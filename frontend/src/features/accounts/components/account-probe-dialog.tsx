@@ -1,0 +1,230 @@
+import { useEffect, useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Activity, CheckCircle2, LoaderCircle, RefreshCw, XCircle } from "lucide-react";
+
+import { api, type ProbeResult } from "@/api";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { operationErrorMessage } from "@/lib/operation-feedback";
+
+const noModelSelected = "__not_selected__";
+
+export type ProbeDialogTarget = {
+  kind: "onboarding";
+  host: string;
+  groupId: string;
+  name: string;
+};
+
+export function onboardingProbeModelOptions(models: string[]): string[] {
+  return [...new Set(models)].sort((left, right) => left.localeCompare(right));
+}
+
+export function AccountProbeDialog(props: {
+  target: ProbeDialogTarget;
+  open: boolean;
+  pending?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCompleted?: () => void;
+}) {
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState(noModelSelected);
+  const [result, setResult] = useState<ProbeResult | null>(null);
+  const loadModels = useMutation({
+    mutationFn: () => api.onboardingProbeModels(props.target.host, props.target.groupId),
+    onSuccess: (response) => {
+      setModels(response.models);
+      if (selectedModel === noModelSelected && response.models.length > 0) {
+        setSelectedModel(response.models[0]);
+      }
+    },
+  });
+  const runProbe = useMutation({
+    mutationFn: async () => {
+      if (selectedModel === noModelSelected) throw new Error("请先获取并选择一个上游模型");
+      return api.runOnboardingProbe(props.target.host, props.target.groupId, selectedModel);
+    },
+    onMutate: () => setResult(null),
+    onSuccess: (probeResult) => {
+      setResult(probeResult);
+      props.onCompleted?.();
+    },
+  });
+
+  useEffect(() => {
+    if (!props.open) {
+      setModels([]);
+      setResult(null);
+      setSelectedModel(noModelSelected);
+      loadModels.reset();
+      runProbe.reset();
+    }
+  }, [props.open]);
+
+  const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
+  const busy = Boolean(props.pending) || loadModels.isPending || runProbe.isPending;
+  const runDisabled = busy || selectedModel === noModelSelected;
+
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => !busy && props.onOpenChange(open)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>探活测试：{props.target.name}</DialogTitle>
+          <DialogDescription>
+            添加账号前读取该上游支持的模型并执行单次测试，结果会保留在此弹窗中。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 py-1">
+          <div className="grid gap-1.5">
+            <span className="text-sm font-medium">测试模型</span>
+            <Select
+              value={selectedModel}
+              itemToStringLabel={(value) =>
+                value === noModelSelected ? "请先获取上游模型" : String(value)
+              }
+              disabled={busy}
+              onValueChange={(value) => {
+                if (!value) return;
+                setSelectedModel(value);
+                setResult(null);
+                runProbe.reset();
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="先获取上游模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={noModelSelected}>请先获取上游模型</SelectItem>
+                {options.map((model) => (
+                  <SelectItem key={model} value={model}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => loadModels.mutate()}
+          >
+            <RefreshCw className={loadModels.isPending ? "animate-spin" : undefined} />
+            {loadModels.isPending ? "正在获取" : "获取上游模型"}
+          </Button>
+          {loadModels.isSuccess ? (
+            <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
+          ) : null}
+          {loadModels.isError ? (
+            <p className="text-destructive text-sm" role="alert">
+              {operationErrorMessage(loadModels.error, "上游模型获取失败")}
+            </p>
+          ) : null}
+          {runProbe.isPending ? (
+            <div
+              className="bg-muted/40 flex min-h-24 items-center gap-3 rounded-lg border px-4 py-3"
+              aria-live="polite"
+            >
+              <LoaderCircle className="text-primary size-5 animate-spin" />
+              <div>
+                <p className="text-sm font-medium">正在测试上游响应</p>
+                <p className="text-muted-foreground text-xs">弹窗会在测试完成后显示详细结果。</p>
+              </div>
+            </div>
+          ) : null}
+          {runProbe.isError ? (
+            <div
+              className="border-destructive/40 bg-destructive/5 rounded-lg border px-4 py-3"
+              role="alert"
+            >
+              <div className="text-destructive flex items-center gap-2 text-sm font-medium">
+                <XCircle className="size-4" />
+                探活失败
+              </div>
+              <p className="text-muted-foreground mt-1.5 text-sm">
+                {operationErrorMessage(runProbe.error, "探活请求失败")}
+              </p>
+            </div>
+          ) : null}
+          {result ? <ProbeResultPanel result={result} /> : null}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>
+            关闭
+          </Button>
+          <Button disabled={runDisabled} onClick={() => runProbe.mutate()}>
+            {runProbe.isPending ? <LoaderCircle className="animate-spin" /> : <Activity />}
+            {runProbe.isPending ? "测试中" : result ? "再次探活" : "开始探活"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ProbeResultPanel(props: { result: ProbeResult }) {
+  const passed = props.result.status === "passed";
+  return (
+    <div
+      className={
+        passed
+          ? "border-emerald-500/40 bg-emerald-500/5 rounded-lg border px-4 py-3"
+          : "border-destructive/40 bg-destructive/5 rounded-lg border px-4 py-3"
+      }
+      aria-live="polite"
+    >
+      <div
+        className={
+          passed
+            ? "flex items-center gap-2 text-sm font-semibold text-emerald-600 dark:text-emerald-400"
+            : "text-destructive flex items-center gap-2 text-sm font-semibold"
+        }
+      >
+        {passed ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+        {passed ? "探活通过" : "探活失败"}
+      </div>
+      <p className="mt-1.5 text-sm">{props.result.message}</p>
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+        <ResultValue label="请求模型" value={props.result.request_model || "未返回"} />
+        <ResultValue label="实际模型" value={props.result.actual_model || "未返回"} />
+        <ResultValue
+          label="HTTP 状态"
+          value={props.result.http_status > 0 ? String(props.result.http_status) : "未返回"}
+        />
+        <ResultValue
+          label="耗时"
+          value={props.result.latency_ms > 0 ? `${props.result.latency_ms} 毫秒` : "未记录"}
+        />
+      </dl>
+    </div>
+  );
+}
+
+function ResultValue(props: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-muted-foreground">{props.label}</dt>
+      <Tooltip>
+        <TooltipTrigger render={<dd className="mt-0.5 truncate font-medium" />}>
+          {props.value}
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs break-all">{props.value}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}

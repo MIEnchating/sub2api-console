@@ -1,0 +1,582 @@
+package notification
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	_ "modernc.org/sqlite"
+)
+
+type responseRoundTripper struct {
+	responses []string
+	urls      []string
+}
+
+func (r *responseRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	r.urls = append(r.urls, request.URL.String())
+	response := r.responses[0]
+	r.responses = r.responses[1:]
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(response)),
+		Header:     make(http.Header),
+		Request:    request,
+	}, nil
+}
+
+func TestQQBotTokenIsRequestedOnceForAWholeMessageBatch(t *testing.T) {
+	transport := &responseRoundTripper{responses: []string{
+		`{"access_token":"batch-token"}`,
+		`{"id":"message-1"}`,
+		`{"id":"message-2"}`,
+	}}
+	sender := NewQQBotSender(&http.Client{Transport: transport})
+	outcomes := sender.Send(context.Background(), configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}, []string{"first", "second"})
+
+	if len(outcomes) != 2 || !outcomes[0].Success || !outcomes[1].Success {
+		t.Fatalf("unexpected outcomes: %#v", outcomes)
+	}
+	tokenRequests := 0
+	for _, endpoint := range transport.urls {
+		if endpoint == tokenEndpoint {
+			tokenRequests++
+		}
+	}
+	if tokenRequests != 1 || len(transport.urls) != 3 {
+		t.Fatalf("token must be reused for the batch: %#v", transport.urls)
+	}
+}
+
+func TestQQBotCanonicalNullMessageIDDoesNotReviveLegacyID(t *testing.T) {
+	transport := &responseRoundTripper{responses: []string{
+		`{"access_token":"batch-token"}`,
+		`{"id":null,"message_id":"legacy-id"}`,
+	}}
+	sender := NewQQBotSender(&http.Client{Transport: transport})
+	outcomes := sender.Send(context.Background(), configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}, []string{"test"})
+	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].Detail != "QQBot 发送响应缺少消息 ID" {
+		t.Fatalf("unexpected outcome: %#v", outcomes)
+	}
+}
+
+func TestAlertDeliverySendsSmallAlertSetsSeparatelyAndDoesNotHoldTransactionDuringSend(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	result, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sent != 2 || result.Failed != 0 || result.Batches != 2 {
+		t.Fatalf("unexpected delivery result: %#v", result)
+	}
+	if len(sender.messages) != 2 || !strings.Contains(sender.messages[0], "Sub2API · 告警通知") ||
+		!strings.Contains(sender.messages[0], "| 项目 | 内容 |") ||
+		!strings.Contains(sender.messages[0], "first.example") || !strings.Contains(sender.messages[1], "second.example") {
+		t.Fatalf("small alert set was not sent separately: %#v", sender.messages)
+	}
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var marker string
+	if err := database.QueryRow(`SELECT value_json FROM app_state WHERE key='network-callback'`).Scan(&marker); err != nil {
+		t.Fatalf("concurrent DB write during network callback failed: %v", err)
+	}
+	var sent int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM alert_deliveries WHERE status='sent'`).Scan(&sent); err != nil || sent != 2 {
+		t.Fatalf("delivery results not persisted: sent=%d err=%v", sent, err)
+	}
+}
+
+func TestZeroRepeatIntervalDoesNotResendPersistentIncidents(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	first, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Sent != 2 || second.Sent != 0 || second.Skipped != 2 || len(sender.messages) != 2 {
+		t.Fatalf("zero repeat interval resent persistent incidents: first=%#v second=%#v messages=%d", first, second, len(sender.messages))
+	}
+}
+
+func TestConcurrentAlertDeliveriesSendPersistentIncidentOnlyOnce(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &blockingBatchSender{started: make(chan struct{}), release: make(chan struct{})}
+	service := New(repository, settings, sender)
+	results := make(chan business.AlertDeliveryResult, 2)
+	errorsFound := make(chan error, 2)
+	deliver := func() {
+		result, deliverErr := service.Deliver(context.Background(), false)
+		results <- result
+		errorsFound <- deliverErr
+	}
+	go deliver()
+	<-sender.started
+	if !service.Status().ConsumerActive {
+		t.Fatal("consumer was not reported as active during delivery")
+	}
+	go deliver()
+	close(sender.release)
+
+	totalSent := 0
+	for range 2 {
+		totalSent += (<-results).Sent
+		if deliverErr := <-errorsFound; deliverErr != nil {
+			t.Fatal(deliverErr)
+		}
+	}
+	if totalSent != 2 || sender.Calls() != 1 {
+		t.Fatalf("concurrent delivery duplicated notifications: sent=%d calls=%d", totalSent, sender.Calls())
+	}
+	if service.Status().ConsumerActive {
+		t.Fatal("consumer remained active after delivery")
+	}
+	snapshot, err := repository.NotificationQueueSnapshot(
+		context.Background(),
+		business.NotificationChannelKey("qqbot", "target"),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ProducerFiring != 2 || snapshot.ConsumerPending != 0 || snapshot.ConsumerFailed != 0 {
+		t.Fatalf("unexpected queue snapshot after delivery: %#v", snapshot)
+	}
+	details, err := repository.NotificationQueueDetails(
+		context.Background(),
+		business.NotificationChannelKey("qqbot", "target"),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "本轮不发送" ||
+		details.ConsumerItems[0].QueueReason != "持续告警已通知，策略设置为只发送一次" {
+		t.Fatalf("sent incidents do not explain why this round is skipped: %#v", details.ConsumerItems)
+	}
+}
+
+func TestNotificationQueueDetailsMatchSnapshotAndIncludeRetryState(t *testing.T) {
+	path := createAlertDatabase(t)
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelKey := business.NotificationChannelKey("qqbot", "target")
+	if _, err := database.Exec(`INSERT INTO alert_deliveries(
+		incident_key,channel_key,status,attempts,last_error,delivered_at,updated_at
+	) VALUES('incident-1',?,'failed',3,'timeout',NULL,'2026-08-28T12:00:00Z')`, channelKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE alert_incidents SET delivery_status='发送失败',last_error='timeout'
+		WHERE incident_key='incident-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+
+	details, err := repository.NotificationQueueDetails(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := repository.NotificationQueueSnapshot(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ProducerFiring) != 2 || len(details.ConsumerPending) != 2 || len(details.ConsumerFailed) != 1 || len(details.ConsumerItems) != 2 {
+		t.Fatalf("unexpected queue details: %#v", details)
+	}
+	failed := details.ConsumerFailed[0]
+	if failed.IncidentKey != "incident-1" || failed.DeliveryAttempts != 3 || failed.LastError == nil || *failed.LastError != "timeout" ||
+		failed.QueueStatus != "发送失败，等待重试" || failed.QueueReason != "timeout" {
+		t.Fatalf("failed queue item lost delivery context: %#v", failed)
+	}
+	if snapshot.ProducerFiring != len(details.ProducerFiring) ||
+		snapshot.ConsumerPending != len(details.ConsumerPending) ||
+		snapshot.ConsumerFailed != len(details.ConsumerFailed) {
+		t.Fatalf("snapshot and details diverged: snapshot=%#v details=%#v", snapshot, details)
+	}
+}
+
+func TestNotificationQueueDetailsExplainSuppressedDeliveries(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	rawPolicy, err := json.Marshal(business.DefaultAlertPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := map[string]any{}
+	if err := json.Unmarshal(rawPolicy, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy["delivery_enabled"] = false
+	if _, err := repository.UpdateAlertPolicy(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
+
+	details, err := repository.NotificationQueueDetails(
+		context.Background(),
+		business.NotificationChannelKey("qqbot", "target"),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ConsumerItems) != 2 || len(details.ConsumerPending) != 0 || len(details.ConsumerFailed) != 0 {
+		t.Fatalf("suppressed deliveries were counted as pending: %#v", details)
+	}
+	for _, item := range details.ConsumerItems {
+		if item.QueueStatus != "已抑制" || item.QueueReason != "告警通知发送已关闭" {
+			t.Fatalf("suppression reason is missing: %#v", item)
+		}
+	}
+}
+
+func TestNotificationBatchesMergeOnlyWhenAlertCountReachesThreshold(t *testing.T) {
+	incidents := make([]business.AlertIncident, 10)
+	for index := range incidents {
+		incidents[index] = business.AlertIncident{
+			IncidentKey: fmt.Sprintf("incident-%d", index), EventType: "upstream.auth",
+			ObjectKind: "host", ObjectID: fmt.Sprintf("host-%d.example", index),
+			CauseCode: "AUTH", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z",
+		}
+	}
+
+	separate := NotificationBatches(incidents[:9], 10)
+	merged := NotificationBatches(incidents, 10)
+
+	if len(separate) != 9 {
+		t.Fatalf("alerts below threshold were merged: batches=%d", len(separate))
+	}
+	if len(merged) != 1 || len(merged[0].Incidents) != 10 || !strings.Contains(merged[0].Message, "告警汇总（10项）") {
+		t.Fatalf("alerts at threshold were not merged: %#v", merged)
+	}
+}
+
+func TestNotificationMessageUsesAccountNameAndExactBalanceBoundary(t *testing.T) {
+	name := "主账号"
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "balance", EventType: "upstream.balance", ObjectKind: "account",
+		ObjectID: "41", ObjectName: &name, CauseCode: "BALANCE:5", Status: "firing",
+		LastSeenAt: "2026-08-26T08:00:00Z",
+	}})
+	if !strings.Contains(message, "主账号") || !strings.Contains(message, "\\#41") || !strings.Contains(message, "余额达到或低于 5") {
+		t.Fatalf("notification message is ambiguous: %s", message)
+	}
+}
+
+func TestSingleNotificationUsesVerticalDetailsTable(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "auth", EventType: "upstream.auth", ObjectKind: "host", ObjectID: "api.example",
+		CauseCode: "AUTH:令牌已过期", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z",
+	}})
+	for _, expected := range []string{
+		"## Sub2API · 告警通知", "| 项目 | 内容 |", "| 告警类型 | 上游鉴权失效 |",
+		"| 告警对象 | 上游：api.example |", "| 原因 | 鉴权已失效：令牌已过期 |",
+		"| 状态 | 告警中 |", "| 时间（北京时间） | 2026-08-26 16:00:00 |",
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("single notification missing %q: %s", expected, message)
+		}
+	}
+	if strings.Contains(message, "| 类型 | 对象 | 原因 | 状态 |") || strings.Contains(message, "（1项）") {
+		t.Fatalf("single notification still uses the horizontal summary format: %s", message)
+	}
+}
+
+func TestMultipleNotificationsKeepHorizontalSummaryTable(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{
+		{IncidentKey: "first", EventType: "upstream.auth", ObjectKind: "host", ObjectID: "first.example", CauseCode: "AUTH", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z"},
+		{IncidentKey: "second", EventType: "upstream.balance", ObjectKind: "host", ObjectID: "second.example", CauseCode: "BALANCE:5", Status: "firing", LastSeenAt: "2026-08-26T08:00:01Z"},
+	})
+	if !strings.Contains(message, "告警汇总（2项）") || !strings.Contains(message, "| 类型 | 对象 | 原因 | 状态 | 时间（北京时间） |") {
+		t.Fatalf("multiple notifications lost the horizontal summary format: %s", message)
+	}
+}
+
+func TestNotificationMessageDistinguishesProbeGroups(t *testing.T) {
+	name := "主账号"
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "console:probe:41:codex", EventType: "account.probe", ObjectKind: "account",
+		ObjectID: "41", ObjectName: &name, CauseCode: "PROBE", Status: "firing",
+		LastSeenAt: "2026-08-26T08:00:00Z",
+	}})
+	if !strings.Contains(message, "分组：codex") {
+		t.Fatalf("probe group is missing from notification: %s", message)
+	}
+}
+
+func TestNotificationMessageShowsRateSyncFailureReason(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "rate", EventType: "upstream.rate_sync", ObjectKind: "host", ObjectID: "api.example",
+		CauseCode: "RATE_SYNC:上游分组 auto 倍率不是有限数值", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z",
+	}})
+	if !strings.Contains(message, "上游分组 auto 倍率不是有限数值") {
+		t.Fatalf("rate-sync reason is missing: %s", message)
+	}
+}
+
+func TestNotificationMessageExplainsRoutingDecisionAndApplyFailure(t *testing.T) {
+	name := "主账号"
+	message := BatchMessage([]business.AlertIncident{
+		{
+			IncidentKey: "console:routing:breaker:41:codex", EventType: "account.routing_breaker",
+			ObjectKind: "account", ObjectID: "41", ObjectName: &name,
+			CauseCode: "ROUTING_BREAKER:连续网关错误", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:apply:41", EventType: "routing.apply_failure",
+			ObjectKind: "account", ObjectID: "41", ObjectName: &name,
+			CauseCode: "APPLY_FAILED:network timeout", Status: "firing", LastSeenAt: "2026-08-26T08:00:01Z",
+		},
+	})
+	for _, expected := range []string{"账号触发熔断判定", "分组：codex", "连续网关错误", "自动执行失败", "network timeout"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("routing notification missing %q: %s", expected, message)
+		}
+	}
+}
+
+func TestRecoverySuppressedByPolicyIsNotReplayedAfterReenable(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	ctx := context.Background()
+	disabledRecovery := defaultAlertPolicyPayload(t)
+	disabledRecovery["notify_recovery"] = false
+	if _, err := repository.UpdateAlertPolicy(ctx, disabledRecovery); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(ctx, `UPDATE alert_incidents SET status='recovered' WHERE incident_key='incident-1'`); err != nil {
+		t.Fatal(err)
+	}
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	first, err := service.Deliver(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Suppressed != 1 {
+		t.Fatalf("recovery was not suppressed: %#v", first)
+	}
+	enabledRecovery := defaultAlertPolicyPayload(t)
+	enabledRecovery["notify_recovery"] = true
+	if _, err := repository.UpdateAlertPolicy(ctx, enabledRecovery); err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Deliver(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Attempted != 0 || second.Suppressed != 1 || len(sender.messages) != 1 {
+		t.Fatalf("stale recovery was replayed after re-enable: result=%#v messages=%#v", second, sender.messages)
+	}
+}
+
+func defaultAlertPolicyPayload(t *testing.T) map[string]any {
+	t.Helper()
+	encoded, err := json.Marshal(business.DefaultAlertPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+type staticSettings struct {
+	value configstore.NotificationSettings
+}
+
+func (s *staticSettings) NotificationSettings(context.Context) (configstore.NotificationSettings, error) {
+	return s.value, nil
+}
+
+type concurrentWriteSender struct {
+	path     string
+	messages []string
+}
+
+type blockingBatchSender struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingBatchSender) Send(_ context.Context, _ configstore.NotificationSettings, messages []string) []SendOutcome {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+	outcomes := make([]SendOutcome, len(messages))
+	for index := range outcomes {
+		outcomes[index] = SendOutcome{Success: true, Detail: "sent"}
+	}
+	return outcomes
+}
+
+func (s *blockingBatchSender) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func TestNotificationTestPersistsConfirmedOutcomeAfterNetworkSend(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	result, err := service.Test(context.Background(), "Sub2API Console 通知测试", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Sent || result.MessageID == nil || *result.MessageID != "message-1" || !result.Persisted || result.RuntimeEventID >= 0 {
+		t.Fatalf("unexpected test result: %#v", result)
+	}
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var status, payload string
+	if err := database.QueryRow(`SELECT status,payload_json FROM runtime_events WHERE source_id=?`, result.RuntimeEventID).Scan(&status, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if status != "succeeded" || !strings.Contains(payload, `"message_id":"message-1"`) {
+		t.Fatalf("unexpected persisted event: status=%s payload=%s", status, payload)
+	}
+}
+
+func (s *concurrentWriteSender) Send(_ context.Context, _ configstore.NotificationSettings, messages []string) []SendOutcome {
+	s.messages = append([]string{}, messages...)
+	database, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=busy_timeout%28100%29")
+	if err != nil {
+		return []SendOutcome{{Detail: err.Error()}}
+	}
+	defer database.Close()
+	if _, err := database.Exec(`INSERT INTO app_state(key,value_json,updated_at) VALUES('network-callback','{}','now')`); err != nil {
+		return []SendOutcome{{Detail: err.Error()}}
+	}
+	outcomes := make([]SendOutcome, len(messages))
+	for index := range messages {
+		id := fmt.Sprintf("message-%d", index+1)
+		outcomes[index] = SendOutcome{Success: true, Detail: "sent", MessageID: &id}
+	}
+	return outcomes
+}
+
+func createAlertDatabase(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "alerts.sqlite3")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`CREATE TABLE migration_runs(id INTEGER PRIMARY KEY,status TEXT NOT NULL)`,
+		`INSERT INTO migration_runs VALUES(1,'succeeded')`,
+		`CREATE TABLE app_state(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE policies(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE policy_nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,node_type TEXT NOT NULL,scalar_value TEXT,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE operational_snapshots(namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(namespace,state_key))`,
+		`CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL)`,
+		`INSERT INTO operational_snapshots VALUES('sub2api','sub2api-notify-rules.json','{"enabled":true,"channels":[{"type":"qqbot","enabled":true}]}','now')`,
+		`CREATE TABLE alert_incidents(incident_key TEXT PRIMARY KEY,event_type TEXT NOT NULL,object_kind TEXT NOT NULL,object_id TEXT NOT NULL,cause_code TEXT NOT NULL,status TEXT NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,delivery_status TEXT,last_error TEXT)`,
+		`INSERT INTO alert_incidents VALUES('incident-1','upstream.auth','host','first.example','AUTH','firing','2026-08-26T08:00:00Z','2026-08-26T08:00:00Z',NULL,NULL)`,
+		`INSERT INTO alert_incidents VALUES('incident-2','upstream.balance','host','second.example','BALANCE:5','firing','2026-08-26T08:00:01Z','2026-08-26T08:00:01Z',NULL,NULL)`,
+		`CREATE TABLE alert_deliveries(incident_key TEXT NOT NULL,channel_key TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,delivered_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(incident_key,channel_key))`,
+	}
+	for _, statement := range statements {
+		if _, err := database.Exec(statement); err != nil {
+			database.Close()
+			t.Fatalf("fixture statement failed: %v\n%s", err, statement)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

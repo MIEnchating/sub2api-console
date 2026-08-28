@@ -1,0 +1,211 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/mienchating/sub2api-console
+
+jobs:
+  validate:
+    name: Validate version and release notes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Require tag commit on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "::error::Release tag must point to a commit already contained in main"
+            exit 1
+          }
+      - name: Validate scripts, tag, and notes
+        run: |
+          node --test .github/scripts/validate-release-tag.test.mjs
+          node .github/scripts/validate-release-tag.mjs "$GITHUB_REF_NAME"
+          node .github/scripts/generate-release-notes.mjs "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md"
+
+  preflight:
+    name: Mandatory release preflight
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.22"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Frontend mandatory checks
+        working-directory: frontend
+        run: |
+          bun run format:check
+          bun run typecheck
+          bun run lint
+          bun run test
+          bun run build
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Backend mandatory checks
+        working-directory: backend
+        run: |
+          go vet ./...
+          go test -race ./...
+          go build ./...
+      - name: API Docker build preflight
+        run: docker build --build-arg VERSION="$GITHUB_REF_NAME" -t "sub2api-console-api-preflight:$GITHUB_REF_NAME" backend
+      - name: Frontend Docker build preflight
+        run: docker build --build-arg VERSION="$GITHUB_REF_NAME" -t "sub2api-console-frontend-preflight:$GITHUB_REF_NAME" frontend
+
+  images:
+    name: Build ${{ matrix.service }} (${{ matrix.arch }})
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            context: backend
+            image: ghcr.io/mienchating/sub2api-console-api
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - service: api
+            context: backend
+            image: ghcr.io/mienchating/sub2api-console-api
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+          - service: frontend
+            context: frontend
+            image: ghcr.io/mienchating/sub2api-console-frontend
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - service: frontend
+            context: frontend
+            image: ghcr.io/mienchating/sub2api-console-frontend
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push architecture image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ matrix.context }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}
+            ${{ matrix.image }}:latest-${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            VCS_REF=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.arch }}
+          provenance: mode=max
+          sbom: true
+
+  manifests:
+    name: Publish ${{ matrix.service }} manifest
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            image: ghcr.io/mienchating/sub2api-console-api
+          - service: frontend
+            image: ghcr.io/mienchating/sub2api-console-frontend
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require both architecture images
+        run: |
+          docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}-amd64"
+          docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}-arm64"
+      - name: Publish version manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${{ matrix.image }}:${GITHUB_REF_NAME}" \
+            "${{ matrix.image }}:${GITHUB_REF_NAME}-amd64" \
+            "${{ matrix.image }}:${GITHUB_REF_NAME}-arm64"
+          docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}"
+      - name: Publish latest manifest
+        run: |
+          docker buildx imagetools create \
+            -t "${{ matrix.image }}:latest" \
+            "${{ matrix.image }}:latest-amd64" \
+            "${{ matrix.image }}:latest-arm64"
+          docker buildx imagetools inspect "${{ matrix.image }}:latest"
+
+  release:
+    name: Publish GitHub Release
+    needs: [preflight, manifests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Generate validated release notes
+        run: node .github/scripts/generate-release-notes.mjs "$GITHUB_REF_NAME" release-notes.md
+      - name: Publish release
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3.0.1
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

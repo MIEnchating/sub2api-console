@@ -1,0 +1,43 @@
+services:
+  api:
+    image: ${SUB2API_CONSOLE_API_IMAGE:-ghcr.io/mienchating/sub2api-console-api:latest}
+    build:
+      context: ./backend
+      args:
+        VERSION: ${SUB2API_CONSOLE_VERSION:-development}
+    restart: unless-stopped
+    environment:
+      SUB2API_CONSOLE_DATA_DIR: /app/data
+      SUB2API_CONSOLE_DATA_DB: ${SUB2API_CONSOLE_DATA_DB:-/app/data/sub2api-console.sqlite3}
+      SUB2API_CONSOLE_TASK_DB: ${SUB2API_CONSOLE_TASK_DB:-/app/data/tasks.sqlite3}
+      SUB2API_CONSOLE_CONFIG_DB: ${SUB2API_CONSOLE_CONFIG_DB:-/app/data/console-config.sqlite3}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8080:8080"
+    command: sub2api-console
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/setup/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+  frontend:
+    image: ${SUB2API_CONSOLE_FRONTEND_IMAGE:-ghcr.io/mienchating/sub2api-console-frontend:latest}
+    build:
+      context: ./frontend
+      args:
+        VERSION: ${SUB2API_CONSOLE_VERSION:-development}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3004:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

@@ -1,0 +1,1926 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
+	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/config"
+	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/inspection"
+	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
+	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
+	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
+	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
+	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+)
+
+type fakeBusiness struct {
+	bootstrapError       error
+	mode                 string
+	notificationChannels *[]string
+	probeEnabled         *bool
+	accountRows          []business.AccountStatus
+	accountDetail        *business.AccountDetail
+	groupRows            []business.GroupStatus
+	groupAllocation      business.GroupAllocation
+	policySnapshot       business.PolicySnapshot
+	policyUpdates        *[]map[string]any
+	policyActors         *[]string
+	accountControlCalls  *[]string
+	groupPolicyUpdates   *[]map[string]any
+	groupExcludedUpdates *[]bool
+	upstreamSummary      business.UpstreamSummary
+	upstreamGroupRows    []business.UpstreamGroup
+	runtimeEventIDs      *[]int64
+	runtimeEventError    error
+	alertPolicy          business.AlertPolicy
+	alertRows            []business.AlertListItem
+	clearedAlerts        int64
+}
+
+type fakeQueueBusiness struct {
+	fakeBusiness
+	details business.NotificationQueueDetails
+	keys    *[]string
+}
+
+func (f fakeQueueBusiness) NotificationQueueDetails(_ context.Context, channelKey string, _ bool) (business.NotificationQueueDetails, error) {
+	if f.keys != nil {
+		*f.keys = append(*f.keys, channelKey)
+	}
+	return f.details, nil
+}
+
+func (f fakeBusiness) Bootstrap(context.Context) error { return f.bootstrapError }
+func (f fakeBusiness) Mode(context.Context) (string, error) {
+	return f.mode, nil
+}
+func (f fakeBusiness) Ready(context.Context) (bool, error) { return true, nil }
+func (f fakeBusiness) RuntimeSnapshot(context.Context) (business.RuntimeSnapshot, error) {
+	return business.RuntimeSnapshot{
+		Available:           true,
+		Keys:                []any{"config/test"},
+		Mode:                f.mode,
+		ConfigurationErrors: []string{},
+	}, nil
+}
+func (f fakeBusiness) SetMode(_ context.Context, mode string) (business.RuntimeSnapshot, error) {
+	return business.RuntimeSnapshot{
+		Available:           true,
+		Keys:                []any{"config/test"},
+		Mode:                mode,
+		ConfigurationErrors: []string{},
+	}, nil
+}
+func (f fakeBusiness) OverviewSummary(context.Context) (business.OverviewSummary, error) {
+	return business.OverviewSummary{Available: true, Accounts: 12, Groups: 3, Alerts: 2, Runs: 8}, nil
+}
+func (f fakeBusiness) EnableNotificationChannel(_ context.Context, channelType string) error {
+	if f.notificationChannels != nil {
+		*f.notificationChannels = append(*f.notificationChannels, channelType)
+	}
+	return nil
+}
+func (f fakeBusiness) SetProbeEnabled(_ context.Context, enabled bool) error {
+	if f.probeEnabled != nil {
+		*f.probeEnabled = enabled
+	}
+	return nil
+}
+func (f fakeBusiness) Accounts(context.Context) ([]business.AccountStatus, error) {
+	return f.accountRows, nil
+}
+func (f fakeBusiness) Account(context.Context, string) (*business.AccountDetail, error) {
+	if f.accountDetail == nil {
+		return nil, sql.ErrNoRows
+	}
+	return f.accountDetail, nil
+}
+func (f fakeBusiness) Groups(context.Context) ([]business.GroupStatus, error) {
+	return f.groupRows, nil
+}
+func (f fakeBusiness) GroupAllocation(context.Context, string) (business.GroupAllocation, error) {
+	return f.groupAllocation, nil
+}
+func (f fakeBusiness) ControlPolicy(context.Context) (map[string]any, error) {
+	if f.policySnapshot.AdvancedPolicy == nil {
+		return map[string]any{}, nil
+	}
+	return f.policySnapshot.AdvancedPolicy, nil
+}
+func (f fakeBusiness) PolicySnapshot(context.Context) (business.PolicySnapshot, error) {
+	return f.policySnapshot, nil
+}
+func (f fakeBusiness) ProbeEnabled(context.Context) (bool, error) {
+	if f.probeEnabled == nil {
+		return true, nil
+	}
+	return *f.probeEnabled, nil
+}
+
+func TestRecentResultsExposeConfiguredHealthEventAndScore(t *testing.T) {
+	result, reason := "失败", "HTTP 502 Bad Gateway"
+	accounts := []business.AccountStatus{{
+		RecentResults: []business.AccountRecentResult{{
+			Result: &result, FailureReason: &reason, Source: "traffic", ClassificationPayload: map[string]any{"status_code": 502},
+		}},
+	}}
+	server := &Server{business: fakeBusiness{policySnapshot: business.PolicySnapshot{AdvancedPolicy: map[string]any{}}}}
+
+	server.enrichRecentResults(context.Background(), accounts)
+
+	recent := accounts[0].RecentResults[0]
+	if recent.EventType == nil || *recent.EventType != "gateway_error" || recent.Score == nil || *recent.Score != 25 {
+		t.Fatalf("recent result classification=%#v", recent)
+	}
+}
+func (f fakeBusiness) UpdatePolicy(_ context.Context, patch map[string]any, actor string) (business.PolicySnapshot, error) {
+	if f.policyUpdates != nil {
+		*f.policyUpdates = append(*f.policyUpdates, patch)
+	}
+	if f.policyActors != nil {
+		*f.policyActors = append(*f.policyActors, actor)
+	}
+	return f.policySnapshot, nil
+}
+func (f fakeBusiness) SetAccountControl(_ context.Context, accountID, action, actor string) (business.PolicySnapshot, error) {
+	if f.accountControlCalls != nil {
+		*f.accountControlCalls = append(*f.accountControlCalls, accountID+":"+action+":"+actor)
+	}
+	return f.policySnapshot, nil
+}
+func (f fakeBusiness) SetAccountTestModel(context.Context, string, *string, string) error {
+	return nil
+}
+func (f fakeBusiness) UpdateGroupPolicy(_ context.Context, _ string, patch map[string]any, _ string) (business.GroupStatus, error) {
+	if f.groupPolicyUpdates != nil {
+		*f.groupPolicyUpdates = append(*f.groupPolicyUpdates, patch)
+	}
+	if len(f.groupRows) == 0 {
+		return business.GroupStatus{}, business.ErrGroupNotFound
+	}
+	return f.groupRows[0], nil
+}
+func (f fakeBusiness) ClearGroupPolicy(_ context.Context, _ string, _ string) (business.GroupStatus, error) {
+	if len(f.groupRows) == 0 {
+		return business.GroupStatus{}, business.ErrGroupNotFound
+	}
+	return f.groupRows[0], nil
+}
+func (f fakeBusiness) SetGroupExcluded(_ context.Context, _ string, excluded bool, _ string) (business.GroupStatus, error) {
+	if f.groupExcludedUpdates != nil {
+		*f.groupExcludedUpdates = append(*f.groupExcludedUpdates, excluded)
+	}
+	if len(f.groupRows) == 0 {
+		return business.GroupStatus{}, business.ErrGroupNotFound
+	}
+	return f.groupRows[0], nil
+}
+func (f fakeBusiness) Upstreams(context.Context) (business.UpstreamSummary, error) {
+	return f.upstreamSummary, nil
+}
+func (f fakeBusiness) UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error) {
+	return f.upstreamGroupRows, nil
+}
+func (f fakeBusiness) Events(context.Context, *int) ([]business.RunEvent, error) {
+	return []business.RunEvent{}, nil
+}
+func (f fakeBusiness) HealthSamples(context.Context, *int, *string, *string) ([]business.HealthSample, error) {
+	return []business.HealthSample{}, nil
+}
+func (f fakeBusiness) RoutingDecisions(context.Context, *int, *string, *string) ([]business.RoutingDecision, error) {
+	return []business.RoutingDecision{}, nil
+}
+func (f fakeBusiness) RunRecords(context.Context, *int) ([]business.RunRecord, error) {
+	return []business.RunRecord{}, nil
+}
+func (f fakeBusiness) OperationalSnapshots(context.Context, *string, *int) ([]business.OperationalSnapshot, error) {
+	return []business.OperationalSnapshot{}, nil
+}
+func (f fakeBusiness) UsageRecords(context.Context, *int, *string, *string) ([]business.UsageRecord, error) {
+	return []business.UsageRecord{}, nil
+}
+func (f fakeBusiness) Alerts(context.Context, *int) ([]business.AlertListItem, error) {
+	return f.alertRows, nil
+}
+func (f fakeBusiness) ClearAlerts(context.Context) (int64, error) { return f.clearedAlerts, nil }
+func (f fakeBusiness) AlertPolicy(context.Context) (business.AlertPolicy, error) {
+	return f.alertPolicy, nil
+}
+func (f fakeBusiness) UpdateAlertPolicy(_ context.Context, _ map[string]any) (business.AlertPolicy, error) {
+	return f.alertPolicy, nil
+}
+func (f fakeBusiness) AuditEvents(context.Context, *int, bool) ([]business.AuditEvent, error) {
+	return []business.AuditEvent{}, nil
+}
+func (f fakeBusiness) RecordRuntimeEvent(_ context.Context, _ string, _ string, _ string, _ map[string]any) (int64, error) {
+	if f.runtimeEventIDs != nil {
+		*f.runtimeEventIDs = append(*f.runtimeEventIDs, -1)
+	}
+	return -1, f.runtimeEventError
+}
+
+type fakeNotifier struct {
+	result   notification.TestResult
+	messages *[]string
+}
+
+func (f fakeNotifier) Test(_ context.Context, message string, _ bool) (notification.TestResult, error) {
+	if f.messages != nil {
+		*f.messages = append(*f.messages, message)
+	}
+	return f.result, nil
+}
+
+type fakeInspectionController struct {
+	status  inspection.Status
+	configs *[]business.AutoInspectionConfig
+}
+
+type fakeLogMaintenance struct {
+	status  consolelogs.CleanupStatus
+	updates *[][2]int
+	result  consolelogs.CleanupResult
+}
+
+func (f fakeLogMaintenance) Status(context.Context) (consolelogs.CleanupStatus, error) {
+	return f.status, nil
+}
+func (f fakeLogMaintenance) Update(_ context.Context, enabled bool, days int) (consolelogs.CleanupStatus, error) {
+	if f.updates != nil {
+		enabledValue := 0
+		if enabled {
+			enabledValue = 1
+		}
+		*f.updates = append(*f.updates, [2]int{enabledValue, days})
+	}
+	f.status.Enabled, f.status.RetentionDays = enabled, days
+	return f.status, nil
+}
+func (f fakeLogMaintenance) ClearExpired(_ context.Context, days int) (consolelogs.CleanupResult, error) {
+	f.result.RetentionDays = days
+	return f.result, nil
+}
+
+type fakeTaskRepository struct {
+	rows []taskstore.Task
+}
+
+type sequenceTaskRepository struct {
+	mu    sync.Mutex
+	rows  []taskstore.Task
+	reads int
+}
+
+type fakeManagementTasks struct {
+	actors *[]string
+	task   taskstore.Task
+	err    error
+}
+
+type fakeAccountMaintenanceTasks struct {
+	task       taskstore.Task
+	err        error
+	revalidate *[][]string
+	repair     *[][]string
+	cleanup    *[][]string
+}
+
+type fakeInspectionTasks struct {
+	task  taskstore.Task
+	err   error
+	calls *[]inspection.RunRequest
+}
+
+type fieldsCall struct {
+	accountID string
+	patch     accountops.FieldPatch
+	actor     string
+}
+
+type fakeAccountTasks struct {
+	task        taskstore.Task
+	err         error
+	fieldsCalls *[]fieldsCall
+}
+
+type probeCall struct {
+	request probe.Request
+	actor   string
+}
+
+type fakeProbeTasks struct {
+	task  taskstore.Task
+	err   error
+	calls *[]probeCall
+}
+
+type fakeModelChecks struct {
+	task     taskstore.Task
+	err      error
+	requests *[]modelcheck.Request
+}
+
+func (service fakeModelChecks) Capabilities() modelcheck.Capabilities {
+	return modelcheck.Capabilities{
+		ClaudeStandards: []string{"claude-opus-5"},
+		SolModels:       []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"},
+	}
+}
+
+func (service fakeModelChecks) Enqueue(_ context.Context, request modelcheck.Request) (taskstore.Task, error) {
+	if service.requests != nil {
+		*service.requests = append(*service.requests, request)
+	}
+	return service.task, service.err
+}
+
+type upstreamSyncCall struct {
+	host      string
+	scope     upstreamsync.Scope
+	actor     string
+	operation string
+}
+
+type fakeUpstreamSyncTasks struct {
+	task       taskstore.Task
+	err        error
+	hostResult *upstreamsync.HostResult
+	allCalls   *[]upstreamSyncCall
+	hostCalls  *[]upstreamSyncCall
+}
+
+type fakeOnboarding struct {
+	task       taskstore.Task
+	err        error
+	candidates []business.OnboardingCandidate
+	hosts      *[]string
+	models     []string
+	probe      onboarding.ProbeResult
+}
+
+type fakeTraceReader struct {
+	trace business.RequestTrace
+	err   error
+	ids   *[]string
+}
+
+type fakeAuthRecovery struct {
+	manual            authrecovery.ManualResult
+	task              taskstore.Task
+	captchaCompletion authrecovery.CaptchaCompletion
+	manualCalls       *[]authrecovery.ManualInput
+	runCalls          *[]upstreamSyncCall
+	captchaSubmits    *[]upstreamSyncCall
+	captchaCancels    *[]string
+}
+
+func (f fakeAuthRecovery) VerifyManual(_ context.Context, input authrecovery.ManualInput, actor string) (authrecovery.ManualResult, error) {
+	if f.manualCalls != nil {
+		*f.manualCalls = append(*f.manualCalls, input)
+	}
+	return f.manual, nil
+}
+func (f fakeAuthRecovery) Enqueue(_ context.Context, host, entry, actor string) (taskstore.Task, error) {
+	if f.runCalls != nil {
+		*f.runCalls = append(*f.runCalls, upstreamSyncCall{host: host, actor: actor, operation: entry})
+	}
+	return f.task, nil
+}
+func (f fakeAuthRecovery) SubmitCaptcha(_ context.Context, challengeID, code, actor string) (authrecovery.CaptchaCompletion, error) {
+	if f.captchaSubmits != nil {
+		*f.captchaSubmits = append(*f.captchaSubmits, upstreamSyncCall{host: challengeID, actor: actor, operation: code})
+	}
+	return f.captchaCompletion, nil
+}
+func (f fakeAuthRecovery) CancelCaptcha(challengeID string) bool {
+	if f.captchaCancels != nil {
+		*f.captchaCancels = append(*f.captchaCancels, challengeID)
+	}
+	return true
+}
+
+type fakeUpstreamDetector struct {
+	result upstreamdetect.Result
+	urls   *[]string
+	err    error
+}
+
+type fakeUpstreamConfigurations struct {
+	configuration upstreamconfig.Configuration
+	created       *[]upstreamconfig.Input
+	updated       *[]upstreamconfig.Input
+	authRecords   *[]upstreamconfig.Input
+	err           error
+}
+
+func (f fakeUpstreamConfigurations) Get(context.Context, string) (upstreamconfig.Configuration, error) {
+	return f.configuration, f.err
+}
+func (f fakeUpstreamConfigurations) Create(_ context.Context, input upstreamconfig.Input, _ string) (upstreamconfig.Configuration, error) {
+	if f.created != nil {
+		*f.created = append(*f.created, input)
+	}
+	return f.configuration, f.err
+}
+func (f fakeUpstreamConfigurations) Update(_ context.Context, _ string, input upstreamconfig.Input, _ string) (upstreamconfig.Configuration, error) {
+	if f.updated != nil {
+		*f.updated = append(*f.updated, input)
+	}
+	return f.configuration, f.err
+}
+func (f fakeUpstreamConfigurations) ConfigureAuthRecord(_ context.Context, input upstreamconfig.Input) (string, error) {
+	if f.authRecords != nil {
+		*f.authRecords = append(*f.authRecords, input)
+	}
+	return input.Host, f.err
+}
+
+func (detector fakeUpstreamDetector) Detect(_ context.Context, baseURL string) (upstreamdetect.Result, error) {
+	if detector.urls != nil {
+		*detector.urls = append(*detector.urls, baseURL)
+	}
+	return detector.result, detector.err
+}
+
+func (tasks fakeProbeTasks) Enqueue(_ context.Context, request probe.Request, actor string) (taskstore.Task, error) {
+	if tasks.calls != nil {
+		*tasks.calls = append(*tasks.calls, probeCall{request: request, actor: actor})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeInspectionTasks) Enqueue(_ context.Context, request inspection.RunRequest) (taskstore.Task, error) {
+	if tasks.calls != nil {
+		*tasks.calls = append(*tasks.calls, request)
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) EnqueueFields(_ context.Context, accountID string, patch accountops.FieldPatch, actor string) (taskstore.Task, error) {
+	if tasks.fieldsCalls != nil {
+		*tasks.fieldsCalls = append(*tasks.fieldsCalls, fieldsCall{accountID: accountID, patch: patch, actor: actor})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) Models(context.Context, string) ([]string, error) {
+	return []string{"gpt-5.1-codex"}, tasks.err
+}
+
+func (tasks fakeManagementTasks) EnqueueSync(_ context.Context, actor string) (taskstore.Task, error) {
+	if tasks.actors != nil {
+		*tasks.actors = append(*tasks.actors, actor)
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountRevalidation(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.revalidate != nil {
+		*tasks.revalidate = append(*tasks.revalidate, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountNameRepair(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.repair != nil {
+		*tasks.repair = append(*tasks.repair, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueMissingBindingCleanup(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.cleanup != nil {
+		*tasks.cleanup = append(*tasks.cleanup, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeUpstreamSyncTasks) EnqueueAll(_ context.Context, scope upstreamsync.Scope, actor, operation string) (taskstore.Task, error) {
+	if tasks.allCalls != nil {
+		*tasks.allCalls = append(*tasks.allCalls, upstreamSyncCall{scope: scope, actor: actor, operation: operation})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeUpstreamSyncTasks) EnqueueHost(_ context.Context, host string, scope upstreamsync.Scope, actor, operation string) (taskstore.Task, error) {
+	if tasks.hostCalls != nil {
+		*tasks.hostCalls = append(*tasks.hostCalls, upstreamSyncCall{host: host, scope: scope, actor: actor, operation: operation})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeUpstreamSyncTasks) SyncHost(_ context.Context, host string, scope upstreamsync.Scope, actor string) (upstreamsync.HostResult, error) {
+	if tasks.hostCalls != nil {
+		*tasks.hostCalls = append(*tasks.hostCalls, upstreamSyncCall{host: host, scope: scope, actor: actor, operation: "sync-host"})
+	}
+	if tasks.hostResult != nil {
+		return *tasks.hostResult, tasks.err
+	}
+	return upstreamsync.HostResult{Host: host, Status: "succeeded", AuthStatus: "已鉴权", BalanceStatus: "已读取"}, tasks.err
+}
+
+func (f fakeOnboarding) Candidates(_ context.Context, host string) ([]business.OnboardingCandidate, error) {
+	if f.hosts != nil {
+		*f.hosts = append(*f.hosts, host)
+	}
+	return f.candidates, f.err
+}
+
+func (f fakeOnboarding) ProbeModels(context.Context, string, string) ([]string, error) {
+	return f.models, f.err
+}
+
+func (f fakeOnboarding) Probe(context.Context, string, string, string) (onboarding.ProbeResult, error) {
+	return f.probe, f.err
+}
+
+func (f fakeOnboarding) Enqueue(context.Context, onboarding.Request) (taskstore.Task, error) {
+	return f.task, f.err
+}
+
+func (f fakeOnboarding) EnqueueBatch(context.Context, []onboarding.Request) (taskstore.Task, error) {
+	return f.task, f.err
+}
+
+func (f fakeTraceReader) RequestTrace(_ context.Context, requestID string) (business.RequestTrace, error) {
+	if f.ids != nil {
+		*f.ids = append(*f.ids, requestID)
+	}
+	return f.trace, f.err
+}
+
+func (f fakeTaskRepository) Get(_ context.Context, id string) (taskstore.Task, error) {
+	for _, row := range f.rows {
+		if row.ID == id {
+			return row, nil
+		}
+	}
+	return taskstore.Task{}, taskstore.ErrNotFound
+}
+func (f *sequenceTaskRepository) Get(_ context.Context, id string) (taskstore.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.rows) == 0 || f.rows[0].ID != id {
+		return taskstore.Task{}, taskstore.ErrNotFound
+	}
+	index := f.reads
+	if index >= len(f.rows) {
+		index = len(f.rows) - 1
+	}
+	f.reads++
+	return f.rows[index], nil
+}
+
+func (f fakeInspectionController) Status(context.Context) (inspection.Status, error) {
+	return f.status, nil
+}
+func (f fakeInspectionController) UpdateConfig(_ context.Context, config business.AutoInspectionConfig) (inspection.Status, error) {
+	if f.configs != nil {
+		*f.configs = append(*f.configs, config)
+	}
+	f.status.AutoInspectionConfig = config
+	return f.status, nil
+}
+func (f fakeInspectionController) Cancel(context.Context) (inspection.Status, bool, error) {
+	f.status.Enabled = false
+	return f.status, f.status.Running, nil
+}
+func (f fakeInspectionController) Resume(context.Context) (inspection.Status, error) {
+	f.status.Enabled = true
+	return f.status, nil
+}
+func (f fakeInspectionController) ClearHistory(context.Context) (int64, error) {
+	f.status.HeartbeatHistory = []business.InspectionHeartbeat{}
+	return 2, nil
+}
+func (f fakeInspectionController) Subscribe() (<-chan struct{}, func()) {
+	updates := make(chan struct{})
+	return updates, func() { close(updates) }
+}
+
+func TestInitializationLoginSessionAndLogoutContract(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+
+	status := request(t, router, http.MethodGet, "/api/setup/status", nil, "")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"initialized":false`) {
+		t.Fatalf("unexpected setup status: %d %s", status.Code, status.Body.String())
+	}
+	protected := request(t, router, http.MethodGet, "/api/health", nil, "")
+	if protected.Code != http.StatusPreconditionRequired || !strings.Contains(protected.Body.String(), "请先完成首次初始化") {
+		t.Fatalf("uninitialized protected route was not rejected: %d %s", protected.Code, protected.Body.String())
+	}
+
+	initialized := request(t, router, http.MethodPost, "/api/setup/initialize", map[string]any{
+		"username":       "admin",
+		"password":       "a secure password",
+		"admin_base_url": "https://sub2api.example",
+		"admin_key":      "admin-key",
+	}, "")
+	if initialized.Code != http.StatusOK {
+		t.Fatalf("initialization failed: %d %s", initialized.Code, initialized.Body.String())
+	}
+	cookie := responseCookie(t, initialized, sessionCookie)
+	if !cookie.HttpOnly || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("unexpected session cookie: %#v", cookie)
+	}
+
+	session := request(t, router, http.MethodGet, "/api/auth/session", nil, cookie.String())
+	if session.Code != http.StatusOK || !strings.Contains(session.Body.String(), `"authenticated":true`) {
+		t.Fatalf("unexpected session: %d %s", session.Code, session.Body.String())
+	}
+
+	unauthorized := request(t, router, http.MethodGet, "/api/health", nil, "")
+	if unauthorized.Code != http.StatusUnauthorized || !strings.Contains(unauthorized.Body.String(), "请先登录控制台") {
+		t.Fatalf("unexpected unauthorized response: %d %s", unauthorized.Code, unauthorized.Body.String())
+	}
+	health := request(t, router, http.MethodGet, "/api/health", nil, cookie.String())
+	if health.Code != http.StatusOK || health.Body.String() != `{"mode":"完全模式","status":"ok"}` {
+		t.Fatalf("unexpected health response: %d %s", health.Code, health.Body.String())
+	}
+
+	logout := request(t, router, http.MethodPost, "/api/auth/logout", nil, cookie.String())
+	if logout.Code != http.StatusOK || !strings.Contains(logout.Body.String(), `"authenticated":false`) {
+		t.Fatalf("unexpected logout: %d %s", logout.Code, logout.Body.String())
+	}
+	username, err := store.SessionUser(context.Background(), cookie.Value, testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if username != nil {
+		t.Fatal("logout must revoke persisted session")
+	}
+}
+
+func TestCORSPreflightUsesExplicitCredentialCompatibleHeaders(t *testing.T) {
+	router, _ := testRouter(t, config.Config{Origins: []string{"https://console.example"}}, fakeBusiness{mode: "完全模式"})
+	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "https://console.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("Access-Control-Request-Headers", "content-type,authorization")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d", response.Code)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
+		t.Fatalf("allow headers = %q", got)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "https://console.example" {
+		t.Fatalf("allow origin = %q", got)
+	}
+}
+
+func TestInitializationRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
+	router, _ := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+	unknown := request(t, router, http.MethodPost, "/api/setup/initialize", map[string]any{
+		"username": "admin", "password": "a secure password", "admin_base_url": "https://sub2api.example",
+		"admin_key": "admin-key", "obsolete_mode": "legacy",
+	}, "")
+	if unknown.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown field status = %d body=%s", unknown.Code, unknown.Body.String())
+	}
+
+	body := strings.NewReader(`{"username":"admin","password":"` + strings.Repeat("x", maximumRequestBytes) + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", body)
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestLoginRejectsWrongPasswordAndAcceptsPersistedCredentials(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "监控模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	wrong := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "wrong",
+	}, "")
+	if wrong.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password status = %d", wrong.Code)
+	}
+	correct := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	if correct.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", correct.Code, correct.Body.String())
+	}
+}
+
+func TestLoginRateLimitsRepeatedFailures(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "监控模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < loginFailureLimit; attempt++ {
+		response := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+			"username": "operator", "password": "wrong",
+		}, "")
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d", attempt+1, response.Code)
+		}
+	}
+	limited := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") == "" {
+		t.Fatalf("limited response = %d headers=%v body=%s", limited.Code, limited.Header(), limited.Body.String())
+	}
+}
+
+func TestPublicSetupStatusDoesNotExposeConfiguredUsername(t *testing.T) {
+	router, store := testRouter(t, config.Config{}, fakeBusiness{mode: "监控模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	response := request(t, router, http.MethodGet, "/api/setup/status", nil, "")
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "username") || strings.Contains(response.Body.String(), "operator") {
+		t.Fatalf("public setup status exposed username: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestBearerAdminTokenBypassesSession(t *testing.T) {
+	router, _ := testRouter(t, config.Config{AdminToken: "internal-token"}, fakeBusiness{mode: "调度模式"})
+	requestWithoutToken := request(t, router, http.MethodGet, "/api/health", nil, "")
+	if requestWithoutToken.Code != http.StatusUnauthorized {
+		t.Fatalf("missing token status = %d", requestWithoutToken.Code)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	req.Header.Set("Authorization", "Bearer internal-token")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusOK {
+		t.Fatalf("bearer authentication failed: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestOverviewConfigAndModeContract(t *testing.T) {
+	cfg := config.Config{DataDB: "/data/sub2api-console.sqlite3"}
+	router, store := testRouter(t, cfg, fakeBusiness{mode: "监控模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	overview := request(t, router, http.MethodGet, "/api/overview", nil, cookie.String())
+	if overview.Code != http.StatusOK || !strings.Contains(overview.Body.String(), `"account_count":12`) || strings.Contains(overview.Body.String(), "skill_count") {
+		t.Fatalf("unexpected overview: %d %s", overview.Code, overview.Body.String())
+	}
+	configuration := request(t, router, http.MethodGet, "/api/config", nil, cookie.String())
+	if configuration.Code != http.StatusOK || !strings.Contains(configuration.Body.String(), `"mode":"监控模式"`) || !strings.Contains(configuration.Body.String(), `"console_username":"op***"`) {
+		t.Fatalf("unexpected config: %d %s", configuration.Code, configuration.Body.String())
+	}
+	updated := request(t, router, http.MethodPost, "/api/config/mode", map[string]any{"mode": "完全模式"}, cookie.String())
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"mode":"完全模式"`) {
+		t.Fatalf("unexpected mode update: %d %s", updated.Code, updated.Body.String())
+	}
+}
+
+func TestTargetAndNotificationConfigurationContracts(t *testing.T) {
+	channels := make([]string, 0)
+	router, store := testRouter(t, config.Config{DataDB: "/data/sub2api-console.sqlite3"}, fakeBusiness{
+		mode: "完全模式", notificationChannels: &channels,
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://old.example", "existing-key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	target := request(t, router, http.MethodPost, "/api/config/target", map[string]any{
+		"admin_base_url": "https://new.example/", "admin_key": "", "request_timeout_seconds": 45,
+	}, cookie.String())
+	if target.Code != http.StatusOK || !strings.Contains(target.Body.String(), `"admin_base_url":"https://new.example"`) || !strings.Contains(target.Body.String(), `"request_timeout_seconds":45`) {
+		t.Fatalf("unexpected target response: %d %s", target.Code, target.Body.String())
+	}
+
+	initialStatus := request(t, router, http.MethodGet, "/api/notifications/status", nil, cookie.String())
+	if initialStatus.Code != http.StatusOK || !strings.Contains(initialStatus.Body.String(), `"configured":false`) ||
+		!strings.Contains(initialStatus.Body.String(), `"queues":{"producer_firing":0`) {
+		t.Fatalf("unexpected notification status: %d %s", initialStatus.Code, initialStatus.Body.String())
+	}
+	configured := request(t, router, http.MethodPost, "/api/notifications/config", map[string]any{
+		"app_id": "app", "client_secret": "secret", "home_channel": "target", "home_channel_type": "c2c",
+	}, cookie.String())
+	if configured.Code != http.StatusOK || !strings.Contains(configured.Body.String(), `"configured":true`) ||
+		!strings.Contains(configured.Body.String(), `"app_id":"app"`) ||
+		!strings.Contains(configured.Body.String(), `"client_secret_configured":true`) ||
+		strings.Contains(configured.Body.String(), `"client_secret":"secret"`) {
+		t.Fatalf("unexpected notification configuration: %d %s", configured.Code, configured.Body.String())
+	}
+	updated := request(t, router, http.MethodPost, "/api/notifications/config", map[string]any{
+		"app_id": "updated-app", "client_secret": "", "home_channel": "updated-target", "home_channel_type": "group",
+	}, cookie.String())
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"app_id":"updated-app"`) ||
+		!strings.Contains(updated.Body.String(), `"home_channel":"updated-target"`) {
+		t.Fatalf("unexpected notification update: %d %s", updated.Code, updated.Body.String())
+	}
+	privateNotification, err := store.NotificationSettings(context.Background())
+	if err != nil || privateNotification.ClientSecret != "secret" {
+		t.Fatalf("blank notification secret was not preserved: %#v err=%v", privateNotification, err)
+	}
+	if len(channels) != 2 || channels[0] != "qqbot" || channels[1] != "qqbot" {
+		t.Fatalf("public notification rule not enabled: %#v", channels)
+	}
+}
+
+func TestProbeConfigurationUpdatesTheSingleBusinessPolicySwitch(t *testing.T) {
+	probeEnabled := false
+	router, store := testRouter(t, config.Config{DataDB: "/data/sub2api-console.sqlite3"}, fakeBusiness{
+		mode: "完全模式", probeEnabled: &probeEnabled,
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	response := request(t, router, http.MethodPost, "/api/config/probes", map[string]any{"enabled": true}, cookie.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"probes_enabled":true`) {
+		t.Fatalf("unexpected probe response: %d %s", response.Code, response.Body.String())
+	}
+	if !probeEnabled {
+		t.Fatal("business probe policy was not updated")
+	}
+}
+
+func TestAccountReadContractsAndRetiredBindingRoute(t *testing.T) {
+	accountID := "41"
+	name := "upstream-0.1"
+	account := business.AccountStatus{
+		ID: accountID, Name: name, Groups: []string{"codex"}, Health: "healthy",
+		RecentResults: []business.AccountRecentResult{},
+	}
+	detail := &business.AccountDetail{
+		AccountStatus: account,
+		Metadata:      map[string]any{"status": "active"},
+		GroupRates:    map[string]*string{"codex": nil},
+		GroupIDs:      map[string]*string{"codex": nil},
+		Bindings:      []business.AccountBinding{},
+	}
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode:          "完全模式",
+		accountRows:   []business.AccountStatus{account},
+		accountDetail: detail,
+	})
+
+	accounts := authenticatedRequest(t, router, http.MethodGet, "/api/accounts", nil)
+	if accounts.Code != http.StatusOK || !strings.Contains(accounts.Body.String(), `"id":"41"`) || !strings.Contains(accounts.Body.String(), `"recent_results":[]`) {
+		t.Fatalf("unexpected accounts response: %d %s", accounts.Code, accounts.Body.String())
+	}
+	accountResponse := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/41", nil)
+	if accountResponse.Code != http.StatusOK || !strings.Contains(accountResponse.Body.String(), `"metadata":{"status":"active"}`) {
+		t.Fatalf("unexpected account response: %d %s", accountResponse.Code, accountResponse.Body.String())
+	}
+	invalid := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/by-name", nil)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid stable ID status = %d", invalid.Code)
+	}
+	bindings := authenticatedRequest(t, router, http.MethodGet, "/api/bindings?host=api.example&account_id=41&limit=10", nil)
+	if bindings.Code != http.StatusNotFound {
+		t.Fatalf("retired binding route status = %d: %s", bindings.Code, bindings.Body.String())
+	}
+}
+
+func TestManagementSyncQueuesGoDomainTask(t *testing.T) {
+	actors := []string{}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "management-1", Skill: "sub2api-operations", Operation: "management-snapshot-sync",
+		Status: "queued", Progress: 0, Message: "管理快照同步已排队", Result: map[string]any{},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		ManagementTasks: fakeManagementTasks{actors: &actors, task: task},
+	})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/management/sync", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"management-1"`) {
+		t.Fatalf("unexpected response: %d %s", response.Code, response.Body.String())
+	}
+	if len(actors) != 1 || actors[0] != "console" {
+		t.Fatalf("actors=%#v", actors)
+	}
+}
+
+func TestAccountMaintenanceRoutesPassCurrentVisibleStableIDs(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{ID: "maintenance-1", Skill: "sub2api-operations", Operation: "account-binding-revalidation",
+		Status: "queued", Progress: 0, Message: "已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	revalidations, repairs, cleanups := [][]string{}, [][]string{}, [][]string{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		AccountMaintenance: fakeAccountMaintenanceTasks{task: task, revalidate: &revalidations, repair: &repairs, cleanup: &cleanups},
+	})
+	for _, path := range []string{"/api/management/accounts/revalidate", "/api/management/accounts/names/repair", "/api/management/accounts/missing-bindings/cleanup"} {
+		response := authenticatedRequest(t, router, http.MethodPost, path, map[string]any{"account_ids": []string{"11", "12"}})
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"maintenance-1"`) {
+			t.Fatalf("%s response=%d %s", path, response.Code, response.Body.String())
+		}
+	}
+	if !reflect.DeepEqual(revalidations, [][]string{{"11", "12"}}) || !reflect.DeepEqual(repairs, [][]string{{"11", "12"}}) || !reflect.DeepEqual(cleanups, [][]string{{"11", "12"}}) {
+		t.Fatalf("revalidations=%#v repairs=%#v cleanups=%#v", revalidations, repairs, cleanups)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/revalidate", map[string]any{"account_ids": []string{"011"}})
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid stable ID response=%d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestUpstreamSyncRoutesPreserveScopeHostAndOperation(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "upstream-task-1", Skill: "sub2api-upstream-info", Operation: "upstream-sync",
+		Status: "queued", Progress: 0, Message: "上游同步已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	allCalls, hostCalls := []upstreamSyncCall{}, []upstreamSyncCall{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		UpstreamSync: fakeUpstreamSyncTasks{task: task, allCalls: &allCalls, hostCalls: &hostCalls},
+	})
+	for _, path := range []string{"/api/upstreams/balances/sync", "/api/upstreams/groups/sync", "/api/upstreams/sync", "/api/upstreams/names/repair"} {
+		response := authenticatedRequest(t, router, http.MethodPost, path, nil)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"upstream-task-1"`) {
+			t.Fatalf("%s response: %d %s", path, response.Code, response.Body.String())
+		}
+	}
+	if len(allCalls) != 4 || allCalls[0].scope != (upstreamsync.Scope{Balance: true}) ||
+		allCalls[1].scope != (upstreamsync.Scope{Catalog: true}) ||
+		allCalls[2].scope != (upstreamsync.Scope{Catalog: true, Balance: true}) ||
+		allCalls[3].scope != (upstreamsync.Scope{Name: true}) || allCalls[3].operation != "upstream-name-repair" {
+		t.Fatalf("all calls=%#v", allCalls)
+	}
+	balance := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/API.EXAMPLE/balance-sync", nil)
+	rate := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/api.example/rate-sync", map[string]any{"host": "https://API.EXAMPLE/", "key_id": "17"})
+	if balance.Code != http.StatusOK || rate.Code != http.StatusOK || len(hostCalls) != 2 {
+		t.Fatalf("balance=%d rate=%d calls=%#v", balance.Code, rate.Code, hostCalls)
+	}
+	if hostCalls[0].host != "API.EXAMPLE" || hostCalls[0].scope != (upstreamsync.Scope{Balance: true}) ||
+		!hostCalls[1].scope.Catalog || !hostCalls[1].scope.Balance || hostCalls[1].scope.KeyID == nil || *hostCalls[1].scope.KeyID != "17" || hostCalls[1].operation != "rate-sync" {
+		t.Fatalf("host calls=%#v", hostCalls)
+	}
+	mismatch := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/api.example/rate-sync", map[string]any{"host": "other.example"})
+	if mismatch.Code != http.StatusUnprocessableEntity || len(hostCalls) != 2 {
+		t.Fatalf("mismatch=%d calls=%#v", mismatch.Code, hostCalls)
+	}
+}
+
+func TestUpstreamSyncRoutesRejectInvalidRuntimeMode(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "upstream-task-1", Skill: "sub2api-upstream-info", Operation: "upstream-sync",
+		Status: "queued", Progress: 0, Message: "上游同步已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	allCalls, hostCalls := []upstreamSyncCall{}, []upstreamSyncCall{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "配置错误"}, Dependencies{
+		UpstreamSync: fakeUpstreamSyncTasks{task: task, allCalls: &allCalls, hostCalls: &hostCalls},
+	})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/sync", nil)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "运行模式无效：配置错误") || len(allCalls) != 0 {
+		t.Fatalf("invalid mode sync response=%d %s calls=%#v", response.Code, response.Body.String(), allCalls)
+	}
+	host := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/api.example/balance-sync", nil)
+	if host.Code != http.StatusConflict || len(hostCalls) != 0 {
+		t.Fatalf("invalid mode host sync response=%d %s calls=%#v", host.Code, host.Body.String(), hostCalls)
+	}
+}
+
+func TestHealthRejectsInvalidRuntimeMode(t *testing.T) {
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "配置错误"})
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/health", nil)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "运行模式无效：配置错误") {
+		t.Fatalf("invalid mode health response=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAuthRecoveryRoutesUseTypedManualCredentialsAndSelectedVaultEntry(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "auth-task-1", Skill: "sub2api-upstream-auth", Operation: "recover-host", Status: "queued", Progress: 0,
+		Message: "鉴权恢复已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	manualCalls := []authrecovery.ManualInput{}
+	runCalls := []upstreamSyncCall{}
+	captchaSubmits := []upstreamSyncCall{}
+	captchaCancels := []string{}
+	balance := authrecovery.BalanceResult{Status: "succeeded", BalanceStatus: "已读取"}
+	service := fakeAuthRecovery{
+		manual: authrecovery.ManualResult{Host: "api.example", Verified: true, BalanceSync: &balance},
+		task:   task, manualCalls: &manualCalls, runCalls: &runCalls, captchaSubmits: &captchaSubmits, captchaCancels: &captchaCancels,
+		captchaCompletion: authrecovery.CaptchaCompletion{CaptchaResult: authrecovery.CaptchaResult{
+			Success: true, Host: "api.example", ProfileStatus: "verified", Stored: true, InteractionKind: "image_captcha_ocr",
+		}},
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{AuthRecovery: service})
+	rows := authenticatedRequest(t, router, http.MethodGet, "/api/auth-recovery?limit=10", nil)
+	if rows.Code != http.StatusNotFound {
+		t.Fatalf("retired auth recovery history route=%d %s", rows.Code, rows.Body.String())
+	}
+	manual := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/manual", map[string]any{
+		"host": "api.example", "auth_mode": "newapi_admin_key", "admin_key": "admin", "user_id": "7",
+		"headers": map[string]any{"X-CF-Access": "signed-header"},
+	})
+	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].AdminKey == nil || *manualCalls[0].AdminKey != "admin" || !manualCalls[0].Present["admin_key"] || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
+		t.Fatalf("manual=%d %s calls=%#v", manual.Code, manual.Body.String(), manualCalls)
+	}
+	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry": "Selected"})
+	if run.Code != http.StatusOK || len(runCalls) != 1 || runCalls[0].host != "api.example" || runCalls[0].operation != "Selected" {
+		t.Fatalf("run=%d %s calls=%#v", run.Code, run.Body.String(), runCalls)
+	}
+	submit := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/captcha/submit", map[string]any{"challenge_id": "challenge-1", "captcha_code": "AB12"})
+	if submit.Code != http.StatusOK || len(captchaSubmits) != 1 || captchaSubmits[0].host != "challenge-1" || captchaSubmits[0].operation != "AB12" {
+		t.Fatalf("submit=%d %s calls=%#v", submit.Code, submit.Body.String(), captchaSubmits)
+	}
+	cancel := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/captcha/cancel", map[string]any{"challenge_id": "challenge-1"})
+	if cancel.Code != http.StatusOK || len(captchaCancels) != 1 || captchaCancels[0] != "challenge-1" || !strings.Contains(cancel.Body.String(), `"cancelled":true`) {
+		t.Fatalf("cancel=%d %s calls=%#v", cancel.Code, cancel.Body.String(), captchaCancels)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/manual", map[string]any{"host": "api.example", "unexpected": true})
+	if invalid.Code != http.StatusUnprocessableEntity || len(manualCalls) != 1 {
+		t.Fatalf("invalid=%d calls=%#v", invalid.Code, manualCalls)
+	}
+}
+
+func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "account-task-1", Skill: "sub2api-account-sync", Operation: "account-fields-sync",
+		Status: "queued", Progress: 0, Message: "账号操作已排队", Result: map[string]any{},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	fieldsCalls := []fieldsCall{}
+	accountID := "41"
+	accountName := "alpha"
+	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
+		ID: accountID, Name: accountName, Groups: []string{}, Health: "healthy", RecentResults: []business.AccountRecentResult{},
+	}}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", accountDetail: account,
+	}, Dependencies{AccountTasks: fakeAccountTasks{
+		task: task, fieldsCalls: &fieldsCalls,
+	}})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	fields := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{
+		"priority": 120, "load_factor": "2.5", "concurrency": 3000,
+		"multiplier": "0.125", "notes": nil,
+	})
+	if fields.Code != http.StatusOK || len(fieldsCalls) != 1 {
+		t.Fatalf("unexpected fields response: %d %s calls=%#v", fields.Code, fields.Body.String(), fieldsCalls)
+	}
+	patch := fieldsCalls[0].patch
+	if patch.NamePresent || !patch.PriorityPresent || patch.Priority == nil || *patch.Priority != 120 ||
+		!patch.LoadFactorPresent || patch.LoadFactor == nil || *patch.LoadFactor != "2.5" ||
+		!patch.ConcurrencyPresent || patch.Concurrency == nil || *patch.Concurrency != 3000 ||
+		!patch.MultiplierPresent || patch.Multiplier == nil || *patch.Multiplier != "0.125" || !patch.NotesPresent || patch.Notes != nil {
+		t.Fatalf("field presence/null semantics lost: %#v", patch)
+	}
+
+	models := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/41/models", nil)
+	if models.Code != http.StatusOK || !strings.Contains(models.Body.String(), `"gpt-5.1-codex"`) {
+		t.Fatalf("unexpected models response: %d %s", models.Code, models.Body.String())
+	}
+	testModel := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/test-model", map[string]any{"model": "gpt-5.1-codex"})
+	if testModel.Code != http.StatusOK || !strings.Contains(testModel.Body.String(), `"saved":true`) {
+		t.Fatalf("unexpected test model response: %d %s", testModel.Code, testModel.Body.String())
+	}
+
+	unknown := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{"website": "invalid"})
+	nullName := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{"name": nil})
+	leadingZero := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/041/control", map[string]any{"action": "pause"})
+	for label, response := range map[string]*httptest.ResponseRecorder{
+		"unknown": unknown, "null name": nullName, "leading zero": leadingZero,
+	} {
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s status=%d body=%s", label, response.Code, response.Body.String())
+		}
+	}
+	if len(fieldsCalls) != 1 {
+		t.Fatalf("invalid requests reached task service: fields=%d", len(fieldsCalls))
+	}
+	for _, path := range []string{"/api/accounts/41/scheduling", "/api/accounts/41/groups"} {
+		response := authenticatedRequest(t, router, http.MethodPost, path, map[string]any{})
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("retired account route %s status=%d", path, response.Code)
+		}
+	}
+}
+
+func TestAccountMutationReturnsNotFoundBeforeQueuing(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	calls := []fieldsCall{}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		AccountTasks: fakeAccountTasks{
+			task:        taskstore.Task{ID: "unused", Skill: "account", Operation: "fields", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+			fieldsCalls: &calls,
+		},
+	})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/99/sync", map[string]any{"multiplier": "1"})
+	if response.Code != http.StatusNotFound || len(calls) != 0 {
+		t.Fatalf("response=%d %s calls=%#v", response.Code, response.Body.String(), calls)
+	}
+}
+
+func TestAccountControlPersistsPolicyAndQueuesScopedInspection(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	accountID := "41"
+	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
+		ID: accountID, Name: "alpha", Groups: []string{"codex"}, Health: "healthy", RecentResults: []business.AccountRecentResult{},
+	}}
+	controlCalls := []string{}
+	inspectionCalls := []inspection.RunRequest{}
+	task := taskstore.Task{
+		ID: "inspection-1", Skill: "sub2api-auto-inspection", Operation: "manual-inspection", Status: "queued",
+		Progress: 0, Message: "巡检已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", accountDetail: account, accountControlCalls: &controlCalls,
+	}, Dependencies{InspectionTasks: fakeInspectionTasks{task: task, calls: &inspectionCalls}})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/control", map[string]any{"action": "pause"})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"inspection-1"`) {
+		t.Fatalf("control response=%d %s", response.Code, response.Body.String())
+	}
+	if len(controlCalls) != 1 || controlCalls[0] != "41:pause:console" || len(inspectionCalls) != 1 || inspectionCalls[0].AccountID == nil || *inspectionCalls[0].AccountID != "41" || inspectionCalls[0].Actor != "console" {
+		t.Fatalf("control=%#v inspections=%#v", controlCalls, inspectionCalls)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/control", map[string]any{"action": "delete"})
+	if invalid.Code != http.StatusUnprocessableEntity || len(controlCalls) != 1 || len(inspectionCalls) != 1 {
+		t.Fatalf("invalid control=%d calls=%#v inspections=%#v", invalid.Code, controlCalls, inspectionCalls)
+	}
+}
+
+func TestGroupAndUpstreamReadContracts(t *testing.T) {
+	groupID := "1"
+	rawRate := "1"
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式",
+		groupRows: []business.GroupStatus{{
+			Name: "codex", ID: &groupID, Strategy: "balanced", StrategySource: "global_default",
+			ParticipationStatus: "participating", Status: "healthy",
+		}},
+		groupAllocation: business.GroupAllocation{
+			GroupID: "1", GroupName: "codex", AccountCount: 1, AssignedConcurrency: 32,
+			Channels: []business.GroupAllocationChannel{{AccountID: "41", AccountName: "alpha"}},
+		},
+		upstreamSummary: business.UpstreamSummary{
+			Hosts: []business.UpstreamHost{{
+				Host: "api.example", BaseURL: "https://api.example", Name: "Example",
+				UpstreamType: "newapi", AuthStatus: "已鉴权", RechargeRate: "1", BalanceStatus: "已读取",
+			}},
+			TotalHosts: 1, AuthenticatedHosts: 1, Source: "Console 业务库",
+		},
+		upstreamGroupRows: []business.UpstreamGroup{{
+			Host: "api.example", GroupID: &groupID, Name: "codex", RawRate: &rawRate,
+			EffectiveRate: &rawRate, RechargeRate: &rawRate, KeyPresent: true, Bindable: true,
+		}},
+	})
+
+	groups := authenticatedRequest(t, router, http.MethodGet, "/api/groups", nil)
+	if groups.Code != http.StatusOK || !strings.Contains(groups.Body.String(), `"strategy_source":"global_default"`) {
+		t.Fatalf("unexpected groups response: %d %s", groups.Code, groups.Body.String())
+	}
+	allocation := authenticatedRequest(t, router, http.MethodGet, "/api/groups/1/allocation", nil)
+	if allocation.Code != http.StatusOK || !strings.Contains(allocation.Body.String(), `"assigned_concurrency":32`) {
+		t.Fatalf("unexpected group allocation response: %d %s", allocation.Code, allocation.Body.String())
+	}
+	upstreams := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams", nil)
+	if upstreams.Code != http.StatusOK || !strings.Contains(upstreams.Body.String(), `"authenticated_hosts":1`) {
+		t.Fatalf("unexpected upstreams response: %d %s", upstreams.Code, upstreams.Body.String())
+	}
+	upstreamGroups := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/groups?include_bound=false", nil)
+	if upstreamGroups.Code != http.StatusOK || !strings.Contains(upstreamGroups.Body.String(), `"bindable":true`) {
+		t.Fatalf("unexpected upstream groups response: %d %s", upstreamGroups.Code, upstreamGroups.Body.String())
+	}
+	invalid := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/groups?include_bound=perhaps", nil)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid include_bound status = %d", invalid.Code)
+	}
+}
+
+func TestUpstreamDetectionRouteUsesTypedPayload(t *testing.T) {
+	urls := []string{}
+	upstreamType := "newapi"
+	authMode := "newapi_admin_key"
+	detector := fakeUpstreamDetector{urls: &urls, result: upstreamdetect.Result{
+		BaseURL: "https://api.example", Host: "api.example", UpstreamType: &upstreamType,
+		AuthMode: &authMode, TypeDetected: true,
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		UpstreamDetect: detector,
+	})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/detect", map[string]any{"base_url": "https://api.example/"})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"upstream_type":"newapi"`) || len(urls) != 1 || urls[0] != "https://api.example/" {
+		t.Fatalf("response=%d %s urls=%#v", response.Code, response.Body.String(), urls)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams/detect", map[string]any{"base_url": "x", "extra": true})
+	if invalid.Code != http.StatusUnprocessableEntity || len(urls) != 1 {
+		t.Fatalf("invalid response=%d %s urls=%#v", invalid.Code, invalid.Body.String(), urls)
+	}
+}
+
+func TestUpstreamConfigurationRoutesPreserveExplicitNullPresence(t *testing.T) {
+	created := []upstreamconfig.Input{}
+	updated := []upstreamconfig.Input{}
+	configuration := upstreamconfig.Configuration{
+		Host: "api.example", Name: "Example", BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1", Headers: map[string]string{},
+		HeaderNames: []string{}, CookieNames: []string{}, Groups: []business.UpstreamGroup{},
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		UpstreamConfigs: fakeUpstreamConfigurations{configuration: configuration, created: &created, updated: &updated},
+	})
+	payload := map[string]any{
+		"host": "api.example", "name": "Example", "base_url": "https://api.example", "upstream_type": "sub2api",
+		"auth_mode": "sub2api_user_token", "recharge_rate": "1", "access_token": nil, "refresh_token": "refresh",
+		"headers": map[string]any{"X-Site": "one"},
+	}
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams", payload)
+	if response.Code != http.StatusOK || len(created) != 1 || !created[0].Present["access_token"] || created[0].AccessToken != nil || created[0].Headers["X-Site"] != "one" {
+		t.Fatalf("response=%d %s created=%#v", response.Code, response.Body.String(), created)
+	}
+	delete(payload, "host")
+	delete(payload, "access_token")
+	response = authenticatedRequest(t, router, http.MethodPut, "/api/upstreams/api.example/configuration", payload)
+	if response.Code != http.StatusOK || len(updated) != 1 || updated[0].Present["access_token"] {
+		t.Fatalf("response=%d %s updated=%#v", response.Code, response.Body.String(), updated)
+	}
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/configuration", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"groups":[]`) {
+		t.Fatalf("unexpected read: %d %s", read.Code, read.Body.String())
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams", map[string]any{
+		"host": "api.example", "name": "Example", "base_url": "https://api.example", "upstream_type": "sub2api",
+		"auth_mode": "sub2api_user_token", "recharge_rate": "1", "unexpected": true,
+	})
+	if invalid.Code != http.StatusUnprocessableEntity || len(created) != 1 {
+		t.Fatalf("unknown field reached service: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestOnboardingPreparationSynchronizesCatalogAndBalanceBeforeReturningCandidates(t *testing.T) {
+	hostCalls := []upstreamSyncCall{}
+	candidateHosts := []string{}
+	groupID := "6"
+	configuration := upstreamconfig.Configuration{
+		Host: "api.example", Name: "Example", BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1", Headers: map[string]string{},
+		HeaderNames: []string{}, CookieNames: []string{}, Groups: []business.UpstreamGroup{},
+	}
+	multiplier := "0.1"
+	candidates := []business.OnboardingCandidate{{
+		Number: 1, Host: "api.example", GroupID: &groupID, GroupName: "codex", Multiplier: &multiplier, Bindable: true,
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		UpstreamSync:    fakeUpstreamSyncTasks{hostCalls: &hostCalls},
+		UpstreamConfigs: fakeUpstreamConfigurations{configuration: configuration},
+		Onboarding:      fakeOnboarding{candidates: candidates, hosts: &candidateHosts},
+	})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/prepare", map[string]any{"host": "api.example"})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"group_name":"codex"`) || !strings.Contains(response.Body.String(), `"upstream":{"host":"api.example"`) {
+		t.Fatalf("prepare response=%d %s", response.Code, response.Body.String())
+	}
+	if len(hostCalls) != 1 || !hostCalls[0].scope.Catalog || !hostCalls[0].scope.Balance || hostCalls[0].actor != "console" || len(candidateHosts) != 1 || candidateHosts[0] != "api.example" {
+		t.Fatalf("sync calls=%#v candidate hosts=%#v", hostCalls, candidateHosts)
+	}
+	reason := "token 已失效"
+	failed := upstreamsync.HostResult{Host: "api.example", Status: "auth_failed", AuthStatus: "鉴权失效", BalanceStatus: "未读取", Reason: &reason}
+	failedRouter, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		UpstreamSync:    fakeUpstreamSyncTasks{hostResult: &failed},
+		UpstreamConfigs: fakeUpstreamConfigurations{configuration: configuration},
+		Onboarding:      fakeOnboarding{candidates: candidates},
+	})
+	failedResponse := authenticatedRequest(t, failedRouter, http.MethodPost, "/api/onboarding/prepare", map[string]any{"host": "api.example"})
+	if failedResponse.Code != http.StatusConflict || !strings.Contains(failedResponse.Body.String(), reason) {
+		t.Fatalf("failed prepare=%d %s", failedResponse.Code, failedResponse.Body.String())
+	}
+}
+
+func TestOnboardingProbeEndpointsWorkWithoutALocalAccount(t *testing.T) {
+	probeResult := onboarding.ProbeResult{
+		Status: "passed", Message: "上游已返回成功响应", RequestModel: "gpt-5.2",
+		ActualModel: "gpt-5.2", LatencyMS: 82, HTTPStatus: http.StatusOK, TemporaryKey: true,
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Onboarding: fakeOnboarding{models: []string{"gpt-5.2"}, probe: probeResult},
+	})
+	models := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe/models", map[string]any{
+		"host": "api.example", "group_id": "6",
+	})
+	if models.Code != http.StatusOK || !strings.Contains(models.Body.String(), `"models":["gpt-5.2"]`) {
+		t.Fatalf("models=%d %s", models.Code, models.Body.String())
+	}
+	probe := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe", map[string]any{
+		"host": "api.example", "group_id": "6", "model": "gpt-5.2",
+	})
+	if probe.Code != http.StatusOK || !strings.Contains(probe.Body.String(), `"status":"passed"`) || !strings.Contains(probe.Body.String(), `"temporary_key":true`) {
+		t.Fatalf("probe=%d %s", probe.Code, probe.Body.String())
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe", map[string]any{
+		"host": "api.example", "group_id": "6", "model": "gpt-5.2", "account_id": "41",
+	})
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid=%d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestVaultConfigurationReturnsOnlyRedactedIndex(t *testing.T) {
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"})
+	configured := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{
+		"entry": "Primary", "username": "operator", "password": "secret", "hosts": []any{"api.example"},
+		"headers": map[string]any{"X-Site": "private-value"},
+	})
+	if configured.Code != http.StatusOK {
+		t.Fatalf("vault configuration failed: %d %s", configured.Code, configured.Body.String())
+	}
+	index := authenticatedRequest(t, router, http.MethodGet, "/api/auth-recovery/config", nil)
+	if index.Code != http.StatusOK || !strings.Contains(index.Body.String(), `"has_password":true`) || strings.Contains(index.Body.String(), "operator") || strings.Contains(index.Body.String(), "private-value") {
+		t.Fatalf("private values leaked: %d %s", index.Code, index.Body.String())
+	}
+	deleted := authenticatedRequest(t, router, http.MethodDelete, "/api/auth-recovery/vault-entry?entry=Primary", nil)
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
+		t.Fatalf("vault delete failed: %d %s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestAuthRecoveryConfigurationReportsHeadersWithoutExposingValues(t *testing.T) {
+	router, private := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"})
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		Headers: map[string]string{"Authorization": "Bearer header-secret"}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	index := authenticatedRequest(t, router, http.MethodGet, "/api/auth-recovery/config", nil)
+	if index.Code != http.StatusOK || !strings.Contains(index.Body.String(), `"has_headers":true`) || strings.Contains(index.Body.String(), "header-secret") {
+		t.Fatalf("unexpected private auth index: %d %s", index.Code, index.Body.String())
+	}
+}
+
+func TestGroupMutationContractsUsePathIDAndTypedPayload(t *testing.T) {
+	groupID := "6"
+	policyUpdates := []map[string]any{}
+	excludedUpdates := []bool{}
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", groupPolicyUpdates: &policyUpdates, groupExcludedUpdates: &excludedUpdates,
+		groupRows: []business.GroupStatus{{Name: "codex", ID: &groupID, Strategy: "reliability", StrategySource: "group_override"}},
+	})
+	payload := map[string]any{
+		"enabled": true, "strategy": "reliability", "min_pool_size": 2, "weight_budget": 500,
+		"balanced_price_ratio": 0.4, "breaker_enabled": false, "recovery_enabled": true,
+		"weights_enabled": true, "scaling_enabled": false, "probe_enabled": true,
+		"probe_interval_seconds": 600, "probe_model": nil,
+	}
+	updated := authenticatedRequest(t, router, http.MethodPut, "/api/groups/6/policy", payload)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"strategy":"reliability"`) {
+		t.Fatalf("group policy update failed: %d %s", updated.Code, updated.Body.String())
+	}
+	if len(policyUpdates) != 1 {
+		t.Fatalf("group policy update not dispatched: %#v", policyUpdates)
+	}
+	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/groups/6/policy", nil)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"strategy_source":"group_override"`) {
+		t.Fatalf("group policy clear failed: %d %s", cleared.Code, cleared.Body.String())
+	}
+	excluded := authenticatedRequest(t, router, http.MethodPut, "/api/groups/6/excluded", map[string]any{"excluded": true})
+	if excluded.Code != http.StatusOK || len(excludedUpdates) != 1 || !excludedUpdates[0] {
+		t.Fatalf("group exclusion failed: %d %s updates=%#v", excluded.Code, excluded.Body.String(), excludedUpdates)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/groups/6/excluded", map[string]any{"excluded": true, "extra": true})
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unexpected unknown-field status: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestPolicyReadContract(t *testing.T) {
+	strategy := "balanced"
+	groupID := "6"
+	router, store := testRouter(t, config.Config{}, fakeBusiness{
+		mode: "完全模式",
+		policySnapshot: business.PolicySnapshot{
+			Available:      true,
+			Source:         "当前控制面策略",
+			Mode:           "完全模式",
+			GlobalStrategy: &strategy,
+			GroupStrategies: []business.PolicyGroupStrategy{{
+				ID: &groupID, Name: "codex", Strategy: "speed_first", StrategySource: "group_override",
+				ParticipationStatus: "participating", AccountCount: 2,
+			}},
+			AutoApply:        map[string]any{"schedulable": true},
+			ExcludedGroupIDs: []string{},
+			AdvancedPolicy:   map[string]any{}, ConfigurationErrors: []string{},
+		},
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	response := request(t, router, http.MethodGet, "/api/policy", nil, cookie.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("policy read failed: %d %s", response.Code, response.Body.String())
+	}
+	var snapshot business.PolicySnapshot
+	if err := json.Unmarshal(response.Body.Bytes(), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Mode != "完全模式" || snapshot.GlobalStrategy == nil || *snapshot.GlobalStrategy != "balanced" {
+		t.Fatalf("unexpected global strategy: %#v", snapshot.GlobalStrategy)
+	}
+	if len(snapshot.GroupStrategies) != 1 || snapshot.GroupStrategies[0].Strategy != "speed_first" || snapshot.GroupStrategies[0].StrategySource != "group_override" {
+		t.Fatalf("group override was not preserved: %#v", snapshot.GroupStrategies)
+	}
+}
+
+func TestPolicyUpdatePreservesExplicitEmptyCollections(t *testing.T) {
+	updates := []map[string]any{}
+	actors := []string{}
+	strategy := "balanced"
+	router, store := testRouter(t, config.Config{}, fakeBusiness{
+		mode: "完全模式", policyUpdates: &updates, policyActors: &actors,
+		policySnapshot: business.PolicySnapshot{
+			Available: true, Source: "当前控制面策略", GlobalStrategy: &strategy,
+			GroupStrategies: []business.PolicyGroupStrategy{}, AutoApply: map[string]any{},
+			ExcludedGroupIDs: []string{},
+			AdvancedPolicy:   map[string]any{}, ConfigurationErrors: []string{},
+		},
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+	response := request(t, router, http.MethodPut, "/api/policy", map[string]any{
+		"mode": "调度模式", "excluded_group_ids": []any{}, "group_strategies": map[string]any{"6": nil},
+	}, cookie.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("policy update failed: %d %s", response.Code, response.Body.String())
+	}
+	if len(updates) != 1 || len(updates[0]["excluded_group_ids"].([]any)) != 0 {
+		t.Fatalf("explicit empty array was lost: %#v", updates)
+	}
+	if updates[0]["mode"] != "调度模式" {
+		t.Fatalf("runtime mode was not submitted with the policy: %#v", updates[0])
+	}
+	groupStrategies, ok := updates[0]["group_strategies"].(map[string]any)
+	if !ok || groupStrategies["6"] != nil {
+		t.Fatalf("explicit null override reset was lost: %#v", updates[0]["group_strategies"])
+	}
+	if len(actors) != 1 || actors[0] != "operator" {
+		t.Fatalf("unexpected policy actor: %#v", actors)
+	}
+	invalid := request(t, router, http.MethodPut, "/api/policy", nil, cookie.String())
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("null body status = %d body=%s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestNotificationAndInspectionServiceContracts(t *testing.T) {
+	messages := []string{}
+	configs := []business.AutoInspectionConfig{}
+	events := []int64{}
+	messageID := "confirmed-message"
+	businessService := fakeBusiness{mode: "完全模式", runtimeEventIDs: &events}
+	notifier := fakeNotifier{messages: &messages, result: notification.TestResult{
+		Sent: true, Detail: "发送成功", MessageID: &messageID, RuntimeEventID: -2, Persisted: true,
+	}}
+	controller := fakeInspectionController{configs: &configs, status: inspection.Status{
+		AutoInspectionConfig: business.AutoInspectionConfig{Enabled: false, IntervalSeconds: 15},
+		Queue:                []inspection.QueueItem{}, HeartbeatHistory: []business.InspectionHeartbeat{},
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, businessService, Dependencies{
+		Notification: notifier, Inspection: controller,
+	})
+
+	notificationResponse := authenticatedRequest(t, router, http.MethodPost, "/api/notifications/test", map[string]any{
+		"message": "Sub2API Console 通知测试", "dry_run": false,
+	})
+	if notificationResponse.Code != http.StatusOK || !strings.Contains(notificationResponse.Body.String(), `"message_id":"confirmed-message"`) || len(messages) != 1 {
+		t.Fatalf("unexpected notification test: %d %s messages=%#v", notificationResponse.Code, notificationResponse.Body.String(), messages)
+	}
+	inspectionResponse := authenticatedRequest(t, router, http.MethodGet, "/api/inspection/automation", nil)
+	if inspectionResponse.Code != http.StatusOK || !strings.Contains(inspectionResponse.Body.String(), `"interval_seconds":15`) {
+		t.Fatalf("unexpected inspection status: %d %s", inspectionResponse.Code, inspectionResponse.Body.String())
+	}
+	updated := authenticatedRequest(t, router, http.MethodPut, "/api/inspection/automation", map[string]any{
+		"enabled": true, "interval_seconds": 30,
+	})
+	if updated.Code != http.StatusOK || len(configs) != 1 || !configs[0].Enabled || configs[0].IntervalSeconds != 30 || len(events) != 1 {
+		t.Fatalf("unexpected inspection update: %d %s configs=%#v events=%#v", updated.Code, updated.Body.String(), configs, events)
+	}
+	canceled := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/automation/cancel", nil)
+	if canceled.Code != http.StatusOK || !strings.Contains(canceled.Body.String(), `"canceled":`) {
+		t.Fatalf("unexpected inspection cancellation: %d %s", canceled.Code, canceled.Body.String())
+	}
+	resumed := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/automation/resume", nil)
+	if resumed.Code != http.StatusOK || !strings.Contains(resumed.Body.String(), `"enabled":true`) || len(events) != 3 {
+		t.Fatalf("unexpected inspection resume: %d %s events=%#v", resumed.Code, resumed.Body.String(), events)
+	}
+}
+
+func TestInspectionUpdateReturnsActualStateWhenSecondaryEventPersistenceFails(t *testing.T) {
+	configs := []business.AutoInspectionConfig{}
+	controller := fakeInspectionController{configs: &configs, status: inspection.Status{
+		AutoInspectionConfig: business.AutoInspectionConfig{Enabled: false, IntervalSeconds: 15},
+		Queue:                []inspection.QueueItem{},
+		HeartbeatHistory:     []business.InspectionHeartbeat{},
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", runtimeEventError: errors.New("event database unavailable"),
+	}, Dependencies{Inspection: controller})
+	response := authenticatedRequest(t, router, http.MethodPut, "/api/inspection/automation", map[string]any{
+		"enabled": true, "interval_seconds": 30,
+	})
+	if response.Code != http.StatusOK || len(configs) != 1 || !configs[0].Enabled {
+		t.Fatalf("updated state was reported as failed: %d %s configs=%#v", response.Code, response.Body.String(), configs)
+	}
+}
+
+func TestInspectionHistoryAndLogMaintenanceContracts(t *testing.T) {
+	updates := [][2]int{}
+	controller := fakeInspectionController{status: inspection.Status{
+		AutoInspectionConfig: business.AutoInspectionConfig{Enabled: false, IntervalSeconds: 15},
+		Queue:                []inspection.QueueItem{}, HeartbeatHistory: []business.InspectionHeartbeat{},
+	}}
+	maintenance := fakeLogMaintenance{
+		status:  consolelogs.CleanupStatus{LogCleanupSettings: configstore.LogCleanupSettings{RetentionDays: 30}},
+		updates: &updates,
+		result:  consolelogs.CleanupResult{Tasks: 1, Runs: 2, Events: 3, Changes: 4, Total: 10},
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Inspection: controller, LogMaintenance: maintenance,
+	})
+
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/config/log-cleanup", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"retention_days":30`) {
+		t.Fatalf("unexpected cleanup status: %d %s", read.Code, read.Body.String())
+	}
+	updated := authenticatedRequest(t, router, http.MethodPut, "/api/config/log-cleanup", map[string]any{"enabled": true, "retention_days": 45})
+	if updated.Code != http.StatusOK || len(updates) != 1 || updates[0] != [2]int{1, 45} {
+		t.Fatalf("unexpected cleanup update: %d %s updates=%#v", updated.Code, updated.Body.String(), updates)
+	}
+	missingRetention := authenticatedRequest(t, router, http.MethodDelete, "/api/logs", nil)
+	if missingRetention.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("cleanup without retention must be rejected: %d %s", missingRetention.Code, missingRetention.Body.String())
+	}
+	clearedLogs := authenticatedRequest(t, router, http.MethodDelete, "/api/logs?retention_days=45", nil)
+	if clearedLogs.Code != http.StatusOK || !strings.Contains(clearedLogs.Body.String(), `"total":10`) || !strings.Contains(clearedLogs.Body.String(), `"retention_days":45`) {
+		t.Fatalf("unexpected log cleanup: %d %s", clearedLogs.Code, clearedLogs.Body.String())
+	}
+	clearedHeartbeats := authenticatedRequest(t, router, http.MethodDelete, "/api/inspection/automation/history", nil)
+	if clearedHeartbeats.Code != http.StatusOK || !strings.Contains(clearedHeartbeats.Body.String(), `"deleted":2`) {
+		t.Fatalf("unexpected heartbeat cleanup: %d %s", clearedHeartbeats.Code, clearedHeartbeats.Body.String())
+	}
+}
+
+func TestActiveProbeRoutePreservesOptionalFiltersAndRejectsInvalidValues(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	calls := []probeCall{}
+	task := taskstore.Task{
+		ID: "probe-1", Skill: "sub2api-connectivity-test", Operation: "active-probe", Status: "queued",
+		Progress: 0, Message: "主动探测已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		ProbeTasks: fakeProbeTasks{task: task, calls: &calls},
+	})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/probe", map[string]any{
+		"account_id": "41", "group_name": " codex ",
+	})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"probe-1"`) || len(calls) != 1 {
+		t.Fatalf("response=%d %s calls=%#v", response.Code, response.Body.String(), calls)
+	}
+	if calls[0].request.AccountID == nil || *calls[0].request.AccountID != "41" || calls[0].request.GroupName == nil || *calls[0].request.GroupName != "codex" || calls[0].actor != "console" {
+		t.Fatalf("optional filters were not preserved: %#v", calls[0])
+	}
+
+	invalidBodies := []map[string]any{
+		{"account_id": nil}, {"account_id": "041"}, {"group_name": nil}, {"group_name": " "}, {"unexpected": true},
+	}
+	for _, body := range invalidBodies {
+		invalid := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/probe", body)
+		if invalid.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("body=%#v status=%d response=%s", body, invalid.Code, invalid.Body.String())
+		}
+	}
+	if len(calls) != 1 {
+		t.Fatalf("invalid requests reached probe service: %#v", calls)
+	}
+}
+
+func TestModelCheckRoutesExposeCapabilitiesAndForwardAccountMatrix(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	requests := []modelcheck.Request{}
+	task := taskstore.Task{
+		ID: "model-check-1", Skill: "sub2api-model-check", Operation: "model-behavior-check",
+		Status: "queued", Progress: 0, Message: "模型检测已排队", Result: map[string]any{"credentials_persisted": false},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		ModelChecks: fakeModelChecks{task: task, requests: &requests},
+	})
+	capabilities := authenticatedRequest(t, router, http.MethodGet, "/api/model-checks/capabilities", nil)
+	if capabilities.Code != http.StatusOK || !strings.Contains(capabilities.Body.String(), `"claude_standards":["claude-opus-5"]`) {
+		t.Fatalf("unexpected capabilities: %d %s", capabilities.Code, capabilities.Body.String())
+	}
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", map[string]any{
+		"account_ids": []string{"41", "42"}, "models": []string{"claude-opus-5", "gpt-5.6-sol"},
+		"rounds": 3, "timeout_seconds": 40,
+	})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"model-check-1"`) || len(requests) != 1 {
+		t.Fatalf("response=%d %s requests=%#v", response.Code, response.Body.String(), requests)
+	}
+	if len(requests[0].AccountIDs) != 2 || len(requests[0].Models) != 2 || requests[0].Rounds != 3 {
+		t.Fatalf("request fields not preserved: %#v", requests[0])
+	}
+
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", map[string]any{
+		"account_ids": []string{}, "models": []string{"gpt-5.6-sol"},
+	})
+	if invalid.Code != http.StatusUnprocessableEntity || len(requests) != 1 {
+		t.Fatalf("invalid request reached service: status=%d requests=%#v", invalid.Code, requests)
+	}
+}
+
+func TestTaskReadContracts(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repository := fakeTaskRepository{rows: []taskstore.Task{{
+		ID: "task-1", Skill: "console", Operation: "sync", Status: "running", Progress: 40,
+		Message: "同步中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{Tasks: repository})
+	list := authenticatedRequest(t, router, http.MethodGet, "/api/tasks?limit=1", nil)
+	if list.Code != http.StatusNotFound {
+		t.Fatalf("retired task list status: %d %s", list.Code, list.Body.String())
+	}
+	detail := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/task-1", nil)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"progress":40`) {
+		t.Fatalf("unexpected task detail: %d %s", detail.Code, detail.Body.String())
+	}
+	missing := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/missing", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing task status = %d", missing.Code)
+	}
+	missingEvents := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/missing/events", nil)
+	if missingEvents.Code != http.StatusNotFound || !strings.Contains(missingEvents.Body.String(), taskstore.ErrNotFound.Error()) {
+		t.Fatalf("missing task event stream = %d %s", missingEvents.Code, missingEvents.Body.String())
+	}
+}
+
+func TestTaskEventStreamContinuesUntilTerminalState(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	running := taskstore.Task{
+		ID: "long-task", Skill: "console", Operation: "inspect", Status: "running", Progress: 50,
+		Message: "运行中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	succeeded := running
+	succeeded.Status, succeeded.Progress, succeeded.Message = "succeeded", 100, "完成"
+	repository := &sequenceTaskRepository{rows: []taskstore.Task{running, succeeded}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{Tasks: repository})
+
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/long-task/events", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("task event stream status = %d: %s", response.Code, response.Body.String())
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "text/event-stream") {
+		t.Fatalf("unexpected content type: %q", contentType)
+	}
+	if response.Header().Get("Cache-Control") != "no-cache" || response.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("missing SSE proxy headers: %#v", response.Header())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, `"status":"running"`) || !strings.Contains(body, `"status":"succeeded"`) || repository.reads != 2 {
+		t.Fatalf("stream did not reach terminal state: reads=%d body=%s", repository.reads, body)
+	}
+}
+
+func TestRequestTraceAndAlertRoutesUseCurrentServicesAndBoundedLimits(t *testing.T) {
+	requestIDs := []string{}
+	trace := business.RequestTrace{RequestID: "req/42", Matched: true, Records: []business.UsageRecord{}, RecentErrors: []business.UsageRecord{}}
+	alert := business.AlertListItem{AlertIncident: business.AlertIncident{
+		IncidentKey: "probe:41", EventType: "probe_failed", ObjectKind: "account", ObjectID: "41",
+		CauseCode: "timeout", Status: "open", FirstSeenAt: "2026-08-27T00:00:00Z", LastSeenAt: "2026-08-27T00:00:00Z",
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", alertRows: []business.AlertListItem{alert}, clearedAlerts: 1,
+	}, Dependencies{RequestTrace: fakeTraceReader{trace: trace, ids: &requestIDs}})
+	traceResponse := authenticatedRequest(t, router, http.MethodGet, "/api/usage/trace/req%2F42", nil)
+	if traceResponse.Code != http.StatusOK || !strings.Contains(traceResponse.Body.String(), `"request_id":"req/42"`) || len(requestIDs) != 1 || requestIDs[0] != "req/42" {
+		t.Fatalf("trace=%d %s ids=%#v", traceResponse.Code, traceResponse.Body.String(), requestIDs)
+	}
+	alerts := authenticatedRequest(t, router, http.MethodGet, "/api/alerts?limit=200", nil)
+	if alerts.Code != http.StatusOK || !strings.Contains(alerts.Body.String(), `"incident_key":"probe:41"`) {
+		t.Fatalf("alerts=%d %s", alerts.Code, alerts.Body.String())
+	}
+	invalidLimit := authenticatedRequest(t, router, http.MethodGet, "/api/alerts?limit=100001", nil)
+	if invalidLimit.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid alert limit=%d %s", invalidLimit.Code, invalidLimit.Body.String())
+	}
+	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/alerts", nil)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"deleted":1`) {
+		t.Fatalf("clear alerts=%d %s", cleared.Code, cleared.Body.String())
+	}
+}
+
+func TestRequestTraceTimeoutReturnsGatewayTimeout(t *testing.T) {
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式",
+	}, Dependencies{RequestTrace: fakeTraceReader{err: context.DeadlineExceeded}})
+
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/usage/trace/req-timeout", nil)
+	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "请求追踪超时") {
+		t.Fatalf("trace timeout=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestNotificationQueueRouteReturnsCurrentQueueContents(t *testing.T) {
+	keys := []string{}
+	details := business.NotificationQueueDetails{
+		ProducerFiring: []business.NotificationQueueItem{{AlertIncident: business.AlertIncident{
+			IncidentKey: "balance:host", EventType: "upstream.balance", ObjectKind: "host", ObjectID: "api.example",
+			CauseCode: "BALANCE:5", Status: "firing", FirstSeenAt: "2026-08-28T12:00:00Z", LastSeenAt: "2026-08-28T12:01:00Z",
+		}}},
+		ProducerRecovered: []business.NotificationQueueItem{},
+		ConsumerPending:   []business.NotificationQueueItem{},
+		ConsumerFailed:    []business.NotificationQueueItem{},
+	}
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeQueueBusiness{
+		fakeBusiness: fakeBusiness{mode: "完全模式"}, details: details, keys: &keys,
+	})
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/notifications/queue", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"incident_key":"balance:host"`) ||
+		!strings.Contains(response.Body.String(), `"consumer_pending":[]`) {
+		t.Fatalf("unexpected queue response: %d %s", response.Code, response.Body.String())
+	}
+	if len(keys) != 1 || keys[0] == "" {
+		t.Fatalf("notification channel key was not resolved: %#v", keys)
+	}
+}
+
+func TestAlertPolicyContracts(t *testing.T) {
+	policy := business.DefaultAlertPolicy()
+	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式", alertPolicy: policy})
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/alerts/policy", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"balance_thresholds":["20","10","5"]`) {
+		t.Fatalf("unexpected alert policy: %d %s", read.Code, read.Body.String())
+	}
+	payload := map[string]any{
+		"enabled": true, "configuration_enabled": true, "auth_enabled": true, "rate_sync_enabled": true,
+		"balance_enabled": true, "probe_enabled": true, "balance_thresholds": []any{"20", "10", "5"},
+		"routing_breaker_enabled": true, "routing_degraded_enabled": true, "routing_survivor_enabled": true,
+		"group_unavailable_enabled": true, "group_survivor_enabled": true, "apply_failure_enabled": true,
+		"probe_failure_streak": 1, "probe_groups": []any{}, "delivery_enabled": true, "notify_recovery": true,
+		"repeat_interval_minutes": 0, "merge_threshold": 10,
+	}
+	updated := authenticatedRequest(t, router, http.MethodPut, "/api/alerts/policy", payload)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("alert policy update failed: %d %s", updated.Code, updated.Body.String())
+	}
+}
+
+func TestParseOnboardingBatchRequestsKeepsEachBindingExplicit(t *testing.T) {
+	requests, err := parseOnboardingBatchRequests(map[string]any{
+		"items": []any{
+			map[string]any{
+				"host": "https://upstream.test", "upstream_type": "sub2api", "multiplier": "0.2",
+				"local_group_id": json.Number("3"), "upstream_group_id": "6",
+			},
+			map[string]any{
+				"host": "https://upstream.test", "upstream_type": "sub2api", "multiplier": "0.3",
+				"local_group_id": json.Number("4"), "upstream_group_id": "7",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0].LocalGroupID != "3" || requests[1].UpstreamGroupID != "7" {
+		t.Fatalf("requests=%#v", requests)
+	}
+}
+
+func TestParseOnboardingBatchRequestsRejectsInvalidBatchShape(t *testing.T) {
+	for name, payload := range map[string]map[string]any{
+		"empty":         {"items": []any{}},
+		"not an array":  {"items": "invalid"},
+		"unknown field": {"items": []any{}, "host": "upstream.test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseOnboardingBatchRequests(payload); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func testRouter(t *testing.T, cfg config.Config, business Business) (http.Handler, *configstore.Store) {
+	return testRouterWithDependencies(t, cfg, business, Dependencies{})
+}
+
+func testRouterWithDependencies(t *testing.T, cfg config.Config, business Business, dependencies Dependencies) (http.Handler, *configstore.Store) {
+	t.Helper()
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "console-config.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	router := New(cfg, store, business, dependencies)
+	return router, store
+}
+
+func request(t *testing.T, handler http.Handler, method string, path string, payload any, cookie string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body *bytes.Reader
+	if payload == nil {
+		body = bytes.NewReader(nil)
+	} else {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, body)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	return response
+}
+
+func authenticatedRequest(t *testing.T, handler http.Handler, method string, path string, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+	var body *bytes.Reader
+	if payload == nil {
+		body = bytes.NewReader(nil)
+	} else {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set("Authorization", "Bearer test-token")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	return response
+}
+
+func responseCookie(t *testing.T, response *httptest.ResponseRecorder, name string) *http.Cookie {
+	t.Helper()
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	t.Fatalf("cookie %q not found", name)
+	return nil
+}
+
+func testNow() (result time.Time) {
+	return time.Now()
+}

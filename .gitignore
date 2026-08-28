@@ -1,0 +1,17 @@
+backend/.venv/
+backend/.pytest_cache/
+backend/data/
+backend/**/__pycache__/
+/.pytest_cache/
+/bin/
+/node_modules/
+/backend/bin/
+/data/
+frontend/node_modules/
+frontend/dist/
+frontend/.rsbuild-cache/
+*.pyc
+*.log
+.env
+.env.*
+!.env.example

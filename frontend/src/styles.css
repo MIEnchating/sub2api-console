@@ -1,0 +1,41 @@
+@import "./newapi-index.css";
+
+/* The authenticated console owns the viewport. Keep the document itself from
+ * becoming a second vertical scroll container; each PageLayout content slot is
+ * the single page scroll region, matching New API's authenticated layout. */
+html:has(#root [data-slot="sidebar-wrapper"]),
+body:has(#root [data-slot="sidebar-wrapper"]),
+#root:has([data-slot="sidebar-wrapper"]) {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Base UI marks the body while a sheet is open. The imported New API base
+ * style relaxes body overflow for that state, so restore the console's
+ * viewport boundary and prevent a second scrollbar beside detail sheets. */
+body[data-scroll-locked]:has(#root [data-slot="sidebar-wrapper"]) {
+  overflow: hidden !important;
+}
+
+/* Keep panel headings aligned with the New API card header. Rows start directly
+ * below the divider; adding an extra first-row margin makes dense tables look
+ * disconnected and creates the excessive bottom whitespace seen in compact
+ * views. */
+.console-panel-heading {
+  min-height: 3.5rem !important;
+  padding-block: 0.875rem !important;
+}
+
+/* New API uses compact cards for table/list panels while regular form cards
+ * retain the primitive's default gap and vertical padding. */
+.console-page [data-slot="card"]:has(> .console-panel-heading),
+.console-page [data-slot="card"]:has(> [data-slot="card-content"].p-0) {
+  gap: 0;
+  padding-block: 0;
+}
+
+/* Error banners must remain inside their parent action/content row. */
+[role="alert"] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,650 @@
+package inspection
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
+	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
+	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+)
+
+type runnerRepositoryStub struct {
+	trafficDue   bool
+	upstreamDue  bool
+	alertEnabled bool
+	routingDue   bool
+	mode         string
+	markErr      error
+	marked       []string
+	policy       map[string]any
+}
+
+func (r *runnerRepositoryStub) ControlPolicy(context.Context) (map[string]any, error) {
+	if r.policy != nil {
+		return r.policy, nil
+	}
+	return map[string]any{
+		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60)},
+		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+	}, nil
+}
+
+func (r *runnerRepositoryStub) Mode(context.Context) (string, error) {
+	if r.mode == "" {
+		return runtimepolicy.Full, nil
+	}
+	return r.mode, nil
+}
+
+func (r *runnerRepositoryStub) AlertPolicy(context.Context) (business.AlertPolicy, error) {
+	return business.AlertPolicy{Enabled: r.alertEnabled}, nil
+}
+
+func (r *runnerRepositoryStub) InspectionTaskDue(_ context.Context, name string, _ int, _ time.Time) (bool, error) {
+	if name == "traffic" {
+		return r.trafficDue, nil
+	}
+	return r.upstreamDue, nil
+}
+
+func (r *runnerRepositoryStub) MarkInspectionTask(_ context.Context, name string, _ time.Time) error {
+	r.marked = append(r.marked, name)
+	return r.markErr
+}
+
+func (r *runnerRepositoryStub) RoutingWritebackPending(context.Context) (bool, error) {
+	return r.routingDue, nil
+}
+
+type evidencePlannerStub struct {
+	plan     evidence.Plan
+	collects int
+	options  []evidence.Options
+}
+
+func (e *evidencePlannerStub) Plan(context.Context, map[string]any, *string, *string, time.Time) (evidence.Plan, error) {
+	return e.plan, nil
+}
+
+func (e *evidencePlannerStub) Collect(_ context.Context, _ map[string]any, _ evidence.Admin, options evidence.Options) (evidence.Result, error) {
+	e.collects++
+	e.options = append(e.options, options)
+	return evidence.Result{}, nil
+}
+
+type alertEvaluatorStub struct {
+	calls  int
+	result alerting.Result
+}
+
+func (e *alertEvaluatorStub) Evaluate(context.Context) (alerting.Result, error) {
+	e.calls++
+	if e.result.Findings == 0 {
+		e.result.Findings = 2
+	}
+	return e.result, nil
+}
+
+type countingTaskStore struct {
+	saves int
+	last  taskstore.Task
+}
+
+func (s *countingTaskStore) Save(_ context.Context, task taskstore.Task) error {
+	s.saves++
+	s.last = task
+	return nil
+}
+
+type routerStub struct {
+	calls            int
+	persistDecisions bool
+}
+
+func (s *routerStub) Calculate(_ context.Context, _ routing.Scope, persistDecisions bool) (routing.Result, error) {
+	s.calls++
+	s.persistDecisions = persistDecisions
+	return routing.Result{AccountTargets: map[string]business.AccountRoutingTarget{}}, nil
+}
+
+type writerStub struct{ calls int }
+
+func (s *writerStub) Apply(context.Context, map[string]business.AccountRoutingTarget, string) (routingwrite.Result, error) {
+	s.calls++
+	return routingwrite.Result{}, nil
+}
+
+type parallelEvidenceStub struct {
+	evidencePlannerStub
+	started         chan struct{}
+	upstreamStarted <-chan struct{}
+}
+
+func (s *parallelEvidenceStub) Collect(ctx context.Context, _ map[string]any, _ evidence.Admin, _ evidence.Options) (evidence.Result, error) {
+	close(s.started)
+	select {
+	case <-s.upstreamStarted:
+		return evidence.Result{}, nil
+	case <-ctx.Done():
+		return evidence.Result{}, ctx.Err()
+	}
+}
+
+type parallelUpstreamStub struct {
+	started         chan struct{}
+	evidenceStarted <-chan struct{}
+}
+
+func (s *parallelUpstreamStub) SyncAllNow(ctx context.Context, _ upstreamsync.Scope, _ string) (upstreamsync.BatchResult, error) {
+	close(s.started)
+	select {
+	case <-s.evidenceStarted:
+		return upstreamsync.BatchResult{}, nil
+	case <-ctx.Done():
+		return upstreamsync.BatchResult{}, ctx.Err()
+	}
+}
+
+func TestInspectionRunsUpstreamSyncAndEvidenceCollectionInParallel(t *testing.T) {
+	evidenceStarted := make(chan struct{})
+	upstreamStarted := make(chan struct{})
+	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, mode: runtimepolicy.Monitoring}
+	collector := &parallelEvidenceStub{
+		evidencePlannerStub: evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}},
+		started:             evidenceStarted, upstreamStarted: upstreamStarted,
+	}
+	upstreams := &parallelUpstreamStub{started: upstreamStarted, evidenceStarted: evidenceStarted}
+	runner := NewRunner(repository, nil, collector, &routerStub{}, nil, nil, upstreams, &countingTaskStore{})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	result, err := runner.Run(ctx, RunRequest{Actor: "operator"})
+
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("parallel collection phase failed: result=%#v err=%v", result, err)
+	}
+	if len(result.OperationTiming) < 2 || result.OperationTiming[0].StartedAt == nil || result.OperationTiming[1].StartedAt == nil {
+		t.Fatalf("parallel operation start times were not recorded: %#v", result.OperationTiming)
+	}
+}
+
+func TestInspectionDoesNotRepeatExternalWorkWhenDueStateCannotBeSaved(t *testing.T) {
+	repository := &runnerRepositoryStub{
+		trafficDue: true, upstreamDue: true, mode: runtimepolicy.Monitoring,
+		markErr: errors.New("database busy"),
+	}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41"}}}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, tasks)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" || planner.collects != 0 {
+		t.Fatalf("result=%#v collects=%d", result, planner.collects)
+	}
+	if len(repository.marked) != 2 || tasks.last.Result["error"] == nil {
+		t.Fatalf("marked=%#v task=%#v", repository.marked, tasks.last)
+	}
+}
+
+func TestAutomaticRunDoesNotCreateTaskWhenNothingIsDue(t *testing.T) {
+	repository := &runnerRepositoryStub{}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{}}}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, tasks)
+	runner.now = func() time.Time { return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC) }
+
+	result, err := runner.Execute(context.Background(), business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Skipped || result.Status != "succeeded" || result.TaskID != nil || tasks.saves != 0 {
+		t.Fatalf("empty heartbeat created a business task: result=%#v saves=%d", result, tasks.saves)
+	}
+}
+
+func TestPendingWritebackRunsWithoutNewCollection(t *testing.T) {
+	repository := &runnerRepositoryStub{routingDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	router := &routerStub{}
+	writer := &writerStub{}
+	runner := NewRunner(repository, nil, planner, router, writer, nil, nil, &countingTaskStore{})
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "自动巡检", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || planner.collects != 0 || router.calls != 1 || writer.calls != 1 {
+		t.Fatalf("pending retry did not run calculation-only convergence: result=%#v collects=%d router=%d writer=%d",
+			result, planner.collects, router.calls, writer.calls)
+	}
+	if len(result.Operations) != 2 || result.Operations[0] != operationRoutingCalculation || result.Operations[1] != operationRoutingWriteback {
+		t.Fatalf("operations=%#v", result.Operations)
+	}
+}
+
+func TestScopedManualInspectionIsDiagnosticOnly(t *testing.T) {
+	accountID := "41"
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	router := &routerStub{}
+	writer := &writerStub{}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(repository, nil, planner, router, writer, nil, nil, tasks)
+	runner.now = func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) }
+
+	result, err := runner.Run(context.Background(), RunRequest{AccountID: &accountID, Actor: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || router.calls != 1 || router.persistDecisions || writer.calls != 0 {
+		t.Fatalf("scoped inspection performed scheduling mutation: result=%#v router=%#v writer=%#v", result, router, writer)
+	}
+	for _, operation := range result.Operations {
+		if operation == operationRoutingWriteback {
+			t.Fatalf("scoped diagnostic advertised automatic execution: %#v", result.Operations)
+		}
+	}
+	if tasks.last.Message != "诊断巡检完成：仅更新健康评估，未保存调度结果，未自动执行远程变更" || tasks.last.Result["diagnostic_only"] != true {
+		t.Fatalf("scoped diagnostic semantics are not visible: %#v", tasks.last)
+	}
+}
+
+func TestUnscopedFullModeInspectionCanPersistAndApply(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, trafficDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	router := &routerStub{}
+	writer := &writerStub{}
+	runner := NewRunner(repository, nil, planner, router, writer, nil, nil, &countingTaskStore{})
+	runner.now = func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) }
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || router.calls != 1 || !router.persistDecisions || writer.calls != 1 {
+		t.Fatalf("unscoped full inspection did not apply policy: result=%#v router=%#v writer=%#v", result, router, writer)
+	}
+}
+
+func TestUpstreamOnlyInspectionStillRecalculatesAndAppliesRouting(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	router := &routerStub{}
+	writer := &writerStub{}
+	runner := NewRunner(repository, nil, planner, router, writer, nil, &parallelUpstreamStub{
+		started: make(chan struct{}), evidenceStarted: closedChannel(),
+	}, &countingTaskStore{})
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || router.calls != 1 || writer.calls != 1 {
+		t.Fatalf("upstream-only inspection skipped routing: result=%#v router=%#v writer=%#v", result, router, writer)
+	}
+}
+
+func TestInspectionTaskPersistsPlannedActiveAndCompletedOperations(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, trafficDue: true, alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41"}}}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(repository, nil, planner, &routerStub{}, &writerStub{}, &alertEvaluatorStub{}, nil, tasks)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" {
+		t.Fatalf("inspection failed: %#v", result)
+	}
+	planned, ok := tasks.last.Result["planned_operations"].([]QueueOperation)
+	if !ok || len(planned) != 5 {
+		t.Fatalf("planned operations were not persisted: %#v", tasks.last.Result)
+	}
+	completed, ok := tasks.last.Result["completed_operations"].([]string)
+	if !ok || len(completed) != 5 {
+		t.Fatalf("completed operations were not persisted: %#v", tasks.last.Result)
+	}
+	active, ok := tasks.last.Result["active_operations"].([]string)
+	if !ok || len(active) != 0 {
+		t.Fatalf("terminal task kept active operations: %#v", tasks.last.Result)
+	}
+}
+
+func closedChannel() <-chan struct{} {
+	value := make(chan struct{})
+	close(value)
+	return value
+}
+
+func TestGlobalManualRoundUsesTheSameDuePlanAsAutomaticHeartbeat(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Monitoring, trafficDue: true, upstreamDue: true, alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41", "42"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+
+	manual, err := runner.plan(context.Background(), RunRequest{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	automatic, err := runner.plan(context.Background(), RunRequest{Automatic: true}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.traffic != automatic.traffic || manual.probes != automatic.probes || manual.upstreams != automatic.upstreams || manual.alert != automatic.alert {
+		t.Fatalf("manual plan=%#v automatic plan=%#v", manual, automatic)
+	}
+	if !manual.traffic || manual.probes || !manual.upstreams || !manual.alert {
+		t.Fatalf("manual heartbeat omitted due operations: %#v", manual)
+	}
+}
+
+func TestMonitoringModeDisablesAutomaticActiveProbes(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Monitoring, trafficDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41"}}}
+	runner := NewRunner(repository, nil, planner, &routerStub{}, nil, nil, nil, &countingTaskStore{})
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "自动巡检", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || planner.collects != 1 || len(planner.options) != 1 {
+		t.Fatalf("monitoring inspection did not collect read-only evidence: result=%#v planner=%#v", result, planner)
+	}
+	if planner.options[0].ProbesAllowed {
+		t.Fatalf("monitoring inspection enabled active probes: %#v", planner.options[0])
+	}
+	for _, operation := range result.Operations {
+		if operation == operationActiveProbe {
+			t.Fatalf("monitoring inspection reported an active probe: %#v", result.Operations)
+		}
+	}
+}
+
+func TestMonitoringModePreviewOmitsActiveProbe(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Monitoring, trafficDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	item, err := runner.Preview(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range item.Operations {
+		if operation.Operation == operationActiveProbe {
+			t.Fatalf("monitoring preview advertised an active probe: %#v", item)
+		}
+	}
+	if item.TargetCount != nil {
+		t.Fatalf("monitoring preview exposed probe targets: %#v", item)
+	}
+}
+
+func TestMonitoringModeKeepsExplicitScopedProbeAvailable(t *testing.T) {
+	accountID := "41"
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Monitoring}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	plan, err := runner.plan(context.Background(), RunRequest{AccountID: &accountID, Actor: "operator"}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.probes || len(plan.probeIDs) != 1 {
+		t.Fatalf("explicit scoped probe was disabled: %#v", plan)
+	}
+}
+
+func TestGlobalManualRoundDoesNotForceTasksThatAreNotDue(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Monitoring}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	plan, err := runner.plan(context.Background(), RunRequest{}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.traffic || plan.probes || plan.upstreams || plan.alert {
+		t.Fatalf("manual heartbeat forced operations that were not due: %#v", plan)
+	}
+}
+
+func TestAutomaticRunExecutesAlertOnlyWithoutRunningInspectionCalculation(t *testing.T) {
+	repository := &runnerRepositoryStub{alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{}}}
+	alerts := &alertEvaluatorStub{}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(repository, nil, planner, nil, nil, alerts, nil, tasks)
+	runner.now = func() time.Time { return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC) }
+
+	result, err := runner.Execute(context.Background(), business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Skipped || result.Status != "succeeded" || alerts.calls != 1 || planner.collects != 0 {
+		t.Fatalf("alert-only heartbeat ran the wrong operations: result=%#v alerts=%d collects=%d", result, alerts.calls, planner.collects)
+	}
+	if len(result.Operations) != 1 || result.Operations[0] != operationAlertEvaluation {
+		t.Fatalf("alert-only heartbeat operations=%#v", result.Operations)
+	}
+}
+
+func TestAutomaticRunReportsNotificationFailure(t *testing.T) {
+	repository := &runnerRepositoryStub{alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	alerts := &alertEvaluatorStub{result: alerting.Result{AlertEvaluationRecord: business.AlertEvaluationRecord{
+		Status: "failed", Summary: "告警检测完成，通知发送未完成",
+	}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, alerts, nil, &countingTaskStore{})
+	runner.now = func() time.Time { return time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC) }
+
+	result, err := runner.Execute(context.Background(), business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" || result.Error == nil || *result.Error != "告警检测完成，通知发送未完成" {
+		t.Fatalf("notification failure was hidden: %#v", result)
+	}
+}
+
+func TestAutomaticPlanCreatesOneMergedTaskForSeveralDueOperations(t *testing.T) {
+	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41", "42"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	plan, err := runner.plan(context.Background(), RunRequest{Automatic: true}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.traffic || !plan.upstreams || !plan.probes || len(plan.probeIDs) != 2 {
+		t.Fatalf("due operations were not merged into one inspection plan: %#v", plan)
+	}
+}
+
+func TestPreviewCollapsesSeveralDueOperationsIntoOneQueueItem(t *testing.T) {
+	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, alertEnabled: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic", ProbeAccountIDs: []string{"41", "42"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	item, err := runner.Preview(context.Background(), time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.TaskType != "inspection" || item.State != "ready" || item.TargetCount == nil || *item.TargetCount != 2 {
+		t.Fatalf("unexpected merged queue item: %#v", item)
+	}
+	if item.Label != "本轮巡检（6 项）" || len(item.Operations) != 6 ||
+		item.Detail != "包含到期操作：上游数据同步、真实流量同步、主动探测、调度计算、自动执行、告警检测" {
+		t.Fatalf("merged operations were not structured: %#v", item)
+	}
+	for _, label := range []string{"上游数据同步", "真实流量同步", "主动探测", "调度计算", "自动执行", "告警检测"} {
+		found := false
+		for _, operation := range item.Operations {
+			found = found || operation.Label == label
+		}
+		if !found {
+			t.Fatalf("merged queue operations are missing %q: %#v", label, item.Operations)
+		}
+	}
+	if item.Operations[0].Cycle != "每2分钟" || item.Operations[1].Cycle != "每1分钟" ||
+		item.Operations[2].Cycle != "按账号策略（常规每5分钟；回池每3分钟）" {
+		t.Fatalf("queue operation cycles were not exposed: %#v", item.Operations)
+	}
+}
+
+func TestPreviewKeepsConfiguredCyclesVisibleWhenNothingIsDue(t *testing.T) {
+	repository := &runnerRepositoryStub{}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	item, err := runner.Preview(context.Background(), time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.State != "waiting" || len(item.Operations) != 5 {
+		t.Fatalf("waiting queue hid configured task cycles: %#v", item)
+	}
+	if item.Label != "下一轮巡检计划" || item.Detail != "当前没有操作到期，下次心跳会重新检查" {
+		t.Fatalf("waiting queue used an ambiguous label: %#v", item)
+	}
+	for _, operation := range item.Operations {
+		if operation.Cycle == "" || operation.Due {
+			t.Fatalf("unexpected waiting operation: %#v", operation)
+		}
+	}
+}
+
+func TestPreviewRejectsIntervalsBelowGuardianMinimums(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy map[string]any
+		want   string
+	}{
+		{
+			name: "regular probe",
+			policy: map[string]any{
+				"traffic":  map[string]any{"enabled": false},
+				"probe":    map[string]any{"enabled": true, "interval_seconds": int64(29)},
+				"recovery": map[string]any{"enabled": false},
+			},
+			want: "策略字段 interval_seconds 必须是 30 到 86400 之间的整数",
+		},
+		{
+			name: "upstream multiplier",
+			policy: map[string]any{
+				"traffic":             map[string]any{"enabled": false},
+				"probe":               map[string]any{"enabled": false},
+				"recovery":            map[string]any{"enabled": false},
+				"upstream_multiplier": map[string]any{"interval_seconds": int64(29)},
+			},
+			want: "策略字段 interval_seconds 必须是 30 到 86400 之间的整数",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &runnerRepositoryStub{mode: runtimepolicy.Full, policy: test.policy}
+			runner := NewRunner(repository, nil, &evidencePlannerStub{}, nil, nil, nil, nil, &countingTaskStore{})
+			_, err := runner.Preview(context.Background(), time.Now().UTC())
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("invalid interval error=%v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSchedulingModePreviewCollectsUpstreamDataAndStopsAfterCalculation(t *testing.T) {
+	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, mode: runtimepolicy.Scheduling}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	item, err := runner.Preview(context.Background(), time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundUpstreamSync := false
+	for _, operation := range item.Operations {
+		if operation.Operation == operationUpstreamSync && operation.Due {
+			foundUpstreamSync = true
+		}
+		if operation.Operation == operationRoutingWriteback {
+			t.Fatalf("scheduling mode advertised remote automatic execution: %#v", item.Operations)
+		}
+	}
+	if !foundUpstreamSync {
+		t.Fatalf("scheduling mode omitted due upstream data collection: %#v", item.Operations)
+	}
+}
+
+func TestPreviewRejectsInvalidRuntimeModeBeforeAdvertisingOperations(t *testing.T) {
+	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, mode: "配置错误"}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+
+	if _, err := runner.Preview(context.Background(), time.Now().UTC()); err == nil || err.Error() != "运行模式无效：配置错误" {
+		t.Fatalf("invalid mode error=%v", err)
+	}
+}
+
+func TestAppliedCleanupCountOnlyIncludesChangedCleanupTargets(t *testing.T) {
+	cleanup := "remove_group"
+	targets := map[string]business.AccountRoutingTarget{
+		"41": {AccountID: "41", CleanupAction: &cleanup},
+		"42": {AccountID: "42", CleanupAction: &cleanup},
+		"43": {AccountID: "43"},
+	}
+	result := routingwrite.Result{Results: []routingwrite.AccountResult{
+		{AccountID: "41", Changed: true},
+		{AccountID: "42", Changed: false},
+		{AccountID: "43", Changed: true},
+		{AccountID: "missing", Changed: true},
+	}}
+	if count := appliedCleanupCount(targets, result); count != 1 {
+		t.Fatalf("cleanup count=%d, want 1", count)
+	}
+}
+
+func TestAppliedRoutingTransitionsOnlyCountConfirmedWriteback(t *testing.T) {
+	off, on := false, true
+	targets := map[string]business.AccountRoutingTarget{
+		"41": {AccountID: "41", Schedulable: &off},
+		"42": {AccountID: "42", Schedulable: &on},
+		"43": {AccountID: "43", Schedulable: &off},
+		"44": {AccountID: "44", Schedulable: &off},
+	}
+	failure := "write failed"
+	result := routingwrite.Result{Results: []routingwrite.AccountResult{
+		{AccountID: "41", Changed: true, Before: map[string]any{"schedulable": true}, Effective: map[string]any{"schedulable": false}},
+		{AccountID: "42", Changed: true, Before: map[string]any{"schedulable": false}, Effective: map[string]any{"schedulable": true}},
+		{AccountID: "43", Changed: false, Error: &failure, Before: map[string]any{"schedulable": true}},
+		{AccountID: "44", Changed: true, Error: &failure, Before: map[string]any{"schedulable": true}, Effective: map[string]any{"schedulable": false}},
+	}}
+	fused, recovered := appliedRoutingTransitions(targets, result)
+	if fused != 2 || recovered != 1 {
+		t.Fatalf("confirmed transitions fused=%d recovered=%d", fused, recovered)
+	}
+}
+
+func TestGlobalManualRoundDoesNotRequireOptionalProbeFallback(t *testing.T) {
+	if strictEvidenceFallback(RunRequest{}) {
+		t.Fatal("global manual round should continue when optional probing is disabled")
+	}
+	accountID := "41"
+	if !strictEvidenceFallback(RunRequest{AccountID: &accountID}) {
+		t.Fatal("account-scoped inspection should require strict evidence")
+	}
+	groupName := "codex"
+	if !strictEvidenceFallback(RunRequest{GroupName: &groupName}) {
+		t.Fatal("group-scoped inspection should require strict evidence")
+	}
+}

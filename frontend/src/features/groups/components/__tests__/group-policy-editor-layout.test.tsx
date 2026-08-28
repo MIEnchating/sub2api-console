@@ -1,0 +1,71 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import type { GroupPolicyOverrideUpdate } from "../../../../api";
+import { GroupPolicyEditorFields } from "../group-policy-editor-fields";
+
+const value: GroupPolicyOverrideUpdate = {
+  enabled: true,
+  strategy: "balanced",
+  min_pool_size: 1,
+  weight_budget: 400,
+  balanced_price_ratio: 0.5,
+  breaker_enabled: true,
+  recovery_enabled: true,
+  weights_enabled: true,
+  scaling_enabled: false,
+  probe_enabled: true,
+  probe_interval_seconds: 300,
+  probe_model: "claude-sonnet-4-6",
+};
+
+function section(markup: string, start: string, end?: string): string {
+  const startIndex = markup.indexOf(start);
+  const endIndex = end ? markup.indexOf(end, startIndex + start.length) : markup.length;
+  return markup.slice(startIndex, endIndex);
+}
+
+describe("分组策略编辑布局", () => {
+  it("调度策略使用四个等尺寸选项且选中态不改变尺寸", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
+    );
+    const strategies = section(markup, "<fieldset", "保底可用账号数");
+
+    expect(strategies).toContain("sm:grid-cols-4");
+    expect(strategies.match(/h-9 w-full min-w-0/g)).toHaveLength(4);
+    expect(strategies.match(/role="radio"/g)).toHaveLength(4);
+    expect(strategies).toContain('aria-checked="true"');
+    expect(strategies).toContain('aria-checked="false"');
+  });
+
+  it("定时测试独立于四项策略能力并与测试参数放在同一区域", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
+    );
+    const capabilities = section(
+      markup,
+      'data-testid="group-policy-capability-switches"',
+      'data-testid="group-policy-probe-settings"',
+    );
+    const probe = section(markup, 'data-testid="group-policy-probe-settings"');
+
+    expect(capabilities).toContain("熔断");
+    expect(capabilities).toContain("健康回池");
+    expect(capabilities).toContain("负载因子调权");
+    expect(capabilities).toContain("智能扩容");
+    expect(capabilities).not.toContain("定时测试");
+    expect(probe).toContain("定时测试");
+    expect(probe).toContain("测试间隔（秒）");
+    expect(probe).toContain("测试模型");
+  });
+
+  it("内容区限制最小宽度并隐藏横向溢出", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain("min-w-0");
+    expect(markup).toContain("overflow-x-hidden");
+  });
+});
