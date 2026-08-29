@@ -122,6 +122,30 @@ func (s *writerStub) Apply(context.Context, map[string]business.AccountRoutingTa
 	return routingwrite.Result{}, nil
 }
 
+type accountRateSyncStub struct {
+	calls int
+	done  bool
+}
+
+func (s *accountRateSyncStub) SyncAllAccountRates(context.Context, string) (map[string]any, error) {
+	s.calls++
+	s.done = true
+	return map[string]any{"requested": 2, "updated": 1, "unchanged": 1, "missing": 0, "failed": 0}, nil
+}
+
+type rateAwareRouterStub struct {
+	rateSync *accountRateSyncStub
+	calls    int
+}
+
+func (s *rateAwareRouterStub) Calculate(_ context.Context, _ routing.Scope, _ bool) (routing.Result, error) {
+	s.calls++
+	if !s.rateSync.done {
+		return routing.Result{}, errors.New("routing ran before account rate sync")
+	}
+	return routing.Result{AccountTargets: map[string]business.AccountRoutingTarget{}}, nil
+}
+
 type parallelEvidenceStub struct {
 	evidencePlannerStub
 	started         chan struct{}
@@ -292,6 +316,55 @@ func TestUpstreamOnlyInspectionStillRecalculatesAndAppliesRouting(t *testing.T) 
 	}
 	if result.Status != "succeeded" || router.calls != 1 || writer.calls != 1 {
 		t.Fatalf("upstream-only inspection skipped routing: result=%#v router=%#v writer=%#v", result, router, writer)
+	}
+}
+
+func TestFullInspectionSyncsAccountRatesBeforeRouting(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	rateSync := &accountRateSyncStub{}
+	router := &rateAwareRouterStub{rateSync: rateSync}
+	runner := NewRunner(repository, nil, planner, router, &writerStub{}, nil, &parallelUpstreamStub{
+		started: make(chan struct{}), evidenceStarted: closedChannel(),
+	}, &countingTaskStore{}, rateSync)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto-inspection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || rateSync.calls != 1 || router.calls != 1 {
+		t.Fatalf("result=%#v rate_sync=%d router=%d", result, rateSync.calls, router.calls)
+	}
+	want := []string{operationUpstreamSync, operationAccountRateSync, operationRoutingCalculation, operationRoutingWriteback}
+	if len(result.Operations) != len(want) {
+		t.Fatalf("operations=%#v", result.Operations)
+	}
+	for index := range want {
+		if result.Operations[index] != want[index] {
+			t.Fatalf("operations=%#v want=%#v", result.Operations, want)
+		}
+	}
+}
+
+func TestSchedulingInspectionDoesNotWriteAccountRates(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Scheduling, upstreamDue: true}
+	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
+	rateSync := &accountRateSyncStub{}
+	runner := NewRunner(repository, nil, planner, &routerStub{}, nil, nil, &parallelUpstreamStub{
+		started: make(chan struct{}), evidenceStarted: closedChannel(),
+	}, &countingTaskStore{}, rateSync)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto-inspection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || rateSync.calls != 0 {
+		t.Fatalf("result=%#v rate_sync=%d", result, rateSync.calls)
+	}
+	for _, operation := range result.Operations {
+		if operation == operationAccountRateSync {
+			t.Fatalf("scheduling mode wrote account rates: %#v", result.Operations)
+		}
 	}
 }
 

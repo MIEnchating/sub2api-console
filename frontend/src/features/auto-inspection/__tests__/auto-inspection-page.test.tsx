@@ -39,10 +39,11 @@ const status: AutoInspectionStatus = {
   queue: [
     {
       task_type: "inspection",
-      label: "本轮巡检（6 项）",
+      label: "本轮巡检（7 项）",
       state: "ready",
       scheduled_for: "2026-08-26T08:00:15Z",
-      detail: "包含到期操作：上游数据同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
+      detail:
+        "包含到期操作：上游数据同步、账号倍率与名称同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
       target_count: 2,
       operations: [
         {
@@ -50,6 +51,13 @@ const status: AutoInspectionStatus = {
           label: "上游数据同步",
           target_count: null,
           cycle: "每2分钟",
+          due: true,
+        },
+        {
+          operation: "account_rate_sync",
+          label: "账号倍率与名称同步",
+          target_count: null,
+          cycle: "上游数据同步后（完全模式）",
           due: true,
         },
         {
@@ -118,6 +126,11 @@ const status: AutoInspectionStatus = {
       operations: ["traffic_refresh", "alert_evaluation"],
       operation_timings: [
         { operation: "upstream_sync", duration_seconds: 72.4, started_at: "2026-08-26T08:00:00Z" },
+        {
+          operation: "account_rate_sync",
+          duration_seconds: 6.4,
+          started_at: "2026-08-26T08:01:12.4Z",
+        },
         { operation: "traffic_refresh", duration_seconds: 14.2 },
         {
           operation: "evidence_collection",
@@ -157,6 +170,13 @@ const inspectionTask: Task = {
         { host: "four.example", status: "auth_failed", key_count: 0 },
         { host: "five.example", status: "failed", key_count: 0 },
       ],
+    },
+    account_rate_sync: {
+      requested: 30,
+      updated: 6,
+      unchanged: 22,
+      missing: 1,
+      failed: 1,
     },
     evidence: {
       monitored_accounts: 30,
@@ -364,9 +384,9 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("按账号策略（常规每5分钟；回池每3分钟）");
     expect(markup).toContain("有任务到期时");
     expect(markup).toContain("每次自动巡检心跳");
-    expect(markup).toContain("本轮巡检（6 项）");
+    expect(markup).toContain("本轮巡检（7 项）");
     expect(markup).not.toContain(
-      "包含到期操作：上游数据同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
+      "包含到期操作：上游数据同步、账号倍率与名称同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
     );
     expect(markup).not.toContain("合并巡检");
     expect(markup).not.toContain('href="/alert-policy"');
@@ -404,10 +424,10 @@ describe("自动巡检页面", () => {
       expect(markup).toContain("5秒后检查");
       expect(markup).toContain('data-slot="queue-list"');
       expect(markup).toContain('data-slot="queue-operations"');
-      expect(markup.match(/data-slot="queue-operation"/g)).toHaveLength(6);
+      expect(markup.match(/data-slot="queue-operation"/g)).toHaveLength(7);
       expect(markup).toContain('data-sequence="1"');
       expect(markup).toContain("本轮执行");
-      expect(markup).toContain("查看 本轮巡检（6 项） 详情");
+      expect(markup).toContain("查看任务详情");
     } finally {
       clock.mockRestore();
     }
@@ -419,11 +439,12 @@ describe("自动巡检页面", () => {
     expect(details).toContain("任务概况");
     expect(details).toContain("执行计划");
     expect(details).toContain(
-      "包含到期操作：上游数据同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
+      "包含到期操作：上游数据同步、账号倍率与名称同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
     );
-    expect(details.match(/data-slot="queue-detail-operation"/g)).toHaveLength(6);
+    expect(details.match(/data-slot="queue-detail-operation"/g)).toHaveLength(7);
     expect(details).toContain("上游数据同步");
-    expect(details).toContain("同步上游分组目录、余额和每个绑定账号的倍率");
+    expect(details).toContain("同步上游分组目录和该上游全部账号共享的余额");
+    expect(details).toContain("账号倍率与名称同步");
     expect(details).toContain("每2分钟");
     expect(details).toContain("本轮执行");
     expect(details).toContain("2 个账号");
@@ -452,8 +473,8 @@ describe("自动巡检页面", () => {
       expect(details).toContain('data-slot="operation-timing-list"');
       expect(details).toContain('data-slot="heartbeat-step"');
       expect(details).toContain('data-slot="heartbeat-timeline-connector"');
-      expect(details.match(/data-slot="heartbeat-step-card"/g)).toHaveLength(5);
-      expect(details.match(/data-slot="heartbeat-step-time"/g)).toHaveLength(5);
+      expect(details.match(/data-slot="heartbeat-step-card"/g)).toHaveLength(6);
+      expect(details.match(/data-slot="heartbeat-step-time"/g)).toHaveLength(6);
       expect(details).not.toContain("耗时占比");
       expect(details).toContain("1分12秒");
       expect(details).toContain("14秒");
@@ -464,8 +485,10 @@ describe("自动巡检页面", () => {
       expect(details).toContain("请求记录与探针");
       expect(details).not.toContain("证据采集");
       expect(details).toContain("上游：共 5 个，成功 3 个，失败 2 个");
-      expect(details).toContain("账号倍率：共 30 个账号，成功 24 个，失败 6 个");
-      expect(details).toContain("同步内容：上游余额、账号倍率");
+      expect(details).toContain("同步内容：上游目录、共享余额");
+      expect(details).toContain(
+        "检查 30 个绑定账号，更新 6 个、无需更新 22 个、缺失 1 个、失败 1 个",
+      );
       expect(details.match(/>并行</g)).toHaveLength(2);
       expect(details).not.toContain("余额：已同步");
       expect(details).toContain("监控 30 个账号，新增 120 条流量样本、8 条探测样本");
@@ -491,9 +514,10 @@ describe("自动巡检页面", () => {
     expect(details).toContain("35%");
     expect(details).toContain("已完成");
     expect(details.match(/data-state="running"/g)).toHaveLength(2);
-    expect(details.match(/data-state="queued"/g)).toHaveLength(3);
+    expect(details.match(/data-state="queued"/g)).toHaveLength(4);
     expect(details).toContain("排队中");
     expect(details).toContain("上游数据同步");
+    expect(details).toContain("账号倍率与名称同步");
     expect(details).toContain("真实流量同步");
     expect(details).toContain("主动探测");
     expect(details).toContain("调度计算");
@@ -521,7 +545,7 @@ describe("自动巡检页面", () => {
 
     expect(markup).toContain("上游同步部分失败：鉴权 2，其他 1");
     expect(markup).not.toContain("设置区域不应重复显示这条错误");
-    expect(markup).toContain("查看 08/26 07:58:00 心跳详情");
+    expect(markup).toContain("查看心跳详情");
     expect(details).toContain("巡检概况");
     expect(details).toContain("失败原因");
     expect(details).toContain("上游同步部分失败：鉴权 2，其他 1");
@@ -555,7 +579,7 @@ describe("自动巡检页面", () => {
       />,
     );
 
-    expect(details).toContain("账号倍率：共 30 个账号，成功 24 个，失败 6 个");
+    expect(details).toContain("同步内容：上游目录、共享余额");
     expect(details).not.toContain("已同步 24 个账号");
   });
 

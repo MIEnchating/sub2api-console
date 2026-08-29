@@ -38,6 +38,7 @@ type AccountStatus struct {
 	AccountType         *string               `json:"account_type"`
 	Schedulable         *bool                 `json:"schedulable"`
 	Priority            *int64                `json:"priority"`
+	ManualPriority      *int64                `json:"manual_priority"`
 	LoadFactor          *string               `json:"load_factor"`
 	Concurrency         *int64                `json:"concurrency"`
 	Multiplier          *string               `json:"multiplier"`
@@ -220,11 +221,12 @@ func (s *Store) accountBindings(ctx context.Context, accountID string) ([]Accoun
 }
 
 func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,upstream_host,upstream_type,schedulable,priority,
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.upstream_host,a.upstream_type,a.schedulable,a.priority,
 		load_factor,concurrency,multiplier,balance,paused,paused_reason,routing_state,health_status,
 		failure_streak,recovery_pass_streak,target_priority,target_load_factor,target_schedulable,
-		target_concurrency,metadata_json FROM accounts
-		ORDER BY CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+		target_concurrency,metadata_json,m.priority FROM accounts a
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
+		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -236,12 +238,12 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 		var pausedReason, routingState, healthStatus, targetLoadFactor sql.NullString
 		var schedulable, paused, targetSchedulable sql.NullInt64
 		var priority, concurrency, failureStreak, recoveryPassStreak sql.NullInt64
-		var targetPriority, targetConcurrency sql.NullInt64
+		var targetPriority, targetConcurrency, manualPriority sql.NullInt64
 		if err := rows.Scan(
 			&item.ID, &item.Name, &upstreamHost, &upstreamType, &schedulable, &priority,
 			&loadFactor, &concurrency, &multiplier, &balance, &paused, &pausedReason, &routingState,
 			&healthStatus, &failureStreak, &recoveryPassStreak, &targetPriority, &targetLoadFactor,
-			&targetSchedulable, &targetConcurrency, &item.metadataRaw,
+			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority,
 		); err != nil {
 			return nil, err
 		}
@@ -267,6 +269,7 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 			}
 		}
 		item.Priority = nullInt(priority)
+		item.ManualPriority = nullInt(manualPriority)
 		item.LoadFactor = nullString(loadFactor)
 		item.Concurrency = nullInt(concurrency)
 		item.Multiplier = nullString(multiplier)
@@ -402,7 +405,8 @@ func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*acco
 }
 
 func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*accountProjection) (map[string][]decisionProjection, error) {
-	query := `SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json
+	query := `WITH ranked AS (SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json,
+		ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY julianday(updated_at) DESC,group_name) AS decision_rank
 		FROM routing_decisions`
 	args := []any{}
 	var epoch string
@@ -414,7 +418,8 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 		query += ` WHERE julianday(updated_at)>=julianday(?)`
 		args = append(args, epoch)
 	}
-	query += ` ORDER BY updated_at DESC`
+	query += `) SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json
+		FROM ranked WHERE decision_rank=1 ORDER BY updated_at DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -428,7 +433,7 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 			return nil, err
 		}
 		account := accounts[accountID]
-		if account == nil || !containsString(account.Groups, groupName) {
+		if account == nil {
 			continue
 		}
 		state := ""
@@ -449,9 +454,12 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 }
 
 func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]*accountProjection) (map[string][]evaluationProjection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT account_id,group_name,health_score,short_score,long_score,
-		sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event FROM account_health_evaluations
-		ORDER BY evaluated_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (SELECT account_id,group_name,health_score,short_score,long_score,
+		sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event,evaluated_at,
+		ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY julianday(evaluated_at) DESC,group_name) AS evaluation_rank
+		FROM account_health_evaluations)
+		SELECT account_id,group_name,health_score,short_score,long_score,sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event
+		FROM ranked WHERE evaluation_rank=1 ORDER BY evaluated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -466,11 +474,13 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 			return nil, err
 		}
 		account := accounts[accountID]
-		if account == nil || !containsString(account.Groups, groupName) {
+		if account == nil {
 			continue
 		}
 		if latest := nullString(latestEvent); latest != nil {
-			account.latestEvents[groupName] = *latest
+			for _, membership := range account.Groups {
+				account.latestEvents[membership] = *latest
+			}
 		}
 		result[accountID] = append(result[accountID], evaluationProjection{
 			healthScore: nullFiniteFloat(healthScore), shortScore: nullFiniteFloat(shortScore),

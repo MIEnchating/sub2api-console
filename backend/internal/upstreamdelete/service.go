@@ -16,12 +16,12 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
-	"github.com/MIEnchating/sub2api-console/backend/internal/writebackpolicy"
 )
+
+const deleteConcurrency = 4
 
 type Repository interface {
 	Mode(context.Context) (string, error)
-	ControlPolicy(context.Context) (map[string]any, error)
 	UpstreamDeletePreview(context.Context, string) (business.UpstreamDeletePreview, error)
 	DeleteUpstreamProjection(context.Context, string, []string, business.UpstreamDeleteAudit) (business.UpstreamDeleteProjection, error)
 }
@@ -136,19 +136,7 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 	if err != nil {
 		return Result{}, err
 	}
-	policyDocument, err := s.repository.ControlPolicy(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	verification, err := writebackpolicy.Verification(policyDocument)
-	if err != nil {
-		return Result{}, err
-	}
-	concurrency, err := writebackpolicy.Concurrency(policyDocument)
-	if err != nil {
-		return Result{}, err
-	}
-	deleteErrors := deleteAccounts(ctx, client, preview.AccountIDs, verification, concurrency)
+	deleteErrors := deleteAccounts(ctx, client, preview.AccountIDs, true, deleteConcurrency)
 	remoteDeleted := 0
 	var firstError error
 	for index, deleteErr := range deleteErrors {
@@ -169,7 +157,7 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 			fmt.Errorf("远端账号已删除，但私有鉴权记录删除失败：%w", err)
 	}
 	projection, err := s.repository.DeleteUpstreamProjection(ctx, preview.Host, preview.AccountIDs, business.UpstreamDeleteAudit{
-		Actor: actor, RemoteDeletedAccounts: remoteDeleted, PrivateAuthDeleted: privateDeleted, ReadbackConfirmed: verification,
+		Actor: actor, RemoteDeletedAccounts: remoteDeleted, PrivateAuthDeleted: privateDeleted, ReadbackConfirmed: true,
 	})
 	if err != nil {
 		return Result{RemoteDeletedAccounts: remoteDeleted, PrivateAuthDeleted: privateDeleted, RemoteWrite: remoteDeleted > 0},
@@ -177,7 +165,7 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 	}
 	return Result{
 		UpstreamDeleteProjection: projection, RemoteDeletedAccounts: remoteDeleted,
-		PrivateAuthDeleted: privateDeleted, EventID: projection.EventID, RemoteWrite: true, ReadbackConfirmed: verification,
+		PrivateAuthDeleted: privateDeleted, EventID: projection.EventID, RemoteWrite: true, ReadbackConfirmed: true,
 	}, nil
 }
 

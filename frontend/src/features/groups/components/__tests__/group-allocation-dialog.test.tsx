@@ -70,15 +70,19 @@ describe("group allocation detail", () => {
     expect(markup).toContain("codex");
     expect(markup).toContain("部分异常");
     expect(markup).toContain("每 5 分钟测试");
-    expect(markup).toContain("#6 · openai · 分组倍率 0.15 · 渠道 2 · 已分配权重 175 / 400");
+    expect(markup).toContain(
+      "#6 · openai · 分组计费倍率 0.15 · 渠道 2 · 最终权重合计 175 · 分组预算 400",
+    );
     expect(markup).toContain("1 / 2");
     expect(markup).toContain("最高分");
     expect(markup).toContain("79");
     expect(markup).toContain("分配并发");
     expect(markup).toContain("48");
     expect(markup).toContain("tokenshen-0.15");
-    expect(markup).toContain("权重 117");
+    expect(markup).toContain("最终权重 117");
     expect(markup).toContain("39.8s");
+    expect(markup).toContain("速度优先：质量分 = 健康门控 ×（80% 相对速度 + 20% 相对价格）");
+    expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
   });
 
   it("keeps a long allocation table inside a stable scroll area", () => {
@@ -93,7 +97,7 @@ describe("group allocation detail", () => {
     );
 
     expect(markup).toContain("该分组暂无账号");
-    expect(markup).toContain("尚未产生组内权重分配");
+    expect(markup).toContain("尚未产生账号调度状态");
   });
 
   it("shows the effective budget without presenting stale weights as a current allocation", () => {
@@ -108,8 +112,8 @@ describe("group allocation detail", () => {
       />,
     );
 
-    expect(markup).toContain("权重预算 400");
-    expect(markup).toContain("尚未生成当前组内权重分配");
+    expect(markup).toContain("分组权重预算 400");
+    expect(markup).toContain("尚未生成账号最终调度状态");
     expect(markup).not.toContain("权重 0.5");
   });
 });

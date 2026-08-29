@@ -47,8 +47,8 @@ describe("VaultEntryTable", () => {
     expect(markup).toContain("凭据完整");
     expect(markup).toContain("X-Custom-Header");
     expect(markup).not.toContain("Base URL");
-    expect(markup).toContain('aria-label="编辑凭据 operator"');
-    expect(markup).toContain('aria-label="删除凭据 operator"');
+    expect(markup).toContain('aria-label="编辑凭据"');
+    expect(markup).toContain('aria-label="删除凭据"');
     expect(markup).toContain("text-destructive");
     expect(markup).not.toContain("title=");
     expect(markup).not.toContain("username-value");

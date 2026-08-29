@@ -68,12 +68,12 @@ describe("分组管理页面", () => {
     expect(markup).toContain("排除");
     expect(markup).toContain("恢复管控");
     expect(markup).toContain("编辑");
-    expect(markup).toContain("组内权重分配");
-    expect(markup).toContain('aria-label="查看 codex 组内权重分配"');
-    expect(markup).toContain('aria-label="排除 codex"');
-    expect(markup).toContain('aria-label="恢复管控 pro"');
-    expect(markup).toContain('aria-label="编辑 codex"');
-    expect(markup).toContain('aria-label="将 pro 回落到全局策略"');
+    expect(markup).toContain("分组账号调度状态");
+    expect(markup).toContain('aria-label="查看分组账号调度状态"');
+    expect(markup).toContain('aria-label="排除分组"');
+    expect(markup).toContain('aria-label="恢复管控"');
+    expect(markup).toContain('aria-label="编辑分组"');
+    expect(markup).toContain('aria-label="回落到全局策略"');
     expect(markup).not.toContain("分组 ID 8 位于排除分组列表中");
   });
 });

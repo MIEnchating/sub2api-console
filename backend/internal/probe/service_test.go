@@ -75,14 +75,19 @@ func TestResolveModelDoesNotRequireGroupIDForGlobalOrKnownModel(t *testing.T) {
 }
 
 type fakeRepository struct {
-	policy     map[string]any
-	candidates []business.ProbeCandidate
-	samples    []business.ProbeSample
-	mu         sync.Mutex
+	policy      map[string]any
+	policyErr   error
+	policyCalls int
+	candidates  []business.ProbeCandidate
+	samples     []business.ProbeSample
+	mu          sync.Mutex
 }
 
 func (repository *fakeRepository) ControlPolicy(context.Context) (map[string]any, error) {
-	return repository.policy, nil
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	repository.policyCalls++
+	return repository.policy, repository.policyErr
 }
 
 func (repository *fakeRepository) ProbeCandidates(context.Context, *string, *string) ([]business.ProbeCandidate, error) {
@@ -138,7 +143,7 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 			"group_policy_bindings": map[string]any{"7": map[string]any{"enabled": true}},
 		},
 		candidates: []business.ProbeCandidate{
-			{AccountID: "41", GroupName: "codex", GroupID: textPointer("7"), Metadata: map[string]any{}},
+			{AccountID: "41", GroupName: "codex", GroupID: textPointer("7"), KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
 			{AccountID: "42", GroupName: "codex", GroupID: textPointer("7"), MetadataErr: errors.New("invalid metadata")},
 		},
 	}
@@ -170,14 +175,53 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 	}
 }
 
-func TestActiveProbeRejectsDisabledConfigurationBeforeCreatingTask(t *testing.T) {
+func TestAutomaticProbeRejectsDisabledConfigurationBeforeCreatingTask(t *testing.T) {
 	repository := &fakeRepository{policy: map[string]any{"probe": map[string]any{"enabled": false}}, candidates: []business.ProbeCandidate{}}
 	tasks := &observingTasks{terminal: make(chan taskstore.Task, 1)}
 	service := New(repository, fakeSettings{}, tasks)
 
-	_, err := service.Enqueue(context.Background(), Request{}, "operator")
+	_, err := service.Enqueue(context.Background(), Request{Automatic: true}, "operator")
 	if err == nil || err.Error() != "主动探测已关闭，请在调度策略中开启" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManualProbeIgnoresAutomaticSchedulingPolicy(t *testing.T) {
+	groupID := "7"
+	repository := &fakeRepository{
+		policyErr: errors.New("automatic scheduling policy unavailable"),
+		policy: map[string]any{
+			"probe": map[string]any{
+				"enabled": false, "timeout_seconds": int64(1), "concurrency": int64(32), "prompt": "automatic",
+			},
+			"scope": map[string]any{"excluded_account_ids": []any{"41"}},
+			"group_policy_bindings": map[string]any{
+				"7": map[string]any{"enabled": false, "probe_enabled": false, "probe_model": "group-model"},
+			},
+		},
+		candidates: []business.ProbeCandidate{{
+			AccountID: "41", GroupName: "codex", GroupID: &groupID,
+			KnownModels: []string{"manual-model"},
+			Metadata:    map[string]any{"automatic_operation_excluded": true},
+		}},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{
+		BaseURL: "http://127.0.0.1:1", AdminKey: "test", TimeoutSeconds: 1,
+	}}, &observingTasks{terminal: make(chan taskstore.Task, 1)})
+
+	accountID := "41"
+	prepared, err := service.prepare(context.Background(), Request{AccountID: &accountID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.targets) != 1 || prepared.targets[0].Model == nil || *prepared.targets[0].Model != "manual-model" {
+		t.Fatalf("manual probe was filtered or used an automatic model: %#v", prepared.targets)
+	}
+	if prepared.config.Timeout != 60*time.Second || prepared.config.MaxConcurrency != 4 || prepared.config.Prompt != "hi" {
+		t.Fatalf("manual probe inherited automatic execution settings: %#v", prepared.config)
+	}
+	if repository.policyCalls != 0 {
+		t.Fatalf("manual probe read automatic scheduling policy %d times", repository.policyCalls)
 	}
 }
 
@@ -194,7 +238,7 @@ func TestBuildTargetsAppliesScopeAndProbesMultiGroupAccountOnce(t *testing.T) {
 		{AccountID: "41", GroupName: "codex", GroupID: textPointer("7"), Metadata: map[string]any{}},
 		{AccountID: "41", GroupName: "pro", GroupID: textPointer("9"), Metadata: map[string]any{}},
 		{AccountID: "42", GroupName: "codex", GroupID: textPointer("7"), Metadata: map[string]any{}},
-	}, policy, false)
+	}, policy, targetOptions{applySchedulingPolicy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +261,7 @@ func TestBuildTargetsDropsDisabledMembershipBeforeChoosingPrimaryGroup(t *testin
 	targets, err := buildTargets([]business.ProbeCandidate{
 		{AccountID: "41", GroupName: "disabled", GroupID: textPointer("7"), Metadata: map[string]any{}},
 		{AccountID: "41", GroupName: "managed", GroupID: textPointer("9"), Metadata: map[string]any{}},
-	}, policy, false)
+	}, policy, targetOptions{applySchedulingPolicy: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +339,7 @@ func TestConfigFromPolicyUsesOneCurrentContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if configured.Timeout != 60*time.Second || configured.MaxConcurrency != 4 {
-		t.Fatalf("运行时仍读取已迁移的旧字段：%#v", configured)
+		t.Fatalf("运行时仍读取未定义字段：%#v", configured)
 	}
 }
 

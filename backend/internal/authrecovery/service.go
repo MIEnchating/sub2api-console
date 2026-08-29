@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,8 +30,10 @@ type HostMetadataSource interface {
 
 type PrivateStore interface {
 	AuthRecord(context.Context, string) (*configstore.AuthRecord, error)
+	AuthRecordIndex(context.Context) ([]configstore.AuthRecordSummary, error)
 	SaveAuthRecord(context.Context, configstore.AuthRecord, map[string]bool) error
 	VaultEntry(context.Context, string) (*configstore.VaultEntry, error)
+	VaultEntryIndex(context.Context) ([]configstore.VaultEntrySummary, error)
 }
 
 type Authenticator interface {
@@ -39,6 +43,10 @@ type Authenticator interface {
 
 type Configurator interface {
 	ConfigureAuthRecord(context.Context, upstreamconfig.Input) (string, error)
+}
+
+type upstreamProvisioner interface {
+	Create(context.Context, upstreamconfig.Input, string) (upstreamconfig.Configuration, error)
 }
 
 type BalanceSyncer interface {
@@ -218,6 +226,153 @@ func (s *Service) Enqueue(ctx context.Context, host, entry, actor string) (tasks
 	}
 	go s.execute(task, *record, entry, actor)
 	return task, nil
+}
+
+// ResolveAuth provisions a missing exact-Host authorization only from an explicit,
+// unambiguous password-vault association.
+func (s *Service) ResolveAuth(ctx context.Context, host, actor string) (*configstore.AuthRecord, error) {
+	host = configstore.CanonicalHost(host)
+	if host == "" {
+		return nil, errors.New("上游 Host 不能为空")
+	}
+	record, err := s.private.AuthRecord(ctx, host)
+	if err != nil || record != nil {
+		return record, err
+	}
+
+	entries, err := s.private.VaultEntryIndex(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("密码箱索引读取失败：%w", err)
+	}
+	matches := matchingVaultEntries(entries, host)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("密码箱中没有显式关联 Host %q 的凭据", host)
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("Host %q 匹配到多个密码箱项（%s），请只保留一个明确关联", host, strings.Join(vaultEntryNames(matches), "、"))
+	}
+
+	seed, publicExists, err := s.resolveAuthSeed(ctx, host, matches[0])
+	if err != nil {
+		return nil, err
+	}
+	mode := recoveryLoginMode(seed.UpstreamType)
+	if mode == "" {
+		return nil, fmt.Errorf("密码箱匹配到的上游类型 %q 不支持账号密码恢复", seed.UpstreamType)
+	}
+	entry := matches[0].Entry
+	name := host
+	input := upstreamconfig.Input{
+		Host: host, Name: &name, BaseURL: seed.BaseURL, UpstreamType: seed.UpstreamType, AuthMode: mode,
+		RechargeRate: "1", Entry: &entry, Present: map[string]bool{"entry": true},
+	}
+	if publicExists {
+		if _, err := s.configurator.ConfigureAuthRecord(ctx, input); err != nil {
+			return nil, err
+		}
+	} else {
+		provisioner, ok := s.configurator.(upstreamProvisioner)
+		if !ok {
+			return nil, errors.New("鉴权恢复服务无法创建缺失的上游配置")
+		}
+		if _, err := provisioner.Create(ctx, input, actor); err != nil {
+			return nil, err
+		}
+	}
+	record, err = s.private.AuthRecord(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if record == nil {
+		return nil, errors.New("上游登录已完成，但未生成私有授权记录")
+	}
+	return record, nil
+}
+
+func matchingVaultEntries(entries []configstore.VaultEntrySummary, host string) []configstore.VaultEntrySummary {
+	result := []configstore.VaultEntrySummary{}
+	for _, entry := range entries {
+		for _, candidate := range entry.Hosts {
+			if configstore.CanonicalHost(candidate) == host {
+				result = append(result, entry)
+				break
+			}
+		}
+	}
+	return result
+}
+
+func vaultEntryNames(entries []configstore.VaultEntrySummary) []string {
+	result := make([]string, len(entries))
+	for index := range entries {
+		result[index] = entries[index].Entry
+	}
+	sort.Strings(result)
+	return result
+}
+
+func (s *Service) resolveAuthSeed(ctx context.Context, host string, entry configstore.VaultEntrySummary) (business.UpstreamAuthSeed, bool, error) {
+	source, ok := s.repository.(HostMetadataSource)
+	if !ok {
+		return business.UpstreamAuthSeed{}, false, errors.New("无法读取上游基础信息")
+	}
+	seed, err := source.UpstreamAuthSeed(ctx, host)
+	if err != nil {
+		return business.UpstreamAuthSeed{}, false, err
+	}
+	if seed != nil {
+		return *seed, true, nil
+	}
+
+	records, err := s.private.AuthRecordIndex(ctx)
+	if err != nil {
+		return business.UpstreamAuthSeed{}, false, err
+	}
+	associatedHosts := map[string]struct{}{}
+	for _, value := range entry.Hosts {
+		if normalized := configstore.CanonicalHost(value); normalized != "" {
+			associatedHosts[normalized] = struct{}{}
+		}
+	}
+	if unqualifiedHost := hostWithoutPort(host); unqualifiedHost != "" {
+		for _, related := range records {
+			_, hostAssociated := associatedHosts[configstore.CanonicalHost(related.Host)]
+			_, baseURLAssociated := associatedHosts[configstore.CanonicalHost(related.BaseURL)]
+			if configstore.CanonicalHost(related.Host) == unqualifiedHost && (hostAssociated || baseURLAssociated) && recoveryLoginMode(related.UpstreamType) != "" {
+				return business.UpstreamAuthSeed{Host: host, BaseURL: related.BaseURL, UpstreamType: related.UpstreamType}, false, nil
+			}
+		}
+	}
+	candidates := map[string]business.UpstreamAuthSeed{}
+	for _, related := range records {
+		_, hostAssociated := associatedHosts[configstore.CanonicalHost(related.Host)]
+		_, baseURLAssociated := associatedHosts[configstore.CanonicalHost(related.BaseURL)]
+		if (!hostAssociated && !baseURLAssociated) || recoveryLoginMode(related.UpstreamType) == "" {
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(related.UpstreamType)) + "\x00" + strings.TrimSpace(related.BaseURL)
+		candidates[key] = business.UpstreamAuthSeed{
+			Host: host, BaseURL: related.BaseURL, UpstreamType: related.UpstreamType,
+		}
+	}
+	if len(candidates) == 0 {
+		return business.UpstreamAuthSeed{}, false, fmt.Errorf("密码箱项 %q 已关联 Host %q，但缺少可复用的平台和 Base URL 配置", entry.Entry, host)
+	}
+	if len(candidates) > 1 {
+		return business.UpstreamAuthSeed{}, false, fmt.Errorf("密码箱项 %q 关联了多组不同的平台或 Base URL，请先明确 Host %q 使用哪一组配置", entry.Entry, host)
+	}
+	for _, candidate := range candidates {
+		return candidate, false, nil
+	}
+	panic("unreachable")
+}
+
+func hostWithoutPort(host string) string {
+	parsed, err := url.Parse("//" + configstore.CanonicalHost(host))
+	if err != nil || parsed.Port() == "" {
+		return ""
+	}
+	return configstore.CanonicalHost(parsed.Hostname())
 }
 
 func (s *Service) execute(task taskstore.Task, record configstore.AuthRecord, entry, actor string) {

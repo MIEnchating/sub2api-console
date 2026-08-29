@@ -65,6 +65,17 @@ func (r *routingRepositoryStub) PersistRoutingRound(
 	return nil
 }
 
+func TestResolveRateUsesCurrentAccountMultiplierBeforeStaleMembershipRate(t *testing.T) {
+	accountMultiplier, membershipRate := "0.17", "0.2"
+	rate, text, known, reason := resolveRate(business.RoutingAccount{
+		Multiplier: &accountMultiplier,
+		GroupRate:  &membershipRate,
+	}, engineConfig{}, nil)
+	if rate == nil || rate.Cmp(big.NewRat(17, 100)) != 0 || text == nil || *text != "0.17" || !known || reason != nil {
+		t.Fatalf("rate=%v text=%v known=%v reason=%v", rate, text, known, reason)
+	}
+}
+
 func TestPausedAccountScopeKeepsScoringButStopsScheduling(t *testing.T) {
 	policy := routingPolicy()
 	policy["scope"].(map[string]any)["paused_account_ids"] = []any{"41"}
@@ -139,6 +150,41 @@ func TestExcludedGroupReleasesAccountControl(t *testing.T) {
 	}
 }
 
+func TestManualPriorityAccountIsProtectedFromAutomaticScheduling(t *testing.T) {
+	policy := routingPolicy()
+	policy["manual_priority"] = map[string]any{"reserved_max": int64(10)}
+	schedulable, multiplier := true, "1"
+	manualSlot := int64(3)
+	repository := &routingRepositoryStub{policy: policy, accounts: []business.RoutingAccount{
+		{ID: "41", Name: "manual", GroupName: "codex", Schedulable: &schedulable, Multiplier: &multiplier, ManualPriority: &manualSlot, Metadata: map[string]any{}},
+		{ID: "42", Name: "automatic", GroupName: "codex", Schedulable: &schedulable, Multiplier: &multiplier, Metadata: map[string]any{}},
+	}}
+	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Accounts != 1 || len(repository.decisions) != 1 || repository.decisions[0].AccountID != "42" {
+		t.Fatalf("manual account entered automatic decisions: result=%#v decisions=%#v", result, repository.decisions)
+	}
+	if _, found := result.AccountTargets["41"]; found {
+		t.Fatalf("manual account received automatic target: %#v", result.AccountTargets["41"])
+	}
+	target := result.AccountTargets["42"]
+	if target.Priority == nil || *target.Priority < 11 {
+		t.Fatalf("automatic priority entered reserved range: %#v", target)
+	}
+}
+
+func TestAutomaticPriorityStartsAfterConfiguredManualRange(t *testing.T) {
+	priority := int64(2)
+	item := &candidate{account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &priority}, state: "healthy", schedulable: true, weight: 400}
+	config := engineConfig{manualPriorityMax: 25, weightsEnabled: true, weightBudget: 400, minLoadFactor: 1, maxLoadFactor: 100}
+	assignAccountPlacements(map[string][]*candidate{"codex": {item}}, map[string]engineConfig{"codex": config}, map[string][]*candidate{"41": {item}})
+	if item.desiredPriority == nil || *item.desiredPriority != 26 {
+		t.Fatalf("automatic priority did not start after reserved range: %#v", item.desiredPriority)
+	}
+}
+
 func TestExcludedMembershipDoesNotReleaseStillManagedAccount(t *testing.T) {
 	policy := routingPolicy()
 	policy["scope"].(map[string]any)["excluded_group_ids"] = []any{"9"}
@@ -199,6 +245,58 @@ func TestMultiGroupAccountAveragesWeightAndUsesPrimaryPlacement(t *testing.T) {
 	}
 }
 
+func TestCalculatePersistsOneCanonicalStateForMultiGroupAccount(t *testing.T) {
+	group1, group2 := "1", "2"
+	schedulable, multiplier := true, "0.2"
+	repository := &routingRepositoryStub{policy: routingPolicy(), accounts: []business.RoutingAccount{
+		{ID: "41", Name: "shared", GroupName: "group-a", GroupID: &group1, Schedulable: &schedulable, Multiplier: &multiplier, Metadata: map[string]any{}},
+		{ID: "41", Name: "shared", GroupName: "group-b", GroupID: &group2, Schedulable: &schedulable, Multiplier: &multiplier, Metadata: map[string]any{}},
+	}}
+
+	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Decisions != 1 || len(repository.decisions) != 1 {
+		t.Fatalf("多分组账号保存了多份最终决策：result=%d writes=%#v", result.Decisions, repository.decisions)
+	}
+	if len(repository.evaluations) != 1 {
+		t.Fatalf("多分组账号保存了多份健康评估：%#v", repository.evaluations)
+	}
+	if repository.decisions[0].AccountID != "41" || repository.decisions[0].GroupName != "group-a" ||
+		repository.evaluations[0].GroupName != "group-a" {
+		t.Fatalf("最终状态没有归属稳定主分组：decisions=%#v evaluations=%#v", repository.decisions, repository.evaluations)
+	}
+}
+
+func TestAlignAccountStateUsesPrimaryHealthAndMultiplierForEveryMembership(t *testing.T) {
+	group1, group2 := "1", "2"
+	schedulable := true
+	primaryRate, secondaryRate := "0.2", "0.9"
+	primary := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "group-a", GroupID: &group1, Schedulable: &schedulable, Metadata: map[string]any{}},
+		health:  Health{HealthScore: 91, ShortScore: 92, LongScore: 90, SampleCount: 3}, rateText: &primaryRate,
+	}
+	secondary := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "group-b", GroupID: &group2, Schedulable: &schedulable, Metadata: map[string]any{}},
+		health:  Health{HealthScore: 22, ShortScore: 20, LongScore: 24, SampleCount: 1}, rateText: &secondaryRate,
+	}
+	primary.rate, secondary.rate = big.NewRat(1, 5), big.NewRat(9, 10)
+
+	alignAccountStateToPrimary(map[string][]*candidate{"41": {secondary, primary}}, map[string]engineConfig{
+		"group-a": {degradeEnabled: false},
+		"group-b": {degradeEnabled: false},
+	}, map[string]business.PreviousRoutingDecision{}, time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC))
+
+	if secondary.health.HealthScore != primary.health.HealthScore || secondary.health.ShortScore != primary.health.ShortScore ||
+		secondary.health.LongScore != primary.health.LongScore || secondary.health.SampleCount != primary.health.SampleCount {
+		t.Fatalf("同一账号仍有多份健康评估：primary=%#v secondary=%#v", primary.health, secondary.health)
+	}
+	if secondary.rate == nil || secondary.rate.Cmp(primary.rate) != 0 || secondary.rateText == nil || *secondary.rateText != primaryRate {
+		t.Fatalf("同一账号仍有多份调度倍率：primary=%v secondary=%v", primary.rateText, secondary.rateText)
+	}
+}
+
 func TestMultiGroupAccountStateUsesStablePrimaryPolicy(t *testing.T) {
 	group1, group2 := "1", "2"
 	schedulable, rate := true, "1"
@@ -230,17 +328,18 @@ func TestFusedAccountKeepsPriorityPlacementButNotLoadOrScaling(t *testing.T) {
 	}
 }
 
-func TestStrategyQualityUsesGuardianAbsoluteTerms(t *testing.T) {
+func TestStrategyQualityUsesNormalizedGroupTerms(t *testing.T) {
 	cheapRate, _ := new(big.Rat).SetString("0.2")
 	expensiveRate, _ := new(big.Rat).SetString("1")
 	slow, fast := 10_000.0, 500.0
 	config := engineConfig{priceExp: 1, speedExp: 1, balancedPriceRatio: .5, gateFloor: 40}
 	cheap := &candidate{rate: cheapRate, health: Health{HealthScore: 100, P95MS: &slow}, strategy: "balanced", state: "healthy"}
 	fastCandidate := &candidate{rate: expensiveRate, health: Health{HealthScore: 100, P95MS: &fast}, strategy: "balanced", state: "healthy"}
-	cheapQuality := strategyQuality(cheap, config)
-	fastQuality := strategyQuality(fastCandidate, config)
-	if math.Abs(cheapQuality-2.55) > 0.0001 || math.Abs(fastQuality-1.5) > 0.0001 || cheapQuality <= fastQuality {
-		t.Fatalf("权重没有使用 Guardian 绝对公式：cheap=%v fast=%v", cheapQuality, fastQuality)
+	benchmark := strategyScoreBenchmark([]*candidate{cheap, fastCandidate}, config)
+	cheapQuality := strategyQuality(cheap, config, benchmark)
+	fastQuality := strategyQuality(fastCandidate, config, benchmark)
+	if math.Abs(cheapQuality-.525) > 0.0001 || math.Abs(fastQuality-.6) > 0.0001 || cheapQuality >= fastQuality {
+		t.Fatalf("权重没有使用组内相对价格与速度：cheap=%v fast=%v", cheapQuality, fastQuality)
 	}
 }
 
@@ -251,7 +350,8 @@ func TestStrategyQualityFallsBackFromP95ToP50(t *testing.T) {
 	item := &candidate{
 		rate: rate, health: Health{HealthScore: 100, P50MS: &p50}, strategy: "speed_first", state: "healthy",
 	}
-	if quality := strategyQuality(item, config); math.Abs(quality-4) > 0.0001 {
+	benchmark := strategyScoreBenchmark([]*candidate{item}, config)
+	if quality := strategyQuality(item, config, benchmark); math.Abs(quality-1) > 0.0001 {
 		t.Fatalf("speed score did not use P50 when P95 was absent: %v", quality)
 	}
 }
@@ -337,16 +437,99 @@ func TestUnknownAccountsShareBudgetAndReceivePlacement(t *testing.T) {
 	}
 }
 
-func TestZeroQualityBudgetKeepsNonServingMembersInDenominator(t *testing.T) {
-	first := &candidate{account: business.RoutingAccount{ID: "41"}, state: "unknown"}
-	second := &candidate{account: business.RoutingAccount{ID: "42"}, state: "unknown"}
+func TestGroupWeightBudgetIsSharedAndConserved(t *testing.T) {
+	rate := big.NewRat(1, 1)
+	fastLatency, slowLatency := 500.0, 2_000.0
+	fast := &candidate{
+		account: business.RoutingAccount{ID: "41"}, rate: rate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &fastLatency}, state: "healthy", strategy: "speed_first",
+	}
+	slow := &candidate{
+		account: business.RoutingAccount{ID: "42"}, rate: rate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &slowLatency}, state: "healthy", strategy: "speed_first",
+	}
+	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
+
+	calculateGroupWeights([]*candidate{fast, slow}, config)
+
+	if math.Abs(fast.weight+slow.weight-400) > 0.0001 {
+		t.Fatalf("组内分配后总权重没有守恒：fast=%v slow=%v", fast.weight, slow.weight)
+	}
+	if fast.weight <= slow.weight || fast.weight >= 400 || slow.weight <= 0 {
+		t.Fatalf("总预算没有按组内账号质量共享：fast=%v slow=%v", fast.weight, slow.weight)
+	}
+}
+
+func TestSpeedFirstUsesPriceAsSecondaryFactor(t *testing.T) {
+	cheapRate, expensiveRate := big.NewRat(1, 10), big.NewRat(1, 5)
+	latency := 1_000.0
+	cheap := &candidate{
+		account: business.RoutingAccount{ID: "41"}, rate: cheapRate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "speed_first",
+	}
+	expensive := &candidate{
+		account: business.RoutingAccount{ID: "42"}, rate: expensiveRate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "speed_first",
+	}
+	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
+
+	calculateGroupWeights([]*candidate{cheap, expensive}, config)
+
+	if cheap.weight <= expensive.weight {
+		t.Fatalf("速度相同时速度优先没有把价格作为次要因素：cheap=%v expensive=%v", cheap.weight, expensive.weight)
+	}
+}
+
+func TestSpeedFirstStillPrefersMeaningfullyFasterAccount(t *testing.T) {
+	cheapRate, expensiveRate := big.NewRat(1, 10), big.NewRat(1, 5)
+	fastLatency, slowLatency := 1_000.0, 2_000.0
+	fast := &candidate{
+		account: business.RoutingAccount{ID: "41"}, rate: expensiveRate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &fastLatency}, state: "healthy", strategy: "speed_first",
+	}
+	cheap := &candidate{
+		account: business.RoutingAccount{ID: "42"}, rate: cheapRate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &slowLatency}, state: "healthy", strategy: "speed_first",
+	}
+	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
+
+	calculateGroupWeights([]*candidate{fast, cheap}, config)
+
+	if fast.weight <= cheap.weight {
+		t.Fatalf("速度优先没有保持速度主导：fast=%v cheap=%v", fast.weight, cheap.weight)
+	}
+}
+
+func TestUnschedulableAccountDoesNotConsumeGroupWeightBudget(t *testing.T) {
+	rate := big.NewRat(1, 1)
+	latency := 1_000.0
+	available := &candidate{
+		account: business.RoutingAccount{ID: "41"}, rate: rate, schedulable: true,
+		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "balanced",
+	}
+	unavailable := &candidate{
+		account: business.RoutingAccount{ID: "42"}, rate: rate, schedulable: false,
+		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "balanced",
+	}
+	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
+
+	calculateGroupWeights([]*candidate{available, unavailable}, config)
+
+	if available.weight != 400 || unavailable.weight != 0 {
+		t.Fatalf("不可调度账号占用了组内权重预算：available=%v unavailable=%v", available.weight, unavailable.weight)
+	}
+}
+
+func TestZeroQualityBudgetIsSharedOnlyBySchedulableMembers(t *testing.T) {
+	first := &candidate{account: business.RoutingAccount{ID: "41"}, state: "unknown", schedulable: true}
+	second := &candidate{account: business.RoutingAccount{ID: "42"}, state: "unknown", schedulable: true}
 	fused := &candidate{account: business.RoutingAccount{ID: "43"}, state: "fused"}
 	config := engineConfig{weightBudget: 300, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
 
 	calculateGroupWeights([]*candidate{first, second, fused}, config)
 
-	if first.weight != 100 || second.weight != 100 || fused.weight != 0 {
-		t.Fatalf("全组原始权重为零时分母必须包含全部成员：first=%v second=%v fused=%v", first.weight, second.weight, fused.weight)
+	if first.weight != 150 || second.weight != 150 || fused.weight != 0 {
+		t.Fatalf("全组原始权重为零时没有只在可调度成员间分配：first=%v second=%v fused=%v", first.weight, second.weight, fused.weight)
 	}
 }
 
@@ -749,19 +932,9 @@ func TestCalculateAppliesAccountLevelFuseAcrossManagedGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, groupName := range []string{"group-a", "group-b"} {
-		found := false
-		for _, decision := range result.DecisionsByGroup[groupName] {
-			if decision.AccountID == "1" {
-				found = true
-				if decision.RoutingState != "fused" || decision.Schedulable {
-					t.Fatalf("account-level fuse missing in %s: %#v", groupName, decision)
-				}
-			}
-		}
-		if !found {
-			t.Fatalf("missing account 1 decision in %s: %#v", groupName, result.DecisionsByGroup)
-		}
+	decision, found := result.AccountDecisions["1"]
+	if !found || decision.RoutingState != "fused" || decision.Schedulable {
+		t.Fatalf("account-level fuse missing: %#v", result.AccountDecisions)
 	}
 	target := result.AccountTargets["1"]
 	if target.Schedulable == nil || *target.Schedulable || target.DesiredHealth != "fused" {
@@ -1098,7 +1271,7 @@ func TestManualFuseScopeOverridesHealthyAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision := result.DecisionsByGroup["codex"][0]
+	decision := result.AccountDecisions["41"]
 	if decision.RoutingState != "fused" || decision.Schedulable || decision.Reason != "人工熔断" {
 		t.Fatalf("manual fuse decision=%#v", decision)
 	}
@@ -1118,7 +1291,7 @@ func TestCalculationOnlyRetainsGroupAndAccountCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Accounts != 1 || result.Groups != 1 || result.Decisions != 0 || len(result.DecisionsByGroup) != 0 {
+	if result.Accounts != 1 || result.Groups != 1 || result.Decisions != 0 || len(result.AccountDecisions) != 0 {
 		t.Fatalf("calculation-only summary lost its scope: %#v", result)
 	}
 	if repository.persistDecisions || len(repository.evaluations) != 1 {

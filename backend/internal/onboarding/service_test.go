@@ -121,7 +121,7 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["account_id"] != "77" || result["readback_confirmed"] != false || keys.createCalls != 1 || keys.revealCalls != 0 || reads != 0 || len(keys.verification) != 1 || keys.verification[0] {
+	if result["account_id"] != "77" || result["readback_confirmed"] != false || keys.createCalls != 1 || keys.revealCalls != 0 || reads != 0 || len(keys.verification) != 0 {
 		t.Fatalf("result=%#v keys=%#v", result, keys)
 	}
 	database, err := sql.Open("sqlite", "file:"+databasePath)
@@ -220,7 +220,7 @@ func TestProbeCleansTemporaryKeyWhenGatewayFails(t *testing.T) {
 	}
 }
 
-func TestOnboardPerformsReadbackWhenVerificationEnabled(t *testing.T) {
+func TestOnboardIgnoresAutomaticSchedulingWritebackVerification(t *testing.T) {
 	reads := 0
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -251,7 +251,7 @@ func TestOnboardPerformsReadbackWhenVerificationEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["readback_confirmed"] != true || reads != 1 || len(keys.verification) != 1 || !keys.verification[0] {
+	if result["readback_confirmed"] != false || reads != 0 || len(keys.verification) != 0 {
 		t.Fatalf("result=%#v reads=%d verification=%v", result, reads, keys.verification)
 	}
 }

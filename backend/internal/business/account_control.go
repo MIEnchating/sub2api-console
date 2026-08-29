@@ -17,7 +17,29 @@ var accountControlFields = map[string]string{
 	"fuse": "manual_fused_account_ids", "recover": "manual_fused_account_ids",
 }
 
-func (s *Store) SetAccountControl(ctx context.Context, accountID, action, actor string) (PolicySnapshot, error) {
+func (s *Store) SetAccountScopeControl(ctx context.Context, accountID, action, actor string) (PolicySnapshot, error) {
+	if action != "exclude" && action != "include" {
+		return PolicySnapshot{}, errors.New("账号受管范围只允许 exclude 或 include")
+	}
+	return s.commitAccountControl(ctx, accountID, action, actor, nil, nil)
+}
+
+func (s *Store) CommitAccountControlReadback(
+	ctx context.Context,
+	accountID, action, actor string,
+	schedulable bool,
+	operation AccountOperation,
+) error {
+	_, err := s.commitAccountControl(ctx, accountID, action, actor, &schedulable, &operation)
+	return err
+}
+
+func (s *Store) commitAccountControl(
+	ctx context.Context,
+	accountID, action, actor string,
+	schedulable *bool,
+	operation *AccountOperation,
+) (PolicySnapshot, error) {
 	if !positiveNumericID(accountID) {
 		return PolicySnapshot{}, errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -83,6 +105,32 @@ func (s *Store) SetAccountControl(ctx context.Context, accountID, action, actor 
 			return PolicySnapshot{}, err
 		}
 	}
+	if schedulable != nil {
+		routingState := map[string]string{
+			"pause": "paused", "resume": "unknown", "fuse": "fused", "recover": "unknown",
+		}[action]
+		result, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=?,routing_state=?,updated_at=? WHERE id=?`,
+			*schedulable, routingState, now, accountID)
+		if err != nil {
+			return PolicySnapshot{}, err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return PolicySnapshot{}, sql.ErrNoRows
+		}
+	}
+	if action == "resume" || action == "recover" {
+		var rawMetadata string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&rawMetadata); err != nil {
+			return PolicySnapshot{}, err
+		}
+		metadata, err := clearedRoutingRuntimeMetadata(rawMetadata, accountID)
+		if err != nil {
+			return PolicySnapshot{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`, metadata, now, accountID); err != nil {
+			return PolicySnapshot{}, err
+		}
+	}
 	if action == "recover" {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM routing_decisions WHERE account_id=?`, accountID); err != nil {
 			return PolicySnapshot{}, err
@@ -90,6 +138,13 @@ func (s *Store) SetAccountControl(ctx context.Context, accountID, action, actor 
 	}
 	if err := recordAccountControlEvent(ctx, tx, accountID, name, action, actor, now); err != nil {
 		return PolicySnapshot{}, err
+	}
+	if operation != nil {
+		operation.ObjectID = accountID
+		operation.ObjectName = &name
+		if err := insertAccountOperation(ctx, tx, *operation); err != nil {
+			return PolicySnapshot{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return PolicySnapshot{}, err

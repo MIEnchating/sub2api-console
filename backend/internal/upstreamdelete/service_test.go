@@ -38,7 +38,7 @@ func (c *boundedDeleteClient) DeleteAccountWithVerification(ctx context.Context,
 	return map[string]any{"confirmed_absent": true}, nil
 }
 
-func TestDeleteAccountsUsesConfiguredBoundedConcurrency(t *testing.T) {
+func TestDeleteAccountsUsesBoundedConcurrency(t *testing.T) {
 	client := &boundedDeleteClient{started: make(chan struct{}, 5), release: make(chan struct{}, 5)}
 	done := make(chan []error, 1)
 	go func() {
@@ -72,14 +72,9 @@ type deleteRepository struct {
 	projectionErr error
 	deleteCalls   int
 	audit         business.UpstreamDeleteAudit
-	policy        map[string]any
 }
 
 func (r *deleteRepository) Mode(context.Context) (string, error) { return "full", nil }
-
-func (r *deleteRepository) ControlPolicy(context.Context) (map[string]any, error) {
-	return r.policy, nil
-}
 
 func (r *deleteRepository) UpstreamDeletePreview(context.Context, string) (business.UpstreamDeletePreview, error) {
 	return r.preview, r.previewErr
@@ -153,7 +148,6 @@ func newDeleteService(t *testing.T, deleteStatus int) (*Service, *deleteReposito
 
 func TestDeleteConfirmsRemoteAbsenceBeforeCommittingLocalProjection(t *testing.T) {
 	service, repository, private := newDeleteService(t, http.StatusOK)
-	repository.policy = map[string]any{"writeback": map[string]any{"verification": true}}
 	result, err := service.Delete(context.Background(), "api.example", []string{"41"}, "admin")
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +163,7 @@ func TestDeleteConfirmsRemoteAbsenceBeforeCommittingLocalProjection(t *testing.T
 	}
 }
 
-func TestDeleteSkipsAbsentReadbackByDefault(t *testing.T) {
+func TestManualDeleteAlwaysConfirmsRemoteAbsence(t *testing.T) {
 	var deletes, reads int
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
@@ -195,7 +189,7 @@ func TestDeleteSkipsAbsentReadbackByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deletes != 1 || reads != 0 || result.ReadbackConfirmed || repository.audit.ReadbackConfirmed {
+	if deletes != 1 || reads != 1 || !result.ReadbackConfirmed || !repository.audit.ReadbackConfirmed {
 		t.Fatalf("deletes=%d reads=%d result=%#v audit=%#v", deletes, reads, result, repository.audit)
 	}
 }

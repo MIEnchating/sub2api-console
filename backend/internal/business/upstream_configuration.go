@@ -63,7 +63,8 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 		}
 		return UpstreamConfigurationWriteResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)
+		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`,
 		value.Host, recharge, "console-upstream-create", now); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}

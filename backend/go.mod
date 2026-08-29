@@ -3,6 +3,7 @@ module github.com/MIEnchating/sub2api-console/backend
 go 1.26.6
 
 require (
+	github.com/coder/websocket v1.8.14
 	github.com/gin-gonic/gin v1.11.0
 	golang.org/x/crypto v0.51.0
 	modernc.org/sqlite v1.40.1

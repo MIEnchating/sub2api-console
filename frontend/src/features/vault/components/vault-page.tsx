@@ -124,14 +124,11 @@ export function VaultEntryTable(props: {
               </TableCell>
               <TableCell className="text-right" overflowTooltip={false}>
                 <div className="flex justify-end gap-1">
-                  <TableActionButton
-                    label={`编辑凭据 ${entry.entry}`}
-                    onClick={() => props.onEdit(entry)}
-                  >
+                  <TableActionButton label="编辑凭据" onClick={() => props.onEdit(entry)}>
                     <Pencil />
                   </TableActionButton>
                   <TableActionButton
-                    label={`删除凭据 ${entry.entry}`}
+                    label="删除凭据"
                     tone="danger"
                     onClick={() => props.onDelete(entry)}
                   >

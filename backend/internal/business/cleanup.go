@@ -77,7 +77,7 @@ func (s *Store) DeleteAccountProjection(ctx context.Context, accountID string, o
 	if exists != 1 {
 		return sql.ErrNoRows
 	}
-	for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "routing_baselines", "cleanup_states"} {
+	for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
 			return err
 		}

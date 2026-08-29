@@ -98,6 +98,9 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	if err != nil {
 		return PolicySnapshot{}, err
 	}
+	if err := validateManualPriorityCapacity(ctx, tx, updated); err != nil {
+		return PolicySnapshot{}, err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.writePolicyDocument(ctx, tx, "control-plane", updated, now); err != nil {
 		return PolicySnapshot{}, err
@@ -261,9 +264,6 @@ func normalizePolicyPatch(ctx context.Context, tx *sql.Tx, current, patch map[st
 	sections["weights"]["scheduling_missing_rate_fallback"] = missing
 	sections["weights"]["change_threshold"] = threshold
 	sections["weights"]["cooldown_seconds"] = int64(cooldown)
-	delete(sections["weights"], "max_writes_per_group")
-	delete(sections["weights"], "max_migration_ratio")
-	delete(updated, "scheduling")
 
 	if rawAutoApply, present := patch["auto_apply"]; present {
 		autoApply, ok := rawAutoApply.(map[string]any)
@@ -544,6 +544,9 @@ var advancedRules = map[string]map[string]advancedRule{
 		"speed_exp": {kind: "positive_number", maximum: 100}, "balanced_price_ratio": {kind: "ratio"},
 		"min_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000}, "max_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000},
 	},
+	"manual_priority": {
+		"reserved_max": {kind: "int", minimum: 1, maximum: 1000},
+	},
 	"scope": {
 		"managed_group_mode": {kind: "enum", allowed: valueStringSet("all", "selected")},
 		"managed_group_ids":  {kind: "strings"}, "excluded_group_ids": {kind: "strings"},
@@ -762,6 +765,7 @@ func valueStringSet(values ...string) map[string]struct{} {
 var advancedPolicyCoreFields = map[string]map[string]struct{}{
 	"selection":           {"strategy": {}},
 	"weights":             {"scheduling_missing_rate_fallback": {}, "change_threshold": {}, "cooldown_seconds": {}},
+	"manual_priority":     {},
 	"scope":               {"excluded_group_ids": {}},
 	"probe":               {"interval_seconds": {}, "model": {}},
 	"traffic":             {"enabled": {}, "lookback_minutes": {}, "max_samples_per_account": {}},

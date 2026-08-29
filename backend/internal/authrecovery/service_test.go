@@ -46,19 +46,49 @@ func (r *recoveryRepository) PersistAuthRecoveryOutcomes(_ context.Context, valu
 type recoveryPrivate struct {
 	mu         sync.Mutex
 	record     *configstore.AuthRecord
+	records    map[string]configstore.AuthRecord
 	vault      map[string]configstore.VaultEntry
 	vaultReads []string
 	saved      bool
 }
 
-func (s *recoveryPrivate) AuthRecord(context.Context, string) (*configstore.AuthRecord, error) {
+func (s *recoveryPrivate) AuthRecord(_ context.Context, host string) (*configstore.AuthRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if record, found := s.records[configstore.CanonicalHost(host)]; found {
+		copy := record
+		return &copy, nil
+	}
 	if s.record == nil {
 		return nil, nil
 	}
 	copy := *s.record
 	return &copy, nil
+}
+func (s *recoveryPrivate) AuthRecordIndex(context.Context) ([]configstore.AuthRecordSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]configstore.AuthRecordSummary, 0, len(s.records)+1)
+	for _, value := range s.records {
+		result = append(result, configstore.AuthRecordSummary{
+			Host: value.Host, BaseURL: value.BaseURL, UpstreamType: value.UpstreamType, AuthMode: value.AuthMode,
+		})
+	}
+	if s.record != nil {
+		result = append(result, configstore.AuthRecordSummary{
+			Host: s.record.Host, BaseURL: s.record.BaseURL, UpstreamType: s.record.UpstreamType, AuthMode: s.record.AuthMode,
+		})
+	}
+	return result, nil
+}
+func (s *recoveryPrivate) VaultEntryIndex(context.Context) ([]configstore.VaultEntrySummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]configstore.VaultEntrySummary, 0, len(s.vault))
+	for _, value := range s.vault {
+		result = append(result, configstore.VaultEntrySummary{Entry: value.Entry, Hosts: append([]string{}, value.Hosts...)})
+	}
+	return result, nil
 }
 func (s *recoveryPrivate) SaveAuthRecord(_ context.Context, record configstore.AuthRecord, _ map[string]bool) error {
 	s.mu.Lock()
@@ -90,9 +120,19 @@ func (a *recoveryAuthenticator) Login(ctx context.Context, record configstore.Au
 }
 
 type recoveryConfigurator struct {
-	input upstreamconfig.Input
-	host  string
-	err   error
+	input    upstreamconfig.Input
+	host     string
+	err      error
+	created  bool
+	onCreate func(upstreamconfig.Input)
+}
+
+func (c *recoveryConfigurator) Create(_ context.Context, input upstreamconfig.Input, _ string) (upstreamconfig.Configuration, error) {
+	c.input, c.created = input, true
+	if c.onCreate != nil {
+		c.onCreate(input)
+	}
+	return upstreamconfig.Configuration{Host: configstore.CanonicalHost(input.Host)}, c.err
 }
 
 func (c *recoveryConfigurator) ConfigureAuthRecord(_ context.Context, input upstreamconfig.Input) (string, error) {
@@ -356,6 +396,58 @@ func TestRecoveryRejectsHostMissingFromPrivateAndBusinessStores(t *testing.T) {
 	_, err := service.Enqueue(context.Background(), "missing.example", "selected", "tester")
 	if err == nil || !strings.Contains(err.Error(), "上游 Host 不存在") {
 		t.Fatalf("expected missing host error, got %v", err)
+	}
+}
+
+func TestResolveAuthUsesUniqueExplicitVaultHostAndRelatedMetadata(t *testing.T) {
+	username, password := "operator", "secret"
+	const host = "152.53.241.112:8080"
+	private := &recoveryPrivate{
+		records: map[string]configstore.AuthRecord{
+			"152.53.241.112": {
+				Host: "152.53.241.112", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
+				AuthMode: "sub2api_user_token", Headers: map[string]string{}, Cookies: map[string]string{},
+			},
+			"another.example.test": {
+				Host: "another.example.test", BaseURL: "https://other-cdn.example.test", UpstreamType: "newapi",
+				AuthMode: "newapi_user_token", Headers: map[string]string{}, Cookies: map[string]string{},
+			},
+		},
+		vault: map[string]configstore.VaultEntry{
+			"shared": {Entry: "shared", Username: &username, Password: &password, Hosts: []string{host, "accelerated.example.test", "other-cdn.example.test"}},
+		},
+	}
+	configurator := &recoveryConfigurator{onCreate: func(input upstreamconfig.Input) {
+		private.records[host] = configstore.AuthRecord{
+			Host: host, BaseURL: input.BaseURL, UpstreamType: input.UpstreamType, AuthMode: "sub2api_user_token",
+			Headers: map[string]string{}, Cookies: map[string]string{},
+		}
+	}}
+	service := New(&recoveryRepository{seeds: map[string]business.UpstreamAuthSeed{}}, private, &recoveryAuthenticator{}, configurator, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+
+	record, err := service.ResolveAuth(context.Background(), host, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configurator.created || configurator.input.BaseURL != "https://accelerated.example.test" || configurator.input.AuthMode != "sub2api_user_login" {
+		t.Fatalf("input=%#v created=%v", configurator.input, configurator.created)
+	}
+	if record == nil || record.Host != host {
+		t.Fatalf("record=%#v", record)
+	}
+}
+
+func TestResolveAuthRejectsAmbiguousVaultMatches(t *testing.T) {
+	const host = "152.53.241.112:8080"
+	private := &recoveryPrivate{vault: map[string]configstore.VaultEntry{
+		"first":  {Entry: "first", Hosts: []string{host}},
+		"second": {Entry: "second", Hosts: []string{host}},
+	}}
+	service := New(&recoveryRepository{seeds: map[string]business.UpstreamAuthSeed{}}, private, &recoveryAuthenticator{}, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+
+	_, err := service.ResolveAuth(context.Background(), host, "tester")
+	if err == nil || !strings.Contains(err.Error(), "匹配到多个密码箱项") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

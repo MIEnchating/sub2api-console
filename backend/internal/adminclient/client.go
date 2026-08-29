@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
@@ -53,6 +54,11 @@ type EvidencePage struct {
 	Total    int
 	Page     int
 	PageSize int
+}
+
+type AccountUpstreamMultiplierResult struct {
+	Multiplier string
+	Err        error
 }
 
 func New(config Config, transport http.RoundTripper) (*Client, error) {
@@ -117,6 +123,152 @@ func (c *Client) Account(ctx context.Context, accountID string) (map[string]any,
 		return nil, errors.New("账号 ID 必须是稳定数字 ID")
 	}
 	return c.resourceDetail(ctx, "/admin/accounts/"+accountID, accountID, "账号")
+}
+
+// AccountUpstreamMultiplier asks Sub2API to authenticate with the selected
+// account and probe the multiplier declared by that account's upstream.
+// This is deliberately different from reading the account's stored
+// rate_multiplier field from the management catalog.
+func (c *Client) AccountUpstreamMultiplier(ctx context.Context, accountID string) (string, error) {
+	if !stableID(accountID) {
+		return "", errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts/"+accountID+"/upstream-billing-probe", nil)
+	if err != nil {
+		return "", fmt.Errorf("上游倍率探测失败：%w", err)
+	}
+	result, err := responseObject(payload, "上游倍率探测")
+	if err != nil {
+		return "", err
+	}
+	return upstreamMultiplierFromProbeResult(result)
+}
+
+// AccountUpstreamMultipliers uses Sub2API's native batch probe. Each returned
+// item is kept independent so one upstream failure does not hide other rates.
+func (c *Client) AccountUpstreamMultipliers(ctx context.Context, accountIDs []string) (map[string]AccountUpstreamMultiplierResult, error) {
+	result := make(map[string]AccountUpstreamMultiplierResult, len(accountIDs))
+	unique := make([]string, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if !stableID(accountID) {
+			return nil, errors.New("批量上游倍率探测包含无效账号 ID")
+		}
+		if _, exists := result[accountID]; exists {
+			continue
+		}
+		result[accountID] = AccountUpstreamMultiplierResult{}
+		unique = append(unique, accountID)
+	}
+	for offset := 0; offset < len(unique); offset += 20 {
+		end := min(offset+20, len(unique))
+		chunk := unique[offset:end]
+		numericIDs := make([]int64, 0, len(chunk))
+		for _, accountID := range chunk {
+			parsed, _ := strconv.ParseInt(accountID, 10, 64)
+			numericIDs = append(numericIDs, parsed)
+		}
+		payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts/upstream-billing-probe/batch", map[string]any{"account_ids": numericIDs})
+		if err != nil {
+			return nil, fmt.Errorf("批量上游倍率探测失败：%w", err)
+		}
+		data, err := responseObject(payload, "批量上游倍率探测")
+		if err != nil {
+			return nil, err
+		}
+		rawResults, ok := data["results"].([]any)
+		if !ok {
+			return nil, errors.New("批量上游倍率探测未返回 results")
+		}
+		requested := make(map[string]struct{}, len(chunk))
+		for _, accountID := range chunk {
+			requested[accountID] = struct{}{}
+		}
+		seen := make(map[string]struct{}, len(chunk))
+		for _, raw := range rawResults {
+			item, ok := raw.(map[string]any)
+			if !ok {
+				return nil, errors.New("批量上游倍率探测返回无效项目")
+			}
+			accountID := strings.TrimSpace(fmt.Sprint(item["account_id"]))
+			if _, wanted := requested[accountID]; !wanted {
+				return nil, fmt.Errorf("批量上游倍率探测返回未请求账号 %q", accountID)
+			}
+			if _, duplicate := seen[accountID]; duplicate {
+				return nil, fmt.Errorf("批量上游倍率探测重复返回账号 %s", accountID)
+			}
+			seen[accountID] = struct{}{}
+			multiplier, itemErr := upstreamMultiplierFromProbeResult(item)
+			result[accountID] = AccountUpstreamMultiplierResult{Multiplier: multiplier, Err: itemErr}
+		}
+		for _, accountID := range chunk {
+			if _, found := seen[accountID]; !found {
+				result[accountID] = AccountUpstreamMultiplierResult{Err: errors.New("批量上游倍率探测未返回该账号结果")}
+			}
+		}
+	}
+	return result, nil
+}
+
+func upstreamMultiplierFromProbeResult(result map[string]any) (string, error) {
+	if detail := strings.TrimSpace(fmt.Sprint(result["error"])); detail != "" && detail != "<nil>" {
+		return "", errors.New("上游倍率探测失败：" + detail)
+	}
+	snapshot, ok := result["snapshot"].(map[string]any)
+	if !ok {
+		return "", errors.New("上游倍率探测未返回倍率快照")
+	}
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(snapshot["status"])), "ok") {
+		detail := strings.TrimSpace(fmt.Sprint(snapshot["last_error"]))
+		if detail == "" || detail == "<nil>" {
+			detail = strings.TrimSpace(fmt.Sprint(snapshot["error"]))
+		}
+		if detail == "" || detail == "<nil>" {
+			detail = "未返回成功快照"
+		}
+		return "", errors.New("上游倍率探测失败：" + detail)
+	}
+	data, ok := snapshot["data"].(map[string]any)
+	if !ok {
+		return "", errors.New("上游倍率探测未返回有效数据")
+	}
+	if scope := strings.ToLower(strings.TrimSpace(fmt.Sprint(data["billing_scope"]))); scope != "" && scope != "<nil>" && scope != "token" {
+		return "", fmt.Errorf("上游倍率探测返回不支持的计费范围 %q", scope)
+	}
+	// resolved_rate_multiplier includes the upstream's per-user override. The
+	// effective value may additionally contain a temporary peak coefficient and
+	// must not be frozen into the management account's static multiplier.
+	for _, field := range []string{"resolved_rate_multiplier", "effective_rate_multiplier"} {
+		raw, present := data[field]
+		if !present || raw == nil {
+			continue
+		}
+		value, ok := new(big.Rat).SetString(strings.TrimSpace(fmt.Sprint(raw)))
+		if !ok || value.Sign() <= 0 {
+			return "", errors.New("上游倍率探测返回非法倍率")
+		}
+		return normalizedDecimal(value), nil
+	}
+	return "", errors.New("上游倍率探测未返回有效倍率")
+}
+
+func responseObject(payload map[string]any, label string) (map[string]any, error) {
+	if raw, present := payload["data"]; present {
+		value, ok := raw.(map[string]any)
+		if !ok {
+			return nil, &Error{label + "返回格式不可读"}
+		}
+		return value, nil
+	}
+	return payload, nil
+}
+
+func normalizedDecimal(value *big.Rat) string {
+	text := value.FloatString(28)
+	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	if text == "" || text == "-0" {
+		return "0"
+	}
+	return text
 }
 
 func (c *Client) AccountModels(ctx context.Context, accountID string) ([]string, error) {
@@ -300,15 +452,7 @@ func (c *Client) Mutate(ctx context.Context, method, path string, body map[strin
 }
 
 func (c *Client) CreateAccount(ctx context.Context, body map[string]any) (map[string]any, error) {
-	return c.CreateAccountWithVerification(ctx, body, false)
-}
-
-func (c *Client) CreateAccountWithVerification(ctx context.Context, body map[string]any, verification bool) (map[string]any, error) {
-	var beforeIDs map[string]struct{}
-	var baselineErr error
-	if verification {
-		beforeIDs, baselineErr = c.accountIDs(ctx)
-	}
+	beforeIDs, baselineErr := c.accountIDs(ctx)
 	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts", body)
 	if err != nil {
 		return nil, err
@@ -319,9 +463,6 @@ func (c *Client) CreateAccountWithVerification(ctx context.Context, body map[str
 	}
 	if present {
 		return data, nil
-	}
-	if !verification {
-		return nil, &Error{"账号创建成功但响应未返回稳定 ID；写后确认关闭，无法安全定位新账号"}
 	}
 	if baselineErr != nil {
 		return nil, &Error{"账号创建成功但响应未返回稳定 ID，且创建前目录读取失败：" + baselineErr.Error()}

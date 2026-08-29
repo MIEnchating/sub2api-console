@@ -209,7 +209,7 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 			result.SourceErrors = append(result.SourceErrors, "需要主动探测回退，但探测执行器不可用")
 		} else {
 			started := time.Now()
-			summary, probeErr := s.probes.RunNow(ctx, probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName})
+			summary, probeErr := s.probes.RunNow(ctx, probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName, Automatic: true})
 			result.ProbeDurationSecond = time.Since(started).Seconds()
 			if probeErr != nil {
 				result.SourceErrors = append(result.SourceErrors, safeError(probeErr))

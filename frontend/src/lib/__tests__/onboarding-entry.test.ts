@@ -4,16 +4,43 @@ import {
   canSubmitOnboarding,
   candidateCanCreateKey,
   candidateCreationUnavailableReason,
+  composeOnboardingBaseUrl,
   localGroupSelectionLabel,
+  normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryKind,
+  onboardingRequestHost,
   onboardingSelectionTitle,
+  parseOnboardingBaseUrl,
   rechargeRatioLabel,
 } from "../onboarding-entry";
 
 describe("onboarding entry workflow", () => {
   it("uses the complete two-step flow when no Host is supplied", () => {
     expect(onboardingEntryKind(undefined, undefined)).toBe("full");
+  });
+
+  it("keeps the authorization Host independent from the accelerated Base URL", () => {
+    expect(normalizeOnboardingHost("152.53.241.112:8080")).toBe("152.53.241.112:8080");
+    expect(
+      composeOnboardingBaseUrl({
+        baseUrlProtocol: "https",
+        baseUrl: "accelerated.example.test:8443/api",
+      }),
+    ).toBe("https://accelerated.example.test:8443/api");
+    expect(
+      onboardingRequestHost(
+        { host: "152.53.241.112:8080", base_url: "https://accelerated.example.test:8443" },
+        "fallback.example.test",
+      ),
+    ).toBe("152.53.241.112:8080");
+  });
+
+  it("preserves HTTP and ports when loading an existing Base URL", () => {
+    expect(parseOnboardingBaseUrl("http://10.0.0.8:8080/api")).toEqual({
+      baseUrlProtocol: "http",
+      baseUrl: "10.0.0.8:8080/api",
+    });
   });
 
   it("skips upstream setup when entering from a Host row", () => {

@@ -134,6 +134,30 @@ type syncRefresher struct {
 	refresh func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error)
 }
 
+type syncResolver struct {
+	mu      sync.Mutex
+	record  *configstore.AuthRecord
+	err     error
+	calls   int
+	private *syncPrivate
+}
+
+func (r *syncResolver) ResolveAuth(context.Context, string, string) (*configstore.AuthRecord, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if r.private != nil && r.record != nil {
+		r.private.SaveAuthRecord(context.Background(), *r.record, nil)
+	}
+	return r.record, r.err
+}
+
+func (r *syncResolver) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
 func (r *syncRefresher) Refresh(ctx context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
 	return r.refresh(ctx, record)
 }
@@ -195,6 +219,66 @@ func TestSyncHostCommitsVerifiedRefreshBeforeRetryingRead(t *testing.T) {
 	}
 	if !repository.applied[0].AuthenticationOK || !repository.applied[0].AuthRecovered {
 		t.Fatalf("write=%#v", repository.applied[0])
+	}
+}
+
+func TestSyncHostUsesBaseURLWithoutChangingHostIdentity(t *testing.T) {
+	token := "token"
+	const host = "152.53.241.112:8080"
+	const baseURL = "https://accelerated.example.test:8443/api"
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{host: {
+		Host: host, BaseURL: baseURL, AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}}}
+	var requested configstore.AuthRecord
+	reader := &syncReader{catalog: func(_ context.Context, record configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+		requested = record
+		return business.UpstreamCatalogSnapshot{}, nil
+	}}
+	repository := &syncRepository{}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{done: make(chan taskstore.Task, 1)})
+	result, err := service.SyncHost(context.Background(), "HTTP://152.53.241.112:8080/", Scope{Catalog: true}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || result.Host != host || requested.Host != host || requested.BaseURL != baseURL {
+		t.Fatalf("result=%#v requested=%#v", result, requested)
+	}
+}
+
+func TestEnqueueHostMissingAuthorizationNamesTheExactHost(t *testing.T) {
+	service := New(
+		&syncRepository{},
+		&syncPrivate{records: map[string]configstore.AuthRecord{}},
+		&syncReader{},
+		&syncRefresher{},
+		&memoryTasks{done: make(chan taskstore.Task, 1)},
+	)
+	_, err := service.EnqueueHost(context.Background(), "HTTP://152.53.241.112:8080/", Scope{Catalog: true}, "tester", "sync")
+	if err == nil || !strings.Contains(err.Error(), `152.53.241.112:8080`) || !strings.Contains(err.Error(), "Base URL 可以不同") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEnqueueHostResolvesExplicitVaultMatchBeforeQueueing(t *testing.T) {
+	token := "token"
+	resolved := &configstore.AuthRecord{
+		Host: "152.53.241.112:8080", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{}}
+	resolver := &syncResolver{record: resolved, private: private}
+	tasks := &memoryTasks{done: make(chan taskstore.Task, 1)}
+	reader := &syncReader{catalog: func(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+		return business.UpstreamCatalogSnapshot{}, nil
+	}}
+	service := New(&syncRepository{}, private, reader, &syncRefresher{}, tasks)
+	service.SetAuthResolver(resolver)
+
+	if _, err := service.EnqueueHost(context.Background(), "152.53.241.112:8080", Scope{Catalog: true}, "tester", "sync"); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.callCount() != 1 {
+		t.Fatalf("resolver calls=%d", resolver.callCount())
 	}
 }
 

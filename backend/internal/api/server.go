@@ -28,6 +28,7 @@ import (
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
+	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
@@ -65,7 +66,6 @@ type Business interface {
 	ControlPolicy(context.Context) (map[string]any, error)
 	PolicySnapshot(context.Context) (business.PolicySnapshot, error)
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
-	SetAccountControl(context.Context, string, string, string) (business.PolicySnapshot, error)
 	SetAccountTestModel(context.Context, string, *string, string) error
 	UpdateGroupPolicy(context.Context, string, map[string]any, string) (business.GroupStatus, error)
 	ClearGroupPolicy(context.Context, string, string) (business.GroupStatus, error)
@@ -82,6 +82,11 @@ type Business interface {
 
 type NotificationTester interface {
 	Test(context.Context, string, bool) (notification.TestResult, error)
+}
+
+type NotificationTargetDiscovery interface {
+	Enqueue(context.Context, notificationtarget.Request) (taskstore.Task, error)
+	Cancel(string) bool
 }
 
 type notificationQueueReader interface {
@@ -144,13 +149,17 @@ type ManagementTaskEnqueuer interface {
 }
 
 type AccountMaintenanceTaskEnqueuer interface {
+	EnqueueAccountRateSync(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueAccountRevalidation(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueAccountNameRepair(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueMissingBindingCleanup(context.Context, []string, string) (taskstore.Task, error)
 }
 
 type AccountTaskEnqueuer interface {
+	EnqueueControl(context.Context, string, string, string) (taskstore.Task, error)
 	EnqueueFields(context.Context, string, accountops.FieldPatch, string) (taskstore.Task, error)
+	EnqueueManualPriority(context.Context, string, int64, string, int64, string) (taskstore.Task, error)
+	EnqueueClearManualPriority(context.Context, string, string) (taskstore.Task, error)
 	Models(context.Context, string) ([]string, error)
 }
 
@@ -201,6 +210,7 @@ type AuthRecoveryService interface {
 
 type Dependencies struct {
 	Notification       NotificationTester
+	NotificationTarget NotificationTargetDiscovery
 	Inspection         InspectionController
 	InspectionTasks    InspectionTaskEnqueuer
 	RoutingControl     RoutingControlRestorer
@@ -228,6 +238,7 @@ type Server struct {
 	private            *configstore.Store
 	business           Business
 	notifier           NotificationTester
+	notificationTarget NotificationTargetDiscovery
 	inspection         InspectionController
 	inspectionTasks    InspectionTaskEnqueuer
 	routingControl     RoutingControlRestorer
@@ -296,6 +307,12 @@ type notificationConfigRequest struct {
 	ClientSecret    string `json:"client_secret" binding:"max=65536"`
 	HomeChannel     string `json:"home_channel" binding:"required,min=1,max=4096"`
 	HomeChannelType string `json:"home_channel_type" binding:"required,oneof=c2c group channel"`
+}
+
+type notificationTargetDiscoveryRequest struct {
+	AppID        string `json:"app_id" binding:"max=4096"`
+	ClientSecret string `json:"client_secret" binding:"max=65536"`
+	TargetType   string `json:"target_type" binding:"required,oneof=c2c group channel"`
 }
 
 type notificationQueueResponse struct {
@@ -376,6 +393,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		private:            private,
 		business:           business,
 		notifier:           services.Notification,
+		notificationTarget: services.NotificationTarget,
 		inspection:         services.Inspection,
 		inspectionTasks:    services.InspectionTasks,
 		routingControl:     services.RoutingControl,
@@ -421,13 +439,18 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/notifications/queue", server.notificationQueue)
 	authorized.POST("/notifications/config", server.configureNotification)
 	authorized.POST("/notifications/test", server.testNotification)
+	authorized.POST("/notifications/target-discovery", server.discoverNotificationTarget)
+	authorized.DELETE("/notifications/target-discovery/:task_id", server.cancelNotificationTargetDiscovery)
 	authorized.GET("/accounts", server.accounts)
 	authorized.GET("/accounts/:account_id", server.account)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
 	authorized.PUT("/accounts/:account_id/test-model", server.setAccountTestModel)
 	authorized.POST("/accounts/:account_id/sync", server.syncAccountFields)
+	authorized.PUT("/accounts/:account_id/manual-priority", server.setAccountManualPriority)
+	authorized.DELETE("/accounts/:account_id/manual-priority", server.clearAccountManualPriority)
 	authorized.POST("/management/sync", server.syncManagement)
+	authorized.POST("/management/accounts/rates/sync", server.syncAccountRates)
 	authorized.POST("/management/accounts/revalidate", server.revalidateAccounts)
 	authorized.POST("/management/accounts/names/repair", server.repairAccountNames)
 	authorized.POST("/management/accounts/missing-bindings/cleanup", server.cleanupMissingBindings)
@@ -869,6 +892,55 @@ func (s *Server) configureNotification(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (s *Server) discoverNotificationTarget(c *gin.Context) {
+	if s.notificationTarget == nil {
+		writeError(c, http.StatusServiceUnavailable, "QQBot 目标获取服务尚未就绪")
+		return
+	}
+	var payload notificationTargetDiscoveryRequest
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "QQBot 目标获取参数无效")
+		return
+	}
+	current, err := s.private.NotificationSettings(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "通知配置读取失败")
+		return
+	}
+	appID := strings.TrimSpace(payload.AppID)
+	if appID == "" {
+		appID = current.AppID
+	}
+	clientSecret := strings.TrimSpace(payload.ClientSecret)
+	if clientSecret == "" {
+		clientSecret = current.ClientSecret
+	}
+	task, err := s.notificationTarget.Enqueue(c.Request.Context(), notificationtarget.Request{
+		AppID: appID, ClientSecret: clientSecret, TargetType: payload.TargetType,
+	})
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if errors.Is(err, notificationtarget.ErrDiscoveryActive) {
+			status = http.StatusConflict
+		}
+		writeError(c, status, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, task)
+}
+
+func (s *Server) cancelNotificationTargetDiscovery(c *gin.Context) {
+	if s.notificationTarget == nil {
+		writeError(c, http.StatusServiceUnavailable, "QQBot 目标获取服务尚未就绪")
+		return
+	}
+	if !s.notificationTarget.Cancel(c.Param("task_id")) {
+		writeError(c, http.StatusNotFound, "目标获取任务不存在或已经结束")
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
+}
+
 func (s *Server) readNotificationStatus(ctx context.Context) (notificationStatusResponse, error) {
 	status, err := s.private.NotificationPublicStatus(ctx)
 	if err != nil {
@@ -1000,11 +1072,12 @@ func (s *Server) setAccountControl(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "账号控制 action 无效")
 		return
 	}
-	if s.inspectionTasks == nil {
-		writeError(c, http.StatusServiceUnavailable, "巡检任务服务尚未就绪")
+	if s.accountTasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号操作服务尚未就绪")
 		return
 	}
-	if _, ok := s.accountMutationPreflight(c, accountID, true); !ok {
+	requiresTarget := action != "exclude" && action != "include"
+	if _, ok := s.accountMutationPreflight(c, accountID, requiresTarget); !ok {
 		return
 	}
 	actor, err := s.requestActor(c)
@@ -1012,20 +1085,9 @@ func (s *Server) setAccountControl(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	if _, err := s.business.SetAccountControl(c.Request.Context(), accountID, action, actor); err != nil {
-		if strings.Contains(err.Error(), "不存在") {
-			writeError(c, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(c, http.StatusConflict, err.Error())
-		return
-	}
-	task, err := s.inspectionTasks.Enqueue(c.Request.Context(), inspection.RunRequest{
-		AccountID: &accountID,
-		Actor:     actor,
-	})
+	task, err := s.accountTasks.EnqueueControl(c.Request.Context(), accountID, action, actor)
 	if err != nil {
-		writeError(c, http.StatusConflict, "账号控制已保存，但巡检任务创建失败："+err.Error())
+		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, task)
@@ -1077,6 +1139,9 @@ func (s *Server) setAccountTestModel(c *gin.Context) {
 		}
 		model = &value
 	}
+	if _, ok := s.accountMutationPreflight(c, accountID, false); !ok {
+		return
+	}
 	actor, err := s.requestActor(c)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
@@ -1127,6 +1192,88 @@ func (s *Server) syncAccountFields(c *gin.Context) {
 		return
 	}
 	task, err := s.accountTasks.EnqueueFields(c.Request.Context(), accountID, patch, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) setAccountManualPriority(c *gin.Context) {
+	accountID := strings.TrimSpace(c.Param("account_id"))
+	if !positiveNumericID(accountID) {
+		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 3 {
+		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor 和 concurrency")
+		return
+	}
+	priority, err := positiveJSONInteger(payload["priority"], "priority", 1, 1000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	loadFactor, ok := payload["load_factor"].(string)
+	if !ok || strings.TrimSpace(loadFactor) == "" {
+		writeError(c, http.StatusUnprocessableEntity, "load_factor 必须是有效数字字符串")
+		return
+	}
+	concurrency, err := positiveJSONInteger(payload["concurrency"], "concurrency", 1, 10_000_000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if s.accountTasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号操作任务服务尚未就绪")
+		return
+	}
+	mode, ok := s.accountMutationPreflight(c, accountID, true)
+	if !ok {
+		return
+	}
+	if mode != runtimepolicy.Full {
+		writeError(c, http.StatusConflict, "设置人工优先位需要完全模式")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountTasks.EnqueueManualPriority(c.Request.Context(), accountID, priority, loadFactor, concurrency, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) clearAccountManualPriority(c *gin.Context) {
+	accountID := strings.TrimSpace(c.Param("account_id"))
+	if !positiveNumericID(accountID) {
+		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
+		return
+	}
+	mode, ok := s.accountMutationPreflight(c, accountID, true)
+	if !ok {
+		return
+	}
+	if mode != runtimepolicy.Full {
+		writeError(c, http.StatusConflict, "取消人工优先位需要完全模式")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	if s.accountTasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号操作任务服务尚未就绪")
+		return
+	}
+	task, err := s.accountTasks.EnqueueClearManualPriority(c.Request.Context(), accountID, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
@@ -1258,6 +1405,10 @@ func (s *Server) revalidateAccounts(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "revalidate")
 }
 
+func (s *Server) syncAccountRates(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "rates")
+}
+
 func (s *Server) repairAccountNames(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "names")
 }
@@ -1298,6 +1449,8 @@ func (s *Server) enqueueAccountMaintenance(c *gin.Context, operation string) {
 	}
 	var task taskstore.Task
 	switch operation {
+	case "rates":
+		task, err = s.accountMaintenance.EnqueueAccountRateSync(c.Request.Context(), accountIDs, actor)
 	case "names":
 		task, err = s.accountMaintenance.EnqueueAccountNameRepair(c.Request.Context(), accountIDs, actor)
 	case "cleanup":

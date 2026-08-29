@@ -78,6 +78,17 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 	if platform != "openai" || groupRate != "2" {
 		t.Fatalf("partial group snapshot erased metadata: platform=%q rate=%q", platform, groupRate)
 	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{
+		{"id": json.Number("11"), "rate_multiplier": json.Number("0.17")},
+	}, []map[string]any{}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT group_rate FROM account_groups WHERE account_id='11' AND group_name='codex'`).Scan(&groupRate); err != nil {
+		t.Fatal(err)
+	}
+	if groupRate != "0.17" {
+		t.Fatalf("account multiplier update left stale membership rate: %q", groupRate)
+	}
 }
 
 func TestManagementSnapshotKeepsCurrentAccountErrorAndClearsStaleError(t *testing.T) {

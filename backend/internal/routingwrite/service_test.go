@@ -23,6 +23,7 @@ type concurrentWriteAdmin struct {
 	mutates      int
 	mutations    []routingMutation
 	deletes      int
+	deleteChecks []bool
 	mutateErr    error
 	mutateErrors map[string]error
 }
@@ -81,6 +82,32 @@ type failingCommitRepository struct {
 	err error
 }
 
+type policyAccessRepository struct {
+	Repository
+	calls int
+}
+
+func (r *policyAccessRepository) ControlPolicy(context.Context) (map[string]any, error) {
+	r.calls++
+	return nil, errors.New("automatic scheduling policy unavailable")
+}
+
+type listingWriteAdmin struct {
+	*concurrentWriteAdmin
+	lists int
+}
+
+func (a *listingWriteAdmin) Accounts(context.Context) ([]map[string]any, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lists++
+	result := make(map[string]any, len(a.state))
+	for key, value := range a.state {
+		result[key] = value
+	}
+	return []map[string]any{result}, nil
+}
+
 func (r *failingCommitRepository) CommitRoutingReadback(
 	context.Context,
 	string,
@@ -95,10 +122,11 @@ func (a *concurrentWriteAdmin) DeleteAccount(context.Context, string) (map[strin
 	return a.DeleteAccountWithVerification(context.Background(), "", true)
 }
 
-func (a *concurrentWriteAdmin) DeleteAccountWithVerification(context.Context, string, bool) (map[string]any, error) {
+func (a *concurrentWriteAdmin) DeleteAccountWithVerification(_ context.Context, _ string, verification bool) (map[string]any, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.deletes++
+	a.deleteChecks = append(a.deleteChecks, verification)
 	return map[string]any{"confirmed_absent": true}, nil
 }
 
@@ -721,16 +749,17 @@ func TestRestoreControlClearsConsoleConfirmedRoutingState(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	admin := &concurrentWriteAdmin{dbPath: path, state: map[string]any{
+	admin := &listingWriteAdmin{concurrentWriteAdmin: &concurrentWriteAdmin{dbPath: path, state: map[string]any{
 		"id": json.Number("41"), "schedulable": false, "priority": int64(10), "load_factor": int64(2), "concurrency": int64(3),
-	}}
-	service := newTestService(repository, admin)
+	}}}
+	policyRepository := &policyAccessRepository{Repository: repository}
+	service := newTestService(policyRepository, admin)
 
 	result, err := service.RestoreControl(ctx, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Failed != 0 || result.Restored != 1 || result.Changed != 1 || admin.mutates != 2 {
+	if result.Failed != 0 || result.Restored != 1 || result.Changed != 1 || admin.mutates != 2 || admin.lists != 2 || policyRepository.calls != 0 {
 		t.Fatalf("交还控制权结果异常：result=%#v mutates=%d", result, admin.mutates)
 	}
 	detail, err := repository.Account(ctx, "41")
@@ -889,7 +918,7 @@ func TestCleanupDeletePredisablesRemoteAndRemovesLocalProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Failed != 0 || result.Changed != 1 || admin.mutates != 1 || admin.deletes != 1 {
+	if result.Failed != 0 || result.Changed != 1 || admin.mutates != 1 || admin.deletes != 1 || len(admin.deleteChecks) != 1 || !admin.deleteChecks[0] {
 		t.Fatalf("删除链路没有完整执行：result=%#v mutates=%d deletes=%d", result, admin.mutates, admin.deletes)
 	}
 	database, err := sql.Open("sqlite", "file:"+path)

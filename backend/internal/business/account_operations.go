@@ -88,8 +88,18 @@ func (s *Store) CommitAccountFieldsReadback(
 		}
 		updates = append(updates, "updated_at=?")
 		arguments = append(arguments, now, accountID)
-		_, err := tx.ExecContext(ctx, `UPDATE accounts SET `+strings.Join(updates, ",")+` WHERE id=?`, arguments...)
-		return err
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET `+strings.Join(updates, ",")+` WHERE id=?`, arguments...); err != nil {
+			return err
+		}
+		if multiplier != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_rate=? WHERE account_id=?`, *multiplier, accountID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE bindings SET local_rate=?,updated_at=? WHERE local_account_id=?`, *multiplier, now, accountID); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

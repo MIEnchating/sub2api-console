@@ -51,6 +51,7 @@ function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
       onProbe={vi.fn()}
       onControl={vi.fn()}
       onRateSync={vi.fn()}
+      onManualPriority={vi.fn()}
       onEdit={vi.fn()}
     />,
   );
@@ -59,21 +60,31 @@ function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
 describe("account operation buttons", () => {
   it("matches the channel pool operations without a multiplier threshold breaker", () => {
     const result = markup();
-    for (const label of ["探活测试", "暂停调度", "手动熔断", "同步上游倍率", "查看并编辑账号"]) {
+    for (const label of [
+      "探活测试",
+      "暂停调度",
+      "手动熔断",
+      "同步账号倍率",
+      "设置人工优先位",
+      "查看并编辑账号",
+    ]) {
       expect(result).toContain(label);
     }
-    expect(result).toContain("grid-cols-2");
-    expect(result).toContain("col-span-2");
+    expect(result).toContain("grid-cols-3");
     expect(result).toContain("lucide-activity");
     expect(result).not.toContain("lucide-scan-search");
     expect(result).not.toContain("排除账号");
     expect(result).not.toContain("倍率超阈值");
   });
 
+  it("shows an adjustment action for an assigned manual priority account", () => {
+    expect(markup({ manual_priority: 3 })).toContain("调整人工优先位");
+  });
+
   it("shows an immediate loading state while an active probe is running", () => {
     const result = markup({}, true);
 
-    expect(result).toContain(`aria-label="正在探活 ${account.name}"`);
+    expect(result).toContain('aria-label="正在探活"');
     expect(result).toContain("lucide-loader-circle");
     expect(result).toContain("animate-spin");
     expect(result).toContain("disabled");
@@ -89,10 +100,39 @@ describe("account operation buttons", () => {
     );
   });
 
-  it("only offers restore control and edit for an excluded account", () => {
+  it("does not offer pause again when a policy already stopped scheduling", () => {
+    const result = markup({
+      health: "cost_blocked",
+      routing_state: "cost_blocked",
+      decision_state: "cost_blocked",
+      schedulable: false,
+      target_schedulable: false,
+    });
+
+    expect(result).toContain('aria-label="已停止调度"');
+    expect(result).not.toContain('aria-label="暂停调度"');
+  });
+
+  it("offers recovery when Sub2API reports an otherwise disabled account", () => {
+    const result = markup({
+      health: "disabled",
+      routing_state: "disabled",
+      schedulable: false,
+    });
+
+    expect(result).toContain('aria-label="恢复调度"');
+    expect(result).not.toContain('aria-label="暂停调度"');
+  });
+
+  it("keeps action labels independent from the account name", () => {
+    expect(markup()).not.toContain(account.name);
+  });
+
+  it("keeps read-only rate sync available for an excluded account", () => {
     const result = markup({ health: "excluded", routing_state: "excluded", schedulable: false });
     expect(result).toContain("恢复管控");
     expect(result).toContain("查看并编辑账号");
+    expect(result).toContain("同步账号倍率");
     expect(result).not.toContain("探活测试");
     expect(result).not.toContain("手动熔断");
   });

@@ -23,6 +23,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/management"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
+	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
@@ -66,10 +67,16 @@ func main() {
 		privateStore,
 		notification.NewQQBotSender(&http.Client{Timeout: 20 * time.Second}),
 	)
+	notificationTargetDiscovery := notificationtarget.New(
+		notificationtarget.NewGatewayListener(&http.Client{Timeout: 20 * time.Second}),
+		taskStore,
+	)
 	alertService := alerting.New(businessStore, notificationService)
 	alertTasks := alerting.NewTaskService(alertService, taskStore)
-	managementTasks := management.New(privateStore, businessStore, taskStore)
+	upstreamReader := upstreamsync.NewReader(&http.Client{Timeout: 20 * time.Second})
 	accountTasks := accountops.New(privateStore, businessStore, taskStore)
+	managementTasks := management.New(privateStore, businessStore, taskStore, accountTasks)
+	managementTasks.UseUpstreamCatalogReader(upstreamReader)
 	probeTasks := probe.New(businessStore, privateStore, taskStore)
 	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore)
 	if err != nil {
@@ -77,7 +84,6 @@ func main() {
 	}
 	upstreamDetector := upstreamdetect.New(&http.Client{Timeout: 8 * time.Second})
 	authClient := upstreamauth.New(&http.Client{Timeout: 20 * time.Second})
-	upstreamReader := upstreamsync.NewReader(&http.Client{Timeout: 20 * time.Second})
 	upstreamConfigurations := upstreamconfig.New(
 		businessStore,
 		privateStore,
@@ -107,6 +113,8 @@ func main() {
 		taskStore,
 		captchaManager,
 	)
+	upstreamSyncTasks.SetAuthResolver(authRecoveryService)
+	managementTasks.UseUpstreamAuthResolver(authRecoveryService)
 	logService := consolelogs.New(businessStore, taskStore)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)
 	evidenceService := evidence.New(businessStore, probeTasks)
@@ -122,6 +130,7 @@ func main() {
 		alertService,
 		upstreamSyncTasks,
 		taskStore,
+		managementTasks,
 	)
 	inspectionScheduler, err := inspection.NewScheduler(businessStore, inspectionRunner)
 	if err != nil {
@@ -141,6 +150,7 @@ func main() {
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
 		Notification:       notificationService,
+		NotificationTarget: notificationTargetDiscovery,
 		Inspection:         inspectionScheduler,
 		InspectionTasks:    manualInspections,
 		RoutingControl:     routingWriteService,

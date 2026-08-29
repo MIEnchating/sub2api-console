@@ -19,6 +19,20 @@ func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 	}
 }
 
+func TestAccountNamesForMaintenanceIncludesAccountsWithoutBindings(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE accounts SET name='Existing Account-0.15' WHERE id='42'`); err != nil {
+		t.Fatal(err)
+	}
+	names, err := store.AccountNamesForMaintenance(context.Background(), []string{"42"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names["42"] != "Existing Account-0.15" {
+		t.Fatalf("names=%#v", names)
+	}
+}
+
 func TestMissingBindingIsNotReportedAsExisting(t *testing.T) {
 	store := openReadModelFixture(t)
 	if err := store.CommitBindingVerification(context.Background(), []BindingVerification{{AccountID: "41", Exists: false}}); err != nil {

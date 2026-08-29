@@ -74,14 +74,25 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		AccountCount: group.AccountCount, RateLimitedAccounts: group.RateLimitedAccounts,
 		AverageHealthScore: group.AverageHealthScore, Channels: []GroupAllocationChannel{},
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,rd.priority,rd.schedulable,rd.role,rd.routing_state,
+	rows, err := s.db.QueryContext(ctx, `WITH ranked_decisions AS (
+		SELECT rd.*,ROW_NUMBER() OVER(PARTITION BY rd.account_id ORDER BY julianday(rd.updated_at) DESC,rd.group_name) AS decision_rank
+		FROM routing_decisions rd
+		LEFT JOIN app_state decision_epoch ON decision_epoch.key='routing-decision-epoch'
+		WHERE decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at)
+	), current_decisions AS (
+		SELECT * FROM ranked_decisions WHERE decision_rank=1
+	), ranked_evaluations AS (
+		SELECT he.*,ROW_NUMBER() OVER(PARTITION BY he.account_id ORDER BY julianday(he.evaluated_at) DESC,he.group_name) AS evaluation_rank
+		FROM account_health_evaluations he
+	), current_evaluations AS (
+		SELECT * FROM ranked_evaluations WHERE evaluation_rank=1
+	)
+		SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
 		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.sample_count,he.ttfb_p95_ms
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
-		LEFT JOIN app_state decision_epoch ON decision_epoch.key='routing-decision-epoch'
-		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND rd.group_name=ag.group_name
-			AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))
-		LEFT JOIN account_health_evaluations he ON he.account_id=a.id AND he.group_name=ag.group_name
+		LEFT JOIN current_decisions rd ON rd.account_id=a.id
+		LEFT JOIN current_evaluations he ON he.account_id=a.id
 		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
 		ORDER BY a.name,a.id`, groupID, group.Name)
 	if err != nil {
@@ -91,9 +102,9 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	for rows.Next() {
 		var channel GroupAllocationChannel
 		var priority, schedulable, rank, sampleCount sql.NullInt64
-		var role, state, reason, updatedAt, payloadRaw sql.NullString
+		var accountMultiplier, role, state, reason, updatedAt, payloadRaw sql.NullString
 		var healthScore, p95 sql.NullFloat64
-		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &priority, &schedulable, &role, &state,
+		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &accountMultiplier, &priority, &schedulable, &role, &state,
 			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &sampleCount, &p95); err != nil {
 			return GroupAllocation{}, err
 		}
@@ -116,6 +127,9 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 				channel.AssignedConcurrency = allocationInteger(payload["desired_concurrency"])
 				channel.Rate = allocationString(payload["rate"])
 			}
+		}
+		if accountMultiplier.Valid && strings.TrimSpace(accountMultiplier.String) != "" {
+			channel.Rate = stringPointer(strings.TrimSpace(accountMultiplier.String))
 		}
 		if channel.UpdatedAt != nil {
 			result.HasAllocation = true

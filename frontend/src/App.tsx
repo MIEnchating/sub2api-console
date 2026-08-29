@@ -155,8 +155,15 @@ import { LogsCenterPage } from "./features/logs/components/logs-center-page";
 import { GroupPolicyEditorFields } from "./features/groups/components/group-policy-editor-fields";
 import { captchaChallengeFromTask } from "./lib/captcha-challenge";
 import { groupStatusMeta } from "./lib/group-policy-display";
+import { schedulingMetric } from "./lib/scheduling-display";
+import {
+  schedulingStrategyDescription,
+  schedulingStrategyOptions,
+  schedulingWeightFormula,
+} from "./lib/scheduling-strategy";
 import { notifyOperationError } from "./lib/operation-feedback";
 import { sensitiveFieldPlaceholder } from "./lib/sensitive-field";
+import { sessionExpiredEvent, sessionExpiredMessage } from "./lib/session-auth";
 import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
 import { TableFilterToolbar } from "./components/data-table/filter-toolbar";
@@ -180,6 +187,7 @@ import {
 import { VaultPage } from "./features/vault/components/vault-page";
 import { ProfilePage } from "./features/profile/components/profile-page";
 import { AccountStatusFilter } from "./features/accounts/components/account-status-tabs";
+import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
 import { AccountDetailDialog } from "./features/accounts/components/account-detail-dialog";
 import { AccountSettingsPanel } from "./features/accounts/components/account-settings-panel";
@@ -215,11 +223,15 @@ import {
   canSubmitOnboarding,
   candidateCanCreateKey,
   candidateCreationUnavailableReason,
+  composeOnboardingBaseUrl,
   localGroupSelectionLabel,
+  normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryDescription,
   onboardingEntryKind,
+  onboardingRequestHost,
   onboardingSelectionTitle,
+  parseOnboardingBaseUrl,
   rechargeRatioLabel,
 } from "./lib/onboarding-entry";
 
@@ -271,7 +283,12 @@ export const navItems: Array<{
     icon: HeartPulse,
     to: "/auto-inspection",
   },
-  { id: "model-check", label: "模型检测", icon: Fingerprint, to: "/model-check" },
+  {
+    id: "model-check",
+    label: "模型检测",
+    icon: Fingerprint,
+    to: "/model-check",
+  },
   { id: "trace", label: "请求查询", icon: FileSearch, to: "/trace" },
   { id: "alerts", label: "告警通知", icon: Siren, to: "/alerts" },
   {
@@ -314,6 +331,8 @@ export function viewForPath(pathname: string): View {
 }
 
 function App() {
+  const queryClient = useQueryClient();
+  const [loginReason, setLoginReason] = useState<string | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
     return window.localStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
@@ -327,6 +346,17 @@ function App() {
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem("sub2api-console-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    const handleSessionExpired = () => {
+      queryClient.removeQueries({
+        predicate: (query) => !["setup-status", "session"].includes(String(query.queryKey[0])),
+      });
+      queryClient.setQueryData(["session"], { authenticated: false, username: null });
+      setLoginReason(sessionExpiredMessage);
+    };
+    window.addEventListener(sessionExpiredEvent, handleSessionExpired);
+    return () => window.removeEventListener(sessionExpiredEvent, handleSessionExpired);
+  }, [queryClient]);
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: api.setupStatus,
@@ -376,7 +406,16 @@ function App() {
         error
       />
     );
-  if (!session.data?.authenticated) return <LoginPage onLogin={() => void session.refetch()} />;
+  if (!session.data?.authenticated)
+    return (
+      <LoginPage
+        reason={loginReason}
+        onLogin={() => {
+          setLoginReason(null);
+          void session.refetch();
+        }}
+      />
+    );
 
   const activeView = viewForPath(location.pathname);
   return (
@@ -559,7 +598,9 @@ function useAutoInspectionEvents(enabled: boolean): boolean {
       setConnected(false);
       return;
     }
-    const source = new EventSource(api.autoInspectionEventsURL(), { withCredentials: true });
+    const source = new EventSource(api.autoInspectionEventsURL(), {
+      withCredentials: true,
+    });
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
     const updateStatus = (event: MessageEvent<string>) => {
@@ -752,21 +793,45 @@ function formatRelativeRun(value: string): string {
 
 function trafficCollectionState(value?: AutoInspectionStatus, failed = false) {
   if (failed) {
-    return { label: "真实流量状态读取失败", shortLabel: "读取失败", tone: "danger" as const };
+    return {
+      label: "真实流量状态读取失败",
+      shortLabel: "读取失败",
+      tone: "danger" as const,
+    };
   }
   if (!value) {
-    return { label: "真实流量状态读取中", shortLabel: "读取中", tone: "neutral" as const };
+    return {
+      label: "真实流量状态读取中",
+      shortLabel: "读取中",
+      tone: "neutral" as const,
+    };
   }
   if (!value.monitoring_configured) {
-    return { label: "真实流量采集已关闭", shortLabel: "采集已关闭", tone: "neutral" as const };
+    return {
+      label: "真实流量采集已关闭",
+      shortLabel: "采集已关闭",
+      tone: "neutral" as const,
+    };
   }
   if (!value.monitoring_checked_at) {
-    return { label: "真实流量随巡检同步", shortLabel: "随巡检同步", tone: "info" as const };
+    return {
+      label: "真实流量随巡检同步",
+      shortLabel: "随巡检同步",
+      tone: "info" as const,
+    };
   }
   if (value.monitoring_enabled) {
-    return { label: "真实流量同步正常", shortLabel: "同步正常", tone: "success" as const };
+    return {
+      label: "真实流量同步正常",
+      shortLabel: "同步正常",
+      tone: "success" as const,
+    };
   }
-  return { label: "本轮未获取真实流量", shortLabel: "本轮无样本", tone: "warning" as const };
+  return {
+    label: "本轮未获取真实流量",
+    shortLabel: "本轮无样本",
+    tone: "warning" as const,
+  };
 }
 
 function trafficStateDot(tone: ReturnType<typeof trafficCollectionState>["tone"]): string {
@@ -981,7 +1046,7 @@ const loginSchema = z.object({
 });
 type LoginForm = z.infer<typeof loginSchema>;
 
-function LoginPage(props: { onLogin: () => void }) {
+export function LoginPage(props: { onLogin: () => void; reason?: string | null }) {
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { username: "", password: "" },
@@ -1014,6 +1079,15 @@ function LoginPage(props: { onLogin: () => void }) {
           <div className="mb-8">
             <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">登录</h1>
           </div>
+          {props.reason ? (
+            <div
+              className="border-warning/35 bg-warning/10 text-warning mb-5 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
+              role="alert"
+            >
+              <CircleAlert className="mt-0.5 shrink-0" size={16} aria-hidden="true" />
+              <span>{props.reason}</span>
+            </div>
+          ) : null}
           <form className="grid gap-5" onSubmit={submit}>
             <FormField
               reserveErrorSpace
@@ -1114,12 +1188,7 @@ const strategyLabels: Record<string, string> = {
   未参与: "未参与",
   配置错误: "配置错误",
 };
-export const schedulingStrategyOptions = [
-  { value: "balanced", label: "均衡" },
-  { value: "price_first", label: "价格优先" },
-  { value: "speed_first", label: "速度优先" },
-  { value: "reliability", label: "稳定优先" },
-] as const;
+export { schedulingStrategyOptions };
 const fallbackLabels: Record<string, string> = {
   current_cost_wall: "回退当前成本墙",
   fail_closed: "严格关闭",
@@ -1216,6 +1285,7 @@ const eventLabels: Record<string, string> = {
   "account-scheduling": "账号调度",
   "account-sync": "账号字段同步",
   "account.groups.sync": "账号分组同步",
+  "account.rates.synced": "账号倍率同步",
   "account.onboarding": "账号添加",
   "routing.writeback": "自动执行",
   "automatic-inspection": "自动巡检",
@@ -1231,6 +1301,7 @@ const operationLabels: Record<string, string> = {
   "management-balances-sync": "账号余额同步",
   "management-groups-sync": "账号分组同步",
   "management-snapshot-sync": "管理数据同步",
+  "account-rate-sync": "账号倍率同步",
   "account.scheduling": "账号调度",
   "account.sync": "账号同步",
   "account.groups.sync": "账号分组同步",
@@ -1459,6 +1530,9 @@ function policyPayload(value: PolicyDraft): PolicyUpdate | null {
     "interval_seconds",
   );
   const trafficEvidenceInterval = policyAdvancedValue(value, "traffic", "refresh_seconds");
+  const configuredManualPriorityMax = policyAdvancedValue(value, "manual_priority", "reserved_max");
+  const manualPriorityMax =
+    configuredManualPriorityMax === undefined ? 10 : configuredManualPriorityMax;
   if (value.auto_apply === null || value.excluded_group_ids === null) return null;
   if (policyRelationshipError(value)) return null;
   if (Object.values(value.auto_apply).some((item) => typeof item !== "boolean")) return null;
@@ -1487,7 +1561,11 @@ function policyPayload(value: PolicyDraft): PolicyUpdate | null {
     typeof trafficEvidenceInterval !== "number" ||
     !Number.isInteger(trafficEvidenceInterval) ||
     trafficEvidenceInterval < 1 ||
-    trafficEvidenceInterval > 86400
+    trafficEvidenceInterval > 86400 ||
+    typeof manualPriorityMax !== "number" ||
+    !Number.isInteger(manualPriorityMax) ||
+    manualPriorityMax < 1 ||
+    manualPriorityMax > 1000
   )
     return null;
   return { ...value, probe_model: value.probe_model ?? "" } as PolicyUpdate;
@@ -2161,7 +2239,7 @@ function UpstreamsPage() {
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
                         <TableActionButton
-                          label={`${host.host} 添加账号`}
+                          label="添加账号"
                           onClick={() =>
                             navigate({
                               to: "/onboarding",
@@ -2176,15 +2254,12 @@ function UpstreamsPage() {
                           <UserPlus />
                         </TableActionButton>
                         <TableActionButton
-                          label={`${host.host} 查看分组`}
+                          label="查看分组"
                           onClick={() => setSelectedHost(host.host)}
                         >
                           <FolderOpen />
                         </TableActionButton>
-                        <TableActionButton
-                          label={`${host.host} 编辑上游`}
-                          onClick={() => setEditHost(host.host)}
-                        >
+                        <TableActionButton label="编辑上游" onClick={() => setEditHost(host.host)}>
                           <Pencil />
                         </TableActionButton>
                         <DropdownMenu>
@@ -2194,7 +2269,7 @@ function UpstreamsPage() {
                                 variant="outline"
                                 size="icon-sm"
                                 className="data-popup-open:bg-muted"
-                                aria-label={`${host.host} 更多操作`}
+                                aria-label="更多操作"
                               />
                             }
                           >
@@ -2596,7 +2671,7 @@ function UpstreamsPage() {
                         <TableCell className="text-right" overflowTooltip={false}>
                           <div className="flex justify-end">
                             <TableActionButton
-                              label={`向 ${group.name} 添加账号`}
+                              label="添加账号"
                               disabled={!group.group_id}
                               onClick={() => {
                                 const upstream = data?.hosts.find(
@@ -2830,7 +2905,9 @@ export function ManualAuthForm(props: {
       setShowCustomHeaders(false);
       setHeaderError(null);
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
-      void queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["auth-recovery-config"],
+      });
       if (props.onVerified) {
         props.onVerified(result);
       } else {
@@ -3132,8 +3209,22 @@ export function ManualAuthForm(props: {
 
 export function AccountsPage() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
   const queryClient = useQueryClient();
   const rows = accounts.data ?? [];
+  const manualPrioritySection = policy.data?.advanced_policy?.manual_priority;
+  const configuredReservedMax =
+    manualPrioritySection !== null &&
+    typeof manualPrioritySection === "object" &&
+    !Array.isArray(manualPrioritySection)
+      ? (manualPrioritySection as Record<string, unknown>).reserved_max
+      : null;
+  const reservedMax =
+    typeof configuredReservedMax === "number" &&
+    Number.isInteger(configuredReservedMax) &&
+    configuredReservedMax >= 1
+      ? configuredReservedMax
+      : 10;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<AccountPoolFilter>("all");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
@@ -3174,16 +3265,17 @@ export function AccountsPage() {
   const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
   const visibleAccountIDs = filteredRows.map((account) => account.id);
   const [maintenanceKind, setMaintenanceKind] = useState<
-    "balance" | "revalidate" | "repair" | "cleanup" | null
+    "balance" | "rate" | "revalidate" | "repair" | "cleanup" | null
   >(null);
   const [maintenanceTaskId, setMaintenanceTaskId] = useState<string | null>(null);
   const [missingBindingTargets, setMissingBindingTargets] = useState<AccountMaintenanceItem[]>([]);
   const maintenanceMutation = useMutation({
     mutationFn: (input: {
-      kind: "balance" | "revalidate" | "repair" | "cleanup";
+      kind: "balance" | "rate" | "revalidate" | "repair" | "cleanup";
       accountIds: string[];
     }) => {
       if (input.kind === "balance") return api.syncUpstreamBalances();
+      if (input.kind === "rate") return api.syncAccountRates(input.accountIds);
       if (input.kind === "revalidate") return api.revalidateAccounts(input.accountIds);
       if (input.kind === "cleanup") return api.cleanupMissingBindings(input.accountIds);
       return api.repairAccountNames(input.accountIds);
@@ -3207,7 +3299,7 @@ export function AccountsPage() {
       queryClient.invalidateQueries({ queryKey: ["onboarding-candidates"] }),
     ]);
   }, [maintenanceTask.data?.status, queryClient]);
-  function startMaintenance(kind: "balance" | "revalidate" | "repair") {
+  function startMaintenance(kind: "balance" | "rate" | "revalidate" | "repair") {
     setMaintenanceKind(kind);
     setMaintenanceTaskId(null);
     maintenanceMutation.reset();
@@ -3223,7 +3315,7 @@ export function AccountsPage() {
       <PageHeading
         eyebrow="ACCOUNTS / MANAGEMENT"
         title="账号管理"
-        description="健康分、最近结果、首字延迟、调度倍率和权重集中查看，可按状态快速定位。"
+        description="健康分、最近结果、首字延迟、调度倍率和组内分配权重集中查看，可按状态快速定位。"
         action={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
@@ -3233,6 +3325,14 @@ export function AccountsPage() {
             >
               <WalletCards size={16} />
               同步余额
+            </Button>
+            <Button
+              variant="outline"
+              disabled={maintenancePending || visibleAccountIDs.length === 0}
+              onClick={() => startMaintenance("rate")}
+            >
+              <RefreshCw size={16} />
+              同步倍率
             </Button>
             <Button
               variant="outline"
@@ -3315,7 +3415,7 @@ export function AccountsPage() {
                 <TableHead className="w-40">最近结果</TableHead>
                 <TableHead className="w-32">首字延迟</TableHead>
                 <TableHead className="w-28">调度倍率</TableHead>
-                <TableHead className="w-24">权重</TableHead>
+                <TableHead className="w-24">最终权重</TableHead>
                 <TableHead className="w-48">调度参数</TableHead>
                 <TableHead className="w-36">状态</TableHead>
                 <TableHead className="w-32 text-right">操作</TableHead>
@@ -3351,7 +3451,14 @@ export function AccountsPage() {
                 </TableRow>
               )}
               {!accounts.isLoading &&
-                pageRows.map((account) => <AccountRow key={account.id} account={account} />)}
+                pageRows.map((account) => (
+                  <AccountRow
+                    key={account.id}
+                    account={account}
+                    accounts={rows}
+                    reservedMax={reservedMax}
+                  />
+                ))}
             </TableBody>
           </Table>
           {filteredRows.length > 0 && (
@@ -3385,17 +3492,21 @@ export function AccountsPage() {
             <DialogTitle>
               {maintenanceKind === "balance"
                 ? "同步账号余额"
-                : maintenanceKind === "revalidate"
-                  ? "批量复验绑定"
-                  : maintenanceKind === "cleanup"
-                    ? "修复失效绑定"
-                    : "账号命名修复"}
+                : maintenanceKind === "rate"
+                  ? "同步账号倍率"
+                  : maintenanceKind === "revalidate"
+                    ? "批量复验绑定"
+                    : maintenanceKind === "cleanup"
+                      ? "修复失效绑定"
+                      : "账号命名修复"}
             </DialogTitle>
             {maintenanceKind !== "balance" && (
               <DialogDescription>
                 {maintenanceKind === "cleanup"
                   ? `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`
-                  : `当前筛选结果共 ${visibleAccountIDs.length} 个账号，只处理其中已有绑定的账号。`}
+                  : maintenanceKind === "rate"
+                    ? `将使用账号凭据向上游探测 ${visibleAccountIDs.length} 个账号的当前有效倍率，并写回管理平台；写后读回一致才更新本地。`
+                    : `当前筛选结果共 ${visibleAccountIDs.length} 个账号，只处理其中已有绑定的账号。`}
               </DialogDescription>
             )}
           </DialogHeader>
@@ -3496,6 +3607,8 @@ export function AccountsPage() {
             {maintenanceTask.data &&
               (maintenanceKind === "balance" ? (
                 <UpstreamSyncTaskStatus task={maintenanceTask.data} scope="balance" />
+              ) : maintenanceKind === "rate" ? (
+                <AccountRateSyncTaskStatus task={maintenanceTask.data} />
               ) : (
                 <AccountMaintenanceTaskStatus
                   task={maintenanceTask.data}
@@ -3523,6 +3636,127 @@ type AccountMaintenanceItem = {
   after: string;
   error: string;
 };
+
+type AccountRateSyncItem = {
+  accountId: string;
+  accountName: string;
+  upstreamHost: string;
+  status: string;
+  before: string;
+  after: string;
+  nameBefore: string;
+  nameAfter: string;
+  error: string;
+};
+
+function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
+  if (!Array.isArray(task.result.items)) return [];
+  return task.result.items.flatMap((raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+    const item = raw as Record<string, unknown>;
+    return [
+      {
+        accountId: String(item.account_id ?? ""),
+        accountName: String(item.account_name ?? ""),
+        upstreamHost: String(item.upstream_host ?? ""),
+        status: String(item.status ?? "未返回"),
+        before: item.before == null ? "—" : String(item.before),
+        after: item.after == null ? "—" : String(item.after),
+        nameBefore: String(item.name_before ?? ""),
+        nameAfter: String(item.name_after ?? ""),
+        error: String(item.error ?? ""),
+      },
+    ];
+  });
+}
+
+export function AccountRateSyncTaskStatus(props: { task: Task }) {
+  const pending = ["queued", "running"].includes(props.task.status);
+  const items = accountRateSyncItems(props.task);
+  if (pending) {
+    return (
+      <div className="grid gap-3 py-2 text-sm" role="status">
+        <div className="flex items-center gap-2">
+          <RefreshCw className="animate-spin text-primary" size={16} />
+          <span>{displayTaskMessage(props.task.message)}</span>
+          <span className="text-muted-foreground ml-auto tabular-nums">{props.task.progress}%</span>
+        </div>
+        <Progress value={props.task.progress} />
+      </div>
+    );
+  }
+  return (
+    <div className="grid gap-4">
+      <div className="grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-4">
+        <ResultSummaryRow
+          label="已更新"
+          value={`${syncResultCount(props.task.result.updated)} 个`}
+        />
+        <ResultSummaryRow
+          label="无需更新"
+          value={`${syncResultCount(props.task.result.unchanged)} 个`}
+        />
+        <ResultSummaryRow
+          label="未绑定/缺失"
+          value={`${syncResultCount(props.task.result.missing)} 个`}
+        />
+        <ResultSummaryRow label="失败" value={`${syncResultCount(props.task.result.failed)} 个`} />
+      </div>
+      {props.task.status === "failed" && items.length === 0 && (
+        <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
+      )}
+      <div className="max-h-[28rem] divide-y overflow-y-auto rounded-lg border">
+        {items.map((item) => (
+          <div
+            className="grid gap-2 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
+            key={item.accountId}
+          >
+            <div className="min-w-0">
+              <strong className="block truncate">
+                {item.accountName || `账号 ${item.accountId}`}
+              </strong>
+              <span className="text-muted-foreground block truncate text-xs">
+                ID {item.accountId}
+                {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
+              </span>
+              {item.status === "已同步" &&
+                item.nameBefore &&
+                item.nameAfter &&
+                item.nameBefore !== item.nameAfter && (
+                  <span className="text-muted-foreground mt-1 block truncate text-xs">
+                    名称 {item.nameBefore} → {item.nameAfter}
+                  </span>
+                )}
+            </div>
+            <span className="text-muted-foreground tabular-nums">
+              {item.before} → {item.after}
+            </span>
+            <div className="flex items-center gap-2 sm:justify-end">
+              <StatusPill
+                label={item.status}
+                tone={
+                  item.status === "已同步" || item.status === "已确认一致"
+                    ? "success"
+                    : item.error
+                      ? "danger"
+                      : "neutral"
+                }
+              />
+              {item.error && (
+                <span className="text-destructive max-w-64 text-xs">{item.error}</span>
+              )}
+            </div>
+          </div>
+        ))}
+        {!items.length && (
+          <div className="text-muted-foreground px-3 py-6 text-center text-sm">
+            没有倍率同步结果
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function accountMaintenanceItems(task: Task): AccountMaintenanceItem[] {
   if (!Array.isArray(task.result.items)) return [];
@@ -3676,7 +3910,11 @@ export function AccountMaintenanceTaskStatus(props: {
   );
 }
 
-function AccountRow(props: { account: AccountStatus }) {
+function AccountRow(props: {
+  account: AccountStatus;
+  accounts: AccountStatus[];
+  reservedMax: number;
+}) {
   const account = props.account;
   const queryClient = useQueryClient();
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -3688,6 +3926,7 @@ function AccountRow(props: { account: AccountStatus }) {
   } | null>(null);
   const [confirmPending, setConfirmPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [manualPriorityOpen, setManualPriorityOpen] = useState(false);
   const details = useQuery({
     queryKey: ["account-detail", account.id],
     queryFn: () => api.account(account.id),
@@ -3703,7 +3942,7 @@ function AccountRow(props: { account: AccountStatus }) {
   useEffect(() => {
     let refreshScope: TaskRefreshScope = "account-scheduling";
     if (activeAction === "探活测试") refreshScope = "active-probe";
-    if (activeAction === "同步上游倍率") refreshScope = "upstream-action";
+    if (activeAction === "同步账号倍率") refreshScope = "management-sync";
     const keys = terminalRefreshKeys(refreshScope, task.data);
     if (keys.length) {
       void Promise.all([
@@ -3776,9 +4015,17 @@ function AccountRow(props: { account: AccountStatus }) {
           <span className="font-medium tabular-nums">{account.multiplier ?? "—"}</span>
         </TableCell>
         <TableCell className="align-middle">
-          <span className="font-semibold tabular-nums">
-            {account.weight === null ? "—" : Math.round(account.weight)}
-          </span>
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-grid cursor-help gap-0.5" />}>
+              <span className="font-semibold tabular-nums">{schedulingMetric(account.weight)}</span>
+              {account.weight !== null && (
+                <span className="text-muted-foreground text-[11px] font-normal">最终权重</span>
+              )}
+            </TooltipTrigger>
+            <TooltipContent>
+              同一账号每轮只有一份最终权重；属于多个分组时，先按各分组策略计算，再取平均
+            </TooltipContent>
+          </Tooltip>
         </TableCell>
         <TableCell className="align-middle">
           <AccountRoutingParametersCell account={account} />
@@ -3796,8 +4043,9 @@ function AccountRow(props: { account: AccountStatus }) {
             }
             onControl={(action, label, confirmation) => void control(action, label, confirmation)}
             onRateSync={() =>
-              void startTask("同步上游倍率", () => api.runRateSync(account.upstream_host!))
+              void startTask("同步账号倍率", () => api.syncAccountRates([account.id]))
             }
+            onManualPriority={() => setManualPriorityOpen(true)}
             onEdit={() => setDetailsOpen(true)}
           />
           {task.error && <QueryError error={task.error} fallback="调度任务状态读取失败" />}
@@ -3816,6 +4064,24 @@ function AccountRow(props: { account: AccountStatus }) {
           onSaved={() => setDetailsOpen(false)}
         />
       </AccountDetailDialog>
+      <ManualPriorityDialog
+        open={manualPriorityOpen}
+        account={account}
+        accounts={props.accounts}
+        reservedMax={props.reservedMax}
+        pending={pending || activeAction !== null}
+        onOpenChange={setManualPriorityOpen}
+        onAssign={({ priority, loadFactor, concurrency }) => {
+          void startTask("设置人工优先位", () =>
+            api.setAccountManualPriority(account.id, priority, loadFactor, concurrency),
+          ).then((started) => started && setManualPriorityOpen(false));
+        }}
+        onClear={() => {
+          void startTask("取消人工优先位", () => api.clearAccountManualPriority(account.id)).then(
+            (started) => started && setManualPriorityOpen(false),
+          );
+        }}
+      />
       <ConfirmActionDialog
         open={confirmAction !== null}
         title={`确认${confirmAction?.label ?? "操作"}`}
@@ -4025,14 +4291,14 @@ export function GroupsPage() {
                   <TableCell className="text-right" overflowTooltip={false}>
                     <div className="flex items-center justify-end gap-1">
                       <TableActionButton
-                        label={`查看 ${group.name} 组内权重分配`}
+                        label="查看分组账号调度状态"
                         disabled={!group.id}
                         onClick={() => setAllocationGroup(group)}
                       >
                         <Gauge />
                       </TableActionButton>
                       <TableActionButton
-                        label={`${group.status === "excluded" ? "恢复管控" : "排除"} ${group.name}`}
+                        label={group.status === "excluded" ? "恢复管控" : "排除分组"}
                         tone={group.status === "excluded" ? "primary" : "danger"}
                         disabled={!group.id || excludeGroup.isPending}
                         onClick={() => {
@@ -4048,14 +4314,14 @@ export function GroupsPage() {
                         {group.status === "excluded" ? <ShieldCheck /> : <ShieldOff />}
                       </TableActionButton>
                       <TableActionButton
-                        label={`将 ${group.name} 回落到全局策略`}
+                        label="回落到全局策略"
                         disabled={!group.id || !group.override || clearGroup.isPending}
                         onClick={() => group.id && clearGroup.mutate(group.id)}
                       >
                         <RefreshCw />
                       </TableActionButton>
                       <TableActionButton
-                        label={`编辑 ${group.name}`}
+                        label="编辑分组"
                         disabled={!group.id || group.status === "excluded"}
                         onClick={() => openEditor(group)}
                       >
@@ -4360,19 +4626,25 @@ function AlertsPage() {
 }
 
 const onboardingSchema = z.object({
-  host_protocol: z.enum(["https", "http"]),
   host: z
     .string()
     .trim()
     .min(1, "请输入上游 Host")
+    .refine((value) => normalizeOnboardingHost(value) !== "", "请输入有效的域名或 IP，可包含端口"),
+  base_url_protocol: z.enum(["https", "http"]),
+  base_url: z
+    .string()
+    .trim()
+    .min(1, "请输入请求 Base URL")
     .refine((value) => !value.includes("://"), "协议请使用左侧下拉选择")
     .refine((value) => {
       try {
-        return Boolean(new URL(`https://${value}`).hostname);
+        const parsed = new URL(`https://${value}`);
+        return Boolean(parsed.hostname) && !parsed.username && !parsed.password;
       } catch {
         return false;
       }
-    }, "请输入有效的上游 Host"),
+    }, "请输入有效的域名或 IP，可包含端口和路径"),
   upstream_type: z.string().min(2, "请选择上游类型"),
   multiplier: z
     .string()
@@ -4383,16 +4655,11 @@ const onboardingSchema = z.object({
   notes: z.string().optional(),
 });
 type OnboardingForm = z.infer<typeof onboardingSchema>;
-function onboardingHostUrl(values: Pick<OnboardingForm, "host_protocol" | "host">) {
-  return `${values.host_protocol}://${values.host.trim().replace(/^\/+/, "")}`;
-}
-function parseOnboardingHost(value: string): Pick<OnboardingForm, "host_protocol" | "host"> {
-  const trimmed = value.trim();
-  const protocol = trimmed.toLowerCase().startsWith("http://") ? "http" : "https";
-  return {
-    host_protocol: protocol,
-    host: trimmed.replace(/^https?:\/\//i, "").replace(/\/$/, ""),
-  };
+function onboardingBaseUrl(values: Pick<OnboardingForm, "base_url_protocol" | "base_url">) {
+  return composeOnboardingBaseUrl({
+    baseUrlProtocol: values.base_url_protocol,
+    baseUrl: values.base_url,
+  });
 }
 function onboardingProbeTarget(
   candidate: OnboardingCandidate | undefined,
@@ -4446,8 +4713,9 @@ function OnboardingPage() {
   const form = useForm<OnboardingForm>({
     resolver: zodResolver(onboardingSchema),
     defaultValues: {
-      host_protocol: "https",
       host: "",
+      base_url_protocol: "https",
+      base_url: "",
       upstream_type: "sub2api",
       multiplier: "1",
       target_group: "",
@@ -4457,9 +4725,9 @@ function OnboardingPage() {
   });
   useEffect(() => {
     if (!onboardingSearch.host) return;
-    const parsedHost = parseOnboardingHost(onboardingSearch.host);
-    form.setValue("host_protocol", parsedHost.host_protocol);
-    form.setValue("host", parsedHost.host, { shouldValidate: true });
+    form.setValue("host", normalizeOnboardingHost(onboardingSearch.host), {
+      shouldValidate: true,
+    });
     if (onboardingSearch.upstream_type) {
       form.setValue("upstream_type", onboardingSearch.upstream_type);
     }
@@ -4549,9 +4817,10 @@ function OnboardingPage() {
     }
     const configuration = entryConfiguration.data;
     if (!configuration) return;
-    const parsedHost = parseOnboardingHost(configuration.base_url);
-    form.setValue("host_protocol", parsedHost.host_protocol);
-    form.setValue("host", parsedHost.host, { shouldValidate: true });
+    const parsedBaseUrl = parseOnboardingBaseUrl(configuration.base_url);
+    form.setValue("host", configuration.host, { shouldValidate: true });
+    form.setValue("base_url_protocol", parsedBaseUrl.baseUrlProtocol);
+    form.setValue("base_url", parsedBaseUrl.baseUrl, { shouldValidate: true });
     form.setValue("upstream_type", configuration.upstream_type, {
       shouldValidate: true,
     });
@@ -4573,11 +4842,11 @@ function OnboardingPage() {
   }, [authMode, authModes]);
 
   async function runUpstreamDetection(action: "type" | "name") {
-    const valid = await form.trigger("host");
+    const valid = await form.trigger("base_url");
     if (!valid) return;
     setDetectionAction(action);
     try {
-      const result = await detection.mutateAsync(onboardingHostUrl(form.getValues()));
+      const result = await detection.mutateAsync(onboardingBaseUrl(form.getValues()));
       if (action === "type") {
         if (!result.type_detected || !result.upstream_type) {
           toast.error("未能识别上游类型，请手动选择");
@@ -4607,11 +4876,11 @@ function OnboardingPage() {
   }
 
   async function completeUpstreamStep() {
-    const valid = await form.trigger(["host", "upstream_type"]);
+    const valid = await form.trigger(["host", "base_url", "upstream_type"]);
     if (!valid) return;
     const values = form.getValues();
-    const baseUrl = onboardingHostUrl(values);
-    const normalizedHost = new URL(baseUrl).host.toLowerCase();
+    const baseUrl = onboardingBaseUrl(values);
+    const normalizedHost = normalizeOnboardingHost(values.host);
     const existing = upstreams.data?.hosts.find(
       (item) => item.host.toLowerCase() === normalizedHost,
     );
@@ -4649,7 +4918,7 @@ function OnboardingPage() {
     }
     try {
       const payload = {
-        host: baseUrl,
+        host: normalizedHost,
         name: upstreamName.trim() || normalizedHost,
         base_url: baseUrl,
         upstream_type: upstreamType,
@@ -4716,7 +4985,7 @@ function OnboardingPage() {
     }
     try {
       const created = await api.onboard({
-        host: verifiedUpstream?.base_url ?? onboardingHostUrl(values),
+        host: onboardingRequestHost(verifiedUpstream, values.host),
         upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
         notes: values.notes,
         multiplier: values.multiplier,
@@ -4737,7 +5006,7 @@ function OnboardingPage() {
       if (!localGroupID || !candidateCanCreateKey(candidate)) return [];
       return [
         {
-          host: verifiedUpstream?.base_url ?? onboardingHostUrl(values),
+          host: onboardingRequestHost(verifiedUpstream, values.host),
           upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
           notes: values.notes,
           multiplier: candidate.multiplier,
@@ -4917,6 +5186,7 @@ function OnboardingPage() {
                     <Badge variant="outline">
                       {displayUpstreamType(verifiedUpstream.upstream_type)}
                     </Badge>
+                    <Badge variant="outline">Host {verifiedUpstream.host}</Badge>
                   </div>
                   <ExternalUpstreamLink
                     host={verifiedUpstream.host}
@@ -4945,11 +5215,20 @@ function OnboardingPage() {
                 }}
               >
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField label="上游 Host" error={form.formState.errors.host?.message}>
-                    <div className="flex min-w-0 gap-2">
+                  <FormField
+                    label="上游 Host（账号归属）"
+                    error={form.formState.errors.host?.message}
+                  >
+                    <Input {...form.register("host")} placeholder="origin.example.com:8080" />
+                  </FormField>
+                  <FormField
+                    label="请求 Base URL（实际访问）"
+                    error={form.formState.errors.base_url?.message}
+                  >
+                    <div className="grid min-w-0 grid-cols-[6.75rem_minmax(0,1fr)] gap-2 sm:grid-cols-[6.75rem_minmax(0,1fr)_6.5rem]">
                       <Controller
                         control={form.control}
-                        name="host_protocol"
+                        name="base_url_protocol"
                         render={({ field }) => (
                           <Select value={field.value} onValueChange={field.onChange}>
                             <SelectTrigger className="w-[6.75rem] shrink-0">
@@ -4962,11 +5241,14 @@ function OnboardingPage() {
                           </Select>
                         )}
                       />
-                      <Input {...form.register("host")} placeholder="api.example.com" />
+                      <Input
+                        {...form.register("base_url")}
+                        placeholder="accelerated.example.com:8443/api"
+                      />
                       <Button
                         type="button"
                         variant="outline"
-                        className="min-w-[6.5rem]"
+                        className="col-span-2 sm:col-span-1"
                         disabled={detection.isPending}
                         onClick={() => void runUpstreamDetection("type")}
                       >
@@ -6520,6 +6802,94 @@ export function notificationFormFromStatus(value?: NotificationStatus): {
   };
 }
 
+const qqBotDeveloperSettingsURL = "https://q.qq.com/qqbot/#/developer/developer-setting";
+const qqBotEventDocsURL =
+  "https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html";
+
+function NotificationFieldHelp(props: { children: React.ReactNode; href: string; link: string }) {
+  return (
+    <p className="text-muted-foreground text-xs leading-5 font-normal">
+      {props.children}{" "}
+      <a
+        className="text-foreground inline-flex items-center gap-1 font-medium underline underline-offset-4"
+        href={props.href}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {props.link}
+        <ExternalLink size={12} aria-hidden="true" />
+      </a>
+    </p>
+  );
+}
+
+export function notificationTargetField(type: "c2c" | "group" | "channel"): {
+  placeholder: string;
+  description: string;
+} {
+  if (type === "group") {
+    return {
+      placeholder: "输入 group_openid",
+      description:
+        "点击“连接获取”后，在目标群里 @机器人并发送任意消息，系统会自动填入 group_openid；机器人无需回复。",
+    };
+  }
+  if (type === "channel") {
+    return {
+      placeholder: "输入 channel_id",
+      description:
+        "点击“连接获取”后，在目标子频道里 @机器人并发送任意消息，系统会自动填入 channel_id；机器人无需回复。",
+    };
+  }
+  return {
+    placeholder: "输入 user_openid",
+    description:
+      "点击“连接获取”后，给机器人发送任意私聊消息，系统会自动填入 user_openid；机器人无需回复。",
+  };
+}
+
+export function notificationTargetResultFromTask(task?: Task): {
+  id: string;
+  type: "c2c" | "group" | "channel";
+  eventType: string;
+  sourceName: string;
+  capturedAt: string;
+} | null {
+  if (task?.status !== "succeeded") return null;
+  const id = typeof task.result.target_id === "string" ? task.result.target_id.trim() : "";
+  const type = task.result.target_type;
+  if (!id || (type !== "c2c" && type !== "group" && type !== "channel")) return null;
+  return {
+    id,
+    type,
+    eventType: typeof task.result.event_type === "string" ? task.result.event_type : "",
+    sourceName: typeof task.result.source_name === "string" ? task.result.source_name : "",
+    capturedAt: typeof task.result.captured_at === "string" ? task.result.captured_at : "",
+  };
+}
+
+function notificationTargetTaskPresentation(status?: Task["status"]): {
+  label: string;
+  tone: "success" | "warning" | "danger" | "info" | "neutral";
+} {
+  switch (status) {
+    case "queued":
+      return { label: "准备连接", tone: "neutral" };
+    case "running":
+      return { label: "连接中", tone: "info" };
+    case "waiting_input":
+      return { label: "等待消息", tone: "warning" };
+    case "succeeded":
+      return { label: "已获取", tone: "success" };
+    case "failed":
+      return { label: "获取失败", tone: "danger" };
+    case "cancelled":
+      return { label: "已取消", tone: "neutral" };
+    default:
+      return { label: "正在启动", tone: "neutral" };
+  }
+}
+
 export function ConfigPage(props: { streamConnected?: boolean } = {}) {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -6541,6 +6911,7 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
   const [notificationForm, setNotificationForm] = useState(() =>
     notificationFormFromStatus(notifications.data),
   );
+  const notificationTarget = notificationTargetField(notificationForm.home_channel_type);
   const [notificationEdited, setNotificationEdited] = useState(false);
   const [targetForm, setTargetForm] = useState({
     admin_base_url: "",
@@ -6561,6 +6932,24 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
     enabled: managementTaskId !== null,
     refetchInterval: taskPollInterval,
   });
+  const [notificationTargetTaskId, setNotificationTargetTaskId] = useState<string | null>(null);
+  const notificationTargetTask = useQuery({
+    queryKey: ["task", notificationTargetTaskId],
+    queryFn: () => api.task(notificationTargetTaskId!),
+    enabled: notificationTargetTaskId !== null,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "succeeded" || status === "failed" || status === "cancelled"
+        ? false
+        : 1_000;
+    },
+  });
+  const notificationTargetResult = notificationTargetResultFromTask(notificationTargetTask.data);
+  const notificationTargetTaskActive =
+    notificationTargetTaskId !== null &&
+    notificationTargetTask.data?.status !== "succeeded" &&
+    notificationTargetTask.data?.status !== "failed" &&
+    notificationTargetTask.data?.status !== "cancelled";
   const trafficState = trafficCollectionState(inspectionStatus.data, inspectionStatus.isError);
   useEffect(() => {
     if (!config.data || targetEdited) return;
@@ -6575,6 +6964,15 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
     if (!notifications.data || notificationEdited) return;
     setNotificationForm(notificationFormFromStatus(notifications.data));
   }, [notificationEdited, notifications.data]);
+  useEffect(() => {
+    if (!notificationTargetResult) return;
+    setNotificationEdited(true);
+    setNotificationForm((current) => ({
+      ...current,
+      home_channel: notificationTargetResult.id,
+      home_channel_type: notificationTargetResult.type,
+    }));
+  }, [notificationTargetResult?.id, notificationTargetResult?.type]);
   useEffect(() => {
     if (!logCleanup.data || logCleanupEdited) return;
     setLogCleanupForm({
@@ -6609,6 +7007,23 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
       toast.success("通知配置已保存");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "通知配置保存失败"),
+  });
+  const discoverNotificationTarget = useMutation({
+    mutationFn: () =>
+      api.discoverNotificationTarget({
+        app_id: notificationForm.app_id,
+        client_secret: notificationForm.client_secret,
+        target_type: notificationForm.home_channel_type,
+      }),
+    onSuccess: (task) => setNotificationTargetTaskId(task.id),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "QQBot 目标获取启动失败"),
+  });
+  const cancelNotificationTargetDiscovery = useMutation({
+    mutationFn: () => api.cancelNotificationTargetDiscovery(notificationTargetTaskId!),
+    onSuccess: () => void notificationTargetTask.refetch(),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "QQBot 目标获取取消失败"),
   });
   const saveLogCleanup = useMutation({
     mutationFn: () =>
@@ -6845,123 +7260,199 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
                 }
               />
             </CardHeader>
-            <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2">
-              <FormField label="App ID">
-                <Input
-                  value={notificationForm.app_id}
-                  onChange={(event) => {
-                    setNotificationEdited(true);
-                    setNotificationForm({
-                      ...notificationForm,
-                      app_id: event.target.value,
-                    });
-                  }}
-                  placeholder="输入 App ID"
-                />
-              </FormField>
-              <FormField label="Client Secret">
-                <Input
-                  type="password"
-                  value={notificationForm.client_secret}
-                  onChange={(event) => {
-                    setNotificationEdited(true);
-                    setNotificationForm({
-                      ...notificationForm,
-                      client_secret: event.target.value,
-                    });
-                  }}
-                  placeholder={sensitiveFieldPlaceholder(
-                    notifications.data?.client_secret_configured === true,
-                    "输入 Client Secret",
-                  )}
-                />
-              </FormField>
-              <FormField label="目标 ID">
-                <Input
-                  value={notificationForm.home_channel}
-                  onChange={(event) => {
-                    setNotificationEdited(true);
-                    setNotificationForm({
-                      ...notificationForm,
-                      home_channel: event.target.value,
-                    });
-                  }}
-                  placeholder="QQ、群或频道 ID"
-                />
-              </FormField>
-              <FormField label="目标类型">
-                <Select
-                  value={notificationForm.home_channel_type}
-                  onValueChange={(value) => {
-                    if (!value) return;
-                    setNotificationEdited(true);
-                    setNotificationForm({
-                      ...notificationForm,
-                      home_channel_type: value as "c2c" | "group" | "channel",
-                    });
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="c2c">私聊</SelectItem>
-                    <SelectItem value="group">群聊</SelectItem>
-                    <SelectItem value="channel">频道</SelectItem>
-                  </SelectContent>
-                </Select>
-              </FormField>
+            <CardContent className="grid gap-5">
               <div
-                className="border-border/70 grid gap-4 border-y py-3 sm:col-span-2 sm:grid-cols-2"
-                data-testid="notification-queues"
+                className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-2"
+                data-testid="notification-credentials"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">告警生产者队列</span>
-                    <StatusPill
-                      label={
-                        (notifications.data?.queues.producer_firing ?? 0) > 0
-                          ? "有触发事件"
-                          : "空闲"
-                      }
-                      tone={
-                        (notifications.data?.queues.producer_firing ?? 0) > 0
-                          ? "warning"
-                          : "neutral"
-                      }
+                <FormField label="App ID">
+                  <>
+                    <Input
+                      value={notificationForm.app_id}
+                      disabled={notificationTargetTaskActive}
+                      onChange={(event) => {
+                        setNotificationEdited(true);
+                        setNotificationForm({
+                          ...notificationForm,
+                          app_id: event.target.value,
+                        });
+                      }}
+                      placeholder="输入 App ID"
                     />
-                  </div>
-                  <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                    触发中 {notifications.data?.queues.producer_firing ?? 0} · 已恢复{" "}
-                    {notifications.data?.queues.producer_recovered ?? 0}
-                  </p>
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">通知消费者队列</span>
-                    <StatusPill
-                      label={notifications.data?.queues.consumer_active ? "发送中" : "空闲"}
-                      tone={notifications.data?.queues.consumer_active ? "info" : "neutral"}
+                    <NotificationFieldHelp href={qqBotDeveloperSettingsURL} link="打开 QQ 开放平台">
+                      在机器人管理页的“开发设置”中复制 App ID。
+                    </NotificationFieldHelp>
+                  </>
+                </FormField>
+                <FormField label="Client Secret">
+                  <>
+                    <Input
+                      type="password"
+                      value={notificationForm.client_secret}
+                      disabled={notificationTargetTaskActive}
+                      onChange={(event) => {
+                        setNotificationEdited(true);
+                        setNotificationForm({
+                          ...notificationForm,
+                          client_secret: event.target.value,
+                        });
+                      }}
+                      placeholder={sensitiveFieldPlaceholder(
+                        notifications.data?.client_secret_configured === true,
+                        "输入 Client Secret",
+                      )}
                     />
+                    <NotificationFieldHelp href={qqBotDeveloperSettingsURL} link="打开 QQ 开放平台">
+                      与 App ID 在同一“开发设置”页面获取；保存后不会回显。
+                    </NotificationFieldHelp>
+                  </>
+                </FormField>
+              </div>
+              <div
+                className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]"
+                data-testid="notification-destination"
+              >
+                <FormField label="目标类型">
+                  <Select
+                    value={notificationForm.home_channel_type}
+                    disabled={notificationTargetTaskActive}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      setNotificationEdited(true);
+                      setNotificationForm({
+                        ...notificationForm,
+                        home_channel_type: value as "c2c" | "group" | "channel",
+                      });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="c2c">私聊</SelectItem>
+                      <SelectItem value="group">群聊</SelectItem>
+                      <SelectItem value="channel">频道</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+                <FormField label="目标 ID">
+                  <>
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <Input
+                        value={notificationForm.home_channel}
+                        disabled={notificationTargetTaskActive}
+                        onChange={(event) => {
+                          setNotificationEdited(true);
+                          setNotificationForm({
+                            ...notificationForm,
+                            home_channel: event.target.value,
+                          });
+                        }}
+                        placeholder={notificationTarget.placeholder}
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => discoverNotificationTarget.mutate()}
+                        disabled={
+                          discoverNotificationTarget.isPending ||
+                          notificationTargetTaskActive ||
+                          !notificationForm.app_id.trim() ||
+                          (!notifications.data?.client_secret_configured &&
+                            !notificationForm.client_secret.trim())
+                        }
+                      >
+                        <ScanSearch size={16} aria-hidden="true" />
+                        {notificationTargetTaskActive ? "等待消息" : "连接获取"}
+                      </Button>
+                    </div>
+                    <NotificationFieldHelp href={qqBotEventDocsURL} link="查看事件服务接入说明">
+                      {notificationTarget.description}
+                    </NotificationFieldHelp>
+                  </>
+                </FormField>
+                {(discoverNotificationTarget.isPending || notificationTargetTaskId) && (
+                  <div
+                    className="border-border/70 bg-muted/30 grid gap-3 rounded-md border px-3 py-3 sm:col-span-2"
+                    data-testid="notification-target-discovery"
+                    role="status"
+                  >
+                    {discoverNotificationTarget.isPending && !notificationTargetTaskId ? (
+                      <div className="flex items-center gap-2 text-sm">
+                        <RefreshCw className="animate-spin" size={16} aria-hidden="true" />
+                        正在创建 QQBot 连接任务
+                      </div>
+                    ) : null}
+                    {notificationTargetTask.error ? (
+                      <QueryError
+                        error={notificationTargetTask.error}
+                        fallback="QQBot 目标获取状态读取失败"
+                        embedded
+                      />
+                    ) : null}
+                    {notificationTargetTask.data ? (
+                      <>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium">自动获取目标 ID</p>
+                            <p className="text-muted-foreground mt-1 text-xs leading-5">
+                              {notificationTargetTask.data.message}
+                            </p>
+                          </div>
+                          <StatusPill
+                            label={
+                              notificationTargetTaskPresentation(notificationTargetTask.data.status)
+                                .label
+                            }
+                            tone={
+                              notificationTargetTaskPresentation(notificationTargetTask.data.status)
+                                .tone
+                            }
+                          />
+                        </div>
+                        {notificationTargetResult ? (
+                          <div className="border-border/70 bg-background grid gap-1 rounded-md border px-3 py-2">
+                            <span className="text-muted-foreground text-xs">已自动填入目标 ID</span>
+                            <code className="break-all text-sm">{notificationTargetResult.id}</code>
+                            {notificationTargetResult.sourceName ? (
+                              <span className="text-muted-foreground text-xs">
+                                触发用户：{notificationTargetResult.sourceName}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {notificationTargetTaskActive ? (
+                          <div className="flex justify-end">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => cancelNotificationTargetDiscovery.mutate()}
+                              disabled={cancelNotificationTargetDiscovery.isPending}
+                            >
+                              <X size={15} aria-hidden="true" />
+                              {cancelNotificationTargetDiscovery.isPending ? "取消中…" : "取消等待"}
+                            </Button>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
                   </div>
-                  <p className="text-muted-foreground mt-1 text-xs tabular-nums">
-                    待发送 {notifications.data?.queues.consumer_pending ?? 0} · 发送失败{" "}
-                    {notifications.data?.queues.consumer_failed ?? 0}
-                  </p>
-                </div>
+                )}
               </div>
               {notifications.data?.configuration_errors?.length ? (
-                <p className="text-destructive text-sm sm:col-span-2">
+                <p className="text-destructive text-sm">
                   通知配置无效：
                   {notifications.data.configuration_errors.join("、")}
                 </p>
               ) : null}
-              <div className="flex flex-wrap justify-end gap-2 pt-1 sm:col-span-2">
+              <div className="border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4">
                 <Button
                   variant="outline"
                   onClick={() => testNotification.mutate()}
                   disabled={
                     testNotification.isPending ||
+                    notificationTargetTaskActive ||
                     notifications.error != null ||
                     !notifications.data?.configured
                   }
@@ -6973,6 +7464,7 @@ export function ConfigPage(props: { streamConnected?: boolean } = {}) {
                   onClick={() => saveNotification.mutate()}
                   disabled={
                     saveNotification.isPending ||
+                    notificationTargetTaskActive ||
                     notifications.isLoading ||
                     notifications.error != null ||
                     !notificationForm.app_id.trim() ||
@@ -7234,6 +7726,7 @@ function autoInspectionConfig(value: AutoInspectionStatus): AutoInspectionConfig
 const autoInspectionOperationLabels: Record<string, string> = {
   upstream_sync: "上游数据同步",
   upstream_rate_sync: "上游数据同步",
+  account_rate_sync: "账号倍率与名称同步",
   traffic_refresh: "真实流量同步",
   active_probe: "主动探测",
   evidence_collection: "请求记录与探针",
@@ -7365,8 +7858,9 @@ function inspectionUpstreamSyncSummary(
 }
 
 const autoInspectionOperationDescriptions: Record<string, string> = {
-  upstream_sync: "同步上游分组目录、余额和每个绑定账号的倍率。",
-  upstream_rate_sync: "同步上游分组目录、余额和每个绑定账号的倍率。",
+  upstream_sync: "同步上游分组目录和该上游全部账号共享的余额。",
+  upstream_rate_sync: "同步上游分组目录和该上游全部账号共享的余额。",
+  account_rate_sync: "将上游最新倍率同步到绑定账号，并按新倍率更新账号名称。",
   traffic_refresh: "读取真实请求记录并更新账号健康样本。",
   active_probe: "对到期账号执行主动探测并补充健康样本。",
   evidence_collection: "读取真实请求记录并补充到期账号的主动探测样本。",
@@ -7546,6 +8040,25 @@ function AutoInspectionLiveTaskQueue(props: { task?: Task; loading?: boolean }) 
 }
 
 function inspectionOperationDetail(operation: string, task?: Task): string {
+  if (operation === "account_rate_sync") {
+    const accountRates = inspectionTaskResultObject(task, "account_rate_sync");
+    if (accountRates) {
+      const requested = inspectionResultCount(accountRates, "requested");
+      const updated = inspectionResultCount(accountRates, "updated");
+      const unchanged = inspectionResultCount(accountRates, "unchanged");
+      const missing = inspectionResultCount(accountRates, "missing");
+      const failed = inspectionResultCount(accountRates, "failed");
+      if (
+        requested !== null &&
+        updated !== null &&
+        unchanged !== null &&
+        missing !== null &&
+        failed !== null
+      ) {
+        return `检查 ${requested} 个绑定账号，更新 ${updated} 个、无需更新 ${unchanged} 个、缺失 ${missing} 个、失败 ${failed} 个`;
+      }
+    }
+  }
   if (
     operation === "traffic_refresh" ||
     operation === "active_probe" ||
@@ -7702,17 +8215,11 @@ function AutoInspectionOperationTimeline(props: {
               </p>
               {timing.operation === autoInspectionUpstreamSyncOperation && props.upstreamSync ? (
                 <div className="text-muted-foreground mt-1 grid gap-0.5 text-xs leading-5">
-                  <span>同步内容：上游余额、账号倍率</span>
+                  <span>同步内容：上游目录、共享余额</span>
                   <span>
                     上游：共 {props.upstreamSync.upstreamTotal} 个，成功{" "}
                     {props.upstreamSync.upstreamSucceeded} 个，失败{" "}
                     {props.upstreamSync.upstreamFailed} 个
-                  </span>
-                  <span>
-                    {props.upstreamSync.accountTotal !== null &&
-                    props.upstreamSync.accountRateFailed !== null
-                      ? `账号倍率：共 ${props.upstreamSync.accountTotal} 个账号，成功 ${props.upstreamSync.accountRateSucceeded} 个，失败 ${props.upstreamSync.accountRateFailed} 个`
-                      : "账号倍率统计读取中"}
                   </span>
                 </div>
               ) : null}
@@ -7810,9 +8317,7 @@ export function AutoInspectionHeartbeatDetails(props: {
             record={props.record}
             task={props.task}
             upstreamSync={upstreamSync}
-            upstreamSyncLoading={
-              props.taskLoading && (upstreamSync === null || upstreamSync.accountTotal === null)
-            }
+            upstreamSyncLoading={props.taskLoading && upstreamSync === null}
           />
         </div>
       </section>
@@ -8141,7 +8646,7 @@ function AutoInspectionCard() {
                       </div>
                       {operations.length ? (
                         <TableActionButton
-                          label={`查看 ${item.label} 详情`}
+                          label="查看任务详情"
                           onClick={() => setSelectedQueueItem(item)}
                           className="justify-self-end"
                         >
@@ -8292,7 +8797,7 @@ function AutoInspectionCard() {
                     <TableCell className="text-right" overflowTooltip={false}>
                       {record.error || record.task_id || (record.operation_timings ?? []).length ? (
                         <TableActionButton
-                          label={`查看 ${formatDate(record.checked_at, true)} 心跳详情`}
+                          label="查看心跳详情"
                           onClick={() => setSelectedHeartbeat(record)}
                         >
                           <Eye />
@@ -8471,7 +8976,7 @@ export function PolicyPage() {
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
       ]);
-      toast.success("策略已保存并立即生效");
+      toast.success("策略已保存，将用于下一轮调度");
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : "策略保存失败";
@@ -8644,7 +9149,7 @@ export function PolicyPage() {
                 <CardHeader>
                   <CardTitle>全局默认策略</CardTitle>
                   <CardDescription>
-                    分组没有单独设置时使用；分组级选择在分组管理中配置
+                    分组没有单独设置时使用；分组级选择在分组管理中配置。{schedulingWeightFormula}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -8666,6 +9171,9 @@ export function PolicyPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <span className="text-muted-foreground text-xs leading-4 font-normal">
+                      {schedulingStrategyDescription(current.global_strategy)}
+                    </span>
                   </FormField>
                   <FormField label="倍率缺失回退">
                     <Select
@@ -8685,12 +9193,25 @@ export function PolicyPage() {
                     </Select>
                   </FormField>
                   <PolicyNumberField
-                    label="每组权重预算"
+                    label="每组总权重预算"
+                    description="由同一分组内参与调度的账号按策略共享"
                     min={1}
                     max={1000000}
                     value={policyAdvancedValue(current, "weights", "budget")}
                     onChange={(value) =>
                       setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
+                    }
+                  />
+                  <PolicyNumberField
+                    label="人工优先位范围"
+                    description="保留优先级 1 至 N；自动调度从 N+1 开始"
+                    min={1}
+                    max={1000}
+                    value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
+                    onChange={(value) =>
+                      setDraft(
+                        withPolicyAdvancedValue(current, "manual_priority", "reserved_max", value),
+                      )
                     }
                   />
                   <PolicyNumberField
@@ -8901,6 +9422,7 @@ function advancedList(value: unknown): string {
 
 function PolicyNumberField(props: {
   label: string;
+  description?: string;
   value: unknown;
   onChange: (value: number | null) => void;
   unit?: string;
@@ -8924,6 +9446,11 @@ function PolicyNumberField(props: {
           props.onChange(raw && Number.isFinite(parsed) ? parsed : null);
         }}
       />
+      {props.description ? (
+        <span className="text-muted-foreground text-xs leading-4 font-normal">
+          {props.description}
+        </span>
+      ) : null}
     </FormField>
   );
 }
@@ -9061,7 +9588,7 @@ function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             </SettingsControlRow>
           ))}
           <PolicyNumberField
-            label="远程写入并发"
+            label="调度写入并发"
             unit="个账号"
             min={1}
             max={16}
@@ -9069,14 +9596,14 @@ function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             onChange={(value) => set("writeback", "concurrency", value)}
           />
           <SettingsControlRow
-            title="写后确认"
-            description="开启后复核 Key 创建、账号添加、修改和删除结果；批量写回只确认实际修改字段"
+            title="调度写后确认"
+            description="开启后只复核自动调度实际修改的字段。"
             controlId="policy-writeback-verification"
           >
             <Switch
               id="policy-writeback-verification"
               checked={policyAdvancedValue(props.value, "writeback", "verification") === true}
-              aria-label="写后确认"
+              aria-label="调度写后确认"
               onCheckedChange={(value) => set("writeback", "verification", value)}
             />
           </SettingsControlRow>

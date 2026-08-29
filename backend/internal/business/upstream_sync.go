@@ -23,6 +23,7 @@ type UpstreamCatalogKey struct {
 	KeyID         string
 	Name          string
 	UpstreamGroup *string
+	RateAmbiguous bool
 	Status        *string
 	Rate          *string
 }

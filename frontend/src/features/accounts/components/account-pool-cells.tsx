@@ -57,7 +57,11 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
     (account.target_concurrency != null && account.target_concurrency !== account.concurrency);
   return (
     <div className="grid gap-1 tabular-nums">
-      <span className="font-medium">当前优先级 {account.priority ?? "—"}</span>
+      {account.manual_priority != null ? (
+        <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
+      ) : (
+        <span className="font-medium">当前优先级 {account.priority ?? "—"}</span>
+      )}
       <span className="text-muted-foreground text-xs">
         负载 {account.load_factor ?? "—"} · 并发 {account.concurrency ?? "—"}
       </span>

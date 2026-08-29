@@ -8,6 +8,9 @@ import (
 func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 	store := openReadModelFixture(t)
 	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET multiplier='0.17' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE local_groups SET platform='openai',rate_multiplier='0.15' WHERE remote_id='1'`); err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +25,7 @@ func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `UPDATE routing_decisions SET
 		priority=136,schedulable=1,role='healthy',routing_state='healthy',rank=1,reason='健康渠道',
 		updated_at='2026-08-27T08:00:00Z',payload_json=? WHERE account_id='41' AND group_name='codex'`,
-		`{"weight":117,"rate":"1.00","desired_concurrency":32}`); err != nil {
+		`{"weight":117,"rate":"0.2","desired_concurrency":32}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,33 +52,40 @@ func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 	if channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 || allocation.AssignedConcurrency != 32 {
 		t.Fatalf("assigned concurrency missing: %#v", allocation)
 	}
-	if channel.Rate == nil || *channel.Rate != "1.00" || channel.Priority == nil || *channel.Priority != 136 {
+	if channel.Rate == nil || *channel.Rate != "0.17" || channel.Priority == nil || *channel.Priority != 136 {
 		t.Fatalf("routing detail missing: %#v", channel)
 	}
 }
 
-func TestGroupAllocationDoesNotExposeLegacyAllocationBeforeCurrentEpoch(t *testing.T) {
+func TestGroupAllocationReusesCanonicalAccountStateInEveryMembership(t *testing.T) {
 	store := openReadModelFixture(t)
 	ctx := context.Background()
-	if _, err := store.db.ExecContext(ctx, `DELETE FROM app_state WHERE key='routing-decision-epoch'`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO local_groups(
+		name,remote_id,strategy,strategy_source,account_count,updated_at
+	) VALUES('secondary','3','balanced','global_default',1,'2026-08-29T08:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE routing_decisions SET payload_json='{"strategy":"balanced","weight":0.5}' WHERE group_name='codex'`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		VALUES('41','secondary','3','0.2')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := initializeRoutingDecisionEpoch(ctx, store.db); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE routing_decisions SET priority=136,schedulable=1,
+		routing_state='healthy',rank=1,reason='账号最终状态',updated_at='2026-08-29T08:00:00Z',
+		payload_json='{"weight":200,"desired_concurrency":32}' WHERE account_id='41'`); err != nil {
 		t.Fatal(err)
 	}
 
-	allocation, err := store.GroupAllocation(ctx, "1")
+	allocation, err := store.GroupAllocation(ctx, "3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if allocation.HasAllocation || allocation.TotalWeight != 0 || allocation.Channels[0].Weight != nil {
-		t.Fatalf("legacy allocation remained visible: %#v", allocation)
+	if len(allocation.Channels) != 1 {
+		t.Fatalf("unexpected channels: %#v", allocation.Channels)
 	}
-	if allocation.WeightBudget != 400 {
-		t.Fatalf("effective budget missing without allocation: %#v", allocation)
+	channel := allocation.Channels[0]
+	if channel.Weight == nil || *channel.Weight != 200 || channel.Priority == nil || *channel.Priority != 136 ||
+		channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 {
+		t.Fatalf("次分组没有复用账号唯一状态：%#v", channel)
 	}
 }
 

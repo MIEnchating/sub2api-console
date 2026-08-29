@@ -60,6 +60,37 @@ func TestCreateVerifiesBeforeBothDatabaseWritesAndReturnsRedactedConfiguration(t
 	}
 }
 
+func TestCreateKeepsHostIdentityIndependentFromBaseURL(t *testing.T) {
+	private, businessStore := openStores(t)
+	service := New(businessStore, private, &passVerifier{})
+	access, refresh := "access", "refresh"
+	tests := []struct {
+		host    string
+		baseURL string
+	}{
+		{host: "152.53.241.112:8080", baseURL: "https://accelerated.example.test:8443/api"},
+		{host: "origin.example.test:8081", baseURL: "http://10.0.0.8:8000"},
+	}
+	for _, test := range tests {
+		name := test.host
+		result, err := service.Create(context.Background(), Input{
+			Host: test.host, Name: &name, BaseURL: test.baseURL, UpstreamType: "sub2api",
+			AuthMode: "sub2api_user_token", RechargeRate: "1", AccessToken: &access, RefreshToken: &refresh,
+			Present: map[string]bool{"access_token": true, "refresh_token": true},
+		}, "operator")
+		if err != nil {
+			t.Fatalf("create %s: %v", test.host, err)
+		}
+		if result.Host != test.host || result.BaseURL != test.baseURL {
+			t.Fatalf("host/base URL were coupled: %#v", result)
+		}
+		stored, err := private.AuthRecord(context.Background(), test.host)
+		if err != nil || stored == nil || stored.Host != test.host || stored.BaseURL != test.baseURL {
+			t.Fatalf("stored record = %#v err=%v", stored, err)
+		}
+	}
+}
+
 func TestUpdatePreservesOmittedSecretAndClearsExplicitNull(t *testing.T) {
 	private, businessStore := openStores(t)
 	verifier := &passVerifier{}

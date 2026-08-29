@@ -48,6 +48,39 @@ func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testin
 	}
 }
 
+func TestUpstreamConfigurationCreateAdoptsExistingOrphanRechargeRate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES('api.example','0.5','account-import','now')`); err != nil {
+		t.Fatal(err)
+	}
+	name := "Example"
+	created, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "0.75",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.RechargeRate != "0.75" {
+		t.Fatalf("created=%#v", created)
+	}
+	var rate, note string
+	if err := store.db.QueryRowContext(ctx, `SELECT recharge_rate,note FROM recharge_rates WHERE host='api.example'`).Scan(&rate, &note); err != nil {
+		t.Fatal(err)
+	}
+	if rate != "0.75" || note != "console-upstream-create" {
+		t.Fatalf("rate=%q note=%q", rate, note)
+	}
+}
+
 func TestUpstreamConfigurationUpdateRollsBackInvalidMetadata(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {

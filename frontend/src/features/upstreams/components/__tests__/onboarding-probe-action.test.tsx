@@ -15,7 +15,8 @@ describe("OnboardingProbeAction", () => {
     );
 
     expect(markup).toContain("探活");
-    expect(markup).toContain("探活测试 Codex");
+    expect(markup).toContain("探活测试");
+    expect(markup).not.toContain("探活测试 Codex");
     expect(markup).toContain('data-slot="tooltip-trigger"');
     expect(markup).not.toContain("title=");
     expect(markup.match(/<button[^>]*>/)?.[0]).not.toMatch(/\sdisabled(?:=|\s|>)/);
@@ -31,7 +32,8 @@ describe("OnboardingProbeAction", () => {
       />,
     );
 
-    expect(markup).toContain("Codex 当前不可探活");
+    expect(markup).toContain("当前不可探活");
+    expect(markup).not.toContain("Codex 当前不可探活");
     expect(markup).toContain("disabled");
   });
 });

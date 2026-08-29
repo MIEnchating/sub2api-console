@@ -41,6 +41,9 @@ type TaskStore interface {
 type Request struct {
 	AccountID *string
 	GroupName *string
+	// Automatic marks requests created by the inspection scheduler. Public API
+	// handlers leave it false so manual probes are not gated by scheduling policy.
+	Automatic bool
 	// AccountIDs is used by the inspection fallback to execute one bounded
 	// probe batch. The public API accepts only AccountID; callers cannot submit
 	// this internal selection directly.
@@ -89,8 +92,12 @@ type Result struct {
 type preparedRun struct {
 	config  Config
 	target  configstore.TargetSettings
-	policy  map[string]any
 	targets []Target
+}
+
+type targetOptions struct {
+	applySchedulingPolicy bool
+	allowDisabledProbe    bool
 }
 
 type Service struct {
@@ -126,37 +133,48 @@ func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (tasks
 }
 
 func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, error) {
-	policy, err := s.repository.ControlPolicy(ctx)
-	if err != nil {
-		return preparedRun{}, err
-	}
-	probePolicy, err := optionalObject(policy, "probe")
-	if err != nil {
-		return preparedRun{}, errors.New("主动探测策略配置无效")
-	}
-	recoverySelection := len(request.AccountIDs) > 0
-	if raw, present := probePolicy["enabled"]; present {
-		enabled, ok := raw.(bool)
-		if !ok {
-			return preparedRun{}, errors.New("主动探测开关配置无效")
+	automatic := request.Automatic || len(request.AccountIDs) > 0
+	recoverySelection := automatic && len(request.AccountIDs) > 0
+	policy := map[string]any{}
+	if automatic {
+		var err error
+		policy, err = s.repository.ControlPolicy(ctx)
+		if err != nil {
+			return preparedRun{}, err
 		}
-		if !enabled && !recoverySelection {
-			return preparedRun{}, errors.New("主动探测已关闭，请在调度策略中开启")
+		probePolicy, policyErr := optionalObject(policy, "probe")
+		if policyErr != nil {
+			return preparedRun{}, errors.New("主动探测策略配置无效")
+		}
+		if raw, present := probePolicy["enabled"]; present {
+			enabled, ok := raw.(bool)
+			if !ok {
+				return preparedRun{}, errors.New("主动探测开关配置无效")
+			}
+			if !enabled && !recoverySelection {
+				return preparedRun{}, errors.New("主动探测已关闭，请在调度策略中开启")
+			}
 		}
 	}
 	targetSettings, err := s.settings.TargetSettings(ctx)
 	if err != nil {
 		return preparedRun{}, err
 	}
-	config, err := configFromPolicy(policy)
-	if err != nil {
-		return preparedRun{}, err
+	config := Config{Timeout: 60 * time.Second, MaxConcurrency: 4, Prompt: "hi"}
+	if automatic {
+		config, err = configFromPolicy(policy)
+		if err != nil {
+			return preparedRun{}, err
+		}
 	}
 	candidates, err := s.repository.ProbeCandidates(ctx, request.AccountID, request.GroupName)
 	if err != nil {
 		return preparedRun{}, err
 	}
-	targets, err := buildTargets(candidates, policy, recoverySelection)
+	targets, err := buildTargets(candidates, policy, targetOptions{
+		applySchedulingPolicy: automatic,
+		allowDisabledProbe:    recoverySelection,
+	})
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -189,11 +207,14 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	}
 	if !executable {
 		if firstReason == "" {
-			firstReason = "没有符合当前分组、参与范围和探测策略的账号"
+			firstReason = "没有可执行探测的账号"
+			if automatic {
+				firstReason = "没有符合当前分组、参与范围和探测策略的账号"
+			}
 		}
 		return preparedRun{}, errors.New(firstReason)
 	}
-	return preparedRun{config: config, target: targetSettings, policy: policy, targets: targets}, nil
+	return preparedRun{config: config, target: targetSettings, targets: targets}, nil
 }
 
 func (s *Service) RunNow(ctx context.Context, request Request) (RunSummary, error) {
@@ -221,7 +242,7 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		task.Message = fmt.Sprintf("官方探测完成：通过 %d，失败 %d，跳过 %d", summary.Passed, summary.Failed, summary.Skipped)
 		task.Result = map[string]any{
 			"source": "official-account-test", "targets": summary.Targets, "persisted": summary.Persisted,
-			"passed": summary.Passed, "failed": summary.Failed, "skipped": summary.Skipped, "policy": prepared.policy,
+			"passed": summary.Passed, "failed": summary.Failed, "skipped": summary.Skipped,
 			"results":      summary.Results,
 			"remote_write": false, "credentials_persisted": false,
 		}
@@ -529,16 +550,18 @@ func configFromPolicy(policy map[string]any) (Config, error) {
 	return Config{Timeout: time.Duration(timeout) * time.Second, MaxConcurrency: concurrency, Prompt: prompt}, nil
 }
 
-func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, allowDisabledProbe bool) ([]Target, error) {
+func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, options targetOptions) ([]Target, error) {
 	byAccount := map[string][]business.ProbeCandidate{}
 	for _, candidate := range candidates {
-		if excludedByMetadata(candidate.Metadata) {
+		if options.applySchedulingPolicy && excludedByMetadata(candidate.Metadata) {
 			continue
 		}
-		if allowed, err := eligibleScope(candidate, policy); err != nil {
-			return nil, err
-		} else if !allowed {
-			continue
+		if options.applySchedulingPolicy {
+			if allowed, err := eligibleScope(candidate, policy); err != nil {
+				return nil, err
+			} else if !allowed {
+				continue
+			}
 		}
 		byAccount[candidate.AccountID] = append(byAccount[candidate.AccountID], candidate)
 	}
@@ -561,7 +584,7 @@ func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, a
 			reason := "账号 metadata 配置无效"
 			target.SkipReason = &reason
 		} else {
-			target.Model, target.SkipReason = resolveModel(policy, primary.AccountID, primary.GroupID, primary.KnownModels, allowDisabledProbe)
+			target.Model, target.SkipReason = resolveModel(policy, primary.AccountID, primary.GroupID, primary.KnownModels, options)
 		}
 		result = append(result, target)
 	}
@@ -660,7 +683,12 @@ func eligibleScope(candidate business.ProbeCandidate, policy map[string]any) (bo
 	return true, nil
 }
 
-func resolveModel(policy map[string]any, accountID string, groupID *string, knownModels []string, allowDisabledProbe ...bool) (*string, *string) {
+func resolveModel(policy map[string]any, accountID string, groupID *string, knownModels []string, options ...targetOptions) (*string, *string) {
+	applySchedulingPolicy := len(options) == 0 || options[0].applySchedulingPolicy
+	allowDisabledProbe := len(options) > 0 && options[0].allowDisabledProbe
+	if !applySchedulingPolicy {
+		return resolveManualModel(knownModels)
+	}
 	if rawModels, present := policy["account_test_models"]; present {
 		models, ok := rawModels.(map[string]any)
 		if !ok {
@@ -689,7 +717,7 @@ func resolveModel(policy map[string]any, accountID string, groupID *string, know
 				return nil, textPointer("分组探测绑定配置无效")
 			}
 		}
-		if raw, present := binding["enabled"]; present {
+		if raw, present := binding["enabled"]; applySchedulingPolicy && present {
 			enabled, ok := flexibleBoolean(raw)
 			if !ok {
 				return nil, textPointer("分组探测开关无效")
@@ -698,12 +726,12 @@ func resolveModel(policy map[string]any, accountID string, groupID *string, know
 				return nil, textPointer("分组未参与守护")
 			}
 		}
-		if raw, present := binding["probe_enabled"]; present {
+		if raw, present := binding["probe_enabled"]; applySchedulingPolicy && present {
 			enabled, ok := raw.(bool)
 			if !ok {
 				return nil, textPointer("分组定时测试开关无效")
 			}
-			if !enabled && (len(allowDisabledProbe) == 0 || !allowDisabledProbe[0]) {
+			if !enabled && !allowDisabledProbe {
 				return nil, textPointer("分组定时测试已关闭")
 			}
 		}
@@ -737,6 +765,13 @@ func resolveModel(policy map[string]any, accountID string, groupID *string, know
 		return model, nil
 	}
 	return nil, textPointer("没有可用探测模型")
+}
+
+func resolveManualModel(knownModels []string) (*string, *string) {
+	if model := firstKnownModel(knownModels); model != nil {
+		return model, nil
+	}
+	return nil, textPointer("账号没有已同步的可用模型，请先同步账号模型")
 }
 
 func firstKnownModel(models []string) *string {

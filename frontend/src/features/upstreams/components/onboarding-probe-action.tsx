@@ -16,7 +16,7 @@ export function OnboardingProbeAction(props: {
   onProbe: () => void;
 }) {
   const available = props.target !== null;
-  const label = available ? `探活测试 ${props.groupName}` : `${props.groupName} 当前不可探活`;
+  const label = available ? "探活测试" : "当前不可探活";
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex" />}>

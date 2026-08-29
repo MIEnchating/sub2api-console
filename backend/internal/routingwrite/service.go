@@ -22,6 +22,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 )
 
+const restoreControlConcurrency = 4
+
 type Repository interface {
 	Mode(context.Context) (string, error)
 	ControlPolicy(context.Context) (map[string]any, error)
@@ -227,14 +229,6 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		result.Reason = &reason
 		return result, nil
 	}
-	policyDocument, err := s.repository.ControlPolicy(ctx)
-	if err != nil {
-		return Result{}, err
-	}
-	policy, err := parseWritePolicy(policyDocument)
-	if err != nil {
-		return Result{}, err
-	}
 	admin, err := s.adminClient(ctx)
 	if err != nil {
 		return Result{}, err
@@ -246,8 +240,8 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 			return Result{}, fmt.Errorf("批量读取账号失败：%w", err)
 		}
 	}
-	admin = limitAdmin(admin, policy.maxConcurrency)
-	coordinator := newBatchWriteCoordinator(ctx, admin, len(baselines), policy.verifyAfterWrite)
+	admin = limitAdmin(admin, restoreControlConcurrency)
+	coordinator := newBatchWriteCoordinator(ctx, admin, len(baselines), true)
 	items := make([]AccountResult, len(baselines))
 	var wait sync.WaitGroup
 	for index, baseline := range baselines {
@@ -312,7 +306,7 @@ func (s *Service) applyAccountCoordinated(
 		return failedResult(result, err)
 	}
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
-		return s.deleteCleanupAccount(ctx, admin, target, policy.verifyAfterWrite, actor, operationID, currentPayload)
+		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload)
 	}
 	if currentPayload == nil {
 		currentPayload, err = admin.Account(ctx, target.AccountID)
@@ -519,7 +513,6 @@ func (s *Service) deleteCleanupAccount(
 	ctx context.Context,
 	admin Admin,
 	target business.AccountRoutingTarget,
-	verification bool,
 	actor, operationID string,
 	currentPayload map[string]any,
 ) AccountResult {
@@ -552,14 +545,14 @@ func (s *Service) deleteCleanupAccount(
 		}
 	}
 	result.RemoteWrite = true
-	if _, err := deleteAccount(ctx, admin, target.AccountID, verification); err != nil {
+	if _, err := deleteAccount(ctx, admin, target.AccountID, true); err != nil {
 		s.recordOperation(ctx, operation(operationID, "cleanup.delete", target, actor, current.asMap(), nil, false, false, err))
 		failed := copyMap(payload)
 		failed["error"] = err.Error()
 		s.recordRuntimeEvent(ctx, "cleanup_delete_failed", "failed", "自动删除账号失败 "+target.AccountID, failed)
 		return failedResult(result, err)
 	}
-	op := operation(operationID, "cleanup.delete", target, actor, current.asMap(), map[string]any{"deleted": true}, true, verification, nil)
+	op := operation(operationID, "cleanup.delete", target, actor, current.asMap(), map[string]any{"deleted": true}, true, true, nil)
 	field := "deleted"
 	op.FieldName = &field
 	if err := s.repository.DeleteAccountProjection(ctx, target.AccountID, op); err != nil {

@@ -43,7 +43,7 @@ type Result struct {
 	Survivors           int                                      `json:"survivors"`
 	ConfigurationErrors []string                                 `json:"configuration_errors"`
 	AccountTargets      map[string]business.AccountRoutingTarget `json:"account_targets"`
-	DecisionsByGroup    map[string][]Decision                    `json:"decisions_by_group"`
+	AccountDecisions    map[string]Decision                      `json:"account_decisions"`
 }
 
 type Decision struct {
@@ -116,6 +116,7 @@ type engineConfig struct {
 	recoveryHold        time.Duration
 	weightsEnabled      bool
 	weightBudget        int64
+	manualPriorityMax   int64
 	gateFloor           float64
 	priceExp            float64
 	speedExp            float64
@@ -183,6 +184,16 @@ type candidate struct {
 	cleanupAction      *string
 }
 
+type strategyScores struct {
+	price float64
+	speed float64
+}
+
+const (
+	primaryStrategyRatio   = .80
+	secondaryStrategyRatio = .20
+)
+
 func NewService(repository Repository) *Service {
 	return &Service{repository: repository, now: time.Now}
 }
@@ -224,10 +235,19 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	previous := map[string]business.PreviousRoutingDecision{}
 	for _, item := range previousRows {
 		previous[routingKey(item.AccountID, item.GroupName)] = item
+		current, found := previous[item.AccountID]
+		if !found || item.GroupName < current.GroupName {
+			previous[item.AccountID] = item
+		}
 	}
 	groups := map[string][]business.RoutingAccount{}
 	allMemberships := map[string][]business.RoutingAccount{}
+	manualAccounts := map[string]struct{}{}
 	for _, account := range accounts {
+		if account.ManualPriority != nil {
+			manualAccounts[account.ID] = struct{}{}
+			continue
+		}
 		groups[account.GroupName] = append(groups[account.GroupName], account)
 		allMemberships[account.ID] = append(allMemberships[account.ID], account)
 	}
@@ -239,7 +259,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	result := Result{
 		Source: "console-domain-db", CalculationOnly: true, RemoteWrite: false,
 		ConfigurationErrors: []string{}, AccountTargets: map[string]business.AccountRoutingTarget{},
-		DecisionsByGroup: map[string][]Decision{},
+		AccountDecisions: map[string]Decision{},
 	}
 	processedGroups := 0
 	evaluations := []business.RoutingEvaluationWrite{}
@@ -293,7 +313,8 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			}
 			current.rate, current.rateText, current.rateKnown, current.rateReason = resolveRate(account, groupConfig, current.costWall)
 			current.costTier, current.costTierRank = costTier(current.rate, current.costWall)
-			applyInitialState(current, groupConfig, previous[routingKey(account.ID, groupName)], now)
+			prior, _ := previousDecision(previous, account.ID, groupName)
+			applyInitialState(current, groupConfig, prior, now)
 			candidates = append(candidates, current)
 			byAccount[account.ID] = append(byAccount[account.ID], current)
 		}
@@ -306,36 +327,35 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		calculateGroupWeights(candidates, configsByGroup[groupName])
 	}
 	assignAccountPlacements(candidatesByGroup, configsByGroup, byAccount)
-	for _, groupName := range groupNames {
-		candidates, found := candidatesByGroup[groupName]
-		if !found {
+	finalizeAccountStates(byAccount, configsByGroup, previous, now)
+	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
+		primary := primaryMembership(byAccount[accountID])
+		if primary == nil {
 			continue
 		}
-		groupConfig := configsByGroup[groupName]
-		applyStateSince(candidates, previous, now)
-		applyDeadband(candidates, previous, groupConfig, now)
-		for _, item := range candidates {
-			decision := publicDecision(item, groupName, groupConfig)
-			prior := previous[routingKey(item.account.ID, groupName)]
-			priorFused := fusedRoutingState(prior.State)
-			currentFused := fusedRoutingState(item.state)
-			if currentFused && !priorFused {
-				result.NewlyFused++
-			}
-			if !currentFused && priorFused {
-				result.Recovered++
-			}
-			result.DecisionsByGroup[groupName] = append(result.DecisionsByGroup[groupName], decision)
-			evaluations = append(evaluations, evaluationWrite(item, groupName))
+		groupName := primary.account.GroupName
+		decision := publicDecision(primary, groupName, configsByGroup[groupName])
+		evaluations = append(evaluations, evaluationWrite(primary, groupName))
+		if persistDecisions {
+			result.AccountDecisions[accountID] = decision
 			writes = append(writes, decisionWrite(decision))
-			switch item.state {
-			case "fused":
-				result.Fused++
-			case "degraded":
-				result.Degraded++
-			case "survivor":
-				result.Survivors++
-			}
+		}
+		prior, _ := previousDecision(previous, accountID, groupName)
+		priorFused := fusedRoutingState(prior.State)
+		currentFused := fusedRoutingState(primary.state)
+		if currentFused && !priorFused {
+			result.NewlyFused++
+		}
+		if !currentFused && priorFused {
+			result.Recovered++
+		}
+		switch primary.state {
+		case "fused":
+			result.Fused++
+		case "degraded":
+			result.Degraded++
+		case "survivor":
+			result.Survivors++
 		}
 	}
 	result.HealthEvaluations = len(evaluations)
@@ -351,6 +371,9 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		// determination because other memberships were not loaded.
 		if scope.GroupName == nil {
 			for accountID, memberships := range allMemberships {
+				if _, manual := manualAccounts[accountID]; manual {
+					continue
+				}
 				if _, managed := byAccount[accountID]; managed {
 					continue
 				}
@@ -365,8 +388,6 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			}
 		}
 		result.Decisions = len(writes)
-	} else {
-		result.DecisionsByGroup = map[string][]Decision{}
 	}
 	result.Accounts = len(byAccount)
 	result.Groups = processedGroups
@@ -396,7 +417,7 @@ func routingStateTransitionEvents(
 				primary = item
 			}
 		}
-		prior, found := previous[routingKey(accountID, primary.account.GroupName)]
+		prior, found := previousDecision(previous, accountID, primary.account.GroupName)
 		if found && prior.State == primary.state {
 			continue
 		}
@@ -465,15 +486,27 @@ func alignAccountStateToPrimary(
 		if len(memberships) == 0 {
 			continue
 		}
-		primary := memberships[0]
-		for _, item := range memberships[1:] {
-			if membershipLess(item, primary) {
-				primary = item
+		primary := primaryMembership(memberships)
+		for _, item := range memberships {
+			if item == primary {
+				continue
 			}
+			item.health = primary.health
+			item.rows = primary.rows
+			if primary.rate != nil {
+				item.rate = new(big.Rat).Set(primary.rate)
+			} else {
+				item.rate = nil
+			}
+			item.rateText = cloneString(primary.rateText)
+			item.rateKnown = primary.rateKnown
+			item.rateReason = cloneString(primary.rateReason)
+			item.costTier, item.costTierRank = costTier(item.rate, item.costWall)
 		}
 		primary.state, primary.reason, primary.schedulable, primary.fuseKind = "healthy", "已计算", remoteSchedulable(primary.account), ""
 		primary.fusedUntil = time.Time{}
-		applyInitialState(primary, configs[primary.account.GroupName], previous[routingKey(primary.account.ID, primary.account.GroupName)], now)
+		prior, _ := previousDecision(previous, primary.account.ID, primary.account.GroupName)
+		applyInitialState(primary, configs[primary.account.GroupName], prior, now)
 		applyAccountCostWall(primary, memberships, now)
 		for _, item := range memberships {
 			if item == primary {
@@ -558,6 +591,13 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 	if err != nil {
 		return engineConfig{}, err
 	}
+	manualPriority := map[string]any{}
+	if raw, present := policy["manual_priority"]; present {
+		manualPriority, _ = raw.(map[string]any)
+		if manualPriority == nil {
+			return engineConfig{}, errors.New("manual_priority 必须是对象")
+		}
+	}
 	strategy, err := strategyField(selection, "strategy", "balanced")
 	if err != nil {
 		return engineConfig{}, err
@@ -622,7 +662,8 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		recoveryEnabled: reader.boolean(recovery, "recovery.enabled", "enabled", true), recoveryTarget: reader.number(recovery, "recovery.target_score", "target_score", 75, 0, 100),
 		recoverySuccesses: reader.integer(recovery, "recovery.success_count", "success_count", 2, 1, 10000), recoveryHold: time.Duration(reader.integer(recovery, "recovery.hold_seconds", "hold_seconds", 60, 0, 86400)) * time.Second,
 		weightsEnabled: reader.boolean(weights, "weights.enabled", "enabled", true), weightBudget: int64(reader.integer(weights, "weights.budget", "budget", 400, 1, 1_000_000)),
-		gateFloor: reader.number(weights, "weights.gate_floor", "gate_floor", 40, 0, 100), priceExp: reader.number(weights, "weights.price_exp", "price_exp", 1, math.SmallestNonzeroFloat64, 100), speedExp: reader.number(weights, "weights.speed_exp", "speed_exp", 1, math.SmallestNonzeroFloat64, 100),
+		manualPriorityMax: int64(reader.integer(manualPriority, "manual_priority.reserved_max", "reserved_max", 10, 1, 1000)),
+		gateFloor:         reader.number(weights, "weights.gate_floor", "gate_floor", 40, 0, 100), priceExp: reader.number(weights, "weights.price_exp", "price_exp", 1, math.SmallestNonzeroFloat64, 100), speedExp: reader.number(weights, "weights.speed_exp", "speed_exp", 1, math.SmallestNonzeroFloat64, 100),
 		balancedPriceRatio: reader.number(weights, "weights.balanced_price_ratio", "balanced_price_ratio", .5, 0, 1), missingRateFallback: missing, changeThreshold: change,
 		cooldown:      time.Duration(reader.integer(weights, "weights.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
 		minLoadFactor: int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
@@ -883,12 +924,7 @@ func accountAlreadyFused(items []*candidate) bool {
 }
 
 func resolveAccountFuse(items []*candidate, request accountFuseRequest, triggerGroup string, configs map[string]engineConfig, now time.Time) {
-	var primary *candidate
-	for _, item := range items {
-		if primary == nil || membershipLess(item, primary) {
-			primary = item
-		}
-	}
+	primary := primaryMembership(items)
 	fusedUntil := time.Time{}
 	if primary != nil {
 		fusedUntil = now.UTC().Add(configs[primary.account.GroupName].fusedCooldown)
@@ -899,11 +935,7 @@ func resolveAccountFuse(items []*candidate, request accountFuseRequest, triggerG
 		}
 		item.state, item.schedulable = "fused", false
 		item.fusedUntil = fusedUntil
-		if item.account.GroupName == request.triggerGroup || triggerGroup == "" {
-			item.reason = request.reason
-		} else {
-			item.reason = "账号在分组 " + triggerGroup + " 触发熔断；调度状态为账号级字段"
-		}
+		item.reason = request.reason
 	}
 }
 
@@ -981,23 +1013,22 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 	eligible := make([]*candidate, 0)
 	for _, item := range items {
 		item.weight = 0
-		if item.state == "excluded" || item.state == "paused" || item.state == "disabled" || item.state == "fused" || item.state == "cost_blocked" {
+		if !item.schedulable || item.state == "excluded" || item.state == "paused" || item.state == "disabled" || item.state == "fused" || item.state == "cost_blocked" {
 			continue
 		}
 		eligible = append(eligible, item)
 	}
+	benchmark := strategyScoreBenchmark(eligible, config)
 	qualityTotal := 0.0
 	for _, item := range eligible {
-		item.quality = strategyQuality(item, config)
+		item.quality = strategyQuality(item, config, benchmark)
 		qualityTotal += item.quality
 	}
 	for _, item := range eligible {
 		if qualityTotal > 0 {
 			item.weight = item.quality / qualityTotal * float64(config.weightBudget)
-		} else if len(items) > 0 {
-			// Guardian keeps non-serving members in the group denominator. They
-			// retain zero weight instead of redistributing the full budget.
-			item.weight = float64(config.weightBudget) / float64(len(items))
+		} else if len(eligible) > 0 {
+			item.weight = float64(config.weightBudget) / float64(len(eligible))
 		}
 	}
 }
@@ -1058,8 +1089,8 @@ func assignAccountPlacements(
 			}
 		}
 		sort.Slice(priorities, func(left, right int) bool { return priorities[left] < priorities[right] })
-		base := max(int64(1), priorities[len(priorities)/2]-int64(len(owned)/2))
 		config := configs[groupName]
+		base := max(config.manualPriorityMax+1, priorities[len(priorities)/2]-int64(len(owned)/2))
 		for index, item := range owned {
 			rank := index + 1
 			item.rank = &rank
@@ -1069,7 +1100,7 @@ func assignAccountPlacements(
 			} else if item.state == "survivor" {
 				priority += config.degradePriorityStep
 			}
-			priority = max(int64(1), priority)
+			priority = max(config.manualPriorityMax+1, priority)
 			item.desiredPriority = &priority
 			if config.weightsEnabled && placementLoadFactorEligible(item) {
 				average := float64(config.weightBudget) / float64(len(owned))
@@ -1132,6 +1163,51 @@ func membershipLess(left, right *candidate) bool {
 		return stableIDLess(leftKey, rightKey)
 	}
 	return left.account.GroupName < right.account.GroupName
+}
+
+func primaryMembership(items []*candidate) *candidate {
+	var primary *candidate
+	for _, item := range items {
+		if primary == nil || membershipLess(item, primary) {
+			primary = item
+		}
+	}
+	return primary
+}
+
+func finalizeAccountStates(
+	byAccount map[string][]*candidate,
+	configs map[string]engineConfig,
+	previous map[string]business.PreviousRoutingDecision,
+	now time.Time,
+) {
+	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
+		memberships := byAccount[accountID]
+		primary := primaryMembership(memberships)
+		if primary == nil {
+			continue
+		}
+		applyStateSince([]*candidate{primary}, previous, now)
+		applyDeadband([]*candidate{primary}, previous, configs[primary.account.GroupName], now)
+		for _, item := range memberships {
+			if item == primary {
+				continue
+			}
+			item.health = primary.health
+			item.state = primary.state
+			item.reason = primary.reason
+			item.schedulable = primary.schedulable
+			item.fuseKind = primary.fuseKind
+			item.fusedUntil = primary.fusedUntil
+			item.stateSince = primary.stateSince
+			item.rank = cloneInt(primary.rank)
+			item.desiredPriority = cloneInt64(primary.desiredPriority)
+			item.desiredLoad = cloneString(primary.desiredLoad)
+			item.desiredConcurrency = cloneInt64(primary.desiredConcurrency)
+			item.writeCooldown = primary.writeCooldown
+			item.scalingCooldown = primary.scalingCooldown
+		}
+	}
 }
 
 func cloneInt(value *int) *int {
@@ -1203,7 +1279,7 @@ func applyDeadband(items []*candidate, previous map[string]business.PreviousRout
 		if item.desiredLoad != nil && loadFactorWithinThreshold(item.account, *item.desiredLoad, config.changeThreshold) {
 			item.desiredLoad = cloneString(item.account.LoadFactor)
 		}
-		prior, found := previous[routingKey(item.account.ID, item.account.GroupName)]
+		prior, found := previousDecision(previous, item.account.ID, item.account.GroupName)
 		if !found {
 			continue
 		}
@@ -1240,7 +1316,7 @@ func loadFactorWithinThreshold(account business.RoutingAccount, desired string, 
 
 func applyStateSince(items []*candidate, previous map[string]business.PreviousRoutingDecision, now time.Time) {
 	for _, item := range items {
-		prior, found := previous[routingKey(item.account.ID, item.account.GroupName)]
+		prior, found := previousDecision(previous, item.account.ID, item.account.GroupName)
 		if found && prior.State == item.state {
 			item.stateSince = previousStateSince(prior)
 		}
@@ -1513,59 +1589,22 @@ func previousFusedUntil(previous business.PreviousRoutingDecision) time.Time {
 func aggregateTargets(values map[string][]*candidate) map[string]business.AccountRoutingTarget {
 	result := map[string]business.AccountRoutingTarget{}
 	for accountID, items := range values {
-		active := make([]*candidate, 0, len(items))
+		primary := primaryMembership(items)
+		if primary == nil {
+			continue
+		}
 		groups := make([]string, 0, len(items))
 		for _, item := range items {
 			groups = append(groups, item.account.GroupName)
-			if item.state != "excluded" {
-				active = append(active, item)
-			}
 		}
-		if len(active) == 0 {
-			active = items
+		target := business.AccountRoutingTarget{
+			AccountID: accountID, GroupNames: uniqueSorted(groups), DesiredHealth: primary.state,
+			Priority: cloneInt64(primary.desiredPriority), LoadFactor: cloneString(primary.desiredLoad),
+			Concurrency: cloneInt64(primary.desiredConcurrency), WriteCooldown: primary.writeCooldown,
+			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction),
 		}
-		state := worstState(active)
-		target := business.AccountRoutingTarget{AccountID: accountID, GroupNames: uniqueSorted(groups), DesiredHealth: state}
-		priorityValues := []int64{}
-		loadValues := []*big.Rat{}
-		concurrencyValues := []int64{}
-		controlled := 0
-		schedulable := true
-		for _, item := range items {
-			if item.desiredPriority != nil {
-				priorityValues = append(priorityValues, *item.desiredPriority)
-			}
-			if item.desiredLoad != nil {
-				if value, ok := new(big.Rat).SetString(*item.desiredLoad); ok {
-					loadValues = append(loadValues, value)
-				}
-			}
-			if item.desiredConcurrency != nil {
-				concurrencyValues = append(concurrencyValues, *item.desiredConcurrency)
-			}
-			if item.state != "excluded" {
-				controlled++
-				schedulable = schedulable && item.schedulable
-			}
-			target.WriteCooldown = target.WriteCooldown || item.writeCooldown
-			target.ScalingCooldown = target.ScalingCooldown || item.scalingCooldown
-			if target.CleanupAction == nil && item.cleanupAction != nil {
-				target.CleanupAction = item.cleanupAction
-			}
-		}
-		if len(priorityValues) > 0 {
-			value := roundedAverageInt(priorityValues)
-			target.Priority = &value
-		}
-		if len(loadValues) > 0 {
-			value := averageRatText(loadValues)
-			target.LoadFactor = &value
-		}
-		if len(concurrencyValues) > 0 {
-			value := roundedAverageInt(concurrencyValues)
-			target.Concurrency = &value
-		}
-		if controlled > 0 {
+		if primary.state != "excluded" {
+			schedulable := primary.schedulable
 			target.Schedulable = &schedulable
 		} else {
 			target.ReleaseControl = true
@@ -1626,7 +1665,7 @@ func decisionWrite(item Decision) business.RoutingDecisionWrite {
 
 func resolveRate(account business.RoutingAccount, config engineConfig, wall *big.Rat) (*big.Rat, *string, bool, *string) {
 	raw := account.Multiplier
-	if account.GroupRate != nil {
+	if raw == nil {
 		raw = account.GroupRate
 	}
 	if value, text := nonnegativeDecimal(raw); value != nil {
@@ -1685,10 +1724,7 @@ func costTier(rate, wall *big.Rat) (string, int) {
 	}
 }
 
-func strategyQuality(item *candidate, config engineConfig) float64 {
-	// Match Guardian's absolute terms. Relative best/current ratios make the
-	// same account receive different raw weights merely because a peer enters
-	// or leaves the group, which is not Guardian's policy contract.
+func candidateStrategyScores(item *candidate, config engineConfig) strategyScores {
 	multiplier := 1.0
 	if item.rate != nil && item.rate.Sign() > 0 {
 		multiplier, _ = item.rate.Float64()
@@ -1701,7 +1737,35 @@ func strategyQuality(item *candidate, config engineConfig) float64 {
 		latencySeconds = max(*item.health.P50MS/1000, .05)
 	}
 	speedScore := 1 / latencySeconds
-	priceScore, speedScore = math.Pow(priceScore, config.priceExp), math.Pow(speedScore, config.speedExp)
+	return strategyScores{
+		price: math.Pow(priceScore, config.priceExp),
+		speed: math.Pow(speedScore, config.speedExp),
+	}
+}
+
+func strategyScoreBenchmark(items []*candidate, config engineConfig) strategyScores {
+	// Price and latency use different units, so compare each account with the
+	// best eligible account in its group before mixing the two dimensions.
+	benchmark := strategyScores{}
+	for _, item := range items {
+		scores := candidateStrategyScores(item, config)
+		benchmark.price = max(benchmark.price, scores.price)
+		benchmark.speed = max(benchmark.speed, scores.speed)
+	}
+	return benchmark
+}
+
+func relativeStrategyScore(score, benchmark float64) float64 {
+	if benchmark <= 0 {
+		return 0
+	}
+	return min(1, max(0, score/benchmark))
+}
+
+func strategyQuality(item *candidate, config engineConfig, benchmark strategyScores) float64 {
+	scores := candidateStrategyScores(item, config)
+	priceScore := relativeStrategyScore(scores.price, benchmark.price)
+	speedScore := relativeStrategyScore(scores.speed, benchmark.speed)
 	healthValue := min(100.0, max(0.0, item.health.HealthScore))
 	if healthValue <= config.gateFloor && item.state != "survivor" {
 		return 0
@@ -1717,9 +1781,9 @@ func strategyQuality(item *candidate, config engineConfig) float64 {
 	quality := 0.0
 	switch item.strategy {
 	case "price_first":
-		quality = priceScore * healthGate
+		quality = (priceScore*primaryStrategyRatio + speedScore*secondaryStrategyRatio) * healthGate
 	case "speed_first":
-		quality = speedScore * healthGate
+		quality = (priceScore*secondaryStrategyRatio + speedScore*primaryStrategyRatio) * healthGate
 	case "reliability":
 		quality = (priceScore*.10 + speedScore*.15 + stability*.75) * healthGate
 	default:
@@ -2050,36 +2114,19 @@ func fallbackState(item *candidate, config engineConfig) string {
 	return "unknown"
 }
 
-func worstState(items []*candidate) string {
-	priority := map[string]int{"configuration_error": 90, "paused": 80, "disabled": 70, "fused": 60, "cost_blocked": 55, "survivor": 50, "degraded": 40, "healthy": 30, "unknown": 20, "excluded": 10}
-	result, score := "unknown", -1
-	for _, item := range items {
-		if priority[item.state] > score {
-			result, score = item.state, priority[item.state]
-		}
-	}
-	return result
-}
-
-func roundedAverageInt(values []int64) int64 {
-	sum := new(big.Int)
-	for _, value := range values {
-		sum.Add(sum, big.NewInt(value))
-	}
-	ratio := new(big.Rat).SetFrac(sum, big.NewInt(int64(len(values))))
-	value, _ := ratio.Float64()
-	return int64(math.Round(value))
-}
-
-func averageRatText(values []*big.Rat) string {
-	sum := new(big.Rat)
-	for _, value := range values {
-		sum.Add(sum, value)
-	}
-	return decimalText(sum.Quo(sum, big.NewRat(int64(len(values)), 1)))
-}
-
 func routingKey(accountID, groupName string) string { return accountID + "\x00" + groupName }
+
+func previousDecision(
+	values map[string]business.PreviousRoutingDecision,
+	accountID string,
+	groupName string,
+) (business.PreviousRoutingDecision, bool) {
+	if item, found := values[routingKey(accountID, groupName)]; found {
+		return item, true
+	}
+	item, found := values[accountID]
+	return item, found
+}
 
 func stableIDLess(left, right string) bool {
 	leftInt, leftOK := new(big.Int).SetString(left, 10)

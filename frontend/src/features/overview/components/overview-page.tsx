@@ -120,7 +120,7 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
       type="button"
       className="border-border bg-muted/15 hover:bg-muted/35 focus-visible:border-ring focus-visible:ring-ring group flex min-h-48 w-full min-w-0 flex-col rounded-[6px] border p-4 text-left transition-colors outline-none focus-visible:ring-2"
       onClick={props.onOpen}
-      aria-label={`打开 ${props.health.group.name} 分组管理`}
+      aria-label="打开分组管理"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0">

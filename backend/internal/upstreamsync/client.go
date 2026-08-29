@@ -98,6 +98,9 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 			name = id
 		}
 		status := statusText(row)
+		// NewAPI's ratio is already resolved for the authenticated user: a
+		// user-group override wins over scheduled and base ratios. base_ratio is
+		// intentionally not a fallback because it can silently bypass that override.
 		rate, err := optionalDecimal(row, "effective_rate", "actual_rate", "custom_rate", "rate_multiplier", "group_ratio", "groupRatio", "ratio", "rate", "multiplier")
 		if err != nil {
 			return business.UpstreamCatalogSnapshot{}, fmt.Errorf("上游分组 %s 倍率不可读：%w", id, err)
@@ -199,7 +202,7 @@ func (r *Reader) ReadSiteName(ctx context.Context, record configstore.AuthRecord
 }
 
 func (r *Reader) CreateKey(ctx context.Context, record configstore.AuthRecord, name, groupID string) (CreatedKey, error) {
-	return r.CreateKeyWithVerification(ctx, record, name, groupID, true)
+	return r.CreateKeyWithVerification(ctx, record, name, groupID, false)
 }
 
 func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configstore.AuthRecord, name, groupID string, verification bool) (CreatedKey, error) {
@@ -389,10 +392,29 @@ func (r *Reader) readKeys(ctx context.Context, record configstore.AuthRecord) ([
 			name = id
 		}
 		result = append(result, business.UpstreamCatalogKey{
-			KeyID: id, Name: name, UpstreamGroup: optionalText(group), Status: statusText(row), Rate: rate,
+			KeyID: id, Name: name, UpstreamGroup: optionalText(group), RateAmbiguous: newAPIMultiGroupToken(record.UpstreamType, row),
+			Status: statusText(row), Rate: rate,
 		})
 	}
 	return result, nil
+}
+
+func newAPIMultiGroupToken(upstreamType string, row map[string]any) bool {
+	if !isNewAPI(upstreamType) {
+		return false
+	}
+	value := firstPresent(row, "group_route_config", "groupRouteConfig")
+	switch raw := value.(type) {
+	case nil:
+		return false
+	case []any:
+		return len(raw) > 0
+	case map[string]any:
+		return len(raw) > 0
+	default:
+		text := strings.TrimSpace(textValue(raw))
+		return text != "" && text != "[]" && text != "{}" && text != "null"
+	}
 }
 
 func (r *Reader) readRawKeys(ctx context.Context, record configstore.AuthRecord) ([]map[string]any, error) {

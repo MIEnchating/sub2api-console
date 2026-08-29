@@ -25,6 +25,7 @@ type RoutingAccount struct {
 	UpstreamAuthStatus *string
 	Schedulable        *bool
 	Priority           *int64
+	ManualPriority     *int64
 	BaselinePriority   *int64
 	LoadFactor         *string
 	Concurrency        *int64
@@ -118,16 +119,17 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		arguments = append(arguments, strings.TrimSpace(*accountID))
 	}
 	if groupName != nil {
-		clauses = append(clauses, "ag.group_name=?")
+		clauses = append(clauses, "a.id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
 	query := `SELECT a.id,a.name,ag.group_name,ag.group_id,ag.group_rate,
 		lg.rate_multiplier,lg.profit_control_enabled,lg.profit_min_margin,lg.profit_safety_buffer,
-		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,rb.priority,a.load_factor,
+		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,a.load_factor,
 		a.concurrency,a.multiplier,a.paused,a.paused_reason,COALESCE(a.routing_state,''),a.metadata_json
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
 		LEFT JOIN upstreams u ON u.host=a.upstream_host
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
 		LEFT JOIN routing_baselines rb ON rb.account_id=a.id`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
@@ -144,12 +146,12 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		var groupID, groupRate, costWall, profitMargin, profitBuffer sql.NullString
 		var upstreamHost, upstreamType, authStatus, loadFactor, multiplier, pausedReason sql.NullString
 		var profitEnabled, schedulable, paused sql.NullInt64
-		var priority, baselinePriority, concurrency sql.NullInt64
+		var priority, manualPriority, baselinePriority, concurrency sql.NullInt64
 		var metadataRaw string
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.GroupName, &groupID, &groupRate,
 			&costWall, &profitEnabled, &profitMargin, &profitBuffer,
-			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &baselinePriority, &loadFactor,
+			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority, &loadFactor,
 			&concurrency, &multiplier, &paused, &pausedReason, &item.EffectiveState, &metadataRaw,
 		); err != nil {
 			return nil, err
@@ -158,7 +160,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		item.ProfitEnabled = strictNullBool(profitEnabled)
 		item.ProfitMinMargin, item.ProfitSafetyBuffer = nullString(profitMargin), nullString(profitBuffer)
 		item.UpstreamHost, item.UpstreamType, item.UpstreamAuthStatus = nullString(upstreamHost), nullString(upstreamType), nullString(authStatus)
-		item.Schedulable, item.Priority, item.BaselinePriority, item.LoadFactor = strictNullBool(schedulable), nullInt(priority), nullInt(baselinePriority), nullString(loadFactor)
+		item.Schedulable, item.Priority, item.ManualPriority, item.BaselinePriority, item.LoadFactor = strictNullBool(schedulable), nullInt(priority), nullInt(manualPriority), nullInt(baselinePriority), nullString(loadFactor)
 		item.Concurrency, item.Multiplier = nullInt(concurrency), nullString(multiplier)
 		item.Paused, item.PausedReason = paused.Valid && paused.Int64 == 1, nullString(pausedReason)
 		if err := json.Unmarshal([]byte(metadataRaw), &item.Metadata); err != nil || item.Metadata == nil {
@@ -245,7 +247,7 @@ func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupNa
 		arguments = append(arguments, strings.TrimSpace(*accountID))
 	}
 	if groupName != nil {
-		clauses = append(clauses, "rd.group_name=?")
+		clauses = append(clauses, "rd.account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
 	query := `SELECT rd.account_id,rd.group_name,rd.priority,rd.schedulable,rd.routing_state,rd.updated_at,rd.payload_json,
@@ -268,6 +270,7 @@ func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupNa
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
+	query += ` ORDER BY rd.account_id,rd.group_name`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -344,6 +347,9 @@ func (s *Store) PersistRoutingRound(
 	persistDecisions bool,
 	now time.Time,
 ) error {
+	if err := validateCanonicalRoutingWrites(evaluations, decisions); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -425,13 +431,31 @@ func routingScope(accountID, groupName *string) (string, []any) {
 		arguments = append(arguments, strings.TrimSpace(*accountID))
 	}
 	if groupName != nil {
-		clauses = append(clauses, "group_name=?")
+		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
 	if len(clauses) == 0 {
 		return "", arguments
 	}
 	return " WHERE " + strings.Join(clauses, " AND "), arguments
+}
+
+func validateCanonicalRoutingWrites(evaluations []RoutingEvaluationWrite, decisions []RoutingDecisionWrite) error {
+	evaluated := make(map[string]struct{}, len(evaluations))
+	for _, item := range evaluations {
+		if _, found := evaluated[item.AccountID]; found {
+			return fmt.Errorf("账号 %s 生成了多份健康评估", item.AccountID)
+		}
+		evaluated[item.AccountID] = struct{}{}
+	}
+	decided := make(map[string]struct{}, len(decisions))
+	for _, item := range decisions {
+		if _, found := decided[item.AccountID]; found {
+			return fmt.Errorf("账号 %s 生成了多份最终调度状态", item.AccountID)
+		}
+		decided[item.AccountID] = struct{}{}
+	}
+	return nil
 }
 
 func strictNullBool(value sql.NullInt64) *bool {

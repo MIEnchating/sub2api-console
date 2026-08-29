@@ -23,15 +23,12 @@ func TestAlertPolicyTypedPersistenceAndThresholdNormalization(t *testing.T) {
 	if !reflect.DeepEqual(stored.BalanceThresholds, []string{"20", "10", "5"}) || !reflect.DeepEqual(stored.ProbeGroups, []string{"codex", "pro"}) {
 		t.Fatalf("unexpected normalized policy: %#v", stored)
 	}
-	var nodeCount, legacyCount int
+	var nodeCount int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM policy_nodes WHERE policy_key='alert-policy'`).Scan(&nodeCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRow(`SELECT COUNT(*) FROM policies WHERE key='alert-policy'`).Scan(&legacyCount); err != nil {
-		t.Fatal(err)
-	}
-	if nodeCount == 0 || legacyCount != 0 {
-		t.Fatalf("typed nodes=%d legacy=%d", nodeCount, legacyCount)
+	if nodeCount == 0 {
+		t.Fatalf("typed nodes=%d", nodeCount)
 	}
 }
 

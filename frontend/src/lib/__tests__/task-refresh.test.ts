@@ -54,4 +54,12 @@ describe("terminal task refresh contract", () => {
       ["overview-events"],
     ]);
   });
+
+  it("refreshes local policy after a dedicated account control task", () => {
+    const keys = terminalRefreshKeys("account-scheduling", { status: "succeeded" } as never);
+
+    expect(keys).toContainEqual(["accounts"]);
+    expect(keys).toContainEqual(["policy"]);
+    expect(keys).toContainEqual(["logs"]);
+  });
 });

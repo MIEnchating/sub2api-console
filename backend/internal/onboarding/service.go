@@ -20,11 +20,9 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/naming"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
-	"github.com/MIEnchating/sub2api-console/backend/internal/writebackpolicy"
 )
 
 type Repository interface {
-	ControlPolicy(context.Context) (map[string]any, error)
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	LocalOnboardingGroup(context.Context, string) (business.LocalOnboardingGroup, error)
 	PendingOnboarding(context.Context, string, string, string, string) (*business.PendingOnboarding, error)
@@ -244,18 +242,10 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if pending != nil {
 		operationID = pending.OperationID
 	}
-	policyDocument, err := s.repository.ControlPolicy(ctx)
-	if err != nil {
-		return map[string]any{"remote_write": false}, err
-	}
-	verification, err := writebackpolicy.Verification(policyDocument)
-	if err != nil {
-		return map[string]any{"remote_write": false}, err
-	}
 	keyName := validated.candidate.GroupName + "-" + operationID[len(operationID)-8:]
 	var key upstreamsync.CreatedKey
 	if pending == nil {
-		key, err = createKey(ctx, s.keys, validated.auth, keyName, validated.candidateID(), verification)
+		key, err = s.keys.CreateKey(ctx, validated.auth, keyName, validated.candidateID())
 	} else {
 		key, err = s.keys.RevealKey(ctx, validated.auth, pending.UpstreamKeyID, validated.candidateID())
 	}
@@ -297,7 +287,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if validated.request.Priority != nil {
 		body["priority"] = *validated.request.Priority
 	}
-	created, err := client.CreateAccountWithVerification(ctx, body, verification)
+	created, err := client.CreateAccount(ctx, body)
 	if err != nil {
 		return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(err, key.Secret))
 	}
@@ -306,20 +296,9 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err != nil {
 		return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(err, key.Secret))
 	}
-	verified, readbackConfirmed := validated.request.Schedulable, false
+	verified := validated.request.Schedulable
 	if response, trusted := matchingOnboardingResponse(scheduleResponse, accountID, accountName, validated.local.ID, validated.multiplier, validated.request.Schedulable); trusted {
 		verified = response
-	}
-	if verification {
-		readback, readErr := client.Account(ctx, accountID)
-		if readErr != nil {
-			return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(readErr, key.Secret))
-		}
-		verified, err = verifyReadback(readback, accountID, accountName, validated.local.ID, validated.multiplier, validated.request.Schedulable)
-		if err != nil {
-			return s.pendingFailure(ctx, operationID, validated, key, result, err)
-		}
-		readbackConfirmed = true
 	}
 	projection := business.OnboardingProjection{
 		OperationID: operationID, AccountID: accountID, AccountName: accountName,
@@ -327,7 +306,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		UpstreamKeyID: key.KeyID, UpstreamKeyName: key.Name, UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: validated.local.ID,
 		LocalGroupName: validated.local.Name, Multiplier: validated.multiplier, Schedulable: verified,
-		Priority: validated.request.Priority, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
+		Priority: validated.request.Priority, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: false,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, operationID, validated, key, result, err)
@@ -337,7 +316,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		"local_group_id": validated.local.ID, "local_group_name": validated.local.Name,
 		"upstream_group_id": validated.candidateID(), "upstream_group_name": validated.candidate.GroupName,
 		"schedulable": verified, "credentials": "已提交远程，Console 不保存", "upstream_key_created": pending == nil,
-		"readback_confirmed": readbackConfirmed,
+		"readback_confirmed": false,
 	}, nil
 }
 

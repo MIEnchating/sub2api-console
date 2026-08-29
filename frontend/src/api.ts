@@ -1,3 +1,5 @@
+import { SessionExpiredError, signalSessionExpired } from "./lib/session-auth";
+
 export type Overview = {
   database_path: string;
   database_available: boolean;
@@ -45,7 +47,11 @@ export type NotificationStatus = {
   };
 };
 
-type AuthRecordIndex = { host: string; configured: boolean; has_headers: boolean };
+type AuthRecordIndex = {
+  host: string;
+  configured: boolean;
+  has_headers: boolean;
+};
 export type VaultEntryIndex = {
   entry: string;
   hosts: string[];
@@ -489,6 +495,7 @@ export type AccountStatus = {
   account_type?: string | null;
   schedulable: boolean | null;
   priority: number | null;
+  manual_priority?: number | null;
   load_factor: string | null;
   concurrency: number | null;
   multiplier: string | null;
@@ -774,7 +781,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    if (response.status === 401 && path !== "/api/auth/login") {
+      signalSessionExpired();
+      throw new SessionExpiredError();
+    }
+    const body = (await response.json().catch(() => null)) as {
+      detail?: unknown;
+    } | null;
     if (body !== null && Object.prototype.hasOwnProperty.call(body, "detail")) {
       if (body.detail === null) throw new Error("空值");
       if (typeof body.detail === "string") throw new Error(body.detail);
@@ -800,10 +813,16 @@ export const api = {
     }),
   session: () => request<SessionStatus>("/api/auth/session"),
   login: (payload: { username: string; password: string }) =>
-    request<SessionStatus>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+    request<SessionStatus>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   logout: () => request<SessionStatus>("/api/auth/logout", { method: "POST" }),
   updateProfile: (payload: { username: string; current_password: string; new_password?: string }) =>
-    request<SessionStatus>("/api/profile", { method: "PUT", body: JSON.stringify(payload) }),
+    request<SessionStatus>("/api/profile", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   overview: () => request<Overview>("/api/overview"),
   config: () => request<RuntimeConfig>("/api/config"),
   notificationStatus: () => request<NotificationStatus>("/api/notifications/status"),
@@ -818,6 +837,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  discoverNotificationTarget: (payload: {
+    app_id: string;
+    client_secret: string;
+    target_type: "c2c" | "group" | "channel";
+  }) =>
+    request<Task>("/api/notifications/target-discovery", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelNotificationTargetDiscovery: (taskId: string) =>
+    request<{ cancelled: boolean }>(
+      `/api/notifications/target-discovery/${encodeURIComponent(taskId)}`,
+      { method: "DELETE" },
+    ),
   testNotification: () =>
     request<{
       sent?: boolean;
@@ -828,10 +861,16 @@ export const api = {
       persisted: boolean;
     }>("/api/notifications/test", {
       method: "POST",
-      body: JSON.stringify({ message: "Sub2API Console 通知测试", dry_run: false }),
+      body: JSON.stringify({
+        message: "Sub2API Console 通知测试",
+        dry_run: false,
+      }),
     }),
   setMode: (mode: RuntimeMode) =>
-    request<RuntimeConfig>("/api/config/mode", { method: "POST", body: JSON.stringify({ mode }) }),
+    request<RuntimeConfig>("/api/config/mode", {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
   setProbesEnabled: (enabled: boolean) =>
     request<RuntimeConfig>("/api/config/probes", {
       method: "POST",
@@ -842,10 +881,16 @@ export const api = {
     admin_key: string;
     request_timeout_seconds: number;
   }) =>
-    request<RuntimeConfig>("/api/config/target", { method: "POST", body: JSON.stringify(payload) }),
+    request<RuntimeConfig>("/api/config/target", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   policy: () => request<PolicySnapshot>("/api/policy"),
   updatePolicy: (payload: PolicyUpdatePayload) =>
-    request<PolicySnapshot>("/api/policy", { method: "PUT", body: JSON.stringify(payload) }),
+    request<PolicySnapshot>("/api/policy", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   restorePolicyControl: () =>
     request<{
       restored: number;
@@ -865,7 +910,9 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   clearGroupPolicy: (id: string) =>
-    request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/policy`, { method: "DELETE" }),
+    request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/policy`, {
+      method: "DELETE",
+    }),
   setGroupExcluded: (id: string, excluded: boolean) =>
     request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/excluded`, {
       method: "PUT",
@@ -898,12 +945,20 @@ export const api = {
   deleteUpstream: (host: string, expectedAccountIds: string[]) =>
     request<Task>(`/api/upstreams/${encodeURIComponent(host)}/delete`, {
       method: "POST",
-      body: JSON.stringify({ confirmation_host: host, expected_account_ids: expectedAccountIds }),
+      body: JSON.stringify({
+        confirmation_host: host,
+        expected_account_ids: expectedAccountIds,
+      }),
     }),
   accounts: () => request<AccountStatus[]>("/api/accounts"),
   groupAllocation: (groupId: string) =>
     request<GroupAllocation>(`/api/groups/${encodeURIComponent(groupId)}/allocation`),
   syncManagement: () => request<Task>("/api/management/sync", { method: "POST" }),
+  syncAccountRates: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/rates/sync", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
   revalidateAccounts: (accountIds: string[]) =>
     request<Task>("/api/management/accounts/revalidate", {
       method: "POST",
@@ -951,6 +1006,24 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  setAccountManualPriority: (
+    accountId: string,
+    priority: number,
+    loadFactor: string,
+    concurrency: number,
+  ) =>
+    request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/manual-priority`, {
+      method: "PUT",
+      body: JSON.stringify({
+        priority,
+        load_factor: loadFactor,
+        concurrency,
+      }),
+    }),
+  clearAccountManualPriority: (accountId: string) =>
+    request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/manual-priority`, {
+      method: "DELETE",
+    }),
   recentEvents: () => request<RunEvent[]>("/api/events?limit=8"),
   logs: (params: {
     kind: UnifiedLogKind;
@@ -981,9 +1054,14 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   clearLogs: (retentionDays: number) =>
-    request<LogCleanupResult>(`/api/logs?retention_days=${retentionDays}`, { method: "DELETE" }),
+    request<LogCleanupResult>(`/api/logs?retention_days=${retentionDays}`, {
+      method: "DELETE",
+    }),
   runInspection: (payload?: { account_id?: string; group_name?: string }) =>
-    request<Task>("/api/inspection/run", { method: "POST", body: JSON.stringify(payload ?? {}) }),
+    request<Task>("/api/inspection/run", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
   autoInspection: () => request<AutoInspectionStatus>("/api/inspection/automation"),
   updateAutoInspection: (payload: AutoInspectionConfig) =>
     request<AutoInspectionStatus>("/api/inspection/automation", {
@@ -991,19 +1069,29 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   clearAutoInspectionHistory: () =>
-    request<{ deleted: number }>("/api/inspection/automation/history", { method: "DELETE" }),
+    request<{ deleted: number }>("/api/inspection/automation/history", {
+      method: "DELETE",
+    }),
   cancelAutoInspection: () =>
     request<{ canceled: boolean; status: AutoInspectionStatus }>(
       "/api/inspection/automation/cancel",
       { method: "POST" },
     ),
   resumeAutoInspection: () =>
-    request<AutoInspectionStatus>("/api/inspection/automation/resume", { method: "POST" }),
+    request<AutoInspectionStatus>("/api/inspection/automation/resume", {
+      method: "POST",
+    }),
   runActiveProbe: (payload?: { account_id?: string; group_name?: string }) =>
-    request<Task>("/api/inspection/probe", { method: "POST", body: JSON.stringify(payload ?? {}) }),
+    request<Task>("/api/inspection/probe", {
+      method: "POST",
+      body: JSON.stringify(payload ?? {}),
+    }),
   modelCheckCapabilities: () => request<ModelCheckCapabilities>("/api/model-checks/capabilities"),
   runModelCheck: (payload: ModelCheckRequest) =>
-    request<Task>("/api/model-checks", { method: "POST", body: JSON.stringify(payload) }),
+    request<Task>("/api/model-checks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   authRecoveryConfig: () => request<PrivateAuthConfigStatus>("/api/auth-recovery/config"),
   verifyManualAuth: (payload: {
     host: string;
@@ -1048,7 +1136,10 @@ export const api = {
   submitAuthCaptcha: (challengeId: string, captchaCode: string) =>
     request<CaptchaRecoveryResult>("/api/auth-recovery/captcha/submit", {
       method: "POST",
-      body: JSON.stringify({ challenge_id: challengeId, captcha_code: captchaCode }),
+      body: JSON.stringify({
+        challenge_id: challengeId,
+        captcha_code: captchaCode,
+      }),
     }),
   cancelAuthCaptcha: (challengeId: string) =>
     request<{ cancelled: boolean }>("/api/auth-recovery/captcha/cancel", {
@@ -1063,7 +1154,9 @@ export const api = {
     });
   },
   runBalanceSync: (host: string) =>
-    request<Task>(`/api/upstreams/${encodeURIComponent(host)}/balance-sync`, { method: "POST" }),
+    request<Task>(`/api/upstreams/${encodeURIComponent(host)}/balance-sync`, {
+      method: "POST",
+    }),
   runUpstreamSync: () => request<Task>("/api/upstreams/sync", { method: "POST" }),
   requestTrace: (requestId: string) =>
     request<RequestTrace>(`/api/usage/trace/${encodeURIComponent(requestId)}`),
@@ -1092,11 +1185,17 @@ export const api = {
   clearAlerts: () => request<{ deleted: number }>("/api/alerts", { method: "DELETE" }),
   alertPolicy: () => request<AlertPolicy>("/api/alerts/policy"),
   updateAlertPolicy: (payload: AlertPolicy) =>
-    request<AlertPolicy>("/api/alerts/policy", { method: "PUT", body: JSON.stringify(payload) }),
+    request<AlertPolicy>("/api/alerts/policy", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
   evaluateAlerts: () => request<Task>("/api/alerts/evaluate", { method: "POST" }),
   task: (id: string) => request<Task>(`/api/tasks/${id}`),
   onboard: (payload: OnboardingRequest) =>
-    request<Task>("/api/onboarding", { method: "POST", body: JSON.stringify(payload) }),
+    request<Task>("/api/onboarding", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   onboardBatch: (items: OnboardingRequest[]) =>
     request<Task>("/api/onboarding/batch", {
       method: "POST",

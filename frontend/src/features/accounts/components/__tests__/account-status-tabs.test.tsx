@@ -43,6 +43,7 @@ describe("AccountStatusFilter", () => {
     expect(toolbar).toContain("类型");
     expect(toolbar).not.toContain("个账号");
     expect(markup).not.toMatch(/<th[^>]*>分组<\/th>/);
+    expect(markup).toContain("最终权重");
     expect(markup).toContain("min-w-[1240px]");
   });
 
@@ -57,6 +58,7 @@ describe("AccountStatusFilter", () => {
 
     expect(markup).toContain("同步余额");
     expect(markup).toContain("批量复验");
+    expect(markup).toContain("同步倍率");
     expect(markup).toContain("命名修复");
     expect(markup).not.toContain('type="checkbox"');
   });

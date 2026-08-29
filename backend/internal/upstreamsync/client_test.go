@@ -21,11 +21,11 @@ func TestReaderNormalizesNewAPINamedGroupsKeysAndBalanceWithoutFloat64(t *testin
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/api/user/self/groups":
-			_, _ = writer.Write([]byte(`{"success":true,"data":{"auto":{"ratio":1},"pro":{"desc":"stable","ratio":0.2}}}`))
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"auto":{"ratio":"自动"},"pro":{"desc":"stable","base_ratio":0.198,"ratio":0.15,"schedule_enabled":true,"schedule_active":false}}}`))
 		case "/api/token/":
 			tokenPages++
 			if request.URL.Query().Get("page") == "1" {
-				_, _ = writer.Write([]byte(`{"success":true,"data":{"items":[{"id":17,"name":"key","group":"pro","rate":0.2}],"total":1}}`))
+				_, _ = writer.Write([]byte(`{"success":true,"data":{"items":[{"id":17,"name":"key","group":"pro","rate":0.9}],"total":1}}`))
 			} else {
 				_, _ = writer.Write([]byte(`{"success":true,"data":{"items":[]}}`))
 			}
@@ -45,7 +45,7 @@ func TestReaderNormalizesNewAPINamedGroupsKeysAndBalanceWithoutFloat64(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Groups) != 1 || catalog.Groups[0].GroupID != "pro" || catalog.Groups[0].RawRate == nil || *catalog.Groups[0].RawRate != "0.2" {
+	if len(catalog.Groups) != 1 || catalog.Groups[0].GroupID != "pro" || catalog.Groups[0].RawRate == nil || *catalog.Groups[0].RawRate != "0.15" {
 		t.Fatalf("groups=%#v", catalog.Groups)
 	}
 	if len(catalog.Keys) != 1 || catalog.Keys[0].KeyID != "17" || catalog.Keys[0].UpstreamGroup == nil || *catalog.Keys[0].UpstreamGroup != "pro" {

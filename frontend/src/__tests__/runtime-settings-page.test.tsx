@@ -2,8 +2,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ConfigPage, notificationFormFromStatus, targetFormFromConfig } from "../App";
-import type { AutoInspectionStatus, NotificationStatus, RuntimeConfig } from "../api";
+import {
+  ConfigPage,
+  notificationFormFromStatus,
+  notificationTargetResultFromTask,
+  notificationTargetField,
+  targetFormFromConfig,
+} from "../App";
+import type { AutoInspectionStatus, NotificationStatus, RuntimeConfig, Task } from "../api";
 
 describe("系统设置页面职责", () => {
   it("只展示可操作的系统设置，不重复展示运行状态和 Host 鉴权配置", () => {
@@ -120,10 +126,26 @@ describe("系统设置页面职责", () => {
     expect(markup).not.toContain("divide-border/70 divide-y rounded-lg border px-3");
     expect(markup).not.toContain("first:pt-0 last:pb-0");
     expect(markup).toContain("通知设置");
-    expect(markup).toContain("告警生产者队列");
-    expect(markup).toContain("通知消费者队列");
-    expect(markup).toContain("触发中 2");
-    expect(markup).toContain("待发送 1");
+    expect(markup).not.toContain("告警生产者队列");
+    expect(markup).not.toContain("通知消费者队列");
+    expect(markup).not.toContain('data-testid="notification-queues"');
+    expect(markup).toContain('data-testid="notification-credentials"');
+    expect(markup).toContain("grid items-start gap-x-5 gap-y-4 sm:grid-cols-2");
+    expect(markup).toContain('data-testid="notification-destination"');
+    expect(markup).toContain("sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]");
+    expect(markup).toContain("border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4");
+    expect(markup).toContain("打开 QQ 开放平台");
+    expect(markup).toContain("开发设置");
+    expect(markup).toContain('placeholder="输入 user_openid"');
+    expect(markup).toContain("查看事件服务接入说明");
+    expect(markup).toContain("连接获取");
+    expect(markup).toContain("系统会自动填入 user_openid");
+    expect(markup).toContain("机器人无需回复");
+    expect(markup).not.toContain("本控制台目前只负责发送通知");
+    expect(markup).toContain("https://q.qq.com/qqbot/#/developer/developer-setting");
+    expect(markup).toContain(
+      "https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html",
+    );
     expect(markup).toContain('value="configured-app"');
     expect(markup).toContain('value="configured-target"');
     expect(markup.match(/placeholder="已配置，留空则不修改"/g)).toHaveLength(2);
@@ -132,7 +154,6 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("定时清理");
     expect(markup).toContain('aria-label="日志保留天数"');
     expect(markup).toContain("立即按期限清理");
-    expect(markup).not.toContain("grid-cols-[minmax(0,1fr)_auto]");
     expect(markup.match(/flex items-start justify-between gap-3/g)).toHaveLength(2);
     const cleanupLabel = markup.match(
       /<label[^>]*for="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>定时清理<\/span>/,
@@ -186,5 +207,54 @@ describe("系统设置页面职责", () => {
       home_channel: "target-456",
       home_channel_type: "group",
     });
+  });
+
+  it("explains which QQ event identifier each notification target needs", () => {
+    expect(notificationTargetField("c2c")).toEqual({
+      placeholder: "输入 user_openid",
+      description:
+        "点击“连接获取”后，给机器人发送任意私聊消息，系统会自动填入 user_openid；机器人无需回复。",
+    });
+    expect(notificationTargetField("group")).toEqual({
+      placeholder: "输入 group_openid",
+      description:
+        "点击“连接获取”后，在目标群里 @机器人并发送任意消息，系统会自动填入 group_openid；机器人无需回复。",
+    });
+    expect(notificationTargetField("channel")).toEqual({
+      placeholder: "输入 channel_id",
+      description:
+        "点击“连接获取”后，在目标子频道里 @机器人并发送任意消息，系统会自动填入 channel_id；机器人无需回复。",
+    });
+  });
+
+  it("accepts only a complete successful target discovery result", () => {
+    const task: Task = {
+      id: "qqbot-target-1",
+      skill: "qqbot",
+      operation: "discover-notification-target",
+      status: "succeeded",
+      progress: 100,
+      message: "已获取通知目标并自动填入",
+      result: {
+        target_id: " user-open-id ",
+        target_type: "c2c",
+        event_type: "C2C_MESSAGE_CREATE",
+        source_name: "测试用户",
+        captured_at: "2026-08-29T10:00:00Z",
+      },
+      created_at: "2026-08-29T09:59:00Z",
+      updated_at: "2026-08-29T10:00:00Z",
+    };
+    expect(notificationTargetResultFromTask(task)).toEqual({
+      id: "user-open-id",
+      type: "c2c",
+      eventType: "C2C_MESSAGE_CREATE",
+      sourceName: "测试用户",
+      capturedAt: "2026-08-29T10:00:00Z",
+    });
+    expect(notificationTargetResultFromTask({ ...task, status: "waiting_input" })).toBeNull();
+    expect(
+      notificationTargetResultFromTask({ ...task, result: { target_type: "c2c" } }),
+    ).toBeNull();
   });
 });

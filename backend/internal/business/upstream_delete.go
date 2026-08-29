@@ -65,7 +65,7 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 		return UpstreamDeleteProjection{}, errors.New("删除预览后的账号范围已变化，请重新确认")
 	}
 	for _, accountID := range preview.AccountIDs {
-		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "routing_baselines", "cleanup_states"} {
+		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
 				return UpstreamDeleteProjection{}, err
 			}

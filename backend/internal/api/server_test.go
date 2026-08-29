@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
+	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
@@ -45,7 +47,6 @@ type fakeBusiness struct {
 	policySnapshot       business.PolicySnapshot
 	policyUpdates        *[]map[string]any
 	policyActors         *[]string
-	accountControlCalls  *[]string
 	groupPolicyUpdates   *[]map[string]any
 	groupExcludedUpdates *[]bool
 	upstreamSummary      business.UpstreamSummary
@@ -159,12 +160,6 @@ func (f fakeBusiness) UpdatePolicy(_ context.Context, patch map[string]any, acto
 	}
 	if f.policyActors != nil {
 		*f.policyActors = append(*f.policyActors, actor)
-	}
-	return f.policySnapshot, nil
-}
-func (f fakeBusiness) SetAccountControl(_ context.Context, accountID, action, actor string) (business.PolicySnapshot, error) {
-	if f.accountControlCalls != nil {
-		*f.accountControlCalls = append(*f.accountControlCalls, accountID+":"+action+":"+actor)
 	}
 	return f.policySnapshot, nil
 }
@@ -297,12 +292,42 @@ type fakeManagementTasks struct {
 	err    error
 }
 
+type fakeNotificationTargetDiscovery struct {
+	task       taskstore.Task
+	err        error
+	requests   *[]notificationtarget.Request
+	cancelled  *[]string
+	cancelOkay bool
+}
+
+func (service fakeNotificationTargetDiscovery) Enqueue(_ context.Context, request notificationtarget.Request) (taskstore.Task, error) {
+	if service.requests != nil {
+		*service.requests = append(*service.requests, request)
+	}
+	return service.task, service.err
+}
+
+func (service fakeNotificationTargetDiscovery) Cancel(taskID string) bool {
+	if service.cancelled != nil {
+		*service.cancelled = append(*service.cancelled, taskID)
+	}
+	return service.cancelOkay
+}
+
 type fakeAccountMaintenanceTasks struct {
 	task       taskstore.Task
 	err        error
 	revalidate *[][]string
 	repair     *[][]string
 	cleanup    *[][]string
+	rates      *[][]string
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountRateSync(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.rates != nil {
+		*tasks.rates = append(*tasks.rates, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
 }
 
 type fakeInspectionTasks struct {
@@ -318,9 +343,19 @@ type fieldsCall struct {
 }
 
 type fakeAccountTasks struct {
-	task        taskstore.Task
-	err         error
-	fieldsCalls *[]fieldsCall
+	task         taskstore.Task
+	err          error
+	controlCalls *[]string
+	fieldsCalls  *[]fieldsCall
+	manualCalls  *[]string
+	clearCalls   *[]string
+}
+
+func (tasks fakeAccountTasks) EnqueueControl(_ context.Context, accountID, action, actor string) (taskstore.Task, error) {
+	if tasks.controlCalls != nil {
+		*tasks.controlCalls = append(*tasks.controlCalls, accountID+":"+action+":"+actor)
+	}
+	return tasks.task, tasks.err
 }
 
 type probeCall struct {
@@ -485,6 +520,20 @@ func (tasks fakeInspectionTasks) Enqueue(_ context.Context, request inspection.R
 func (tasks fakeAccountTasks) EnqueueFields(_ context.Context, accountID string, patch accountops.FieldPatch, actor string) (taskstore.Task, error) {
 	if tasks.fieldsCalls != nil {
 		*tasks.fieldsCalls = append(*tasks.fieldsCalls, fieldsCall{accountID: accountID, patch: patch, actor: actor})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) EnqueueManualPriority(_ context.Context, accountID string, priority int64, loadFactor string, concurrency int64, actor string) (taskstore.Task, error) {
+	if tasks.manualCalls != nil {
+		*tasks.manualCalls = append(*tasks.manualCalls, fmt.Sprintf("%s:%d:%s:%d:%s", accountID, priority, loadFactor, concurrency, actor))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) EnqueueClearManualPriority(_ context.Context, accountID, actor string) (taskstore.Task, error) {
+	if tasks.clearCalls != nil {
+		*tasks.clearCalls = append(*tasks.clearCalls, accountID+":"+actor)
 	}
 	return tasks.task, tasks.err
 }
@@ -864,6 +913,45 @@ func TestTargetAndNotificationConfigurationContracts(t *testing.T) {
 	}
 }
 
+func TestNotificationTargetDiscoveryReusesSavedSecretAndCanBeCancelled(t *testing.T) {
+	requests := []notificationtarget.Request{}
+	cancelled := []string{}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "qqbot-target-1", Skill: "qqbot", Operation: "discover-notification-target",
+		Status: "queued", Progress: 0, Message: "已创建", Result: map[string]any{"target_type": "c2c"},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	router, store := testRouterWithDependencies(t, config.Config{}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		NotificationTarget: fakeNotificationTargetDiscovery{
+			task: task, requests: &requests, cancelled: &cancelled, cancelOkay: true,
+		},
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ConfigureNotifications(context.Background(), "saved-app", "saved-secret", "old-target", "c2c"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+	started := request(t, router, http.MethodPost, "/api/notifications/target-discovery", map[string]any{
+		"app_id": "saved-app", "client_secret": "", "target_type": "c2c",
+	}, cookie.String())
+	if started.Code != http.StatusAccepted || !strings.Contains(started.Body.String(), `"id":"qqbot-target-1"`) || strings.Contains(started.Body.String(), "saved-secret") {
+		t.Fatalf("unexpected discovery response: %d %s", started.Code, started.Body.String())
+	}
+	if len(requests) != 1 || requests[0].AppID != "saved-app" || requests[0].ClientSecret != "saved-secret" || requests[0].TargetType != "c2c" {
+		t.Fatalf("discovery request = %#v", requests)
+	}
+	stopped := request(t, router, http.MethodDelete, "/api/notifications/target-discovery/qqbot-target-1", nil, cookie.String())
+	if stopped.Code != http.StatusAccepted || len(cancelled) != 1 || cancelled[0] != "qqbot-target-1" {
+		t.Fatalf("unexpected cancel response: %d %s calls=%#v", stopped.Code, stopped.Body.String(), cancelled)
+	}
+}
+
 func TestProbeConfigurationUpdatesTheSingleBusinessPolicySwitch(t *testing.T) {
 	probeEnabled := false
 	router, store := testRouter(t, config.Config{DataDB: "/data/sub2api-console.sqlite3"}, fakeBusiness{
@@ -948,15 +1036,18 @@ func TestAccountMaintenanceRoutesPassCurrentVisibleStableIDs(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	task := taskstore.Task{ID: "maintenance-1", Skill: "sub2api-operations", Operation: "account-binding-revalidation",
 		Status: "queued", Progress: 0, Message: "已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
-	revalidations, repairs, cleanups := [][]string{}, [][]string{}, [][]string{}
+	revalidations, repairs, cleanups, rates := [][]string{}, [][]string{}, [][]string{}, [][]string{}
 	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
-		AccountMaintenance: fakeAccountMaintenanceTasks{task: task, revalidate: &revalidations, repair: &repairs, cleanup: &cleanups},
+		AccountMaintenance: fakeAccountMaintenanceTasks{task: task, revalidate: &revalidations, repair: &repairs, cleanup: &cleanups, rates: &rates},
 	})
-	for _, path := range []string{"/api/management/accounts/revalidate", "/api/management/accounts/names/repair", "/api/management/accounts/missing-bindings/cleanup"} {
+	for _, path := range []string{"/api/management/accounts/rates/sync", "/api/management/accounts/revalidate", "/api/management/accounts/names/repair", "/api/management/accounts/missing-bindings/cleanup"} {
 		response := authenticatedRequest(t, router, http.MethodPost, path, map[string]any{"account_ids": []string{"11", "12"}})
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"maintenance-1"`) {
 			t.Fatalf("%s response=%d %s", path, response.Code, response.Body.String())
 		}
+	}
+	if !reflect.DeepEqual(rates, [][]string{{"11", "12"}}) {
+		t.Fatalf("rates=%#v", rates)
 	}
 	if !reflect.DeepEqual(revalidations, [][]string{{"11", "12"}}) || !reflect.DeepEqual(repairs, [][]string{{"11", "12"}}) || !reflect.DeepEqual(cleanups, [][]string{{"11", "12"}}) {
 		t.Fatalf("revalidations=%#v repairs=%#v cleanups=%#v", revalidations, repairs, cleanups)
@@ -1165,34 +1256,61 @@ func TestAccountMutationReturnsNotFoundBeforeQueuing(t *testing.T) {
 	}
 }
 
-func TestAccountControlPersistsPolicyAndQueuesScopedInspection(t *testing.T) {
+func TestManualPriorityRoutesAssignAndClearWithoutInspection(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
+		ID: "41", Name: "alpha", Groups: []string{"codex"}, Health: "healthy", RecentResults: []business.AccountRecentResult{},
+	}}
+	manualCalls, clearCalls := []string{}, []string{}
+	manualTask := taskstore.Task{ID: "manual-1", Skill: "manual", Operation: "assign", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", accountDetail: account,
+	}, Dependencies{
+		AccountTasks: fakeAccountTasks{task: manualTask, manualCalls: &manualCalls, clearCalls: &clearCalls},
+	})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	assigned := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 3, "load_factor": "100", "concurrency": 100})
+	if assigned.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0] != "41:3:100:100:console" {
+		t.Fatalf("assign response=%d %s calls=%#v", assigned.Code, assigned.Body.String(), manualCalls)
+	}
+	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/accounts/41/manual-priority", nil)
+	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"id":"manual-1"`) || len(clearCalls) != 1 || clearCalls[0] != "41:console" {
+		t.Fatalf("clear response=%d %s clear=%#v", cleared.Code, cleared.Body.String(), clearCalls)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 0, "load_factor": "100", "concurrency": 100})
+	if invalid.Code != http.StatusUnprocessableEntity || len(manualCalls) != 1 {
+		t.Fatalf("invalid response=%d %s calls=%#v", invalid.Code, invalid.Body.String(), manualCalls)
+	}
+}
+
+func TestAccountControlQueuesDedicatedTaskWithoutInspection(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	accountID := "41"
 	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
 		ID: accountID, Name: "alpha", Groups: []string{"codex"}, Health: "healthy", RecentResults: []business.AccountRecentResult{},
 	}}
 	controlCalls := []string{}
-	inspectionCalls := []inspection.RunRequest{}
-	task := taskstore.Task{
-		ID: "inspection-1", Skill: "sub2api-auto-inspection", Operation: "manual-inspection", Status: "queued",
-		Progress: 0, Message: "巡检已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
-	}
 	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
-		mode: "完全模式", accountDetail: account, accountControlCalls: &controlCalls,
-	}, Dependencies{InspectionTasks: fakeInspectionTasks{task: task, calls: &inspectionCalls}})
+		mode: "完全模式", accountDetail: account,
+	}, Dependencies{AccountTasks: fakeAccountTasks{
+		task:         taskstore.Task{ID: "control-1", Skill: "account-control", Operation: "account-control", Status: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+		controlCalls: &controlCalls,
+	}})
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
 	}
 	response := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/control", map[string]any{"action": "pause"})
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"inspection-1"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"control-1"`) {
 		t.Fatalf("control response=%d %s", response.Code, response.Body.String())
 	}
-	if len(controlCalls) != 1 || controlCalls[0] != "41:pause:console" || len(inspectionCalls) != 1 || inspectionCalls[0].AccountID == nil || *inspectionCalls[0].AccountID != "41" || inspectionCalls[0].Actor != "console" {
-		t.Fatalf("control=%#v inspections=%#v", controlCalls, inspectionCalls)
+	if len(controlCalls) != 1 || controlCalls[0] != "41:pause:console" {
+		t.Fatalf("control=%#v", controlCalls)
 	}
 	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/control", map[string]any{"action": "delete"})
-	if invalid.Code != http.StatusUnprocessableEntity || len(controlCalls) != 1 || len(inspectionCalls) != 1 {
-		t.Fatalf("invalid control=%d calls=%#v inspections=%#v", invalid.Code, controlCalls, inspectionCalls)
+	if invalid.Code != http.StatusUnprocessableEntity || len(controlCalls) != 1 {
+		t.Fatalf("invalid control=%d calls=%#v", invalid.Code, controlCalls)
 	}
 }
 
@@ -1277,12 +1395,12 @@ func TestUpstreamConfigurationRoutesPreserveExplicitNullPresence(t *testing.T) {
 		UpstreamConfigs: fakeUpstreamConfigurations{configuration: configuration, created: &created, updated: &updated},
 	})
 	payload := map[string]any{
-		"host": "api.example", "name": "Example", "base_url": "https://api.example", "upstream_type": "sub2api",
+		"host": "origin.example:8080", "name": "Example", "base_url": "https://accelerated.example:8443/api", "upstream_type": "sub2api",
 		"auth_mode": "sub2api_user_token", "recharge_rate": "1", "access_token": nil, "refresh_token": "refresh",
 		"headers": map[string]any{"X-Site": "one"},
 	}
 	response := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams", payload)
-	if response.Code != http.StatusOK || len(created) != 1 || !created[0].Present["access_token"] || created[0].AccessToken != nil || created[0].Headers["X-Site"] != "one" {
+	if response.Code != http.StatusOK || len(created) != 1 || created[0].Host != "origin.example:8080" || created[0].BaseURL != "https://accelerated.example:8443/api" || !created[0].Present["access_token"] || created[0].AccessToken != nil || created[0].Headers["X-Site"] != "one" {
 		t.Fatalf("response=%d %s created=%#v", response.Code, response.Body.String(), created)
 	}
 	delete(payload, "host")
@@ -1296,7 +1414,7 @@ func TestUpstreamConfigurationRoutesPreserveExplicitNullPresence(t *testing.T) {
 		t.Fatalf("unexpected read: %d %s", read.Code, read.Body.String())
 	}
 	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/upstreams", map[string]any{
-		"host": "api.example", "name": "Example", "base_url": "https://api.example", "upstream_type": "sub2api",
+		"host": "origin.example:8080", "name": "Example", "base_url": "https://accelerated.example:8443/api", "upstream_type": "sub2api",
 		"auth_mode": "sub2api_user_token", "recharge_rate": "1", "unexpected": true,
 	})
 	if invalid.Code != http.StatusUnprocessableEntity || len(created) != 1 {

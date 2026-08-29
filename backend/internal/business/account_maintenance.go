@@ -13,10 +13,21 @@ import (
 )
 
 type BoundAccountMaintenance struct {
-	AccountID    string `json:"account_id"`
-	AccountName  string `json:"account_name"`
-	ExpectedName string `json:"expected_name"`
-	UpstreamHost string `json:"upstream_host"`
+	AccountID         string `json:"account_id"`
+	AccountName       string `json:"account_name"`
+	ExpectedName      string `json:"expected_name"`
+	UpstreamHost      string `json:"upstream_host"`
+	UpstreamType      string `json:"upstream_type"`
+	UpstreamKeyID     string `json:"upstream_key_id"`
+	UpstreamGroupID   string `json:"upstream_group_id"`
+	RechargeRate      string `json:"recharge_rate"`
+	CurrentMultiplier string `json:"current_multiplier"`
+	NamingSiteName    string `json:"-"`
+	NamingBaseURL     string `json:"-"`
+}
+
+func (account BoundAccountMaintenance) NameForMultiplier(multiplier string) string {
+	return naming.AccountName(account.NamingSiteName, account.NamingBaseURL, multiplier)
 }
 
 type BindingVerification struct {
@@ -29,10 +40,41 @@ type AccountNameRepairCommit struct {
 	Name      string
 }
 
+type AccountRateObservation struct {
+	AccountID string
+	Rate      string
+}
+
 type MissingBindingCleanupResult struct {
 	Cleaned int      `json:"cleaned"`
 	IDs     []string `json:"ids"`
 	EventID int64    `json:"event_id"`
+}
+
+func (s *Store) AccountNamesForMaintenance(ctx context.Context, requestedIDs []string) (map[string]string, error) {
+	requested := make(map[string]struct{}, len(requestedIDs))
+	for _, id := range requestedIDs {
+		requested[strings.TrimSpace(id)] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name FROM accounts ORDER BY CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string, len(requested))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		if len(requested) > 0 {
+			if _, found := requested[id]; !found {
+				continue
+			}
+		}
+		result[id] = name
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []string) ([]BoundAccountMaintenance, error) {
@@ -40,9 +82,11 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	for _, id := range requestedIDs {
 		requested[strings.TrimSpace(id)] = struct{}{}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,u.base_url,u.metadata_json
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,u.upstream_type,
+		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(r.recharge_rate,'1'),u.base_url,u.metadata_json
 		FROM accounts a JOIN bindings b ON b.local_account_id=a.id
 		JOIN upstreams u ON u.host=b.upstream_host
+		LEFT JOIN recharge_rates r ON r.host=u.host
 		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
 	if err != nil {
 		return nil, err
@@ -52,7 +96,8 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	for rows.Next() {
 		var item BoundAccountMaintenance
 		var multiplier, baseURL, metadataRaw string
-		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &baseURL, &metadataRaw); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &item.UpstreamType,
+			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &baseURL, &metadataRaw); err != nil {
 			return nil, err
 		}
 		if len(requested) > 0 {
@@ -66,6 +111,8 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 		if siteName == "" {
 			siteName = strings.TrimSpace(stringValue(metadata["system_name"]))
 		}
+		item.CurrentMultiplier = multiplier
+		item.NamingSiteName, item.NamingBaseURL = siteName, baseURL
 		item.ExpectedName = naming.AccountName(siteName, baseURL, multiplier)
 		result = append(result, item)
 	}
@@ -109,6 +156,33 @@ func (s *Store) CommitAccountNameRepairs(ctx context.Context, values []AccountNa
 	return tx.Commit()
 }
 
+func (s *Store) CommitAccountRateObservations(ctx context.Context, values []AccountRateObservation) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, value := range values {
+		if !positiveNumericID(value.AccountID) || normalizePositiveDecimal(value.Rate) == nil {
+			return errors.New("账号上游倍率观测包含无效账号或倍率")
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE bindings SET upstream_rate=?,updated_at=? WHERE local_account_id=?`, value.Rate, now, value.AccountID)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil {
+			return err
+		} else if affected == 0 {
+			return fmt.Errorf("账号 %s 没有可更新的上游绑定", value.AccountID)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_rate=? WHERE account_id=?`, value.Rate, value.AccountID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string, actor string) (MissingBindingCleanupResult, error) {
 	accountIDs, err := normalizedStableIDs(accountIDs)
 	if err != nil {
@@ -140,7 +214,7 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 			name = "账号 " + accountID
 		}
 		names = append(names, name)
-		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "routing_baselines", "cleanup_states"} {
+		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
 				return MissingBindingCleanupResult{}, err
 			}

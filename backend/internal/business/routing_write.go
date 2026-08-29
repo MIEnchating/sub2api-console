@@ -157,9 +157,25 @@ func (s *Store) ClearRoutingRuntimeBlocks(ctx context.Context, accountID string)
 	if err := s.db.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
 		return err
 	}
+	encoded, err := clearedRoutingRuntimeMetadata(raw, accountID)
+	if err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`,
+		encoded, time.Now().UTC().Format(time.RFC3339Nano), accountID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func clearedRoutingRuntimeMetadata(raw, accountID string) (string, error) {
 	metadata := map[string]any{}
 	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
-		return fmt.Errorf("账号 %s metadata 配置无效", accountID)
+		return "", fmt.Errorf("账号 %s metadata 配置无效", accountID)
 	}
 	for _, key := range []string{
 		"last_error", "error_message", "rate_limited_at", "rate_limit_reset_at",
@@ -169,17 +185,9 @@ func (s *Store) ClearRoutingRuntimeBlocks(ctx context.Context, accountID string)
 	}
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
-		return err
+		return "", err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`,
-		string(encoded), time.Now().UTC().Format(time.RFC3339Nano), accountID)
-	if err != nil {
-		return err
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return string(encoded), nil
 }
 
 func (s *Store) DeleteRoutingBaseline(ctx context.Context, accountID string) error {

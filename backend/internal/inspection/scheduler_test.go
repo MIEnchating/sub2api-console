@@ -594,10 +594,8 @@ func openInspectionRepository(t *testing.T) *business.Store {
 		t.Fatal(err)
 	}
 	statements := []string{
-		`CREATE TABLE migration_runs(id INTEGER PRIMARY KEY,status TEXT NOT NULL)`,
-		`INSERT INTO migration_runs VALUES(1,'succeeded')`,
 		`CREATE TABLE app_state(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
-		`CREATE TABLE policies(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`INSERT INTO app_state(key,value_json,updated_at) VALUES('config','{"keys":[],"mode":"完全模式"}','now')`,
 		`CREATE TABLE policy_nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,node_type TEXT NOT NULL,scalar_value TEXT,updated_at TEXT NOT NULL)`,
 		`CREATE UNIQUE INDEX ux_policy_nodes_root ON policy_nodes(policy_key) WHERE parent_id IS NULL`,
 		`CREATE TABLE scheduler_leases(lease_name TEXT PRIMARY KEY,owner_id TEXT NOT NULL,owner_pid INTEGER NOT NULL,owner_host TEXT NOT NULL,checked_at TEXT NOT NULL,acquired_at TEXT NOT NULL,renewed_at TEXT NOT NULL,expires_at TEXT NOT NULL)`,

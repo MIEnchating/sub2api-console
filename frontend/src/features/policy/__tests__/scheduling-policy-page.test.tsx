@@ -60,7 +60,8 @@ const policy: PolicySnapshot = {
   advanced_policy: {
     probe: { concurrency: 4 },
     traffic: { refresh_seconds: 60 },
-    weights: { max_writes_per_group: 2, max_migration_ratio: 0.3 },
+    weights: {},
+    manual_priority: { reserved_max: 10 },
     upstream_multiplier: { interval_seconds: 120 },
     writeback: { concurrency: 4, verification: false },
     scaling: {
@@ -142,6 +143,8 @@ describe("调度策略入口", () => {
     expect(markup).toContain("调度策略");
     expect(markup).not.toContain("策略中心");
     expect(markup).toContain("分组没有单独设置时使用");
+    expect(markup).toContain("价格和速度先在组内换算为 0～1 的相对分数");
+    expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
     expect(markup).toContain("运营配置");
     expect(markup).toContain("系统级规则");
     expect(markup).toContain("守护范围");
@@ -161,6 +164,7 @@ describe("调度策略入口", () => {
     expect(schedulingStrategyOptions).toContainEqual({
       value: "reliability",
       label: "稳定优先",
+      description: "质量分 = 健康门控 ×（75% 健康稳定性 + 15% 相对速度 + 10% 相对价格）",
     });
     expect(markup).not.toContain("高级策略");
     expect(markup).not.toContain("JSON 对象");
@@ -243,7 +247,10 @@ describe("调度策略入口", () => {
     expect(runtime).not.toContain("启用主动探测");
 
     expect(global).toContain("倍率缺失回退");
-    expect(global).toContain("每组权重预算");
+    expect(global).toContain("每组总权重预算");
+    expect(global).toContain("人工优先位范围");
+    expect(global).toContain("自动调度从 N+1 开始");
+    expect(global).toContain("由同一分组内参与调度的账号按策略共享");
     expect(global).toContain("权重健康闸门");
     expect(global).toContain("均衡中价格占比");
     expect(global).not.toContain("上游数据拉取间隔");
@@ -265,8 +272,12 @@ describe("调度策略入口", () => {
 
     expect(autoApply).toContain("调度状态");
     expect(autoApply).toContain("负载因子");
-    expect(autoApply).toContain("远程写入并发");
-    expect(autoApply).toContain('aria-label="写后确认"');
+    expect(autoApply).toContain("调度写入并发");
+    expect(autoApply).toContain('aria-label="调度写后确认"');
+    expect(autoApply).toContain("只复核自动调度实际修改的字段");
+    expect(autoApply).not.toContain("Key 创建");
+    expect(autoApply).not.toContain("账号添加");
+    expect(autoApply).not.toContain("删除结果");
     expect(autoApply).not.toContain("每组每轮自动执行账号上限");
     expect(autoApply).not.toContain("每组每轮自动执行占比上限");
     expect(markup).toContain("窗口内慢响应次数");

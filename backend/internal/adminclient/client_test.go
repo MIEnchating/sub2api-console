@@ -2,6 +2,7 @@ package adminclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -161,38 +162,70 @@ func TestStableIDsAreRequired(t *testing.T) {
 	}
 }
 
-func TestCreateAccountAcceptsNestedAccountResponseWithoutDirectoryRead(t *testing.T) {
-	var calls int
+func TestCreateAccountAcceptsNestedAccountResponseAfterCapturingIdentityBaseline(t *testing.T) {
+	var lists, posts int
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
-		calls++
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts" {
-			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+		switch request.Method {
+		case http.MethodGet:
+			lists++
+			writeJSON(w, `{"data":{"items":[],"total":0}}`)
+		case http.MethodPost:
+			posts++
+			writeJSON(w, `{"success":true,"data":{"account":{"accountId":42,"name":"alpha"}}}`)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
-		writeJSON(w, `{"success":true,"data":{"account":{"accountId":42,"name":"alpha"}}}`)
 	})
 	defer server.Close()
 
-	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+	created, err := client.CreateAccount(context.Background(), map[string]any{
 		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
-	}, false)
-	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || calls != 1 {
-		t.Fatalf("created=%#v err=%v calls=%d", created, err, calls)
+	})
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || lists != 1 || posts != 1 {
+		t.Fatalf("created=%#v err=%v lists=%d posts=%d", created, err, lists, posts)
 	}
 }
 
-func TestCreateAccountAcceptsScalarDataIDWithoutDirectoryRead(t *testing.T) {
-	var calls int
+func TestCreateAccountAcceptsScalarDataID(t *testing.T) {
+	var lists, posts int
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
-		calls++
+		if request.Method == http.MethodGet {
+			lists++
+			writeJSON(w, `{"data":{"items":[],"total":0}}`)
+			return
+		}
+		posts++
 		writeJSON(w, `{"success":true,"data":42}`)
 	})
 	defer server.Close()
 
-	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+	created, err := client.CreateAccount(context.Background(), map[string]any{
 		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
-	}, false)
-	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || calls != 1 {
-		t.Fatalf("created=%#v err=%v calls=%d", created, err, calls)
+	})
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || lists != 1 || posts != 1 {
+		t.Fatalf("created=%#v err=%v lists=%d posts=%d", created, err, lists, posts)
+	}
+}
+
+func TestCreateAccountUsesStableResponseIDWhenIdentityBaselineIsUnavailable(t *testing.T) {
+	var lists, posts int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			lists++
+			w.WriteHeader(http.StatusServiceUnavailable)
+			writeJSON(w, `{"error":"temporarily unavailable"}`)
+			return
+		}
+		posts++
+		writeJSON(w, `{"success":true,"data":{"id":42,"name":"alpha"}}`)
+	})
+	defer server.Close()
+
+	created, err := client.CreateAccount(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	})
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || lists != 1 || posts != 1 {
+		t.Fatalf("created=%#v err=%v lists=%d posts=%d", created, err, lists, posts)
 	}
 }
 
@@ -217,20 +250,27 @@ func TestCreateAccountRecoversMissingResponseIDFromStableDirectoryDifference(t *
 	})
 	defer server.Close()
 
-	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+	created, err := client.CreateAccount(context.Background(), map[string]any{
 		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
-	}, true)
+	})
 	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || lists != 2 || posts != 1 {
 		t.Fatalf("created=%#v err=%v lists=%d posts=%d", created, err, lists, posts)
 	}
 }
 
-func TestCreateAccountDoesNotGuessMissingIDWhenVerificationIsDisabled(t *testing.T) {
+func TestCreateAccountRejectsAmbiguousDirectoryDifferenceWhenResponseIDIsMissing(t *testing.T) {
 	var gets, posts int
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodGet {
 			gets++
-			writeJSON(w, `{"data":{"items":[{"id":42,"name":"alpha"}],"total":1}}`)
+			items := `[]`
+			total := 0
+			if gets == 2 {
+				items = `[{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]},` +
+					`{"id":43,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}]`
+				total = 2
+			}
+			writeJSON(w, `{"data":{"items":`+items+`,"total":`+strconv.Itoa(total)+`}}`)
 			return
 		}
 		posts++
@@ -238,10 +278,10 @@ func TestCreateAccountDoesNotGuessMissingIDWhenVerificationIsDisabled(t *testing
 	})
 	defer server.Close()
 
-	_, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+	_, err := client.CreateAccount(context.Background(), map[string]any{
 		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
-	}, false)
-	if err == nil || !strings.Contains(err.Error(), "未返回稳定 ID") || gets != 0 || posts != 1 {
+	})
+	if err == nil || !strings.Contains(err.Error(), "无法唯一确认") || gets != 2 || posts != 1 {
 		t.Fatalf("err=%v gets=%d posts=%d", err, gets, posts)
 	}
 }
@@ -373,6 +413,77 @@ func TestClientDoesNotFollowRedirects(t *testing.T) {
 	_, err := client.Accounts(context.Background())
 	if err == nil || destinationCalls != 0 {
 		t.Fatalf("err=%v destinationCalls=%d", err, destinationCalls)
+	}
+}
+
+func TestAccountUpstreamMultiplierPrefersResolvedUpstreamValue(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts/41/upstream-billing-probe" {
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+		writeJSON(w, `{"data":{"account_id":41,"snapshot":{"status":"ok","data":{"billing_scope":"token","group_rate_multiplier":0.198,"user_rate_multiplier":0.15,"resolved_rate_multiplier":0.15,"effective_rate_multiplier":0.3}}}}`)
+	})
+	defer server.Close()
+
+	value, err := client.AccountUpstreamMultiplier(context.Background(), "41")
+	if err != nil || value != "0.15" {
+		t.Fatalf("value=%q err=%v", value, err)
+	}
+}
+
+func TestAccountUpstreamMultiplierFallsBackToResolvedValue(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, `{"data":{"snapshot":{"status":"ok","data":{"billing_scope":"token","resolved_rate_multiplier":"0.42"}}}}`)
+	})
+	defer server.Close()
+
+	value, err := client.AccountUpstreamMultiplier(context.Background(), "41")
+	if err != nil || value != "0.42" {
+		t.Fatalf("value=%q err=%v", value, err)
+	}
+}
+
+func TestAccountUpstreamMultiplierRejectsFailedOrInvalidProbe(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "failed", body: `{"data":{"snapshot":{"status":"failed","last_error":"credential rejected"}}}`, want: "credential rejected"},
+		{name: "zero", body: `{"data":{"snapshot":{"status":"ok","data":{"effective_rate_multiplier":0}}}}`, want: "非法倍率"},
+		{name: "missing", body: `{"data":{"snapshot":{"status":"ok","data":{}}}}`, want: "未返回有效倍率"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := testClient(t, 1, func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, test.body) })
+			defer server.Close()
+			_, err := client.AccountUpstreamMultiplier(context.Background(), "41")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err=%v want=%q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestAccountUpstreamMultipliersUsesOneBatchAndKeepsItemFailures(t *testing.T) {
+	var requests int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts/upstream-billing-probe/batch" {
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+		var body struct {
+			AccountIDs []int64 `json:"account_ids"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil || len(body.AccountIDs) != 2 || body.AccountIDs[0] != 41 || body.AccountIDs[1] != 42 {
+			t.Fatalf("body=%#v err=%v", body, err)
+		}
+		writeJSON(w, `{"data":{"results":[{"account_id":41,"snapshot":{"status":"ok","data":{"resolved_rate_multiplier":0.15,"effective_rate_multiplier":0.3}}},{"account_id":42,"snapshot":{"status":"failed","last_error":"upstream rejected"}}]}}`)
+	})
+	defer server.Close()
+
+	results, err := client.AccountUpstreamMultipliers(context.Background(), []string{"41", "42"})
+	if err != nil || requests != 1 || results["41"].Multiplier != "0.15" || results["41"].Err != nil || results["42"].Err == nil || !strings.Contains(results["42"].Err.Error(), "upstream rejected") {
+		t.Fatalf("requests=%d results=%#v err=%v", requests, results, err)
 	}
 }
 

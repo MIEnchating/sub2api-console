@@ -158,15 +158,12 @@ func TestUpdatePolicyPreservesOmittedFieldsAndClearsExplicitLists(t *testing.T) 
 	if after["probe"].(map[string]any)["timeout_seconds"] != probeBefore {
 		t.Fatal("omitted advanced policy field was changed")
 	}
-	var eventCount, legacyCount int
+	var eventCount int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_events WHERE event_type='policy.updated'`).Scan(&eventCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM policies WHERE key='control-plane'`).Scan(&legacyCount); err != nil {
-		t.Fatal(err)
-	}
-	if eventCount != 1 || legacyCount != 0 {
-		t.Fatalf("eventCount=%d legacyCount=%d", eventCount, legacyCount)
+	if eventCount != 1 {
+		t.Fatalf("eventCount=%d", eventCount)
 	}
 }
 
@@ -190,63 +187,6 @@ func TestUpdatePolicyKeepsExplicitManagedGroupSelection(t *testing.T) {
 	scope := document["scope"].(map[string]any)
 	if scope["managed_group_mode"] != "selected" || !reflect.DeepEqual(scope["managed_group_ids"], []any{"6", "8"}) {
 		t.Fatalf("explicit managed group selection was overwritten: %#v", scope)
-	}
-}
-
-func TestLegacyPolicyRetiresConservativeAutomaticApplyLimits(t *testing.T) {
-	store := openPolicyStore(t)
-	ctx := context.Background()
-	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
-	if err != nil {
-		t.Fatal(err)
-	}
-	weights := document["weights"].(map[string]any)
-	delete(weights, "change_threshold")
-	delete(weights, "max_writes_per_group")
-	delete(weights, "max_migration_ratio")
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writePolicyDocument(ctx, tx, "control-plane", document, "2026-08-27T12:00:00Z"); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-
-	snapshot, err := store.PolicySnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	advancedWeights, ok := snapshot.AdvancedPolicy["weights"].(map[string]any)
-	if snapshot.ChangeThreshold == nil || *snapshot.ChangeThreshold != "0.1" || !ok {
-		t.Fatalf("weight defaults are incomplete: %#v", snapshot)
-	}
-	if _, present := advancedWeights["max_writes_per_group"]; present {
-		t.Fatalf("retired write-count cap remains editable: %#v", advancedWeights)
-	}
-	if _, present := advancedWeights["max_migration_ratio"]; present {
-		t.Fatalf("retired migration cap remains editable: %#v", advancedWeights)
-	}
-
-	if _, err := store.UpdatePolicy(ctx, map[string]any{"global_strategy": "reliability"}, "operator"); err != nil {
-		t.Fatal(err)
-	}
-	document, err = store.readPolicyDocument(ctx, store.db, "control-plane")
-	if err != nil {
-		t.Fatal(err)
-	}
-	weights = document["weights"].(map[string]any)
-	if weights["change_threshold"] != "0.1" {
-		t.Fatalf("weight threshold was not persisted: %#v", weights)
-	}
-	if _, present := weights["max_writes_per_group"]; present {
-		t.Fatalf("retired write-count cap survived normalization: %#v", weights)
-	}
-	if _, present := weights["max_migration_ratio"]; present {
-		t.Fatalf("retired migration cap survived normalization: %#v", weights)
 	}
 }
 
@@ -325,60 +265,6 @@ func TestLegacyPolicySnapshotDefaultsWritebackVerificationToOff(t *testing.T) {
 	writeback, ok := snapshot.AdvancedPolicy["writeback"].(map[string]any)
 	if !ok || writeback["concurrency"] != int64(4) || writeback["verification"] != false {
 		t.Fatalf("writeback defaults are not explicit: %#v", writeback)
-	}
-}
-
-func TestPolicySnapshotDoesNotExposeDeprecatedAdvancedFields(t *testing.T) {
-	store := openPolicyStore(t)
-	ctx := context.Background()
-	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
-	if err != nil {
-		t.Fatal(err)
-	}
-	document["weights"].(map[string]any)["deadband_ratio"] = 0.2
-	document["breaker"].(map[string]any)["failure_window"] = int64(12)
-	document["scheduling"] = map[string]any{
-		"priority": map[string]any{
-			"max_priority":    int64(900),
-			"min_improvement": 0.1,
-		},
-	}
-	tx, err := store.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writePolicyDocument(ctx, tx, "control-plane", document, "2026-08-27T12:00:00Z"); err != nil {
-		_ = tx.Rollback()
-		t.Fatal(err)
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-
-	snapshot, err := store.PolicySnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for section, field := range map[string]string{"weights": "deadband_ratio", "breaker": "failure_window"} {
-		values, _ := snapshot.AdvancedPolicy[section].(map[string]any)
-		if _, present := values[field]; present {
-			t.Fatalf("deprecated %s.%s was exposed to the editable contract: %#v", section, field, values)
-		}
-	}
-	if _, present := snapshot.AdvancedPolicy["scheduling"]; present {
-		t.Fatalf("retired artificial priority cap was exposed: %#v", snapshot.AdvancedPolicy["scheduling"])
-	}
-	if _, err := store.UpdatePolicy(ctx, map[string]any{
-		"advanced_policy": snapshot.AdvancedPolicy,
-	}, "operator"); err != nil {
-		t.Fatalf("snapshot containing a legacy priority field could not be saved: %v", err)
-	}
-	stored, err := store.readPolicyDocument(ctx, store.db, "control-plane")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, present := stored["scheduling"]; present {
-		t.Fatalf("saving the projected snapshot did not retire scheduling cap: %#v", stored["scheduling"])
 	}
 }
 

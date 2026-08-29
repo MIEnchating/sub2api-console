@@ -34,7 +34,7 @@ const refreshKeys: Record<TaskRefreshScope, string[]> = {
   ],
   "active-probe": ["accounts", "logs", "overview-events"],
   "management-sync": ["accounts", "groups", "upstreams", "logs", "overview", "overview-events"],
-  "account-scheduling": ["accounts", "groups", "logs", "overview", "overview-events"],
+  "account-scheduling": ["accounts", "groups", "policy", "logs", "overview", "overview-events"],
   alerts: ["alerts", "logs", "overview", "overview-events"],
   onboarding: [
     "accounts",

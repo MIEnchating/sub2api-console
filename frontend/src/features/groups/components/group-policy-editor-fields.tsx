@@ -3,13 +3,11 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Switch } from "../../../components/ui/switch";
 import { cn } from "../../../lib/utils";
-
-const strategyOptions = [
-  { value: "balanced", label: "均衡" },
-  { value: "price_first", label: "价格优先" },
-  { value: "speed_first", label: "速度优先" },
-  { value: "reliability", label: "稳定优先" },
-] as const;
+import {
+  schedulingStrategyDescription,
+  schedulingStrategyOptions,
+  schedulingWeightFormula,
+} from "../../../lib/scheduling-strategy";
 
 const capabilityOptions = [
   ["breaker_enabled", "熔断"],
@@ -52,7 +50,7 @@ export function GroupPolicyEditorFields(props: {
           aria-label="调度策略"
           data-testid="group-policy-strategy-options"
         >
-          {strategyOptions.map((strategy) => {
+          {schedulingStrategyOptions.map((strategy) => {
             const selected = props.value.strategy === strategy.value;
             return (
               <Button
@@ -73,6 +71,9 @@ export function GroupPolicyEditorFields(props: {
             );
           })}
         </div>
+        <p className="text-muted-foreground text-xs leading-5">
+          {schedulingStrategyDescription(props.value.strategy)}；{schedulingWeightFormula}
+        </p>
       </fieldset>
 
       <div className="grid min-w-0 gap-4 sm:grid-cols-3">
@@ -87,7 +88,7 @@ export function GroupPolicyEditorFields(props: {
           />
         </label>
         <label className="min-w-0 space-y-1.5 text-sm">
-          <span className="block font-medium">权重预算</span>
+          <span className="block font-medium">组内总权重预算</span>
           <Input
             className="min-w-0"
             type="number"
@@ -95,6 +96,9 @@ export function GroupPolicyEditorFields(props: {
             value={props.value.weight_budget}
             onChange={(event) => update("weight_budget", Number(event.target.value))}
           />
+          <span className="text-muted-foreground block text-xs font-normal">
+            由同组参与调度的账号按策略共享
+          </span>
         </label>
         <label className="min-w-0 space-y-1.5 text-sm">
           <span className="block font-medium">均衡策略价格占比</span>

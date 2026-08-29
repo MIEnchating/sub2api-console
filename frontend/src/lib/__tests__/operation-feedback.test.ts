@@ -7,6 +7,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { notifyOperationError, operationErrorMessage } from "../operation-feedback";
+import { SessionExpiredError } from "../session-auth";
 
 describe("global operation feedback", () => {
   beforeEach(() => {
@@ -32,5 +33,11 @@ describe("global operation feedback", () => {
     expect(toastError).toHaveBeenCalledWith("上游分组不存在", {
       id: "operation-error:上游分组不存在",
     });
+  });
+
+  it("does not show a stale-page toast while session expiry redirects to login", () => {
+    notifyOperationError(new SessionExpiredError(), "请求失败");
+
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

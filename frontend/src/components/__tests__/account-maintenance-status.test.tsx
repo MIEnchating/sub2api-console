@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { AccountMaintenanceTaskStatus } from "../../App";
+import { AccountMaintenanceTaskStatus, AccountRateSyncTaskStatus } from "../../App";
 import type { Task } from "../../api";
 
 function maintenanceTask(items: Array<Record<string, string>>): Task {
@@ -63,5 +63,59 @@ describe("account maintenance status", () => {
     );
 
     expect(markup).not.toContain("失效绑定");
+  });
+});
+
+describe("account rate sync status", () => {
+  it("shows per-account before and after values with concrete partial failures", () => {
+    const task: Task = {
+      id: "account-rate-task",
+      skill: "sub2api-operations",
+      operation: "account-rate-sync",
+      status: "failed",
+      progress: 100,
+      message: "账号倍率同步部分失败",
+      result: {
+        updated: 1,
+        unchanged: 0,
+        missing: 1,
+        failed: 1,
+        items: [
+          {
+            account_id: "11",
+            account_name: "alpha",
+            status: "已同步",
+            before: "0.1",
+            after: "0.75",
+            name_before: "Example-0.1",
+            name_after: "Example-0.75",
+          },
+          {
+            account_id: "12",
+            account_name: "beta",
+            status: "管理平台不存在",
+            before: "0.2",
+          },
+          {
+            account_id: "13",
+            account_name: "gamma",
+            status: "同步失败",
+            before: "0.3",
+            error: "管理平台账号倍率必须大于 0",
+          },
+        ],
+      },
+      created_at: "2026-08-29T00:00:00Z",
+      updated_at: "2026-08-29T00:00:01Z",
+    };
+
+    const markup = renderToStaticMarkup(<AccountRateSyncTaskStatus task={task} />);
+
+    expect(markup).toContain("alpha");
+    expect(markup).toContain("0.1 → 0.75");
+    expect(markup).toContain("名称 Example-0.1 → Example-0.75");
+    expect(markup).toContain("管理平台不存在");
+    expect(markup).toContain("管理平台账号倍率必须大于 0");
+    expect(markup).not.toContain("account-rate-task");
   });
 });

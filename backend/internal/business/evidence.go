@@ -51,8 +51,9 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 	}
 	query := `SELECT a.id,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json,COALESCE(a.routing_state,''),
 		(SELECT COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),'')) FROM routing_decisions rd
-		 WHERE rd.account_id=a.id AND rd.group_name=ag.group_name
-		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at)) LIMIT 1),
+		 WHERE rd.account_id=a.id
+		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))
+		 ORDER BY julianday(rd.updated_at) DESC,rd.group_name LIMIT 1),
 		(SELECT hs.observed_at FROM health_samples hs
 		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='traffic'
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1),

@@ -352,24 +352,28 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 	if err != nil {
 		return nil, nil, err
 	}
-	query := `SELECT account_id,group_name,
-		COALESCE(NULLIF(TRIM(routing_state),''),NULLIF(TRIM(role),''),''),COALESCE(reason,''),schedulable
-		FROM routing_decisions`
+	query := `WITH ranked AS (
+		SELECT rd.*,ROW_NUMBER() OVER(PARTITION BY rd.account_id ORDER BY julianday(rd.updated_at) DESC,rd.group_name) AS decision_rank
+		FROM routing_decisions rd`
 	arguments := []any{}
 	if epoch != nil {
-		query += ` WHERE julianday(updated_at)>=julianday(?)`
+		query += ` WHERE julianday(rd.updated_at)>=julianday(?)`
 		arguments = append(arguments, *epoch)
 	}
-	query += ` ORDER BY account_id,group_name`
+	query += `) SELECT rd.account_id,rd.group_name,COALESCE(ag.group_name,rd.group_name),
+		COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),''),''),COALESCE(rd.reason,''),rd.schedulable
+		FROM ranked rd LEFT JOIN account_groups ag ON ag.account_id=rd.account_id
+		WHERE rd.decision_rank=1 ORDER BY rd.account_id,ag.group_name`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer rows.Close()
+	accountFindings := map[string]struct{}{}
 	for rows.Next() {
-		var accountID, groupName, state, reason string
+		var accountID, primaryGroupName, groupName, state, reason string
 		var schedulable sql.NullInt64
-		if err := rows.Scan(&accountID, &groupName, &state, &reason, &schedulable); err != nil {
+		if err := rows.Scan(&accountID, &primaryGroupName, &groupName, &state, &reason, &schedulable); err != nil {
 			return nil, nil, err
 		}
 		state = strings.ToLower(strings.TrimSpace(state))
@@ -383,22 +387,28 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 			group.schedulable++
 		}
 		group.hasSurvivor = group.hasSurvivor || state == "survivor"
+		if _, found := accountFindings[accountID]; found {
+			continue
+		}
 		switch {
 		case policy.RoutingBreakerEnabled && fusedRoutingDecisionState(state):
 			findings = append(findings, alertFinding{
-				"console:routing:breaker:" + accountID + ":" + groupName,
+				"console:routing:breaker:" + accountID + ":" + primaryGroupName,
 				"account.routing_breaker", "account", accountID, alertCause("ROUTING_BREAKER", reason),
 			})
+			accountFindings[accountID] = struct{}{}
 		case policy.RoutingDegradedEnabled && state == "degraded":
 			findings = append(findings, alertFinding{
-				"console:routing:degraded:" + accountID + ":" + groupName,
+				"console:routing:degraded:" + accountID + ":" + primaryGroupName,
 				"account.routing_degraded", "account", accountID, alertCause("ROUTING_DEGRADED", reason),
 			})
+			accountFindings[accountID] = struct{}{}
 		case policy.RoutingSurvivorEnabled && state == "survivor":
 			findings = append(findings, alertFinding{
-				"console:routing:survivor:" + accountID + ":" + groupName,
+				"console:routing:survivor:" + accountID + ":" + primaryGroupName,
 				"account.routing_survivor", "account", accountID, alertCause("ROUTING_SURVIVOR", reason),
 			})
+			accountFindings[accountID] = struct{}{}
 		}
 	}
 	if err := rows.Err(); err != nil {

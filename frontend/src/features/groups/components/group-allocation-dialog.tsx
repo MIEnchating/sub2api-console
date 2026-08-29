@@ -18,6 +18,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { groupStatusMeta } from "@/lib/group-policy-display";
+import { schedulingMetric } from "@/lib/scheduling-display";
+import {
+  schedulingStrategyDescription,
+  schedulingStrategyLabel,
+  schedulingWeightFormula,
+} from "@/lib/scheduling-strategy";
 
 type Props = {
   group: GroupStatus | null;
@@ -49,11 +55,6 @@ const stateLabels: Record<string, string> = {
   unknown: "待探测",
 };
 
-function metric(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
 function integer(value: number): string {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)).toLocaleString("zh-CN") : "—";
 }
@@ -74,12 +75,12 @@ function interval(value: number): string {
 function GroupHeader(props: { allocation: GroupAllocation }) {
   const status = groupStatusMeta(props.allocation.status);
   const weightSummary = props.allocation.has_allocation
-    ? `已分配权重 ${metric(props.allocation.total_weight)} / ${integer(props.allocation.weight_budget)}`
-    : `权重预算 ${integer(props.allocation.weight_budget)}`;
+    ? `最终权重合计 ${schedulingMetric(props.allocation.total_weight)} · 分组预算 ${integer(props.allocation.weight_budget)}`
+    : `分组权重预算 ${integer(props.allocation.weight_budget)}`;
   const metadata = [
     `#${props.allocation.group_id}`,
     props.allocation.platform ?? "平台未记录",
-    `分组倍率 ${props.allocation.rate_multiplier ?? "—"}`,
+    `分组计费倍率 ${props.allocation.rate_multiplier ?? "—"}`,
     `渠道 ${integer(props.allocation.account_count)}`,
     weightSummary,
   ];
@@ -93,6 +94,10 @@ function GroupHeader(props: { allocation: GroupAllocation }) {
         <StatusBadge label={interval(props.allocation.probe_interval_seconds)} variant="info" />
       </div>
       <p className="text-muted-foreground min-w-0 text-sm leading-5">{metadata.join(" · ")}</p>
+      <p className="text-muted-foreground min-w-0 text-xs leading-5">
+        {schedulingStrategyLabel(props.allocation.strategy)}：
+        {schedulingStrategyDescription(props.allocation.strategy)}；{schedulingWeightFormula}
+      </p>
     </div>
   );
 }
@@ -123,7 +128,7 @@ function WeightCell(props: { channel: GroupAllocationChannel; maximum: number })
         <span className="bg-primary block h-full" style={{ width: `${share}%` }} />
       </div>
       <span className="text-muted-foreground text-right text-xs tabular-nums">
-        {weight === null ? "未分配" : `权重 ${metric(weight)}`}
+        {weight === null ? "未生成" : `最终权重 ${schedulingMetric(weight)}`}
       </span>
     </div>
   );
@@ -139,7 +144,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
       <GroupHeader allocation={props.allocation} />
       {!props.allocation.has_allocation && props.allocation.channels.length > 0 && (
         <div className="border-info/30 bg-info/10 text-info rounded-lg border px-3 py-2 text-sm">
-          尚未生成当前组内权重分配。监控模式不会保存调度分配；切换至调度模式或完全模式后，下一轮巡检会按权重预算{" "}
+          尚未生成账号最终调度状态。监控模式不会保存调度结果；切换至调度模式或完全模式后，下一轮巡检会按分组权重预算{" "}
           {integer(props.allocation.weight_budget)} 计算。
         </div>
       )}
@@ -148,8 +153,14 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
           label="健康 / 可用"
           value={`${integer(props.allocation.healthy_accounts)} / ${integer(props.allocation.available_accounts)}`}
         />
-        <SummaryMetric label="最高分" value={metric(props.allocation.highest_health_score)} />
-        <SummaryMetric label="平均分" value={metric(props.allocation.average_health_score)} />
+        <SummaryMetric
+          label="最高分"
+          value={schedulingMetric(props.allocation.highest_health_score)}
+        />
+        <SummaryMetric
+          label="平均分"
+          value={schedulingMetric(props.allocation.average_health_score)}
+        />
         <SummaryMetric
           label="熔断 / 暂停 / 不可用"
           value={`${integer(props.allocation.fused_accounts)} / ${integer(props.allocation.paused_accounts)} / ${integer(props.allocation.unavailable_accounts)}`}
@@ -172,16 +183,18 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
                 <TableHead className="w-[24%]">账号</TableHead>
                 <TableHead className="w-[10%]">状态</TableHead>
                 <TableHead className="w-[10%]">首字 P95</TableHead>
-                <TableHead className="w-[9%]">倍率</TableHead>
+                <TableHead className="w-[9%]">调度倍率</TableHead>
                 <TableHead className="w-[9%]">优先级</TableHead>
-                <TableHead className="w-[20%]">权重</TableHead>
+                <TableHead className="w-[20%]">最终权重</TableHead>
                 <TableHead className="w-[10%] text-right">分配并发</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {props.allocation.channels.map((channel) => (
                 <TableRow key={channel.account_id}>
-                  <TableCell className="font-semibold">{metric(channel.health_score)}</TableCell>
+                  <TableCell className="font-semibold">
+                    {schedulingMetric(channel.health_score)}
+                  </TableCell>
                   <TableCell>
                     <div className="grid min-w-0 gap-0.5">
                       <span className="truncate font-medium">{channel.account_name}</span>
@@ -214,7 +227,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
         </div>
       ) : (
         <div className="text-muted-foreground flex min-h-32 items-center justify-center rounded-lg border border-dashed px-4 text-sm">
-          该分组暂无账号，尚未产生组内权重分配。
+          该分组暂无账号，尚未产生账号调度状态。
         </div>
       )}
     </div>
@@ -226,20 +239,20 @@ export function GroupAllocationDialog(props: Props) {
     <Dialog open={props.group !== null} onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent className={groupAllocationLayout.dialog}>
         <DialogHeader>
-          <DialogTitle>组内权重分配</DialogTitle>
+          <DialogTitle>分组账号调度状态</DialogTitle>
           <DialogDescription>
             {props.group
               ? `${props.group.name} · 共 ${props.group.account_count} 个账号`
-              : "查看当前组内权重分配结果"}
+              : "查看分组内账号的唯一最终调度状态"}
           </DialogDescription>
         </DialogHeader>
         {props.loading ? (
-          <div className="grid gap-4" aria-label="正在读取组内权重分配">
+          <div className="grid gap-4" aria-label="正在读取分组账号调度状态">
             <Skeleton className="h-16 w-full" />
             <Skeleton className="h-72 w-full" />
           </div>
         ) : props.error ? (
-          <QueryErrorToast error={props.error} fallback="组内权重分配读取失败" />
+          <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
         ) : props.allocation ? (
           <GroupAllocationContent allocation={props.allocation} />
         ) : null}

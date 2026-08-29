@@ -39,6 +39,10 @@ type Refresher interface {
 	Refresh(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error)
 }
 
+type AuthResolver interface {
+	ResolveAuth(context.Context, string, string) (*configstore.AuthRecord, error)
+}
+
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -85,6 +89,7 @@ type Service struct {
 	private    PrivateStore
 	reader     CatalogReader
 	refresher  Refresher
+	resolver   AuthResolver
 	tasks      TaskStore
 	timeout    time.Duration
 	workers    int
@@ -92,6 +97,10 @@ type Service struct {
 
 func New(repository Repository, private PrivateStore, reader CatalogReader, refresher Refresher, tasks TaskStore) *Service {
 	return &Service{repository: repository, private: private, reader: reader, refresher: refresher, tasks: tasks, timeout: 30 * time.Minute, workers: 4}
+}
+
+func (s *Service) SetAuthResolver(resolver AuthResolver) {
+	s.resolver = resolver
 }
 
 func (s *Service) EnqueueAll(ctx context.Context, scope Scope, actor, operation string) (taskstore.Task, error) {
@@ -124,12 +133,12 @@ func (s *Service) EnqueueHost(ctx context.Context, host string, scope Scope, act
 	if host == "" {
 		return taskstore.Task{}, errors.New("上游 Host 不能为空")
 	}
-	record, err := s.private.AuthRecord(ctx, host)
+	record, _, err := s.authRecord(ctx, host, actor)
 	if err != nil {
-		return taskstore.Task{}, err
+		return taskstore.Task{}, fmt.Errorf("Host %q 的私有授权恢复失败：%w", host, err)
 	}
 	if record == nil {
-		return taskstore.Task{}, errors.New("未找到该 Host 的私有授权记录")
+		return taskstore.Task{}, fmt.Errorf("未找到 Host %q 的私有授权记录，请检查账号归属 Host 是否完全一致（含端口）；Base URL 可以不同", host)
 	}
 	summary, err := s.repository.Upstreams(ctx)
 	if err != nil {
@@ -324,15 +333,14 @@ func applyBatchAccountCounts(result *BatchResult, summary business.UpstreamSumma
 }
 
 func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor string) HostResult {
-	record, err := s.private.AuthRecord(ctx, host)
+	record, recovered, err := s.authRecord(ctx, host, actor)
 	if err != nil {
-		return s.failed(ctx, host, scope, false, "私有授权记录读取失败："+err.Error())
+		return s.failed(ctx, host, scope, true, "私有授权恢复失败："+err.Error())
 	}
 	if record == nil {
 		return s.failed(ctx, host, scope, true, "未配置私有授权记录")
 	}
 	catalog, balance, err := s.read(ctx, *record, scope)
-	recovered := false
 	if err != nil && IsAuthenticationError(err) {
 		rotated, refreshErr := s.refresher.Refresh(ctx, *record)
 		if refreshErr != nil {
@@ -370,6 +378,18 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,
 	}
+}
+
+func (s *Service) authRecord(ctx context.Context, host, actor string) (*configstore.AuthRecord, bool, error) {
+	record, err := s.private.AuthRecord(ctx, host)
+	if err != nil || record != nil || s.resolver == nil {
+		return record, false, err
+	}
+	record, err = s.resolver.ResolveAuth(ctx, host, actor)
+	if err != nil {
+		return nil, false, err
+	}
+	return record, record != nil, nil
 }
 
 func (s *Service) read(ctx context.Context, record configstore.AuthRecord, scope Scope) (*business.UpstreamCatalogSnapshot, *business.UpstreamBalanceObservation, error) {

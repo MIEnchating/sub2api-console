@@ -39,6 +39,18 @@ describe("分组策略编辑布局", () => {
     expect(strategies).toContain('aria-checked="false"');
   });
 
+  it("展示所选策略的实际计算公式", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields
+        value={{ ...value, strategy: "speed_first" }}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("80% 相对速度 + 20% 相对价格");
+    expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
+  });
+
   it("定时测试独立于四项策略能力并与测试参数放在同一区域", () => {
     const markup = renderToStaticMarkup(
       <GroupPolicyEditorFields value={value} onChange={() => undefined} />,

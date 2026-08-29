@@ -191,7 +191,11 @@ func (s *Store) HealthSamples(ctx context.Context, limit *int, accountID, groupN
 }
 
 func (s *Store) RoutingDecisions(ctx context.Context, limit *int, accountID, groupName *string) ([]RoutingDecision, error) {
-	clauses, arguments := filterClauses([]filterValue{{"account_id", accountID}, {"group_name", groupName}})
+	clauses, arguments := filterClauses([]filterValue{{"account_id", accountID}})
+	if groupName != nil {
+		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
+		arguments = append(arguments, strings.TrimSpace(*groupName))
+	}
 	query := `SELECT account_id,group_name,priority,schedulable,role,routing_state,rank,reason,updated_at,payload_json
 		FROM routing_decisions` + whereSQL(clauses) + ` ORDER BY updated_at DESC`
 	limitArguments, err := appendLimit(&query, limit)

@@ -2,6 +2,42 @@ import type { OnboardingCandidate } from "../api";
 
 export type OnboardingEntryKind = "full" | "host" | "group";
 
+export type OnboardingBaseUrlFields = {
+  baseUrlProtocol: "http" | "https";
+  baseUrl: string;
+};
+
+export function normalizeOnboardingHost(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes("://") || /[/\\?#]/.test(trimmed)) return "";
+  try {
+    const parsed = new URL(`https://${trimmed}`);
+    if (!parsed.hostname || parsed.username || parsed.password) return "";
+    return parsed.host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+export function composeOnboardingBaseUrl(value: OnboardingBaseUrlFields): string {
+  return `${value.baseUrlProtocol}://${value.baseUrl.trim().replace(/^\/+/, "")}`;
+}
+
+export function parseOnboardingBaseUrl(value: string): OnboardingBaseUrlFields {
+  const trimmed = value.trim();
+  return {
+    baseUrlProtocol: trimmed.toLowerCase().startsWith("http://") ? "http" : "https",
+    baseUrl: trimmed.replace(/^https?:\/\//i, ""),
+  };
+}
+
+export function onboardingRequestHost(
+  upstream: Pick<{ host: string; base_url: string }, "host" | "base_url"> | null,
+  draftHost: string,
+): string {
+  return normalizeOnboardingHost(upstream?.host ?? draftHost);
+}
+
 export function onboardingEntryKind(
   host: string | undefined,
   groupId: string | undefined,

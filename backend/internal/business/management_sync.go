@@ -22,23 +22,24 @@ type ManagementSyncResult struct {
 }
 
 type managementAccount struct {
-	ID            string
-	Name          string
-	UpstreamHost  *string
-	UpstreamType  *string
-	Schedulable   *bool
-	Priority      *int64
-	LoadFactor    *string
-	Concurrency   *int64
-	Multiplier    *string
-	Balance       *string
-	RoutingState  *string
-	HealthStatus  *string
-	Metadata      map[string]any
-	GroupsPresent bool
-	Groups        []managementMembership
-	GroupRates    map[string]*string
-	RatesPresent  bool
+	ID                string
+	Name              string
+	UpstreamHost      *string
+	UpstreamType      *string
+	Schedulable       *bool
+	Priority          *int64
+	LoadFactor        *string
+	Concurrency       *int64
+	Multiplier        *string
+	Balance           *string
+	RoutingState      *string
+	HealthStatus      *string
+	Metadata          map[string]any
+	GroupsPresent     bool
+	Groups            []managementMembership
+	GroupRates        map[string]*string
+	RatesPresent      bool
+	MultiplierPresent bool
 }
 
 type managementMembership struct {
@@ -132,6 +133,12 @@ func (s *Store) SyncManagementSnapshot(
 		); err != nil {
 			return ManagementSyncResult{}, err
 		}
+		if account.MultiplierPresent && !account.RatesPresent {
+			if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_rate=? WHERE account_id=?`,
+				managementNullableString(account.Multiplier), account.ID); err != nil {
+				return ManagementSyncResult{}, err
+			}
+		}
 		if account.GroupsPresent {
 			existingRates, err := managementExistingGroupRates(ctx, tx, account.ID)
 			if err != nil {
@@ -142,6 +149,9 @@ func (s *Store) SyncManagementSnapshot(
 			}
 			for _, membership := range account.Groups {
 				rate := existingRates[membership.Name]
+				if account.MultiplierPresent {
+					rate = account.Multiplier
+				}
 				if account.RatesPresent {
 					rate = account.GroupRates[membership.Name]
 				}
@@ -314,6 +324,7 @@ func managementAccountProjection(
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s 的 multiplier 无效", id)
 	}
+	_, multiplierPresent := managementPresent(row, "rate_multiplier", "multiplier")
 	balance, err := managementOptionalDecimalExisting(row, existing.balance, "balance")
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s 的 balance 无效", id)
@@ -332,7 +343,7 @@ func managementAccountProjection(
 		LoadFactor: loadFactor, Concurrency: concurrency, Multiplier: multiplier, Balance: balance,
 		RoutingState: routingState, HealthStatus: healthStatus,
 		Metadata: metadata, GroupsPresent: groupsPresent, Groups: groups,
-		GroupRates: groupRates, RatesPresent: ratesPresent,
+		GroupRates: groupRates, RatesPresent: ratesPresent, MultiplierPresent: multiplierPresent,
 	}, nil
 }
 

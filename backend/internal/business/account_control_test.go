@@ -12,7 +12,7 @@ func TestAccountControlPersistsPauseFuseAndRecoveryState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.SetAccountControl(ctx, "41", "pause", "operator"); err != nil {
+	if err := store.CommitAccountControlReadback(ctx, "41", "pause", "operator", false, testControlOperation("pause-1")); err != nil {
 		t.Fatal(err)
 	}
 	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
@@ -28,10 +28,10 @@ func TestAccountControlPersistsPauseFuseAndRecoveryState(t *testing.T) {
 		t.Fatalf("paused=%d err=%v", paused, err)
 	}
 
-	if _, err := store.SetAccountControl(ctx, "41", "resume", "operator"); err != nil {
+	if err := store.CommitAccountControlReadback(ctx, "41", "resume", "operator", true, testControlOperation("resume-1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetAccountControl(ctx, "41", "fuse", "operator"); err != nil {
+	if err := store.CommitAccountControlReadback(ctx, "41", "fuse", "operator", false, testControlOperation("fuse-1")); err != nil {
 		t.Fatal(err)
 	}
 	document, _ = store.readPolicyDocument(ctx, store.db, "control-plane")
@@ -42,7 +42,7 @@ func TestAccountControlPersistsPauseFuseAndRecoveryState(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO routing_decisions(account_id,group_name,routing_state,updated_at,payload_json) VALUES('41','codex','fused','now','{}')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SetAccountControl(ctx, "41", "recover", "operator"); err != nil {
+	if err := store.CommitAccountControlReadback(ctx, "41", "recover", "operator", true, testControlOperation("recover-1")); err != nil {
 		t.Fatal(err)
 	}
 	var decisions int
@@ -65,7 +65,7 @@ func TestAccountControlDoesNotResetOtherAccountsRoutingHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := store.SetAccountControl(ctx, "41", "pause", "operator"); err != nil {
+	if err := store.CommitAccountControlReadback(ctx, "41", "pause", "operator", false, testControlOperation("pause-1")); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := store.PreviousRoutingDecisions(ctx, nil, nil)
@@ -78,6 +78,23 @@ func TestAccountControlDoesNotResetOtherAccountsRoutingHistory(t *testing.T) {
 	}
 	if epoch != epochAt {
 		t.Fatalf("account control changed global decision epoch: got=%s want=%s", epoch, epochAt)
+	}
+}
+
+func TestAccountScopeControlRejectsRemoteSchedulingActions(t *testing.T) {
+	store := openPolicyStore(t)
+	if _, err := store.SetAccountScopeControl(context.Background(), "41", "pause", "operator"); err == nil {
+		t.Fatal("local scope control accepted a remote scheduling action")
+	}
+}
+
+func testControlOperation(id string) AccountOperation {
+	field := "schedulable"
+	return AccountOperation{
+		OperationID: id, OperationType: "account.control", State: "succeeded", Phase: "readback",
+		Actor: "operator", RemoteConfirmed: true, ReadbackConfirmed: true,
+		ObjectID: "41", GroupNames: []string{}, FieldName: &field,
+		Before: map[string]any{}, After: map[string]any{}, Writeback: true,
 	}
 }
 

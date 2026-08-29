@@ -34,6 +34,46 @@ describe("API error detail contract", () => {
 
     await expect(api.setupStatus()).rejects.toMatchObject({ message: "空值" });
   });
+
+  it("notifies the application when an authenticated request finds an expired session", async () => {
+    const browser = new EventTarget();
+    const expired = vi.fn();
+    browser.addEventListener("sub2api-console:session-expired", expired);
+    vi.stubGlobal("window", browser);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "请先登录控制台" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(api.overview()).rejects.toMatchObject({ message: "登录已过期，请重新登录" });
+    expect(expired).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a rejected login in the login form instead of treating it as session expiry", async () => {
+    const browser = new EventTarget();
+    const expired = vi.fn();
+    browser.addEventListener("sub2api-console:session-expired", expired);
+    vi.stubGlobal("window", browser);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "账号或密码错误" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(api.login({ username: "xiaoge", password: "wrong" })).rejects.toMatchObject({
+      message: "账号或密码错误",
+    });
+    expect(expired).not.toHaveBeenCalled();
+  });
 });
 
 describe("alert request contract", () => {
@@ -53,6 +93,117 @@ describe("alert request contract", () => {
     await expect(api.clearAlerts()).resolves.toEqual({ deleted: 3 });
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/alerts");
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+});
+
+describe("manual priority request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("assigns and clears one account through the dedicated resource", async () => {
+    const taskResponse = () =>
+      new Response(JSON.stringify({ id: "task-1", status: "queued", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(taskResponse())
+      .mockResolvedValueOnce(taskResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.setAccountManualPriority("account/41", 3, "100", 100);
+    await expect(api.clearAccountManualPriority("account/41")).resolves.toMatchObject({
+      id: "task-1",
+      status: "queued",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/account%2F41/manual-priority");
+    const assign = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(assign.method).toBe("PUT");
+    expect(JSON.parse(String(assign.body))).toEqual({
+      priority: 3,
+      load_factor: "100",
+      concurrency: 100,
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/account%2F41/manual-priority");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+});
+
+describe("account control request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a dedicated account task without creating an inspection task", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "control-1", status: "queued", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.setAccountControl("account/41", "pause")).resolves.toMatchObject({
+      id: "control-1",
+      status: "queued",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/account%2F41/control");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(String(request.body))).toEqual({ action: "pause" });
+  });
+});
+
+describe("QQBot target discovery request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("starts and cancels the authenticated target discovery task", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "qqbot-target-1",
+            status: "queued",
+            result: {},
+          }),
+          {
+            status: 202,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ cancelled: true }), {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.discoverNotificationTarget({
+      app_id: "app-1",
+      client_secret: "",
+      target_type: "c2c",
+    });
+    await api.cancelNotificationTargetDiscovery("target/id");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/notifications/target-discovery");
+    const start = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(start.method).toBe("POST");
+    expect(JSON.parse(String(start.body))).toEqual({
+      app_id: "app-1",
+      client_secret: "",
+      target_type: "c2c",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/notifications/target-discovery/target%2Fid");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("DELETE");
   });
 });
 
@@ -315,9 +466,9 @@ describe("onboarding request contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.createUpstream({
-      host: "https://upstream.test",
+      host: "origin.example.test:8080",
       name: "Upstream",
-      base_url: "https://upstream.test",
+      base_url: "https://accelerated.example.test:8443/api",
       upstream_type: "sub2api",
       auth_mode: "sub2api_user_token",
       recharge_rate: "1",
@@ -328,6 +479,10 @@ describe("onboarding request contract", () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/upstreams");
     expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
+      host: "origin.example.test:8080",
+      base_url: "https://accelerated.example.test:8443/api",
+    });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/onboarding/prepare");
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       host: "upstream.test",
@@ -348,7 +503,9 @@ describe("onboarding request contract", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/upstreams/detect");
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(request.method).toBe("POST");
-    expect(JSON.parse(String(request.body))).toEqual({ base_url: "https://api.example.test" });
+    expect(JSON.parse(String(request.body))).toEqual({
+      base_url: "https://api.example.test",
+    });
   });
 });
 
@@ -371,7 +528,9 @@ describe("account maintenance request contract", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/management/accounts/missing-bindings/cleanup");
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual({ account_ids: ["744", "745"] });
+    expect(JSON.parse(String(init.body))).toEqual({
+      account_ids: ["744", "745"],
+    });
   });
 });
 
@@ -569,7 +728,9 @@ describe("rate sync request contract", () => {
     await api.runRateSync("https://upstream.test");
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(JSON.parse(String(request.body))).toEqual({ host: "https://upstream.test" });
+    expect(JSON.parse(String(request.body))).toEqual({
+      host: "https://upstream.test",
+    });
   });
 
   it("preserves an explicitly empty key_id so the server can reject it", async () => {
@@ -584,7 +745,10 @@ describe("rate sync request contract", () => {
     await api.runRateSync("https://upstream.test", "");
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(JSON.parse(String(request.body))).toEqual({ host: "https://upstream.test", key_id: "" });
+    expect(JSON.parse(String(request.body))).toEqual({
+      host: "https://upstream.test",
+      key_id: "",
+    });
   });
 
   it("includes a concrete key_id when syncing one key", async () => {
@@ -602,6 +766,30 @@ describe("rate sync request contract", () => {
     expect(JSON.parse(String(request.body))).toEqual({
       host: "https://upstream.test",
       key_id: "key-7",
+    });
+  });
+});
+
+describe("account rate sync request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("submits the current filtered stable account IDs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "account-rate-task" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.syncAccountRates(["11", "12"]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/management/accounts/rates/sync");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({
+      account_ids: ["11", "12"],
     });
   });
 });
@@ -776,7 +964,11 @@ describe("password vault request contracts", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.configureVaultEntry({ entry: "operator", username: "user", password: "secret" });
+    await api.configureVaultEntry({
+      entry: "operator",
+      username: "user",
+      password: "secret",
+    });
     await api.runAuthRecovery("api.example.test", "operator");
 
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({

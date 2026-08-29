@@ -70,9 +70,6 @@ func Open(path string) (*Store, error) {
 	if err := store.ensureSchema(context.Background()); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
-	if err := store.migrateLegacySchema(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
 	if err := sqliteutil.Secure(path); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
@@ -84,26 +81,12 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Ready(ctx context.Context) (bool, error) {
-	var tableName string
-	err := s.db.QueryRowContext(
-		ctx,
-		`SELECT name FROM sqlite_master WHERE type='table' AND name='migration_runs'`,
-	).Scan(&tableName)
+	var marker int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE key='config'`).Scan(&marker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	if err != nil {
-		return false, err
-	}
-	var status string
-	err = s.db.QueryRowContext(ctx, `SELECT status FROM migration_runs ORDER BY id DESC LIMIT 1`).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return status == "succeeded", nil
+	return err == nil, err
 }
 
 func (s *Store) Mode(ctx context.Context) (string, error) {
@@ -455,15 +438,7 @@ func (s *Store) readPolicyDocument(ctx context.Context, queryer policyQueryer, p
 		return nil, err
 	}
 	if len(nodes) == 0 {
-		var raw string
-		err := queryer.QueryRowContext(ctx, `SELECT value_json FROM policies WHERE key=?`, policyKey).Scan(&raw)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return decodeJSONObject(raw)
+		return nil, nil
 	}
 	if len(rootIDs) != 1 {
 		return nil, fmt.Errorf("策略 %s 根节点数量无效", policyKey)
@@ -555,8 +530,7 @@ func (s *Store) writePolicyDocument(ctx context.Context, tx *sql.Tx, policyKey s
 	if _, err := insertPolicyNode(ctx, tx, policyKey, value, nil, nil, nil, updatedAt); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM policies WHERE key=?`, policyKey)
-	return err
+	return nil
 }
 
 func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value any, parentID *int64, keyName *string, listIndex *int64, updatedAt string) (int64, error) {

@@ -82,6 +82,76 @@ func TestApplyNameOnlySyncPreservesBalanceAndAuthenticationState(t *testing.T) {
 	}
 }
 
+func TestApplyUpstreamBalanceKeepsBalanceAtUpstreamScope(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,balance,metadata_json,updated_at) VALUES
+		('11','Example-0.1',NULL,'{}','now'),('12','Example-0.2',NULL,'{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.ApplyUpstreamSync(context.Background(), UpstreamSyncWrite{
+		Host: "api.example", AuthenticationOK: true,
+		Balance: &UpstreamBalanceObservation{RawBalance: stringPointer("6"), Status: "已读取"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Balance == nil || *result.Balance != "20" {
+		t.Fatalf("result=%#v", result)
+	}
+	var accountBalances int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM accounts WHERE balance IS NOT NULL`).Scan(&accountBalances); err != nil {
+		t.Fatal(err)
+	}
+	if accountBalances != 0 {
+		t.Fatalf("upstream balance was copied into %d accounts", accountBalances)
+	}
+}
+
+func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at) VALUES('11','Example-0.1','0.1','{}','now');
+		INSERT INTO account_groups(account_id,group_name,group_rate) VALUES('11','codex','0.1');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,local_rate,upstream_rate,metadata_json,updated_at)
+		VALUES('11','api.example','key-11','key-11','codex','0.1','0.1','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitAccountRateObservations(context.Background(), []AccountRateObservation{{AccountID: "11", Rate: "0.2"}}); err != nil {
+		t.Fatal(err)
+	}
+	var localRate, upstreamRate string
+	if err := store.db.QueryRow(`SELECT local_rate,upstream_rate FROM bindings WHERE local_account_id='11'`).Scan(&localRate, &upstreamRate); err != nil {
+		t.Fatal(err)
+	}
+	var observedGroupRate string
+	if err := store.db.QueryRow(`SELECT group_rate FROM account_groups WHERE account_id='11'`).Scan(&observedGroupRate); err != nil {
+		t.Fatal(err)
+	}
+	if localRate != "0.1" || upstreamRate != "0.2" || observedGroupRate != "0.2" {
+		t.Fatalf("observed rates local=%q upstream=%q group=%q", localRate, upstreamRate, observedGroupRate)
+	}
+	name := "Example-0.2"
+	multiplier := "0.2"
+	if err := store.CommitAccountFieldsReadback(context.Background(), "11", &name, nil, nil, nil, &multiplier, false, nil, AccountOperation{
+		OperationID: "rate-sync-11", OperationType: "account.sync", State: "succeeded", Phase: "readback", Actor: "auto-inspection",
+		RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: "11", ObjectName: &name, Before: map[string]any{}, After: map[string]any{}, Writeback: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var accountName, accountRate, groupRate string
+	if err := store.db.QueryRow(`SELECT name,multiplier FROM accounts WHERE id='11'`).Scan(&accountName, &accountRate); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT group_rate FROM account_groups WHERE account_id='11'`).Scan(&groupRate); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT local_rate,upstream_rate FROM bindings WHERE local_account_id='11'`).Scan(&localRate, &upstreamRate); err != nil {
+		t.Fatal(err)
+	}
+	if accountName != "Example-0.2" || accountRate != "0.2" || groupRate != "0.2" || localRate != "0.2" || upstreamRate != "0.2" {
+		t.Fatalf("account=%q rate=%q group=%q local=%q upstream=%q", accountName, accountRate, groupRate, localRate, upstreamRate)
+	}
+}
+
 func TestApplyUpstreamSyncRejectsInvalidCatalogWithoutPartialWrites(t *testing.T) {
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()

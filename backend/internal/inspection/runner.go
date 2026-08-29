@@ -51,6 +51,10 @@ type UpstreamSynchronizer interface {
 	SyncAllNow(context.Context, upstreamsync.Scope, string) (upstreamsync.BatchResult, error)
 }
 
+type AccountRateSynchronizer interface {
+	SyncAllAccountRates(context.Context, string) (map[string]any, error)
+}
+
 type InspectionTaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -67,26 +71,28 @@ type RunRequest struct {
 }
 
 type Runner struct {
-	repository RunnerRepository
-	targets    InspectionTargetStore
-	evidence   EvidenceCollector
-	router     Router
-	writer     RoutingWriter
-	alerts     AlertEvaluator
-	upstreams  UpstreamSynchronizer
-	tasks      InspectionTaskStore
-	now        func() time.Time
+	repository   RunnerRepository
+	targets      InspectionTargetStore
+	evidence     EvidenceCollector
+	router       Router
+	writer       RoutingWriter
+	alerts       AlertEvaluator
+	upstreams    UpstreamSynchronizer
+	accountRates AccountRateSynchronizer
+	tasks        InspectionTaskStore
+	now          func() time.Time
 }
 
 type duePlan struct {
-	traffic   bool
-	probes    bool
-	upstreams bool
-	alert     bool
-	routing   bool
-	policy    map[string]any
-	mode      string
-	probeIDs  []string
+	traffic      bool
+	probes       bool
+	upstreams    bool
+	alert        bool
+	routing      bool
+	accountRates bool
+	policy       map[string]any
+	mode         string
+	probeIDs     []string
 }
 
 type upstreamSyncOutcome struct {
@@ -103,6 +109,7 @@ type evidenceCollectionOutcome struct {
 
 const (
 	operationUpstreamSync       = "upstream_sync"
+	operationAccountRateSync    = "account_rate_sync"
 	operationTrafficRefresh     = "traffic_refresh"
 	operationActiveProbe        = "active_probe"
 	operationRoutingCalculation = "routing_calculation"
@@ -119,11 +126,16 @@ func NewRunner(
 	alerts AlertEvaluator,
 	upstreams UpstreamSynchronizer,
 	tasks InspectionTaskStore,
+	accountRates ...AccountRateSynchronizer,
 ) *Runner {
-	return &Runner{
+	runner := &Runner{
 		repository: repository, targets: targets, evidence: evidenceCollector, router: router,
 		writer: writer, alerts: alerts, upstreams: upstreams, tasks: tasks, now: time.Now,
 	}
+	if len(accountRates) > 0 {
+		runner.accountRates = accountRates[0]
+	}
+	return runner
 }
 
 func (r *Runner) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
@@ -165,7 +177,7 @@ func (r *Runner) Preview(ctx context.Context, now time.Time) (QueueItem, error) 
 }
 
 func previewOperations(plan duePlan) ([]QueueOperation, error) {
-	operations := make([]QueueOperation, 0, 5)
+	operations := make([]QueueOperation, 0, 6)
 	capabilities, valid := runtimepolicy.For(plan.mode)
 	if !valid {
 		return nil, fmt.Errorf("运行模式无效：%s", plan.mode)
@@ -182,6 +194,12 @@ func previewOperations(plan duePlan) ([]QueueOperation, error) {
 		operations = append(operations, QueueOperation{
 			Operation: operationUpstreamSync, Label: "上游数据同步",
 			Cycle: periodicCycle(interval), Due: plan.upstreams,
+		})
+	}
+	if plan.accountRates {
+		operations = append(operations, QueueOperation{
+			Operation: operationAccountRateSync, Label: "账号倍率与名称同步",
+			Cycle: "上游数据同步后（完全模式）", Due: true,
 		})
 	}
 	traffic, err := inspectionSection(plan.policy, "traffic")
@@ -433,6 +451,7 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 		if err != nil {
 			return duePlan{}, err
 		}
+		result.accountRates = result.upstreams && r.accountRates != nil
 	}
 	return result, nil
 }
@@ -546,6 +565,30 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		} else if outcome.batch.AuthFailed > 0 || outcome.batch.Failed > 0 {
 			failures = append(failures, fmt.Sprintf("上游同步部分失败：鉴权 %d，其他 %d", outcome.batch.AuthFailed, outcome.batch.Failed))
 		}
+		if plan.accountRates && outcome.err == nil && (outcome.batch.Total == 0 || outcome.batch.Succeeded > 0) {
+			persistStage(48, "正在同步账号倍率与名称", []string{operationAccountRateSync})
+			rateStarted := time.Now()
+			rateResult, rateErr := r.accountRates.SyncAllAccountRates(ctx, request.Actor)
+			timings = append(timings, operationTiming(operationAccountRateSync, rateStarted))
+			operations = append(operations, operationAccountRateSync)
+			resultPayload["account_rate_sync"] = rateResult
+			if rateErr != nil {
+				failures = append(failures, "账号倍率与名称同步："+rateErr.Error())
+			} else {
+				requested := integerResultValue(rateResult, "requested")
+				updated := integerResultValue(rateResult, "updated")
+				unchanged := integerResultValue(rateResult, "unchanged")
+				missing := integerResultValue(rateResult, "missing")
+				failed := integerResultValue(rateResult, "failed")
+				outcome.batch.AccountTotal = requested
+				outcome.batch.AccountRateSucceeded = updated + unchanged
+				outcome.batch.AccountRateFailed = missing + failed
+				resultPayload["upstream_sync"] = outcome.batch
+				if missing+failed > 0 {
+					failures = append(failures, fmt.Sprintf("账号倍率与名称同步部分失败：缺失 %d，失败 %d", missing, failed))
+				}
+			}
+		}
 		if runInspection {
 			active := make([]string, 0, 2)
 			if plan.traffic {
@@ -629,6 +672,22 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 	}
 	return finish(failures)
+}
+
+func integerResultValue(result map[string]any, key string) int {
+	if result == nil {
+		return 0
+	}
+	switch value := result[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func appliedCleanupCount(targets map[string]business.AccountRoutingTarget, result routingwrite.Result) int {

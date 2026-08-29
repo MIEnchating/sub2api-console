@@ -12,11 +12,6 @@ import (
 )
 
 const businessSchema = `
-CREATE TABLE IF NOT EXISTS migration_runs (
- id INTEGER PRIMARY KEY AUTOINCREMENT,status TEXT NOT NULL,row_count INTEGER NOT NULL DEFAULT 0,error TEXT,
- started_at TEXT NOT NULL,completed_at TEXT,private_auth_imported INTEGER NOT NULL DEFAULT 0,
- private_auth_status TEXT NOT NULL DEFAULT '未执行',private_auth_error TEXT
-);
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS upstreams (
  host TEXT PRIMARY KEY,base_url TEXT NOT NULL,upstream_type TEXT NOT NULL,auth_mode TEXT,enabled INTEGER NOT NULL DEFAULT 1,
@@ -52,12 +47,12 @@ CREATE INDEX IF NOT EXISTS ix_health_samples_latest ON health_samples(account_id
 CREATE INDEX IF NOT EXISTS ix_health_samples_source_latest ON health_samples(source,account_id,group_name,observed_at DESC,id DESC);
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
- rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id,group_name)
+ rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
 );
 CREATE TABLE IF NOT EXISTS account_health_evaluations (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,health_score REAL,short_score REAL,long_score REAL,
  sample_count INTEGER NOT NULL DEFAULT 0,ttfb_p50_ms REAL,ttfb_p95_ms REAL,latest_event TEXT,evaluated_at TEXT NOT NULL,
- PRIMARY KEY(account_id,group_name),FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+ PRIMARY KEY(account_id),FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS bindings (
  id INTEGER PRIMARY KEY AUTOINCREMENT,local_account_id TEXT NOT NULL,upstream_host TEXT NOT NULL,
@@ -72,7 +67,6 @@ CREATE TABLE IF NOT EXISTS local_groups (
  account_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS recharge_rates (host TEXT PRIMARY KEY,recharge_rate TEXT NOT NULL,note TEXT,updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS policies (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS policy_nodes (
  id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,
  node_type TEXT NOT NULL CHECK(node_type IN ('object','array','string','integer','real','boolean','null')),
@@ -82,6 +76,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_policy_nodes_root ON policy_nodes(policy_ke
 CREATE UNIQUE INDEX IF NOT EXISTS ux_policy_nodes_object_child ON policy_nodes(policy_key,parent_id,key_name) WHERE key_name IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_policy_nodes_array_child ON policy_nodes(policy_key,parent_id,list_index) WHERE list_index IS NOT NULL;
 CREATE TABLE IF NOT EXISTS paused_accounts (account_id TEXT PRIMARY KEY,reason TEXT,enabled INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS manual_priority_accounts (
+ account_id TEXT PRIMARY KEY,priority INTEGER NOT NULL,previous_priority INTEGER,previous_load_factor TEXT,
+ previous_concurrency INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+ FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS routing_baselines (
  account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
  ownership_version INTEGER NOT NULL DEFAULT 1,managed_schedulable INTEGER,managed_priority INTEGER,
@@ -121,10 +120,6 @@ CREATE TABLE IF NOT EXISTS operational_snapshots (
  namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,observed_at TEXT,updated_at TEXT NOT NULL,
  origin TEXT NOT NULL DEFAULT 'console',PRIMARY KEY(namespace,state_key)
 );
-CREATE TABLE IF NOT EXISTS imported_records (
- record_table TEXT NOT NULL,record_key TEXT NOT NULL,value_json TEXT NOT NULL,observed_at TEXT,updated_at TEXT NOT NULL,
- PRIMARY KEY(record_table,record_key)
-);
 CREATE TABLE IF NOT EXISTS onboarding_pending (
  operation_id TEXT PRIMARY KEY,upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,upstream_key_id TEXT NOT NULL,
  upstream_key_name TEXT,upstream_group_id TEXT NOT NULL,upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,
@@ -158,10 +153,6 @@ func (s *Store) bootstrapFresh(ctx context.Context) error {
 		return fmt.Errorf("控制台业务库初始化状态不完整，拒绝覆盖已有数据：%s", strings.Join(populated, ","))
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO migration_runs(status,row_count,started_at,completed_at,private_auth_status)
-		VALUES('succeeded',0,?,?,?)`, now, now, "无需迁移"); err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES('config',?,?)`,
 		`{"mode":"`+runtimepolicy.Full+`","keys":[]}`, now); err != nil {
 		return err
@@ -178,21 +169,21 @@ type connectionQueryer interface {
 }
 
 func readyOnConnection(ctx context.Context, queryer connectionQueryer) (bool, error) {
-	var status string
-	err := queryer.QueryRowContext(ctx, `SELECT status FROM migration_runs ORDER BY id DESC LIMIT 1`).Scan(&status)
+	var marker int
+	err := queryer.QueryRowContext(ctx, `SELECT 1 FROM app_state WHERE key='config'`).Scan(&marker)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return status == "succeeded", err
+	return err == nil, err
 }
 
 func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]string, error) {
 	tables := []string{
 		"upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
 		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates",
-		"policies", "policy_nodes", "paused_accounts", "routing_baselines", "cleanup_states", "runtime_events",
+		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "runtime_events",
 		"alert_incidents", "alert_deliveries", "operation_audit", "run_records", "usage_records",
-		"operational_snapshots", "imported_records", "onboarding_pending",
+		"operational_snapshots", "onboarding_pending",
 	}
 	result := make([]string, 0)
 	for _, table := range tables {
@@ -216,12 +207,13 @@ func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]
 
 func initialControlPolicy() map[string]any {
 	return map[string]any{
-		"schema_version": int64(9), "strategy": "balanced", "selection": map[string]any{"strategy": "balanced"},
+		"strategy": "balanced", "selection": map[string]any{"strategy": "balanced"},
 		"weights": map[string]any{
 			"scheduling_missing_rate_fallback": "current_cost_wall", "enabled": true, "budget": int64(400),
 			"gate_floor": int64(40), "price_exp": 1.0, "speed_exp": 1.0, "balanced_price_ratio": 0.5,
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
+		"manual_priority":     map[string]any{"reserved_max": int64(10)},
 		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180)},
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
