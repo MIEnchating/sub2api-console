@@ -300,26 +300,177 @@ func (c *Client) Mutate(ctx context.Context, method, path string, body map[strin
 }
 
 func (c *Client) CreateAccount(ctx context.Context, body map[string]any) (map[string]any, error) {
+	return c.CreateAccountWithVerification(ctx, body, false)
+}
+
+func (c *Client) CreateAccountWithVerification(ctx context.Context, body map[string]any, verification bool) (map[string]any, error) {
+	var beforeIDs map[string]struct{}
+	var baselineErr error
+	if verification {
+		beforeIDs, baselineErr = c.accountIDs(ctx)
+	}
 	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts", body)
 	if err != nil {
 		return nil, err
 	}
-	data := payload
-	if raw, present := payload["data"]; present {
-		var ok bool
-		data, ok = raw.(map[string]any)
-		if !ok {
-			return nil, &Error{"账号创建返回缺少可读数据"}
+	data, present, err := createdAccountObject(payload)
+	if err != nil {
+		return nil, err
+	}
+	if present {
+		return data, nil
+	}
+	if !verification {
+		return nil, &Error{"账号创建成功但响应未返回稳定 ID；写后确认关闭，无法安全定位新账号"}
+	}
+	if baselineErr != nil {
+		return nil, &Error{"账号创建成功但响应未返回稳定 ID，且创建前目录读取失败：" + baselineErr.Error()}
+	}
+	after, err := c.Accounts(ctx)
+	if err != nil {
+		return nil, &Error{"账号创建成功但响应未返回稳定 ID，目录补读失败：" + err.Error()}
+	}
+	matches := make([]map[string]any, 0, 1)
+	for _, account := range after {
+		accountID := strings.TrimSpace(fmt.Sprint(account["id"]))
+		if !stableID(accountID) {
+			continue
+		}
+		if _, existed := beforeIDs[accountID]; existed || !matchesCreatedAccount(account, body) {
+			continue
+		}
+		matches = append(matches, account)
+	}
+	if len(matches) != 1 {
+		return nil, &Error{"账号创建结果缺少稳定 ID，目录补读无法唯一确认新账号"}
+	}
+	return matches[0], nil
+}
+
+func (c *Client) accountIDs(ctx context.Context) (map[string]struct{}, error) {
+	accounts, err := c.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]struct{}, len(accounts))
+	for _, account := range accounts {
+		accountID := strings.TrimSpace(fmt.Sprint(account["id"]))
+		if !stableID(accountID) {
+			return nil, &Error{"账号目录项目缺少稳定 ID"}
+		}
+		result[accountID] = struct{}{}
+	}
+	return result, nil
+}
+
+func createdAccountObject(payload map[string]any) (map[string]any, bool, error) {
+	type candidate struct {
+		value map[string]any
+		depth int
+	}
+	queue := []candidate{{value: payload}}
+	matches := map[string]map[string]any{}
+	invalidID := false
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, key := range []string{"id", "account_id", "accountId"} {
+			rawID, present := current.value[key]
+			if !present {
+				continue
+			}
+			accountID := strings.TrimSpace(fmt.Sprint(rawID))
+			if stableID(accountID) {
+				if key == "accountId" {
+					current.value["id"] = rawID
+				}
+				matches[accountID] = current.value
+			} else {
+				invalidID = true
+			}
+			break
+		}
+		if current.depth >= 4 {
+			continue
+		}
+		for _, key := range []string{"data", "account", "result", "item", "record", "created_account"} {
+			rawNested, present := current.value[key]
+			if !present {
+				continue
+			}
+			if nested, ok := rawNested.(map[string]any); ok {
+				queue = append(queue, candidate{value: nested, depth: current.depth + 1})
+				continue
+			}
+			accountID := strings.TrimSpace(fmt.Sprint(rawNested))
+			if stableID(accountID) {
+				matches[accountID] = map[string]any{"id": rawNested}
+			}
 		}
 	}
-	rawID, present := data["id"]
-	if !present {
-		rawID = data["account_id"]
+	if len(matches) > 1 {
+		return nil, false, &Error{"账号创建返回包含多个不同的稳定 ID"}
 	}
-	if !stableID(strings.TrimSpace(fmt.Sprint(rawID))) {
-		return nil, &Error{"账号创建返回缺少有效稳定 ID"}
+	for _, match := range matches {
+		return match, true, nil
 	}
-	return data, nil
+	if invalidID {
+		return nil, false, &Error{"账号创建返回包含无效稳定 ID"}
+	}
+	return nil, false, nil
+}
+
+func matchesCreatedAccount(account, requested map[string]any) bool {
+	for _, field := range []string{"name", "platform", "type"} {
+		expected := strings.TrimSpace(fmt.Sprint(requested[field]))
+		actual := strings.TrimSpace(fmt.Sprint(account[field]))
+		if expected == "" || actual != expected {
+			return false
+		}
+	}
+	expectedGroups, ok := stableIDValues(requested["group_ids"])
+	if !ok {
+		return false
+	}
+	actualGroups, ok := stableIDValues(account["group_ids"])
+	if !ok || strings.Join(expectedGroups, ",") != strings.Join(actualGroups, ",") {
+		return false
+	}
+	for _, field := range []string{"rate_multiplier", "notes"} {
+		expected, requestedField := requested[field]
+		actual, returnedField := account[field]
+		if requestedField && returnedField && strings.TrimSpace(fmt.Sprint(actual)) != strings.TrimSpace(fmt.Sprint(expected)) {
+			return false
+		}
+	}
+	return true
+}
+
+func stableIDValues(raw any) ([]string, bool) {
+	values := []string{}
+	switch typed := raw.(type) {
+	case []any:
+		for _, value := range typed {
+			values = append(values, strings.TrimSpace(fmt.Sprint(value)))
+		}
+	case []int64:
+		for _, value := range typed {
+			values = append(values, strconv.FormatInt(value, 10))
+		}
+	case []int:
+		for _, value := range typed {
+			values = append(values, strconv.Itoa(value))
+		}
+	default:
+		return nil, false
+	}
+	for _, value := range values {
+		if !stableID(value) {
+			return nil, false
+		}
+	}
+	sort.Strings(values)
+	return values, true
 }
 
 func (c *Client) DeleteAccount(ctx context.Context, accountID string) (map[string]any, error) {

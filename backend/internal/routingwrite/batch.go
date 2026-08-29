@@ -398,44 +398,78 @@ func mutationResponseValues(payload map[string]any, accountID string) (values, b
 	if payload == nil {
 		return values{}, false
 	}
-	data, ok := payload["data"].(map[string]any)
-	if !ok {
-		data = payload
-	}
-	if strings.TrimSpace(fmt.Sprint(data["id"])) != accountID {
-		return values{}, false
-	}
-	for _, field := range []string{"schedulable", "priority", "load_factor", "concurrency", "status"} {
-		if _, present := data[field]; !present {
-			return values{}, false
+	for _, data := range mutationResponseObjects(payload) {
+		if strings.TrimSpace(fmt.Sprint(data["id"])) != accountID {
+			continue
 		}
+		complete := true
+		for _, field := range []string{"schedulable", "priority", "load_factor", "concurrency", "status"} {
+			if _, present := data[field]; !present {
+				complete = false
+				break
+			}
+		}
+		if !complete {
+			continue
+		}
+		after, err := remoteValues(data)
+		return after, err == nil
 	}
-	after, err := remoteValues(data)
-	return after, err == nil
+	return values{}, false
 }
 
 func batchUpdateFailures(payload map[string]any) map[string]error {
 	result := map[string]error{}
-	data, _ := payload["data"].(map[string]any)
-	failedIDs, _ := data["failed_ids"].([]any)
-	for _, rawID := range failedIDs {
-		accountID := strings.TrimSpace(fmt.Sprint(rawID))
-		if accountID != "" {
-			result[accountID] = errors.New("批量更新失败")
+	for _, data := range mutationResponseObjects(payload) {
+		failedIDs, _ := data["failed_ids"].([]any)
+		for _, rawID := range failedIDs {
+			accountID := strings.TrimSpace(fmt.Sprint(rawID))
+			if accountID != "" {
+				result[accountID] = errors.New("批量更新失败")
+			}
+		}
+		items, _ := data["results"].([]any)
+		for _, raw := range items {
+			item, _ := raw.(map[string]any)
+			if item == nil || item["success"] == true {
+				continue
+			}
+			accountID := strings.TrimSpace(fmt.Sprint(item["account_id"]))
+			if accountID == "" {
+				continue
+			}
+			detail := strings.TrimSpace(fmt.Sprint(item["error"]))
+			if detail == "" {
+				detail = "批量更新失败"
+			}
+			result[accountID] = errors.New(detail)
 		}
 	}
-	items, _ := data["results"].([]any)
-	for _, raw := range items {
-		item, _ := raw.(map[string]any)
-		if item == nil || item["success"] == true {
+	return result
+}
+
+func mutationResponseObjects(payload map[string]any) []map[string]any {
+	if payload == nil {
+		return nil
+	}
+	type entry struct {
+		value map[string]any
+		depth int
+	}
+	queue := []entry{{value: payload}}
+	result := []map[string]any{}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		result = append(result, current.value)
+		if current.depth >= 4 {
 			continue
 		}
-		accountID := strings.TrimSpace(fmt.Sprint(item["account_id"]))
-		detail := strings.TrimSpace(fmt.Sprint(item["error"]))
-		if detail == "" {
-			detail = "批量更新失败"
+		for _, key := range []string{"data", "result", "account", "item", "record"} {
+			if nested, ok := current.value[key].(map[string]any); ok {
+				queue = append(queue, entry{value: nested, depth: current.depth + 1})
+			}
 		}
-		result[accountID] = errors.New(detail)
 	}
 	return result
 }

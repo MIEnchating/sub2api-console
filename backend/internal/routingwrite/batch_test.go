@@ -10,15 +10,16 @@ import (
 )
 
 type batchCoordinatorAdmin struct {
-	mu        sync.Mutex
-	states    map[string]map[string]any
-	mutates   int
-	lists     int
-	active    int
-	maxActive int
-	started   chan struct{}
-	release   chan struct{}
-	onList    func(map[string]map[string]any)
+	mu         sync.Mutex
+	states     map[string]map[string]any
+	batchReply map[string]any
+	mutates    int
+	lists      int
+	active     int
+	maxActive  int
+	started    chan struct{}
+	release    chan struct{}
+	onList     func(map[string]map[string]any)
 }
 
 func (a *batchCoordinatorAdmin) Account(_ context.Context, accountID string) (map[string]any, error) {
@@ -74,12 +75,54 @@ func (a *batchCoordinatorAdmin) Mutate(_ context.Context, _ string, path string,
 			a.apply(id, body)
 			results = append(results, map[string]any{"account_id": rawID, "success": true})
 		}
+		if a.batchReply != nil {
+			return copyMap(a.batchReply), nil
+		}
 		return map[string]any{"data": map[string]any{"results": results}}, nil
 	}
 	accountID := strings.TrimPrefix(path, "/admin/accounts/")
 	accountID = strings.TrimSuffix(accountID, "/schedulable")
 	a.apply(accountID, body)
 	return map[string]any{"data": copyMap(a.states[accountID])}, nil
+}
+
+func TestBatchWriteCoordinatorRecognizesTopLevelPerAccountFailure(t *testing.T) {
+	admin := &batchCoordinatorAdmin{
+		states: map[string]map[string]any{
+			"41": coordinatorState("41", 20),
+			"42": coordinatorState("42", 20),
+		},
+		batchReply: map[string]any{"success": true, "results": []any{
+			map[string]any{"account_id": int64(41), "success": false, "error": "account rejected"},
+			map[string]any{"account_id": int64(42), "success": true},
+		}},
+	}
+	coordinator := newBatchWriteCoordinator(context.Background(), admin, 2, false)
+	results := make(chan coordinatedWriteOutcome, 2)
+	for _, accountID := range []string{"41", "42"} {
+		current, err := remoteValues(admin.states[accountID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(accountID string, current values) {
+			results <- coordinator.Submit(context.Background(), accountID, map[string]any{"priority": int64(10)}, current)
+		}(accountID, current)
+	}
+	outcomes := map[string]coordinatedWriteOutcome{}
+	for range 2 {
+		outcome := <-results
+		accountID := "42"
+		if outcome.err != nil {
+			accountID = "41"
+		}
+		outcomes[accountID] = outcome
+	}
+	if outcomes["41"].err == nil || !strings.Contains(outcomes["41"].err.Error(), "account rejected") {
+		t.Fatalf("failed account outcome=%#v", outcomes["41"])
+	}
+	if outcomes["42"].err != nil || !outcomes["42"].remoteConfirmed {
+		t.Fatalf("successful account outcome=%#v", outcomes["42"])
+	}
 }
 
 func (a *batchCoordinatorAdmin) apply(accountID string, body map[string]any) {

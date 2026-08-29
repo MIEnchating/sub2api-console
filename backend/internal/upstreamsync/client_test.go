@@ -341,6 +341,58 @@ func TestCreateKeySkipsInventoryReadbackWhenVerificationDisabled(t *testing.T) {
 	}
 }
 
+func TestCreateKeyRecoversMissingResponseIDFromInventoryWhenVerificationDisabled(t *testing.T) {
+	var gets, posts int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case http.MethodPost:
+			posts++
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"key":"sk-once"}}`))
+		case http.MethodGet:
+			gets++
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"items":[{"id":17,"name":"codex-key","group_id":6,"status":"active"}],"total":1}}`))
+		default:
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	token := "token"
+	key, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "codex-key", "6", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.KeyID != "17" || key.Name != "codex-key" || key.GroupID != "6" || key.Secret != "sk-once" || gets != 1 || posts != 1 {
+		t.Fatalf("key=%#v gets=%d posts=%d", key, gets, posts)
+	}
+}
+
+func TestCreateKeyRejectsAmbiguousInventoryFallbackWhenResponseIDMissing(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodPost {
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"key":"sk-once"}}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"code":0,"data":{"items":[
+			{"id":17,"name":"codex-key","group_id":6},
+			{"id":18,"name":"codex-key","group_id":6}
+		],"total":2}}`))
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "codex-key", "6", false)
+	if err == nil || !strings.Contains(err.Error(), "目录补读无法唯一定位新 Key") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestDeleteKeyUsesPlatformEndpointAndAuthentication(t *testing.T) {
 	var deletedPath string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

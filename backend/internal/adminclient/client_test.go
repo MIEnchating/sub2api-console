@@ -3,6 +3,7 @@ package adminclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -157,6 +158,91 @@ func TestStableIDsAreRequired(t *testing.T) {
 		if _, err := client.Group(context.Background(), id); err == nil {
 			t.Fatalf("group ID %q accepted", id)
 		}
+	}
+}
+
+func TestCreateAccountAcceptsNestedAccountResponseWithoutDirectoryRead(t *testing.T) {
+	var calls int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		calls++
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts" {
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+		}
+		writeJSON(w, `{"success":true,"data":{"account":{"accountId":42,"name":"alpha"}}}`)
+	})
+	defer server.Close()
+
+	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, false)
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || calls != 1 {
+		t.Fatalf("created=%#v err=%v calls=%d", created, err, calls)
+	}
+}
+
+func TestCreateAccountAcceptsScalarDataIDWithoutDirectoryRead(t *testing.T) {
+	var calls int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		calls++
+		writeJSON(w, `{"success":true,"data":42}`)
+	})
+	defer server.Close()
+
+	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, false)
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || calls != 1 {
+		t.Fatalf("created=%#v err=%v calls=%d", created, err, calls)
+	}
+}
+
+func TestCreateAccountRecoversMissingResponseIDFromStableDirectoryDifference(t *testing.T) {
+	var lists, posts int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodGet:
+			lists++
+			items := `[{"id":9,"name":"existing","platform":"openai","type":"apikey","group_ids":[3]}]`
+			if lists == 2 {
+				items = `[{"id":9,"name":"existing","platform":"openai","type":"apikey","group_ids":[3]},` +
+					`{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}]`
+			}
+			writeJSON(w, `{"data":{"items":`+items+`,"total":`+strconv.Itoa(lists)+`}}`)
+		case http.MethodPost:
+			posts++
+			writeJSON(w, `{"success":true}`)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	defer server.Close()
+
+	created, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, true)
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || lists != 2 || posts != 1 {
+		t.Fatalf("created=%#v err=%v lists=%d posts=%d", created, err, lists, posts)
+	}
+}
+
+func TestCreateAccountDoesNotGuessMissingIDWhenVerificationIsDisabled(t *testing.T) {
+	var gets, posts int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			gets++
+			writeJSON(w, `{"data":{"items":[{"id":42,"name":"alpha"}],"total":1}}`)
+			return
+		}
+		posts++
+		writeJSON(w, `{"success":true}`)
+	})
+	defer server.Close()
+
+	_, err := client.CreateAccountWithVerification(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "未返回稳定 ID") || gets != 0 || posts != 1 {
+		t.Fatalf("err=%v gets=%d posts=%d", err, gets, posts)
 	}
 }
 

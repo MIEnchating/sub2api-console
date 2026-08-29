@@ -297,7 +297,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if validated.request.Priority != nil {
 		body["priority"] = *validated.request.Priority
 	}
-	created, err := client.CreateAccount(ctx, body)
+	created, err := client.CreateAccountWithVerification(ctx, body, verification)
 	if err != nil {
 		return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(err, key.Secret))
 	}

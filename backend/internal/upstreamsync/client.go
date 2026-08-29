@@ -249,39 +249,49 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 	if returnedName := strings.TrimSpace(textValue(firstPresent(created, "name", "key_name"))); returnedName != "" {
 		verifiedName = returnedName
 	}
-	if verification {
+	lookupMissingID := keyID == ""
+	if verification || lookupMissingID {
 		after, err := r.readKeys(ctx, record)
 		if err != nil {
+			if lookupMissingID && !verification {
+				return CreatedKey{}, fmt.Errorf("上游 Key 已创建但响应未返回稳定 ID，目录补读失败：%w", err)
+			}
 			return CreatedKey{}, err
 		}
-		if keyID == "" {
+		if lookupMissingID {
 			matches := make([]business.UpstreamCatalogKey, 0, 1)
 			for _, key := range after {
-				_, existed := beforeIDs[key.KeyID]
-				if !existed && key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
+				_, existedBeforeWrite := beforeIDs[key.KeyID]
+				if (!verification || !existedBeforeWrite) && key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
 					matches = append(matches, key)
 				}
 			}
 			if len(matches) != 1 {
-				return CreatedKey{}, errors.New("上游 Key 创建结果缺少稳定 ID，读回无法唯一确认")
+				if verification {
+					return CreatedKey{}, errors.New("上游 Key 创建结果缺少稳定 ID，读回无法唯一确认")
+				}
+				return CreatedKey{}, errors.New("上游 Key 已创建但响应未返回稳定 ID，目录补读无法唯一定位新 Key")
 			}
 			keyID = matches[0].KeyID
-		}
-		var verified *business.UpstreamCatalogKey
-		for index := range after {
-			if after[index].KeyID == keyID {
-				verified = &after[index]
-				break
+			if strings.TrimSpace(matches[0].Name) != "" {
+				verifiedName = strings.TrimSpace(matches[0].Name)
 			}
 		}
-		if verified == nil || verified.UpstreamGroup == nil || *verified.UpstreamGroup != groupID {
-			return CreatedKey{}, errors.New("上游 Key 创建后稳定 ID 或分组读回不一致")
+		if verification {
+			var verified *business.UpstreamCatalogKey
+			for index := range after {
+				if after[index].KeyID == keyID {
+					verified = &after[index]
+					break
+				}
+			}
+			if verified == nil || verified.UpstreamGroup == nil || *verified.UpstreamGroup != groupID {
+				return CreatedKey{}, errors.New("上游 Key 创建后稳定 ID 或分组读回不一致")
+			}
+			if strings.TrimSpace(verified.Name) != "" {
+				verifiedName = strings.TrimSpace(verified.Name)
+			}
 		}
-		if strings.TrimSpace(verified.Name) != "" {
-			verifiedName = strings.TrimSpace(verified.Name)
-		}
-	} else if keyID == "" {
-		return CreatedKey{}, errors.New("上游 Key 创建响应缺少稳定 ID，关闭写后确认时无法安全继续")
 	}
 	secret := textValue(firstPresent(created, "key", "api_key", "token"))
 	if isNewAPI(record.UpstreamType) {
