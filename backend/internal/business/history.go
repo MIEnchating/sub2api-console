@@ -94,6 +94,13 @@ type RequestTrace struct {
 	RecentErrors []UsageRecord `json:"recent_errors"`
 }
 
+type SystemLogPage struct {
+	Items    []UsageRecord `json:"items"`
+	Total    int           `json:"total"`
+	Page     int           `json:"page"`
+	PageSize int           `json:"page_size"`
+}
+
 type AlertListItem struct {
 	AlertIncident
 	ObjectName       *string `json:"object_name"`

@@ -48,6 +48,13 @@ type Client struct {
 	http     *http.Client
 }
 
+type EvidencePage struct {
+	Items    []map[string]any
+	Total    int
+	Page     int
+	PageSize int
+}
+
 func New(config Config, transport http.RoundTripper) (*Client, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(config.BaseURL), "/")
 	parsed, err := url.Parse(baseURL)
@@ -241,6 +248,36 @@ func (c *Client) SystemLogsByRequestID(ctx context.Context, requestID string, lo
 	return c.fetchEvidence(ctx, "/admin/ops/system-logs", "运维系统日志", map[string]string{
 		"request_id": requestID, "start_time": start.Format(time.RFC3339Nano), "end_time": end.Format(time.RFC3339Nano),
 	}, maxSamples, "id", 100)
+}
+
+func (c *Client) SystemLogs(ctx context.Context, filters map[string]string, page, pageSize int) (EvidencePage, error) {
+	if page < 1 || pageSize < 1 || pageSize > 100 {
+		return EvidencePage{}, errors.New("系统日志分页参数无效")
+	}
+	query := make(map[string]string, len(filters)+2)
+	for key, value := range filters {
+		if normalized := strings.TrimSpace(value); normalized != "" {
+			query[key] = normalized
+		}
+	}
+	query["page"] = strconv.Itoa(page)
+	query["page_size"] = strconv.Itoa(pageSize)
+	payload, err := c.request(ctx, http.MethodGet, "/admin/ops/system-logs", nil, query)
+	if err != nil {
+		return EvidencePage{}, err
+	}
+	rows, metadata, err := items(payload, "运维系统日志")
+	if err != nil {
+		return EvidencePage{}, err
+	}
+	total, present, err := pageTotal(metadata, "运维系统日志")
+	if err != nil {
+		return EvidencePage{}, err
+	}
+	if !present {
+		total = len(rows)
+	}
+	return EvidencePage{Items: rows, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (c *Client) RequestErrors(ctx context.Context, accountID string, lookbackMinutes, maxSamples int) ([]map[string]any, error) {

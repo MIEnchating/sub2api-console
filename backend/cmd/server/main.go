@@ -160,6 +160,7 @@ func main() {
 		AuthRecovery:       authRecoveryService,
 		Onboarding:         onboardingService,
 		RequestTrace:       opsTrafficService,
+		SystemLogs:         opsTrafficService,
 	})
 	server := newHTTPServer(cfg.ListenAddress, handler)
 	stopped := make(chan os.Signal, 1)

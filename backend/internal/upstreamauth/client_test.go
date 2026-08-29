@@ -247,7 +247,7 @@ func TestSub2APILoginClassifiesCredentialBrowserFlowAsImageCaptcha(t *testing.T)
 	client := New(&http.Client{Transport: transport})
 	username, password := "user@example.com", "secret"
 	_, err := client.Login(context.Background(), configstore.AuthRecord{
-		Host: "www.xiaobaishu.org", BaseURL: "https://www.xiaobaishu.org", UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
+		Host: "www.example.test", BaseURL: "https://www.example.test", UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
 	var interaction *InteractionError

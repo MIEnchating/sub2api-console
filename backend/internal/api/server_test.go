@@ -25,6 +25,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
+	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
@@ -383,6 +384,12 @@ type fakeTraceReader struct {
 	ids   *[]string
 }
 
+type fakeSystemLogReader struct {
+	page    business.SystemLogPage
+	err     error
+	queries *[]opstraffic.SystemLogQuery
+}
+
 type fakeAuthRecovery struct {
 	manual            authrecovery.ManualResult
 	task              taskstore.Task
@@ -566,6 +573,13 @@ func (f fakeTraceReader) RequestTrace(_ context.Context, requestID string) (busi
 		*f.ids = append(*f.ids, requestID)
 	}
 	return f.trace, f.err
+}
+
+func (f fakeSystemLogReader) SearchSystemLogs(_ context.Context, query opstraffic.SystemLogQuery) (business.SystemLogPage, error) {
+	if f.queries != nil {
+		*f.queries = append(*f.queries, query)
+	}
+	return f.page, f.err
 }
 
 func (f fakeTaskRepository) Get(_ context.Context, id string) (taskstore.Task, error) {
@@ -1766,6 +1780,36 @@ func TestRequestTraceTimeoutReturnsGatewayTimeout(t *testing.T) {
 	response := authenticatedRequest(t, router, http.MethodGet, "/api/usage/trace/req-timeout", nil)
 	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "请求追踪超时") {
 		t.Fatalf("trace timeout=%d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSystemLogRouteAcceptsManagementPlatformSearchConditions(t *testing.T) {
+	queries := []opstraffic.SystemLogQuery{}
+	page := business.SystemLogPage{Items: []business.UsageRecord{{ID: 9, RequestID: "req-42", Source: "system-log"}}, Total: 1, Page: 2, PageSize: 20}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		SystemLogs: fakeSystemLogReader{page: page, queries: &queries},
+	})
+	path := "/api/ops/system-logs?time_range=6h&host=node-1&level=info&component=http.access&request_id=req-42&client_request_id=client-42&user_id=7&api_key_id=8&account_id=42&platform=openai&model=gpt-5&q=completed&page=2&page_size=20"
+	response := authenticatedRequest(t, router, http.MethodGet, path, nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"request_id":"req-42"`) {
+		t.Fatalf("system logs=%d %s", response.Code, response.Body.String())
+	}
+	if len(queries) != 1 {
+		t.Fatalf("queries=%#v", queries)
+	}
+	query := queries[0]
+	if query.TimeRange != "6h" || query.Host != "node-1" || query.RequestID != "req-42" || query.ClientRequestID != "client-42" || query.APIKeyID != "8" || query.Keyword != "completed" || query.Page != 2 || query.PageSize != 20 {
+		t.Fatalf("query=%#v", query)
+	}
+}
+
+func TestSystemLogRouteRejectsInvalidIdentityFilter(t *testing.T) {
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		SystemLogs: fakeSystemLogReader{},
+	})
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/ops/system-logs?account_id=not-a-number", nil)
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "account_id 必须是正整数") {
+		t.Fatalf("invalid filter=%d %s", response.Code, response.Body.String())
 	}
 }
 

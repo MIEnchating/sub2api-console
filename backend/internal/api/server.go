@@ -29,6 +29,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
+	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
@@ -97,6 +98,10 @@ type notificationQueueStatusReader interface {
 
 type RequestTraceReader interface {
 	RequestTrace(context.Context, string) (business.RequestTrace, error)
+}
+
+type SystemLogReader interface {
+	SearchSystemLogs(context.Context, opstraffic.SystemLogQuery) (business.SystemLogPage, error)
 }
 
 type InspectionController interface {
@@ -215,6 +220,7 @@ type Dependencies struct {
 	AuthRecovery       AuthRecoveryService
 	Onboarding         OnboardingService
 	RequestTrace       RequestTraceReader
+	SystemLogs         SystemLogReader
 }
 
 type Server struct {
@@ -241,6 +247,7 @@ type Server struct {
 	authRecovery       AuthRecoveryService
 	onboarding         OnboardingService
 	traceReader        RequestTraceReader
+	systemLogReader    SystemLogReader
 	loginThrottle      *loginThrottle
 	now                func() time.Time
 }
@@ -388,6 +395,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		authRecovery:       services.AuthRecovery,
 		onboarding:         services.Onboarding,
 		traceReader:        services.RequestTrace,
+		systemLogReader:    services.SystemLogs,
 		loginThrottle:      newLoginThrottle(),
 		now:                time.Now,
 	}
@@ -469,6 +477,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/automation/resume", server.resumeAutoInspection)
 	authorized.DELETE("/inspection/automation/history", server.clearAutoInspectionHistory)
 	authorized.GET("/usage/trace/*request_id", server.requestTrace)
+	authorized.GET("/ops/system-logs", server.systemLogs)
 	authorized.GET("/alerts", server.alerts)
 	authorized.DELETE("/alerts", server.clearAlerts)
 	authorized.GET("/alerts/policy", server.alertPolicy)
@@ -2865,6 +2874,94 @@ func (s *Server) requestTrace(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, trace)
+}
+
+func (s *Server) systemLogs(c *gin.Context) {
+	if s.systemLogReader == nil {
+		writeError(c, http.StatusServiceUnavailable, "系统日志查询服务尚未就绪")
+		return
+	}
+	timeRange := queryDefault(c, "time_range", "1h")
+	allowedRanges := map[string]bool{"5m": true, "30m": true, "1h": true, "6h": true, "24h": true, "7d": true, "30d": true}
+	if !allowedRanges[timeRange] {
+		writeError(c, http.StatusUnprocessableEntity, "时间范围必须是 5m、30m、1h、6h、24h、7d 或 30d")
+		return
+	}
+	startTime, err := optionalRFC3339Query(c, "start_time")
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	endTime, err := optionalRFC3339Query(c, "end_time")
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if startTime != "" && endTime != "" {
+		start, _ := time.Parse(time.RFC3339Nano, startTime)
+		end, _ := time.Parse(time.RFC3339Nano, endTime)
+		if start.After(end) || end.Sub(start) > 30*24*time.Hour {
+			writeError(c, http.StatusUnprocessableEntity, "自定义时间范围必须按先后顺序且不超过 30 天")
+			return
+		}
+	}
+	for _, name := range []string{"user_id", "api_key_id", "account_id"} {
+		if err := validateOptionalPositiveID(c.Query(name), name); err != nil {
+			writeError(c, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
+	page, err := positiveQueryInteger(c, "page", 1, 1, 1_000_000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	pageSize, err := positiveQueryInteger(c, "page_size", 20, 1, 100)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	result, err := s.systemLogReader.SearchSystemLogs(c.Request.Context(), opstraffic.SystemLogQuery{
+		TimeRange: timeRange, StartTime: startTime, EndTime: endTime,
+		Host: c.Query("host"), Level: c.Query("level"), Component: c.Query("component"),
+		RequestID: c.Query("request_id"), ClientRequestID: c.Query("client_request_id"),
+		UserID: c.Query("user_id"), APIKeyID: c.Query("api_key_id"), AccountID: c.Query("account_id"),
+		Platform: c.Query("platform"), Model: c.Query("model"), Keyword: c.Query("q"),
+		Page: page, PageSize: pageSize,
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		writeError(c, http.StatusGatewayTimeout, "系统日志查询超时，请缩短时间范围后重试")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusBadGateway, "系统日志查询失败："+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func optionalRFC3339Query(c *gin.Context, name string) (string, error) {
+	raw := strings.TrimSpace(c.Query(name))
+	if raw == "" {
+		return "", nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return "", fmt.Errorf("%s 必须是有效时间", name)
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
+func validateOptionalPositiveID(raw, name string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		return fmt.Errorf("%s 必须是正整数", name)
+	}
+	return nil
 }
 
 func (s *Server) alerts(c *gin.Context) {

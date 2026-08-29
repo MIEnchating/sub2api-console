@@ -252,6 +252,27 @@ func TestSystemLogsByRequestIDUsesExactIndexedFilter(t *testing.T) {
 	}
 }
 
+func TestSystemLogsPreservesFiltersAndPagination(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		query := request.URL.Query()
+		if request.URL.Path != "/api/v1/admin/ops/system-logs" || query.Get("page") != "2" || query.Get("page_size") != "20" {
+			t.Fatalf("path=%q query=%v", request.URL.Path, query)
+		}
+		if query.Get("request_id") != "req-42" || query.Get("client_request_id") != "client-42" || query.Get("component") != "http.access" || query.Get("q") != "completed" {
+			t.Fatalf("filters=%v", query)
+		}
+		writeJSON(w, `{"data":{"items":[{"id":9,"request_id":"req-42","level":"info"}],"total":21}}`)
+	})
+	defer server.Close()
+
+	page, err := client.SystemLogs(context.Background(), map[string]string{
+		"request_id": "req-42", "client_request_id": "client-42", "component": "http.access", "q": "completed",
+	}, 2, 20)
+	if err != nil || len(page.Items) != 1 || page.Total != 21 || page.Page != 2 || page.PageSize != 20 {
+		t.Fatalf("page=%#v err=%v", page, err)
+	}
+}
+
 func TestClientDoesNotFollowRedirects(t *testing.T) {
 	var destinationCalls int
 	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

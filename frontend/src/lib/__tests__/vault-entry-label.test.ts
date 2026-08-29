@@ -96,14 +96,14 @@ describe("vaultEntryLabel", () => {
   it("treats the www Host and its root-domain credential binding as the same upstream", () => {
     const entries = [
       {
-        entry: "xiaobaishu",
-        hosts: ["xiaobaishu.org"],
+        entry: "root-domain-entry",
+        hosts: ["example.test"],
         has_username: true,
         has_password: true,
         username_is_email: true,
         header_names: [],
       },
     ];
-    expect(defaultVaultEntryForHost(entries, "www.xiaobaishu.org")).toBe("xiaobaishu");
+    expect(defaultVaultEntryForHost(entries, "www.example.test")).toBe("root-domain-entry");
   });
 });

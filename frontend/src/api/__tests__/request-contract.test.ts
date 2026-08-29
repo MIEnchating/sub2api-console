@@ -153,6 +153,58 @@ describe("request trace contract", () => {
   });
 });
 
+describe("system log search contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("forwards the same search conditions as the Sub2API management platform", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 2, page_size: 20 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.systemLogs({
+      timeRange: "6h",
+      startTime: "",
+      endTime: "",
+      host: "node-1",
+      level: "info",
+      requestId: "req-42",
+      clientRequestId: "client-42",
+      apiKeyId: "8",
+      accountId: "42",
+      platform: "openai",
+      model: "gpt-5",
+      keyword: "completed",
+      page: 2,
+      pageSize: 20,
+    });
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://console.local");
+    expect(url.pathname).toBe("/api/ops/system-logs");
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      time_range: "6h",
+      host: "node-1",
+      level: "info",
+      request_id: "req-42",
+      client_request_id: "client-42",
+      api_key_id: "8",
+      account_id: "42",
+      platform: "openai",
+      model: "gpt-5",
+      q: "completed",
+      page: "2",
+      page_size: "20",
+    });
+    expect(url.searchParams.has("component")).toBe(false);
+    expect(url.searchParams.has("user_id")).toBe(false);
+  });
+});
+
 describe("unified log request contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

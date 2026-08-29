@@ -280,7 +280,7 @@ func TestManualCaptchaCredentialStaysInMemoryUntilSuccessfulSubmit(t *testing.T)
 }
 
 func TestCaptchaPrepareRejectsNonEmailCredentialBeforeUpstreamRequest(t *testing.T) {
-	username, password := "xiaoge", "secret"
+	username, password := "not-an-email", "secret"
 	store := &captchaStore{entry: &configstore.VaultEntry{
 		Entry: "wrong-entry", Username: &username, Password: &password,
 	}}
@@ -291,7 +291,7 @@ func TestCaptchaPrepareRejectsNonEmailCredentialBeforeUpstreamRequest(t *testing
 		}),
 	})
 	record := configstore.AuthRecord{
-		Host: "www.xiaobaishu.org", BaseURL: "https://www.xiaobaishu.org", UpstreamType: "sub2api",
+		Host: "www.example.test", BaseURL: "https://www.example.test", UpstreamType: "sub2api",
 	}
 	_, err := manager.Prepare(context.Background(), record, "wrong-entry", nil)
 	if err == nil || !strings.Contains(err.Error(), "用户名不是有效邮箱") {
@@ -311,7 +311,7 @@ func TestCredentialEnvelopeAcceptsStandardBase64PublicKey(t *testing.T) {
 	challenge := storedChallenge{
 		publicKey:    base64.StdEncoding.EncodeToString(der),
 		serverOffset: 37,
-		keyID:        "xiaobaishu-key",
+		keyID:        "test-key",
 	}
 	now := time.Unix(1787811937, 0)
 	envelope, err := credentialEnvelope(challenge, "operator@example.test", "secret", now)

@@ -611,7 +611,7 @@ export type ManualAuthVerifyResult =
       captcha_challenge: CaptchaChallenge;
     };
 
-type UsageRecord = {
+export type UsageRecord = {
   id: number;
   request_id: string;
   account_id: string | null;
@@ -625,6 +625,30 @@ type UsageRecord = {
   observed_at: string | null;
   source: string;
   payload: Record<string, unknown>;
+};
+
+export type SystemLogSearchQuery = {
+  timeRange: "5m" | "30m" | "1h" | "6h" | "24h" | "7d" | "30d";
+  startTime: string;
+  endTime: string;
+  host: string;
+  level: string;
+  requestId: string;
+  clientRequestId: string;
+  apiKeyId: string;
+  accountId: string;
+  platform: string;
+  model: string;
+  keyword: string;
+  page: number;
+  pageSize: number;
+};
+
+export type SystemLogPage = {
+  items: UsageRecord[];
+  total: number;
+  page: number;
+  page_size: number;
 };
 
 export type RequestTrace = {
@@ -1043,6 +1067,25 @@ export const api = {
   runUpstreamSync: () => request<Task>("/api/upstreams/sync", { method: "POST" }),
   requestTrace: (requestId: string) =>
     request<RequestTrace>(`/api/usage/trace/${encodeURIComponent(requestId)}`),
+  systemLogs: (params: SystemLogSearchQuery) => {
+    const query = new URLSearchParams({
+      time_range: params.timeRange,
+      start_time: params.startTime,
+      end_time: params.endTime,
+      host: params.host,
+      level: params.level,
+      request_id: params.requestId,
+      client_request_id: params.clientRequestId,
+      api_key_id: params.apiKeyId,
+      account_id: params.accountId,
+      platform: params.platform,
+      model: params.model,
+      q: params.keyword,
+      page: String(params.page),
+      page_size: String(params.pageSize),
+    });
+    return request<SystemLogPage>(`/api/ops/system-logs?${query.toString()}`);
+  },
   // Keep the alert view bounded; an unbounded incident table can block the
   // browser when a long-running instance has accumulated a large history.
   alerts: () => request<AlertIncident[]>("/api/alerts?limit=200"),

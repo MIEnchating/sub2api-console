@@ -94,6 +94,7 @@ import { Skeleton } from "./components/ui/skeleton";
 import { Switch } from "./components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { UpstreamIdentity } from "./features/upstreams/components/upstream-identity";
+import { SystemLogSearchPanel } from "./features/request-trace/components/system-log-search-panel";
 import { GroupAllocationDialog } from "./features/groups/components/group-allocation-dialog";
 import {
   Sheet,
@@ -154,7 +155,7 @@ import { LogsCenterPage } from "./features/logs/components/logs-center-page";
 import { GroupPolicyEditorFields } from "./features/groups/components/group-policy-editor-fields";
 import { captchaChallengeFromTask } from "./lib/captcha-challenge";
 import { groupStatusMeta } from "./lib/group-policy-display";
-import { notifyOperationError, operationErrorMessage } from "./lib/operation-feedback";
+import { notifyOperationError } from "./lib/operation-feedback";
 import { sensitiveFieldPlaceholder } from "./lib/sensitive-field";
 import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
@@ -5766,7 +5767,7 @@ function OnboardingPage() {
           }
         }}
       >
-        <DialogContent className="max-h-[min(40rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] sm:max-w-2xl">
+        <DialogContent className="max-h-[min(40rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>添加账号</DialogTitle>
           </DialogHeader>
@@ -5775,8 +5776,23 @@ function OnboardingPage() {
             {task.error && (
               <QueryError error={task.error} fallback="账号添加状态读取失败" embedded />
             )}
-            {task.data && <TaskProgress task={task.data} />}
+            {task.data && <OnboardingTaskProgress task={task.data} />}
           </div>
+          {task.data && !onboardingPending ? (
+            <DialogFooter>
+              <Button
+                onClick={() => {
+                  setTaskId(null);
+                  setBatchBindings({});
+                  const host = verifiedUpstream?.host;
+                  if (host) prepare.mutate(host);
+                }}
+              >
+                <Check size={16} />
+                完成
+              </Button>
+            </DialogFooter>
+          ) : null}
         </DialogContent>
       </Dialog>
     </PageLayout>
@@ -5784,157 +5800,14 @@ function OnboardingPage() {
 }
 
 function RequestTracePage() {
-  const [input, setInput] = useState("");
-  const [requestId, setRequestId] = useState("");
-  const trace = useQuery({
-    queryKey: ["request-trace", requestId],
-    queryFn: () => api.requestTrace(requestId),
-    enabled: Boolean(requestId),
-    retry: false,
-  });
-  const querying = Boolean(requestId) && trace.isFetching;
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextRequestId = input.trim();
-    if (!nextRequestId || querying) return;
-    if (nextRequestId === requestId) {
-      void trace.refetch();
-      return;
-    }
-    setRequestId(nextRequestId);
-  }
   return (
     <PageLayout>
       <PageHeading
         eyebrow="OBSERVABILITY / REQUEST TRACE"
         title="请求追踪"
-        description="输入 request_id，从 Sub2API 运维监控定位请求及该账号最近的错误请求。"
+        description="查询 Sub2API 系统日志，直接查看请求状态、耗时、账号和模型等关键信息。"
       />
-      <Card>
-        <CardHeader>
-          <CardTitle>查询请求</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form className="flex flex-col gap-3 sm:flex-row" onSubmit={submit}>
-            <Input
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="例如 client:..."
-              aria-label="request_id"
-              maxLength={512}
-              autoComplete="off"
-            />
-            <Button type="submit" disabled={!input.trim() || querying} className="sm:min-w-24">
-              {querying ? <RefreshCw className="animate-spin" size={16} /> : <Search size={16} />}
-              {querying ? "查询中" : "查询"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-      {trace.isError && (
-        <>
-          <QueryError error={trace.error} fallback="请求追踪失败" />
-          <Card className="mt-3 sm:mt-4" role="alert">
-            <CardContent className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center">
-              <CircleAlert className="text-destructive size-5 shrink-0" aria-hidden="true" />
-              <div className="min-w-0 flex-1">
-                <strong className="text-destructive block text-sm">请求追踪失败</strong>
-                <p className="text-muted-foreground mt-1 break-words text-xs">
-                  {operationErrorMessage(trace.error, "请稍后重试或确认上游运维监控可用")}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={trace.isFetching}
-                onClick={() => void trace.refetch()}
-              >
-                <RefreshCw className={trace.isFetching ? "animate-spin" : undefined} size={15} />
-                重试
-              </Button>
-            </CardContent>
-          </Card>
-        </>
-      )}
-      {requestId && trace.isLoading && (
-        <Card className="mt-3 sm:mt-4">
-          <CardContent className="text-muted-foreground flex min-h-28 items-center justify-center gap-2 text-sm">
-            <RefreshCw className="size-4 animate-spin" aria-hidden="true" />
-            正在查询 30 天内的请求记录，最长约 10 秒
-          </CardContent>
-        </Card>
-      )}
-      {requestId && !trace.isError && trace.data && (
-        <>
-          <Card className="mt-3 sm:mt-4">
-            <PanelHeading
-              title="关联账号"
-              action={
-                <StatusPill
-                  label={trace.data.matched ? "已找到" : "未找到"}
-                  tone={trace.data.matched ? "success" : "neutral"}
-                />
-              }
-            />
-            {trace.data.matched ? (
-              <CardContent className="pt-0">
-                <PolicyRows
-                  rows={[
-                    ["请求 ID", trace.data.request_id],
-                    ["账号 ID", trace.data.account_id ?? "—"],
-                    ["账号名称", trace.data.account_name ?? "—"],
-                    ["请求记录", `${trace.data.records.length} 条`],
-                    ["最近错误", `${trace.data.recent_errors.length} 条`],
-                  ]}
-                />
-              </CardContent>
-            ) : (
-              <EmptyRow
-                text="没有匹配的使用记录"
-                detail="已完成查询。请确认 request_id 完整无误，且记录仍在最近 30 天的日志保留范围内。"
-              />
-            )}
-          </Card>
-          {trace.data.matched && (
-            <Card className="mt-3 sm:mt-4">
-              <PanelHeading title="运维请求记录" subtitle="数据来自 Sub2API ops" />
-              {trace.data.records.map((record) => (
-                <RunRow
-                  key={record.id}
-                  status={record.is_error ? "failed" : "succeeded"}
-                  title={`${record.group_name ?? "未分组"} · ${record.request_id}`}
-                  detail={`${record.summary ? `${record.summary} · ` : `耗时 ${record.duration_ms ?? "—"} ms · `}${record.observed_at ? formatDate(record.observed_at) : "时间未记录"}`}
-                  state={record.is_error ? (record.error_reason ?? "错误") : "成功"}
-                  icon={<Activity size={15} />}
-                />
-              ))}
-            </Card>
-          )}
-          {trace.data.matched && (
-            <Card className="mt-3 sm:mt-4">
-              <PanelHeading
-                title="最近错误请求"
-                subtitle="该账号最近 24 小时，辅助查询失败不会影响主记录"
-              />
-              {trace.data.recent_errors.length ? (
-                trace.data.recent_errors.map((record) => (
-                  <RunRow
-                    key={`error:${record.id}`}
-                    status="failed"
-                    title={`${record.group_name ?? "未分组"} · ${record.account_name ?? trace.data.account_id ?? "账号"}`}
-                    detail={`${record.error_reason ?? "未记录错误原因"} · ${record.observed_at ? formatDate(record.observed_at) : "时间未记录"}`}
-                    state="失败"
-                    icon={<CircleHelp size={15} />}
-                  />
-                ))
-              ) : (
-                <EmptyRow text="该账号近期没有错误请求" />
-              )}
-            </Card>
-          )}
-        </>
-      )}
+      <SystemLogSearchPanel />
     </PageLayout>
   );
 }
@@ -5956,6 +5829,181 @@ function TaskFailureDetail(props: { reason: string }) {
     </div>
   );
 }
+
+type OnboardingTaskItem = {
+  upstreamGroup: string;
+  localGroup: string;
+  succeeded: boolean;
+  error: string | null;
+};
+
+function onboardingTaskItems(task: Task): OnboardingTaskItem[] {
+  if (!Array.isArray(task.result.items)) return [];
+  return task.result.items.flatMap((raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+    const item = raw as Record<string, unknown>;
+    const status = String(item.status ?? "")
+      .trim()
+      .toLowerCase();
+    return [
+      {
+        upstreamGroup: String(item.upstream_group ?? "未返回"),
+        localGroup: String(item.local_group ?? "未返回"),
+        succeeded: status === "成功" || status === "succeeded" || status === "success",
+        error:
+          typeof item.error === "string" && item.error.trim() !== "" ? item.error.trim() : null,
+      },
+    ];
+  });
+}
+
+export function OnboardingTaskProgress(props: { task: Task }) {
+  const pending = ["queued", "running", "waiting_input"].includes(props.task.status);
+  const failed = props.task.status === "failed";
+  const items = onboardingTaskItems(props.task);
+  const batch = props.task.operation === "onboard-batch" || items.length > 0;
+  const succeeded = syncResultCount(props.task.result.succeeded);
+  const failedCount = syncResultCount(props.task.result.failed);
+  const total = Math.max(
+    syncResultCount(props.task.result.total),
+    succeeded + failedCount,
+    items.length,
+  );
+  const title = pending
+    ? batch
+      ? "正在批量添加账号"
+      : "正在添加账号"
+    : failed
+      ? batch && succeeded > 0
+        ? "部分账号添加失败"
+        : "账号添加失败"
+      : batch
+        ? "账号批量添加完成"
+        : "账号添加完成";
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex min-w-0 items-start gap-3">
+        <span
+          className={cn(
+            "flex size-8 shrink-0 items-center justify-center rounded-md",
+            pending
+              ? "bg-primary/10 text-primary"
+              : failed
+                ? "bg-destructive/10 text-destructive"
+                : "bg-success/10 text-success",
+          )}
+        >
+          {pending ? (
+            <RefreshCw className="animate-spin" size={16} />
+          ) : failed ? (
+            <CircleAlert size={16} />
+          ) : (
+            <Check size={16} />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <strong className="text-sm">{title}</strong>
+            <StatusPill
+              label={pending ? "进行中" : failed ? (succeeded > 0 ? "部分成功" : "失败") : "成功"}
+              tone={pending ? "info" : failed ? (succeeded > 0 ? "warning" : "danger") : "success"}
+            />
+          </div>
+          <p className="text-muted-foreground mt-1 text-xs leading-5">
+            {displayTaskMessage(props.task.message)}
+          </p>
+        </div>
+        {pending ? (
+          <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+            {props.task.progress}%
+          </span>
+        ) : null}
+      </div>
+
+      {pending ? <Progress value={props.task.progress} /> : null}
+
+      {!pending && batch ? (
+        <>
+          <div className="grid grid-cols-3 divide-x rounded-lg border">
+            <ResultSummaryRow label="计划添加" value={`${total} 个`} />
+            <ResultSummaryRow label="添加成功" value={`${succeeded} 个`} />
+            <ResultSummaryRow label="添加失败" value={`${failedCount} 个`} />
+          </div>
+          <Table
+            className="min-w-[520px]"
+            containerClassName="max-h-[min(24rem,calc(100svh-18rem))] overflow-auto rounded-lg border"
+          >
+            <TableHeader className="sticky top-0 z-10">
+              <TableRow>
+                <TableHead className="w-[34%]">上游分组</TableHead>
+                <TableHead className="w-[26%]">本地分组</TableHead>
+                <TableHead className="w-[40%]">添加结果</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item, index) => (
+                <TableRow key={`${item.upstreamGroup}:${item.localGroup}:${index}`}>
+                  <TableCell className="font-medium">{item.upstreamGroup}</TableCell>
+                  <TableCell>{item.localGroup}</TableCell>
+                  <TableCell
+                    className="whitespace-normal break-words leading-5"
+                    overflowTooltip={false}
+                  >
+                    {item.succeeded ? (
+                      <StatusPill label="添加成功" tone="success" />
+                    ) : (
+                      <div className="grid gap-1">
+                        <StatusPill label="添加失败" tone="danger" />
+                        <span className="text-destructive text-xs">
+                          {item.error ?? "未返回失败原因"}
+                        </span>
+                      </div>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </>
+      ) : null}
+
+      {!pending && !batch && !failed ? (
+        <div className="divide-y rounded-lg border">
+          <ResultSummaryRow
+            label="账号"
+            value={String(props.task.result.account_name ?? "已添加")}
+          />
+          <ResultSummaryRow
+            label="账号 ID"
+            value={String(props.task.result.account_id ?? "未返回")}
+          />
+          <ResultSummaryRow
+            label="上游分组"
+            value={String(props.task.result.upstream_group_name ?? "未返回")}
+          />
+          <ResultSummaryRow
+            label="本地分组"
+            value={String(props.task.result.local_group_name ?? "未返回")}
+          />
+          <ResultSummaryRow
+            label="调度状态"
+            value={props.task.result.schedulable === true ? "已启用" : "已添加，暂未启用"}
+          />
+        </div>
+      ) : null}
+
+      {!pending && !batch && failed ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+          <TaskFailureDetail
+            reason={String(props.task.result.error ?? props.task.message ?? "账号添加失败")}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AccountSyncTaskStatus(props: {
   task: Task;
   accountId: string;
@@ -9934,21 +9982,6 @@ function effectiveProjectMode(value: string | undefined) {
   if (value === "调度模式" || value === "scheduling") return "调度模式";
   if (value === "未初始化") return "未初始化";
   return "配置错误";
-}
-function PolicyRows(props: { rows: Array<[string, string]> }) {
-  return (
-    <div className="divide-border divide-y">
-      {props.rows.map(([key, value]) => (
-        <div
-          className="flex items-start justify-between gap-4 py-2.5 text-sm first:pt-0 last:pb-0"
-          key={key}
-        >
-          <span className="text-muted-foreground">{key}</span>
-          <strong className="max-w-[65%] break-words text-right font-medium">{value}</strong>
-        </div>
-      ))}
-    </div>
-  );
 }
 function RunRow(props: {
   status: string;
