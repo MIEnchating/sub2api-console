@@ -3,8 +3,8 @@ package onboarding
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -88,6 +88,7 @@ func (keys *checkingKeys) checkNoTransaction() error {
 
 func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing.T) {
 	reads := 0
+	const upstreamBaseURL = "http://192.0.2.10:8443/accelerated"
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if request.Header.Get("X-API-Key") != "admin-key" {
@@ -96,9 +97,16 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 		}
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
-			body, _ := io.ReadAll(request.Body)
-			if !strings.Contains(string(body), "never-store-this") {
-				t.Errorf("remote account did not receive the one-time secret: %s", body)
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode remote account body: %v", err)
+			}
+			credentials, _ := body["credentials"].(map[string]any)
+			if credentials["api_key"] != "never-store-this" {
+				t.Errorf("remote account did not receive the one-time secret: %#v", credentials)
+			}
+			if credentials["base_url"] != upstreamBaseURL {
+				t.Errorf("remote account base_url = %#v, want %q", credentials["base_url"], upstreamBaseURL)
 			}
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
@@ -112,6 +120,13 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 	}))
 	defer admin.Close()
 	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	token := "upstream-token"
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "upstream.test", BaseURL: upstreamBaseURL, UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
 	keys := &checkingKeys{databasePath: databasePath}
 	service := New(repository, private, keys, nil)
 	result, err := service.Onboard(context.Background(), Request{

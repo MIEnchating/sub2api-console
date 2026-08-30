@@ -280,7 +280,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	}
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
-		"credentials": map[string]any{"api_key": key.Secret}, "extra": validated.request.Extra,
+		"credentials": map[string]any{"api_key": key.Secret, "base_url": validated.auth.BaseURL}, "extra": validated.request.Extra,
 		"rate_multiplier": json.Number(validated.multiplier), "group_ids": []int64{mustInt64(validated.local.ID)},
 		"auto_pause_on_expired": true,
 	}
