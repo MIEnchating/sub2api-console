@@ -15,7 +15,7 @@ export function PageHeading(props: PageHeadingProps) {
           <h2 className="truncate text-base font-bold tracking-tight sm:text-lg">{props.title}</h2>
         </div>
         {props.action && (
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:gap-x-4">
+          <div className="flex w-full min-w-0 flex-wrap items-center justify-end gap-2 sm:w-auto sm:shrink-0 sm:gap-x-4">
             {props.action}
           </div>
         )}

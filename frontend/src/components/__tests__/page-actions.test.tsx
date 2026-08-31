@@ -13,6 +13,8 @@ describe("PageActions", () => {
     );
 
     expect(markup).toContain('data-slot="page-actions"');
+    expect(markup).toContain("min-w-0");
+    expect(markup).toContain("max-w-full");
     expect(markup).toContain("flex-wrap");
     expect(markup).toContain("items-center");
     expect(markup).toContain("justify-end");

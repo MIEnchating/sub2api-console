@@ -10,7 +10,7 @@ export function PageActions(props: PageActionsProps) {
     <div
       data-slot="page-actions"
       {...divProps}
-      className={cn("flex flex-wrap items-center justify-end gap-2", className)}
+      className={cn("flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2", className)}
     />
   );
 }

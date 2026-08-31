@@ -719,10 +719,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
               <CardDescription>价格数据来自当前分组配置。</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
+              <Table className="min-w-[960px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead>分组</TableHead>
+                    <TableHead className="w-56">分组</TableHead>
                     <TableHead className="w-40">平台</TableHead>
                     <TableHead className="w-40">进货倍率</TableHead>
                     <TableHead className="w-40">售价倍率</TableHead>

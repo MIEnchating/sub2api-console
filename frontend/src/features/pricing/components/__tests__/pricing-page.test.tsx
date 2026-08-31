@@ -80,6 +80,8 @@ describe("PricingPage", () => {
     expect(markup).not.toContain("价格配置");
     expect(markup).not.toContain("目标盈利比例");
     expect(markup).toContain("查看账号调整明细");
+    expect(markup).toContain("min-w-[960px]");
+    expect(markup).toContain("w-56");
     expect(markup).not.toContain("计算收入");
     expect(markup).not.toContain("收益分析");
   });

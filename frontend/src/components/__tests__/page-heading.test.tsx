@@ -14,4 +14,21 @@ describe("PageHeading", () => {
     expect(markup).not.toContain("sticky");
     expect(markup).not.toContain("overflow-auto");
   });
+
+  it("gives mobile actions a constrained row that can wrap without clipping", () => {
+    const markup = renderToStaticMarkup(
+      <PageHeading
+        eyebrow="OPERATIONS"
+        title="账号管理"
+        description="账号列表"
+        action={<button type="button">同步余额</button>}
+      />,
+    );
+
+    expect(markup).toContain("w-full");
+    expect(markup).toContain("min-w-0");
+    expect(markup).toContain("flex-wrap");
+    expect(markup).toContain("sm:w-auto");
+    expect(markup).toContain("sm:shrink-0");
+  });
 });
