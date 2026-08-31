@@ -9,8 +9,7 @@ import {
 } from "@/components/ui/dialog";
 
 export const accountDetailDialogLayout = {
-  content:
-    "grid max-h-[min(42rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-2xl",
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
   body: "min-h-0 overflow-x-hidden overflow-y-auto pr-1 text-sm",
 } as const;
 
@@ -23,7 +22,7 @@ export function AccountDetailDialog(props: {
 }) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className={accountDetailDialogLayout.content}>
+      <DialogContent width="medium" height="large" className={accountDetailDialogLayout.content}>
         <DialogHeader>
           <DialogTitle>账号设置</DialogTitle>
           <DialogDescription>

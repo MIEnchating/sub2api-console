@@ -72,8 +72,11 @@ describe("PricingPage", () => {
 
     expect(markup).toContain("价格管理");
     expect(markup).toContain("分组售价");
+    expect(markup).toContain("进货倍率");
     expect(markup).toContain("售价倍率");
     expect(markup).toContain("标准");
+    expect(markup).toContain(">0.9</span>");
+    expect(markup).toContain("1 个账号");
     expect(markup).not.toContain("价格配置");
     expect(markup).not.toContain("目标盈利比例");
     expect(markup).toContain("查看账号调整明细");
@@ -168,8 +171,11 @@ describe("PricingPage", () => {
     expect(markup).toContain("未分组");
     expect(markup).toContain("具体变更");
     expect(markup).toContain("判定依据");
+    expect(markup).toContain("#41 · openai");
+    expect(markup).toContain('data-testid="pricing-preview-table"');
+    expect(markup).toContain("h-full");
     expect(markup).toContain("移出：标准");
-    expect(markup).toContain("成本 0.9 &gt; 可接受上限 0.8");
+    expect(markup).toContain("进货倍率 0.9 &gt; 可接受上限 0.8");
     expect(markup).toContain("售价 1 × 80%");
     expect(markup).toContain("将调整");
     expect(markup).toContain("unchanged-42");
@@ -193,8 +199,8 @@ describe("PricingPage", () => {
       />,
     );
 
-    expect(markup).toContain("preview-account-20");
-    expect(markup).not.toContain("preview-account-21");
+    expect(markup).toContain("preview-account-10");
+    expect(markup).not.toContain("preview-account-11");
     expect(markup).toContain('aria-label="转到第 2 页"');
     expect(markup).toContain('aria-label="转到下一页"');
   });

@@ -12,11 +12,13 @@ import {
   type ModelCheckCapabilities,
   type ModelCheckRequest,
 } from "@/api";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -219,10 +221,12 @@ export function ModelCheckPage() {
         description=""
         action={
           task.data ? (
-            <Button type="button" variant="outline" onClick={() => setResultOpen(true)}>
-              <Eye aria-hidden="true" />
-              查看检测结果
-            </Button>
+            <PageActions>
+              <Button type="button" variant="outline" onClick={() => setResultOpen(true)}>
+                <Eye aria-hidden="true" />
+                查看检测结果
+              </Button>
+            </PageActions>
           ) : null
         }
       />
@@ -297,7 +301,7 @@ export function ModelCheckPage() {
         <DialogContent
           width="table"
           height="tall"
-          className="grid min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>
@@ -309,14 +313,14 @@ export function ModelCheckPage() {
             </DialogTitle>
             <DialogDescription>{task.data?.message ?? "正在读取检测任务"}</DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 min-w-0 overflow-hidden">
+          <DialogBody className="overflow-hidden pr-0">
             {task.error ? (
               <p className="text-destructive text-sm" role="alert">
                 任务状态读取失败
               </p>
             ) : null}
             {task.data ? <ModelCheckResult task={task.data} /> : null}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </PageLayout>

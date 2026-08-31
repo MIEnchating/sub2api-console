@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -44,7 +45,7 @@ export function OnboardingConfirmContent(props: {
           请核对 {props.items.length} 条分组绑定；新增项将创建账号，更新项只修改现有账号分组。
         </DialogDescription>
       </DialogHeader>
-      <div className="min-h-0 overflow-auto rounded-md border">
+      <DialogBody className="overflow-auto rounded-md border pr-0">
         <Table className="min-w-[960px] table-fixed">
           <TableHeader className="sticky top-0 z-10">
             <TableRow>
@@ -75,7 +76,7 @@ export function OnboardingConfirmContent(props: {
             ))}
           </TableBody>
         </Table>
-      </div>
+      </DialogBody>
       <DialogFooter>
         <Button variant="outline" disabled={props.pending} onClick={props.onCancel}>
           取消
@@ -106,7 +107,7 @@ export function OnboardingConfirmDialog(props: {
       <DialogContent
         width="wide"
         height="large"
-        className="grid min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
       >
         <OnboardingConfirmContent
           items={props.items}

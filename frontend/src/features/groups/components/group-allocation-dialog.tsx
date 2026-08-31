@@ -2,6 +2,7 @@ import type { GroupAllocation, GroupAllocationChannel, GroupStatus } from "@/api
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -252,16 +253,18 @@ export function GroupAllocationDialog(props: Props) {
               : "查看分组内账号的唯一最终调度状态"}
           </DialogDescription>
         </DialogHeader>
-        {props.loading ? (
-          <div className={groupAllocationLayout.loading} aria-label="正在读取分组账号调度状态">
-            <Skeleton className="h-full w-full" />
-            <Skeleton className="h-full min-h-0 w-full" />
-          </div>
-        ) : props.error ? (
-          <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
-        ) : props.allocation ? (
-          <GroupAllocationContent allocation={props.allocation} />
-        ) : null}
+        <DialogBody className="overflow-hidden pr-0">
+          {props.loading ? (
+            <div className={groupAllocationLayout.loading} aria-label="正在读取分组账号调度状态">
+              <Skeleton className="h-full w-full" />
+              <Skeleton className="h-full min-h-0 w-full" />
+            </div>
+          ) : props.error ? (
+            <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
+          ) : props.allocation ? (
+            <GroupAllocationContent allocation={props.allocation} />
+          ) : null}
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );

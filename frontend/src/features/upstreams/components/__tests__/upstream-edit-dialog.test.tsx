@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { UpstreamConfiguration } from "@/api";
+import { dialogBodyLayout, dialogContentClass } from "@/components/ui/dialog";
 import { upstreamEditDialogLayout, upstreamEditPresentation } from "../upstream-edit-dialog";
 
 describe("upstream edit dialog", () => {
@@ -52,11 +53,13 @@ describe("upstream edit dialog", () => {
   });
 
   it("keeps vertical scrolling without exposing a horizontal scroll area", () => {
-    expect(upstreamEditDialogLayout.content).toContain("min-w-0");
-    expect(upstreamEditDialogLayout.content).toContain("overflow-hidden");
-    expect(upstreamEditDialogLayout.scrollArea).toContain("min-w-0");
+    const content = dialogContentClass("wide", "tall", upstreamEditDialogLayout.content);
+    expect(content).toContain("overflow-hidden");
+    expect(content).toContain("w-[min(64rem,calc(100vw-2rem))]");
+    expect(content).toContain("h-[min(46rem,calc(100svh-2rem))]");
+    expect(dialogBodyLayout).toContain("min-w-0");
+    expect(dialogBodyLayout).toContain("overflow-y-auto");
     expect(upstreamEditDialogLayout.scrollArea).toContain("overflow-x-clip");
-    expect(upstreamEditDialogLayout.scrollArea).toContain("overflow-y-auto");
     expect(upstreamEditDialogLayout.form).toContain("min-w-0");
     expect(upstreamEditDialogLayout.form).toContain("max-w-full");
   });

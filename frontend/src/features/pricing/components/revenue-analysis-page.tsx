@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { api, type RevenueReport, type RevenueRow, type Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -227,40 +228,38 @@ export function RevenueAnalysisPage() {
             ? `${report.report_date} · ${report.timezone} · 仅汇总稳定 Key/Token 精确归因结果`
             : "按完整自然日核对账号计费、实际扣费和上游消费。"
         }
+        action={
+          <PageActions>
+            <Input
+              type="date"
+              value={date}
+              max={defaultRevenueDate()}
+              aria-label="核算日期"
+              onChange={(event) => setDate(event.target.value)}
+              className="w-36"
+            />
+            <Button onClick={() => calculate.mutate(date)} disabled={running || !date}>
+              <Play /> {running ? "核算中" : "开始分析"}
+            </Button>
+          </PageActions>
+        }
       />
       {task.error ? <QueryErrorToast error={task.error} fallback="收益核算任务读取失败" /> : null}
       <div
         className="flex h-full min-h-0 flex-col gap-3 overflow-hidden"
         data-testid="revenue-analysis-page"
       >
-        <div className="flex shrink-0 flex-wrap items-end justify-between gap-3 border-y py-3">
-          <div className="flex items-end gap-2">
-            <label className="space-y-1.5 text-sm font-medium">
-              <span>核算日期</span>
-              <Input
-                type="date"
-                value={date}
-                max={defaultRevenueDate()}
-                onChange={(event) => setDate(event.target.value)}
-                className="w-44"
-              />
-            </label>
-            <Button onClick={() => calculate.mutate(date)} disabled={running || !date}>
-              <Play /> {running ? "核算中" : "开始分析"}
-            </Button>
+        {report ? (
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-b pb-3">
+            <Badge variant="outline">精确核对 {report.comparable}</Badge>
+            <Badge variant={report.abnormal > 0 ? "destructive" : "outline"}>
+              计费异常 {report.abnormal}
+            </Badge>
+            <Badge variant={report.unavailable > 0 ? "warning" : "outline"}>
+              无法核对 {report.unavailable}
+            </Badge>
           </div>
-          {report ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">精确核对 {report.comparable}</Badge>
-              <Badge variant={report.abnormal > 0 ? "destructive" : "outline"}>
-                计费异常 {report.abnormal}
-              </Badge>
-              <Badge variant={report.unavailable > 0 ? "warning" : "outline"}>
-                无法核对 {report.unavailable}
-              </Badge>
-            </div>
-          ) : null}
-        </div>
+        ) : null}
 
         {running ? (
           <div className="flex min-h-0 flex-col justify-center gap-3 px-1">

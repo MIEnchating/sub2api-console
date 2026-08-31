@@ -10,7 +10,14 @@ import { api, type UpstreamConfiguration, type UpstreamConfigurationUpdate } fro
 import { Badge } from "@/components/ui/badge";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -46,11 +53,12 @@ type Props = {
 };
 
 export const upstreamEditDialogLayout = {
-  content:
-    "max-h-[min(52rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-4xl",
-  scrollArea: "min-h-0 min-w-0 overflow-x-clip overflow-y-auto overscroll-contain pr-1",
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+  scrollArea: "overflow-x-clip",
   form: "grid min-w-0 max-w-full gap-5",
 } as const;
+
+const upstreamEditFormID = "upstream-edit-form";
 
 const emptyValues: UpstreamEditValues = {
   name: "",
@@ -260,11 +268,11 @@ export function UpstreamEditDialog(props: Props) {
 
   return (
     <Dialog open={props.host !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent className={upstreamEditDialogLayout.content}>
+      <DialogContent width="wide" height="tall" className={upstreamEditDialogLayout.content}>
         <DialogHeader>
           <DialogTitle>编辑上游</DialogTitle>
         </DialogHeader>
-        <div className={upstreamEditDialogLayout.scrollArea}>
+        <DialogBody className={upstreamEditDialogLayout.scrollArea}>
           {configuration.isLoading ? (
             <div className="grid gap-3" aria-label="正在读取上游配置">
               <Skeleton className="h-8 w-full" />
@@ -274,7 +282,11 @@ export function UpstreamEditDialog(props: Props) {
           ) : configuration.error ? (
             <QueryErrorToast error={configuration.error} fallback="上游配置读取失败" />
           ) : (
-            <form className={upstreamEditDialogLayout.form} onSubmit={form.handleSubmit(onSubmit)}>
+            <form
+              id={upstreamEditFormID}
+              className={upstreamEditDialogLayout.form}
+              onSubmit={form.handleSubmit(onSubmit)}
+            >
               <section className="grid min-w-0 gap-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold">连接与鉴权</h3>
@@ -545,19 +557,22 @@ export function UpstreamEditDialog(props: Props) {
                   </div>
                 </div>
               </section>
-
-              <div className="flex justify-end gap-2 border-t pt-4">
-                <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
-                  取消
-                </Button>
-                <Button type="submit" disabled={save.isPending}>
-                  {save.isPending ? <RefreshCw className="animate-spin" /> : <Save />}
-                  {save.isPending ? "保存中…" : "保存并重算"}
-                </Button>
-              </div>
             </form>
           )}
-        </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
+            取消
+          </Button>
+          <Button
+            type="submit"
+            form={upstreamEditFormID}
+            disabled={save.isPending || configuration.isLoading || Boolean(configuration.error)}
+          >
+            {save.isPending ? <RefreshCw className="animate-spin" /> : <Save />}
+            {save.isPending ? "保存中…" : "保存并重算"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

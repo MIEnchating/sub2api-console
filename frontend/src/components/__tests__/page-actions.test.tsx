@@ -32,4 +32,16 @@ describe("PageActions", () => {
     expect(markup).toContain("flex-wrap");
     expect(markup).toContain("justify-end");
   });
+
+  it("forwards page-level identifiers through the shared action container", () => {
+    const markup = renderToStaticMarkup(
+      <PageActions data-testid="pricing-page-actions" aria-label="页面操作">
+        <button type="button">刷新</button>
+      </PageActions>,
+    );
+
+    expect(markup).toContain('data-testid="pricing-page-actions"');
+    expect(markup).toContain('aria-label="页面操作"');
+    expect(markup).toContain('data-slot="page-actions"');
+  });
 });

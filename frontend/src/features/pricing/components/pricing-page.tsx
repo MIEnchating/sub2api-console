@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 
 import { api, type PricingConfig, type PricingDecision, type PricingGroup } from "@/api";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -24,6 +25,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -58,6 +60,65 @@ function groupIDsLabel(ids: string[], names: Map<string, string>) {
 
 function decimal(value: number) {
   return value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function groupPurchaseMultipliers(groupID: string, decisions: PricingDecision[]) {
+  const accounts = decisions.filter((decision) => decision.current_group_ids.includes(groupID));
+  const values = [
+    ...new Map(
+      accounts.flatMap((decision) => {
+        const value = Number(decision.cost_multiplier);
+        if (!Number.isFinite(value) || value <= 0 || !decision.cost_multiplier) return [];
+        return [[value, decision.cost_multiplier] as const];
+      }),
+    ).entries(),
+  ]
+    .sort(([left], [right]) => left - right)
+    .map(([, label]) => label);
+  return { accounts: accounts.length, values };
+}
+
+function GroupPurchaseMultiplierCell(props: { groupID: string; decisions: PricingDecision[] }) {
+  const summary = groupPurchaseMultipliers(props.groupID, props.decisions);
+  if (summary.accounts === 0) return <span className="text-muted-foreground">无账号</span>;
+  if (summary.values.length === 0) {
+    return (
+      <div className="grid gap-0.5">
+        <span className="text-muted-foreground">未记录</span>
+        <span className="text-muted-foreground text-xs">{summary.accounts} 个账号</span>
+      </div>
+    );
+  }
+  const label =
+    summary.values.length === 1
+      ? summary.values[0]
+      : `${summary.values[0]} - ${summary.values[summary.values.length - 1]}`;
+  const content = `当前 ${summary.accounts} 个账号，进货倍率共 ${summary.values.length} 档：${summary.values.join("、")}`;
+  return (
+    <div className="grid gap-0.5 tabular-nums">
+      {summary.values.length === 1 ? (
+        <span className="font-medium">{label}</span>
+      ) : (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="w-fit border-b border-dashed font-medium"
+                aria-label={`查看分组 ${props.groupID} 的全部进货倍率`}
+              />
+            }
+          >
+            {label}
+          </TooltipTrigger>
+          <TooltipContent className="max-w-sm whitespace-normal">{content}</TooltipContent>
+        </Tooltip>
+      )}
+      <span className="text-muted-foreground text-xs">
+        {summary.accounts} 个账号{summary.values.length > 1 ? ` · ${summary.values.length} 档` : ""}
+      </span>
+    </div>
+  );
 }
 
 function pricingGroupChanges(decision: PricingDecision) {
@@ -111,7 +172,7 @@ function pricingDecisionBasis(
       }
       const limit = sale * (1 - config.profit_margin);
       rows.push(
-        `${name}：成本 ${decision.cost_multiplier} ${cost <= limit ? "≤" : ">"} 可接受上限 ${decimal(limit)}（售价 ${group.rate_multiplier} × ${percent(1 - config.profit_margin)}）`,
+        `${name}：进货倍率 ${decision.cost_multiplier} ${cost <= limit ? "≤" : ">"} 可接受上限 ${decimal(limit)}（售价 ${group.rate_multiplier} × ${percent(1 - config.profit_margin)}）`,
       );
     }
   }
@@ -214,7 +275,7 @@ export function PricingPreviewTable(props: {
   config: PricingConfig;
 }) {
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = useState(10);
   const totalPages = Math.max(1, Math.ceil(props.decisions.length / pageSize));
   const page = Math.min(currentPage, totalPages);
   const visibleDecisions = props.decisions.slice((page - 1) * pageSize, page * pageSize);
@@ -229,93 +290,105 @@ export function PricingPreviewTable(props: {
 
   return (
     <div
-      className="flex min-h-0 flex-col overflow-hidden rounded-md border"
+      className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border"
       data-testid="pricing-preview-table"
     >
-      <div className="min-h-0 flex-1 overflow-auto">
-        <Table className="min-w-[94rem]">
-          <TableHeader>
+      <Table
+        className="min-w-[82rem]"
+        containerClassName="min-h-0 flex-1 overflow-auto"
+        overflowTooltip={false}
+      >
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-52">账号</TableHead>
+            <TableHead className="w-28">进货倍率</TableHead>
+            <TableHead className="w-44">当前分组</TableHead>
+            <TableHead className="w-44">调整后分组</TableHead>
+            <TableHead className="w-56">具体变更</TableHead>
+            <TableHead>判定依据</TableHead>
+            <TableHead className="w-28">状态</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {props.decisions.length === 0 ? (
             <TableRow>
-              <TableHead className="w-52">账号</TableHead>
-              <TableHead className="w-28">账号平台</TableHead>
-              <TableHead className="w-28">成本倍率</TableHead>
-              <TableHead className="w-48">当前分组</TableHead>
-              <TableHead className="w-48">调整后分组</TableHead>
-              <TableHead className="w-64">具体变更</TableHead>
-              <TableHead className="min-w-[28rem]">判定依据</TableHead>
-              <TableHead className="w-28">状态</TableHead>
+              <TableCell colSpan={7} className="text-muted-foreground h-24 text-center">
+                当前没有账号价格数据
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {props.decisions.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={8} className="text-muted-foreground h-24 text-center">
-                  当前没有待调整账号
-                </TableCell>
-              </TableRow>
-            ) : (
-              visibleDecisions.map((decision) => {
-                const changes = pricingGroupChanges(decision);
-                const basis = pricingDecisionBasis(decision, props.groups, props.config);
-                return (
-                  <TableRow key={decision.account_id}>
-                    <TableCell>
-                      <span className="font-medium">
+          ) : (
+            visibleDecisions.map((decision) => {
+              const changes = pricingGroupChanges(decision);
+              const basis = pricingDecisionBasis(decision, props.groups, props.config);
+              return (
+                <TableRow key={decision.account_id}>
+                  <TableCell className="align-top whitespace-normal">
+                    <div className="grid gap-0.5">
+                      <span className="break-words font-medium">
                         {decision.account_name || `账号 ${decision.account_id}`}
                       </span>
-                      <span className="text-muted-foreground ml-2">#{decision.account_id}</span>
-                    </TableCell>
-                    <TableCell>{decision.platform || "未记录"}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {decision.cost_multiplier ?? "-"}
-                    </TableCell>
-                    <TableCell>{groupIDsLabel(decision.current_group_ids, groupNames)}</TableCell>
-                    <TableCell>{groupIDsLabel(decision.desired_group_ids, groupNames)}</TableCell>
-                    <TableCell>
-                      {decision.skipped ? (
-                        <span className="text-muted-foreground text-xs">不会修改账号分组</span>
-                      ) : decision.changed ? (
-                        <div className="grid gap-1 text-xs leading-5">
-                          {changes.added.length > 0 ? (
-                            <span className="text-success">
-                              加入：{groupIDsLabel(changes.added, groupNames)}
-                            </span>
-                          ) : null}
-                          {changes.removed.length > 0 ? (
-                            <span className="text-destructive">
-                              移出：{groupIDsLabel(changes.removed, groupNames)}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">保留当前分组</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
+                      <span className="text-muted-foreground text-xs">
+                        #{decision.account_id} · {decision.platform || "平台未记录"}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="align-top font-medium tabular-nums">
+                    {decision.cost_multiplier ?? "-"}
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    <span className="break-words">
+                      {groupIDsLabel(decision.current_group_ids, groupNames)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    <span className="break-words">
+                      {groupIDsLabel(decision.desired_group_ids, groupNames)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    {decision.skipped ? (
+                      <span className="text-muted-foreground text-xs">不会修改账号分组</span>
+                    ) : decision.changed ? (
                       <div className="grid gap-1 text-xs leading-5">
-                        {basis.map((line) => (
-                          <span className="text-muted-foreground" key={line}>
-                            {line}
+                        {changes.added.length > 0 ? (
+                          <span className="text-success break-words">
+                            加入：{groupIDsLabel(changes.added, groupNames)}
                           </span>
-                        ))}
+                        ) : null}
+                        {changes.removed.length > 0 ? (
+                          <span className="text-destructive break-words">
+                            移出：{groupIDsLabel(changes.removed, groupNames)}
+                          </span>
+                        ) : null}
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      {decision.skipped ? (
-                        <Badge variant="warning">无法判定</Badge>
-                      ) : decision.changed ? (
-                        <Badge variant="secondary">将调整</Badge>
-                      ) : (
-                        <Badge variant="outline">无需调整</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">保留当前分组</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="align-top whitespace-normal">
+                    <div className="grid gap-1 text-xs leading-5">
+                      {basis.map((line) => (
+                        <span className="text-muted-foreground break-words" key={line}>
+                          {line}
+                        </span>
+                      ))}
+                    </div>
+                  </TableCell>
+                  <TableCell className="align-top">
+                    {decision.skipped ? (
+                      <Badge variant="warning">无法判定</Badge>
+                    ) : decision.changed ? (
+                      <Badge variant="secondary">将调整</Badge>
+                    ) : (
+                      <Badge variant="outline">无需调整</Badge>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
       <DataTablePagination
         currentPage={page}
         totalPages={totalPages}
@@ -595,10 +668,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             : "配置自动调价参数、账号互换范围与执行策略。"
         }
         action={
-          <div
-            className="flex w-[calc(100vw-1.5rem)] flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end"
-            data-testid="pricing-page-actions"
-          >
+          <PageActions data-testid="pricing-page-actions">
             <Button
               variant="outline"
               onClick={() => void snapshot.refetch()}
@@ -632,7 +702,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 </Button>
               </>
             ) : null}
-          </div>
+          </PageActions>
         }
       />
 
@@ -654,6 +724,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   <TableRow>
                     <TableHead>分组</TableHead>
                     <TableHead className="w-40">平台</TableHead>
+                    <TableHead className="w-40">进货倍率</TableHead>
                     <TableHead className="w-40">售价倍率</TableHead>
                     <TableHead className="w-48">状态</TableHead>
                   </TableRow>
@@ -666,6 +737,12 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                         <span className="text-muted-foreground ml-2">#{group.id}</span>
                       </TableCell>
                       <TableCell>{group.platform || "-"}</TableCell>
+                      <TableCell>
+                        <GroupPurchaseMultiplierCell
+                          groupID={group.id}
+                          decisions={snapshot.data.decisions}
+                        />
+                      </TableCell>
                       <TableCell>{group.rate_multiplier ?? "-"}</TableCell>
                       <TableCell>
                         {group.available ? (
@@ -833,7 +910,11 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       )}
       {current && snapshot.data ? (
         <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-          <DialogContent className="grid max-h-[min(48rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-[min(96vw,100rem)]">
+          <DialogContent
+            width="table"
+            height="tall"
+            className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          >
             <DialogHeader>
               <DialogTitle>账号分组调整明细</DialogTitle>
               <DialogDescription>
@@ -843,11 +924,13 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 {previewSkipped} 个。表格会明确列出加入、移出的分组以及每个售价分组的成本上限。
               </DialogDescription>
             </DialogHeader>
-            <PricingPreviewTable
-              decisions={previewDecisions}
-              groups={snapshot.data.groups}
-              config={current}
-            />
+            <DialogBody className="overflow-hidden pr-0">
+              <PricingPreviewTable
+                decisions={previewDecisions}
+                groups={snapshot.data.groups}
+                config={current}
+              />
+            </DialogBody>
           </DialogContent>
         </Dialog>
       ) : null}

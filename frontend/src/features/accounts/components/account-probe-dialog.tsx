@@ -6,6 +6,7 @@ import { api, type ProbeResult } from "@/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -25,7 +26,7 @@ import { operationErrorMessage } from "@/lib/operation-feedback";
 const noModelSelected = "__not_selected__";
 
 export const accountProbeDialogContentClass =
-  "grid min-w-0 max-h-[calc(100svh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden";
+  "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden";
 
 export type ProbeDialogTarget = {
   kind: "onboarding";
@@ -85,14 +86,14 @@ export function AccountProbeDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent width="medium" className={accountProbeDialogContentClass}>
+      <DialogContent width="medium" height="large" className={accountProbeDialogContentClass}>
         <DialogHeader className="min-w-0 pr-8">
           <DialogTitle className="min-w-0 break-words">探活测试：{props.target.name}</DialogTitle>
           <DialogDescription className="min-w-0 break-words">
             添加账号前读取该上游支持的模型并执行单次测试，结果会保留在此弹窗中。
           </DialogDescription>
         </DialogHeader>
-        <div className="grid min-w-0 gap-3 overflow-x-hidden overflow-y-auto py-1">
+        <DialogBody className="grid gap-3 py-1">
           <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">测试模型</span>
             <Select
@@ -169,7 +170,7 @@ export function AccountProbeDialog(props: {
             </div>
           ) : null}
           {result ? <ProbeResultPanel result={result} /> : null}
-        </div>
+        </DialogBody>
         <ProbeDialogActions
           runDisabled={runDisabled}
           probePending={runProbe.isPending}

@@ -1,5 +1,6 @@
 import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
 
+import { PageActions } from "@/components/page-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,7 +45,7 @@ export function OnboardingHeadingActions(props: {
   nextUpstream?: NavigationTarget | null;
 }) {
   return (
-    <>
+    <PageActions>
       <Button type="button" variant="outline" onClick={props.onBack}>
         <ArrowLeft aria-hidden="true" />
         返回上游管理
@@ -52,6 +53,6 @@ export function OnboardingHeadingActions(props: {
       <UpstreamNavigationButton direction="previous" target={props.previousUpstream ?? null} />
       <UpstreamNavigationButton direction="next" target={props.nextUpstream ?? null} />
       <Badge variant="outline">新建 Key</Badge>
-    </>
+    </PageActions>
   );
 }

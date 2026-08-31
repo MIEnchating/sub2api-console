@@ -18,11 +18,11 @@ describe("账号探活弹窗", () => {
   });
 
   it("使用稳定宽度并限制所有探活控件在弹窗内部", () => {
-    const className = dialogContentClass("medium", "content", accountProbeDialogContentClass);
+    const className = dialogContentClass("medium", "large", accountProbeDialogContentClass);
 
     expect(className).toContain("w-[min(32rem,calc(100vw-2rem))]");
     expect(className).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
-    expect(className).toContain("min-w-0");
+    expect(className).toContain("h-[min(42rem,calc(100svh-2rem))]");
     expect(className).toContain("overflow-hidden");
   });
 

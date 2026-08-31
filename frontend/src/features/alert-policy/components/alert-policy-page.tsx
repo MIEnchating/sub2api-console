@@ -6,6 +6,7 @@ import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
 
 import { api, type AlertPolicy } from "@/api";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -204,7 +205,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
         title="告警策略"
         description="配置告警检测范围、触发阈值和通知发送行为。"
         action={
-          <div className="flex items-center gap-2">
+          <PageActions>
             <Button
               variant="outline"
               onClick={() => form.reset(defaultAlertPolicyForm)}
@@ -215,7 +216,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
             <Button onClick={() => void submit()} disabled={update.isPending || policy.isLoading}>
               <Save /> {update.isPending ? "保存中" : "保存策略"}
             </Button>
-          </div>
+          </PageActions>
         }
       />
 

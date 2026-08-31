@@ -24,6 +24,8 @@ describe("revenue analysis", () => {
     expect(markup).toContain("收益分析");
     expect(markup).toContain("开始分析");
     expect(markup).toContain('type="date"');
+    expect(markup).toContain('aria-label="核算日期"');
+    expect(markup).toContain('data-slot="page-actions"');
     expect(markup).toContain('data-testid="revenue-analysis-page"');
     expect(markup).not.toContain('role="dialog"');
     expect(markup).not.toContain("计算收入");

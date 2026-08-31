@@ -4,6 +4,7 @@ import { ArrowRight, Bolt, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } fr
 import { toast } from "sonner";
 
 import { api } from "@/api";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -267,10 +268,12 @@ export function OverviewPage(props: OverviewPageProps) {
         title="运营总览"
         description="汇总受管渠道、分组健康与近期运行状态。"
         action={
-          <Button variant="outline" onClick={() => sync.mutate()} disabled={syncing}>
-            <RefreshCw className={cn(syncing && "animate-spin")} />
-            {syncing ? "同步中" : "立即同步"}
-          </Button>
+          <PageActions>
+            <Button variant="outline" onClick={() => sync.mutate()} disabled={syncing}>
+              <RefreshCw className={cn(syncing && "animate-spin")} />
+              {syncing ? "同步中" : "立即同步"}
+            </Button>
+          </PageActions>
         }
       />
       {error && <QueryErrorToast error={error} fallback="运营数据读取失败" />}

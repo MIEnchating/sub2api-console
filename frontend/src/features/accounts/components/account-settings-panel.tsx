@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import { api, type AccountDetail, type Task } from "@/api";
 import { Button } from "@/components/ui/button";
-import { DialogFooter } from "@/components/ui/dialog";
+import { DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -146,7 +146,7 @@ export function AccountSettingsPanel(props: {
   const formId = `account-settings-${props.accountId}`;
   return (
     <>
-      <div className={accountDetailDialogLayout.body}>
+      <DialogBody className={accountDetailDialogLayout.body}>
         {props.query.isLoading ? <AccountSettingsSkeleton /> : null}
         {props.query.isError ? (
           <p className="text-destructive py-6 text-center text-sm">
@@ -272,7 +272,7 @@ export function AccountSettingsPanel(props: {
             </section>
           </form>
         ) : null}
-      </div>
+      </DialogBody>
       <DialogFooter>
         <Button type="button" variant="outline" disabled={save.isPending} onClick={props.onCancel}>
           取消

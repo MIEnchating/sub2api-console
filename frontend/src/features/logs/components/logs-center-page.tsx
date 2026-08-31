@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -280,7 +281,11 @@ function LogDetailsDialog(props: { entry: UnifiedLogEntry | null; onClose: () =>
   const changes = props.entry ? relatedChanges(props.entry) : [];
   return (
     <Dialog open={props.entry !== null} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="max-h-[min(46rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-[min(96vw,76rem)]">
+      <DialogContent
+        width="wide"
+        height="tall"
+        className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+      >
         <DialogHeader>
           <DialogTitle>{props.entry ? logTitleLabel(props.entry.title) : "记录详情"}</DialogTitle>
           <DialogDescription>
@@ -290,7 +295,7 @@ function LogDetailsDialog(props: { entry: UnifiedLogEntry | null; onClose: () =>
           </DialogDescription>
         </DialogHeader>
         {props.entry && (
-          <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+          <DialogBody className="space-y-4">
             <section className="border-b pb-4">
               <h3 className="text-muted-foreground text-xs font-medium">执行摘要</h3>
               <p className="mt-1 text-sm leading-6">{props.entry.summary}</p>
@@ -350,7 +355,7 @@ function LogDetailsDialog(props: { entry: UnifiedLogEntry | null; onClose: () =>
                 <LogChangesTable changes={changes} />
               </section>
             )}
-          </div>
+          </DialogBody>
         )}
       </DialogContent>
     </Dialog>

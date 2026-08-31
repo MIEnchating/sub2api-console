@@ -1,31 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  BellRing,
-  CircleAlert,
-  Eye,
-  LoaderCircle,
-  Radio,
-  Send,
-} from "lucide-react";
+import { BellRing, CircleAlert, Eye, LoaderCircle, Radio, Send } from "lucide-react";
 
-import type {
-  NotificationQueueDetails,
-  NotificationQueueItem,
-  NotificationStatus,
-} from "@/api";
+import type { NotificationQueueDetails, NotificationQueueItem, NotificationStatus } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -81,10 +65,7 @@ function QueueMetric(props: QueueMetricProps) {
   );
 }
 
-function queueItems(
-  details: NotificationQueueDetails,
-  kind: QueueKind,
-): QueueDisplayItem[] {
+function queueItems(details: NotificationQueueDetails, kind: QueueKind): QueueDisplayItem[] {
   if (kind === "producer") {
     return [
       ...details.producer_firing.map((alert) => ({
@@ -134,10 +115,7 @@ function queueItemMatches(item: QueueDisplayItem, search: string) {
   ].some((value) => value?.toLocaleLowerCase().includes(query));
 }
 
-function QueueDetailsTable(props: {
-  items: QueueDisplayItem[];
-  kind: QueueKind;
-}) {
+function QueueDetailsTable(props: { items: QueueDisplayItem[]; kind: QueueKind }) {
   if (!props.items.length) {
     return (
       <div className="text-muted-foreground flex min-h-40 items-center justify-center px-4 text-sm">
@@ -149,15 +127,10 @@ function QueueDetailsTable(props: {
     <>
       <div className="divide-border divide-y sm:hidden">
         {props.items.map(({ alert, queueStatus, queueReason, danger }) => (
-          <article
-            className="space-y-2.5 p-3"
-            key={`${queueStatus}:${alert.incident_key}`}
-          >
+          <article className="space-y-2.5 p-3" key={`${queueStatus}:${alert.incident_key}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <strong className="block font-medium">
-                  {alertTypeLabel(alert.event_type)}
-                </strong>
+                <strong className="block font-medium">{alertTypeLabel(alert.event_type)}</strong>
                 <span className="text-muted-foreground mt-0.5 block text-xs">
                   {alertObjectLabel(alert)}
                 </span>
@@ -181,20 +154,13 @@ function QueueDetailsTable(props: {
             <div className="text-sm">
               <span>{alertCauseLabel(alert.cause_code)}</span>
               {alert.last_error ? (
-                <span className="text-destructive mt-0.5 block text-xs">
-                  {alert.last_error}
-                </span>
+                <span className="text-destructive mt-0.5 block text-xs">{alert.last_error}</span>
               ) : null}
             </div>
             <div className="text-muted-foreground flex flex-wrap items-center justify-between gap-2 text-xs">
               <span>最近更新 {formatQueueTime(alert.last_seen_at)}</span>
               {props.kind === "consumer" ? (
-                <span>
-                  {alertDeliveryLabel(
-                    alert.delivery_status,
-                    alert.delivery_attempts,
-                  )}
-                </span>
+                <span>{alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}</span>
               ) : null}
             </div>
           </article>
@@ -208,34 +174,20 @@ function QueueDetailsTable(props: {
               <TableHead className="w-32">队列状态</TableHead>
               <TableHead>原因</TableHead>
               <TableHead className="w-32">最近更新</TableHead>
-              {props.kind === "consumer" ? (
-                <TableHead className="w-32">通知情况</TableHead>
-              ) : null}
+              {props.kind === "consumer" ? <TableHead className="w-32">通知情况</TableHead> : null}
             </TableRow>
           </TableHeader>
           <TableBody>
             {props.items.map(({ alert, queueStatus, queueReason, danger }) => (
               <TableRow key={`${queueStatus}:${alert.incident_key}`}>
-                <TableCell
-                  className="whitespace-normal"
-                  overflowTooltip={false}
-                >
-                  <strong className="block font-medium">
-                    {alertTypeLabel(alert.event_type)}
-                  </strong>
+                <TableCell className="whitespace-normal" overflowTooltip={false}>
+                  <strong className="block font-medium">{alertTypeLabel(alert.event_type)}</strong>
                   <span className="text-muted-foreground mt-0.5 block text-xs">
                     {alertObjectLabel(alert)}
                   </span>
                 </TableCell>
-                <TableCell
-                  className="whitespace-normal"
-                  overflowTooltip={false}
-                >
-                  <span
-                    className={
-                      danger ? "text-destructive font-medium" : "font-medium"
-                    }
-                  >
+                <TableCell className="whitespace-normal" overflowTooltip={false}>
+                  <span className={danger ? "text-destructive font-medium" : "font-medium"}>
                     {queueStatus}
                   </span>
                   {queueReason ? (
@@ -244,10 +196,7 @@ function QueueDetailsTable(props: {
                     </span>
                   ) : null}
                 </TableCell>
-                <TableCell
-                  className="whitespace-normal"
-                  overflowTooltip={false}
-                >
+                <TableCell className="whitespace-normal" overflowTooltip={false}>
                   <span>{alertCauseLabel(alert.cause_code)}</span>
                   {alert.last_error ? (
                     <span className="text-destructive mt-0.5 block text-xs">
@@ -257,14 +206,8 @@ function QueueDetailsTable(props: {
                 </TableCell>
                 <TableCell>{formatQueueTime(alert.last_seen_at)}</TableCell>
                 {props.kind === "consumer" ? (
-                  <TableCell
-                    className="whitespace-normal"
-                    overflowTooltip={false}
-                  >
-                    {alertDeliveryLabel(
-                      alert.delivery_status,
-                      alert.delivery_attempts,
-                    )}
+                  <TableCell className="whitespace-normal" overflowTooltip={false}>
+                    {alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}
                     {alert.delivered_at ? (
                       <span className="text-muted-foreground mt-0.5 block text-xs">
                         {formatQueueTime(alert.delivered_at)}
@@ -289,18 +232,12 @@ export function NotificationQueueDetailsList(props: {
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const filteredItems = useMemo(
-    () =>
-      queueItems(props.details, props.kind).filter((item) =>
-        queueItemMatches(item, search),
-      ),
+    () => queueItems(props.details, props.kind).filter((item) => queueItemMatches(item, search)),
     [props.details, props.kind, search],
   );
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const page = Math.min(currentPage, totalPages);
-  const visibleItems = filteredItems.slice(
-    (page - 1) * pageSize,
-    page * pageSize,
-  );
+  const visibleItems = filteredItems.slice((page - 1) * pageSize, page * pageSize);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -311,10 +248,7 @@ export function NotificationQueueDetailsList(props: {
   }, [currentPage, totalPages]);
 
   return (
-    <div
-      className="flex h-full min-h-0 flex-col gap-3"
-      data-testid="notification-queue-details"
-    >
+    <div className="flex h-full min-h-0 flex-col gap-3" data-testid="notification-queue-details">
       <TableFilterToolbar>
         <SearchField
           value={search}
@@ -365,9 +299,7 @@ export function NotificationQueueStatus(props: {
     try {
       setDetails(await props.loadDetails());
     } catch (loadError) {
-      setError(
-        loadError instanceof Error ? loadError.message : "队列内容读取失败",
-      );
+      setError(loadError instanceof Error ? loadError.message : "队列内容读取失败");
     } finally {
       setLoading(false);
     }
@@ -391,21 +323,12 @@ export function NotificationQueueStatus(props: {
         <CardContent className="p-0">
           <section className="grid gap-3 border-b px-4 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-center sm:gap-5">
             <div className="flex min-w-0 items-center gap-2 font-medium">
-              <BellRing
-                className="text-muted-foreground size-4 shrink-0"
-                aria-hidden="true"
-              />
+              <BellRing className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
               <span>告警生产队列</span>
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-              <QueueMetric
-                label="告警中"
-                value={props.queues.producer_firing}
-              />
-              <QueueMetric
-                label="已恢复"
-                value={props.queues.producer_recovered}
-              />
+              <QueueMetric label="告警中" value={props.queues.producer_firing} />
+              <QueueMetric label="已恢复" value={props.queues.producer_recovered} />
             </div>
             <Button
               type="button"
@@ -420,27 +343,18 @@ export function NotificationQueueStatus(props: {
           </section>
           <section className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-center sm:gap-5">
             <div className="flex min-w-0 items-center gap-2 font-medium">
-              <Send
-                className="text-muted-foreground size-4 shrink-0"
-                aria-hidden="true"
-              />
+              <Send className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
               <span>通知消费队列</span>
             </div>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-              <QueueMetric
-                label="待发送"
-                value={props.queues.consumer_pending}
-              />
+              <QueueMetric label="待发送" value={props.queues.consumer_pending} />
               <QueueMetric
                 label="发送失败"
                 value={props.queues.consumer_failed}
                 danger={props.queues.consumer_failed > 0}
               />
               {props.queues.consumer_failed > 0 ? (
-                <CircleAlert
-                  className="text-destructive sr-only"
-                  aria-label="存在发送失败"
-                />
+                <CircleAlert className="text-destructive sr-only" aria-label="存在发送失败" />
               ) : null}
             </div>
             <Button
@@ -466,46 +380,39 @@ export function NotificationQueueStatus(props: {
         <DialogContent
           width={operationDialogWidth(Boolean(details && !loading))}
           height={operationDialogHeight(Boolean(details && !loading), "large")}
-          className="grid max-h-[min(42rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-5xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>
-              {dialogKind === "consumer" ? "通知消费队列" : "告警生产队列"}
-            </DialogTitle>
+            <DialogTitle>{dialogKind === "consumer" ? "通知消费队列" : "告警生产队列"}</DialogTitle>
             <DialogDescription>
               {dialogKind === "consumer"
                 ? `待发送 ${details?.consumer_pending.length ?? props.queues.consumer_pending} 条，发送失败 ${details?.consumer_failed.length ?? props.queues.consumer_failed} 条${details ? `，已抑制或本轮不发送 ${Math.max(0, details.consumer_items.length - details.consumer_pending.length)} 条` : ""}`
                 : `告警中 ${details?.producer_firing.length ?? props.queues.producer_firing} 条，已恢复 ${details?.producer_recovered.length ?? props.queues.producer_recovered} 条`}
             </DialogDescription>
           </DialogHeader>
-          {loading ? (
-            <div className="border-border min-h-0 overflow-auto rounded-lg border">
-              <div className="text-muted-foreground flex min-h-40 items-center justify-center gap-2 text-sm">
-                <LoaderCircle
-                  className="size-4 animate-spin"
-                  aria-hidden="true"
-                />
-                正在读取队列内容
+          <DialogBody className="overflow-hidden pr-0">
+            {loading ? (
+              <div className="border-border h-full overflow-auto rounded-lg border">
+                <div className="text-muted-foreground flex min-h-40 items-center justify-center gap-2 text-sm">
+                  <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+                  正在读取队列内容
+                </div>
               </div>
-            </div>
-          ) : error ? (
-            <div className="border-border min-h-0 overflow-auto rounded-lg border">
-              <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center text-sm">
-                <span className="text-destructive">{error}</span>
-                {dialogKind ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void loadQueue(dialogKind)}
-                  >
-                    重新读取
-                  </Button>
-                ) : null}
+            ) : error ? (
+              <div className="border-border h-full overflow-auto rounded-lg border">
+                <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center text-sm">
+                  <span className="text-destructive">{error}</span>
+                  {dialogKind ? (
+                    <Button variant="outline" size="sm" onClick={() => void loadQueue(dialogKind)}>
+                      重新读取
+                    </Button>
+                  ) : null}
+                </div>
               </div>
-            </div>
-          ) : details && dialogKind ? (
-            <NotificationQueueDetailsList details={details} kind={dialogKind} />
-          ) : null}
+            ) : details && dialogKind ? (
+              <NotificationQueueDetailsList details={details} kind={dialogKind} />
+            ) : null}
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </>

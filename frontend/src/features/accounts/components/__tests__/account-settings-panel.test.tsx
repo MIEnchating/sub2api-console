@@ -97,8 +97,7 @@ describe("账号设置面板", () => {
   it("uses a compact two-column form without nested highlight cards", () => {
     const markup = renderPanel();
 
-    expect(accountDetailDialogLayout.content).toContain("sm:max-w-2xl");
-    expect(accountDetailDialogLayout.content).not.toContain("sm:max-w-3xl");
+    expect(accountDetailDialogLayout.content).not.toContain("sm:max-w-");
     expect(markup).toContain('data-testid="account-routing-grid"');
     expect(markup).toContain("sm:grid-cols-2");
     expect(markup).toContain('data-testid="account-control-group"');

@@ -119,7 +119,7 @@ export function ManualPriorityDialog(props: {
     parsedConcurrency <= 10_000_000;
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent width="medium">
         <DialogHeader>
           <DialogTitle>人工优先位</DialogTitle>
           <DialogDescription>

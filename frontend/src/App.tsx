@@ -110,6 +110,7 @@ import {
 } from "./components/ui/sheet";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -2493,7 +2494,7 @@ function UpstreamsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(managementTask.data))}
           height={operationDialogHeight(taskStopsPolling(managementTask.data), "medium")}
-          className="max-h-[min(40rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] sm:max-w-5xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>
@@ -2504,9 +2505,7 @@ function UpstreamsPage() {
                   : "上游名称修复"}
             </DialogTitle>
           </DialogHeader>
-          <div
-            className={cn("min-h-0", managementTask.data ? "overflow-hidden" : "overflow-y-auto")}
-          >
+          <DialogBody className={cn(managementTask.data && "overflow-hidden pr-0")}>
             {!managementTask.data &&
               !managementTask.error &&
               !balanceSync.error &&
@@ -2550,7 +2549,7 @@ function UpstreamsPage() {
                 }
               />
             )}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -2566,12 +2565,12 @@ function UpstreamsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(syncTask.data))}
           height={operationDialogHeight(taskStopsPolling(syncTask.data), "tall")}
-          className="max-h-[min(46rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] sm:max-w-5xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>同步上游</DialogTitle>
           </DialogHeader>
-          <div className={cn("min-h-0", syncTask.data ? "overflow-hidden" : "overflow-y-auto")}>
+          <DialogBody className={cn(syncTask.data && "overflow-hidden pr-0")}>
             {!syncTask.data && !syncTask.error && !syncUpstreams.error && (
               <TaskStartupState message="正在创建上游同步任务" />
             )}
@@ -2582,7 +2581,7 @@ function UpstreamsPage() {
               <QueryError error={syncTask.error} fallback="同步状态读取失败" embedded />
             )}
             {syncTask.data && <UpstreamSyncTaskStatus task={syncTask.data} />}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -2599,12 +2598,13 @@ function UpstreamsPage() {
       >
         <DialogContent
           width="medium"
-          className="max-h-[min(40rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-2xl"
+          height="large"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>{actionDialog?.kind === "balance" ? "同步余额" : "恢复鉴权"}</DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 min-w-0 overflow-x-clip overflow-y-auto overscroll-contain">
+          <DialogBody>
             {actionDialog?.kind === "auth" &&
             (!actionTaskId || actionTask.data?.status === "failed") ? (
               <ManualAuthForm
@@ -2657,7 +2657,7 @@ function UpstreamsPage() {
               ) : (
                 <AuthTaskProgress task={actionTask.data} />
               ))}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -2672,12 +2672,13 @@ function UpstreamsPage() {
       >
         <DialogContent
           width="medium"
-          className="max-h-[min(42rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] sm:max-w-xl"
+          height="large"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>删除上游</DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 overflow-y-auto">
+          <DialogBody>
             {!deleteTaskId && deletePreview.isLoading && (
               <div className="grid gap-3 py-2" aria-label="正在读取删除范围">
                 <Skeleton className="h-5 w-40" />
@@ -2761,7 +2762,7 @@ function UpstreamsPage() {
                   </Button>
                 </div>
               )}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -2770,11 +2771,15 @@ function UpstreamsPage() {
           if (!open) setSelectedHost(null);
         }}
       >
-        <DialogContent className="grid max-h-[min(48rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] sm:max-w-[min(96vw,86rem)]">
+        <DialogContent
+          width="table"
+          height="tall"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
           <DialogHeader>
             <DialogTitle>上游分组</DialogTitle>
           </DialogHeader>
-          <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border">
+          <DialogBody className="grid grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border pr-0">
             <Table className="min-w-[820px] table-fixed" containerClassName="min-h-0 overflow-auto">
               <TableHeader className="sticky top-0 z-10">
                 <TableRow>
@@ -2855,7 +2860,7 @@ function UpstreamsPage() {
                 }}
               />
             )}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Sheet
@@ -3746,12 +3751,12 @@ export function AccountsPage() {
         <DialogContent
           width={operationDialogWidth(baseURLCheckResultsReady, "table")}
           height={operationDialogHeight(baseURLCheckResultsReady, "tall")}
-          className="max-h-[min(46rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>配置校验与修复</DialogTitle>
           </DialogHeader>
-          <div className="min-h-0 min-w-0 overflow-hidden">
+          <DialogBody className="overflow-hidden pr-0">
             {baseURLCheckMutation.isPending && (
               <TaskStartupState message="正在启动配置校验与修复" />
             )}
@@ -3834,7 +3839,7 @@ export function AccountsPage() {
                 />
               </div>
             ) : null}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -3851,7 +3856,7 @@ export function AccountsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(maintenanceTask.data))}
           height={operationDialogHeight(taskStopsPolling(maintenanceTask.data), "large")}
-          className="max-h-[min(42rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-4xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>
@@ -3875,12 +3880,7 @@ export function AccountsPage() {
               </DialogDescription>
             )}
           </DialogHeader>
-          <div
-            className={cn(
-              "min-h-0 min-w-0 overflow-x-hidden",
-              maintenanceTask.data ? "overflow-y-hidden" : "overflow-y-auto",
-            )}
-          >
+          <DialogBody className={cn(maintenanceTask.data && "overflow-hidden pr-0")}>
             {maintenanceKind === "repair" &&
               !maintenanceTaskId &&
               !maintenanceMutation.isPending &&
@@ -3990,7 +3990,7 @@ export function AccountsPage() {
                   }}
                 />
               ))}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </PageLayout>
@@ -4897,12 +4897,18 @@ export function GroupsPage() {
           }
         }}
       >
-        <DialogContent className="grid max-h-[min(46rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-3xl">
+        <DialogContent
+          width="wide"
+          height="large"
+          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        >
           <DialogHeader>
             <DialogTitle>编辑分组策略</DialogTitle>
             <DialogDescription>{editingGroup?.name}</DialogDescription>
           </DialogHeader>
-          {editor && <GroupPolicyEditorFields value={editor} onChange={setEditor} />}
+          <DialogBody className="overflow-hidden pr-0">
+            {editor && <GroupPolicyEditorFields value={editor} onChange={setEditor} />}
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"
@@ -5014,15 +5020,7 @@ function AlertsPage() {
         title="告警通知"
         description="查看上游、鉴权、余额和主动探测告警，以及通知发送结果。"
         action={
-          <div className="flex flex-wrap gap-2">
-            <SearchField
-              value={search}
-              onChange={(value) => {
-                setSearch(value);
-                setPage(1);
-              }}
-              placeholder="搜索类型、对象或原因"
-            />
+          <PageActions>
             <Button variant="outline" disabled={evaluating} onClick={() => evaluate.mutate()}>
               <BellRing size={16} />
               {evaluating ? "检测中…" : "立即检测"}
@@ -5031,7 +5029,7 @@ function AlertsPage() {
               <RefreshCw size={16} />
               刷新
             </Button>
-          </div>
+          </PageActions>
         }
       />
       {!notifications.isLoading &&
@@ -5069,6 +5067,16 @@ function AlertsPage() {
             />
           }
         />
+        <TableFilterToolbar className="border-b px-4 py-3">
+          <SearchField
+            value={search}
+            onChange={(value) => {
+              setSearch(value);
+              setPage(1);
+            }}
+            placeholder="搜索类型、对象或原因"
+          />
+        </TableFilterToolbar>
         {alerts.isLoading && <LoadingRows columns={1} />}
         {!alerts.isLoading && !alerts.error && !filteredAlerts.length && (
           <EmptyRow
@@ -6692,7 +6700,7 @@ function OnboardingPage() {
           }
         }}
       >
-        <DialogContent width="medium" className="sm:max-w-xl">
+        <DialogContent width="medium">
           <DialogHeader>
             <DialogTitle>同步余额</DialogTitle>
           </DialogHeader>
@@ -6739,7 +6747,7 @@ function OnboardingPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(onboardingMaintenanceTask.data))}
           height={operationDialogHeight(taskStopsPolling(onboardingMaintenanceTask.data), "large")}
-          className="max-h-[min(42rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-4xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>
@@ -6755,12 +6763,7 @@ function OnboardingPage() {
                 : `当前页面显示 ${boundAccountIDs.length} 个已绑定账号，不需要勾选账号。`}
             </DialogDescription>
           </DialogHeader>
-          <div
-            className={cn(
-              "min-h-0 min-w-0 overflow-x-hidden",
-              onboardingMaintenanceTask.data ? "overflow-y-hidden" : "overflow-y-auto",
-            )}
-          >
+          <DialogBody className={cn(onboardingMaintenanceTask.data && "overflow-hidden pr-0")}>
             {onboardingMaintenanceKind === "repair" &&
               !onboardingMaintenanceTaskId &&
               !onboardingMaintenance.isPending &&
@@ -6872,7 +6875,7 @@ function OnboardingPage() {
                 }}
               />
             )}
-          </div>
+          </DialogBody>
         </DialogContent>
       </Dialog>
 
@@ -6890,18 +6893,18 @@ function OnboardingPage() {
         <DialogContent
           width={operationDialogWidth(Boolean(task.data && !onboardingPending))}
           height={operationDialogHeight(Boolean(task.data && !onboardingPending), "medium")}
-          className="max-h-[min(40rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-3xl"
+          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
           <DialogHeader>
             <DialogTitle>账号绑定变更</DialogTitle>
           </DialogHeader>
-          <div className={cn("min-h-0", task.data ? "overflow-hidden" : "overflow-y-auto")}>
+          <DialogBody className={cn(task.data && "overflow-hidden pr-0")}>
             {!task.data && !task.error && <TaskStartupState message="正在创建账号绑定变更任务" />}
             {task.error && (
               <QueryError error={task.error} fallback="账号绑定变更状态读取失败" embedded />
             )}
             {task.data && <OnboardingTaskProgress task={task.data} />}
-          </div>
+          </DialogBody>
           {task.data && !onboardingPending ? (
             <DialogFooter>
               <Button
@@ -9427,14 +9430,18 @@ function AutoInspectionCard() {
         title="自动巡检"
         description="查看下一次执行任务和心跳记录；主动探测、倍率同步与告警检测分别继承各自策略。"
         action={
-          <Button
-            aria-label="保存自动巡检"
-            onClick={() => current && save.mutate(current)}
-            disabled={!current || !intervalValid || save.isPending}
-          >
-            <Save size={16} />
-            <span className="hidden sm:inline">{save.isPending ? "保存中…" : "保存自动巡检"}</span>
-          </Button>
+          <PageActions>
+            <Button
+              aria-label="保存自动巡检"
+              onClick={() => current && save.mutate(current)}
+              disabled={!current || !intervalValid || save.isPending}
+            >
+              <Save size={16} />
+              <span className="hidden sm:inline">
+                {save.isPending ? "保存中…" : "保存自动巡检"}
+              </span>
+            </Button>
+          </PageActions>
         }
       />
       <div className="w-full space-y-4" data-testid="auto-inspection-layout">
@@ -9799,7 +9806,11 @@ function AutoInspectionCard() {
           if (!open) setSelectedQueueItem(null);
         }}
       >
-        <DialogContent className="grid max-h-[min(46rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-3xl">
+        <DialogContent
+          width="wide"
+          height="tall"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
           <DialogHeader>
             <DialogTitle>巡检任务详情</DialogTitle>
             <DialogDescription>
@@ -9808,7 +9819,9 @@ function AutoInspectionCard() {
                 : "查看下一轮巡检计划"}
             </DialogDescription>
           </DialogHeader>
-          {selectedQueueItem ? <AutoInspectionQueueDetails item={selectedQueueItem} /> : null}
+          <DialogBody className="overflow-hidden pr-0">
+            {selectedQueueItem ? <AutoInspectionQueueDetails item={selectedQueueItem} /> : null}
+          </DialogBody>
         </DialogContent>
       </Dialog>
       <Dialog
@@ -9817,7 +9830,11 @@ function AutoInspectionCard() {
           if (!open) setSelectedHeartbeat(null);
         }}
       >
-        <DialogContent className="grid max-h-[min(46rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-3xl">
+        <DialogContent
+          width="wide"
+          height="tall"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
           <DialogHeader>
             <DialogTitle>巡检心跳详情</DialogTitle>
             <DialogDescription>
@@ -9826,14 +9843,16 @@ function AutoInspectionCard() {
                 : "查看本轮巡检执行信息"}
             </DialogDescription>
           </DialogHeader>
-          {selectedHeartbeat ? (
-            <AutoInspectionHeartbeatDetails
-              record={selectedHeartbeat}
-              task={heartbeatTask.data}
-              taskLoading={heartbeatTask.isLoading || heartbeatUpstreams.isLoading}
-              upstreams={heartbeatUpstreams.data}
-            />
-          ) : null}
+          <DialogBody className="overflow-hidden pr-0">
+            {selectedHeartbeat ? (
+              <AutoInspectionHeartbeatDetails
+                record={selectedHeartbeat}
+                task={heartbeatTask.data}
+                taskLoading={heartbeatTask.isLoading || heartbeatUpstreams.isLoading}
+                upstreams={heartbeatUpstreams.data}
+              />
+            ) : null}
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </PageLayout>
@@ -9999,7 +10018,7 @@ export function PolicyPage() {
         title="调度策略"
         description="设置全局默认、健康判定、熔断回池和自动执行范围；分组覆盖在分组管理中配置。"
         action={
-          <div className="flex gap-2">
+          <PageActions>
             <Button variant="outline" onClick={() => void refreshPolicy()}>
               <RefreshCw size={16} />
               刷新策略
@@ -10008,7 +10027,7 @@ export function PolicyPage() {
               <ShieldCheck size={16} />
               {save.isPending ? "保存中…" : "保存策略"}
             </Button>
-          </div>
+          </PageActions>
         }
       />
       <div className="w-full space-y-4">
@@ -11344,9 +11363,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
           <PolicySwitchRow
             label="托管所有账号"
             description="开启后，现有和新添加账号的调度开关都由 Console 决定；关闭后，检测到 Sub2API 人工修改时保留人工值并停止托管该账号。"
-            checked={
-              policyAdvancedValue(props.value, "scope", "manage_all_accounts") !== false
-            }
+            checked={policyAdvancedValue(props.value, "scope", "manage_all_accounts") !== false}
             onCheckedChange={(checked) => set("scope", "manage_all_accounts", checked)}
           />
         </div>

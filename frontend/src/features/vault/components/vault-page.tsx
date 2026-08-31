@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, type VaultEntryIndex } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { TableActionButton } from "@/components/data-table/table-action-button";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -15,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Card } from "@/components/ui/card";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -273,7 +275,7 @@ export function VaultPage() {
         title="密码箱"
         description="管理上游鉴权恢复使用的账号密码。"
         action={
-          <div className="flex items-center gap-2">
+          <PageActions>
             <Tooltip>
               <TooltipTrigger render={<span className="inline-flex" />}>
                 <Button
@@ -292,7 +294,7 @@ export function VaultPage() {
               <Plus />
               添加凭据
             </Button>
-          </div>
+          </PageActions>
         }
       />
 
@@ -340,12 +342,16 @@ export function VaultPage() {
           if (!save.isPending) setEditorOpen(open);
         }}
       >
-        <DialogContent className="max-h-[min(44rem,calc(100svh-2rem))] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-2xl">
+        <DialogContent
+          width="medium"
+          height="large"
+          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        >
           <DialogHeader>
             <DialogTitle>{editing ? "编辑凭据" : "添加凭据"}</DialogTitle>
             <DialogDescription>敏感字段不会回显；已配置的字段留空则不修改。</DialogDescription>
           </DialogHeader>
-          <div className="grid min-h-0 gap-4 overflow-y-auto pr-1 sm:grid-cols-2">
+          <DialogBody className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <VaultField label="凭据名称">
                 <Input
@@ -426,7 +432,7 @@ export function VaultPage() {
                 />
               </VaultField>
             </div>
-          </div>
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"
