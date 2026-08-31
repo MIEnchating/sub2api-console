@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { AccountMaintenanceTaskStatus, AccountRateSyncTaskStatus } from "../../App";
+import {
+  AccountDefaultsRepairTaskStatus,
+  AccountMaintenanceTaskStatus,
+  AccountRateSyncTaskStatus,
+} from "../../App";
 import type { Task } from "../../api";
 
 function maintenanceTask(items: Array<Record<string, string>>): Task {
@@ -24,6 +28,43 @@ function maintenanceTask(items: Array<Record<string, string>>): Task {
 }
 
 describe("account maintenance status", () => {
+  it("shows default parameter repair counts and readable before and after values", () => {
+    const task = maintenanceTask([
+      {
+        account_id: "11",
+        account_name: "account-11",
+        upstream_host: "api.example",
+        status: "已修复",
+        before: "并发 0 · 负载 跟随并发（有效 0）· 优先级 0",
+        after: "并发 10 · 负载 跟随并发（有效 10）· 优先级 1",
+      },
+      {
+        account_id: "12",
+        account_name: "external",
+        upstream_host: "api.example",
+        status: "非本控制台添加，未修改",
+      },
+    ]);
+    task.result = {
+      ...task.result,
+      repaired: 1,
+      unchanged: 0,
+      skipped: 1,
+      failed: 0,
+    };
+
+    const markup = renderToStaticMarkup(
+      <AccountDefaultsRepairTaskStatus task={task} />,
+    );
+
+    expect(markup).toContain("已修复");
+    expect(markup).toContain("无需修复");
+    expect(markup).toContain("已跳过");
+    expect(markup).toContain("并发 0");
+    expect(markup).toContain("并发 10");
+    expect(markup).toContain("非本控制台添加，未修改");
+  });
+
   it("offers cleanup and shows account identity when a stable ID is missing remotely", () => {
     const markup = renderToStaticMarkup(
       <AccountMaintenanceTaskStatus
@@ -63,6 +104,27 @@ describe("account maintenance status", () => {
     );
 
     expect(markup).not.toContain("失效绑定");
+  });
+
+  it("paginates long maintenance results", () => {
+    const markup = renderToStaticMarkup(
+      <AccountMaintenanceTaskStatus
+        task={maintenanceTask(
+          Array.from({ length: 25 }, (_, index) => ({
+            account_id: String(index + 1),
+            account_name: `分页账号-${index + 1}`,
+            upstream_host: "api.example",
+            status: "已确认存在",
+          })),
+        )}
+      />,
+    );
+
+    expect(markup).toContain("分页账号-20");
+    expect(markup).not.toContain("分页账号-21");
+    expect(markup).toContain("转到第 2 页");
+    expect(markup).toContain("flex h-full min-h-0 flex-col");
+    expect(markup).toContain("min-h-0 flex-1 divide-y overflow-y-auto");
   });
 });
 
@@ -109,7 +171,9 @@ describe("account rate sync status", () => {
       updated_at: "2026-08-29T00:00:01Z",
     };
 
-    const markup = renderToStaticMarkup(<AccountRateSyncTaskStatus task={task} />);
+    const markup = renderToStaticMarkup(
+      <AccountRateSyncTaskStatus task={task} />,
+    );
 
     expect(markup).toContain("alpha");
     expect(markup).toContain("0.1 → 0.75");

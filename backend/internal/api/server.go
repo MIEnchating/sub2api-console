@@ -31,6 +31,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
+	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
@@ -61,6 +62,7 @@ type Business interface {
 	ProbeEnabled(context.Context) (bool, error)
 	Accounts(context.Context) ([]business.AccountStatus, error)
 	Account(context.Context, string) (*business.AccountDetail, error)
+	TrafficRanking(context.Context, business.TrafficRankingQuery) (business.TrafficRanking, error)
 	Groups(context.Context) ([]business.GroupStatus, error)
 	GroupAllocation(context.Context, string) (business.GroupAllocation, error)
 	ControlPolicy(context.Context) (map[string]any, error)
@@ -151,14 +153,19 @@ type ManagementTaskEnqueuer interface {
 type AccountMaintenanceTaskEnqueuer interface {
 	EnqueueAccountRateSync(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueAccountRevalidation(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueAccountBaseURLValidation(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueAccountConfigurationCheck(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueAccountBaseURLRepair(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueAccountUpstreamHostRepair(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueAccountNameRepair(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueAccountDefaultsRepair(context.Context, []string, string) (taskstore.Task, error)
 	EnqueueMissingBindingCleanup(context.Context, []string, string) (taskstore.Task, error)
 }
 
 type AccountTaskEnqueuer interface {
 	EnqueueControl(context.Context, string, string, string) (taskstore.Task, error)
 	EnqueueFields(context.Context, string, accountops.FieldPatch, string) (taskstore.Task, error)
-	EnqueueManualPriority(context.Context, string, int64, string, int64, string) (taskstore.Task, error)
+	EnqueueManualPriority(context.Context, string, int64, string, int64, bool, string) (taskstore.Task, error)
 	EnqueueClearManualPriority(context.Context, string, string) (taskstore.Task, error)
 	Models(context.Context, string) ([]string, error)
 }
@@ -169,7 +176,15 @@ type ProbeTaskEnqueuer interface {
 
 type ModelCheckService interface {
 	Capabilities() modelcheck.Capabilities
+	AccountStatuses(context.Context) ([]modelcheck.AccountCheckStatus, error)
 	Enqueue(context.Context, modelcheck.Request) (taskstore.Task, error)
+}
+
+type PricingService interface {
+	Snapshot(context.Context) (pricing.Snapshot, error)
+	UpdateConfig(context.Context, pricing.Config, string) (pricing.Snapshot, error)
+	Enqueue(context.Context, string) (taskstore.Task, error)
+	EnqueueRevenue(context.Context, pricing.RevenueRequest, string) (taskstore.Task, error)
 }
 
 type UpstreamDetector interface {
@@ -231,6 +246,7 @@ type Dependencies struct {
 	Onboarding         OnboardingService
 	RequestTrace       RequestTraceReader
 	SystemLogs         SystemLogReader
+	Pricing            PricingService
 }
 
 type Server struct {
@@ -259,6 +275,7 @@ type Server struct {
 	onboarding         OnboardingService
 	traceReader        RequestTraceReader
 	systemLogReader    SystemLogReader
+	pricing            PricingService
 	loginThrottle      *loginThrottle
 	now                func() time.Time
 }
@@ -332,6 +349,11 @@ type probeSettingsRequest struct {
 	Enabled *bool `json:"enabled" binding:"required"`
 }
 
+type accountDefaultsRequest struct {
+	Concurrency int64 `json:"concurrency" binding:"required,min=1,max=10000000"`
+	Priority    int64 `json:"priority" binding:"required,min=1,max=10000000"`
+}
+
 type notificationTestRequest struct {
 	Message string `json:"message" binding:"required,min=1,max=4000"`
 	DryRun  *bool  `json:"dry_run" binding:"required"`
@@ -366,20 +388,22 @@ type overviewResponse struct {
 }
 
 type runtimeConfigResponse struct {
-	DatabasePath          string   `json:"database_path"`
-	DataDatabasePath      string   `json:"data_database_path"`
-	DatabaseAvailable     bool     `json:"database_available"`
-	DataDatabaseAvailable bool     `json:"data_database_available"`
-	Mode                  string   `json:"mode"`
-	ConfigKeys            any      `json:"config_keys"`
-	SecretValuesHidden    bool     `json:"secret_values_hidden"`
-	ProbesEnabled         bool     `json:"probes_enabled"`
-	AdminBaseURL          *string  `json:"admin_base_url"`
-	RequestTimeoutSeconds int      `json:"request_timeout_seconds"`
-	Initialized           bool     `json:"initialized"`
-	TargetConfigured      bool     `json:"target_configured"`
-	ConsoleUsername       *string  `json:"console_username"`
-	ConfigurationErrors   []string `json:"configuration_errors"`
+	DatabasePath              string   `json:"database_path"`
+	DataDatabasePath          string   `json:"data_database_path"`
+	DatabaseAvailable         bool     `json:"database_available"`
+	DataDatabaseAvailable     bool     `json:"data_database_available"`
+	Mode                      string   `json:"mode"`
+	ConfigKeys                any      `json:"config_keys"`
+	SecretValuesHidden        bool     `json:"secret_values_hidden"`
+	ProbesEnabled             bool     `json:"probes_enabled"`
+	AdminBaseURL              *string  `json:"admin_base_url"`
+	RequestTimeoutSeconds     int      `json:"request_timeout_seconds"`
+	AccountDefaultConcurrency int64    `json:"account_default_concurrency"`
+	AccountDefaultPriority    int64    `json:"account_default_priority"`
+	Initialized               bool     `json:"initialized"`
+	TargetConfigured          bool     `json:"target_configured"`
+	ConsoleUsername           *string  `json:"console_username"`
+	ConfigurationErrors       []string `json:"configuration_errors"`
 }
 
 func New(cfg config.Config, private *configstore.Store, business Business, dependencies ...Dependencies) *gin.Engine {
@@ -414,6 +438,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		onboarding:         services.Onboarding,
 		traceReader:        services.RequestTrace,
 		systemLogReader:    services.SystemLogs,
+		pricing:            services.Pricing,
 		loginThrottle:      newLoginThrottle(),
 		now:                time.Now,
 	}
@@ -434,6 +459,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/config", server.runtimeConfig)
 	authorized.POST("/config/mode", server.updateRuntimeMode)
 	authorized.POST("/config/probes", server.updateProbeSettings)
+	authorized.POST("/config/account-defaults", server.updateAccountDefaults)
 	authorized.POST("/config/target", server.updateAdminTarget)
 	authorized.GET("/notifications/status", server.notificationStatus)
 	authorized.GET("/notifications/queue", server.notificationQueue)
@@ -443,6 +469,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.DELETE("/notifications/target-discovery/:task_id", server.cancelNotificationTargetDiscovery)
 	authorized.GET("/accounts", server.accounts)
 	authorized.GET("/accounts/:account_id", server.account)
+	authorized.GET("/traffic/ranking", server.trafficRanking)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
 	authorized.PUT("/accounts/:account_id/test-model", server.setAccountTestModel)
@@ -452,7 +479,12 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/management/sync", server.syncManagement)
 	authorized.POST("/management/accounts/rates/sync", server.syncAccountRates)
 	authorized.POST("/management/accounts/revalidate", server.revalidateAccounts)
+	authorized.POST("/management/accounts/base-url/validate", server.validateAccountBaseURLs)
+	authorized.POST("/management/accounts/configuration/check", server.checkAccountConfiguration)
+	authorized.POST("/management/accounts/base-url/repair", server.repairAccountBaseURLs)
+	authorized.POST("/management/accounts/upstream-hosts/repair", server.repairAccountUpstreamHosts)
 	authorized.POST("/management/accounts/names/repair", server.repairAccountNames)
+	authorized.POST("/management/accounts/defaults/repair", server.repairAccountDefaults)
 	authorized.POST("/management/accounts/missing-bindings/cleanup", server.cleanupMissingBindings)
 	authorized.POST("/onboarding", server.createOnboarding)
 	authorized.POST("/onboarding/batch", server.createOnboardingBatch)
@@ -467,6 +499,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/policy", server.policy)
 	authorized.PUT("/policy", server.updatePolicy)
 	authorized.POST("/policy/restore-control", server.restoreRoutingControl)
+	authorized.GET("/pricing", server.pricingSnapshot)
+	authorized.PUT("/pricing/config", server.updatePricingConfig)
+	authorized.POST("/pricing/apply", server.applyPricing)
+	authorized.POST("/pricing/revenue", server.calculatePricingRevenue)
 	authorized.GET("/upstreams", server.upstreams)
 	authorized.POST("/upstreams", server.createUpstream)
 	authorized.POST("/upstreams/detect", server.detectUpstream)
@@ -492,6 +528,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/run", server.runInspection)
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
+	authorized.GET("/model-checks/account-statuses", server.modelCheckAccountStatuses)
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
 	authorized.PUT("/inspection/automation", server.updateAutoInspection)
@@ -703,6 +740,42 @@ func (s *Server) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "mode": mode})
 }
 
+func (s *Server) trafficRanking(c *gin.Context) {
+	timeRange := queryDefault(c, "time_range", "24h")
+	durations := map[string]time.Duration{
+		"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour,
+		"7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour,
+	}
+	duration, found := durations[timeRange]
+	if !found {
+		writeError(c, http.StatusUnprocessableEntity, "时间范围必须是 1h、6h、24h、7d 或 30d")
+		return
+	}
+	sortBy := queryDefault(c, "sort_by", business.TrafficRankingSortTraffic)
+	allowedSorts := map[string]bool{
+		business.TrafficRankingSortTraffic: true, business.TrafficRankingSortStability: true,
+		business.TrafficRankingSortSuccessRate: true, business.TrafficRankingSortLatency: true,
+	}
+	if !allowedSorts[sortBy] {
+		writeError(c, http.StatusUnprocessableEntity, "排序方式必须是 traffic、stability、success_rate 或 latency")
+		return
+	}
+	groupName := strings.TrimSpace(c.Query("group"))
+	if len(groupName) > 255 {
+		writeError(c, http.StatusUnprocessableEntity, "分组名称不能超过 255 个字符")
+		return
+	}
+	endAt := s.now().UTC()
+	result, err := s.business.TrafficRanking(c.Request.Context(), business.TrafficRankingQuery{
+		StartAt: endAt.Add(-duration), EndAt: endAt, GroupName: groupName, SortBy: sortBy,
+	})
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "流量排行读取失败："+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Server) overview(c *gin.Context) {
 	summary, err := s.business.OverviewSummary(c.Request.Context())
 	if err != nil {
@@ -807,6 +880,24 @@ func (s *Server) updateProbeSettings(c *gin.Context) {
 	}
 	if err := s.business.SetProbeEnabled(c.Request.Context(), *payload.Enabled); err != nil {
 		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	snapshot, err := s.business.RuntimeSnapshot(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "运行配置读取失败")
+		return
+	}
+	s.runtimeConfigFromSnapshot(c, snapshot)
+}
+
+func (s *Server) updateAccountDefaults(c *gin.Context) {
+	var payload accountDefaultsRequest
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "账号默认参数无效")
+		return
+	}
+	if _, err := s.private.ConfigureAccountDefaults(c.Request.Context(), payload.Concurrency, payload.Priority); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	snapshot, err := s.business.RuntimeSnapshot(c.Request.Context())
@@ -1206,8 +1297,8 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 		return
 	}
 	payload, err := decodeRequestObject(c)
-	if err != nil || len(payload) != 3 {
-		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor 和 concurrency")
+	if err != nil || len(payload) != 4 {
+		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor、concurrency 和 sync_balance_multiplier")
 		return
 	}
 	priority, err := positiveJSONInteger(payload["priority"], "priority", 1, 1000)
@@ -1223,6 +1314,11 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 	concurrency, err := positiveJSONInteger(payload["concurrency"], "concurrency", 1, 10_000_000)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	syncBalanceMultiplier, ok := payload["sync_balance_multiplier"].(bool)
+	if !ok {
+		writeError(c, http.StatusUnprocessableEntity, "sync_balance_multiplier 必须是布尔值")
 		return
 	}
 	if s.accountTasks == nil {
@@ -1242,7 +1338,7 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	task, err := s.accountTasks.EnqueueManualPriority(c.Request.Context(), accountID, priority, loadFactor, concurrency, actor)
+	task, err := s.accountTasks.EnqueueManualPriority(c.Request.Context(), accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
@@ -1405,12 +1501,32 @@ func (s *Server) revalidateAccounts(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "revalidate")
 }
 
+func (s *Server) validateAccountBaseURLs(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "base-url")
+}
+
+func (s *Server) checkAccountConfiguration(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "configuration-check")
+}
+
+func (s *Server) repairAccountBaseURLs(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "base-url-repair")
+}
+
+func (s *Server) repairAccountUpstreamHosts(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "upstream-hosts")
+}
+
 func (s *Server) syncAccountRates(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "rates")
 }
 
 func (s *Server) repairAccountNames(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "names")
+}
+
+func (s *Server) repairAccountDefaults(c *gin.Context) {
+	s.enqueueAccountMaintenance(c, "defaults")
 }
 
 func (s *Server) cleanupMissingBindings(c *gin.Context) {
@@ -1451,8 +1567,18 @@ func (s *Server) enqueueAccountMaintenance(c *gin.Context, operation string) {
 	switch operation {
 	case "rates":
 		task, err = s.accountMaintenance.EnqueueAccountRateSync(c.Request.Context(), accountIDs, actor)
+	case "base-url":
+		task, err = s.accountMaintenance.EnqueueAccountBaseURLValidation(c.Request.Context(), accountIDs, actor)
+	case "configuration-check":
+		task, err = s.accountMaintenance.EnqueueAccountConfigurationCheck(c.Request.Context(), accountIDs, actor)
+	case "base-url-repair":
+		task, err = s.accountMaintenance.EnqueueAccountBaseURLRepair(c.Request.Context(), accountIDs, actor)
+	case "upstream-hosts":
+		task, err = s.accountMaintenance.EnqueueAccountUpstreamHostRepair(c.Request.Context(), accountIDs, actor)
 	case "names":
 		task, err = s.accountMaintenance.EnqueueAccountNameRepair(c.Request.Context(), accountIDs, actor)
+	case "defaults":
+		task, err = s.accountMaintenance.EnqueueAccountDefaultsRepair(c.Request.Context(), accountIDs, actor)
 	case "cleanup":
 		task, err = s.accountMaintenance.EnqueueMissingBindingCleanup(c.Request.Context(), accountIDs, actor)
 	default:
@@ -1682,7 +1808,8 @@ func parseOnboardingBatchRequests(payload map[string]any) ([]onboarding.Request,
 func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) {
 	allowed := map[string]struct{}{
 		"host": {}, "upstream_type": {}, "platform": {}, "account_type": {}, "notes": {}, "multiplier": {},
-		"local_group_id": {}, "upstream_group_id": {}, "extra": {}, "priority": {}, "schedulable": {},
+		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
+		"priority": {}, "concurrency": {}, "schedulable": {},
 	}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
@@ -1705,17 +1832,29 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 	if err != nil {
 		return onboarding.Request{}, err
 	}
-	rawLocalID, present := payload["local_group_id"]
-	localID := ""
-	if number, ok := rawLocalID.(json.Number); present && ok {
-		localID = number.String()
+	localGroupIDs, err := onboardingStableIDList(payload, "local_group_ids", 50)
+	if err != nil {
+		return onboarding.Request{}, err
 	}
-	if !positiveNumericID(localID) {
-		return onboarding.Request{}, errors.New("local_group_id 必须是稳定正整数")
+	if len(localGroupIDs) == 0 {
+		rawLocalID, present := payload["local_group_id"]
+		localID := ""
+		if number, ok := rawLocalID.(json.Number); present && ok {
+			localID = number.String()
+		}
+		if !positiveNumericID(localID) {
+			return onboarding.Request{}, errors.New("local_group_ids 必须至少包含一个稳定正整数")
+		}
+		localGroupIDs = []string{localID}
+	}
+	accountIDs, err := onboardingStableIDList(payload, "account_ids", 50)
+	if err != nil {
+		return onboarding.Request{}, err
 	}
 	result := onboarding.Request{
 		Host: host, UpstreamType: strings.ToLower(upstreamType), Multiplier: multiplier,
-		LocalGroupID: localID, UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
+		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
+		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
 	}
 	for field, target := range map[string]**string{"platform": &result.Platform, "account_type": &result.AccountType, "notes": &result.Notes} {
 		if raw, found := payload[field]; found {
@@ -1747,10 +1886,21 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 			return onboarding.Request{}, errors.New("priority 必须是整数")
 		}
 		value, err := number.Int64()
-		if err != nil {
-			return onboarding.Request{}, errors.New("priority 必须是整数")
+		if err != nil || value < 1 || value > 10_000_000 {
+			return onboarding.Request{}, errors.New("priority 必须是 1 到 10000000 之间的整数")
 		}
 		result.Priority = &value
+	}
+	if raw, found := payload["concurrency"]; found {
+		number, ok := raw.(json.Number)
+		if !ok {
+			return onboarding.Request{}, errors.New("concurrency 必须是整数")
+		}
+		value, err := number.Int64()
+		if err != nil || value < 1 || value > 10_000_000 {
+			return onboarding.Request{}, errors.New("concurrency 必须是 1 到 10000000 之间的整数")
+		}
+		result.Concurrency = &value
 	}
 	if raw, found := payload["schedulable"]; found {
 		value, ok := raw.(bool)
@@ -1758,6 +1908,37 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 			return onboarding.Request{}, errors.New("schedulable 必须是布尔值")
 		}
 		result.Schedulable = value
+	}
+	return result, nil
+}
+
+func onboardingStableIDList(payload map[string]any, field string, maximum int) ([]string, error) {
+	raw, present := payload[field]
+	if !present || raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > maximum {
+		return nil, fmt.Errorf("%s 必须是包含 1 到 %d 个稳定正整数的数组", field, maximum)
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawValue := range values {
+		value := ""
+		switch typed := rawValue.(type) {
+		case json.Number:
+			value = typed.String()
+		case string:
+			value = strings.TrimSpace(typed)
+		}
+		if !positiveNumericID(value) {
+			return nil, fmt.Errorf("%s 必须只包含稳定正整数", field)
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
 	return result, nil
 }
@@ -2022,6 +2203,83 @@ func (s *Server) restoreRoutingControl(c *gin.Context) {
 			"actor": actor, "restored": result.Restored, "failed": result.Failed, "remote_write": result.RemoteWrite,
 		})
 	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) pricingSnapshot(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	snapshot, err := s.pricing.Snapshot(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, snapshot)
+}
+
+func (s *Server) updatePricingConfig(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	var request pricing.Config
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "价格管理配置必须是完整 JSON 对象")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	snapshot, err := s.pricing.UpdateConfig(c.Request.Context(), request, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, snapshot)
+}
+
+func (s *Server) applyPricing(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.pricing.Enqueue(c.Request.Context(), actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, task)
+}
+
+func (s *Server) calculatePricingRevenue(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "收入核算服务尚未就绪")
+		return
+	}
+	var request pricing.RevenueRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "收入核算参数必须是 JSON 对象")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.pricing.EnqueueRevenue(c.Request.Context(), request, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, task)
 }
 
 func (s *Server) updateGroupPolicy(c *gin.Context) {
@@ -2772,6 +3030,19 @@ func (s *Server) modelCheckCapabilities(c *gin.Context) {
 	c.JSON(http.StatusOK, s.modelChecks.Capabilities())
 }
 
+func (s *Server) modelCheckAccountStatuses(c *gin.Context) {
+	if s.modelChecks == nil {
+		writeError(c, http.StatusServiceUnavailable, "模型检测服务尚未就绪")
+		return
+	}
+	statuses, err := s.modelChecks.AccountStatuses(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, statuses)
+}
+
 func (s *Server) runModelCheck(c *gin.Context) {
 	if s.modelChecks == nil {
 		writeError(c, http.StatusServiceUnavailable, "模型检测服务尚未就绪")
@@ -3431,20 +3702,22 @@ func (s *Server) runtimeConfigFromSnapshot(c *gin.Context, snapshot business.Run
 		errorsFound = append(errorsFound, privateSettings.RequestTimeoutConfigurationError)
 	}
 	c.JSON(http.StatusOK, runtimeConfigResponse{
-		DatabasePath:          s.config.DataDB,
-		DataDatabasePath:      s.config.DataDB,
-		DatabaseAvailable:     snapshot.Available,
-		DataDatabaseAvailable: true,
-		Mode:                  snapshot.Mode,
-		ConfigKeys:            configKeys,
-		SecretValuesHidden:    true,
-		ProbesEnabled:         probesEnabled,
-		AdminBaseURL:          privateSettings.AdminBaseURL,
-		RequestTimeoutSeconds: privateSettings.RequestTimeoutSeconds,
-		Initialized:           setup.Initialized,
-		TargetConfigured:      setup.TargetConfigured,
-		ConsoleUsername:       configstore.MaskUsername(setup.Username),
-		ConfigurationErrors:   uniqueStrings(errorsFound),
+		DatabasePath:              s.config.DataDB,
+		DataDatabasePath:          s.config.DataDB,
+		DatabaseAvailable:         snapshot.Available,
+		DataDatabaseAvailable:     true,
+		Mode:                      snapshot.Mode,
+		ConfigKeys:                configKeys,
+		SecretValuesHidden:        true,
+		ProbesEnabled:             probesEnabled,
+		AdminBaseURL:              privateSettings.AdminBaseURL,
+		RequestTimeoutSeconds:     privateSettings.RequestTimeoutSeconds,
+		AccountDefaultConcurrency: privateSettings.AccountDefaultConcurrency,
+		AccountDefaultPriority:    privateSettings.AccountDefaultPriority,
+		Initialized:               setup.Initialized,
+		TargetConfigured:          setup.TargetConfigured,
+		ConsoleUsername:           configstore.MaskUsername(setup.Username),
+		ConfigurationErrors:       uniqueStrings(errorsFound),
 	})
 }
 

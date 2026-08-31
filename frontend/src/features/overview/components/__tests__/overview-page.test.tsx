@@ -10,6 +10,7 @@ function account(): AccountStatus {
     id: "42",
     name: "需要处理的渠道",
     groups: ["codex"],
+    upstream_id: "up_test",
     upstream_host: "api.example.com",
     upstream_type: "apikey",
     platform: "openai",

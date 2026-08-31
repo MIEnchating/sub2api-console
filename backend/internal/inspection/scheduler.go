@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	leaseTTL   = 120 * time.Second
-	renewEvery = 30 * time.Second
+	leaseTTL             = 120 * time.Second
+	renewEvery           = 30 * time.Second
+	queuePreviewCacheTTL = 15 * time.Second
+	queuePreviewTimeout  = 30 * time.Second
 )
 
 type Repository interface {
@@ -126,6 +128,10 @@ type Scheduler struct {
 	reconfigure         chan struct{}
 	subscribers         map[chan struct{}]struct{}
 	loopDone            chan struct{}
+	previewMu           sync.Mutex
+	previewItem         *QueueItem
+	previewedAt         time.Time
+	previewLoading      bool
 }
 
 func NewScheduler(repository Repository, executor Executor) (*Scheduler, error) {
@@ -196,7 +202,7 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 	if !config.Enabled {
 		result.NextRunAt = nil
 	}
-	result.Queue = s.queuePreview(ctx, config, now, result.NextRunAt)
+	result.Queue = s.queuePreview(config, now, result.NextRunAt, result.Running)
 	if latest := latestCompleted(history); latest != nil {
 		if result.LastRunAt == nil {
 			result.LastRunAt = latest.CompletedAt
@@ -232,33 +238,86 @@ func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 }
 
 func (s *Scheduler) queuePreview(
-	ctx context.Context,
 	config business.AutoInspectionConfig,
 	now time.Time,
 	scheduledFor *string,
+	running bool,
 ) []QueueItem {
-	previewer, available := s.executor.(QueuePreviewer)
-	if !available {
-		return []QueueItem{}
-	}
 	if !config.Enabled {
 		return []QueueItem{{
 			TaskType: "inspection", Label: "巡检计划未启用", State: "disabled",
 			Detail: "自动巡检未启用，启用后才会计算到期操作", TargetCount: nil, Operations: []QueueOperation{},
 		}}
 	}
-	item, err := previewer.Preview(ctx, now)
-	if err != nil {
+	if running {
 		return []QueueItem{{
-			TaskType: "inspection", Label: "巡检计划读取失败", State: "blocked",
-			ScheduledFor: cloneString(scheduledFor), Detail: "巡检计划读取失败：" + stringsOrType(err), Operations: []QueueOperation{},
+			TaskType: "inspection", Label: "当前轮次执行中", State: "waiting",
+			Detail: "当前巡检完成后更新下一轮计划", Operations: []QueueOperation{},
+		}}
+	}
+	previewer, available := s.executor.(QueuePreviewer)
+	if !available {
+		return []QueueItem{}
+	}
+
+	s.previewMu.Lock()
+	item := cloneQueueItem(s.previewItem)
+	fresh := item != nil && now.Sub(s.previewedAt) < queuePreviewCacheTTL
+	if !fresh && !s.previewLoading {
+		s.previewLoading = true
+		go s.refreshQueuePreview(previewer)
+	}
+	s.previewMu.Unlock()
+
+	if item == nil {
+		return []QueueItem{{
+			TaskType: "inspection", Label: "正在读取巡检计划", State: "waiting",
+			ScheduledFor: cloneString(scheduledFor), Detail: "计划更新后会自动显示本轮安排", Operations: []QueueOperation{},
 		}}
 	}
 	item.ScheduledFor = cloneString(scheduledFor)
+	return []QueueItem{*item}
+}
+
+func (s *Scheduler) refreshQueuePreview(previewer QueuePreviewer) {
+	ctx, cancel := context.WithTimeout(context.Background(), queuePreviewTimeout)
+	defer cancel()
+	item, err := previewer.Preview(ctx, s.now().UTC())
+	if err != nil {
+		item = QueueItem{
+			TaskType: "inspection", Label: "巡检计划读取失败", State: "blocked",
+			Detail: "巡检计划读取失败：" + stringsOrType(err), Operations: []QueueOperation{},
+		}
+	}
 	if item.Operations == nil {
 		item.Operations = []QueueOperation{}
 	}
-	return []QueueItem{item}
+	item.ScheduledFor = nil
+	s.previewMu.Lock()
+	s.previewItem = &item
+	s.previewedAt = s.now().UTC()
+	s.previewLoading = false
+	s.previewMu.Unlock()
+	s.notify()
+}
+
+func cloneQueueItem(item *QueueItem) *QueueItem {
+	if item == nil {
+		return nil
+	}
+	result := *item
+	result.ScheduledFor = cloneString(item.ScheduledFor)
+	result.TargetCount = cloneInt(item.TargetCount)
+	result.Operations = append([]QueueOperation(nil), item.Operations...)
+	return &result
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
 }
 
 func (s *Scheduler) UpdateConfig(ctx context.Context, config business.AutoInspectionConfig) (Status, error) {

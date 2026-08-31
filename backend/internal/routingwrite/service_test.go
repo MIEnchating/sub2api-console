@@ -77,6 +77,50 @@ func TestCleanupTargetsAreOrderedAfterAllRoutingWritebacks(t *testing.T) {
 	}
 }
 
+func TestApplySkipsManualPriorityTargetsBeforeRemoteWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing-manual-priority.sqlite3")
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	ctx := context.Background()
+	if err := repository.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.UpdatePolicy(ctx, map[string]any{
+		"auto_apply": map[string]any{
+			"schedulable": true, "priority": true, "load_factor": true, "concurrency": true,
+		},
+	}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("41"), "name": "manual", "schedulable": true,
+		"priority": json.Number("20"), "load_factor": json.Number("3"), "concurrency": json.Number("4"),
+		"groups": []any{json.Number("7")},
+	}}, []map[string]any{{"id": json.Number("7"), "name": "codex"}}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	admin := &concurrentWriteAdmin{state: map[string]any{
+		"id": json.Number("41"), "schedulable": true, "priority": int64(20), "load_factor": int64(3), "concurrency": int64(4),
+	}}
+	service := newTestService(repository, admin)
+	schedulable := false
+	result, err := service.Apply(ctx, map[string]business.AccountRoutingTarget{
+		"41": {AccountID: "41", GroupNames: []string{"codex"}, Schedulable: &schedulable},
+	}, "scheduler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admin.mutates != 0 || len(result.Results) != 1 || !result.Results[0].Skipped || result.Results[0].RemoteWrite {
+		t.Fatalf("result=%#v remote writes=%d", result, admin.mutates)
+	}
+}
+
 type failingCommitRepository struct {
 	Repository
 	err error
@@ -884,6 +928,113 @@ func TestReleaseControlReportsExternallyChangedFieldsWithoutRemoteWrite(t *testi
 	}
 	if item.Reason == nil || *item.Reason != "以下字段已被外部修改，交还时保留当前值：priority" {
 		t.Fatalf("外部修改说明被通用成功结果覆盖：%#v", item.Reason)
+	}
+}
+
+func TestAbandonControlKeepsExternalValuesAndDeletesOwnership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing-abandon-external.sqlite3")
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	ctx := context.Background()
+	if err := repository.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repository.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("41"), "name": "external-change", "schedulable": false,
+		"priority": json.Number("15"), "load_factor": json.Number("3"), "concurrency": json.Number("4"),
+		"routing_state": "healthy", "groups": []any{json.Number("7")},
+	}}, []map[string]any{{"id": json.Number("7"), "name": "codex"}}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baselineSchedulable, managedSchedulable := true, true
+	if err := repository.CaptureRoutingBaseline(ctx, business.RoutingBaseline{
+		AccountID: "41", Schedulable: &baselineSchedulable, OwnershipVersion: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateRoutingManagedIntent(ctx, "41", business.RoutingManagedIntent{
+		Schedulable: &managedSchedulable,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admin := &concurrentWriteAdmin{state: map[string]any{
+		"id": json.Number("41"), "schedulable": false, "priority": int64(15), "load_factor": int64(3), "concurrency": int64(4),
+	}}
+	service := newTestService(repository, admin)
+	item := service.applyAccount(ctx, admin, business.AccountRoutingTarget{
+		AccountID: "41", GroupNames: []string{"codex"}, DesiredHealth: "external_control", AbandonControl: true,
+	}, writePolicy{autoApply: map[string]bool{"schedulable": true}}, "scheduler")
+	if item.Error != nil {
+		t.Fatalf("停止托管失败：%s", *item.Error)
+	}
+	if admin.mutates != 0 || item.RemoteWrite || !item.Released {
+		t.Fatalf("停止托管不应改写人工值：item=%#v mutates=%d", item, admin.mutates)
+	}
+	detail, err := repository.Account(ctx, "41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Schedulable == nil || *detail.Schedulable || detail.Priority == nil || *detail.Priority != 15 {
+		t.Fatalf("人工值未保留：%#v", detail)
+	}
+	baselines, err := repository.RoutingBaselines(ctx)
+	if err != nil || len(baselines) != 0 {
+		t.Fatalf("停止托管后仍保留 Console 所有权：baselines=%#v err=%v", baselines, err)
+	}
+	routingAccounts, err := repository.RoutingAccounts(ctx, nil, nil)
+	if err != nil || len(routingAccounts) != 1 || !routingAccounts[0].ExternalControl {
+		t.Fatalf("停止托管状态没有持久化：accounts=%#v err=%v", routingAccounts, err)
+	}
+	currentSchedulable, currentPriority, currentLoad, currentConcurrency := false, int64(15), "3", int64(4)
+	if err := repository.CaptureRoutingBaseline(ctx, business.RoutingBaseline{
+		AccountID: "41", Schedulable: &currentSchedulable, Priority: &currentPriority,
+		LoadFactor: &currentLoad, Concurrency: &currentConcurrency, OwnershipVersion: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	routingAccounts, err = repository.RoutingAccounts(ctx, nil, nil)
+	if err != nil || len(routingAccounts) != 1 || routingAccounts[0].ExternalControl {
+		t.Fatalf("重新开启全部托管后没有清除外部控制标记：accounts=%#v err=%v", routingAccounts, err)
+	}
+}
+
+func TestMatchingTargetStillCapturesNewAccountOwnership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing-new-account-ownership.sqlite3")
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	ctx := context.Background()
+	if err := repository.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = repository.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("41"), "name": "new-account", "schedulable": true,
+		"priority": json.Number("20"), "load_factor": json.Number("3"), "concurrency": json.Number("4"),
+		"groups": []any{json.Number("7")},
+	}}, []map[string]any{{"id": json.Number("7"), "name": "codex"}}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &concurrentWriteAdmin{state: map[string]any{
+		"id": json.Number("41"), "schedulable": true, "priority": int64(20), "load_factor": int64(3), "concurrency": int64(4),
+	}}
+	service := newTestService(repository, admin)
+	schedulable := true
+	item := service.applyAccount(ctx, admin, business.AccountRoutingTarget{
+		AccountID: "41", GroupNames: []string{"codex"}, DesiredHealth: "healthy", Schedulable: &schedulable,
+	}, writePolicy{autoApply: map[string]bool{"schedulable": true}}, "scheduler")
+	if item.Error != nil || admin.mutates != 0 {
+		t.Fatalf("已匹配目标不应远程写入：item=%#v mutates=%d", item, admin.mutates)
+	}
+	baselines, err := repository.RoutingBaselines(ctx)
+	if err != nil || len(baselines) != 1 || baselines[0].ManagedSchedulable == nil || !*baselines[0].ManagedSchedulable {
+		t.Fatalf("首次纳管没有记录调度所有权：baselines=%#v err=%v", baselines, err)
 	}
 }
 

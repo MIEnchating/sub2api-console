@@ -77,7 +77,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	if rawMode, present := patch["mode"]; present {
 		parsedMode, ok := rawMode.(string)
 		if !ok || !validMode(parsedMode) {
-			return PolicySnapshot{}, fmt.Errorf("运行模式只能是监控模式、调度模式或完全模式")
+			return PolicySnapshot{}, fmt.Errorf("运行模式只能是监控模式或完全模式")
 		}
 		runtimeMode = parsedMode
 		delete(patch, "mode")
@@ -548,8 +548,9 @@ var advancedRules = map[string]map[string]advancedRule{
 		"reserved_max": {kind: "int", minimum: 1, maximum: 1000},
 	},
 	"scope": {
-		"managed_group_mode": {kind: "enum", allowed: valueStringSet("all", "selected")},
-		"managed_group_ids":  {kind: "strings"}, "excluded_group_ids": {kind: "strings"},
+		"manage_all_accounts": {kind: "bool"},
+		"managed_group_mode":  {kind: "enum", allowed: valueStringSet("all", "selected")},
+		"managed_group_ids":   {kind: "strings"}, "excluded_group_ids": {kind: "strings"},
 		"account_types": {kind: "strings"}, "platforms": {kind: "strings"},
 		"paused_account_ids": {kind: "strings"}, "excluded_account_ids": {kind: "strings"}, "manual_fused_account_ids": {kind: "strings"},
 	},
@@ -557,6 +558,8 @@ var advancedRules = map[string]map[string]advancedRule{
 		"enabled": {kind: "bool"}, "timeout_seconds": {kind: "int", minimum: 1, maximum: 86400},
 		"concurrency": {kind: "int", minimum: 1, maximum: 32}, "prompt": {kind: "string", maxLength: 10000},
 		"skip_when_traffic_fresh": {kind: "bool"}, "traffic_fresh_seconds": {kind: "int", minimum: 1, maximum: 86400},
+		"retry_enabled": {kind: "bool"}, "retry_source": {kind: "enum", allowed: valueStringSet("fixed", "sub2api_pool")},
+		"retry_count": {kind: "int", minimum: 0, maximum: 10}, "retry_status_codes": {kind: "status_codes"},
 	},
 	"traffic": {
 		"refresh_seconds": {kind: "int", minimum: 1, maximum: 86400},
@@ -599,6 +602,11 @@ var advancedRules = map[string]map[string]advancedRule{
 	},
 	"upstream_multiplier": {
 		"interval_seconds": {kind: "int", minimum: 30, maximum: 86400},
+	},
+	"price_management": {
+		"enabled": {kind: "bool"}, "profit_margin": {kind: "number", minimum: 0, maximum: 0.99},
+		"exchange_group_sets": {kind: "string_groups"}, "interval_seconds": {kind: "int", minimum: 30, maximum: 86400},
+		"write_concurrency": {kind: "int", minimum: 1, maximum: 16},
 	},
 	"writeback": {
 		"concurrency": {kind: "int", minimum: 1, maximum: 16}, "verification": {kind: "bool"},
@@ -680,6 +688,31 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 		return text, nil
 	case "strings":
 		return normalizedStringArray(path, value)
+	case "string_groups":
+		items, ok := value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("高级策略字段 %s 必须是数组", path)
+		}
+		result := make([]any, 0, len(items))
+		seen := map[string]struct{}{}
+		for index, item := range items {
+			group, err := normalizedStringArray(fmt.Sprintf("%s[%d]", path, index), item)
+			if err != nil {
+				return nil, err
+			}
+			if len(group) < 2 {
+				return nil, fmt.Errorf("高级策略字段 %s[%d] 至少需要两个分组", path, index)
+			}
+			for _, rawID := range group {
+				id := fmt.Sprint(rawID)
+				if _, duplicate := seen[id]; duplicate {
+					return nil, fmt.Errorf("高级策略字段 %s 中的分组 %s 不能重复", path, id)
+				}
+				seen[id] = struct{}{}
+			}
+			result = append(result, group)
+		}
+		return result, nil
 	case "status_codes":
 		items, ok := value.([]any)
 		if !ok {
@@ -776,6 +809,7 @@ var advancedPolicyCoreFields = map[string]map[string]struct{}{
 	"scaling":             {},
 	"cleanup":             {},
 	"upstream_multiplier": {},
+	"price_management":    {},
 	"writeback":           {},
 	"classify":            {},
 }

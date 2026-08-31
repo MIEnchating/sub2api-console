@@ -16,6 +16,22 @@ import (
 
 var ErrNotFound = errors.New("任务不存在或已过期")
 
+const (
+	taskRunKeySQL = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.run_key') AS TEXT) END`
+	taskObjectSQL = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
+		json_extract(result_json,'$.host'),json_extract(result_json,'$.account_name'),
+		json_extract(result_json,'$.account_id'),json_extract(result_json,'$.object_label')
+	) AS TEXT) END`
+	taskRequestSQL = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
+		json_extract(result_json,'$.request_id'),json_extract(result_json,'$.req'),
+		json_extract(result_json,'$.client_request_id'),json_extract(result_json,'$.client_req')
+	) AS TEXT) END`
+	taskModelSQL = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.model') AS TEXT) END`
+	taskErrorSQL = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
+		json_extract(result_json,'$.error'),json_extract(result_json,'$.detail'),json_extract(result_json,'$.summary')
+	) AS TEXT) END`
+)
+
 var validStatuses = map[string]struct{}{
 	"queued": {}, "running": {}, "waiting_input": {}, "succeeded": {}, "failed": {}, "cancelled": {},
 }
@@ -51,6 +67,23 @@ func Open(path string) (*Store, error) {
 		message TEXT NOT NULL,result_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 	)`); err != nil {
 		return nil, errors.Join(err, db.Close())
+	}
+	for _, statement := range []string{
+		`CREATE INDEX IF NOT EXISTS ix_tasks_updated_at ON tasks(updated_at DESC,id)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_status_updated_at ON tasks(status,updated_at,id)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_skill_updated_at ON tasks(skill,updated_at DESC,id)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_log_listing ON tasks(
+			updated_at DESC,id,skill,operation,status,progress,message,created_at,
+			` + taskRunKeySQL + `,` + taskObjectSQL + `
+		)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_log_search ON tasks(
+			updated_at DESC,id,skill,operation,status,progress,message,created_at,
+			` + taskRunKeySQL + `,` + taskObjectSQL + `,` + taskRequestSQL + `,` + taskModelSQL + `,` + taskErrorSQL + `
+		)`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			return nil, errors.Join(err, db.Close())
+		}
 	}
 	if err := sqliteutil.Secure(path); err != nil {
 		return nil, errors.Join(err, db.Close())
@@ -100,6 +133,119 @@ func (s *Store) List(ctx context.Context, limit *int) ([]Task, error) {
 		task, err := scanTask(rows)
 		if err != nil {
 			return nil, err
+		}
+		result = append(result, task)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListBySkill(ctx context.Context, skill string) ([]Task, error) {
+	skill = strings.TrimSpace(skill)
+	if skill == "" {
+		return nil, errors.New("skill 不能为空")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id,skill,operation,status,progress,message,result_json,created_at,updated_at
+		FROM tasks WHERE skill=? ORDER BY updated_at DESC,id`, skill)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Task{}
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, task)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) ListLogSummaries(ctx context.Context, limit *int) ([]Task, error) {
+	query := `SELECT id,skill,operation,status,progress,message,
+		CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.run_key') END,
+		CASE WHEN json_valid(result_json) THEN COALESCE(
+			json_extract(result_json,'$.host'),json_extract(result_json,'$.account_name'),json_extract(result_json,'$.account_id')
+		) END,created_at,updated_at FROM tasks ORDER BY updated_at DESC`
+	arguments := []any{}
+	if limit != nil {
+		if *limit < 0 || *limit > 100000 {
+			return nil, errors.New("limit 必须在 0 到 100000 之间")
+		}
+		query += ` LIMIT ?`
+		arguments = append(arguments, *limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Task{}
+	for rows.Next() {
+		var task Task
+		var runKey, objectLabel sql.NullString
+		if err := rows.Scan(
+			&task.ID, &task.Skill, &task.Operation, &task.Status, &task.Progress, &task.Message,
+			&runKey, &objectLabel, &task.CreatedAt, &task.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		task.Result = map[string]any{}
+		if runKey.Valid && strings.TrimSpace(runKey.String) != "" {
+			task.Result["run_key"] = runKey.String
+		}
+		if objectLabel.Valid && strings.TrimSpace(objectLabel.String) != "" {
+			task.Result["object_label"] = objectLabel.String
+		}
+		result = append(result, task)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SearchLogs(ctx context.Context, search string, limit *int) ([]Task, error) {
+	normalized := strings.ToLower(strings.TrimSpace(search))
+	if normalized == "" {
+		return s.ListLogSummaries(ctx, limit)
+	}
+	query := `SELECT id,skill,operation,status,progress,message,` +
+		taskRunKeySQL + `,` + taskObjectSQL + `,` + taskRequestSQL + `,` + taskModelSQL + `,` + taskErrorSQL +
+		`,created_at,updated_at FROM tasks INDEXED BY ix_tasks_log_search WHERE
+		instr(lower(id),?)>0 OR instr(lower(skill),?)>0 OR instr(lower(operation),?)>0 OR
+		instr(lower(status),?)>0 OR instr(lower(message),?)>0 OR instr(lower(COALESCE(` + taskRunKeySQL + `,'')),?)>0 OR
+		instr(lower(COALESCE(` + taskObjectSQL + `,'')),?)>0 OR instr(lower(COALESCE(` + taskRequestSQL + `,'')),?)>0 OR
+		instr(lower(COALESCE(` + taskModelSQL + `,'')),?)>0 OR instr(lower(COALESCE(` + taskErrorSQL + `,'')),?)>0 OR
+		instr(lower(created_at),?)>0 OR instr(lower(updated_at),?)>0
+		ORDER BY updated_at DESC`
+	arguments := []any{normalized, normalized, normalized, normalized, normalized, normalized, normalized, normalized, normalized, normalized, normalized, normalized}
+	if limit != nil {
+		if *limit < 0 || *limit > 100000 {
+			return nil, errors.New("limit 必须在 0 到 100000 之间")
+		}
+		query += ` LIMIT ?`
+		arguments = append(arguments, *limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Task{}
+	for rows.Next() {
+		var task Task
+		var runKey, objectLabel, requestID, model, errorText sql.NullString
+		if err := rows.Scan(
+			&task.ID, &task.Skill, &task.Operation, &task.Status, &task.Progress, &task.Message,
+			&runKey, &objectLabel, &requestID, &model, &errorText, &task.CreatedAt, &task.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		task.Result = map[string]any{}
+		for key, value := range map[string]sql.NullString{
+			"run_key": runKey, "object_label": objectLabel, "request_id": requestID, "model": model, "error": errorText,
+		} {
+			if value.Valid && strings.TrimSpace(value.String) != "" {
+				task.Result[key] = value.String
+			}
 		}
 		result = append(result, task)
 	}

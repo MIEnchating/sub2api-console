@@ -14,6 +14,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
@@ -55,6 +56,10 @@ type AccountRateSynchronizer interface {
 	SyncAllAccountRates(context.Context, string) (map[string]any, error)
 }
 
+type PriceAllocator interface {
+	ApplyNow(context.Context, string) (pricing.Result, error)
+}
+
 type InspectionTaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -79,6 +84,7 @@ type Runner struct {
 	alerts       AlertEvaluator
 	upstreams    UpstreamSynchronizer
 	accountRates AccountRateSynchronizer
+	pricing      PriceAllocator
 	tasks        InspectionTaskStore
 	now          func() time.Time
 }
@@ -90,6 +96,7 @@ type duePlan struct {
 	alert        bool
 	routing      bool
 	accountRates bool
+	pricing      bool
 	policy       map[string]any
 	mode         string
 	probeIDs     []string
@@ -110,6 +117,7 @@ type evidenceCollectionOutcome struct {
 const (
 	operationUpstreamSync       = "upstream_sync"
 	operationAccountRateSync    = "account_rate_sync"
+	operationPriceManagement    = "price_management"
 	operationTrafficRefresh     = "traffic_refresh"
 	operationActiveProbe        = "active_probe"
 	operationRoutingCalculation = "routing_calculation"
@@ -126,14 +134,19 @@ func NewRunner(
 	alerts AlertEvaluator,
 	upstreams UpstreamSynchronizer,
 	tasks InspectionTaskStore,
-	accountRates ...AccountRateSynchronizer,
+	extensions ...any,
 ) *Runner {
 	runner := &Runner{
 		repository: repository, targets: targets, evidence: evidenceCollector, router: router,
 		writer: writer, alerts: alerts, upstreams: upstreams, tasks: tasks, now: time.Now,
 	}
-	if len(accountRates) > 0 {
-		runner.accountRates = accountRates[0]
+	for _, extension := range extensions {
+		switch value := extension.(type) {
+		case AccountRateSynchronizer:
+			runner.accountRates = value
+		case PriceAllocator:
+			runner.pricing = value
+		}
 	}
 	return runner
 }
@@ -200,6 +213,20 @@ func previewOperations(plan duePlan) ([]QueueOperation, error) {
 		operations = append(operations, QueueOperation{
 			Operation: operationAccountRateSync, Label: "账号倍率与名称同步",
 			Cycle: "上游数据同步后（完全模式）", Due: true,
+		})
+	}
+	if plan.pricing {
+		section, err := inspectionSection(plan.policy, "price_management")
+		if err != nil {
+			return nil, err
+		}
+		interval, err := boundedSetting(section, "interval_seconds", 120, 30)
+		if err != nil {
+			return nil, err
+		}
+		operations = append(operations, QueueOperation{
+			Operation: operationPriceManagement, Label: "价格分组调整",
+			Cycle: periodicCycle(interval), Due: true,
 		})
 	}
 	traffic, err := inspectionSection(plan.policy, "traffic")
@@ -345,7 +372,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	if !plan.traffic && !plan.probes && !plan.upstreams && !plan.routing && !plan.alert {
+	if !plan.traffic && !plan.probes && !plan.upstreams && !plan.routing && !plan.alert && !plan.pricing {
 		return ExecutionResult{Status: "succeeded", Operations: []string{}, OperationTiming: []business.OperationTiming{}, Skipped: true}, nil
 	}
 	task, err := r.QueueTask(ctx, request.Automatic)
@@ -452,6 +479,16 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 			return duePlan{}, err
 		}
 		result.accountRates = result.upstreams && r.accountRates != nil
+		priceConfig, configErr := pricing.ConfigFromPolicy(policy)
+		if configErr != nil {
+			return duePlan{}, configErr
+		}
+		if priceConfig.Enabled && r.pricing != nil {
+			result.pricing, err = r.repository.InspectionTaskDue(ctx, "price-management", priceConfig.IntervalSeconds, now)
+			if err != nil {
+				return duePlan{}, err
+			}
+		}
 	}
 	return result, nil
 }
@@ -516,6 +553,12 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			failures = append(failures, "真实流量同步到期状态保存失败："+err.Error())
 			plan.traffic = false
 			plan.probes = false
+		}
+	}
+	if plan.pricing {
+		if err := r.repository.MarkInspectionTask(ctx, "price-management", started); err != nil {
+			failures = append(failures, "价格分组调整到期状态保存失败："+err.Error())
+			plan.pricing = false
 		}
 	}
 	runInspection := plan.traffic || plan.probes
@@ -600,6 +643,17 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			persistStage(45, collectionStageMessage(false, plan.traffic, plan.probes), active)
 		}
 	}
+	if plan.pricing && r.pricing != nil {
+		persistStage(55, "正在按盈利比例动态调整账号分组", []string{operationPriceManagement})
+		priceStarted := time.Now()
+		priceResult, priceErr := r.pricing.ApplyNow(ctx, request.Actor)
+		timings = append(timings, operationTiming(operationPriceManagement, priceStarted))
+		operations = append(operations, operationPriceManagement)
+		resultPayload["price_management"] = priceResult
+		if priceErr != nil {
+			failures = append(failures, "价格分组调整："+priceErr.Error())
+		}
+	}
 	if runInspection {
 		outcome := <-evidenceResults
 		evidenceResult, err := outcome.result, outcome.err
@@ -619,7 +673,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 		resultPayload["evidence"] = evidenceResult
 	}
-	if plan.upstreams || runInspection || plan.routing {
+	if plan.upstreams || runInspection || plan.routing || plan.pricing {
 		persistStage(65, "正在计算健康状态与调度目标", []string{operationRoutingCalculation})
 		routingStarted := time.Now()
 		capabilities, valid := runtimepolicy.For(plan.mode)

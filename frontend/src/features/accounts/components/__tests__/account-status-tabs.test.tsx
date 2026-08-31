@@ -43,8 +43,12 @@ describe("AccountStatusFilter", () => {
     expect(toolbar).toContain("类型");
     expect(toolbar).not.toContain("个账号");
     expect(markup).not.toMatch(/<th[^>]*>分组<\/th>/);
-    expect(markup).toContain("最终权重");
-    expect(markup).toContain("min-w-[1240px]");
+    expect(markup).toContain("调度权重");
+    expect(markup).toContain("配置校验与修复");
+    expect(markup).toContain("Key 状态");
+    expect(markup).toContain("Sub2API 状态");
+    expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
+    expect(markup).toContain("min-w-[1500px]");
   });
 
   it("shows balance sync, batch revalidation, and name repair as page-level actions", () => {
@@ -60,6 +64,8 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain("批量复验");
     expect(markup).toContain("同步倍率");
     expect(markup).toContain("命名修复");
+    expect(markup).toContain("配置校验与修复");
+    expect(markup).not.toContain(">参数修复<");
     expect(markup).not.toContain('type="checkbox"');
   });
 });

@@ -17,18 +17,20 @@ import (
 )
 
 type UpstreamHost struct {
-	Host          string  `json:"host"`
-	BaseURL       string  `json:"base_url"`
-	Name          string  `json:"name"`
-	UpstreamType  string  `json:"upstream_type"`
-	AccountCount  int64   `json:"account_count"`
-	GroupCount    int64   `json:"group_count"`
-	AuthStatus    string  `json:"auth_status"`
-	RawBalance    *string `json:"raw_balance"`
-	Balance       *string `json:"balance"`
-	RechargeRate  string  `json:"recharge_rate"`
-	BalanceStatus string  `json:"balance_status"`
-	CheckedAt     *string `json:"checked_at"`
+	UpstreamID    string   `json:"upstream_id"`
+	Host          string   `json:"host"`
+	Hosts         []string `json:"hosts"`
+	BaseURL       string   `json:"base_url"`
+	Name          string   `json:"name"`
+	UpstreamType  string   `json:"upstream_type"`
+	AccountCount  int64    `json:"account_count"`
+	GroupCount    int64    `json:"group_count"`
+	AuthStatus    string   `json:"auth_status"`
+	RawBalance    *string  `json:"raw_balance"`
+	Balance       *string  `json:"balance"`
+	RechargeRate  string   `json:"recharge_rate"`
+	BalanceStatus string   `json:"balance_status"`
+	CheckedAt     *string  `json:"checked_at"`
 }
 
 type UpstreamSummary struct {
@@ -40,6 +42,7 @@ type UpstreamSummary struct {
 }
 
 type UpstreamGroup struct {
+	UpstreamID        string                 `json:"upstream_id"`
 	Host              string                 `json:"host"`
 	GroupID           *string                `json:"group_id"`
 	Name              string                 `json:"name"`
@@ -57,14 +60,15 @@ type UpstreamGroup struct {
 }
 
 type UpstreamBoundAccount struct {
-	BindingID       int64   `json:"binding_id"`
-	AccountID       string  `json:"account_id"`
-	AccountName     *string `json:"account_name"`
-	AccountExists   bool    `json:"account_exists"`
-	BindingStatus   *string `json:"binding_status"`
-	LocalGroup      string  `json:"local_group"`
-	UpstreamKeyID   string  `json:"upstream_key_id"`
-	UpstreamKeyName string  `json:"upstream_key_name"`
+	BindingID       int64                  `json:"binding_id"`
+	AccountID       string                 `json:"account_id"`
+	AccountName     *string                `json:"account_name"`
+	AccountExists   bool                   `json:"account_exists"`
+	BindingStatus   *string                `json:"binding_status"`
+	LocalGroup      string                 `json:"local_group"`
+	LocalGroups     []LocalOnboardingGroup `json:"local_groups"`
+	UpstreamKeyID   string                 `json:"upstream_key_id"`
+	UpstreamKeyName string                 `json:"upstream_key_name"`
 }
 
 type GroupPolicyOverride struct {
@@ -116,15 +120,29 @@ type GroupStatus struct {
 }
 
 func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT u.host,u.base_url,u.upstream_type,u.auth_status,
+	// The upstream list is the ownership boundary where newly discovered host aliases
+	// are reconciled, including aliases added after both hosts already had identities.
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return UpstreamSummary{}, err
+	}
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return UpstreamSummary{}, err
+	}
+	identityHosts, err := upstreamIdentityHostSets(ctx, s.db)
+	if err != nil {
+		return UpstreamSummary{}, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT h.upstream_id,u.host,u.base_url,u.upstream_type,u.auth_status,
 		u.balance,u.raw_balance,u.mapped_balance,u.checked_at,u.metadata_json,
 		COALESCE(r.recharge_rate,'1')
-		FROM upstreams u LEFT JOIN recharge_rates r ON r.host=u.host ORDER BY u.host`)
+		FROM upstreams u JOIN upstream_identity_hosts h ON h.host=u.host
+		LEFT JOIN recharge_rates r ON r.host=u.host WHERE h.is_primary=1 ORDER BY u.host`)
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
 	defer rows.Close()
-	accountCounts, err := countByString(ctx, s.db, `SELECT upstream_host,COUNT(*) FROM bindings GROUP BY upstream_host`)
+	accountCounts, err := countByString(ctx, s.db, `SELECT bi.upstream_id,COUNT(DISTINCT b.local_account_id)
+		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id GROUP BY bi.upstream_id`)
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
@@ -143,13 +161,14 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 		var rawBalance, mappedBalance, checkedAt sql.NullString
 		var metadataRaw string
 		if err := rows.Scan(
-			&item.Host, &item.BaseURL, &item.UpstreamType, &item.AuthStatus, &legacyBalance,
+			&item.UpstreamID, &item.Host, &item.BaseURL, &item.UpstreamType, &item.AuthStatus, &legacyBalance,
 			&rawBalance, &mappedBalance, &checkedAt, &metadataRaw, &item.RechargeRate,
 		); err != nil {
 			return UpstreamSummary{}, err
 		}
 		metadata, metadataErr := decodeObject(metadataRaw)
 		item.Name = upstreamDisplayName(metadata, item.BaseURL, derivedNames[item.Host])
+		item.Hosts = append([]string{}, identityHosts[item.UpstreamID]...)
 		item.RawBalance = nullString(rawBalance)
 		if item.RawBalance == nil && legacyBalance.Valid {
 			legacy := normalizeDecimal(strconv.FormatFloat(legacyBalance.Float64, 'f', -1, 64))
@@ -167,7 +186,7 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 			item.Balance = divideDecimalPointers(item.RawBalance, normalizePositiveDecimal(item.RechargeRate))
 		}
 		item.CheckedAt = nullString(checkedAt)
-		item.AccountCount = accountCounts[item.Host]
+		item.AccountCount = accountCounts[item.UpstreamID]
 		item.GroupCount = groupCounts[item.Host]
 		if metadataErr != nil {
 			item.AuthStatus = "配置错误"
@@ -193,11 +212,18 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 
 func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bool) ([]UpstreamGroup, error) {
 	normalized := canonicalHost(host)
+	upstreamID, err := s.upstreamIdentityID(ctx, normalized)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, sql.ErrNoRows
+	}
+	if err != nil {
+		return nil, err
+	}
 	var authStatus string
 	var mappedBalance, legacyBalance sql.NullString
-	var metadataRaw string
-	err := s.db.QueryRowContext(ctx, `SELECT auth_status,mapped_balance,CAST(balance AS TEXT),metadata_json
-		FROM upstreams WHERE host=?`, normalized).Scan(&authStatus, &mappedBalance, &legacyBalance, &metadataRaw)
+	var metadataRaw, upstreamUpdatedAt string
+	err = s.db.QueryRowContext(ctx, `SELECT auth_status,mapped_balance,CAST(balance AS TEXT),metadata_json,updated_at
+		FROM upstreams WHERE host=?`, normalized).Scan(&authStatus, &mappedBalance, &legacyBalance, &metadataRaw, &upstreamUpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -206,7 +232,7 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 	}
 	metadata, metadataErr := decodeObject(metadataRaw)
 	hostReason := upstreamUnavailableReason(authStatus, mappedBalance, legacyBalance, metadata, metadataErr)
-	if snapshotReason, snapshotErr := s.authRecoveryFailure(ctx, normalized); snapshotErr != nil {
+	if snapshotReason, snapshotErr := s.authRecoveryFailure(ctx, normalized, upstreamUpdatedAt); snapshotErr != nil {
 		return nil, snapshotErr
 	} else if hostReason == nil && snapshotReason != nil {
 		hostReason = snapshotReason
@@ -236,8 +262,11 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT host,group_id,name,description,platform,status,raw_rate,effective_rate
-		FROM upstream_groups WHERE host=? ORDER BY name,group_id`, normalized)
+	rows, err := s.db.QueryContext(ctx, `SELECT g.host,g.group_id,g.name,g.description,g.platform,
+		CASE WHEN e.lifecycle_state IN ('suspected','missing','retired') THEN e.lifecycle_state
+			ELSE COALESCE(e.observed_status,g.status) END,g.raw_rate,g.effective_rate
+		FROM upstream_groups g LEFT JOIN upstream_catalog_entities e ON e.upstream_id=? AND e.entity_kind='group' AND e.entity_id=g.group_id
+		WHERE g.host=? ORDER BY g.name,g.group_id`, upstreamID, normalized)
 	if err != nil {
 		return nil, err
 	}
@@ -251,13 +280,16 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 			return nil, err
 		}
 		item.GroupID = stringPointer(groupID)
+		item.UpstreamID = upstreamID
 		item.Description = nullString(description)
 		item.Platform = nullString(platform)
 		item.Status = nullString(status)
 		item.RawRate = nullString(rawRate)
 		item.EffectiveRate = nullString(effectiveRate)
-		if (item.EffectiveRate == nil || *item.EffectiveRate == "") && item.RawRate != nil && *item.RawRate != "" {
-			item.EffectiveRate = divideDecimalPointers(normalizeDecimal(*item.RawRate), rechargeValue)
+		if item.RawRate != nil && *item.RawRate != "" {
+			if converted := divideMultiplierPointers(normalizeDecimal(*item.RawRate), rechargeValue); converted != nil {
+				item.EffectiveRate = converted
+			}
 		}
 		item.RechargeRate = stringPointer(recharge)
 		item.BoundAccounts = append([]UpstreamBoundAccount{}, boundAccounts[groupID]...)
@@ -282,16 +314,24 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 }
 
 func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[string][]UpstreamBoundAccount, error) {
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return nil, err
+	}
+	upstreamID, err := s.upstreamIdentityID(ctx, host)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT b.id,b.upstream_group_id,b.local_account_id,a.name,
 		a.id IS NOT NULL AND COALESCE(b.status,'')<>'missing',b.status,b.local_group,b.upstream_key_id,b.upstream_key_name
-		FROM bindings b LEFT JOIN accounts a ON a.id=b.local_account_id
-		WHERE b.upstream_host=? AND b.upstream_group_id IS NOT NULL
-		ORDER BY b.upstream_group_id,a.name,b.local_account_id,b.id`, host)
+		FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id LEFT JOIN accounts a ON a.id=b.local_account_id
+		WHERE bi.upstream_id=? AND b.upstream_group_id IS NOT NULL
+		ORDER BY b.upstream_group_id,a.name,b.local_account_id,b.id`, upstreamID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := map[string][]UpstreamBoundAccount{}
+	accountIDs := map[string]struct{}{}
 	for rows.Next() {
 		var groupID string
 		var accountName, bindingStatus sql.NullString
@@ -306,9 +346,61 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 		item.AccountName = nullString(accountName)
 		item.AccountExists = accountExists == 1
 		item.BindingStatus = nullString(bindingStatus)
+		item.LocalGroups = []LocalOnboardingGroup{}
 		result[groupID] = append(result[groupID], item)
+		if item.AccountExists {
+			accountIDs[item.AccountID] = struct{}{}
+		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+	ids := make([]string, 0, len(accountIDs))
+	for accountID := range accountIDs {
+		ids = append(ids, accountID)
+	}
+	sort.Strings(ids)
+	groupPlaceholders, groupArguments := sqlStringArguments(ids)
+	groupRows, err := s.db.QueryContext(ctx, `SELECT ag.account_id,COALESCE(ag.group_id,lg.remote_id),ag.group_name
+		FROM account_groups ag LEFT JOIN local_groups lg ON lg.name=ag.group_name
+		WHERE ag.account_id IN (`+groupPlaceholders+`) AND COALESCE(ag.group_id,lg.remote_id) IS NOT NULL
+		ORDER BY ag.account_id,ag.group_name`, groupArguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer groupRows.Close()
+	memberships := map[string][]LocalOnboardingGroup{}
+	for groupRows.Next() {
+		var accountID, groupID, groupName string
+		if err := groupRows.Scan(&accountID, &groupID, &groupName); err != nil {
+			return nil, err
+		}
+		memberships[accountID] = append(memberships[accountID], LocalOnboardingGroup{ID: groupID, Name: groupName})
+	}
+	if err := groupRows.Err(); err != nil {
+		return nil, err
+	}
+	for groupID, accounts := range result {
+		for index := range accounts {
+			accounts[index].LocalGroups = append([]LocalOnboardingGroup{}, memberships[accounts[index].AccountID]...)
+		}
+		result[groupID] = accounts
+	}
+	return result, nil
+}
+
+func (s *Store) equivalentUpstreamHosts(ctx context.Context, host string) ([]string, error) {
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return nil, err
+	}
+	_, hosts, err := upstreamIdentityHostsForQueryer(ctx, s.db, host)
+	if err != nil {
+		return nil, err
+	}
+	return hosts, nil
 }
 
 func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
@@ -316,7 +408,7 @@ func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	accounts, err := s.accountProjections(ctx)
+	accounts, err := s.groupAccountProjections(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -564,16 +656,19 @@ func upstreamUnavailableReason(authStatus string, mappedBalance, legacyBalance s
 	return nil
 }
 
-func (s *Store) authRecoveryFailure(ctx context.Context, host string) (*string, error) {
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM operational_snapshots
+func (s *Store) authRecoveryFailure(ctx context.Context, host, upstreamUpdatedAt string) (*string, error) {
+	var raw, snapshotUpdatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT value_json,updated_at FROM operational_snapshots
 		WHERE namespace='sub2api' AND state_key='auth-recovery-runtime-snapshot'
-		ORDER BY updated_at DESC LIMIT 1`).Scan(&raw)
+		ORDER BY updated_at DESC LIMIT 1`).Scan(&raw, &snapshotUpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !timestampAfter(snapshotUpdatedAt, upstreamUpdatedAt) {
+		return nil, nil
 	}
 	var snapshot map[string]any
 	if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
@@ -616,8 +711,23 @@ func (s *Store) authRecoveryFailure(ctx context.Context, host string) (*string, 
 	return nil, nil
 }
 
+func timestampAfter(candidate, baseline string) bool {
+	candidateTime, candidateErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(candidate))
+	baselineTime, baselineErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(baseline))
+	if candidateErr != nil || baselineErr != nil {
+		return true
+	}
+	return candidateTime.After(baselineTime)
+}
+
 func (s *Store) upstreamKeyStates(ctx context.Context, host string) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT upstream_group,status FROM upstream_keys WHERE host=?`, host)
+	upstreamID, err := s.upstreamIdentityID(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT parent_entity_id,
+		CASE WHEN lifecycle_state='active' THEN observed_status ELSE lifecycle_state END
+		FROM upstream_catalog_entities WHERE upstream_id=? AND entity_kind='key'`, upstreamID)
 	if err != nil {
 		return nil, err
 	}
@@ -988,6 +1098,33 @@ func divideDecimalPointers(numerator, denominator *string) *string {
 		return nil
 	}
 	return stringPointer(decimalRatText(new(big.Rat).Quo(left, right)))
+}
+
+// ConvertMultiplier applies the recharge ratio and rounds the resulting
+// multiplier to six decimal places so upstream floating-point noise is not
+// persisted or written to managed accounts.
+func ConvertMultiplier(rawRate, rechargeRate string) (string, error) {
+	raw, rawOK := new(big.Rat).SetString(strings.TrimSpace(rawRate))
+	recharge, rechargeOK := new(big.Rat).SetString(strings.TrimSpace(rechargeRate))
+	if !rawOK || !rechargeOK || raw.Sign() <= 0 || recharge.Sign() <= 0 {
+		return "", errors.New("倍率换算参数必须是有限正数")
+	}
+	text := strings.TrimRight(strings.TrimRight(new(big.Rat).Quo(raw, recharge).FloatString(6), "0"), ".")
+	if text == "" || text == "0" {
+		return "", errors.New("换算后的倍率小于可用精度")
+	}
+	return text, nil
+}
+
+func divideMultiplierPointers(numerator, denominator *string) *string {
+	if numerator == nil || denominator == nil || *numerator == "" || *denominator == "" {
+		return nil
+	}
+	text, err := ConvertMultiplier(*numerator, *denominator)
+	if err != nil {
+		return nil
+	}
+	return stringPointer(text)
 }
 
 func decimalRatText(value *big.Rat) string {

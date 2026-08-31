@@ -74,6 +74,9 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	if value.NameOnly && (value.Catalog != nil || value.Balance == nil) {
 		return UpstreamSyncWriteResult{}, errors.New("上游名称修复只能包含公开站点名称")
 	}
+	if _, err := s.upstreamIdentityID(ctx, host); err != nil {
+		return UpstreamSyncWriteResult{}, err
+	}
 	groups, keys, err := normalizeUpstreamCatalog(value.Catalog)
 	if err != nil {
 		return UpstreamSyncWriteResult{}, err
@@ -251,7 +254,17 @@ func catalogAccountRateCounts(
 			rateKeys[key.KeyID] = struct{}{}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT upstream_key_id FROM bindings WHERE upstream_host=?`, host)
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
+		return 0, 0, 0, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT bi.upstream_key_id FROM binding_identities bi
+		JOIN bindings b ON b.id=bi.binding_id
+		LEFT JOIN manual_priority_accounts m ON m.account_id=b.local_account_id
+		WHERE bi.upstream_id=? AND m.account_id IS NULL`, upstreamID)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -401,18 +414,29 @@ func normalizeUpstreamBalance(value *UpstreamBalanceObservation) (*UpstreamBalan
 }
 
 func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, recharge *string, now string, partial bool) error {
-	boundGroups, err := stringSetFromQueryer(ctx, tx, `SELECT upstream_group_id FROM bindings WHERE upstream_host=? AND upstream_group_id IS NOT NULL`, host)
+	upstreamID, identityHosts, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
 	if err != nil {
 		return err
 	}
-	boundKeys, err := stringSetFromQueryer(ctx, tx, `SELECT upstream_key_id FROM bindings WHERE upstream_host=? AND upstream_key_id IS NOT NULL`, host)
-	if err != nil {
+	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
+		return err
+	}
+	if err := ensureCatalogEntitiesFromRowsTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := repairBindingCatalogReferences(ctx, tx, identityHosts, groups, keys, now); err != nil {
+		return err
+	}
+	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
+		return err
+	}
+	if err := ensureCatalogEntitiesFromBindingsTx(ctx, tx, upstreamID, now); err != nil {
 		return err
 	}
 	groupIDs := map[string]struct{}{}
 	for _, item := range groups {
 		groupIDs[item.GroupID] = struct{}{}
-		effective := divideDecimalPointers(item.RawRate, recharge)
+		effective := divideMultiplierPointers(item.RawRate, recharge)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,rate_source,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(host,group_id) DO UPDATE SET name=excluded.name,description=excluded.description,
 			platform=excluded.platform,status=excluded.status,raw_rate=excluded.raw_rate,effective_rate=excluded.effective_rate,
@@ -431,13 +455,60 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 			return err
 		}
 	}
+	if err := upsertLiveCatalogEntitiesTx(ctx, tx, upstreamID, groups, keys, now); err != nil {
+		return err
+	}
 	if partial {
 		return nil
 	}
-	if err := reconcileCatalogRows(ctx, tx, "upstream_groups", "group_id", host, groupIDs, boundGroups, now); err != nil {
+	if err := reconcileCatalogEntitiesTx(ctx, tx, upstreamID, "group", groupIDs, now); err != nil {
 		return err
 	}
-	return reconcileCatalogRows(ctx, tx, "upstream_keys", "key_id", host, keyIDs, boundKeys, now)
+	return reconcileCatalogEntitiesTx(ctx, tx, upstreamID, "key", keyIDs, now)
+}
+
+func repairBindingCatalogReferences(ctx context.Context, tx *sql.Tx, hosts []string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, now string) error {
+	byID := make(map[string]UpstreamCatalogGroup, len(groups))
+	byName := make(map[string]UpstreamCatalogGroup, len(groups))
+	ambiguousNames := map[string]struct{}{}
+	for _, group := range groups {
+		byID[group.GroupID] = group
+		if previous, exists := byName[group.Name]; exists && previous.GroupID != group.GroupID {
+			delete(byName, group.Name)
+			ambiguousNames[group.Name] = struct{}{}
+			continue
+		}
+		if _, ambiguous := ambiguousNames[group.Name]; !ambiguous {
+			byName[group.Name] = group
+		}
+	}
+	for _, key := range keys {
+		if key.UpstreamGroup == nil {
+			continue
+		}
+		reference := strings.TrimSpace(*key.UpstreamGroup)
+		if reference == "" {
+			continue
+		}
+		group, found := byID[reference]
+		if !found {
+			group, found = byName[reference]
+		}
+		if !found {
+			continue
+		}
+		placeholders, hostArguments := sqlStringArguments(hosts)
+		arguments := []any{key.Name, group.Name, group.GroupID, now}
+		arguments = append(arguments, hostArguments...)
+		arguments = append(arguments, key.KeyID, key.Name, group.Name, group.GroupID)
+		if _, err := tx.ExecContext(ctx, `UPDATE bindings SET upstream_key_name=?,upstream_group=?,upstream_group_id=?,updated_at=?
+			WHERE upstream_host IN (`+placeholders+`) AND upstream_key_id=? AND (
+				upstream_key_name<>? OR COALESCE(upstream_group,'')<>? OR COALESCE(upstream_group_id,'')<>?
+			) AND NOT EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=bindings.local_account_id)`, arguments...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func stringSetFromQueryer(ctx context.Context, queryer interface {

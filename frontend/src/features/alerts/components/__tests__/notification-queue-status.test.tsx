@@ -1,7 +1,30 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { NotificationQueueStatus } from "../notification-queue-status";
+import type { NotificationQueueItem } from "@/api";
+
+import {
+  NotificationQueueDetailsList,
+  NotificationQueueStatus,
+} from "../notification-queue-status";
+
+function queueItem(index: number): NotificationQueueItem {
+  return {
+    incident_key: `incident-${index}`,
+    event_type: "account_unhealthy",
+    object_kind: "account",
+    object_id: String(index),
+    object_name: `测试账号-${index}`,
+    cause_code: "probe_failed",
+    status: "firing",
+    first_seen_at: "2026-08-31T00:00:00Z",
+    last_error: null,
+    delivery_status: "pending",
+    delivery_attempts: 0,
+    delivered_at: null,
+    last_seen_at: "2026-08-31T00:00:00Z",
+  };
+}
 
 describe("NotificationQueueStatus", () => {
   it("shows producer and consumer queue counts and worker state", () => {
@@ -37,5 +60,28 @@ describe("NotificationQueueStatus", () => {
     }
     for (const count of ["12", "3", "4", "2"]) expect(markup).toContain(count);
     expect(markup.match(/>查看</g)).toHaveLength(2);
+  });
+
+  it("adds search and pagination to long queue details", () => {
+    const items = Array.from({ length: 25 }, (_, index) =>
+      queueItem(index + 1),
+    );
+    const markup = renderToStaticMarkup(
+      <NotificationQueueDetailsList
+        kind="consumer"
+        details={{
+          producer_firing: [],
+          producer_recovered: [],
+          consumer_pending: items,
+          consumer_failed: [],
+          consumer_items: items,
+        }}
+      />,
+    );
+
+    expect(markup).toContain("搜索告警、对象、状态或原因");
+    expect(markup).toContain("测试账号-20");
+    expect(markup).not.toContain("测试账号-21");
+    expect(markup).toContain("转到第 2 页");
   });
 });

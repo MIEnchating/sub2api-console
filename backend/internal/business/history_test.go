@@ -58,6 +58,40 @@ func TestHistoryReadModelsPreserveNullabilityAndSurfaceDamagedJSON(t *testing.T)
 	}
 }
 
+func TestLogSearchFiltersBeforeDecodingPayloads(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	now := "2026-08-30T16:00:00Z"
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
+		VALUES(101,'request.completed',?,'succeeded','请求完成','{"request_id":"needle-request"}'),
+		(102,'request.completed',?,'succeeded','其他请求','{"request_id":"other"}')`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO run_records(run_key,task_name,status,payload_json,updated_at)
+		VALUES('run-needle','巡检','succeeded','{"model":"needle-model"}',?),
+		('run-other','巡检','succeeded','{}',?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO operation_audit(source_id,operation_id,operation_type,state,phase,error,
+		group_names_json,writeback,created_at) VALUES(103,'op-needle','routing.writeback','failed','remote-write',
+		'needle-error','[]',1,?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	limit := 5000
+	events, err := store.SearchEvents(ctx, "NEEDLE-REQUEST", &limit)
+	if err != nil || len(events) != 1 || events[0].ID != 101 {
+		t.Fatalf("events=%#v err=%v", events, err)
+	}
+	runs, err := store.SearchRunRecords(ctx, "needle-model", &limit)
+	if err != nil || len(runs) != 1 || runs[0].RunKey != "run-needle" {
+		t.Fatalf("runs=%#v err=%v", runs, err)
+	}
+	audits, err := store.SearchAuditEvents(ctx, "needle-error", &limit)
+	if err != nil || len(audits) != 1 || audits[0].ID != 103 {
+		t.Fatalf("audits=%#v err=%v", audits, err)
+	}
+}
+
 func TestHistoryOrdersMixedSourcesByActualTimeAndSourceSequence(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "history-order.sqlite3"))
 	if err != nil {

@@ -41,23 +41,122 @@ func TestApplyUpstreamSyncAtomicallyReplacesCatalogAndMapsDecimalBalance(t *test
 	if err := store.db.QueryRow(`SELECT effective_rate FROM upstream_groups WHERE host='api.example' AND group_id='7'`).Scan(&effective); err != nil {
 		t.Fatal(err)
 	}
-	if effective != "0.6666666666666666666666666667" {
+	if effective != "0.666667" {
 		t.Fatalf("wrong effective rate: %s", effective)
 	}
 	if err := store.db.QueryRow(`SELECT auth_status FROM upstreams WHERE host='api.example'`).Scan(&authStatus); err != nil || authStatus != "已恢复" {
 		t.Fatalf("auth status=%q err=%v", authStatus, err)
 	}
-	for table, id := range map[string]string{"upstream_groups": "bound-old", "upstream_keys": "bound-key"} {
-		var status string
-		if err := store.db.QueryRow(`SELECT status FROM `+table+` WHERE host='api.example' AND `+map[string]string{"upstream_groups": "group_id", "upstream_keys": "key_id"}[table]+`=?`, id).Scan(&status); err != nil || status != "missing" {
-			t.Fatalf("bound stale row %s/%s was not retained as missing: status=%q err=%v", table, id, status, err)
+	for kind, id := range map[string]string{"group": "bound-old", "key": "bound-key", "group-unused": "unused-old", "key-unused": "unused-key"} {
+		entityKind := strings.TrimSuffix(kind, "-unused")
+		var lifecycle string
+		if err := store.db.QueryRow(`SELECT lifecycle_state FROM upstream_catalog_entities
+			WHERE entity_kind=? AND entity_id=?`, entityKind, id).Scan(&lifecycle); err != nil || lifecycle != "suspected" {
+			t.Fatalf("stale entity %s/%s was not retained for confirmation: lifecycle=%q err=%v", entityKind, id, lifecycle, err)
 		}
 	}
-	for table, id := range map[string]string{"upstream_groups": "unused-old", "upstream_keys": "unused-key"} {
-		var count int
-		if err := store.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE host='api.example' AND `+map[string]string{"upstream_groups": "group_id", "upstream_keys": "key_id"}[table]+`=?`, id).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("unbound stale row %s/%s remains: count=%d err=%v", table, id, count, err)
-		}
+}
+
+func TestApplyUpstreamSyncRoundsConvertedGroupMultiplier(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE recharge_rates SET recharge_rate='10' WHERE host='api.example'`); err != nil {
+		t.Fatal(err)
+	}
+	active, rate := "active", "1.1000000000000001"
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
+		Host: "api.example", AuthenticationOK: true,
+		Catalog: &UpstreamCatalogSnapshot{Groups: []UpstreamCatalogGroup{{
+			GroupID: "7", Name: "pro", Status: &active, RawRate: &rate,
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var effective string
+	if err := store.db.QueryRowContext(ctx, `SELECT effective_rate FROM upstream_groups
+		WHERE host='api.example' AND group_id='7'`).Scan(&effective); err != nil {
+		t.Fatal(err)
+	}
+	if effective != "0.11" {
+		t.Fatalf("converted multiplier was not rounded: %q", effective)
+	}
+}
+
+func TestCatalogSyncDoesNotRewriteManualPriorityBinding(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	active, rate := "active", "0.2"
+	_, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
+		Host: "api.example", AuthenticationOK: true,
+		Catalog: &UpstreamCatalogSnapshot{
+			Groups: []UpstreamCatalogGroup{{GroupID: "1", Name: "renamed-group", Status: &active, RawRate: &rate}},
+			Keys: []UpstreamCatalogKey{{
+				KeyID: "key-1", Name: "renamed-key", UpstreamGroup: stringPointer("1"), Status: &active, Rate: &rate,
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keyName, groupName string
+	if err := store.db.QueryRow(`SELECT upstream_key_name,upstream_group FROM bindings WHERE local_account_id='41'`).Scan(&keyName, &groupName); err != nil {
+		t.Fatal(err)
+	}
+	if keyName != "codex-key" || groupName != "codex" {
+		t.Fatalf("manual binding was rewritten: key=%q group=%q", keyName, groupName)
+	}
+}
+
+func TestApplyUpstreamSyncConfirmsMissingCatalogObjectsAfterTwoCompleteSnapshots(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	active, rate := "active", "0.2"
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,schedulable,metadata_json,updated_at)
+		VALUES('41','example-0.2',1,'{}','now');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,metadata_json,updated_at)
+		VALUES('41','api.example','key-1','key-1','pro','group-1','codex','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	live := &UpstreamCatalogSnapshot{
+		Groups: []UpstreamCatalogGroup{{GroupID: "group-1", Name: "pro", Status: &active, RawRate: &rate}},
+		Keys:   []UpstreamCatalogKey{{KeyID: "key-1", Name: "key-1", UpstreamGroup: stringPointer("group-1"), Status: &active}},
+	}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: live, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: &UpstreamCatalogSnapshot{}, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Accounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].KeyStatus == nil || *first[0].KeyStatus != "suspected" {
+		t.Fatalf("first absent snapshot must wait for confirmation: %#v", first)
+	}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: &UpstreamCatalogSnapshot{}, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Accounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 || second[0].KeyStatus == nil || *second[0].KeyStatus != "key_and_group_missing" ||
+		second[0].KeyStatusReason == nil || !strings.Contains(*second[0].KeyStatusReason, "连续 2 次完整同步") {
+		t.Fatalf("second absent snapshot must confirm deletion: %#v", second)
+	}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: live, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Accounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].KeyStatus == nil || *recovered[0].KeyStatus != "active" {
+		t.Fatalf("returned stable IDs must restore the binding: %#v", recovered)
 	}
 }
 
@@ -245,6 +344,45 @@ func TestApplyUpstreamSyncForOneKeyDoesNotReconcileUnselectedCatalogRows(t *test
 	var otherCount int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM upstream_keys WHERE host='api.example' AND key_id='other-key'`).Scan(&otherCount); err != nil || otherCount != 0 {
 		t.Fatalf("partial sync wrote an unselected key: count=%d err=%v", otherCount, err)
+	}
+}
+
+func TestApplyUpstreamSyncRepairsBindingGroupFromAuthoritativeKeyCatalog(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('28','pro-0.2','{}','now');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,metadata_json,updated_at)
+		VALUES('28','api.example','4924','pro','gptproo','4924','pro','{}','now');
+		INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at)
+		VALUES('api.example','4924','stale','missing','0.2','now')`); err != nil {
+		t.Fatal(err)
+	}
+	active, rate := "active", "0.2"
+	if _, err := store.ApplyUpstreamSync(context.Background(), UpstreamSyncWrite{
+		Host: "api.example", AuthenticationOK: true,
+		Catalog: &UpstreamCatalogSnapshot{
+			Groups: []UpstreamCatalogGroup{{GroupID: "gptproo", Name: "gptproo", Status: &active, RawRate: &rate}},
+			Keys: []UpstreamCatalogKey{{
+				KeyID: "4924", Name: "pro", UpstreamGroup: stringPointer("gptproo"), Status: &active,
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var groupID, groupName string
+	if err := store.db.QueryRow(`SELECT upstream_group_id,upstream_group FROM bindings
+		WHERE upstream_host='api.example' AND upstream_key_id='4924'`).Scan(&groupID, &groupName); err != nil {
+		t.Fatal(err)
+	}
+	if groupID != "gptproo" || groupName != "gptproo" {
+		t.Fatalf("binding group was not repaired: id=%q name=%q", groupID, groupName)
+	}
+	var lifecycle string
+	if err := store.db.QueryRow(`SELECT lifecycle_state FROM upstream_catalog_entities
+		WHERE entity_kind='group' AND entity_id='4924'`).Scan(&lifecycle); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle != "missing" {
+		t.Fatalf("stale group identity must remain as a tombstone: lifecycle=%q", lifecycle)
 	}
 }
 

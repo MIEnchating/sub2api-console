@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,15 +22,20 @@ import (
 
 type TargetStore interface {
 	TargetSettings(context.Context) (configstore.TargetSettings, error)
+	AccountDefaults(context.Context) (configstore.AccountDefaultsSettings, error)
 }
 
 type Repository interface {
 	SyncManagementSnapshot(context.Context, []map[string]any, []map[string]any, string) (business.ManagementSyncResult, error)
+	CommitAccountBaseURLObservations(context.Context, []business.AccountBaseURLObservation) error
 	BoundAccountsForMaintenance(context.Context, []string) ([]business.BoundAccountMaintenance, error)
 	CommitAccountRateObservations(context.Context, []business.AccountRateObservation) error
 	CommitBindingVerification(context.Context, []business.BindingVerification) error
 	CommitAccountNameRepairs(context.Context, []business.AccountNameRepairCommit) error
+	CommitAccountDefaultsRepairs(context.Context, []business.AccountDefaultsRepairCommit, string) error
+	RepairAccountUpstreamHosts(context.Context, []string, string) (business.AccountUpstreamHostRepairResult, error)
 	CleanupMissingBindings(context.Context, []string, string) (business.MissingBindingCleanupResult, error)
+	ManualPriorityControls(context.Context, []string) (map[string]business.ManualPriorityControl, error)
 }
 
 type TaskStore interface {
@@ -38,6 +44,7 @@ type TaskStore interface {
 
 type AccountRateWriter interface {
 	SyncAccountRate(context.Context, string, string, string, string) (map[string]any, error)
+	SyncAccountMultiplier(context.Context, string, string, string) (map[string]any, error)
 }
 
 type UpstreamCatalogReader interface {
@@ -103,6 +110,22 @@ func (s *Service) EnqueueAccountRevalidation(ctx context.Context, accountIDs []s
 	return s.enqueueMaintenance(ctx, "account-binding-revalidation", "账号批量复验已排队", accountIDs, actor)
 }
 
+func (s *Service) EnqueueAccountBaseURLValidation(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
+	return s.enqueueMaintenance(ctx, "account-base-url-validation", "账号 Base URL 校验已排队", accountIDs, actor)
+}
+
+func (s *Service) EnqueueAccountConfigurationCheck(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
+	return s.enqueueMaintenance(ctx, "account-configuration-check", "账号配置校验与修复已排队", accountIDs, actor)
+}
+
+func (s *Service) EnqueueAccountBaseURLRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
+	return s.enqueueMaintenance(ctx, "account-base-url-repair", "账号配置与状态修复已排队", accountIDs, actor)
+}
+
+func (s *Service) EnqueueAccountUpstreamHostRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
+	return s.enqueueMaintenance(ctx, "account-upstream-host-repair", "账号归属 Host 修复已排队", accountIDs, actor)
+}
+
 func (s *Service) EnqueueAccountRateSync(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
 	return s.enqueueMaintenance(ctx, "account-rate-sync", "账号倍率同步已排队", accountIDs, actor)
 }
@@ -113,6 +136,10 @@ func (s *Service) SyncAllAccountRates(ctx context.Context, actor string) (map[st
 
 func (s *Service) EnqueueAccountNameRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
 	return s.enqueueMaintenance(ctx, "account-name-repair", "账号命名修复已排队", accountIDs, actor)
+}
+
+func (s *Service) EnqueueAccountDefaultsRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
+	return s.enqueueMaintenance(ctx, "account-defaults-repair", "账号默认参数修复已排队", accountIDs, actor)
 }
 
 func (s *Service) EnqueueMissingBindingCleanup(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
@@ -144,6 +171,16 @@ func (s *Service) executeMaintenance(task taskstore.Task, operation string, acco
 	runningMessage := "读取管理平台账号目录"
 	if operation == "account-rate-sync" {
 		runningMessage = "正在从上游探测账号有效倍率并写回管理平台"
+	} else if operation == "account-base-url-validation" {
+		runningMessage = "正在读取管理平台账号详情中的 Base URL"
+	} else if operation == "account-configuration-check" {
+		runningMessage = "正在校验 Base URL 并修复错误开户参数"
+	} else if operation == "account-base-url-repair" {
+		runningMessage = "正在修复 Base URL、恢复账号状态并开启调度"
+	} else if operation == "account-upstream-host-repair" {
+		runningMessage = "正在根据账号绑定修复归属 Host"
+	} else if operation == "account-defaults-repair" {
+		runningMessage = "正在核对并修复控制台开户账号的默认参数"
 	}
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 10, runningMessage, time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.tasks.Save(ctx, task); err != nil {
@@ -151,14 +188,20 @@ func (s *Service) executeMaintenance(task taskstore.Task, operation string, acco
 	}
 	var result map[string]any
 	var err error
-	if operation == "account-rate-sync" {
-		result, err = s.syncAccountRates(ctx, accountIDs, actor)
-	} else if operation == "account-name-repair" {
-		result, err = s.repairAccountNames(ctx, accountIDs, actor)
-	} else if operation == "account-missing-binding-cleanup" {
-		result, err = s.cleanupMissingBindings(ctx, accountIDs, actor)
-	} else {
-		result, err = s.revalidateAccounts(ctx, accountIDs, actor)
+	requested := len(accountIDs)
+	protected := []map[string]any{}
+	if operation != "account-rate-sync" {
+		accountIDs, protected, err = s.excludeManualPriorityAccounts(ctx, accountIDs)
+	}
+	if err == nil {
+		if len(accountIDs) == 0 && len(protected) > 0 {
+			result = manualPriorityOnlyMaintenanceResult(operation, requested, protected, actor)
+		} else {
+			result, err = s.runMaintenance(ctx, operation, accountIDs, actor)
+			if result != nil && len(protected) > 0 {
+				mergeManualPrioritySkips(result, requested, protected)
+			}
+		}
 	}
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
@@ -175,8 +218,28 @@ func (s *Service) executeMaintenance(task taskstore.Task, operation string, acco
 				task.Status = "failed"
 				task.Message = fmt.Sprintf("账号倍率同步部分失败：更新 %v 个，未变 %v 个，缺失 %v 个，失败 %v 个", result["updated"], result["unchanged"], result["missing"], result["failed"])
 			}
+		} else if operation == "account-base-url-validation" {
+			task.Message = fmt.Sprintf("Base URL 校验完成：已读取 %v 个，未返回 %v 个，失败 %v 个", result["resolved"], result["unavailable"], result["failed"])
+		} else if operation == "account-configuration-check" {
+			task.Message = fmt.Sprintf("配置校验完成：Base URL 已读取 %v 个；参数已修复 %v 个，无需修复 %v 个，跳过 %v 个，失败 %v 个",
+				result["base_url_resolved"], result["parameters_repaired"], result["parameters_unchanged"], result["parameters_skipped"], result["failed"])
+			if failed, _ := result["failed"].(int); failed > 0 {
+				task.Status = "failed"
+			}
+		} else if operation == "account-base-url-repair" {
+			task.Message = fmt.Sprintf("账号配置与状态修复完成：已修复 %v 个，未变 %v 个，跳过 %v 个，失败 %v 个", result["repaired"], result["unchanged"], result["skipped"], result["failed"])
+			if failed, _ := result["failed"].(int); failed > 0 {
+				task.Status = "failed"
+			}
+		} else if operation == "account-upstream-host-repair" {
+			task.Message = fmt.Sprintf("归属 Host 修复完成：已修复 %v 个，无需修复 %v 个，跳过 %v 个", result["repaired"], result["unchanged"], result["skipped"])
 		} else if operation == "account-name-repair" {
 			task.Message = fmt.Sprintf("命名修复完成：已修复 %v 个", result["renamed"])
+		} else if operation == "account-defaults-repair" {
+			task.Message = fmt.Sprintf("默认参数修复完成：已修复 %v 个，无需修复 %v 个，跳过 %v 个，失败 %v 个", result["repaired"], result["unchanged"], result["skipped"], result["failed"])
+			if failed, _ := result["failed"].(int); failed > 0 {
+				task.Status = "failed"
+			}
 		} else if operation == "account-missing-binding-cleanup" {
 			task.Message = fmt.Sprintf("失效绑定修复完成：已清理 %v 个", result["cleaned"])
 		} else {
@@ -185,6 +248,486 @@ func (s *Service) executeMaintenance(task taskstore.Task, operation string, acco
 	}
 	task.Result = result
 	taskstore.PersistFinal(s.tasks, task)
+}
+
+func (s *Service) runMaintenance(ctx context.Context, operation string, accountIDs []string, actor string) (map[string]any, error) {
+	switch operation {
+	case "account-rate-sync":
+		return s.syncAccountRates(ctx, accountIDs, actor)
+	case "account-base-url-validation":
+		return s.validateAccountBaseURLs(ctx, accountIDs, actor)
+	case "account-configuration-check":
+		return s.checkAccountConfiguration(ctx, accountIDs, actor)
+	case "account-base-url-repair":
+		return s.repairAccountBaseURLs(ctx, accountIDs, actor)
+	case "account-upstream-host-repair":
+		return s.repairAccountUpstreamHosts(ctx, accountIDs, actor)
+	case "account-name-repair":
+		return s.repairAccountNames(ctx, accountIDs, actor)
+	case "account-defaults-repair":
+		return s.repairAccountDefaults(ctx, accountIDs, actor)
+	case "account-missing-binding-cleanup":
+		return s.cleanupMissingBindings(ctx, accountIDs, actor)
+	default:
+		return s.revalidateAccounts(ctx, accountIDs, actor)
+	}
+}
+
+func (s *Service) excludeManualPriorityAccounts(ctx context.Context, accountIDs []string) ([]string, []map[string]any, error) {
+	controls, err := s.repository.ManualPriorityControls(ctx, accountIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("人工优先位保护状态读取失败：%w", err)
+	}
+	eligible := make([]string, 0, len(accountIDs))
+	protected := make([]map[string]any, 0, len(controls))
+	for _, accountID := range accountIDs {
+		if _, found := controls[accountID]; !found {
+			eligible = append(eligible, accountID)
+			continue
+		}
+		protected = append(protected, map[string]any{
+			"account_id":   accountID,
+			"status":       "人工优先位，已跳过",
+			"reason":       "人工控制账号仅允许按设置同步余额与倍率",
+			"remote_write": false,
+		})
+	}
+	return eligible, protected, nil
+}
+
+func manualPriorityOnlyMaintenanceResult(operation string, requested int, protected []map[string]any, actor string) map[string]any {
+	result := map[string]any{
+		"operation": operation, "requested": requested, "skipped": len(protected), "items": protected,
+		"actor": actor, "remote_write": false,
+	}
+	switch operation {
+	case "account-base-url-validation":
+		result["resolved"], result["unavailable"], result["failed"] = 0, 0, 0
+		result["read_only"] = true
+	case "account-configuration-check":
+		result["base_url_resolved"], result["base_url_unavailable"], result["base_url_failed"] = 0, 0, 0
+		result["parameters_repaired"], result["parameters_unchanged"], result["parameters_skipped"] = 0, 0, len(protected)
+		result["parameters_failed"], result["failed"] = 0, 0
+	case "account-base-url-repair", "account-defaults-repair":
+		result["repaired"], result["unchanged"], result["failed"] = 0, 0, 0
+	case "account-upstream-host-repair":
+		result["repaired"], result["unchanged"] = 0, 0
+		items := make([]business.AccountUpstreamHostRepairItem, 0, len(protected))
+		for _, item := range protected {
+			reason, _ := item["reason"].(string)
+			items = append(items, business.AccountUpstreamHostRepairItem{
+				AccountID: item["account_id"].(string), Status: item["status"].(string), Reason: &reason,
+			})
+		}
+		result["items"] = items
+	case "account-name-repair":
+		result["renamed"], result["unchanged"], result["missing"], result["failed"] = 0, 0, 0, 0
+	case "account-missing-binding-cleanup":
+		result["bound"], result["cleaned"] = 0, 0
+	default:
+		result["bound"], result["verified"], result["missing"] = 0, 0, 0
+	}
+	return result
+}
+
+func mergeManualPrioritySkips(result map[string]any, requested int, protected []map[string]any) {
+	result["requested"] = requested
+	skipped := resultInteger(result, "skipped") + len(protected)
+	result["skipped"] = skipped
+	if _, present := result["parameters_skipped"]; present {
+		result["parameters_skipped"] = resultInteger(result, "parameters_skipped") + len(protected)
+	}
+	switch items := result["items"].(type) {
+	case []map[string]any:
+		result["items"] = append(items, protected...)
+	case []business.AccountUpstreamHostRepairItem:
+		for _, item := range protected {
+			reason, _ := item["reason"].(string)
+			items = append(items, business.AccountUpstreamHostRepairItem{
+				AccountID: item["account_id"].(string), Status: item["status"].(string), Reason: &reason,
+			})
+		}
+		result["items"] = items
+	}
+}
+
+func (s *Service) repairAccountUpstreamHosts(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	result, err := s.repository.RepairAccountUpstreamHosts(ctx, accountIDs, actor)
+	if err != nil {
+		return nil, fmt.Errorf("账号归属 Host 修复失败：%w", err)
+	}
+	return map[string]any{
+		"operation": "account.upstream_host.repair", "requested": result.Requested,
+		"repaired": result.Repaired, "unchanged": result.Unchanged, "skipped": result.Skipped,
+		"items": result.Items, "event_id": result.EventID, "actor": actor, "remote_write": false,
+	}, nil
+}
+
+func (s *Service) validateAccountBaseURLs(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	client, err := s.maintenanceClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type validationResult struct {
+		row       map[string]any
+		item      map[string]any
+		resolved  bool
+		available bool
+		source    string
+	}
+	results := make([]validationResult, len(accountIDs))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(8, len(accountIDs)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				accountID := accountIDs[index]
+				item := map[string]any{"account_id": accountID, "status": "详情读取失败"}
+				row, readErr := client.Account(ctx, accountID)
+				if readErr != nil {
+					item["error"] = readErr.Error()
+					results[index].item = item
+					continue
+				}
+				item["account_name"] = strings.TrimSpace(fmt.Sprint(firstValue(row, "name")))
+				baseURL, source, available := managementRowBaseURL(row)
+				item["status"] = "详情未返回 Base URL"
+				if available {
+					item["status"], item["base_url"], item["source"] = "已读取", baseURL, source
+				}
+				results[index] = validationResult{row: row, item: item, resolved: true, available: available, source: source}
+			}
+		}()
+	}
+	for index := range accountIDs {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+
+	observations := make([]business.AccountBaseURLObservation, 0, len(results))
+	items := make([]map[string]any, 0, len(results))
+	resolved, unavailable, failed := 0, 0, 0
+	for _, result := range results {
+		items = append(items, result.item)
+		if !result.resolved {
+			failed++
+			continue
+		}
+		observation := business.AccountBaseURLObservation{AccountID: strings.TrimSpace(fmt.Sprint(firstValue(result.row, "id", "account_id")))}
+		if result.available {
+			resolved++
+			baseURL, _, _ := managementRowBaseURL(result.row)
+			observation.BaseURL = &baseURL
+			observation.Source = result.source
+		} else {
+			unavailable++
+		}
+		observations = append(observations, observation)
+	}
+	if len(observations) > 0 {
+		if err := s.repository.CommitAccountBaseURLObservations(ctx, observations); err != nil {
+			return nil, fmt.Errorf("Base URL 校验结果保存失败：%w", err)
+		}
+	}
+	return map[string]any{
+		"operation": "account.base_url.validation", "requested": len(accountIDs),
+		"resolved": resolved, "unavailable": unavailable, "failed": failed,
+		"items": items, "actor": actor, "remote_write": false, "read_only": true,
+	}, nil
+}
+
+func (s *Service) checkAccountConfiguration(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	baseURLResult, baseURLErr := s.validateAccountBaseURLs(ctx, accountIDs, actor)
+	defaultsResult, defaultsErr := s.repairAccountDefaults(ctx, accountIDs, actor)
+	result := map[string]any{
+		"operation": "account.configuration.check", "requested": len(accountIDs), "actor": actor,
+		"base_url": baseURLResult, "parameters": defaultsResult,
+	}
+	if baseURLResult != nil {
+		result["base_url_resolved"] = resultInteger(baseURLResult, "resolved")
+		result["base_url_unavailable"] = resultInteger(baseURLResult, "unavailable")
+		result["base_url_failed"] = resultInteger(baseURLResult, "failed")
+	}
+	if defaultsResult != nil {
+		result["parameters_repaired"] = resultInteger(defaultsResult, "repaired")
+		result["parameters_unchanged"] = resultInteger(defaultsResult, "unchanged")
+		result["parameters_skipped"] = resultInteger(defaultsResult, "skipped")
+		result["parameters_failed"] = resultInteger(defaultsResult, "failed")
+		result["remote_write"] = defaultsResult["remote_write"]
+	}
+	failed := resultInteger(result, "base_url_failed") + resultInteger(result, "parameters_failed")
+	if baseURLErr != nil {
+		failed++
+		result["base_url_error"] = baseURLErr.Error()
+	}
+	if defaultsErr != nil && resultInteger(result, "parameters_failed") == 0 {
+		failed++
+		result["parameters_error"] = defaultsErr.Error()
+	}
+	result["failed"] = failed
+	if baseURLErr != nil || defaultsErr != nil {
+		return result, errors.Join(baseURLErr, defaultsErr)
+	}
+	return result, nil
+}
+
+func resultInteger(result map[string]any, key string) int {
+	if result == nil {
+		return 0
+	}
+	value, _ := result[key].(int)
+	return value
+}
+
+func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	client, err := s.maintenanceClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	boundByID := make(map[string][]business.BoundAccountMaintenance, len(bound))
+	for _, account := range bound {
+		boundByID[account.AccountID] = append(boundByID[account.AccountID], account)
+	}
+	type repairResult struct {
+		item        map[string]any
+		kind        string
+		observation *business.AccountBaseURLObservation
+		written     bool
+	}
+	results := make([]repairResult, len(accountIDs))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(4, len(accountIDs)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				accountID := accountIDs[index]
+				bindings := boundByID[accountID]
+				item := map[string]any{"account_id": accountID, "remote_write": false, "readback_confirmed": false}
+				targets, hosts := map[string]string{}, map[string]struct{}{}
+				for _, account := range bindings {
+					item["account_name"] = account.AccountName
+					host := strings.TrimSpace(account.UpstreamHost)
+					if host != "" {
+						hosts[strings.ToLower(host)] = struct{}{}
+						item["upstream_host"] = host
+					}
+					if target, ok := validAccountRepairBaseURL(account.NamingBaseURL); ok {
+						targets[comparableBaseURL(target)] = target
+					}
+				}
+				switch {
+				case len(bindings) == 0:
+					item["status"] = "没有绑定，无法修复"
+					results[index] = repairResult{item: item, kind: "skipped"}
+					continue
+				case len(hosts) != 1 || len(targets) != 1:
+					item["status"] = "归属上游不唯一，无法自动修复"
+					results[index] = repairResult{item: item, kind: "skipped"}
+					continue
+				}
+				var target string
+				for _, value := range targets {
+					target = value
+				}
+				item["after"] = target
+				row, readErr := client.Account(ctx, accountID)
+				if readErr != nil {
+					item["status"], item["error"] = "账号详情读取失败", readErr.Error()
+					results[index] = repairResult{item: item, kind: "failed"}
+					continue
+				}
+				current, source, available := managementRowBaseURL(row)
+				if available {
+					item["before"] = current
+				}
+				explicitTarget := source == "explicit" && sameBaseURL(current, target)
+				if source == "explicit" && !explicitTarget {
+					item["status"] = "已有显式 Base URL，未覆盖"
+					results[index] = repairResult{item: item, kind: "skipped",
+						observation: &business.AccountBaseURLObservation{AccountID: accountID, BaseURL: &current, Source: source}}
+					continue
+				}
+				if !explicitTarget && (!available || source != "platform_default") {
+					item["status"] = "账号类型未提供可修复的默认 Base URL"
+					results[index] = repairResult{item: item, kind: "skipped"}
+					continue
+				}
+				remoteWritten := false
+				if !explicitTarget {
+					if _, updateErr := client.UpdateAccount(ctx, accountID, map[string]any{
+						"credentials": map[string]any{"base_url": target},
+					}); updateErr != nil {
+						item["status"], item["error"] = "Base URL 修复失败", updateErr.Error()
+						results[index] = repairResult{item: item, kind: "failed"}
+						continue
+					}
+					remoteWritten = true
+				}
+				recoveredRow, recoverErr := client.RecoverAccountState(ctx, accountID)
+				if recoverErr != nil {
+					item["status"], item["error"] = "账号状态恢复失败", recoverErr.Error()
+					results[index] = repairResult{item: item, kind: "failed", written: remoteWritten}
+					continue
+				}
+				remoteWritten = true
+				if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(firstValue(recoveredRow, "status"))), "active") {
+					if _, statusErr := client.UpdateAccount(ctx, accountID, map[string]any{"status": "active"}); statusErr != nil {
+						item["status"], item["error"] = "账号状态恢复失败", statusErr.Error()
+						results[index] = repairResult{item: item, kind: "failed", written: true}
+						continue
+					}
+				}
+				if _, schedulingErr := client.SetAccountSchedulable(ctx, accountID, true); schedulingErr != nil {
+					item["status"], item["error"] = "调度开启失败", schedulingErr.Error()
+					results[index] = repairResult{item: item, kind: "failed", written: true}
+					continue
+				}
+				item["remote_write"] = true
+				confirmedRow, confirmErr := client.Account(ctx, accountID)
+				if confirmErr != nil {
+					item["status"], item["error"] = "写后确认失败", confirmErr.Error()
+					results[index] = repairResult{item: item, kind: "failed", written: true}
+					continue
+				}
+				confirmed, confirmedSource, confirmedAvailable := managementRowBaseURL(confirmedRow)
+				confirmedStatus := strings.ToLower(strings.TrimSpace(fmt.Sprint(firstValue(confirmedRow, "status"))))
+				confirmedSchedulable, schedulableOK := confirmedRow["schedulable"].(bool)
+				if !confirmedAvailable || confirmedSource != "explicit" || !sameBaseURL(confirmed, target) ||
+					confirmedStatus != "active" || !schedulableOK || !confirmedSchedulable {
+					item["status"], item["error"] = "写后确认失败", "Base URL、账号状态或调度状态未全部恢复"
+					results[index] = repairResult{item: item, kind: "failed", written: true}
+					continue
+				}
+				item["status"], item["readback_confirmed"] = "已修复并恢复调度", true
+				results[index] = repairResult{item: item, kind: "repaired", written: true,
+					observation: &business.AccountBaseURLObservation{AccountID: accountID, BaseURL: &confirmed, Source: confirmedSource}}
+			}
+		}()
+	}
+	for index := range accountIDs {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+
+	items := make([]map[string]any, 0, len(results))
+	observations := make([]business.AccountBaseURLObservation, 0, len(results))
+	repaired, unchanged, skipped, failed, written := 0, 0, 0, 0, 0
+	for _, result := range results {
+		items = append(items, result.item)
+		if result.observation != nil {
+			observations = append(observations, *result.observation)
+		}
+		if result.written {
+			written++
+		}
+		switch result.kind {
+		case "repaired":
+			repaired++
+		case "unchanged":
+			unchanged++
+		case "skipped":
+			skipped++
+		default:
+			failed++
+		}
+	}
+	result := map[string]any{
+		"operation": "account.base_url.repair", "requested": len(accountIDs), "repaired": repaired,
+		"unchanged": unchanged, "skipped": skipped, "failed": failed, "items": items, "actor": actor,
+		"remote_write": written > 0,
+	}
+	if len(observations) > 0 {
+		if err := s.repository.CommitAccountBaseURLObservations(ctx, observations); err != nil {
+			return result, fmt.Errorf("Base URL 修复结果保存失败：%w", err)
+		}
+	}
+	if failed > 0 {
+		return result, errors.New("部分账号 Base URL 修复失败，请查看明细")
+	}
+	return result, nil
+}
+
+func validAccountRepairBaseURL(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	parsed, err := url.Parse(value)
+	validScheme := parsed != nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https"))
+	if err != nil || !validScheme || parsed.Host == "" || parsed.User != nil {
+		return "", false
+	}
+	return value, true
+}
+
+func comparableBaseURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed == nil {
+		return strings.TrimRight(strings.TrimSpace(value), "/")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func sameBaseURL(left, right string) bool {
+	return comparableBaseURL(left) == comparableBaseURL(right)
+}
+
+func managementRowBaseURL(row map[string]any) (string, string, bool) {
+	raw, present := row["base_url"]
+	if !present {
+		credentials, ok := row["credentials"].(map[string]any)
+		if !ok {
+			return managementDefaultBaseURL(row)
+		}
+		raw, present = credentials["base_url"]
+	}
+	value, ok := raw.(string)
+	value = strings.TrimSpace(value)
+	if present && ok && value != "" {
+		return value, "explicit", true
+	}
+	return managementDefaultBaseURL(row)
+}
+
+func managementDefaultBaseURL(row map[string]any) (string, string, bool) {
+	platform := strings.ToLower(strings.TrimSpace(fmt.Sprint(firstValue(row, "platform"))))
+	accountType := strings.ToLower(strings.TrimSpace(fmt.Sprint(firstValue(row, "type", "account_type"))))
+	if accountType != "apikey" && accountType != "upstream" && accountType != "oauth" {
+		return "", "", false
+	}
+	var value string
+	switch platform {
+	case "anthropic":
+		if accountType == "apikey" {
+			value = "https://api.anthropic.com"
+		}
+	case "openai":
+		if accountType == "apikey" || accountType == "upstream" {
+			value = "https://api.openai.com"
+		}
+	case "grok":
+		if accountType == "oauth" {
+			value = "https://cli-chat-proxy.grok.com/v1"
+		} else {
+			value = "https://api.x.ai/v1"
+		}
+	case "gemini":
+		if accountType == "apikey" {
+			value = "https://generativelanguage.googleapis.com"
+		}
+	}
+	return value, "platform_default", value != ""
 }
 
 func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
@@ -208,7 +751,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	if len(accountIDs) == 0 {
 		return map[string]any{
 			"operation": "account.rate.sync", "source": "upstream_live", "requested": 0,
-			"updated": 0, "unchanged": 0, "missing": 0, "failed": 0,
+			"updated": 0, "unchanged": 0, "skipped": 0, "missing": 0, "failed": 0,
 			"items": []map[string]any{}, "read_only": false, "remote_write": false,
 		}, nil
 	}
@@ -284,9 +827,11 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		return nil, err
 	}
 	type upstreamRate struct {
-		account    business.BoundAccountMaintenance
-		multiplier string
-		err        error
+		account              business.BoundAccountMaintenance
+		multiplier           string
+		manualMultiplierOnly bool
+		skippedReason        string
+		err                  error
 	}
 	upstreamRates := make([]upstreamRate, len(accountIDs))
 	sub2APIIDs := make([]string, 0, len(accountIDs))
@@ -301,6 +846,11 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 			upstreamRates[index].err = errors.New("未找到该账号的有效上游绑定")
 		case 1:
 			upstreamRates[index].account = bindings[0]
+			if bindings[0].ManualPriority && !bindings[0].SyncBalanceMultiplier {
+				upstreamRates[index].skippedReason = "人工控制账号未开启余额与倍率同步"
+				continue
+			}
+			upstreamRates[index].manualMultiplierOnly = bindings[0].ManualPriority
 			if isNewAPIType(bindings[0].UpstreamType) {
 				newAPIIndexes = append(newAPIIndexes, index)
 			} else {
@@ -313,7 +863,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	if len(sub2APIIDs) > 0 {
 		batch, batchErr := client.AccountUpstreamMultipliers(ctx, sub2APIIDs)
 		for index, accountID := range accountIDs {
-			if upstreamRates[index].err != nil || isNewAPIType(upstreamRates[index].account.UpstreamType) {
+			if upstreamRates[index].err != nil || upstreamRates[index].skippedReason != "" || isNewAPIType(upstreamRates[index].account.UpstreamType) {
 				continue
 			}
 			if batchErr != nil {
@@ -352,7 +902,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	probeWorkers.Wait()
 	observations := make([]business.AccountRateObservation, 0, len(upstreamRates))
 	for _, probe := range upstreamRates {
-		if probe.err == nil {
+		if probe.err == nil && probe.skippedReason == "" {
 			observations = append(observations, business.AccountRateObservation{AccountID: probe.account.AccountID, Rate: probe.multiplier})
 		}
 	}
@@ -383,6 +933,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		unchanged bool
 		missing   bool
 		failed    bool
+		skipped   bool
 		written   bool
 	}
 	results := make([]rateResult, len(accountIDs))
@@ -398,6 +949,11 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 				account := probe.account
 				item := map[string]any{"account_id": accountID, "remote_write": false, "readback_confirmed": false}
 				item["account_name"], item["upstream_host"] = account.AccountName, account.UpstreamHost
+				if probe.skippedReason != "" {
+					item["status"], item["reason"] = "人工控制，已跳过", probe.skippedReason
+					results[index] = rateResult{item: item, skipped: true}
+					continue
+				}
 				if probe.err != nil {
 					item["status"], item["error"] = "上游探测失败", probe.err.Error()
 					var httpError *adminclient.HTTPError
@@ -423,15 +979,24 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 				remoteName := strings.TrimSpace(fmt.Sprint(firstValue(remote, "name")))
 				expectedName := account.NameForMultiplier(probe.multiplier)
 				item["account_name"], item["before"], item["after"] = remoteName, remoteMultiplier, probe.multiplier
-				item["name_before"], item["name_after"] = remoteName, expectedName
+				item["name_before"] = remoteName
+				if !probe.manualMultiplierOnly {
+					item["name_after"] = expectedName
+				}
 				item["upstream_multiplier"] = probe.multiplier
-				if remoteMultiplier == probe.multiplier && remoteName == expectedName &&
-					sameRate(account.CurrentMultiplier, probe.multiplier) && account.AccountName == expectedName {
+				nameMatches := probe.manualMultiplierOnly || (remoteName == expectedName && account.AccountName == expectedName)
+				if remoteMultiplier == probe.multiplier && sameRate(account.CurrentMultiplier, probe.multiplier) && nameMatches {
 					item["status"] = "已确认一致"
 					results[index] = rateResult{item: item, unchanged: true}
 					continue
 				}
-				writeResult, writeErr := s.rateWriter.SyncAccountRate(ctx, accountID, expectedName, probe.multiplier, actor)
+				var writeResult map[string]any
+				var writeErr error
+				if probe.manualMultiplierOnly {
+					writeResult, writeErr = s.rateWriter.SyncAccountMultiplier(ctx, accountID, probe.multiplier, actor)
+				} else {
+					writeResult, writeErr = s.rateWriter.SyncAccountRate(ctx, accountID, expectedName, probe.multiplier, actor)
+				}
 				if writeErr != nil {
 					item["status"], item["error"] = "写回失败", writeErr.Error()
 					var state interface{ RemoteWriteSucceeded() bool }
@@ -455,7 +1020,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	writeWorkers.Wait()
 
 	items := make([]map[string]any, 0, len(results))
-	updated, unchanged, missing, failed, written := 0, 0, 0, 0, 0
+	updated, unchanged, skipped, missing, failed, written := 0, 0, 0, 0, 0, 0
 	for _, result := range results {
 		items = append(items, result.item)
 		if result.updated {
@@ -467,6 +1032,9 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		if result.missing {
 			missing++
 		}
+		if result.skipped {
+			skipped++
+		}
 		if result.failed {
 			failed++
 		}
@@ -476,7 +1044,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	}
 	return map[string]any{
 		"operation": "account.rate.sync", "source": "upstream_live", "requested": len(accountIDs),
-		"updated": updated, "unchanged": unchanged, "missing": missing, "failed": failed,
+		"updated": updated, "unchanged": unchanged, "skipped": skipped, "missing": missing, "failed": failed,
 		"items": items, "read_only": false, "remote_write": written > 0,
 	}, nil
 }
@@ -543,19 +1111,9 @@ func newAPIAccountMultiplier(account business.BoundAccountMaintenance, catalog b
 	if rawRate == nil || strings.TrimSpace(*rawRate) == "" {
 		return "", fmt.Errorf("NewAPI 上游分组 %q 未返回有效倍率", groupID)
 	}
-	raw, ok := new(big.Rat).SetString(strings.TrimSpace(*rawRate))
-	if !ok || raw.Sign() <= 0 {
-		return "", errors.New("NewAPI 上游返回非法倍率")
-	}
-	recharge, ok := new(big.Rat).SetString(strings.TrimSpace(account.RechargeRate))
-	if !ok || recharge.Sign() <= 0 {
-		return "", errors.New("NewAPI 上游充值倍率无效")
-	}
-	raw.Quo(raw, recharge)
-	text := raw.FloatString(28)
-	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
-	if text == "" || text == "0" {
-		return "", errors.New("NewAPI 上游折算倍率无效")
+	text, err := business.ConvertMultiplier(*rawRate, account.RechargeRate)
+	if err != nil {
+		return "", fmt.Errorf("NewAPI 上游折算倍率无效: %w", err)
 	}
 	return text, nil
 }
@@ -718,6 +1276,204 @@ func (s *Service) repairAccountNames(ctx context.Context, accountIDs []string, a
 		return result, errors.New("部分账号名称修复失败，请查看明细")
 	}
 	return result, nil
+}
+
+func (s *Service) repairAccountDefaults(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	defaults, err := s.targets.AccountDefaults(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("账号默认参数读取失败：%w", err)
+	}
+	bound, remote, err := s.maintenanceCatalog(ctx, accountIDs)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]business.BoundAccountMaintenance, len(bound))
+	for _, account := range bound {
+		if _, exists := byID[account.AccountID]; !exists {
+			byID[account.AccountID] = account
+		}
+	}
+	client, err := s.maintenanceClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type repairResult struct {
+		item    map[string]any
+		commit  *business.AccountDefaultsRepairCommit
+		written bool
+		kind    string
+	}
+	results := make([]repairResult, len(accountIDs))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(4, len(accountIDs)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				accountID := accountIDs[index]
+				account, boundExists := byID[accountID]
+				item := map[string]any{"account_id": accountID, "remote_write": false, "readback_confirmed": false}
+				if boundExists {
+					item["account_name"], item["upstream_host"] = account.AccountName, account.UpstreamHost
+				}
+				row, remoteExists := remote[accountID]
+				switch {
+				case !boundExists:
+					item["status"] = "没有绑定，已跳过"
+					results[index] = repairResult{item: item, kind: "skipped"}
+					continue
+				case !account.ConsoleOnboarded:
+					item["status"] = "非本控制台添加，未修改"
+					results[index] = repairResult{item: item, kind: "skipped"}
+					continue
+				case !remoteExists:
+					item["status"] = "管理平台不存在"
+					results[index] = repairResult{item: item, kind: "failed"}
+					continue
+				}
+				item["account_name"] = strings.TrimSpace(fmt.Sprint(firstValue(row, "name")))
+				concurrency, concurrencyErr := managementInteger(row, "concurrency")
+				priority, priorityErr := managementInteger(row, "priority")
+				loadFactor, loadFactorErr := managementOptionalInteger(row, "load_factor")
+				if concurrencyErr != nil || priorityErr != nil || loadFactorErr != nil {
+					item["status"] = "参数读取失败"
+					item["error"] = errors.Join(concurrencyErr, priorityErr, loadFactorErr).Error()
+					results[index] = repairResult{item: item, kind: "failed"}
+					continue
+				}
+				body := map[string]any{}
+				priorityValue, concurrencyValue := priority, concurrency
+				commit := business.AccountDefaultsRepairCommit{
+					AccountID: accountID, Priority: &priorityValue, Concurrency: &concurrencyValue, LoadFactorPresent: true,
+				}
+				if loadFactor != nil && *loadFactor > 0 {
+					value := strconv.FormatInt(*loadFactor, 10)
+					commit.LoadFactor = &value
+				}
+				afterConcurrency, afterPriority := concurrency, priority
+				if concurrency <= 0 {
+					afterConcurrency = defaults.Concurrency
+					body["concurrency"] = afterConcurrency
+					*commit.Concurrency = afterConcurrency
+				}
+				if priority <= 0 {
+					afterPriority = defaults.Priority
+					body["priority"] = afterPriority
+					*commit.Priority = afterPriority
+				}
+				if loadFactor != nil && *loadFactor <= 0 {
+					body["load_factor"] = int64(0)
+					commit.LoadFactor = nil
+				}
+				item["before"] = accountDefaultsSummary(concurrency, priority, loadFactor)
+				item["after"] = accountDefaultsSummary(afterConcurrency, afterPriority, positiveLoadFactor(loadFactor))
+				if len(body) == 0 {
+					item["status"] = "无需修复"
+					results[index] = repairResult{item: item, commit: &commit, kind: "unchanged"}
+					continue
+				}
+				updated, updateErr := client.UpdateAccount(ctx, accountID, body)
+				if updateErr != nil {
+					item["status"], item["error"] = "修复失败", updateErr.Error()
+					results[index] = repairResult{item: item, kind: "failed"}
+					continue
+				}
+				item["remote_write"] = true
+				confirmedConcurrency, confirmedConcurrencyErr := managementInteger(updated, "concurrency")
+				confirmedPriority, confirmedPriorityErr := managementInteger(updated, "priority")
+				confirmedLoadFactor, confirmedLoadFactorErr := managementOptionalInteger(updated, "load_factor")
+				confirmed := confirmedConcurrencyErr == nil && confirmedPriorityErr == nil && confirmedLoadFactorErr == nil &&
+					confirmedConcurrency == afterConcurrency && confirmedPriority == afterPriority &&
+					(body["load_factor"] == nil || confirmedLoadFactor == nil)
+				if !confirmed {
+					item["status"], item["error"] = "修复失败", "管理平台更新响应中的账号参数与预期不一致"
+					results[index] = repairResult{item: item, written: true, kind: "failed"}
+					continue
+				}
+				item["status"], item["readback_confirmed"] = "已修复", true
+				commit.RemoteRepaired = true
+				results[index] = repairResult{item: item, commit: &commit, written: true, kind: "repaired"}
+			}
+		}()
+	}
+	for index := range accountIDs {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+
+	items := make([]map[string]any, 0, len(results))
+	commits := make([]business.AccountDefaultsRepairCommit, 0, len(results))
+	repaired, unchanged, skipped, failed, written := 0, 0, 0, 0, 0
+	for _, result := range results {
+		items = append(items, result.item)
+		if result.written {
+			written++
+		}
+		switch result.kind {
+		case "repaired":
+			repaired++
+			commits = append(commits, *result.commit)
+		case "unchanged":
+			unchanged++
+			commits = append(commits, *result.commit)
+		case "skipped":
+			skipped++
+		default:
+			failed++
+		}
+	}
+	result := map[string]any{"operation": "account.defaults.repair", "requested": len(accountIDs), "bound": len(byID),
+		"repaired": repaired, "unchanged": unchanged, "skipped": skipped, "failed": failed, "items": items,
+		"actor": actor, "remote_write": written > 0, "default_concurrency": defaults.Concurrency, "default_priority": defaults.Priority}
+	if err := s.repository.CommitAccountDefaultsRepairs(ctx, commits, actor); err != nil {
+		return result, fmt.Errorf("默认参数修复结果保存失败：%w", err)
+	}
+	if failed > 0 {
+		return result, errors.New("部分账号默认参数修复失败，请查看明细")
+	}
+	return result, nil
+}
+
+func managementInteger(row map[string]any, key string) (int64, error) {
+	value, present := row[key]
+	if !present || value == nil {
+		return 0, fmt.Errorf("管理平台账号未返回 %s", key)
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(value)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("管理平台账号 %s 不是有效整数", key)
+	}
+	return parsed, nil
+}
+
+func managementOptionalInteger(row map[string]any, key string) (*int64, error) {
+	value, present := row[key]
+	if !present || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(value)), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("管理平台账号 %s 不是有效整数", key)
+	}
+	return &parsed, nil
+}
+
+func positiveLoadFactor(value *int64) *int64 {
+	if value == nil || *value <= 0 {
+		return nil
+	}
+	return value
+}
+
+func accountDefaultsSummary(concurrency, priority int64, loadFactor *int64) string {
+	effectiveLoad := concurrency
+	loadLabel := "跟随并发"
+	if loadFactor != nil && *loadFactor > 0 {
+		effectiveLoad, loadLabel = *loadFactor, strconv.FormatInt(*loadFactor, 10)
+	}
+	return fmt.Sprintf("并发 %d · 负载 %s（有效 %d）· 优先级 %d", concurrency, loadLabel, effectiveLoad, priority)
 }
 
 func (s *Service) cleanupMissingBindings(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {

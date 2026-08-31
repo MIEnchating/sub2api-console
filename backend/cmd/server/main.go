@@ -26,6 +26,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
+	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
@@ -76,9 +77,10 @@ func main() {
 	upstreamReader := upstreamsync.NewReader(&http.Client{Timeout: 20 * time.Second})
 	accountTasks := accountops.New(privateStore, businessStore, taskStore)
 	managementTasks := management.New(privateStore, businessStore, taskStore, accountTasks)
+	pricingTasks := pricing.New(businessStore, privateStore, taskStore)
 	managementTasks.UseUpstreamCatalogReader(upstreamReader)
 	probeTasks := probe.New(businessStore, privateStore, taskStore)
-	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore)
+	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore, upstreamReader)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -113,8 +115,11 @@ func main() {
 		taskStore,
 		captchaManager,
 	)
+	authRecoveryService.UsePlatformDetector(upstreamDetector)
+	pricingTasks.UseAuthResolver(authRecoveryService)
 	upstreamSyncTasks.SetAuthResolver(authRecoveryService)
 	managementTasks.UseUpstreamAuthResolver(authRecoveryService)
+	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
 	logService := consolelogs.New(businessStore, taskStore)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)
 	evidenceService := evidence.New(businessStore, probeTasks)
@@ -131,6 +136,7 @@ func main() {
 		upstreamSyncTasks,
 		taskStore,
 		managementTasks,
+		pricingTasks,
 	)
 	inspectionScheduler, err := inspection.NewScheduler(businessStore, inspectionRunner)
 	if err != nil {
@@ -171,6 +177,7 @@ func main() {
 		Onboarding:         onboardingService,
 		RequestTrace:       opsTrafficService,
 		SystemLogs:         opsTrafficService,
+		Pricing:            pricingTasks,
 	})
 	server := newHTTPServer(cfg.ListenAddress, handler)
 	stopped := make(chan os.Signal, 1)

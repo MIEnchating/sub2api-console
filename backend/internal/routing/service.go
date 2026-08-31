@@ -117,6 +117,7 @@ type engineConfig struct {
 	weightsEnabled      bool
 	weightBudget        int64
 	manualPriorityMax   int64
+	manageAllAccounts   bool
 	gateFloor           float64
 	priceExp            float64
 	speedExp            float64
@@ -243,13 +244,24 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	groups := map[string][]business.RoutingAccount{}
 	allMemberships := map[string][]business.RoutingAccount{}
 	manualAccounts := map[string]struct{}{}
+	externallyManagedAccounts := map[string][]business.RoutingAccount{}
+	externalReleaseAccounts := map[string][]business.RoutingAccount{}
 	for _, account := range accounts {
 		if account.ManualPriority != nil {
 			manualAccounts[account.ID] = struct{}{}
 			continue
 		}
-		groups[account.GroupName] = append(groups[account.GroupName], account)
 		allMemberships[account.ID] = append(allMemberships[account.ID], account)
+		if !config.manageAllAccounts && account.ExternalControl {
+			externallyManagedAccounts[account.ID] = append(externallyManagedAccounts[account.ID], account)
+			continue
+		}
+		if !config.manageAllAccounts && accountExternallyModified(account) {
+			externallyManagedAccounts[account.ID] = append(externallyManagedAccounts[account.ID], account)
+			externalReleaseAccounts[account.ID] = append(externalReleaseAccounts[account.ID], account)
+			continue
+		}
+		groups[account.GroupName] = append(groups[account.GroupName], account)
 	}
 	groupNames := make([]string, 0, len(groups))
 	for name := range groups {
@@ -365,6 +377,16 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		cleanupWrites, cleanupEvents = applyCleanupPolicy(byAccount, config, cleanupState, now)
 		runtimeEvents = append(runtimeEvents, cleanupEvents...)
 		result.AccountTargets = aggregateTargets(byAccount)
+		for accountID, memberships := range externalReleaseAccounts {
+			groupNames := make([]string, 0, len(memberships))
+			for _, membership := range memberships {
+				groupNames = append(groupNames, membership.GroupName)
+			}
+			result.AccountTargets[accountID] = business.AccountRoutingTarget{
+				AccountID: accountID, GroupNames: uniqueSorted(groupNames),
+				DesiredHealth: "external_control", AbandonControl: true,
+			}
+		}
 		// A group that leaves Guardian's scope is not merely skipped: accounts
 		// with no remaining managed membership must have their captured baseline
 		// restored. Group-scoped runs cannot safely make this account-level
@@ -375,6 +397,9 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 					continue
 				}
 				if _, managed := byAccount[accountID]; managed {
+					continue
+				}
+				if _, external := externallyManagedAccounts[accountID]; external {
 					continue
 				}
 				groupNames := make([]string, 0, len(memberships))
@@ -427,12 +452,14 @@ func routingStateTransitionEvents(
 			eventType, status, action = "routing.fused", "failed", "已停止调度"
 		case "cost_blocked":
 			eventType, status, action = "routing.cost_blocked", "warning", "已被成本墙拦截"
+		case "binding_invalid":
+			eventType, status, action = "routing.binding_invalid", "failed", "已因上游绑定失效而停止调度"
 		case "degraded":
 			eventType, status, action = "routing.degraded", "warning", "已降级"
 		case "survivor":
 			eventType, status, action = "routing.survivor", "warning", "已被保底强留"
 		case "healthy", "unknown":
-			if found && (prior.State == "fused" || prior.State == "cost_blocked" || prior.State == "degraded" || prior.State == "survivor") {
+			if found && (prior.State == "fused" || prior.State == "cost_blocked" || prior.State == "binding_invalid" || prior.State == "degraded" || prior.State == "survivor") {
 				eventType, action = "routing.recovered", "已恢复调度"
 			}
 		}
@@ -663,6 +690,7 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		recoverySuccesses: reader.integer(recovery, "recovery.success_count", "success_count", 2, 1, 10000), recoveryHold: time.Duration(reader.integer(recovery, "recovery.hold_seconds", "hold_seconds", 60, 0, 86400)) * time.Second,
 		weightsEnabled: reader.boolean(weights, "weights.enabled", "enabled", true), weightBudget: int64(reader.integer(weights, "weights.budget", "budget", 400, 1, 1_000_000)),
 		manualPriorityMax: int64(reader.integer(manualPriority, "manual_priority.reserved_max", "reserved_max", 10, 1, 1000)),
+		manageAllAccounts: reader.boolean(scope, "scope.manage_all_accounts", "manage_all_accounts", true),
 		gateFloor:         reader.number(weights, "weights.gate_floor", "gate_floor", 40, 0, 100), priceExp: reader.number(weights, "weights.price_exp", "price_exp", 1, math.SmallestNonzeroFloat64, 100), speedExp: reader.number(weights, "weights.speed_exp", "speed_exp", 1, math.SmallestNonzeroFloat64, 100),
 		balancedPriceRatio: reader.number(weights, "weights.balanced_price_ratio", "balanced_price_ratio", .5, 0, 1), missingRateFallback: missing, changeThreshold: change,
 		cooldown:      time.Duration(reader.integer(weights, "weights.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
@@ -776,12 +804,18 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		item.state, item.schedulable, item.reason = "paused", false, "账号已在策略中暂停"
 	case accountDisabled(item.account):
 		item.state, item.schedulable, item.reason = "disabled", false, "账号已停用"
+	case catalogBindingInvalid(item.account.CatalogBindingState):
+		item.state, item.schedulable = "binding_invalid", false
+		item.reason = pointerText(item.account.CatalogBindingReason, "上游 Key 或分组已确认删除，绑定失效")
 	case item.account.Schedulable == nil:
 		item.state, item.schedulable, item.reason = "unknown", false, "账号调度状态未知"
 	case manuallyFused:
 		item.state, item.schedulable, item.reason = "fused", false, "人工熔断"
 	case item.rate == nil:
 		item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, pointerText(item.rateReason, "倍率不可用"), "soft"
+	case strings.EqualFold(strings.TrimSpace(item.account.EffectiveState), "binding_invalid") &&
+		strings.EqualFold(strings.TrimSpace(item.account.CatalogBindingState), "active"):
+		item.state, item.schedulable, item.reason = "healthy", true, "上游 Key 与分组已重新出现，稳定 ID 绑定已恢复"
 	case fusedRoutingState(item.account.EffectiveState):
 		item.fusedUntil = previousFusedUntil(previous)
 		if item.fusedUntil.IsZero() {
@@ -821,6 +855,56 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		item.state, item.reason = "unknown", "尚无样本，等待首次探测"
 	case config.degradeEnabled && item.health.SampleCount > 0 && item.health.HealthScore < config.degradeThreshold:
 		item.state, item.reason = "degraded", fmt.Sprintf("健康分低于降级线 %.4g", config.degradeThreshold)
+	}
+	if config.manageAllAccounts && managedAccountCanReceiveTraffic(item, now) {
+		item.schedulable = true
+	}
+}
+
+func managedAccountCanReceiveTraffic(item *candidate, now time.Time) bool {
+	if item.account.Schedulable == nil {
+		return false
+	}
+	switch item.state {
+	case "healthy", "degraded", "unknown", "survivor":
+		remoteEnabled := true
+		return business.AccountUpstreamBlock(item.account.Metadata, &remoteEnabled, now) == ""
+	default:
+		return false
+	}
+}
+
+func accountExternallyModified(account business.RoutingAccount) bool {
+	if account.ManagedSchedulable != nil && !sameOptionalBool(account.Schedulable, account.ManagedSchedulable) {
+		return true
+	}
+	if account.ManagedPriority != nil && !sameOptionalInt64(account.Priority, account.ManagedPriority) {
+		return true
+	}
+	if account.ManagedLoadFactor != nil && !sameOptionalText(account.LoadFactor, account.ManagedLoadFactor) {
+		return true
+	}
+	return account.ManagedConcurrency != nil && !sameOptionalInt64(account.Concurrency, account.ManagedConcurrency)
+}
+
+func sameOptionalBool(left, right *bool) bool {
+	return left != nil && right != nil && *left == *right
+}
+
+func sameOptionalInt64(left, right *int64) bool {
+	return left != nil && right != nil && *left == *right
+}
+
+func sameOptionalText(left, right *string) bool {
+	return left != nil && right != nil && strings.TrimSpace(*left) == strings.TrimSpace(*right)
+}
+
+func catalogBindingInvalid(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "key_missing", "group_missing", "key_and_group_missing":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1144,7 +1228,7 @@ func assignAccountPlacements(
 
 func placementLoadFactorEligible(item *candidate) bool {
 	switch item.state {
-	case "excluded", "paused", "disabled", "fused", "cost_blocked":
+	case "excluded", "paused", "disabled", "fused", "cost_blocked", "binding_invalid":
 		return false
 	default:
 		return true

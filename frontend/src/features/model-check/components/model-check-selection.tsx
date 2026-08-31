@@ -1,6 +1,8 @@
 import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { AccountStatus } from "@/api";
+import { DataTablePagination } from "@/components/data-table/pagination";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,22 +47,62 @@ export type ModelCheckSelectionProps = {
   onSubmit: () => void;
 };
 
-function accountState(account: AccountStatus): string {
-  if (account.paused === true) return "已暂停";
-  if (account.schedulable === false) return "未调度";
-  return account.health_status ?? account.health ?? "-";
-}
-
-function accountStateVariant(account: AccountStatus): "secondary" | "warning" | "outline" {
-  if (account.paused === true || account.schedulable === false) return "warning";
-  const state = accountState(account).toLocaleLowerCase();
-  if (["健康", "正常", "healthy", "active"].some((value) => state.includes(value)))
-    return "secondary";
-  return "outline";
-}
-
 function modelProtocol(model: string): string {
   return model.startsWith("claude-") ? "Anthropic" : "Responses";
+}
+
+function accountCheckStatus(account: AccountStatus): {
+  label: string;
+  variant: "secondary" | "warning" | "destructive" | "outline";
+} {
+  switch (account.model_check_status) {
+    case "loading":
+      return { label: "读取中", variant: "outline" };
+    case "unavailable":
+      return { label: "结果读取失败", variant: "warning" };
+    case "consistent":
+      return { label: "符合特征", variant: "secondary" };
+    case "inconsistent":
+      return { label: "不符合特征", variant: "destructive" };
+    case "inconclusive":
+      return { label: "无法判定", variant: "warning" };
+    default:
+      return { label: "未检测", variant: "outline" };
+  }
+}
+
+function accountCheckTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "-";
+  return timestamp.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+function AccountCheckBadge(props: { account: AccountStatus }) {
+  if (props.account.manual_priority != null) {
+    return <Badge variant="outline">人工控制</Badge>;
+  }
+  const status = accountCheckStatus(props.account);
+  return <Badge variant={status.variant}>{status.label}</Badge>;
+}
+
+function accountSelectionDisabled(
+  account: AccountStatus,
+  props: ModelCheckSelectionProps,
+): boolean {
+  const checked = props.selectedAccountIDs.includes(account.id);
+  return (
+    props.disabled ||
+    account.manual_priority != null ||
+    (!checked && props.selectedAccountIDs.length >= 20)
+  );
 }
 
 function AccountIdentity(props: { account: AccountStatus }) {
@@ -95,7 +137,7 @@ function AccountMobileList(props: ModelCheckSelectionProps) {
           >
             <Checkbox
               checked={checked}
-              disabled={props.disabled || (!checked && props.selectedAccountIDs.length >= 20)}
+              disabled={accountSelectionDisabled(account, props)}
               onCheckedChange={(next) => props.onAccountToggle(account.id, next)}
               aria-label={`选择账号 ${account.name}`}
             />
@@ -104,10 +146,13 @@ function AccountMobileList(props: ModelCheckSelectionProps) {
               <span className="text-muted-foreground mt-0.5 block truncate text-xs">
                 {account.groups.join("、") || "未分组"}
               </span>
+              <span className="text-muted-foreground mt-0.5 block text-xs tabular-nums">
+                上次检测 {accountCheckTime(account.model_check_checked_at)}
+              </span>
             </span>
             <span className="flex shrink-0 flex-col items-end gap-1">
               <Badge variant="outline">{account.platform ?? account.account_type ?? "-"}</Badge>
-              <Badge variant={accountStateVariant(account)}>{accountState(account)}</Badge>
+              <AccountCheckBadge account={account} />
             </span>
           </label>
         );
@@ -142,9 +187,25 @@ function AccountEmptyState(props: ModelCheckSelectionProps) {
 }
 
 function AccountPanel(props: ModelCheckSelectionProps) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(props.accounts.length / pageSize));
+  const pageAccounts = props.accounts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const emptyState = AccountEmptyState(props);
+  const selectableAccountCount = props.accounts.filter(
+    (account) => account.manual_priority == null,
+  ).length;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [props.accountQuery]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
   return (
-    <Card className="h-[30rem] gap-0 py-0 xl:h-[36rem]">
+    <Card className="h-[32rem] gap-0 py-0 xl:h-full">
       <CardHeader className="grid-cols-[1fr_auto] items-center">
         <div className="min-w-0">
           <CardTitle>选择账号</CardTitle>
@@ -157,11 +218,11 @@ function AccountPanel(props: ModelCheckSelectionProps) {
             type="button"
             size="sm"
             variant="outline"
-            disabled={props.disabled || props.accounts.length === 0}
+            disabled={props.disabled || selectableAccountCount === 0}
             onClick={props.onAccountsSelectAll}
           >
             <CheckCheck aria-hidden="true" />
-            全选账号
+            {selectableAccountCount > 20 ? "选择前 20 个" : "全选账号"}
           </Button>
           <Tooltip>
             <TooltipTrigger render={<span className="inline-flex" />}>
@@ -200,11 +261,11 @@ function AccountPanel(props: ModelCheckSelectionProps) {
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {emptyState}
-        {!emptyState && <AccountMobileList {...props} />}
+        {!emptyState && <AccountMobileList {...props} accounts={pageAccounts} />}
         {!emptyState ? (
           <Table
             containerClassName="hidden min-h-0 md:block"
-            className="min-w-[640px]"
+            className="min-w-[860px]"
             data-testid="model-check-account-desktop-table"
           >
             <TableHeader>
@@ -212,14 +273,15 @@ function AccountPanel(props: ModelCheckSelectionProps) {
                 <TableHead className="w-11">
                   <span className="sr-only">选择</span>
                 </TableHead>
-                <TableHead className="w-[32%]">账号</TableHead>
-                <TableHead className="w-[18%]">平台</TableHead>
+                <TableHead className="w-[28%]">账号</TableHead>
+                <TableHead className="w-[14%]">平台</TableHead>
                 <TableHead>分组</TableHead>
-                <TableHead className="w-[18%]">状态</TableHead>
+                <TableHead className="w-[14%]">检测状态</TableHead>
+                <TableHead className="w-[18%]">上次检测</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {props.accounts.map((account) => {
+              {pageAccounts.map((account) => {
                 const checked = props.selectedAccountIDs.includes(account.id);
                 return (
                   <TableRow key={account.id} data-state={checked ? "selected" : undefined}>
@@ -227,9 +289,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
                       <Checkbox
                         id={`model-check-account-${account.id}`}
                         checked={checked}
-                        disabled={
-                          props.disabled || (!checked && props.selectedAccountIDs.length >= 20)
-                        }
+                        disabled={accountSelectionDisabled(account, props)}
                         onCheckedChange={(next) => props.onAccountToggle(account.id, next)}
                         aria-label={`选择账号 ${account.name}`}
                       />
@@ -237,7 +297,10 @@ function AccountPanel(props: ModelCheckSelectionProps) {
                     <TableCell>
                       <label
                         htmlFor={`model-check-account-${account.id}`}
-                        className="block min-w-0 cursor-pointer"
+                        className={cn(
+                          "block min-w-0",
+                          account.manual_priority == null ? "cursor-pointer" : "cursor-not-allowed",
+                        )}
                       >
                         <AccountIdentity account={account} />
                       </label>
@@ -249,7 +312,10 @@ function AccountPanel(props: ModelCheckSelectionProps) {
                     </TableCell>
                     <TableCell>{account.groups.join("、") || "-"}</TableCell>
                     <TableCell>
-                      <Badge variant={accountStateVariant(account)}>{accountState(account)}</Badge>
+                      <AccountCheckBadge account={account} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs tabular-nums">
+                      {accountCheckTime(account.model_check_checked_at)}
                     </TableCell>
                   </TableRow>
                 );
@@ -258,6 +324,20 @@ function AccountPanel(props: ModelCheckSelectionProps) {
           </Table>
         ) : null}
       </div>
+      {!emptyState ? (
+        <DataTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={props.accounts.length}
+          pageSize={pageSize}
+          pageSizes={[10, 20, 50]}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setCurrentPage(1);
+          }}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -347,7 +427,7 @@ function RoundControl(props: ModelCheckSelectionProps) {
 
 function MatrixPanel(props: ModelCheckSelectionProps) {
   return (
-    <Card className="h-[30rem] gap-0 py-0 xl:h-[36rem]">
+    <Card className="h-[32rem] gap-0 py-0 xl:h-full">
       <CardHeader className="grid-cols-[1fr_auto] items-center">
         <div className="min-w-0">
           <CardTitle>检测矩阵</CardTitle>
@@ -473,7 +553,7 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
 export function ModelCheckSelection(props: ModelCheckSelectionProps) {
   return (
     <section
-      className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_21rem]"
+      className="grid min-h-0 flex-1 items-stretch gap-3 overflow-auto xl:grid-cols-[minmax(0,1fr)_22rem] xl:overflow-hidden"
       aria-label="模型检测配置"
       data-testid="model-check-selection-layout"
     >

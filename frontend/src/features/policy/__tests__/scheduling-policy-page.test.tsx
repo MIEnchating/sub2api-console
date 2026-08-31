@@ -58,10 +58,21 @@ const policy: PolicySnapshot = {
   traffic_lookback_minutes: 120,
   max_samples_per_account: 60,
   advanced_policy: {
-    probe: { concurrency: 4 },
+    probe: {
+      concurrency: 4,
+      retry_enabled: true,
+      retry_source: "fixed",
+      retry_count: 2,
+      retry_status_codes: [429, 503],
+    },
     traffic: { refresh_seconds: 60 },
     weights: {},
     manual_priority: { reserved_max: 10 },
+    scope: {
+      manage_all_accounts: true,
+      managed_group_mode: "all",
+      managed_group_ids: [],
+    },
     upstream_multiplier: { interval_seconds: 120 },
     writeback: { concurrency: 4, verification: false },
     scaling: {
@@ -87,6 +98,8 @@ const config: RuntimeConfig = {
   config_keys: [],
   secret_values_hidden: true,
   probes_enabled: true,
+  account_default_concurrency: 10,
+  account_default_priority: 1,
   admin_base_url: "https://sub2api.example.test",
   request_timeout_seconds: 60,
   initialized: true,
@@ -95,9 +108,9 @@ const config: RuntimeConfig = {
   configuration_errors: [],
 };
 
-function renderPolicyPage() {
+function renderPolicyPage(snapshot: PolicySnapshot = policy) {
   const queryClient = new QueryClient();
-  queryClient.setQueryData(["policy"], policy);
+  queryClient.setQueryData(["policy"], snapshot);
   queryClient.setQueryData(["config"], config);
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
@@ -145,9 +158,10 @@ describe("调度策略入口", () => {
     expect(markup).toContain("分组没有单独设置时使用");
     expect(markup).toContain("价格和速度先在组内换算为 0～1 的相对分数");
     expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
-    expect(markup).toContain("运营配置");
-    expect(markup).toContain("系统级规则");
+    expect(markup).toContain("调度与执行");
+    expect(markup).toContain("健康判定");
     expect(markup).toContain("守护范围");
+    expect(markup).not.toContain("系统级规则");
     expect(markup).toContain("健康回池");
     expect(markup).toContain("负载因子调权");
     expect(markup).toContain("运行控制");
@@ -157,8 +171,7 @@ describe("调度策略入口", () => {
     expect(markup).toContain(
       "只读取上游与真实流量数据并执行巡检告警，不主动探测、不保存调度结果、不写入 Sub2API",
     );
-    expect(markup).toContain("调度模式");
-    expect(markup).toContain("采集上游与流量数据，计算并保存本地调度结果，不自动执行远程变更");
+    expect(markup).not.toContain("调度模式");
     expect(markup).toContain("完全模式");
     expect(markup).toContain('aria-label="启用主动探测"');
     expect(schedulingStrategyOptions).toContainEqual({
@@ -323,7 +336,14 @@ describe("调度策略入口", () => {
     expect(sampling).toContain("流量回溯（分钟）");
     expect(sampling).toContain("每账号样本上限");
     expect(sampling).toContain("探测超时（秒）");
-    expect(sampling).not.toContain("单次探测尝试次数（次）");
+    expect(sampling).toContain("失败重试");
+    expect(sampling).toContain('aria-label="探测失败重试模式"');
+    expect(sampling).toContain("固定规则");
+    expect(sampling).toContain("跟随账号池");
+    expect(sampling).toContain("失败重试次数");
+    expect(sampling).toContain("触发重试状态码");
+    expect(sampling).toContain('value="2"');
+    expect(sampling).toContain('value="429, 503"');
     expect(sampling).toContain("探测并发");
     expect(sampling).toContain('max="86400"');
     expect(sampling).not.toContain('max="3"');
@@ -336,6 +356,34 @@ describe("调度策略入口", () => {
     expect(switches).toContain("接入真实流量样本");
     expect(switches).toContain("启用主动探测");
     expect(switches).toContain("有新鲜流量时跳过探测");
+  });
+
+  it("关闭重试时隐藏模式，跟随账号池时隐藏固定参数", () => {
+    const disabled = renderPolicyPage({
+      ...policy,
+      advanced_policy: {
+        ...policy.advanced_policy,
+        probe: { retry_enabled: false, retry_source: "fixed", retry_count: 2 },
+      },
+    });
+    const disabledSampling = policySection(disabled, "采样（真实流量 / 主动探测）");
+    expect(disabledSampling).toContain("失败重试");
+    expect(disabledSampling).not.toContain("固定规则");
+    expect(disabledSampling).not.toContain("失败重试次数");
+
+    const pool = renderPolicyPage({
+      ...policy,
+      advanced_policy: {
+        ...policy.advanced_policy,
+        probe: { retry_enabled: true, retry_source: "sub2api_pool" },
+      },
+    });
+    const poolSampling = policySection(pool, "采样（真实流量 / 主动探测）");
+    expect(poolSampling).toContain("固定规则");
+    expect(poolSampling).toContain("跟随账号池");
+    expect(poolSampling).toContain("读取每个 Sub2API 账号的池模式、重试次数和状态码");
+    expect(poolSampling).not.toContain("失败重试次数");
+    expect(poolSampling).not.toContain("触发重试状态码");
   });
 
   it("只接受真实流量优先或纯主动探测两种模式", () => {
@@ -437,6 +485,26 @@ describe("调度策略入口", () => {
     expect(selected.advanced_policy.scope).toMatchObject({
       managed_group_mode: "selected",
       managed_group_ids: ["6"],
+    });
+  });
+
+  it("账号托管默认开启并说明人工优先级例外", () => {
+    const markup = renderToStaticMarkup(
+      <PolicyScopeEditor
+        value={policyDraft(policy)}
+        onChange={() => undefined}
+        groups={policy.group_strategies}
+        onRestoreControl={() => undefined}
+        restorePending={false}
+      />,
+    );
+
+    expect(markup).toContain("账号托管");
+    expect(markup).toContain('aria-label="托管所有账号"');
+    expect(markup).toContain('aria-checked="true"');
+    expect(markup).toContain("人工优先级账号始终由人工控制");
+    expect(policyDraft(policy).advanced_policy.scope).toMatchObject({
+      manage_all_accounts: true,
     });
   });
 

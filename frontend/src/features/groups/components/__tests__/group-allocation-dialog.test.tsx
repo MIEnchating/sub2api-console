@@ -87,6 +87,9 @@ describe("group allocation detail", () => {
 
   it("keeps a long allocation table inside a stable scroll area", () => {
     expect(groupAllocationLayout.dialog).toContain("overflow-hidden");
+    expect(groupAllocationLayout.width).toBe("table");
+    expect(groupAllocationLayout.height).toBe("tall");
+    expect(groupAllocationLayout.loading).toContain("h-full");
     expect(groupAllocationLayout.content).toContain("min-h-0");
     expect(groupAllocationLayout.table).toContain("min-w-[1060px]");
   });

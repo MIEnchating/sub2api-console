@@ -19,6 +19,7 @@ type UpstreamConfigurationWrite struct {
 }
 
 type UpstreamConfigurationWriteResult struct {
+	UpstreamID        string
 	Host              string
 	Name              string
 	RechargeRate      string
@@ -63,6 +64,10 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 		}
 		return UpstreamConfigurationWriteResult{}, err
 	}
+	upstreamID, err := s.createUpstreamIdentityTx(ctx, tx, value.Host, now)
+	if err != nil {
+		return UpstreamConfigurationWriteResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)
 		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`,
 		value.Host, recharge, "console-upstream-create", now); err != nil {
@@ -71,11 +76,15 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if err := tx.Commit(); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
-	return UpstreamConfigurationWriteResult{Host: value.Host, Name: name, RechargeRate: recharge}, nil
+	return UpstreamConfigurationWriteResult{UpstreamID: upstreamID, Host: value.Host, Name: name, RechargeRate: recharge}, nil
 }
 
 func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamConfigurationWrite) (UpstreamConfigurationWriteResult, error) {
 	value.Host = canonicalHost(value.Host)
+	upstreamID, identityErr := s.upstreamIdentityID(ctx, value.Host)
+	if identityErr != nil {
+		return UpstreamConfigurationWriteResult{}, identityErr
+	}
 	name, baseURL, platform, authMode, recharge, err := normalizeUpstreamConfiguration(value)
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
@@ -146,12 +155,12 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 		return UpstreamConfigurationWriteResult{}, err
 	}
 	result := UpstreamConfigurationWriteResult{
-		Host: value.Host, Name: name, RechargeRate: recharge, RawBalance: normalizedRaw, Balance: mappedBalance,
+		UpstreamID: upstreamID, Host: value.Host, Name: name, RechargeRate: recharge, RawBalance: normalizedRaw, Balance: mappedBalance,
 	}
 	for _, group := range groupRates {
 		var effective *string
 		if group.raw.Valid {
-			effective = divideDecimalPointers(normalizePositiveDecimal(group.raw.String), &recharge)
+			effective = divideMultiplierPointers(normalizePositiveDecimal(group.raw.String), &recharge)
 		}
 		if effective == nil {
 			result.UnavailableGroups++
@@ -177,6 +186,48 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 		return UpstreamConfigurationWriteResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) UpdateUpstreamClassification(ctx context.Context, host, upstreamType, authMode string) error {
+	host = canonicalHost(host)
+	upstreamType = strings.ToLower(strings.TrimSpace(upstreamType))
+	authMode = strings.TrimSpace(authMode)
+	if host == "" || upstreamType == "" || authMode == "" {
+		return errors.New("上游 Host、平台和鉴权方式不能为空")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var metadataRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`, host).Scan(&metadataRaw); err != nil {
+		return err
+	}
+	metadata, err := decodeObject(metadataRaw)
+	if err != nil {
+		return errors.New("上游 metadata 记录损坏")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	metadata["auth_verified_at"] = now
+	delete(metadata, "auth_error")
+	metadataEncoded, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE upstreams SET upstream_type=?,auth_mode=?,auth_status='已鉴权',metadata_json=?,updated_at=? WHERE host=?`,
+		upstreamType, authMode, string(metadataEncoded), now, host)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
 }
 
 func normalizeUpstreamConfiguration(value UpstreamConfigurationWrite) (string, string, string, string, string, error) {

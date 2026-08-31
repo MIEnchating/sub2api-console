@@ -2,7 +2,6 @@ package runtimepolicy
 
 const (
 	Monitoring = "监控模式"
-	Scheduling = "调度模式"
 	Full       = "完全模式"
 )
 
@@ -22,12 +21,6 @@ func For(mode string) (Capabilities, bool) {
 		return Capabilities{
 			AutomaticUpstreamSync:   true,
 			ManualAccountMultiplier: true,
-		}, true
-	case Scheduling:
-		return Capabilities{
-			PersistRoutingDecisions: true,
-			AutomaticUpstreamSync:   true,
-			AutomaticActiveProbe:    true,
 		}, true
 	case Full:
 		return Capabilities{

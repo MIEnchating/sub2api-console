@@ -6,6 +6,7 @@ import { upstreamEditDialogLayout, upstreamEditPresentation } from "../upstream-
 describe("upstream edit dialog", () => {
   it("shows redacted credential state and balance mapping summary without group details", () => {
     const configuration: UpstreamConfiguration = {
+      upstream_id: "up_example",
       host: "api.example.test",
       name: "Example",
       base_url: "https://api.example.test",
@@ -23,6 +24,7 @@ describe("upstream edit dialog", () => {
       cookie_names: [],
       groups: [
         {
+          upstream_id: "up_example",
           host: "api.example.test",
           group_id: "codex",
           name: "codex",

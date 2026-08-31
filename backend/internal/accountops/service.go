@@ -38,7 +38,7 @@ type Repository interface {
 
 type manualPriorityRepository interface {
 	ManualPriorityConfig(context.Context) (business.ManualPriorityConfig, error)
-	AssignManualPriority(context.Context, string, int64, string, int64, string) (business.ManualPriorityAssignment, error)
+	AssignManualPriority(context.Context, string, int64, string, int64, bool, string) (business.ManualPriorityAssignment, error)
 	RevertManualPriorityReservation(context.Context, string, string) error
 	ManualPriorityRelease(context.Context, string) (business.ManualPriorityRelease, error)
 	CommitManualPriorityRelease(context.Context, business.ManualPriorityRelease, string, business.AccountOperation) error
@@ -119,6 +119,9 @@ func (s *Service) Control(ctx context.Context, accountID, action, actor string) 
 	mode, local, err := s.localAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
+	}
+	if local.ManualPriority != nil {
+		return nil, errors.New("账号处于人工优先位，平台控制操作已禁用；请先取消人工优先位")
 	}
 	if mode != runtimepolicy.Full {
 		return nil, errors.New("暂停、恢复和熔断操作需要完全模式")
@@ -232,8 +235,12 @@ func (s *Service) syncFields(ctx context.Context, accountID string, patch FieldP
 	if err != nil {
 		return nil, err
 	}
-	if mode == runtimepolicy.Scheduling {
-		return nil, errors.New("调度模式只允许计算，不允许同步账号字段；请切换到完全模式")
+	if local.ManualPriority != nil && !allowReservedPriority {
+		multiplierOnly := patch.MultiplierPresent && !patch.NamePresent && !patch.PriorityPresent &&
+			!patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.NotesPresent
+		if !multiplierOnly || !local.ManualSyncBalanceMultiplier {
+			return nil, errors.New("账号处于人工优先位，仅允许按人工控制设置同步余额与倍率")
+		}
 	}
 	if mode == runtimepolicy.Monitoring && (!patch.MultiplierPresent || patch.NamePresent || patch.PriorityPresent || patch.LoadFactorPresent || patch.ConcurrencyPresent || patch.NotesPresent) {
 		return nil, errors.New("监控模式只允许同步账号倍率")
@@ -388,7 +395,7 @@ func (s *Service) EnqueueFields(ctx context.Context, accountID string, patch Fie
 	})
 }
 
-func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, actor string) (taskstore.Task, error) {
+func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
 	if !stableID(accountID) {
 		return taskstore.Task{}, errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -423,6 +430,7 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 			return nil, err
 		}
 		previousManualPriority := cloneInt64(before.ManualPriority)
+		previousSyncBalanceMultiplier := before.ManualSyncBalanceMultiplier
 		rollbackLoadFactor := config.DefaultLoadFactor
 		if before.LoadFactor != nil {
 			if normalized, normalizeErr := decimalAtLeastOne(*before.LoadFactor); normalizeErr == nil {
@@ -433,7 +441,7 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 		if before.Concurrency != nil && *before.Concurrency >= 1 && *before.Concurrency <= 10_000_000 {
 			rollbackConcurrency = *before.Concurrency
 		}
-		assignment, err := manualRepository.AssignManualPriority(run, accountID, priority, loadFactor, concurrency, actor)
+		assignment, err := manualRepository.AssignManualPriority(run, accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
 		if err != nil {
 			return nil, err
 		}
@@ -448,7 +456,7 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 		if err != nil {
 			var operationError *OperationError
 			if !errors.As(err, &operationError) || !operationError.RemoteWritten {
-				rollbackErr := rollbackManualPriority(run, manualRepository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, actor)
+				rollbackErr := rollbackManualPriority(run, manualRepository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
 				if rollbackErr != nil {
 					return nil, fmt.Errorf("%w；人工优先位回滚失败：%v", err, rollbackErr)
 				}
@@ -456,6 +464,7 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 			return nil, err
 		}
 		result["manual_priority"] = assignment.Priority
+		result["sync_balance_multiplier"] = assignment.SyncBalanceMultiplier
 		return result, nil
 	})
 }
@@ -538,11 +547,11 @@ func (s *Service) clearManualPriority(ctx context.Context, accountID, actor stri
 	}, nil
 }
 
-func rollbackManualPriority(ctx context.Context, repository manualPriorityRepository, accountID string, previous *int64, loadFactor string, concurrency int64, actor string) error {
+func rollbackManualPriority(ctx context.Context, repository manualPriorityRepository, accountID string, previous *int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) error {
 	if previous == nil {
 		return repository.RevertManualPriorityReservation(ctx, accountID, actor)
 	}
-	_, err := repository.AssignManualPriority(ctx, accountID, *previous, loadFactor, concurrency, actor)
+	_, err := repository.AssignManualPriority(ctx, accountID, *previous, loadFactor, concurrency, syncBalanceMultiplier, actor)
 	return err
 }
 

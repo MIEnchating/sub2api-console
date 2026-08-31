@@ -1,8 +1,9 @@
 import { AlertTriangle, CheckCircle2, CircleHelp, LoaderCircle, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type { Task } from "@/api";
+import { DataTablePagination } from "@/components/data-table/pagination";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
   Table,
@@ -156,192 +157,224 @@ function ResultMetrics(props: { result: ResultRecord }) {
 }
 
 export function ModelCheckResult(props: { task: Task }) {
+  const rows = resultRows(props.task.result.tests);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [props.task.id]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
   if (["queued", "running", "waiting_input"].includes(props.task.status)) {
     return (
-      <Card size="sm" className="gap-0 py-0" aria-live="polite">
-        <CardHeader className="grid-cols-[1fr_auto] items-center">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <LoaderCircle className="text-primary size-4 animate-spin" aria-hidden="true" />
-              正在检测
-            </CardTitle>
-            <p className="text-muted-foreground mt-1 text-xs">{props.task.message}</p>
+      <div className="grid h-full place-items-center" aria-live="polite">
+        <div className="w-full max-w-lg rounded-md border p-5">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="flex items-center gap-2 font-medium">
+                <LoaderCircle className="text-primary size-4 animate-spin" aria-hidden="true" />
+                正在检测
+              </p>
+              <p className="text-muted-foreground mt-1 text-sm">{props.task.message}</p>
+            </div>
+            <strong className="text-primary text-lg tabular-nums">{props.task.progress}%</strong>
           </div>
-          <strong className="text-primary text-lg tabular-nums">{props.task.progress}%</strong>
-        </CardHeader>
-        <CardContent className="py-3!">
-          <Progress value={props.task.progress} aria-label="模型检测进度" />
-        </CardContent>
-      </Card>
+          <div className="mt-4">
+            <Progress value={props.task.progress} aria-label="模型检测进度" />
+          </div>
+        </div>
+      </div>
     );
   }
   if (props.task.status === "failed" || props.task.status === "cancelled") {
     return (
-      <Card size="sm" className="ring-destructive/50 gap-0 py-0">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      <div className="grid h-full place-items-center">
+        <div className="border-destructive/40 bg-destructive/5 w-full max-w-lg rounded-md border p-5">
+          <p className="flex items-center gap-2 font-medium">
             <CircleHelp className="text-destructive size-4" aria-hidden="true" />
             检测失败
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="text-destructive text-sm">
-          {textValue(props.task.result.error) ?? props.task.message}
-        </CardContent>
-      </Card>
+          </p>
+          <p className="text-destructive mt-2 text-sm break-words">
+            {textValue(props.task.result.error) ?? props.task.message}
+          </p>
+        </div>
+      </div>
     );
   }
 
-  const rows = resultRows(props.task.result.tests);
   const summary = resultSummary(rows);
   return (
-    <Card size="sm" className="gap-0 py-0" data-testid="model-check-result">
-      <CardHeader className="grid-cols-[minmax(0,1fr)_auto] items-center">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="model-check-result">
+      <div className="flex shrink-0 flex-col gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <CardTitle className="flex items-center gap-2">
+          <p className="flex items-center gap-2 font-medium">
             <CheckCircle2 className="text-primary size-4" aria-hidden="true" />
-            检测结果
-          </CardTitle>
-          <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+            检测完成
+          </p>
+          <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
             {rows.length} 个账号模型组合
           </p>
         </div>
-        <div className="flex max-w-full flex-wrap justify-end gap-1.5">
+        <div className="flex max-w-full flex-wrap gap-1.5 sm:justify-end">
           {summaryBadges(summary)}
         </div>
-      </CardHeader>
-      <Table
-        containerClassName="hidden overflow-auto md:block"
-        className="min-w-[840px]"
-        data-testid="model-check-result-desktop-table"
-      >
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[17%]">账号</TableHead>
-            <TableHead className="w-[20%]">模型</TableHead>
-            <TableHead className="w-[15%]">结论</TableHead>
-            <TableHead className="w-[22%]">行为指标</TableHead>
-            <TableHead className="w-[10%]">成功请求</TableHead>
-            <TableHead>详情</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.length === 0 ? (
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden rounded-md border">
+        <Table
+          containerClassName="hidden h-full overflow-auto md:block"
+          className="min-w-[840px]"
+          data-testid="model-check-result-desktop-table"
+        >
+          <TableHeader>
             <TableRow>
-              <TableCell colSpan={6} className="text-muted-foreground h-24 text-center">
-                任务未返回检测明细
-              </TableCell>
+              <TableHead className="w-[17%]">账号</TableHead>
+              <TableHead className="w-[20%]">模型</TableHead>
+              <TableHead className="w-[15%]">结论</TableHead>
+              <TableHead className="w-[22%]">行为指标</TableHead>
+              <TableHead className="w-[10%]">成功请求</TableHead>
+              <TableHead>详情</TableHead>
             </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-muted-foreground h-24 text-center">
+                  任务未返回检测明细
+                </TableCell>
+              </TableRow>
+            ) : null}
+            {pageRows.map((result, index) => {
+              const verdict = displayVerdict(result);
+              const requests = objectValue(result.requests);
+              const error =
+                textValue(result.error) ??
+                (verdict === "ERROR" ? "所有检测请求均失败，请检查账号、模型和上游连接" : null);
+              const responseModels = stringArray(result.response_models);
+              const detail = error ?? (responseModels.join("、") || "未返回模型");
+              return (
+                <TableRow
+                  key={`${textValue(result.account_id) ?? index}-${textValue(result.claimed_model) ?? index}`}
+                  className={
+                    verdict === "ERROR" ? "bg-destructive/5 hover:bg-destructive/10" : undefined
+                  }
+                >
+                  <TableCell>
+                    <span className="block truncate font-medium">
+                      {textValue(result.account_name) ?? "-"}
+                    </span>
+                    <span className="text-muted-foreground block truncate text-xs">
+                      ID {textValue(result.account_id) ?? "-"}
+                    </span>
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    {textValue(result.claimed_model) ?? "-"}
+                  </TableCell>
+                  <TableCell tooltipContent={error ?? verdictLabels[verdict] ?? verdict}>
+                    {verdictBadge(verdict)}
+                  </TableCell>
+                  <TableCell overflowTooltip={false}>
+                    <ResultMetrics result={result} />
+                  </TableCell>
+                  <TableCell
+                    className={verdict === "ERROR" ? "text-destructive font-medium" : undefined}
+                  >
+                    {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
+                  </TableCell>
+                  <TableCell tooltipContent={detail} className="max-w-72">
+                    <span
+                      className={
+                        verdict === "ERROR"
+                          ? "text-destructive line-clamp-2 whitespace-normal"
+                          : "line-clamp-2 whitespace-normal"
+                      }
+                    >
+                      {detail}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+        <div
+          className="h-full divide-y overflow-auto md:hidden"
+          data-testid="model-check-result-mobile-list"
+        >
+          {rows.length === 0 ? (
+            <div className="text-muted-foreground p-6 text-center text-sm">任务未返回检测明细</div>
           ) : null}
-          {rows.map((result, index) => {
+          {pageRows.map((result, index) => {
             const verdict = displayVerdict(result);
             const requests = objectValue(result.requests);
             const error =
               textValue(result.error) ??
-              (verdict === "ERROR"
-                ? "所有检测请求均失败，请检查账号状态、模型可用性和上游连接"
-                : null);
+              (verdict === "ERROR" ? "所有检测请求均失败，请检查账号、模型和上游连接" : null);
             const responseModels = stringArray(result.response_models);
             const detail = error ?? (responseModels.join("、") || "未返回模型");
             return (
-              <TableRow
+              <article
                 key={`${textValue(result.account_id) ?? index}-${textValue(result.claimed_model) ?? index}`}
-                className={
-                  verdict === "ERROR" ? "bg-destructive/5 hover:bg-destructive/10" : undefined
-                }
+                className={verdict === "ERROR" ? "bg-destructive/5 p-3" : "p-3"}
               >
-                <TableCell>
-                  <span className="block truncate font-medium">
-                    {textValue(result.account_name) ?? "-"}
-                  </span>
-                  <span className="text-muted-foreground block truncate text-xs">
-                    ID {textValue(result.account_id) ?? "-"}
-                  </span>
-                </TableCell>
-                <TableCell className="font-medium">
-                  {textValue(result.claimed_model) ?? "-"}
-                </TableCell>
-                <TableCell tooltipContent={error ?? verdictLabels[verdict] ?? verdict}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{textValue(result.account_name) ?? "-"}</p>
+                    <p className="text-muted-foreground truncate text-xs tabular-nums">
+                      ID {textValue(result.account_id) ?? "-"}
+                    </p>
+                  </div>
                   {verdictBadge(verdict)}
-                </TableCell>
-                <TableCell overflowTooltip={false}>
+                </div>
+                <p className="mt-2 truncate text-sm font-medium">
+                  {textValue(result.claimed_model) ?? "-"}
+                </p>
+                <div className="mt-3">
                   <ResultMetrics result={result} />
-                </TableCell>
-                <TableCell
-                  className={verdict === "ERROR" ? "text-destructive font-medium" : undefined}
-                >
-                  {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
-                </TableCell>
-                <TableCell tooltipContent={detail} className="max-w-72">
-                  <span
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3 border-t pt-2 text-xs">
+                  <span className="text-muted-foreground">成功请求</span>
+                  <strong
                     className={
-                      verdict === "ERROR"
-                        ? "text-destructive line-clamp-2 whitespace-normal"
-                        : "line-clamp-2 whitespace-normal"
+                      verdict === "ERROR" ? "text-destructive tabular-nums" : "tabular-nums"
                     }
                   >
-                    {detail}
-                  </span>
-                </TableCell>
-              </TableRow>
+                    {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
+                  </strong>
+                </div>
+                <p
+                  className={
+                    verdict === "ERROR"
+                      ? "text-destructive mt-2 break-words text-xs"
+                      : "text-muted-foreground mt-2 break-words text-xs"
+                  }
+                >
+                  {detail}
+                </p>
+              </article>
             );
           })}
-        </TableBody>
-      </Table>
-      <div className="divide-y md:hidden" data-testid="model-check-result-mobile-list">
-        {rows.length === 0 ? (
-          <div className="text-muted-foreground p-6 text-center text-sm">任务未返回检测明细</div>
-        ) : null}
-        {rows.map((result, index) => {
-          const verdict = displayVerdict(result);
-          const requests = objectValue(result.requests);
-          const error =
-            textValue(result.error) ??
-            (verdict === "ERROR"
-              ? "所有检测请求均失败，请检查账号状态、模型可用性和上游连接"
-              : null);
-          const responseModels = stringArray(result.response_models);
-          const detail = error ?? (responseModels.join("、") || "未返回模型");
-          return (
-            <article
-              key={`${textValue(result.account_id) ?? index}-${textValue(result.claimed_model) ?? index}`}
-              className={verdict === "ERROR" ? "bg-destructive/5 p-3" : "p-3"}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{textValue(result.account_name) ?? "-"}</p>
-                  <p className="text-muted-foreground truncate text-xs tabular-nums">
-                    ID {textValue(result.account_id) ?? "-"}
-                  </p>
-                </div>
-                {verdictBadge(verdict)}
-              </div>
-              <p className="mt-2 truncate text-sm font-medium">
-                {textValue(result.claimed_model) ?? "-"}
-              </p>
-              <div className="mt-3">
-                <ResultMetrics result={result} />
-              </div>
-              <div className="mt-3 flex items-center justify-between gap-3 border-t pt-2 text-xs">
-                <span className="text-muted-foreground">成功请求</span>
-                <strong
-                  className={verdict === "ERROR" ? "text-destructive tabular-nums" : "tabular-nums"}
-                >
-                  {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
-                </strong>
-              </div>
-              <p
-                className={
-                  verdict === "ERROR"
-                    ? "text-destructive mt-2 break-words text-xs"
-                    : "text-muted-foreground mt-2 break-words text-xs"
-                }
-              >
-                {detail}
-              </p>
-            </article>
-          );
-        })}
+        </div>
       </div>
-    </Card>
+      <div className="shrink-0">
+        <DataTablePagination
+          currentPage={page}
+          totalPages={totalPages}
+          totalItems={rows.length}
+          pageSize={pageSize}
+          pageSizes={[10, 20, 50]}
+          onPageChange={setPage}
+          onPageSizeChange={(value) => {
+            setPageSize(value);
+            setPage(1);
+          }}
+        />
+      </div>
+    </div>
   );
 }

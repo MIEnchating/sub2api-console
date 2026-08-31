@@ -17,11 +17,19 @@ import (
 )
 
 type syncRepository struct {
-	mu         sync.Mutex
-	applied    []business.UpstreamSyncWrite
-	failures   []string
-	hosts      []business.UpstreamHost
-	failureErr error
+	mu             sync.Mutex
+	applied        []business.UpstreamSyncWrite
+	failures       []string
+	hosts          []business.UpstreamHost
+	failureErr     error
+	balanceAllowed *bool
+}
+
+func (r *syncRepository) HostBalanceSyncAllowed(context.Context, string) (bool, error) {
+	if r.balanceAllowed == nil {
+		return true, nil
+	}
+	return *r.balanceAllowed, nil
 }
 
 func (r *syncRepository) Upstreams(context.Context) (business.UpstreamSummary, error) {
@@ -78,6 +86,30 @@ func TestSyncAllNowKeepsUpstreamAndAccountRateCountsSeparate(t *testing.T) {
 	}
 	if result.AccountTotal != 8 || result.AccountRateSucceeded != 2 || result.AccountRateFailed != 6 {
 		t.Fatalf("account rate counts=%#v", result)
+	}
+}
+
+func TestBalanceSyncSkipsHostsBoundOnlyToFullyManualAccounts(t *testing.T) {
+	allowed := false
+	repository := &syncRepository{balanceAllowed: &allowed}
+	readerCalls := 0
+	service := New(
+		repository,
+		&syncPrivate{},
+		&syncReader{balance: func(context.Context, configstore.AuthRecord) (business.UpstreamBalanceObservation, error) {
+			readerCalls++
+			return business.UpstreamBalanceObservation{}, nil
+		}},
+		&syncRefresher{},
+		&memoryTasks{done: make(chan taskstore.Task, 1)},
+	)
+	result, err := service.SyncHost(context.Background(), "api.example", Scope{Balance: true}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || readerCalls != 0 || len(repository.applied) != 0 ||
+		!strings.Contains(result.BalanceStatus, "已跳过") {
+		t.Fatalf("result=%#v readerCalls=%d applied=%#v", result, readerCalls, repository.applied)
 	}
 }
 func (r *syncRepository) RecordUpstreamSyncFailure(_ context.Context, host, _, reason string, _ bool) error {
@@ -224,7 +256,7 @@ func TestSyncHostCommitsVerifiedRefreshBeforeRetryingRead(t *testing.T) {
 
 func TestSyncHostUsesBaseURLWithoutChangingHostIdentity(t *testing.T) {
 	token := "token"
-	const host = "152.53.241.112:8080"
+	const host = "192.0.2.44:8080"
 	const baseURL = "https://accelerated.example.test:8443/api"
 	private := &syncPrivate{records: map[string]configstore.AuthRecord{host: {
 		Host: host, BaseURL: baseURL, AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
@@ -236,7 +268,7 @@ func TestSyncHostUsesBaseURLWithoutChangingHostIdentity(t *testing.T) {
 	}}
 	repository := &syncRepository{}
 	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{done: make(chan taskstore.Task, 1)})
-	result, err := service.SyncHost(context.Background(), "HTTP://152.53.241.112:8080/", Scope{Catalog: true}, "tester")
+	result, err := service.SyncHost(context.Background(), "HTTP://192.0.2.44:8080/", Scope{Catalog: true}, "tester")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +285,8 @@ func TestEnqueueHostMissingAuthorizationNamesTheExactHost(t *testing.T) {
 		&syncRefresher{},
 		&memoryTasks{done: make(chan taskstore.Task, 1)},
 	)
-	_, err := service.EnqueueHost(context.Background(), "HTTP://152.53.241.112:8080/", Scope{Catalog: true}, "tester", "sync")
-	if err == nil || !strings.Contains(err.Error(), `152.53.241.112:8080`) || !strings.Contains(err.Error(), "Base URL 可以不同") {
+	_, err := service.EnqueueHost(context.Background(), "HTTP://192.0.2.44:8080/", Scope{Catalog: true}, "tester", "sync")
+	if err == nil || !strings.Contains(err.Error(), `192.0.2.44:8080`) || !strings.Contains(err.Error(), "Base URL 可以不同") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -262,7 +294,7 @@ func TestEnqueueHostMissingAuthorizationNamesTheExactHost(t *testing.T) {
 func TestEnqueueHostResolvesExplicitVaultMatchBeforeQueueing(t *testing.T) {
 	token := "token"
 	resolved := &configstore.AuthRecord{
-		Host: "152.53.241.112:8080", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
+		Host: "192.0.2.44:8080", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
 		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
 	}
 	private := &syncPrivate{records: map[string]configstore.AuthRecord{}}
@@ -274,7 +306,7 @@ func TestEnqueueHostResolvesExplicitVaultMatchBeforeQueueing(t *testing.T) {
 	service := New(&syncRepository{}, private, reader, &syncRefresher{}, tasks)
 	service.SetAuthResolver(resolver)
 
-	if _, err := service.EnqueueHost(context.Background(), "152.53.241.112:8080", Scope{Catalog: true}, "tester", "sync"); err != nil {
+	if _, err := service.EnqueueHost(context.Background(), "192.0.2.44:8080", Scope{Catalog: true}, "tester", "sync"); err != nil {
 		t.Fatal(err)
 	}
 	if resolver.callCount() != 1 {

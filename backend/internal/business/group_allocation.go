@@ -60,13 +60,13 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	if err != nil {
 		return GroupAllocation{}, err
 	}
-	accounts, err := s.accountProjections(ctx)
+	mode, err := s.Mode(ctx)
 	if err != nil {
 		return GroupAllocation{}, err
 	}
-	accountsByID := make(map[string]*accountProjection, len(accounts))
-	for index := range accounts {
-		accountsByID[accounts[index].ID] = &accounts[index]
+	excludedIDs, degradeThreshold, err := s.monitorPolicy(ctx, mode)
+	if err != nil {
+		return GroupAllocation{}, err
 	}
 	result := GroupAllocation{
 		GroupID: groupID, GroupName: group.Name, Platform: group.Platform, RateMultiplier: group.RateMultiplier,
@@ -74,25 +74,14 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		AccountCount: group.AccountCount, RateLimitedAccounts: group.RateLimitedAccounts,
 		AverageHealthScore: group.AverageHealthScore, Channels: []GroupAllocationChannel{},
 	}
-	rows, err := s.db.QueryContext(ctx, `WITH ranked_decisions AS (
-		SELECT rd.*,ROW_NUMBER() OVER(PARTITION BY rd.account_id ORDER BY julianday(rd.updated_at) DESC,rd.group_name) AS decision_rank
-		FROM routing_decisions rd
-		LEFT JOIN app_state decision_epoch ON decision_epoch.key='routing-decision-epoch'
-		WHERE decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at)
-	), current_decisions AS (
-		SELECT * FROM ranked_decisions WHERE decision_rank=1
-	), ranked_evaluations AS (
-		SELECT he.*,ROW_NUMBER() OVER(PARTITION BY he.account_id ORDER BY julianday(he.evaluated_at) DESC,he.group_name) AS evaluation_rank
-		FROM account_health_evaluations he
-	), current_evaluations AS (
-		SELECT * FROM ranked_evaluations WHERE evaluation_rank=1
-	)
-		SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
-		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.sample_count,he.ttfb_p95_ms
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
+		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.sample_count,he.ttfb_p95_ms,
+		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
-		LEFT JOIN current_decisions rd ON rd.account_id=a.id
-		LEFT JOIN current_evaluations he ON he.account_id=a.id
+		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND rd.updated_at>=COALESCE(
+			(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
+		LEFT JOIN account_health_evaluations he ON he.account_id=a.id
 		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
 		ORDER BY a.name,a.id`, groupID, group.Name)
 	if err != nil {
@@ -101,11 +90,14 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	defer rows.Close()
 	for rows.Next() {
 		var channel GroupAllocationChannel
-		var priority, schedulable, rank, sampleCount sql.NullInt64
+		var priority, schedulable, rank, sampleCount, accountSchedulable, paused sql.NullInt64
 		var accountMultiplier, role, state, reason, updatedAt, payloadRaw sql.NullString
+		var accountRoutingState, accountHealthStatus sql.NullString
+		var metadataRaw string
 		var healthScore, p95 sql.NullFloat64
 		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &accountMultiplier, &priority, &schedulable, &role, &state,
-			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &sampleCount, &p95); err != nil {
+			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &sampleCount, &p95,
+			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw); err != nil {
 			return GroupAllocation{}, err
 		}
 		channel.Priority, channel.Schedulable, channel.Rank = nullInt(priority), strictBool(schedulable), nullInt(rank)
@@ -114,11 +106,34 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		if sampleCount.Valid && sampleCount.Int64 > 0 {
 			channel.SampleCount = sampleCount.Int64
 		}
-		channel.Health = allocationHealth(accountsByID[channel.AccountID])
-		if channel.UpdatedAt == nil {
-			if account := accountsByID[channel.AccountID]; account != nil {
-				channel.Schedulable = account.Schedulable
+		account := accountProjection{AccountStatus: AccountStatus{
+			ID: channel.AccountID, Schedulable: strictBool(accountSchedulable), RoutingState: nullString(accountRoutingState),
+			HealthStatus: nullString(accountHealthStatus), Paused: strictBool(paused),
+		}, metadataRaw: metadataRaw}
+		decisions := []decisionProjection{}
+		if updatedAt.Valid {
+			decisionState := role.String
+			if state.Valid && strings.TrimSpace(state.String) != "" {
+				decisionState = state.String
 			}
+			decisions = append(decisions, decisionProjection{state: decisionState, reason: nullString(reason), updatedAt: nullString(updatedAt)})
+		}
+		evaluations := []evaluationProjection{}
+		if sampleCount.Valid || healthScore.Valid || p95.Valid {
+			evaluations = append(evaluations, evaluationProjection{
+				healthScore: nullFiniteFloat(healthScore), sampleCount: sampleCount.Int64, p95: nullFiniteFloat(p95),
+			})
+		}
+		applyAccountCalculations(&account, decisions, evaluations, struct {
+			message string
+			at      *string
+		}{}, routingApplyView{fields: map[string]bool{}})
+		if mode == "monitoring" {
+			applyMonitoringHealth(&account, excludedIDs, degradeThreshold)
+		}
+		channel.Health = account.Health
+		if channel.UpdatedAt == nil {
+			channel.Schedulable = account.Schedulable
 		}
 		if payloadRaw.Valid {
 			payload, decodeErr := decodeObject(payloadRaw.String)
@@ -194,13 +209,6 @@ func classifyAllocationChannel(allocation *GroupAllocation, channel GroupAllocat
 		channel.Health != AccountStateDisabled && channel.Health != AccountStateExcluded {
 		allocation.AvailableAccounts++
 	}
-}
-
-func allocationHealth(account *accountProjection) string {
-	if account != nil {
-		return account.Health
-	}
-	return AccountStateUnknown
 }
 
 func allocationInteger(value any) *int64 {

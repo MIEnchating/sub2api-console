@@ -25,6 +25,8 @@ export function AccountOperationButtons(props: {
   const policyStopped = state === "cost_blocked" || fused;
   const resumable = paused || (!policyStopped && props.account.schedulable === false);
   const excluded = state === "excluded";
+  const manualControlled = props.account.manual_priority != null;
+  const manualSyncAllowed = props.account.manual_sync_balance_multiplier === true;
   return (
     <div className="ml-auto grid w-[7rem] grid-cols-3 gap-1">
       {excluded ? (
@@ -32,7 +34,7 @@ export function AccountOperationButtons(props: {
           label="恢复管控"
           tone="primary"
           className="col-span-2 w-full"
-          disabled={props.pending}
+          disabled={props.pending || manualControlled}
           onClick={() => props.onControl("include", "恢复管控")}
         >
           <Play />
@@ -41,7 +43,7 @@ export function AccountOperationButtons(props: {
         <>
           <TableActionButton
             label={props.probePending ? "正在探活" : "探活测试"}
-            disabled={props.pending || props.probePending}
+            disabled={props.pending || props.probePending || manualControlled}
             onClick={props.onProbe}
           >
             {props.probePending ? <LoaderCircle className="animate-spin" /> : <Activity />}
@@ -49,7 +51,7 @@ export function AccountOperationButtons(props: {
           <TableActionButton
             label={resumable ? "恢复调度" : policyStopped ? "已停止调度" : "暂停调度"}
             tone={resumable ? "primary" : "default"}
-            disabled={props.pending || policyStopped}
+            disabled={props.pending || policyStopped || manualControlled}
             onClick={() =>
               props.onControl(
                 resumable ? "resume" : "pause",
@@ -65,7 +67,7 @@ export function AccountOperationButtons(props: {
           <TableActionButton
             label={fused ? "解除熔断" : "手动熔断"}
             tone={fused ? "primary" : "danger"}
-            disabled={props.pending || paused}
+            disabled={props.pending || paused || manualControlled}
             onClick={() =>
               props.onControl(
                 fused ? "recover" : "fuse",
@@ -78,7 +80,11 @@ export function AccountOperationButtons(props: {
           </TableActionButton>
         </>
       )}
-      <TableActionButton label="同步账号倍率" disabled={props.pending} onClick={props.onRateSync}>
+      <TableActionButton
+        label="同步账号倍率"
+        disabled={props.pending || (manualControlled && !manualSyncAllowed)}
+        onClick={props.onRateSync}
+      >
         <RefreshCw />
       </TableActionButton>
       <TableActionButton
@@ -92,6 +98,7 @@ export function AccountOperationButtons(props: {
       <TableActionButton
         label="查看并编辑账号"
         className={cn(excluded && "col-span-3 w-full")}
+        disabled={props.pending || manualControlled}
         onClick={props.onEdit}
       >
         <Pencil />

@@ -364,10 +364,22 @@ func latencyMS(sample Sample) *float64 {
 		return nil
 	}
 	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
-	trustedProbe := source == "active-probe" || source == "probe"
 	metric, ok := sample.Payload["latency_metric"].(string)
 	metric = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(metric)), "-", "_")
-	if !trustedProbe && (!ok || (metric != "first_token" && metric != "ttfb")) {
+	latencySource, _ := sample.Payload["latency_source"].(string)
+	latencySource = strings.ToLower(strings.TrimSpace(latencySource))
+	probe := source == "active-probe" || source == "probe"
+	if probe && (metric == "total_duration" || metric == "request_duration" || latencySource == "account_test.complete_response") {
+		return nil
+	}
+	if probe && ok && metric != "first_token" && metric != "ttfb" {
+		return nil
+	}
+	traffic := source == "traffic" || source == "logs"
+	if traffic && (!ok || (metric != "request_duration" && metric != "first_token" && metric != "ttfb")) {
+		return nil
+	}
+	if !probe && !traffic {
 		return nil
 	}
 	value, err := strconv.ParseFloat(strings.TrimSpace(*sample.LatencyP95), 64)

@@ -24,6 +24,7 @@ type Repository interface {
 	Mode(context.Context) (string, error)
 	UpstreamDeletePreview(context.Context, string) (business.UpstreamDeletePreview, error)
 	DeleteUpstreamProjection(context.Context, string, []string, business.UpstreamDeleteAudit) (business.UpstreamDeleteProjection, error)
+	ManualPriorityControls(context.Context, []string) (map[string]business.ManualPriorityControl, error)
 }
 
 type PrivateStore interface {
@@ -73,6 +74,9 @@ func (s *Service) Enqueue(ctx context.Context, host string, expected []string, a
 	}
 	if !sameIDs(preview.AccountIDs, expected) {
 		return taskstore.Task{}, errors.New("删除预览后的账号范围已变化，请重新确认")
+	}
+	if err := s.rejectManualPriorityAccounts(ctx, preview.AccountIDs); err != nil {
+		return taskstore.Task{}, err
 	}
 	id, err := taskID()
 	if err != nil {
@@ -125,6 +129,9 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 	if !sameIDs(preview.AccountIDs, expected) {
 		return Result{}, errors.New("删除预览后的账号范围已变化，请重新确认")
 	}
+	if err := s.rejectManualPriorityAccounts(ctx, preview.AccountIDs); err != nil {
+		return Result{}, err
+	}
 	target, err := s.private.TargetSettings(ctx)
 	if err != nil {
 		return Result{}, err
@@ -167,6 +174,22 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 		UpstreamDeleteProjection: projection, RemoteDeletedAccounts: remoteDeleted,
 		PrivateAuthDeleted: privateDeleted, EventID: projection.EventID, RemoteWrite: true, ReadbackConfirmed: true,
 	}, nil
+}
+
+func (s *Service) rejectManualPriorityAccounts(ctx context.Context, accountIDs []string) error {
+	controls, err := s.repository.ManualPriorityControls(ctx, accountIDs)
+	if err != nil {
+		return fmt.Errorf("人工优先位保护状态读取失败：%w", err)
+	}
+	if len(controls) == 0 {
+		return nil
+	}
+	protected := make([]string, 0, len(controls))
+	for accountID := range controls {
+		protected = append(protected, accountID)
+	}
+	sort.Strings(protected)
+	return fmt.Errorf("上游包含人工优先位账号 %s，请先取消人工优先位再删除", strings.Join(protected, "、"))
 }
 
 type accountDeleter interface {

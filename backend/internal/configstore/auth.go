@@ -130,12 +130,27 @@ func (s *Store) SaveAuthRecord(ctx context.Context, record AuthRecord, present m
 }
 
 func (s *Store) DeleteAuthRecord(ctx context.Context, host string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM auth_records WHERE host=?`, CanonicalHost(host))
+	host = CanonicalHost(host)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM auth_records WHERE host=?`, host)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_key_secrets WHERE host=?`, host); err != nil {
+		return false, err
+	}
 	count, err := result.RowsAffected()
-	return count > 0, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *Store) AuthRecordIndex(ctx context.Context) ([]AuthRecordSummary, error) {

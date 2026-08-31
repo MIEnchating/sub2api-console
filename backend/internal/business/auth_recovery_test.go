@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuthRecoveryProjectionStoresOnlyRedactedPublicOutcome(t *testing.T) {
@@ -47,5 +48,37 @@ func TestAuthRecoveryProjectionStoresOnlyRedactedPublicOutcome(t *testing.T) {
 	}
 	if len(payload.Results) != 1 || payload.Results[0].Reason == nil || strings.Contains(*payload.Results[0].Reason, "super-secret") || strings.Contains(*payload.Results[0].RefreshAttempt, "hidden") {
 		t.Fatalf("snapshot outcome is not redacted: %#v", payload.Results)
+	}
+}
+
+func TestAuthRecoveryFailureIgnoresSnapshotOlderThanCurrentUpstreamState(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := "Example"
+	if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reason, code := "HTTP 404", "vault_login_failed"
+	if _, err := store.PersistAuthRecoveryOutcomes(ctx, []AuthRecoveryOutcome{{
+		Host: "api.example", Success: false, Attempted: true, Code: &code, Reason: &reason,
+	}}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	newer := time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)
+	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',updated_at=? WHERE host='api.example'`, newer); err != nil {
+		t.Fatal(err)
+	}
+	if failure, err := store.authRecoveryFailure(ctx, "api.example", newer); err != nil || failure != nil {
+		t.Fatalf("stale failure=%v err=%v", failure, err)
 	}
 }

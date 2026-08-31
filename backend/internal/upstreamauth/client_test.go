@@ -159,6 +159,9 @@ func TestSub2APILoginUsesEmailAndVerifiesReturnedToken(t *testing.T) {
 	if len(transport.requests) != 2 || transport.requests[0].URL.Path != "/api/v1/auth/login" || transport.requests[1].Header.Get("Authorization") != "Bearer new-token" {
 		t.Fatalf("unexpected requests: %#v", transport.requests)
 	}
+	if transport.requests[0].Header.Get("Authorization") != "" || transport.requests[0].Header.Get("New-Api-User") != "" {
+		t.Fatalf("login reused stale authentication headers: %#v", transport.requests[0].Header)
+	}
 }
 
 func TestNewAPILegacyLoginUsesSessionCookieAndUserIDWithoutTokens(t *testing.T) {
@@ -284,6 +287,77 @@ func TestRefreshUsesPlatformEndpointAndVerifiesRotatedToken(t *testing.T) {
 	}
 	if transport.requests[1].Header.Get("Authorization") != "Bearer rotated" || transport.requests[1].Header.Get("X-Site") != "custom" {
 		t.Fatalf("verification did not use staged credentials: %#v", transport.requests[1].Header)
+	}
+}
+
+func TestSub2APIRefreshUsesEmptyBodyAndRefreshCookie(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{`{"code":0,"data":{"access_token":"rotated"}}`, `{"code":0,"data":{"id":7}}`},
+	}
+	client := New(&http.Client{Transport: transport})
+	access, refresh := "expired", "refresh-token"
+	_, err := client.Refresh(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := transport.requests[0]
+	if request.URL.Path != "/api/v1/auth/refresh" || request.Body != nil {
+		t.Fatalf("unexpected refresh request: path=%s body=%#v", request.URL.Path, request.Body)
+	}
+	if cookie, err := request.Cookie("sub2api_refresh_token"); err != nil || cookie.Value != "refresh-token" {
+		t.Fatalf("refresh cookie=%#v err=%v", cookie, err)
+	}
+}
+
+func TestSub2APIRefreshRetriesLegacyJSONBodyAfterExplicitEOF(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{
+			`{"code":400,"message":"Invalid request: EOF"}`,
+			`{"code":0,"data":{"access_token":"rotated"}}`,
+			`{"code":0,"data":{"id":7}}`,
+		},
+		statuses: []int{http.StatusBadRequest, http.StatusOK, http.StatusOK},
+	}
+	client := New(&http.Client{Transport: transport})
+	access, refresh := "expired", "refresh-token"
+	_, err := client.Refresh(context.Background(), configstore.AuthRecord{
+		Host: "legacy.example", BaseURL: "https://legacy.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transport.requests) != 3 || transport.requests[0].Body != nil || transport.requests[1].Body == nil {
+		t.Fatalf("unexpected compatibility sequence: %#v", transport.requests)
+	}
+	body, err := io.ReadAll(transport.requests[1].Body)
+	if err != nil || string(body) != `{"refresh_token":"refresh-token"}` {
+		t.Fatalf("legacy body=%q err=%v", body, err)
+	}
+	for _, request := range transport.requests[:2] {
+		cookie, err := request.Cookie("sub2api_refresh_token")
+		if err != nil || cookie.Value != "refresh-token" {
+			t.Fatalf("refresh cookie=%#v err=%v", cookie, err)
+		}
+	}
+}
+
+func TestSub2APIRefreshDoesNotRetryLegacyBodyForCredentialRejection(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{`{"code":400,"message":"refresh token invalid"}`},
+		statuses:  []int{http.StatusBadRequest},
+	}
+	client := New(&http.Client{Transport: transport})
+	access, refresh := "expired", "refresh-token"
+	_, err := client.Refresh(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
+	})
+	if err == nil || len(transport.requests) != 1 {
+		t.Fatalf("err=%v requests=%d", err, len(transport.requests))
 	}
 }
 

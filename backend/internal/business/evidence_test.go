@@ -40,6 +40,14 @@ func TestEvidenceTargetsAndTrafficPersistence(t *testing.T) {
 	if err != nil || inserted != 0 {
 		t.Fatalf("duplicate inserted=%d err=%v", inserted, err)
 	}
+	var usageCount, usageError int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(is_error),0) FROM usage_records
+		WHERE account_id='41' AND request_id='request-1'`).Scan(&usageCount, &usageError); err != nil {
+		t.Fatal(err)
+	}
+	if usageCount != 1 || usageError != 0 {
+		t.Fatalf("traffic usage record count=%d error=%d", usageCount, usageError)
+	}
 	targets, err := store.EvidenceTargets(ctx, nil, nil)
 	if err != nil || len(targets) != 1 || targets[0].TrafficAt == nil || targets[0].ProbeAt != nil ||
 		targets[0].EffectiveState != "healthy" || targets[0].DecisionState == nil || *targets[0].DecisionState != "fused" ||
@@ -60,6 +68,22 @@ func TestEvidenceTargetsAndTrafficPersistence(t *testing.T) {
 	}
 }
 
+func TestEvidenceTargetsExcludeManualPriorityAccounts(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
+		VALUES('41','manual','{}','now'),('42','automatic','{}','now');
+		INSERT INTO account_groups(account_id,group_name) VALUES('41','codex'),('42','codex');
+		INSERT INTO manual_priority_accounts(account_id,priority,created_at,updated_at) VALUES('41',3,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := store.EvidenceTargets(ctx, nil, nil)
+	if err != nil || len(targets) != 1 || targets[0].AccountID != "42" {
+		t.Fatalf("manual priority account entered evidence targets: targets=%#v err=%v", targets, err)
+	}
+}
+
 func TestPersistTrafficSamplesRejectsNonFiniteJSON(t *testing.T) {
 	store := openPolicyStore(t)
 	_, err := store.PersistTrafficSamples(context.Background(), []TrafficSample{{
@@ -68,6 +92,30 @@ func TestPersistTrafficSamplesRejectsNonFiniteJSON(t *testing.T) {
 	}})
 	if err == nil {
 		t.Fatal("non-finite payload must be rejected")
+	}
+}
+
+func TestPersistTrafficSamplesKeepsThirtyDaysOfUsageForRanking(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
+		VALUES('41','demo','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	latest := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	samples := []TrafficSample{
+		{AccountID: "41", GroupName: "codex", Result: "通过", ObservedAt: latest.Format(time.RFC3339Nano), EvidenceKey: "current", Payload: map[string]any{}},
+		{AccountID: "41", GroupName: "codex", Result: "通过", ObservedAt: latest.Add(-31 * 24 * time.Hour).Format(time.RFC3339Nano), EvidenceKey: "expired", Payload: map[string]any{}},
+	}
+	if _, err := store.PersistTrafficSamples(ctx, samples); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_records WHERE account_id='41'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("retained usage records=%d want=1", count)
 	}
 }
 
@@ -120,6 +168,52 @@ func TestPersistTrafficSamplesEnrichesExistingRequestWithFirstTokenLatency(t *te
 	}
 	if p95 != latency || !strings.Contains(payload, `"latency_metric":"first_token"`) {
 		t.Fatalf("p95=%q payload=%s", p95, payload)
+	}
+}
+
+func TestPersistTrafficSamplesUpgradesFirstTokenAggregateToRequestDuration(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	firstToken, duration := "1250", "6800"
+	legacy := TrafficSample{
+		AccountID: "41", GroupName: "codex", Result: "通过", SampleCount: 1, Attempts: 1,
+		ObservedAt: now, EvidenceKey: "request-upgrade",
+		LatencyP50: &firstToken, LatencyP95: &firstToken, LatencyP99: &firstToken,
+		Payload: map[string]any{
+			"request_id": "request-upgrade", "duration_ms": duration, "duration_unit": "ms",
+			"latency_metric": "first_token", "latency_source": "operations.first_token_ms", "latency_unit": "ms",
+		},
+	}
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{legacy}); err != nil {
+		t.Fatal(err)
+	}
+	combined := legacy
+	combined.LatencyP50, combined.LatencyP95, combined.LatencyP99 = &duration, &duration, &duration
+	combined.Payload = map[string]any{
+		"request_id": "request-upgrade", "duration_ms": duration, "duration_unit": "ms",
+		"first_token_ms": firstToken, "first_token_unit": "ms",
+		"latency_metric": "request_duration", "latency_source": "operations.duration_ms", "latency_unit": "ms",
+	}
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{combined}); err != nil {
+		t.Fatal(err)
+	}
+
+	var p95, payload string
+	if err := store.db.QueryRowContext(ctx, `SELECT latency_p95,payload_json FROM health_samples
+		WHERE account_id='41' AND group_name='codex' AND source='traffic' AND evidence_key='request-upgrade'`).Scan(&p95, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if p95 != duration || !strings.Contains(payload, `"latency_metric":"request_duration"`) || !strings.Contains(payload, `"first_token_ms":"1250"`) {
+		t.Fatalf("p95=%q payload=%s", p95, payload)
+	}
+	var storedFirstToken string
+	if err := store.db.QueryRowContext(ctx, `SELECT first_token_ms FROM usage_records
+		WHERE account_id='41' AND group_name='codex' AND request_id='request-upgrade'`).Scan(&storedFirstToken); err != nil {
+		t.Fatal(err)
+	}
+	if storedFirstToken != firstToken {
+		t.Fatalf("usage first token=%q", storedFirstToken)
 	}
 }
 

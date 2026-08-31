@@ -422,7 +422,7 @@ func requestBundle(ctx context.Context, sender bundleSender, request targetReque
 	result := bundleResult{Run: run, Outputs: emptyOutputs(probes), ResponseModel: responseModel, LatencyMS: elapsedMS(started)}
 	if len(parsed) != len(probes) {
 		if looksLikeLegacyFixedGreeting(text) {
-			result.Err = errors.New("目标 Sub2API 版本不支持行为检测：账号测试通道未转发检测题目，请升级 Sub2API 服务端")
+			result.Err = errors.New("上游未按检测提示返回结果：响应为固定问候语，可能忽略或覆盖了提示词")
 			return result
 		}
 		result.Err = errors.New("响应未包含符合要求的 JSON 数组")
@@ -577,20 +577,20 @@ func collectRequestSummary(rows []bundleResult, successful *int, responseModels 
 
 func requestFailureReason(rows []bundleResult) string {
 	reasons := map[string]bool{}
-	legacyVersionError := ""
+	fixedGreetingError := ""
 	for _, row := range rows {
 		if row.Err != nil {
 			reason := strings.TrimSpace(row.Err.Error())
 			if reason != "" {
-				if strings.Contains(reason, "目标 Sub2API 版本不支持行为检测") {
-					legacyVersionError = reason
+				if strings.Contains(reason, "响应为固定问候语") {
+					fixedGreetingError = reason
 				}
 				reasons[reason] = true
 			}
 		}
 	}
-	if legacyVersionError != "" {
-		return legacyVersionError
+	if fixedGreetingError != "" {
+		return fixedGreetingError
 	}
 	values := make([]string, 0, len(reasons))
 	for reason := range reasons {

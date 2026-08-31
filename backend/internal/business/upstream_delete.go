@@ -41,6 +41,9 @@ type UpstreamDeleteAudit struct {
 }
 
 func (s *Store) UpstreamDeletePreview(ctx context.Context, host string) (UpstreamDeletePreview, error) {
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return UpstreamDeletePreview{}, err
+	}
 	return upstreamDeletePreview(ctx, s.db, canonicalHost(host))
 }
 
@@ -48,6 +51,9 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 	host = canonicalHost(host)
 	expected, err := normalizedStableIDs(expectedAccountIDs)
 	if err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -64,6 +70,10 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 	if strings.Join(current, "\x00") != strings.Join(expected, "\x00") {
 		return UpstreamDeleteProjection{}, errors.New("删除预览后的账号范围已变化，请重新确认")
 	}
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
+	if err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
 	for _, accountID := range preview.AccountIDs {
 		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
@@ -78,16 +88,19 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 		}
 	}
 	for _, statement := range []string{
-		"DELETE FROM bindings WHERE upstream_host=?",
-		"DELETE FROM onboarding_pending WHERE upstream_host=?",
-		"DELETE FROM upstream_keys WHERE host=?",
-		"DELETE FROM upstream_groups WHERE host=?",
-		"DELETE FROM recharge_rates WHERE host=?",
-		"DELETE FROM upstreams WHERE host=?",
+		"DELETE FROM bindings WHERE id IN (SELECT binding_id FROM binding_identities WHERE upstream_id=?)",
+		"DELETE FROM onboarding_pending WHERE upstream_host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?)",
+		"DELETE FROM upstream_keys WHERE host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?)",
+		"DELETE FROM upstream_groups WHERE host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?)",
+		"DELETE FROM recharge_rates WHERE host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?)",
+		"DELETE FROM upstreams WHERE host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?)",
 	} {
-		if _, err := tx.ExecContext(ctx, statement, host); err != nil {
+		if _, err := tx.ExecContext(ctx, statement, upstreamID); err != nil {
 			return UpstreamDeleteProjection{}, err
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_identities WHERE upstream_id=?`, upstreamID); err != nil {
+		return UpstreamDeleteProjection{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
@@ -139,7 +152,11 @@ func upstreamDeletePreview(ctx context.Context, queryer deletePreviewQueryer, ho
 		}
 		return UpstreamDeletePreview{}, err
 	}
-	accountRows, err := upstreamDeleteAccountRows(ctx, queryer, host)
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, queryer, host)
+	if err != nil {
+		return UpstreamDeletePreview{}, err
+	}
+	accountRows, err := upstreamDeleteAccountRows(ctx, queryer, upstreamID)
 	if err != nil {
 		return UpstreamDeletePreview{}, err
 	}
@@ -148,13 +165,22 @@ func upstreamDeletePreview(ctx context.Context, queryer deletePreviewQueryer, ho
 		if !positiveNumericID(row.ID) {
 			return UpstreamDeletePreview{}, errors.New("关联账号不是可用于 Sub2API 删除的稳定数字 ID")
 		}
-		if row.Host.Valid && canonicalHost(row.Host.String) != "" && canonicalHost(row.Host.String) != host {
-			return UpstreamDeletePreview{}, errors.New("关联账号的主 Host 与删除目标不一致，拒绝级联删除")
+		if row.Host.Valid && canonicalHost(row.Host.String) != "" {
+			var belongs bool
+			if err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
+				SELECT 1 FROM upstream_identity_hosts WHERE upstream_id=? AND host=?
+			)`, upstreamID, canonicalHost(row.Host.String)).Scan(&belongs); err != nil {
+				return UpstreamDeletePreview{}, err
+			}
+			if !belongs {
+				return UpstreamDeletePreview{}, errors.New("关联账号的稳定上游身份与删除目标不一致，拒绝级联删除")
+			}
 		}
 		var otherHost bool
 		if err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
-			SELECT 1 FROM bindings WHERE local_account_id=? AND upstream_host<>?
-		)`, account.ID, host).Scan(&otherHost); err != nil {
+			SELECT 1 FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
+			WHERE b.local_account_id=? AND bi.upstream_id<>?
+		)`, account.ID, upstreamID).Scan(&otherHost); err != nil {
 			return UpstreamDeletePreview{}, err
 		}
 		if otherHost {
@@ -168,17 +194,19 @@ func upstreamDeletePreview(ctx context.Context, queryer deletePreviewQueryer, ho
 		result.Accounts = append(result.Accounts, account)
 	}
 	result.AccountCount = len(result.Accounts)
-	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstream_groups WHERE host=?`, host).Scan(&result.GroupCount); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstream_catalog_entities
+		WHERE upstream_id=? AND entity_kind='group'`, upstreamID).Scan(&result.GroupCount); err != nil {
 		return UpstreamDeletePreview{}, err
 	}
 	return result, nil
 }
 
-func upstreamDeleteAccountRows(ctx context.Context, queryer deletePreviewQueryer, host string) ([]upstreamDeleteAccountRow, error) {
+func upstreamDeleteAccountRows(ctx context.Context, queryer deletePreviewQueryer, upstreamID string) ([]upstreamDeleteAccountRow, error) {
 	rows, err := queryer.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,a.upstream_host
 		FROM accounts a LEFT JOIN bindings b ON b.local_account_id=a.id
-		WHERE a.upstream_host=? OR b.upstream_host=?
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`, host, host)
+		LEFT JOIN binding_identities bi ON bi.binding_id=b.id
+		WHERE a.upstream_host IN (SELECT host FROM upstream_identity_hosts WHERE upstream_id=?) OR bi.upstream_id=?
+		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`, upstreamID, upstreamID)
 	if err != nil {
 		return nil, err
 	}

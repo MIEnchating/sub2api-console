@@ -48,7 +48,7 @@ function resultTone(result: AccountRecentResult): string {
 
 function sourceLabel(source: string): string {
   const normalized = source.trim().toLowerCase();
-  if (["active-probe", "probe"].includes(normalized)) return "主动探测";
+  if (["active-probe", "probe"].includes(normalized)) return "探针";
   if (["traffic", "ops"].includes(normalized)) return "真实流量";
   return source.trim() || "来源未记录";
 }
@@ -58,7 +58,7 @@ function eventLabel(result: AccountRecentResult): string {
     case "healthy":
       return "完美健康";
     case "slow":
-      return "首字慢";
+      return "响应慢";
     case "unknown_upstream_error":
       return "上游未知异常";
     case "gateway_error":
@@ -92,6 +92,9 @@ function resultDetail(result: AccountRecentResult): string {
     eventLabel(result),
     result.score === null || result.score === undefined ? null : `${metric(result.score)} 分`,
     result.latency_ms === null ? null : `首字 ${metric(result.latency_ms)}ms`,
+    result.duration_ms === null || result.duration_ms === undefined
+      ? null
+      : `总耗时 ${metric(result.duration_ms)}ms`,
     sourceLabel(result.source),
     result.failure_reason,
   ]

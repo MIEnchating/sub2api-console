@@ -17,6 +17,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
@@ -43,6 +44,14 @@ type Authenticator interface {
 
 type Configurator interface {
 	ConfigureAuthRecord(context.Context, upstreamconfig.Input) (string, error)
+}
+
+type PlatformDetector interface {
+	Detect(context.Context, string) (upstreamdetect.Result, error)
+}
+
+type recoveredAuthCommitter interface {
+	CommitRecoveredAuth(context.Context, configstore.AuthRecord) error
 }
 
 type upstreamProvisioner interface {
@@ -111,7 +120,12 @@ type Service struct {
 	balances      BalanceSyncer
 	tasks         TaskStore
 	captcha       CaptchaFlow
+	detector      PlatformDetector
 	timeout       time.Duration
+}
+
+func (s *Service) UsePlatformDetector(detector PlatformDetector) {
+	s.detector = detector
 }
 
 func New(repository Repository, private PrivateStore, authenticator Authenticator, configurator Configurator, balances BalanceSyncer, tasks TaskStore, captcha ...CaptchaFlow) *Service {
@@ -499,11 +513,16 @@ func (s *Service) finishCaptchaParent(parentTaskID *string, status, message stri
 func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, entry string) business.AuthRecoveryOutcome {
 	host := record.Host
 	outcome := business.AuthRecoveryOutcome{Host: host, Attempted: true}
+	originalType, originalMode := record.UpstreamType, record.AuthMode
+	if detected, err := s.detectRecoveryPlatform(ctx, record); err == nil {
+		record = detected
+	}
+	classificationChanged := !strings.EqualFold(originalType, record.UpstreamType) || originalMode != record.AuthMode
 	var refreshReason string
 	if record.RefreshToken != nil && strings.TrimSpace(*record.RefreshToken) != "" {
 		rotated, refreshErr := s.authenticator.Refresh(ctx, record)
 		if refreshErr == nil {
-			if saveErr := s.private.SaveAuthRecord(ctx, rotated, allAuthFields()); saveErr != nil {
+			if saveErr := s.commitRecoveredAuth(ctx, rotated, classificationChanged); saveErr != nil {
 				return failedOutcome(outcome, "credential_commit_failed", "refresh 已复核但凭据保存失败："+saveErr.Error(), false, stringPointer("refresh 已复核"), stringPointer("refresh"))
 			}
 			return successfulOutcome(outcome, "recovered_by_refresh", "refresh token 续签并复核成功", "refresh")
@@ -534,10 +553,58 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 		}
 		return failedOutcome(outcome, "vault_login_failed", reason, false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
-	if err := s.private.SaveAuthRecord(ctx, loggedIn, allAuthFields()); err != nil {
+	if err := s.commitRecoveredAuth(ctx, loggedIn, classificationChanged); err != nil {
 		return failedOutcome(outcome, "credential_commit_failed", "密码箱登录已复核但凭据保存失败："+safeReason(err.Error()), false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
 	return successfulOutcome(outcome, "recovered_by_vault", "所选密码箱项登录并复核成功", "vault")
+}
+
+func (s *Service) detectRecoveryPlatform(ctx context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
+	if s.detector == nil {
+		return record, nil
+	}
+	result, err := s.detector.Detect(ctx, record.BaseURL)
+	if err != nil || !result.TypeDetected || result.UpstreamType == nil {
+		return record, err
+	}
+	detected := strings.ToLower(strings.TrimSpace(*result.UpstreamType))
+	if detected == "" || strings.EqualFold(detected, record.UpstreamType) {
+		return record, nil
+	}
+	mode := recoveryModeForPlatform(record.AuthMode, detected)
+	if mode == "" {
+		return record, nil
+	}
+	record.UpstreamType, record.AuthMode = detected, mode
+	return record, nil
+}
+
+func recoveryModeForPlatform(current, platform string) string {
+	login := strings.Contains(strings.ToLower(strings.TrimSpace(current)), "login")
+	switch platform {
+	case "sub2api":
+		if login {
+			return "sub2api_user_login"
+		}
+		return "sub2api_user_token"
+	case "newapi", "oneapi":
+		if login {
+			return "newapi_user_login"
+		}
+		return "newapi_user_token"
+	default:
+		return ""
+	}
+}
+
+func (s *Service) commitRecoveredAuth(ctx context.Context, record configstore.AuthRecord, classificationChanged bool) error {
+	if classificationChanged {
+		if committer, ok := s.configurator.(recoveredAuthCommitter); ok {
+			return committer.CommitRecoveredAuth(ctx, record)
+		}
+		return errors.New("鉴权已复核，但服务不支持提交平台类型修复")
+	}
+	return s.private.SaveAuthRecord(ctx, record, allAuthFields())
 }
 
 func (s *Service) recoveryRecord(ctx context.Context, host string) (*configstore.AuthRecord, error) {

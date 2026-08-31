@@ -125,6 +125,7 @@ func (tasks *observingTasks) Save(_ context.Context, task taskstore.Task) error 
 
 func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 	requestCount := 0
+	streamRelease := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requestCount++
 		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts/41/test" || request.Header.Get("X-API-Key") != "secret" {
@@ -134,8 +135,14 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 		_, _ = response.Write([]byte("data: {\"type\":\"test_start\",\"model\":\"mapped-model\"}\n\n"))
 		_, _ = response.Write([]byte("data: {\"type\":\"status\",\"text\":\"正在请求上游\"}\n\n"))
 		_, _ = response.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"))
+		if flusher, ok := response.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-streamRelease
+		_, _ = response.Write([]byte("data: {\"type\":\"test_complete\",\"success\":true}\n\n"))
 	}))
 	defer server.Close()
+	defer close(streamRelease)
 	repository := &fakeRepository{
 		policy: map[string]any{
 			"probe":                 map[string]any{"enabled": true, "model": "gpt-test", "timeout_seconds": int64(5), "concurrency": int64(2)},
@@ -170,8 +177,142 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
 	if requestCount != 1 || len(repository.samples) != 1 || repository.samples[0].Result != "通过" || repository.samples[0].SampleCount != 1 ||
-		repository.samples[0].RequestModel != "gpt-test" || repository.samples[0].ActualModel != "mapped-model" {
+		repository.samples[0].RequestModel != "gpt-test" || repository.samples[0].ActualModel != "mapped-model" ||
+		repository.samples[0].LatencyP95 == nil {
 		t.Fatalf("requests=%d samples=%#v", requestCount, repository.samples)
+	}
+}
+
+func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestCount++
+		if request.URL.Path != "/api/v1/admin/accounts/41/test" {
+			t.Fatalf("unexpected request path %s", request.URL.Path)
+		}
+		if requestCount < 3 {
+			response.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = response.Write([]byte(`{"error":"temporary"}`))
+			return
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{
+			"retry_enabled": true, "retry_source": "fixed", "retry_count": int64(2),
+			"retry_status_codes": []any{int64(503)},
+		}},
+		candidates: []business.ProbeCandidate{{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}}},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret"}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 3 || summary.Passed != 1 || len(summary.Results) != 1 || summary.Results[0].Attempts != 3 {
+		t.Fatalf("requests=%d summary=%#v", requestCount, summary)
+	}
+}
+
+func TestFixedRetryDoesNotRunForUnconfiguredStatusOrDisabledSwitch(t *testing.T) {
+	for name, retryEnabled := range map[string]bool{"unconfigured status": true, "disabled": false} {
+		t.Run(name, func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				requestCount++
+				response.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			repository := &fakeRepository{
+				policy: map[string]any{"probe": map[string]any{
+					"retry_enabled": retryEnabled, "retry_source": "fixed", "retry_count": int64(3),
+					"retry_status_codes": []any{int64(503)},
+				}},
+				candidates: []business.ProbeCandidate{{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}}},
+			}
+			service := New(repository, fakeSettings{target: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret"}}, &observingTasks{})
+
+			summary, err := service.RunNow(context.Background(), Request{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requestCount != 1 || summary.Failed != 1 || summary.Results[0].Attempts != 1 {
+				t.Fatalf("requests=%d summary=%#v", requestCount, summary)
+			}
+		})
+	}
+}
+
+func TestSub2APIPoolRetryLoadsDirectoryOnceAndAppliesPerAccountRules(t *testing.T) {
+	var mutex sync.Mutex
+	directoryRequests := 0
+	probeRequests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		switch request.URL.Path {
+		case "/api/v1/admin/accounts":
+			directoryRequests++
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"success":true,"data":{"items":[{"id":41,"credentials":{"pool_mode":true,"pool_mode_retry_count":1,"pool_mode_retry_status_codes":[502]}},{"id":42,"credentials":{"pool_mode":false}}],"total":2}}`))
+		case "/api/v1/admin/accounts/41/test", "/api/v1/admin/accounts/42/test":
+			accountID := strings.Split(request.URL.Path, "/")[5]
+			probeRequests[accountID]++
+			if accountID == "41" && probeRequests[accountID] > 1 {
+				response.Header().Set("Content-Type", "text/event-stream")
+				_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+				return
+			}
+			response.WriteHeader(http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected request path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{
+			"retry_enabled": true, "retry_source": "sub2api_pool", "retry_count": int64(10),
+			"retry_status_codes": []any{int64(500)},
+		}},
+		candidates: []business.ProbeCandidate{
+			{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+			{AccountID: "42", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+		},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret"}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if directoryRequests != 1 || probeRequests["41"] != 2 || probeRequests["42"] != 1 {
+		t.Fatalf("directory=%d probes=%#v", directoryRequests, probeRequests)
+	}
+	if summary.Passed != 1 || summary.Failed != 1 || summary.Results[0].Attempts != 2 || summary.Results[1].Attempts != 1 {
+		t.Fatalf("summary=%#v", summary)
+	}
+}
+
+func TestPoolRetryConfigUsesSub2APIDefaultsAndHonorsExplicitEmptyCodes(t *testing.T) {
+	defaults := poolRetryConfig(map[string]any{"credentials": map[string]any{"pool_mode": true}})
+	if defaults.Count != 3 {
+		t.Fatalf("default retry count=%d", defaults.Count)
+	}
+	for _, code := range []int{401, 403, 429} {
+		if _, found := defaults.StatusCodes[code]; !found {
+			t.Fatalf("default status codes=%#v", defaults.StatusCodes)
+		}
+	}
+	empty := poolRetryConfig(map[string]any{"credentials": map[string]any{
+		"pool_mode": true, "pool_mode_retry_count": "99", "pool_mode_retry_status_codes": []any{},
+	}})
+	if empty.Count != 10 || len(empty.StatusCodes) != 0 {
+		t.Fatalf("explicit pool config=%#v", empty)
 	}
 }
 
@@ -186,13 +327,13 @@ func TestAutomaticProbeRejectsDisabledConfigurationBeforeCreatingTask(t *testing
 	}
 }
 
-func TestManualProbeIgnoresAutomaticSchedulingPolicy(t *testing.T) {
+func TestManualProbeIgnoresAutomaticSchedulingFiltersButUsesRetryPolicy(t *testing.T) {
 	groupID := "7"
 	repository := &fakeRepository{
-		policyErr: errors.New("automatic scheduling policy unavailable"),
 		policy: map[string]any{
 			"probe": map[string]any{
 				"enabled": false, "timeout_seconds": int64(1), "concurrency": int64(32), "prompt": "automatic",
+				"retry_enabled": true, "retry_source": "fixed", "retry_count": int64(2), "retry_status_codes": []any{int64(503)},
 			},
 			"scope": map[string]any{"excluded_account_ids": []any{"41"}},
 			"group_policy_bindings": map[string]any{
@@ -220,8 +361,14 @@ func TestManualProbeIgnoresAutomaticSchedulingPolicy(t *testing.T) {
 	if prepared.config.Timeout != 60*time.Second || prepared.config.MaxConcurrency != 4 || prepared.config.Prompt != "hi" {
 		t.Fatalf("manual probe inherited automatic execution settings: %#v", prepared.config)
 	}
-	if repository.policyCalls != 0 {
-		t.Fatalf("manual probe read automatic scheduling policy %d times", repository.policyCalls)
+	if !prepared.config.RetryEnabled || prepared.config.RetrySource != "fixed" || prepared.config.Retry.Count != 2 {
+		t.Fatalf("manual probe did not inherit retry settings: %#v", prepared.config)
+	}
+	if _, found := prepared.config.Retry.StatusCodes[503]; !found {
+		t.Fatalf("manual probe retry status codes=%#v", prepared.config.Retry.StatusCodes)
+	}
+	if repository.policyCalls != 1 {
+		t.Fatalf("manual probe should read retry policy once, got %d", repository.policyCalls)
 	}
 }
 

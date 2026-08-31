@@ -233,7 +233,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
               <CardHeader className="border-b">
                 <CardTitle className="flex items-center gap-2">
                   <ShieldAlert className="text-primary" />
-                  运行控制
+                  告警控制
                 </CardTitle>
               </CardHeader>
               <CardContent>

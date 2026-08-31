@@ -49,11 +49,11 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 		clauses = append(clauses, "ag.group_name=?")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
+	clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id)")
 	query := `SELECT a.id,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json,COALESCE(a.routing_state,''),
 		(SELECT COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),'')) FROM routing_decisions rd
 		 WHERE rd.account_id=a.id
-		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))
-		 ORDER BY julianday(rd.updated_at) DESC,rd.group_name LIMIT 1),
+		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))),
 		(SELECT hs.observed_at FROM health_samples hs
 		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='traffic'
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1),
@@ -146,11 +146,13 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 	defer tx.Rollback()
 	inserted := 0
 	accountIDs := map[string]struct{}{}
+	latestTraffic := map[string]time.Time{}
 	for _, sample := range samples {
 		if strings.TrimSpace(sample.AccountID) == "" || strings.TrimSpace(sample.GroupName) == "" || strings.TrimSpace(sample.EvidenceKey) == "" {
 			return 0, errors.New("流量样本缺少账号、分组或请求 ID")
 		}
-		if _, err := time.Parse(time.RFC3339Nano, sample.ObservedAt); err != nil {
+		observedAt, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err != nil {
 			return 0, errors.New("流量样本时间无效")
 		}
 		payload, err := json.Marshal(sample.Payload)
@@ -164,7 +166,11 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		ON CONFLICT(source,evidence_key,account_id,group_name) DO UPDATE SET
 			latency_p50=excluded.latency_p50,latency_p95=excluded.latency_p95,latency_p99=excluded.latency_p99,
 			payload_json=excluded.payload_json
-		WHERE health_samples.latency_p95 IS NULL AND excluded.latency_p95 IS NOT NULL`, sample.AccountID, sample.GroupName, sample.Result,
+		WHERE excluded.latency_p95 IS NOT NULL AND (
+			health_samples.latency_p95 IS NULL OR
+			(COALESCE(json_extract(health_samples.payload_json,'$.latency_metric'),'')<>'request_duration'
+			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')='request_duration')
+		)`, sample.AccountID, sample.GroupName, sample.Result,
 			sample.LatencyP50, sample.LatencyP95, sample.LatencyP99, sample.SampleCount, sample.Attempts,
 			sample.FailureReason, sample.ObservedAt, "traffic", sample.EvidenceKey, string(payload))
 		if err != nil {
@@ -176,6 +182,40 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		}
 		inserted += int(count)
 		accountIDs[sample.AccountID] = struct{}{}
+		if latestTraffic[sample.AccountID].IsZero() || observedAt.After(latestTraffic[sample.AccountID]) {
+			latestTraffic[sample.AccountID] = observedAt.UTC()
+		}
+		isError := 0
+		if trafficResultFailed(sample.Result, sample.FailureReason) {
+			isError = 1
+		}
+		var firstToken *string
+		if value, present := sample.Payload["first_token_ms"]; present {
+			text := strings.TrimSpace(fmt.Sprint(value))
+			if text != "" && text != "<nil>" {
+				firstToken = &text
+			}
+		} else if metric, _ := sample.Payload["latency_metric"].(string); strings.EqualFold(strings.TrimSpace(metric), "first_token") {
+			firstToken = sample.LatencyP95
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_records(
+			request_id,account_id,account_name,group_name,is_error,error_reason,first_token_ms,observed_at,source,payload_json
+		) VALUES(?,?,(SELECT name FROM accounts WHERE id=?),?,?,?,?,?,'traffic',?)
+		ON CONFLICT(request_id,account_id,group_name,observed_at) DO UPDATE SET
+			account_name=excluded.account_name,is_error=excluded.is_error,error_reason=excluded.error_reason,
+			first_token_ms=COALESCE(excluded.first_token_ms,usage_records.first_token_ms),
+			payload_json=CASE WHEN excluded.payload_json='{}' THEN usage_records.payload_json ELSE excluded.payload_json END`,
+			sample.EvidenceKey, sample.AccountID, sample.AccountID, sample.GroupName, isError, sample.FailureReason,
+			firstToken, sample.ObservedAt, string(payload)); err != nil {
+			return 0, err
+		}
+	}
+	for accountID, latest := range latestTraffic {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_records WHERE account_id=?
+			AND LOWER(REPLACE(source,'_','-'))='traffic' AND observed_at<?`,
+			accountID, latest.Add(-30*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+			return 0, err
+		}
 	}
 	if err := pruneHealthSamples(ctx, tx, accountIDs); err != nil {
 		return 0, err
@@ -184,6 +224,14 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		return 0, err
 	}
 	return inserted, nil
+}
+
+func trafficResultFailed(result string, reason *string) bool {
+	if reason != nil && strings.TrimSpace(*reason) != "" {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(result))
+	return normalized == "error" || normalized == "failed" || normalized == "failure" || normalized == "unhealthy" || normalized == "失败" || normalized == "错误"
 }
 
 const retainedHealthSamplesPerAccount = 200

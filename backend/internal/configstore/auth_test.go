@@ -70,3 +70,32 @@ func TestAuthRecordRejectsHeaderInjectionWithoutChangingStoredRecord(t *testing.
 		t.Fatalf("failed update changed stored record: record=%#v err=%v", record, readErr)
 	}
 }
+
+func TestDeleteAuthRecordAlsoDeletesCachedUpstreamKeys(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "config.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	access := "access"
+	if err := store.SaveAuthRecord(ctx, AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		AccessToken: &access, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveUpstreamKeySecret(ctx, UpstreamKeySecret{
+		Host: "api.example", KeyID: "91", GroupID: "7", Secret: "secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := store.DeleteAuthRecord(ctx, "https://API.EXAMPLE/")
+	if err != nil || !deleted {
+		t.Fatalf("deleted=%v err=%v", deleted, err)
+	}
+	key, err := store.UpstreamKeySecret(ctx, "api.example", "91", "7")
+	if err != nil || key != nil {
+		t.Fatalf("cached key survived auth deletion: key=%#v err=%v", key, err)
+	}
+}

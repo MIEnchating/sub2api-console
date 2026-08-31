@@ -20,21 +20,21 @@ func TestManualPriorityAssignmentIsIsolatedByGroupAndVisibleOnAccount(t *testing
 		('41','codex'),('42','claude'),('43','codex')`); err != nil {
 		t.Fatal(err)
 	}
-	assignment, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, "operator")
+	assignment, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, true, "operator")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if assignment.Priority != 3 || assignment.LoadFactor != "100" || assignment.Concurrency != 100 {
+	if assignment.Priority != 3 || assignment.LoadFactor != "100" || assignment.Concurrency != 100 || !assignment.SyncBalanceMultiplier {
 		t.Fatalf("unexpected assignment: %#v", assignment)
 	}
-	if _, err := store.AssignManualPriority(ctx, "42", 3, "80", 120, "operator"); err != nil {
+	if _, err := store.AssignManualPriority(ctx, "42", 3, "80", 120, false, "operator"); err != nil {
 		t.Fatalf("different group rejected shared slot: %v", err)
 	}
-	if _, err := store.AssignManualPriority(ctx, "43", 3, "100", 100, "operator"); err == nil || !strings.Contains(err.Error(), "分组 codex") || !strings.Contains(err.Error(), "已被账号 41 占用") {
+	if _, err := store.AssignManualPriority(ctx, "43", 3, "100", 100, false, "operator"); err == nil || !strings.Contains(err.Error(), "分组 codex") || !strings.Contains(err.Error(), "已被账号 41 占用") {
 		t.Fatalf("occupied slot was accepted: %v", err)
 	}
 	account, err := store.Account(ctx, "41")
-	if err != nil || account.ManualPriority == nil || *account.ManualPriority != 3 {
+	if err != nil || account.ManualPriority == nil || *account.ManualPriority != 3 || !account.ManualSyncBalanceMultiplier {
 		t.Fatalf("assignment is missing from account projection: account=%#v err=%v", account, err)
 	}
 	if err := store.RevertManualPriorityReservation(ctx, "41", "operator"); err != nil {
@@ -46,6 +46,25 @@ func TestManualPriorityAssignmentIsIsolatedByGroupAndVisibleOnAccount(t *testing
 	}
 }
 
+func TestHostBalanceSyncRequiresAtLeastOneEligibleBoundAccount(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := store.HostBalanceSyncAllowed(ctx, "api.example")
+	if err != nil || allowed {
+		t.Fatalf("manual-only host balance allowed=%v err=%v", allowed, err)
+	}
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, true, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err = store.HostBalanceSyncAllowed(ctx, "api.example")
+	if err != nil || !allowed {
+		t.Fatalf("sync-enabled host balance allowed=%v err=%v", allowed, err)
+	}
+}
+
 func TestRevertManualPriorityReservationMarksRoutingRecalculationPending(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
@@ -54,7 +73,7 @@ func TestRevertManualPriorityReservationMarksRoutingRecalculationPending(t *test
 	) VALUES('41','alpha',1,20,'5',8,'{}','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE policy_nodes SET updated_at='2000-01-01T00:00:00Z'
@@ -82,7 +101,7 @@ func TestManualPriorityPolicyCannotShrinkBelowOccupiedSlot(t *testing.T) {
 		VALUES('41','alpha','{}','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AssignManualPriority(ctx, "41", 8, "100", 100, "operator"); err != nil {
+	if _, err := store.AssignManualPriority(ctx, "41", 8, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	_, err := store.UpdatePolicy(ctx, map[string]any{

@@ -3,22 +3,35 @@ import { describe, expect, it } from "vitest";
 
 import type { AccountStatus } from "@/api";
 import {
+  AccountBaseURLCell,
   AccountHealthCell,
   AccountIdentityCell,
+  AccountKeyStatusCell,
   AccountLatencyCell,
   AccountRecentResultsCell,
   AccountRoutingParametersCell,
   AccountStateCell,
+  AccountSub2APIStatusCell,
 } from "../account-pool-cells";
 
 const account: AccountStatus = {
   id: "63005",
   name: "primary-account",
   groups: ["codex", "fallback"],
+  upstream_id: "up_test",
   upstream_host: "api.example.test",
   upstream_type: "apikey",
   platform: "openai",
   account_type: "apikey",
+  base_url: "https://api.openai.com/v1",
+  upstream_base_url: "https://gateway.example.test",
+  base_url_check: "official_mismatch",
+  base_url_check_reason:
+    "上游地址不是官方服务，但账号 Base URL 指向官方地址，请检查添加账号时的 Base URL",
+  key_status: "active",
+  key_status_reason: "上游 Key key-1 状态为 active，所属分组仍存在",
+  sub2api_status: "active",
+  sub2api_error: null,
   schedulable: true,
   priority: 12,
   load_factor: "38",
@@ -106,7 +119,7 @@ describe("account pool cells", () => {
     expect(markup).toContain("最近错误：API returned 503: service unavailable");
   });
 
-  it("shows the actual reason when Sub2API has stopped scheduling", () => {
+  it("does not repeat a decision reason as a second scheduling stop reason", () => {
     const markup = renderToStaticMarkup(
       <AccountStateCell
         account={{
@@ -123,8 +136,144 @@ describe("account pool cells", () => {
     );
 
     expect(markup).toContain("熔断原因：连续凭据错误触发熔断");
-    expect(markup).toContain("停止原因：连续凭据错误触发熔断");
+    expect(markup).not.toContain("停止原因：连续凭据错误触发熔断");
     expect(markup).not.toContain(">已停止调度<");
+  });
+
+  it("shows Base URL validation and upstream Key status", () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <AccountBaseURLCell account={account} />
+        <AccountKeyStatusCell account={account} />
+      </>,
+    );
+
+    expect(markup).toContain("配置异常");
+    expect(markup).toContain("https://api.openai.com/v1");
+    expect(markup).toContain("上游访问地址：https://gateway.example.test");
+    expect(markup).toContain("正常");
+  });
+
+  it("distinguishes an unchecked account from a checked detail without Base URL", () => {
+    const unchecked = renderToStaticMarkup(
+      <AccountBaseURLCell
+        account={{
+          ...account,
+          base_url: null,
+          base_url_check: "unchecked",
+          base_url_checked_at: null,
+        }}
+      />,
+    );
+    const missing = renderToStaticMarkup(
+      <AccountBaseURLCell
+        account={{
+          ...account,
+          base_url: null,
+          base_url_check: "unknown",
+          base_url_checked_at: "2026-08-30T12:00:00Z",
+        }}
+      />,
+    );
+
+    expect(unchecked).toContain("尚未校验");
+    expect(unchecked).toContain("等待校验");
+    expect(missing).toContain("缺少账号 Base URL");
+    expect(missing).toContain("详情未提供 Base URL");
+  });
+
+  it("does not call an existing account Base URL missing when upstream ownership is absent", () => {
+    const markup = renderToStaticMarkup(
+      <AccountBaseURLCell
+        account={{
+          ...account,
+          base_url: "https://api.x.ai/v1",
+          upstream_host: null,
+          upstream_base_url: null,
+          base_url_check: "unknown",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("缺少上游信息");
+    expect(markup).not.toContain("缺少账号 Base URL");
+  });
+
+  it("labels a resolved platform default Base URL", () => {
+    const markup = renderToStaticMarkup(
+      <AccountBaseURLCell
+        account={{
+          ...account,
+          base_url: "https://api.openai.com",
+          base_url_source: "platform_default",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("来源：Sub2API 平台默认地址");
+  });
+
+  it("maps NewAPI and missing Key or group states to actionable labels", () => {
+    const exhausted = renderToStaticMarkup(
+      <AccountKeyStatusCell account={{ ...account, key_status: "4" }} />,
+    );
+    const missing = renderToStaticMarkup(
+      <AccountKeyStatusCell account={{ ...account, key_status: "key_missing" }} />,
+    );
+    const suspected = renderToStaticMarkup(
+      <AccountKeyStatusCell account={{ ...account, key_status: "suspected" }} />,
+    );
+    const groupMissing = renderToStaticMarkup(
+      <AccountKeyStatusCell
+        account={{
+          ...account,
+          key_status: "group_missing",
+          key_status_reason: "上游 Key key-1 仍有绑定，但所属分组 pro 已删除或不存在",
+        }}
+      />,
+    );
+
+    expect(exhausted).toContain("额度耗尽");
+    expect(suspected).toContain("待复核");
+    expect(missing).toContain("Key 已删除");
+    expect(groupMissing).toContain("分组已删除");
+  });
+
+  it("mirrors Sub2API account status and exposes its error detail", () => {
+    const active = renderToStaticMarkup(<AccountSub2APIStatusCell account={account} />);
+    const paused = renderToStaticMarkup(
+      <AccountSub2APIStatusCell account={{ ...account, schedulable: false }} />,
+    );
+    const failed = renderToStaticMarkup(
+      <AccountSub2APIStatusCell
+        account={{
+          ...account,
+          sub2api_status: "error",
+          sub2api_error: "Access forbidden (403): quota exceeded",
+        }}
+      />,
+    );
+
+    expect(active).toContain("正常");
+    expect(paused).toContain("暂停");
+    expect(failed).toContain("错误");
+    expect(failed).toContain("查看 Sub2API 账号报错");
+  });
+
+  it("does not repeat the Sub2API error in the calculated state column", () => {
+    const markup = renderToStaticMarkup(
+      <AccountStateCell
+        account={{
+          ...account,
+          sub2api_status: "error",
+          sub2api_error: "Access forbidden (403): quota exceeded",
+          last_error: "Access forbidden (403): quota exceeded",
+          recent_results: [],
+        }}
+      />,
+    );
+
+    expect(markup).not.toContain("Access forbidden (403): quota exceeded");
   });
 
   it("does not mistake an unexplained scheduling switch for the degraded reason", () => {
@@ -221,7 +370,7 @@ describe("account pool cells", () => {
     expect(markup).toContain("上游写回超时");
   });
 
-  it("shows score detail, recent evidence and first-token latency", () => {
+  it("shows score detail, recent evidence and combined latency", () => {
     const markup = renderToStaticMarkup(
       <>
         <AccountHealthCell account={account} />
@@ -240,12 +389,13 @@ describe("account pool cells", () => {
     expect(markup).toContain("2 条样本");
     expect(latencyMarkup).toContain("P95 1s");
     expect(latencyMarkup).toContain("P50 0s");
+    expect(latencyMarkup).toContain('aria-label="综合延迟"');
     expect(latencyMarkup).not.toContain("1.25s");
     expect(latencyMarkup).not.toContain("0.32s");
     expect(latencyMarkup).not.toContain("1250ms");
   });
 
-  it("shows missing first-token latency without a seconds suffix", () => {
+  it("shows missing combined latency without a seconds suffix", () => {
     const markup = renderToStaticMarkup(
       <AccountLatencyCell account={{ ...account, ttfb_p50_ms: null, ttfb_p95_ms: null }} />,
     );
@@ -282,5 +432,22 @@ describe("account pool cells", () => {
     expect(markup).toContain("负载");
     expect(markup).toContain("并发");
     expect(markup).not.toContain("→");
+  });
+
+  it("shows whether a manual priority account is fully manual or sync-only", () => {
+    const fullyManual = renderToStaticMarkup(
+      <AccountRoutingParametersCell
+        account={{ ...account, manual_priority: 3, manual_sync_balance_multiplier: false }}
+      />,
+    );
+    const syncOnly = renderToStaticMarkup(
+      <AccountRoutingParametersCell
+        account={{ ...account, manual_priority: 3, manual_sync_balance_multiplier: true }}
+      />,
+    );
+
+    expect(fullyManual).toContain("人工优先位 #3");
+    expect(fullyManual).toContain("完全人工控制");
+    expect(syncOnly).toContain("仅同步余额与倍率");
   });
 });

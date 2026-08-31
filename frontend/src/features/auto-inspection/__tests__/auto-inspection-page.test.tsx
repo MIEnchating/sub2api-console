@@ -225,6 +225,8 @@ const currentUpstreams: UpstreamSummary = {
     { host: "five.example", account_count: 2 },
   ].map((host) => ({
     ...host,
+    upstream_id: `up_${host.host}`,
+    hosts: [host.host],
     base_url: `https://${host.host}`,
     name: host.host,
     upstream_type: "sub2api",
@@ -354,10 +356,13 @@ describe("自动巡检页面", () => {
     expect(viewForPath("/auto-inspection")).toBe("auto-inspection");
   });
 
-  it("展示完整的自动巡检配置和运行状态", () => {
+  it("展示后台巡检服务配置和运行状态，并把任务周期归到调度策略", () => {
     const markup = renderPage();
 
     expect(markup).toContain("自动巡检");
+    expect(markup).toContain("巡检服务");
+    expect(markup).toContain("这里只控制后台服务与心跳");
+    expect(markup).toContain("各任务执行周期统一在调度策略中配置");
     expect(markup).toContain('aria-label="启用自动巡检"');
     expect(markup).toContain('aria-label="调度心跳周期"');
     expect(markup).toContain('min="15"');
@@ -371,6 +376,23 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("保存自动巡检");
     expect(markup).not.toContain('data-slot="card-action"');
     expect(markup.indexOf("保存自动巡检")).toBeLessThan(markup.indexOf('data-slot="page-content"'));
+    expect(markup).toContain('data-testid="last-inspection-summary"');
+    expect(markup).toContain("上一轮概要");
+    expect(markup).toContain("执行时间：08/26 08:00:00");
+    expect(markup).toContain("执行成功");
+    expect(markup).toContain("29.7 秒");
+    expect(markup).toContain("受管账号");
+    expect(markup).toContain(">233<");
+    expect(markup).toContain("主动探测");
+    expect(markup).toContain(">10<");
+    expect(markup).toContain("新增样本");
+    expect(markup).toContain(">112<");
+    expect(markup).toContain("新增熔断");
+    expect(markup).toContain("恢复回池");
+    expect(markup).toContain("自动执行");
+    expect(markup).toContain(">24<");
+    expect(markup).toContain("自动处置");
+    expect(markup).toContain("当前告警");
     expect(markup).toContain("任务队列");
     expect(markup).toContain("本轮安排");
     expect(markup).toContain("主动探测");
@@ -525,7 +547,7 @@ describe("自动巡检页面", () => {
     expect(details).toContain("告警检测");
   });
 
-  it("巡检设置不重复显示错误并由心跳记录提供详情入口", () => {
+  it("巡检服务区不重复显示错误并由心跳记录提供详情入口", () => {
     const failed: AutoInspectionStatus = {
       ...status,
       running: false,
@@ -552,6 +574,8 @@ describe("自动巡检页面", () => {
     expect(details).toContain("执行时间线");
     expect(details).toContain("上游数据同步");
     expect(details).toContain("告警检测");
+    expect(details).toContain('data-slot="heartbeat-step-marker"');
+    expect(details).toContain("relative flex items-center justify-center");
     expect(details).not.toContain("任务 ID");
     expect(details).not.toContain("耗时占比");
   });

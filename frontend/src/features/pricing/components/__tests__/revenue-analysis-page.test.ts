@@ -1,0 +1,65 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+
+import type { Task } from "@/api";
+import {
+  defaultRevenueDate,
+  RevenueAnalysisPage,
+  revenueReportFromTask,
+} from "../revenue-analysis-page";
+
+describe("revenue analysis", () => {
+  it("renders revenue analysis as a standalone page", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(RevenueAnalysisPage),
+      ),
+    );
+
+    expect(markup).toContain("收益分析");
+    expect(markup).toContain("开始分析");
+    expect(markup).toContain('type="date"');
+    expect(markup).toContain('data-testid="revenue-analysis-page"');
+    expect(markup).not.toContain('role="dialog"');
+    expect(markup).not.toContain("计算收入");
+  });
+
+  it("uses the previous local calendar day by default", () => {
+    expect(defaultRevenueDate(new Date(2026, 7, 30, 1, 0, 0))).toBe("2026-08-29");
+    expect(defaultRevenueDate(new Date(2026, 0, 1, 1, 0, 0))).toBe("2025-12-31");
+  });
+
+  it("accepts only a completed revenue task with the report contract", () => {
+    const task: Task = {
+      id: "revenue",
+      skill: "sub2api-billing-reconciliation",
+      operation: "revenue-calculation",
+      status: "succeeded",
+      progress: 100,
+      message: "done",
+      result: {
+        report_date: "2026-08-29",
+        timezone: "Asia/Shanghai",
+        tolerance: 2,
+        rows: [],
+        summaries: [],
+        issues: [],
+        comparable: 0,
+        unavailable: 0,
+        abnormal: 0,
+        generated_at: "2026-08-30T00:00:00Z",
+      },
+      created_at: "2026-08-30T00:00:00Z",
+      updated_at: "2026-08-30T00:00:01Z",
+    };
+
+    expect(revenueReportFromTask(task)?.report_date).toBe("2026-08-29");
+    expect(revenueReportFromTask({ ...task, status: "running" })).toBeNull();
+    expect(revenueReportFromTask({ ...task, result: { report_date: "2026-08-29" } })).toBeNull();
+  });
+});

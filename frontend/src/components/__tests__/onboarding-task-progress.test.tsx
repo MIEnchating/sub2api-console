@@ -33,16 +33,24 @@ describe("onboarding task progress", () => {
           failed: 0,
           operation: "account.onboarding.batch",
           items: [
-            { upstream_group: "CC Max | 企业专用", local_group: "A-CCMAX-1", status: "成功" },
-            { upstream_group: "GPT Plus | 高速稳定", local_group: "codex", status: "成功" },
+            {
+              upstream_group: "CC Max | 企业专用",
+              local_group: "A-CCMAX-1",
+              status: "成功",
+            },
+            {
+              upstream_group: "GPT Plus | 高速稳定",
+              local_group: "codex",
+              status: "成功",
+            },
           ],
         })}
       />,
     );
 
-    expect(markup).toContain("账号批量添加完成");
-    expect(markup).toContain("计划添加");
-    expect(markup).toContain("添加成功");
+    expect(markup).toContain("账号批量绑定变更完成");
+    expect(markup).toContain("计划变更");
+    expect(markup).toContain("处理成功");
     expect(markup).toContain("CC Max | 企业专用");
     expect(markup).toContain("A-CCMAX-1");
     expect(markup).not.toContain("Items / 1 / Local Group");
@@ -58,7 +66,11 @@ describe("onboarding task progress", () => {
           succeeded: 1,
           failed: 1,
           items: [
-            { upstream_group: "GPT Plus", local_group: "codex", status: "成功" },
+            {
+              upstream_group: "GPT Plus",
+              local_group: "codex",
+              status: "成功",
+            },
             {
               upstream_group: "GPT Pro",
               local_group: "pro",
@@ -70,7 +82,7 @@ describe("onboarding task progress", () => {
       />,
     );
 
-    expect(markup).toContain("部分账号添加失败");
+    expect(markup).toContain("部分账号绑定变更失败");
     expect(markup).toContain("部分成功");
     expect(markup).toContain("GPT Pro");
     expect(markup).toContain("上游分组当前不可创建 Key");
@@ -81,9 +93,33 @@ describe("onboarding task progress", () => {
       <OnboardingTaskProgress task={task("running", "onboard-batch", {})} />,
     );
 
-    expect(markup).toContain("正在批量添加账号");
+    expect(markup).toContain("正在批量处理账号绑定");
     expect(markup).toContain("正在添加 2/4：GPT Plus → codex");
     expect(markup).toContain("55%");
     expect(markup).not.toContain("internal-task-id");
+  });
+
+  it("paginates long batch results", () => {
+    const items = Array.from({ length: 25 }, (_, index) => ({
+      upstream_group: `上游分组-${index + 1}`,
+      local_group: `本地分组-${index + 1}`,
+      status: "成功",
+    }));
+    const markup = renderToStaticMarkup(
+      <OnboardingTaskProgress
+        task={task("succeeded", "onboard-batch", {
+          total: items.length,
+          succeeded: items.length,
+          failed: 0,
+          items,
+        })}
+      />,
+    );
+
+    expect(markup).toContain("上游分组-20");
+    expect(markup).not.toContain("上游分组-21");
+    expect(markup).toContain("转到第 2 页");
+    expect(markup).toContain("flex h-full min-h-0 flex-col");
+    expect(markup).toContain("min-h-0 flex-1 overflow-auto");
   });
 });

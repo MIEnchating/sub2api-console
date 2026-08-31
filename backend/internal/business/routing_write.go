@@ -45,7 +45,8 @@ type RoutingReadback struct {
 func (s *Store) RoutingBaselines(ctx context.Context) ([]RoutingBaseline, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT account_id,schedulable,priority,load_factor,concurrency,status,captured_at,
 		ownership_version,managed_schedulable,managed_priority,managed_load_factor,managed_concurrency,managed_status
-		FROM routing_baselines ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`)
+		FROM routing_baselines WHERE ownership_version<>2
+		ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +80,13 @@ func (s *Store) CaptureRoutingBaseline(ctx context.Context, baseline RoutingBase
 	if capturedAt == "" {
 		capturedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO routing_baselines(
+	_, err := s.db.ExecContext(ctx, `INSERT INTO routing_baselines(
 		account_id,schedulable,priority,load_factor,concurrency,status,captured_at,ownership_version
-	) VALUES(?,?,?,?,?,?,?,?)`, baseline.AccountID, boolDatabase(baseline.Schedulable), baseline.Priority,
+	) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+		schedulable=excluded.schedulable,priority=excluded.priority,load_factor=excluded.load_factor,
+		concurrency=excluded.concurrency,status=excluded.status,captured_at=excluded.captured_at,
+		ownership_version=1,managed_schedulable=NULL,managed_priority=NULL,managed_load_factor=NULL,
+		managed_concurrency=NULL,managed_status=NULL WHERE routing_baselines.ownership_version=2`, baseline.AccountID, boolDatabase(baseline.Schedulable), baseline.Priority,
 		baseline.LoadFactor, baseline.Concurrency, baseline.Status, capturedAt, baseline.OwnershipVersion)
 	return err
 }
@@ -146,6 +151,35 @@ func (s *Store) CommitRoutingReadback(
 			_, err = tx.ExecContext(ctx, `DELETE FROM routing_baselines WHERE account_id=?`, accountID)
 		}
 		return err
+	})
+}
+
+func (s *Store) AbandonRoutingControl(
+	ctx context.Context,
+	accountID string,
+	readback RoutingReadback,
+	operation AccountOperation,
+) error {
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+		result, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=?,priority=?,load_factor=?,concurrency=?,
+			routing_state='',updated_at=? WHERE id=?`, boolDatabase(readback.Schedulable), readback.Priority,
+			readback.LoadFactor, readback.Concurrency, now, accountID)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return sql.ErrNoRows
+		}
+		result, err = tx.ExecContext(ctx, `UPDATE routing_baselines SET ownership_version=2,
+			managed_schedulable=NULL,managed_priority=NULL,managed_load_factor=NULL,
+			managed_concurrency=NULL,managed_status=NULL WHERE account_id=?`, accountID)
+		if err != nil {
+			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return fmt.Errorf("账号 %s 缺少可释放的调度所有权", accountID)
+		}
+		return nil
 	})
 }
 

@@ -81,10 +81,12 @@ func TestUpdatePolicySavesRuntimeModeAndPolicyAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.UpdatePolicy(ctx, map[string]any{
-		"mode": "错误模式", "global_strategy": "reliability",
-	}, "operator"); err == nil {
-		t.Fatal("invalid runtime mode was accepted")
+	for _, invalidMode := range []string{"调度模式", "错误模式"} {
+		if _, err := store.UpdatePolicy(ctx, map[string]any{
+			"mode": invalidMode, "global_strategy": "reliability",
+		}, "operator"); err == nil {
+			t.Fatalf("invalid runtime mode %q was accepted", invalidMode)
+		}
 	}
 	after, err := store.readPolicyDocument(ctx, store.db, "control-plane")
 	if err != nil {
@@ -187,6 +189,33 @@ func TestUpdatePolicyKeepsExplicitManagedGroupSelection(t *testing.T) {
 	scope := document["scope"].(map[string]any)
 	if scope["managed_group_mode"] != "selected" || !reflect.DeepEqual(scope["managed_group_ids"], []any{"6", "8"}) {
 		t.Fatalf("explicit managed group selection was overwritten: %#v", scope)
+	}
+}
+
+func TestPolicyDefaultsToManagingAllAccountsAndPersistsOptOut(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	snapshot, err := store.PolicySnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, ok := snapshot.AdvancedPolicy["scope"].(map[string]any)
+	if !ok || scope["manage_all_accounts"] != true {
+		t.Fatalf("新策略必须默认托管全部账号：%#v", snapshot.AdvancedPolicy["scope"])
+	}
+
+	if _, err := store.UpdatePolicy(ctx, map[string]any{
+		"advanced_policy": map[string]any{"scope": map[string]any{"manage_all_accounts": false}},
+	}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	document, err := store.readPolicyDocument(ctx, store.db, "control-plane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := document["scope"].(map[string]any)
+	if stored["manage_all_accounts"] != false {
+		t.Fatalf("关闭全部账号托管未持久化：%#v", stored)
 	}
 }
 
@@ -304,6 +333,12 @@ func TestUpdatePolicyRejectsInvalidValuesWithoutPartialWrite(t *testing.T) {
 		{"zero degrade ratio", map[string]any{"advanced_policy": map[string]any{"degrade": map[string]any{"load_factor_ratio": 0}}}, "必须大于 0 且不超过 1"},
 		{"zero degrade load floor", map[string]any{"advanced_policy": map[string]any{"degrade": map[string]any{"min_load_factor": 0}}}, "不能小于 1"},
 		{"zero probe timeout", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"timeout_seconds": 0}}}, "不能小于 1"},
+		{"invalid probe retry source", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"retry_source": "other"}}}, "选项无效"},
+		{"probe retry count exceeds limit", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"retry_count": 11}}}, "不能大于 10"},
+		{"invalid probe retry status", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"retry_status_codes": []any{99}}}}, "不能小于 100"},
+		{"invalid price margin", map[string]any{"advanced_policy": map[string]any{"price_management": map[string]any{"profit_margin": 1}}}, "必须在 0 到 0.99 之间"},
+		{"invalid price interval", map[string]any{"advanced_policy": map[string]any{"price_management": map[string]any{"interval_seconds": 29}}}, "不能小于 30"},
+		{"invalid price concurrency", map[string]any{"advanced_policy": map[string]any{"price_management": map[string]any{"write_concurrency": 17}}}, "不能大于 16"},
 		{"zero traffic freshness", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"traffic_fresh_seconds": 0}}}, "不能小于 1"},
 		{"minimum concurrency exceeds maximum", map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"min_per_account": 251, "max_per_account": 250}}}, "min_per_account 不能大于"},
 		{"zero scaling minimum", map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"min_per_account": 0}}}, "不能小于 1"},

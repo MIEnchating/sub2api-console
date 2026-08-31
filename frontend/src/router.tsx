@@ -15,6 +15,18 @@ const groupsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/groups",
 });
+const pricingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/pricing",
+});
+const revenueAnalysisRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/revenue-analysis",
+});
+const pricingConfigRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/pricing-config",
+});
 const autoInspectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/auto-inspection",
@@ -22,6 +34,10 @@ const autoInspectionRoute = createRoute({
 const modelCheckRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/model-check",
+});
+const trafficRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/traffic",
 });
 const logsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -76,8 +92,12 @@ const routeTree = rootRoute.addChildren([
   accountsRoute,
   upstreamsRoute,
   groupsRoute,
+  pricingRoute,
+  revenueAnalysisRoute,
+  pricingConfigRoute,
   autoInspectionRoute,
   modelCheckRoute,
+  trafficRoute,
   logsRoute,
   alertsRoute,
   alertPolicyRoute,

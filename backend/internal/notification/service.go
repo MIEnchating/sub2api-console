@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -207,22 +208,22 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 	if mergeThreshold < 2 {
 		mergeThreshold = 10
 	}
+	groups := notificationGroups(incidents)
 	if len(incidents) < mergeThreshold {
-		result := make([]NotificationBatch, 0, len(incidents))
-		for _, incident := range incidents {
-			items := []business.AlertIncident{incident}
-			result = append(result, NotificationBatch{Incidents: items, Message: BatchMessage(items)})
+		result := make([]NotificationBatch, 0, len(groups))
+		for _, group := range groups {
+			result = append(result, NotificationBatch{Incidents: group.incidents, Message: BatchMessage(group.incidents)})
 		}
 		return result
 	}
 	result := make([]NotificationBatch, 0)
 	current := make([]business.AlertIncident, 0)
-	for _, incident := range incidents {
-		candidate := append(append([]business.AlertIncident{}, current...), incident)
+	for _, group := range groups {
+		candidate := append(append([]business.AlertIncident{}, current...), group.incidents...)
 		message := BatchMessage(candidate)
 		if len(current) > 0 && utf8.RuneCountInString(message) >= batchLimit {
 			result = append(result, NotificationBatch{Incidents: current, Message: BatchMessage(current)})
-			current = []business.AlertIncident{incident}
+			current = append([]business.AlertIncident{}, group.incidents...)
 		} else {
 			current = candidate
 		}
@@ -233,6 +234,92 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 	return result
 }
 
+type notificationGroup struct {
+	incidents []business.AlertIncident
+	parent    *business.AlertIncident
+}
+
+func notificationGroups(incidents []business.AlertIncident) []notificationGroup {
+	parentByRelation := map[string]int{}
+	for index, incident := range incidents {
+		childTypes := relatedRoutingChildTypes(incident.EventType)
+		if len(childTypes) == 0 || strings.TrimSpace(incident.ObjectID) == "" {
+			continue
+		}
+		for _, childType := range childTypes {
+			parentByRelation[routingRelationKey(incident.Status, incident.ObjectID, childType)] = index
+		}
+	}
+	membersByParent := map[int][]int{}
+	for index, incident := range incidents {
+		groupName := routingIncidentGroup(incident)
+		if groupName == "" {
+			continue
+		}
+		parentIndex, found := parentByRelation[routingRelationKey(incident.Status, groupName, incident.EventType)]
+		if !found {
+			continue
+		}
+		membersByParent[parentIndex] = append(membersByParent[parentIndex], index)
+	}
+
+	consumed := make(map[int]struct{})
+	groupByRoot := map[int]notificationGroup{}
+	for parentIndex, childIndexes := range membersByParent {
+		if len(childIndexes) == 0 {
+			continue
+		}
+		indexes := append([]int{parentIndex}, childIndexes...)
+		sort.Ints(indexes)
+		members := make([]business.AlertIncident, 0, len(indexes))
+		for _, index := range indexes {
+			consumed[index] = struct{}{}
+			members = append(members, incidents[index])
+		}
+		parent := incidents[parentIndex]
+		groupByRoot[indexes[0]] = notificationGroup{incidents: members, parent: &parent}
+	}
+
+	result := make([]notificationGroup, 0, len(incidents))
+	for index, incident := range incidents {
+		if group, found := groupByRoot[index]; found {
+			result = append(result, group)
+			continue
+		}
+		if _, found := consumed[index]; found {
+			continue
+		}
+		result = append(result, notificationGroup{incidents: []business.AlertIncident{incident}})
+	}
+	return result
+}
+
+func relatedRoutingChildTypes(eventType string) []string {
+	switch eventType {
+	case "group.routing_survivor":
+		return []string{"account.routing_survivor"}
+	case "group.routing_unavailable":
+		return []string{"account.binding_invalid", "account.routing_breaker"}
+	default:
+		return nil
+	}
+}
+
+func routingRelationKey(status, groupName, childType string) string {
+	return status + "\x00" + groupName + "\x00" + childType
+}
+
+func routingIncidentGroup(incident business.AlertIncident) string {
+	if incident.ObjectKind != "account" {
+		return ""
+	}
+	prefix := accountGroupIncidentPrefix(incident.EventType, incident.ObjectID)
+	if prefix == "" || !strings.HasPrefix(incident.IncidentKey, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(incident.IncidentKey, prefix))
+}
+
 var eventLabels = map[string]string{
 	"upstream.configuration":    "上游配置异常",
 	"upstream.auth":             "上游鉴权失效",
@@ -240,6 +327,7 @@ var eventLabels = map[string]string{
 	"upstream.balance":          "上游余额不足",
 	"account.probe":             "账号主动探测失败",
 	"account.routing_breaker":   "账号触发熔断判定",
+	"account.binding_invalid":   "账号上游绑定失效",
 	"account.routing_degraded":  "账号进入降级状态",
 	"account.routing_survivor":  "账号被保底强留",
 	"group.routing_unavailable": "分组无可调度账号",
@@ -259,6 +347,7 @@ var causeLabels = map[string]string{
 	"BALANCE_HARD_CLOSED":           "上游因余额不足已关闭服务",
 	"PROBE":                         "连续主动探测失败",
 	"ROUTING_BREAKER":               "调度策略触发熔断判定",
+	"BINDING_INVALID":               "绑定的上游 Key 或分组已确认删除",
 	"ROUTING_DEGRADED":              "调度策略判定为降级",
 	"ROUTING_SURVIVOR":              "为避免分组断供而保底强留",
 	"GROUP_UNAVAILABLE":             "调度判定后没有可调度账号",
@@ -270,12 +359,13 @@ var causeLabels = map[string]string{
 var objectLabels = map[string]string{"host": "上游", "account": "账号", "group": "分组"}
 
 func BatchMessage(incidents []business.AlertIncident) string {
+	groups := notificationGroups(incidents)
 	statuses := map[string]struct{}{}
 	for _, incident := range incidents {
 		statuses[incident.Status] = struct{}{}
 	}
 	title := "告警与恢复汇总"
-	if len(incidents) == 1 {
+	if len(groups) == 1 {
 		title = "状态通知"
 		if incidents[0].Status == "recovered" {
 			title = "恢复通知"
@@ -284,13 +374,16 @@ func BatchMessage(incidents []business.AlertIncident) string {
 		}
 	}
 	if len(statuses) == 1 {
-		if _, found := statuses["recovered"]; found && len(incidents) > 1 {
+		if _, found := statuses["recovered"]; found && len(groups) > 1 {
 			title = "恢复汇总"
-		} else if _, found := statuses["firing"]; found && len(incidents) > 1 {
+		} else if _, found := statuses["firing"]; found && len(groups) > 1 {
 			title = "告警汇总"
 		}
 	}
-	if len(incidents) == 1 {
+	if len(groups) == 1 && groups[0].parent != nil {
+		return relatedRoutingMessage(title, groups[0])
+	}
+	if len(groups) == 1 {
 		fields := notificationIncidentFields(incidents[0])
 		lines := []string{
 			fmt.Sprintf("## Sub2API · %s", title),
@@ -306,15 +399,97 @@ func BatchMessage(incidents []business.AlertIncident) string {
 		return truncateRunes(strings.Join(lines, "\n"), messageLimit)
 	}
 	lines := []string{
-		fmt.Sprintf("## Sub2API · %s（%d项）", title, len(incidents)),
+		fmt.Sprintf("## Sub2API · %s（%d项）", title, len(groups)),
 		"",
 		"| 类型 | 对象 | 原因 | 状态 | 时间（北京时间） |",
 		"| --- | --- | --- | --- | --- |",
 	}
-	for _, incident := range incidents {
-		lines = append(lines, incidentTableRow(incident))
+	for _, group := range groups {
+		if group.parent != nil {
+			lines = append(lines, relatedRoutingTableRow(group))
+			continue
+		}
+		lines = append(lines, incidentTableRow(group.incidents[0]))
 	}
 	return truncateRunes(strings.Join(lines, "\n"), messageLimit)
+}
+
+func relatedRoutingMessage(title string, group notificationGroup) string {
+	fields := notificationIncidentFields(*group.parent)
+	lines := []string{
+		fmt.Sprintf("## Sub2API · %s", title),
+		"",
+		"| 项目 | 内容 |",
+		"| --- | --- |",
+		fmt.Sprintf("| 告警类型 | %s |", markdownTableValue(fields.event)),
+		fmt.Sprintf("| 告警对象 | %s |", markdownTableValue(fields.object)),
+		fmt.Sprintf("| 关联账号 | %s |", markdownTableValue(relatedAccountDetails(group))),
+		fmt.Sprintf("| 原因 | %s |", markdownTableValue(fields.cause)),
+		fmt.Sprintf("| 状态 | %s |", fields.status),
+		fmt.Sprintf("| 时间（北京时间） | %s |", markdownTableValue(fields.observedAt)),
+	}
+	return truncateRunes(strings.Join(lines, "\n"), messageLimit)
+}
+
+func relatedRoutingTableRow(group notificationGroup) string {
+	fields := notificationIncidentFields(*group.parent)
+	object := fields.object + " · 关联账号：" + relatedAccountSummary(group)
+	cause := fields.cause + "；账号原因：" + relatedAccountReasons(group)
+	return fmt.Sprintf("| %s | %s | %s | %s | %s |",
+		markdownTableValue(fields.event), markdownTableValue(object), markdownTableValue(cause),
+		fields.status, markdownTableValue(fields.observedAt),
+	)
+}
+
+func relatedAccountDetails(group notificationGroup) string {
+	details := make([]string, 0, len(group.incidents)-1)
+	for _, incident := range group.incidents {
+		if incident.IncidentKey == group.parent.IncidentKey {
+			continue
+		}
+		details = append(details, notificationAccountIdentity(incident)+"："+relatedAccountCause(incident))
+	}
+	return strings.Join(details, "\n")
+}
+
+func relatedAccountSummary(group notificationGroup) string {
+	accounts := make([]string, 0, len(group.incidents)-1)
+	for _, incident := range group.incidents {
+		if incident.IncidentKey != group.parent.IncidentKey {
+			accounts = append(accounts, notificationAccountIdentity(incident))
+		}
+	}
+	return strings.Join(accounts, "、")
+}
+
+func relatedAccountReasons(group notificationGroup) string {
+	reasons := make([]string, 0, len(group.incidents)-1)
+	for _, incident := range group.incidents {
+		if incident.IncidentKey == group.parent.IncidentKey {
+			continue
+		}
+		reasons = append(reasons, notificationAccountIdentity(incident)+"："+relatedAccountCause(incident))
+	}
+	return strings.Join(reasons, "；")
+}
+
+func notificationAccountIdentity(incident business.AlertIncident) string {
+	if incident.ObjectName != nil && strings.TrimSpace(*incident.ObjectName) != "" {
+		return strings.TrimSpace(*incident.ObjectName) + "（#" + incident.ObjectID + "）"
+	}
+	return "账号 #" + incident.ObjectID
+}
+
+func relatedAccountCause(incident business.AlertIncident) string {
+	if _, reason, found := dynamicAlertCause(incident.CauseCode); found && reason != "" {
+		if incident.EventType == "account.routing_survivor" {
+			reason = strings.TrimSpace(strings.TrimPrefix(reason, "保底强留："))
+		}
+		if reason != "" {
+			return reason
+		}
+	}
+	return notificationIncidentFields(incident).cause
 }
 
 type notificationIncidentDisplay struct {
@@ -385,7 +560,7 @@ func incidentTableRow(incident business.AlertIncident) string {
 func dynamicAlertCause(cause string) (string, string, bool) {
 	for _, code := range []string{
 		"AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
-		"ROUTING_BREAKER", "ROUTING_DEGRADED", "ROUTING_SURVIVOR", "APPLY_FAILED",
+		"ROUTING_BREAKER", "ROUTING_DEGRADED", "ROUTING_SURVIVOR", "BINDING_INVALID", "APPLY_FAILED",
 	} {
 		prefix := code + ":"
 		if strings.HasPrefix(cause, prefix) {
@@ -405,6 +580,8 @@ func accountGroupIncidentPrefix(eventType, accountID string) string {
 		return "console:routing:degraded:" + accountID + ":"
 	case "account.routing_survivor":
 		return "console:routing:survivor:" + accountID + ":"
+	case "account.binding_invalid":
+		return "console:routing:binding-invalid:" + accountID + ":"
 	default:
 		return ""
 	}

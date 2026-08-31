@@ -132,6 +132,56 @@ func TestUpstreamManagementAuthFailureDoesNotFuseHealthyAccount(t *testing.T) {
 	}
 }
 
+func TestConfirmedMissingUpstreamBindingStopsSchedulingWithoutSurvivorFallback(t *testing.T) {
+	policy := routingPolicy()
+	schedulable := true
+	multiplier := "1"
+	reason := "绑定的上游 Key key-1 已确认删除（连续 2 次完整同步未返回）"
+	repository := &routingRepositoryStub{
+		policy: policy,
+		accounts: []business.RoutingAccount{{
+			ID: "41", Name: "missing-key", GroupName: "codex", Schedulable: &schedulable,
+			Multiplier: &multiplier, CatalogBindingState: "key_missing", CatalogBindingReason: &reason,
+			Metadata: map[string]any{},
+		}},
+	}
+	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := result.AccountDecisions["41"]
+	if decision.RoutingState != "binding_invalid" || decision.Schedulable || decision.Reason != reason {
+		t.Fatalf("confirmed missing binding stayed schedulable: %#v", decision)
+	}
+	target := result.AccountTargets["41"]
+	if target.Schedulable == nil || *target.Schedulable || target.DesiredHealth != "binding_invalid" {
+		t.Fatalf("missing binding did not produce a stop target: %#v", target)
+	}
+}
+
+func TestSuspectedMissingUpstreamBindingDoesNotStopScheduling(t *testing.T) {
+	policy := routingPolicy()
+	schedulable := true
+	multiplier := "1"
+	reason := "本轮完整同步未返回，等待下一轮复核"
+	repository := &routingRepositoryStub{
+		policy: policy,
+		accounts: []business.RoutingAccount{{
+			ID: "41", Name: "suspected-key", GroupName: "codex", Schedulable: &schedulable,
+			Multiplier: &multiplier, CatalogBindingState: "suspected", CatalogBindingReason: &reason,
+			Metadata: map[string]any{},
+		}},
+	}
+	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := result.AccountDecisions["41"]
+	if !decision.Schedulable || decision.RoutingState == "binding_invalid" {
+		t.Fatalf("one missing snapshot stopped scheduling: %#v", decision)
+	}
+}
+
 func TestExcludedGroupReleasesAccountControl(t *testing.T) {
 	policy := routingPolicy()
 	policy["scope"].(map[string]any)["excluded_group_ids"] = []any{"7"}
@@ -643,6 +693,7 @@ func TestHealthyButManuallyUnschedulableAccountStaysClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	configured.manageAllAccounts = false
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	schedulable := false
 	rate := "1"
@@ -660,6 +711,50 @@ func TestHealthyButManuallyUnschedulableAccountStaysClosed(t *testing.T) {
 	applyInitialState(item, configured, business.PreviousRoutingDecision{}, now)
 	if item.state != "degraded" || item.schedulable {
 		t.Fatalf("降级分支不应覆盖人工关闭状态：%#v", item)
+	}
+}
+
+func TestManageAllAccountsReopensHealthyAndFirstSeenAccounts(t *testing.T) {
+	configured, err := parseEngineConfig(routingPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configured.manageAllAccounts {
+		t.Fatal("托管全部账号必须默认开启")
+	}
+	schedulable := false
+	rate := "1"
+	for _, sampleCount := range []int{0, 1} {
+		item := &candidate{
+			account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, Metadata: map[string]any{}},
+			health:  Health{SampleCount: sampleCount, HealthScore: 100}, state: "healthy", rateText: &rate,
+		}
+		item.rate = big.NewRat(1, 1)
+		applyInitialState(item, configured, business.PreviousRoutingDecision{}, time.Now().UTC())
+		if !item.schedulable {
+			t.Fatalf("托管账号没有进入调度：sample_count=%d item=%#v", sampleCount, item)
+		}
+	}
+}
+
+func TestDisabledManageAllAccountsAbandonsExternallyModifiedAccount(t *testing.T) {
+	policy := routingPolicy()
+	policy["scope"].(map[string]any)["manage_all_accounts"] = false
+	schedulable, managedSchedulable, multiplier := false, true, "1"
+	repository := &routingRepositoryStub{policy: policy, accounts: []business.RoutingAccount{{
+		ID: "41", Name: "externally-closed", GroupName: "codex", Schedulable: &schedulable,
+		ManagedSchedulable: &managedSchedulable, Multiplier: &multiplier, Metadata: map[string]any{},
+	}}}
+	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, found := result.AccountTargets["41"]
+	if !found || !target.AbandonControl || target.ReleaseControl || target.DesiredHealth != "external_control" {
+		t.Fatalf("人工改动后没有停止托管：%#v", result.AccountTargets)
+	}
+	if len(repository.decisions) != 0 {
+		t.Fatalf("停止托管账号仍生成自动调度决策：%#v", repository.decisions)
 	}
 }
 

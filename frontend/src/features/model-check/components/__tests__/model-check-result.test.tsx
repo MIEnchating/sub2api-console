@@ -86,4 +86,24 @@ describe("模型检测结果", () => {
     expect(markup).not.toContain("33.3%");
     expect(markup).not.toContain("无法判定");
   });
+
+  it("默认每页展示十条并显示完整结果总数", () => {
+    const tests = Array.from({ length: 12 }, (_, index) => ({
+      account_id: `${index + 1}`,
+      account_name: `分页账号 ${index + 1}`,
+      checker: "sol",
+      verdict: "SOL_CONSISTENT",
+      claimed_model: `gpt-page-${index + 1}`,
+      similarity_percent: { sol: 90 },
+      coverage: { percent: 100 },
+      requests: { successful: 2, total: 2 },
+    }));
+    const markup = renderToStaticMarkup(<ModelCheckResult task={task(tests)} />);
+
+    expect(markup).toContain("12 个账号模型组合");
+    expect(markup).toContain("分页账号 10");
+    expect(markup).not.toContain("分页账号 11");
+    expect(markup).toContain(">12</span>");
+    expect(markup).toContain('aria-label="转到第 2 页"');
+  });
 });

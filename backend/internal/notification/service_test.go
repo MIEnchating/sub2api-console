@@ -311,6 +311,223 @@ func TestNotificationBatchesMergeOnlyWhenAlertCountReachesThreshold(t *testing.T
 	}
 }
 
+func TestNotificationBatchesMergeRelatedSurvivorAlertAndRecoveryBelowThreshold(t *testing.T) {
+	name := "鲨鱼辣椒-0.8"
+	for _, status := range []string{"firing", "recovered"} {
+		incidents := []business.AlertIncident{
+			{
+				IncidentKey: "console:routing:survivor:323:A-CCMAX(特价渠道)", EventType: "account.routing_survivor",
+				ObjectKind: "account", ObjectID: "323", ObjectName: &name, CauseCode: "ROUTING_SURVIVOR:凭据失效",
+				Status: status, LastSeenAt: "2026-08-30T12:59:53Z",
+			},
+			{
+				IncidentKey: "console:routing:group-survivor:A-CCMAX(特价渠道)", EventType: "group.routing_survivor",
+				ObjectKind: "group", ObjectID: "A-CCMAX(特价渠道)", CauseCode: "GROUP_SURVIVOR_ONLY",
+				Status: status, LastSeenAt: "2026-08-30T12:59:53Z",
+			},
+		}
+
+		batches := NotificationBatches(incidents, 10)
+		if len(batches) != 1 || len(batches[0].Incidents) != 2 {
+			t.Fatalf("status=%s related survivor incidents were not merged: %#v", status, batches)
+		}
+		message := batches[0].Message
+		for _, expected := range []string{"分组仅剩保底账号", "A-CCMAX\\(特价渠道\\)", "关联账号", "鲨鱼辣椒-0.8", "\\#323", "凭据失效"} {
+			if !strings.Contains(message, expected) {
+				t.Fatalf("status=%s merged notification missing %q: %s", status, expected, message)
+			}
+		}
+		if status == "recovered" && !strings.Contains(message, "Sub2API · 恢复通知") {
+			t.Fatalf("related recovery lost its recovery title: %s", message)
+		}
+		if strings.Contains(message, "| 类型 | 对象 | 原因 | 状态 |") {
+			t.Fatalf("related pair should use one readable vertical notification: %s", message)
+		}
+	}
+}
+
+func TestNotificationBatchesMergeAllBreakerAccountsIntoUnavailableGroup(t *testing.T) {
+	first, second := "账号一", "账号二"
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:routing:breaker:41:codex", EventType: "account.routing_breaker",
+			ObjectKind: "account", ObjectID: "41", ObjectName: &first, CauseCode: "ROUTING_BREAKER:凭据失效",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:group-unavailable:codex", EventType: "group.routing_unavailable",
+			ObjectKind: "group", ObjectID: "codex", CauseCode: "GROUP_UNAVAILABLE",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:breaker:42:codex", EventType: "account.routing_breaker",
+			ObjectKind: "account", ObjectID: "42", ObjectName: &second, CauseCode: "ROUTING_BREAKER:余额不足",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+	}
+
+	batches := NotificationBatches(incidents, 10)
+	if len(batches) != 1 || len(batches[0].Incidents) != 3 {
+		t.Fatalf("group outage and breaker accounts were not merged: %#v", batches)
+	}
+	for _, expected := range []string{"分组无可调度账号", "账号一", "凭据失效", "账号二", "余额不足"} {
+		if !strings.Contains(batches[0].Message, expected) {
+			t.Fatalf("merged group outage missing %q: %s", expected, batches[0].Message)
+		}
+	}
+}
+
+func TestNotificationBatchesMergeBindingInvalidAccountIntoUnavailableGroup(t *testing.T) {
+	name := "账号一"
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:routing:binding-invalid:41:codex", EventType: "account.binding_invalid",
+			ObjectKind: "account", ObjectID: "41", ObjectName: &name,
+			CauseCode: "BINDING_INVALID:上游 Key key-1 已确认删除（连续 2 次完整同步未返回）",
+			Status:    "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:group-unavailable:codex", EventType: "group.routing_unavailable",
+			ObjectKind: "group", ObjectID: "codex", CauseCode: "GROUP_UNAVAILABLE",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+	}
+	batches := NotificationBatches(incidents, 10)
+	if len(batches) != 1 || len(batches[0].Incidents) != 2 {
+		t.Fatalf("binding invalid account was not merged with group outage: %#v", batches)
+	}
+	for _, expected := range []string{"分组无可调度账号", "账号一", "Key key-1 已确认删除"} {
+		if !strings.Contains(batches[0].Message, expected) {
+			t.Fatalf("merged binding notification missing %q: %s", expected, batches[0].Message)
+		}
+	}
+}
+
+func TestNotificationBatchesDoNotMergeDifferentGroupsOrDifferentStatuses(t *testing.T) {
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:routing:survivor:41:alpha", EventType: "account.routing_survivor",
+			ObjectKind: "account", ObjectID: "41", CauseCode: "ROUTING_SURVIVOR", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:group-survivor:beta", EventType: "group.routing_survivor",
+			ObjectKind: "group", ObjectID: "beta", CauseCode: "GROUP_SURVIVOR_ONLY", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:group-survivor:alpha", EventType: "group.routing_survivor",
+			ObjectKind: "group", ObjectID: "alpha", CauseCode: "GROUP_SURVIVOR_ONLY", Status: "recovered",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+	}
+
+	if batches := NotificationBatches(incidents, 10); len(batches) != 3 {
+		t.Fatalf("unrelated incidents were incorrectly merged: %#v", batches)
+	}
+}
+
+func TestNotificationBatchesCollapseRelatedRowsInsideLargeSummary(t *testing.T) {
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:routing:survivor:41:codex", EventType: "account.routing_survivor",
+			ObjectKind: "account", ObjectID: "41", CauseCode: "ROUTING_SURVIVOR:保底强留：凭据失效", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:group-survivor:codex", EventType: "group.routing_survivor",
+			ObjectKind: "group", ObjectID: "codex", CauseCode: "GROUP_SURVIVOR_ONLY", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+	}
+	for index := 0; index < 8; index++ {
+		incidents = append(incidents, business.AlertIncident{
+			IncidentKey: fmt.Sprintf("auth-%d", index), EventType: "upstream.auth", ObjectKind: "host",
+			ObjectID: fmt.Sprintf("host-%d.example", index), CauseCode: "AUTH", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		})
+	}
+
+	batches := NotificationBatches(incidents, 10)
+	if len(batches) != 1 || len(batches[0].Incidents) != 10 {
+		t.Fatalf("large related summary lost delivery incidents: %#v", batches)
+	}
+	message := batches[0].Message
+	if !strings.Contains(message, "告警汇总（9项）") || strings.Count(message, "分组仅剩保底账号") != 1 || strings.Contains(message, "账号被保底强留") {
+		t.Fatalf("large summary did not collapse its related rows: %s", message)
+	}
+	if strings.Contains(message, "保底强留：保底强留") {
+		t.Fatalf("related account reason retained a duplicated prefix: %s", message)
+	}
+}
+
+func TestNotificationBatchesKeepEvidenceDecisionAndApplyFailureSeparate(t *testing.T) {
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:probe:41:codex", EventType: "account.probe", ObjectKind: "account",
+			ObjectID: "41", CauseCode: "PROBE:上游返回 401", Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:breaker:41:codex", EventType: "account.routing_breaker", ObjectKind: "account",
+			ObjectID: "41", CauseCode: "ROUTING_BREAKER:凭据失效", Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:apply:41", EventType: "routing.apply_failure", ObjectKind: "account",
+			ObjectID: "41", CauseCode: "APPLY_FAILED:network timeout", Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+	}
+
+	if batches := NotificationBatches(incidents, 10); len(batches) != 3 {
+		t.Fatalf("evidence, decision, and remote apply alerts must keep separate lifecycles: %#v", batches)
+	}
+}
+
+func TestAlertDeliverySendsRelatedRoutingIncidentsOnceAndFinalizesBoth(t *testing.T) {
+	path := createAlertDatabase(t)
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DELETE FROM alert_incidents;
+		INSERT INTO accounts(id,name) VALUES('323','鲨鱼辣椒-0.8');
+		INSERT INTO alert_incidents VALUES
+		('console:routing:survivor:323:A-CCMAX(特价渠道)','account.routing_survivor','account','323','ROUTING_SURVIVOR:凭据失效','recovered','2026-08-30T12:00:00Z','2026-08-30T12:59:53Z',NULL,NULL),
+		('console:routing:group-survivor:A-CCMAX(特价渠道)','group.routing_survivor','group','A-CCMAX(特价渠道)','GROUP_SURVIVOR_ONLY','recovered','2026-08-30T12:00:00Z','2026-08-30T12:59:53Z',NULL,NULL)`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	result, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sent != 2 || result.Batches != 1 || len(sender.messages) != 1 {
+		t.Fatalf("related incidents produced duplicate sends: result=%#v messages=%#v", result, sender.messages)
+	}
+	verification, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verification.Close()
+	var sent int
+	if err := verification.QueryRow(`SELECT COUNT(*) FROM alert_deliveries WHERE status='sent'`).Scan(&sent); err != nil || sent != 2 {
+		t.Fatalf("both related incidents were not finalized: sent=%d err=%v", sent, err)
+	}
+}
+
 func TestNotificationMessageUsesAccountNameAndExactBalanceBoundary(t *testing.T) {
 	name := "主账号"
 	message := BatchMessage([]business.AlertIncident{{

@@ -66,15 +66,26 @@ func TestDeleteAccountsUsesBoundedConcurrency(t *testing.T) {
 }
 
 type deleteRepository struct {
-	preview       business.UpstreamDeletePreview
-	projection    business.UpstreamDeleteProjection
-	previewErr    error
-	projectionErr error
-	deleteCalls   int
-	audit         business.UpstreamDeleteAudit
+	preview        business.UpstreamDeletePreview
+	projection     business.UpstreamDeleteProjection
+	previewErr     error
+	projectionErr  error
+	deleteCalls    int
+	audit          business.UpstreamDeleteAudit
+	manualControls map[string]business.ManualPriorityControl
 }
 
 func (r *deleteRepository) Mode(context.Context) (string, error) { return "full", nil }
+
+func (r *deleteRepository) ManualPriorityControls(_ context.Context, accountIDs []string) (map[string]business.ManualPriorityControl, error) {
+	result := make(map[string]business.ManualPriorityControl)
+	for _, accountID := range accountIDs {
+		if control, found := r.manualControls[accountID]; found {
+			result[accountID] = control
+		}
+	}
+	return result, nil
+}
 
 func (r *deleteRepository) UpstreamDeletePreview(context.Context, string) (business.UpstreamDeletePreview, error) {
 	return r.preview, r.previewErr
@@ -202,6 +213,24 @@ func TestDeleteRejectsChangedPreviewBeforeAnyRemoteOrPrivateWrite(t *testing.T) 
 	}
 	if repository.deleteCalls != 0 || private.deleteCalls != 0 {
 		t.Fatalf("projection calls=%d private calls=%d", repository.deleteCalls, private.deleteCalls)
+	}
+}
+
+func TestDeleteRejectsUpstreamContainingManualPriorityAccount(t *testing.T) {
+	repository := &deleteRepository{
+		preview: business.UpstreamDeletePreview{Host: "api.example", AccountIDs: []string{"41"}},
+		manualControls: map[string]business.ManualPriorityControl{
+			"41": {AccountID: "41"},
+		},
+	}
+	private := &deletePrivateStore{targetErr: errors.New("target must not be read")}
+	service := New(repository, private, nil)
+	_, err := service.Delete(context.Background(), "api.example", []string{"41"}, "operator")
+	if err == nil || !strings.Contains(err.Error(), "人工优先位") {
+		t.Fatalf("manual priority delete error=%v", err)
+	}
+	if private.deleteCalls != 0 || repository.deleteCalls != 0 {
+		t.Fatalf("manual account deletion reached writes: private=%d projection=%d", private.deleteCalls, repository.deleteCalls)
 	}
 }
 

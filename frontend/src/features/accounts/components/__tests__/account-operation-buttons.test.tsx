@@ -8,6 +8,7 @@ const account: AccountStatus = {
   id: "41",
   name: "channel-41",
   groups: ["codex"],
+  upstream_id: "up_test",
   upstream_host: "api.example.test",
   upstream_type: "apikey",
   schedulable: true,
@@ -78,7 +79,18 @@ describe("account operation buttons", () => {
   });
 
   it("shows an adjustment action for an assigned manual priority account", () => {
-    expect(markup({ manual_priority: 3 })).toContain("调整人工优先位");
+    const result = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
+    expect(result).toContain("调整人工优先位");
+    expect(result.match(/disabled/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(result).toMatch(/disabled=""[^>]*aria-label="查看并编辑账号"/);
+  });
+
+  it("only enables multiplier sync for a manual account when explicitly allowed", () => {
+    const disabled = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
+    const allowed = markup({ manual_priority: 3, manual_sync_balance_multiplier: true });
+
+    expect(disabled).toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
+    expect(allowed).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
   });
 
   it("shows an immediate loading state while an active probe is running", () => {

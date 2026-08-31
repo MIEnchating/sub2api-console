@@ -3,12 +3,14 @@ package inspection
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
@@ -19,6 +21,7 @@ import (
 type runnerRepositoryStub struct {
 	trafficDue   bool
 	upstreamDue  bool
+	pricingDue   bool
 	alertEnabled bool
 	routingDue   bool
 	mode         string
@@ -51,6 +54,9 @@ func (r *runnerRepositoryStub) AlertPolicy(context.Context) (business.AlertPolic
 func (r *runnerRepositoryStub) InspectionTaskDue(_ context.Context, name string, _ int, _ time.Time) (bool, error) {
 	if name == "traffic" {
 		return r.trafficDue, nil
+	}
+	if name == "price-management" {
+		return r.pricingDue, nil
 	}
 	return r.upstreamDue, nil
 }
@@ -136,6 +142,26 @@ func (s *accountRateSyncStub) SyncAllAccountRates(context.Context, string) (map[
 type rateAwareRouterStub struct {
 	rateSync *accountRateSyncStub
 	calls    int
+}
+
+type priceAllocatorStub struct {
+	calls int
+	done  bool
+}
+
+func (stub *priceAllocatorStub) ApplyNow(context.Context, string) (pricing.Result, error) {
+	stub.calls++
+	stub.done = true
+	return pricing.Result{Requested: 2, Changed: 1, Unchanged: 1, RemoteWrite: true}, nil
+}
+
+type priceAwareRouterStub struct{ pricing *priceAllocatorStub }
+
+func (stub *priceAwareRouterStub) Calculate(context.Context, routing.Scope, bool) (routing.Result, error) {
+	if !stub.pricing.done {
+		return routing.Result{}, errors.New("routing ran before price management")
+	}
+	return routing.Result{AccountTargets: map[string]business.AccountRoutingTarget{}}, nil
 }
 
 func (s *rateAwareRouterStub) Calculate(_ context.Context, _ routing.Scope, _ bool) (routing.Result, error) {
@@ -346,25 +372,61 @@ func TestFullInspectionSyncsAccountRatesBeforeRouting(t *testing.T) {
 	}
 }
 
-func TestSchedulingInspectionDoesNotWriteAccountRates(t *testing.T) {
-	repository := &runnerRepositoryStub{mode: runtimepolicy.Scheduling, upstreamDue: true}
-	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
-	rateSync := &accountRateSyncStub{}
-	runner := NewRunner(repository, nil, planner, &routerStub{}, nil, nil, &parallelUpstreamStub{
-		started: make(chan struct{}), evidenceStarted: closedChannel(),
-	}, &countingTaskStore{}, rateSync)
-
-	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto-inspection"})
+func TestEnabledPriceManagementRunsBeforeRoutingAndDefaultRemainsOff(t *testing.T) {
+	allocator := &priceAllocatorStub{}
+	defaultRepository := &runnerRepositoryStub{mode: runtimepolicy.Full, pricingDue: true}
+	defaultRunner := NewRunner(defaultRepository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil, nil, &countingTaskStore{}, allocator)
+	defaultResult, err := defaultRunner.Run(context.Background(), RunRequest{Actor: "auto", Automatic: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "succeeded" || rateSync.calls != 0 {
-		t.Fatalf("result=%#v rate_sync=%d", result, rateSync.calls)
+	if !defaultResult.Skipped || allocator.calls != 0 {
+		t.Fatalf("disabled-by-default pricing ran: result=%#v calls=%d", defaultResult, allocator.calls)
 	}
-	for _, operation := range result.Operations {
-		if operation == operationAccountRateSync {
-			t.Fatalf("scheduling mode wrote account rates: %#v", result.Operations)
-		}
+
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, pricingDue: true, policy: map[string]any{
+		"traffic": map[string]any{"enabled": false, "refresh_seconds": int64(60)},
+		"probe":   map[string]any{"enabled": false}, "recovery": map[string]any{"enabled": false},
+		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+		"price_management": map[string]any{
+			"enabled": true, "profit_margin": 0.2, "exchange_group_sets": []any{[]any{"6", "7"}},
+			"interval_seconds": int64(120), "write_concurrency": int64(4),
+		},
+	}}
+	allocator = &priceAllocatorStub{}
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, &priceAwareRouterStub{pricing: allocator}, &writerStub{}, nil, nil, &countingTaskStore{}, allocator)
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "succeeded" || allocator.calls != 1 {
+		t.Fatalf("enabled pricing did not run: result=%#v calls=%d", result, allocator.calls)
+	}
+	want := []string{operationPriceManagement, operationRoutingCalculation, operationRoutingWriteback}
+	if !reflect.DeepEqual(result.Operations, want) {
+		t.Fatalf("operations=%#v want=%#v", result.Operations, want)
+	}
+}
+
+func TestLegacyPriceManagementConfigIsNotScheduled(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, pricingDue: true, policy: map[string]any{
+		"traffic": map[string]any{"enabled": false, "refresh_seconds": int64(60)},
+		"probe":   map[string]any{"enabled": false}, "recovery": map[string]any{"enabled": false},
+		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+		"price_management": map[string]any{
+			"enabled": true, "profit_margin": 0.2, "managed_group_ids": []any{"6", "7"},
+			"interval_seconds": int64(120), "write_concurrency": int64(4),
+		},
+	}}
+	allocator := &priceAllocatorStub{}
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil, nil, &countingTaskStore{}, allocator)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Skipped || allocator.calls != 0 {
+		t.Fatalf("legacy pricing config was scheduled: result=%#v calls=%d", result, allocator.calls)
 	}
 }
 
@@ -633,29 +695,6 @@ func TestPreviewRejectsIntervalsBelowGuardianMinimums(t *testing.T) {
 				t.Fatalf("invalid interval error=%v, want %q", err, test.want)
 			}
 		})
-	}
-}
-
-func TestSchedulingModePreviewCollectsUpstreamDataAndStopsAfterCalculation(t *testing.T) {
-	repository := &runnerRepositoryStub{trafficDue: true, upstreamDue: true, mode: runtimepolicy.Scheduling}
-	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
-	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
-
-	item, err := runner.Preview(context.Background(), time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
-	foundUpstreamSync := false
-	for _, operation := range item.Operations {
-		if operation.Operation == operationUpstreamSync && operation.Due {
-			foundUpstreamSync = true
-		}
-		if operation.Operation == operationRoutingWriteback {
-			t.Fatalf("scheduling mode advertised remote automatic execution: %#v", item.Operations)
-		}
-	}
-	if !foundUpstreamSync {
-		t.Fatalf("scheduling mode omitted due upstream data collection: %#v", item.Operations)
 	}
 }
 

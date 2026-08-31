@@ -149,7 +149,7 @@ func alertIncidentScope(incidentKey, eventType, objectKind, objectID string) str
 	if eventType == "account.probe" {
 		return incidentKey
 	}
-	if strings.HasPrefix(eventType, "account.routing_") {
+	if strings.HasPrefix(eventType, "account.routing_") || eventType == "account.binding_invalid" {
 		remainder := strings.TrimPrefix(incidentKey, "console:routing:")
 		if separator := strings.IndexByte(remainder, ':'); separator >= 0 {
 			return "account.routing\x00" + remainder[separator+1:]
@@ -191,6 +191,8 @@ func alertRuleEnabled(policy AlertPolicy, eventType string) bool {
 	case "account.probe":
 		return policy.ProbeEnabled
 	case "account.routing_breaker":
+		return policy.RoutingBreakerEnabled
+	case "account.binding_invalid":
 		return policy.RoutingBreakerEnabled
 	case "account.routing_degraded":
 		return policy.RoutingDegradedEnabled
@@ -352,18 +354,15 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 	if err != nil {
 		return nil, nil, err
 	}
-	query := `WITH ranked AS (
-		SELECT rd.*,ROW_NUMBER() OVER(PARTITION BY rd.account_id ORDER BY julianday(rd.updated_at) DESC,rd.group_name) AS decision_rank
-		FROM routing_decisions rd`
+	query := `SELECT rd.account_id,rd.group_name,COALESCE(ag.group_name,rd.group_name),
+		COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),''),''),COALESCE(rd.reason,''),rd.schedulable
+		FROM routing_decisions rd LEFT JOIN account_groups ag ON ag.account_id=rd.account_id`
 	arguments := []any{}
 	if epoch != nil {
 		query += ` WHERE julianday(rd.updated_at)>=julianday(?)`
 		arguments = append(arguments, *epoch)
 	}
-	query += `) SELECT rd.account_id,rd.group_name,COALESCE(ag.group_name,rd.group_name),
-		COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),''),''),COALESCE(rd.reason,''),rd.schedulable
-		FROM ranked rd LEFT JOIN account_groups ag ON ag.account_id=rd.account_id
-		WHERE rd.decision_rank=1 ORDER BY rd.account_id,ag.group_name`
+	query += ` ORDER BY rd.account_id,ag.group_name`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, nil, err
@@ -391,6 +390,12 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 			continue
 		}
 		switch {
+		case policy.RoutingBreakerEnabled && state == "binding_invalid":
+			findings = append(findings, alertFinding{
+				"console:routing:binding-invalid:" + accountID + ":" + primaryGroupName,
+				"account.binding_invalid", "account", accountID, alertCause("BINDING_INVALID", reason),
+			})
+			accountFindings[accountID] = struct{}{}
 		case policy.RoutingBreakerEnabled && fusedRoutingDecisionState(state):
 			findings = append(findings, alertFinding{
 				"console:routing:breaker:" + accountID + ":" + primaryGroupName,
@@ -463,7 +468,7 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 		return result, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT incident_key FROM alert_incidents WHERE status IN ('firing','suppressed')
-		AND event_type IN ('account.routing_breaker','account.routing_degraded','account.routing_survivor',
+		AND event_type IN ('account.binding_invalid','account.routing_breaker','account.routing_degraded','account.routing_survivor',
 		'group.routing_unavailable','group.routing_survivor') AND julianday(last_seen_at)<julianday(?)`, *epoch)
 	if err != nil {
 		return nil, err
@@ -480,13 +485,16 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 }
 
 func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding, error) {
-	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (
-		SELECT object_id,error,state,ROW_NUMBER() OVER(PARTITION BY object_id ORDER BY created_at DESC,
-		CASE WHEN source_id < 0 THEN 0 ELSE 1 END,CASE WHEN source_id < 0 THEN source_id END ASC,
-		CASE WHEN source_id >= 0 THEN source_id END DESC) AS position
-		FROM operation_audit WHERE operation_type IN ('routing.writeback','cleanup.delete') AND object_id IS NOT NULL
-		AND (state='failed' OR readback_confirmed=1)
-	) SELECT object_id,COALESCE(error,'') FROM ranked WHERE position=1 AND state='failed' ORDER BY object_id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,COALESCE(latest.error,'')
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(
+			SELECT recent.source_id FROM operation_audit recent INDEXED BY ix_operation_audit_apply_error_recent
+			WHERE recent.operation_type IN ('routing.writeback','cleanup.delete') AND recent.object_id=a.id
+			AND (recent.state='failed' OR recent.readback_confirmed=1)
+			ORDER BY recent.created_at DESC,
+			CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
+			CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
+			CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
+		) WHERE latest.state='failed' ORDER BY a.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -530,8 +538,8 @@ func (s *Store) probeFailureFindings(ctx context.Context, policy AlertPolicy) ([
 	for _, group := range policy.ProbeGroups {
 		selected[strings.ToLower(strings.TrimSpace(group))] = struct{}{}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id,group_name FROM health_samples
-		WHERE LOWER(REPLACE(source,'-','_')) IN ('active_probe','probe') ORDER BY account_id,group_name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id,group_name FROM health_samples INDEXED BY ix_health_samples_probe_recent
+		WHERE LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe') ORDER BY account_id,group_name`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -617,8 +625,8 @@ func (s *Store) probeFailureEvidence(
 	limit int,
 	cutoff time.Time,
 ) (int, bool, string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at FROM health_samples
-		WHERE account_id=? AND group_name=? AND LOWER(REPLACE(source,'-','_')) IN ('active_probe','probe')
+	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at FROM health_samples INDEXED BY ix_health_samples_probe_recent
+		WHERE account_id=? AND group_name=? AND LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe')
 		AND LOWER(TRIM(result)) IN ('通过','passed','pass','success','succeeded','healthy','ok',
 			'失败','failed','error','timeout','超时','probe failed','unhealthy','管理 api 异常')
 		ORDER BY observed_at DESC,id DESC LIMIT ?`, accountID, groupName, limit)

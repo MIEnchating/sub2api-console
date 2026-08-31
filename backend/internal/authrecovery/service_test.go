@@ -14,6 +14,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
@@ -120,11 +121,12 @@ func (a *recoveryAuthenticator) Login(ctx context.Context, record configstore.Au
 }
 
 type recoveryConfigurator struct {
-	input    upstreamconfig.Input
-	host     string
-	err      error
-	created  bool
-	onCreate func(upstreamconfig.Input)
+	input     upstreamconfig.Input
+	host      string
+	err       error
+	created   bool
+	committed *configstore.AuthRecord
+	onCreate  func(upstreamconfig.Input)
 }
 
 func (c *recoveryConfigurator) Create(_ context.Context, input upstreamconfig.Input, _ string) (upstreamconfig.Configuration, error) {
@@ -138,6 +140,20 @@ func (c *recoveryConfigurator) Create(_ context.Context, input upstreamconfig.In
 func (c *recoveryConfigurator) ConfigureAuthRecord(_ context.Context, input upstreamconfig.Input) (string, error) {
 	c.input = input
 	return c.host, c.err
+}
+
+func (c *recoveryConfigurator) CommitRecoveredAuth(_ context.Context, record configstore.AuthRecord) error {
+	c.committed = &record
+	return c.err
+}
+
+type recoveryDetector struct {
+	result upstreamdetect.Result
+	err    error
+}
+
+func (d recoveryDetector) Detect(context.Context, string) (upstreamdetect.Result, error) {
+	return d.result, d.err
 }
 
 type recoveryBalance struct {
@@ -275,6 +291,48 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 	}
 }
 
+func TestRecoveryCorrectsStoredPlatformAfterVerifiedPublicFingerprint(t *testing.T) {
+	username, password, access, refresh := "user", "password", "expired", "refresh"
+	private := &recoveryPrivate{record: &configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
+		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, vault: map[string]configstore.VaultEntry{
+		"selected": {Entry: "selected", Username: &username, Password: &password},
+	}}
+	auth := &recoveryAuthenticator{
+		refresh: func(_ context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
+			if record.UpstreamType != "newapi" || record.AuthMode != "newapi_user_login" {
+				t.Fatalf("refresh used stale classification: %#v", record)
+			}
+			return configstore.AuthRecord{}, errors.New("refresh session expired")
+		},
+		login: func(_ context.Context, record configstore.AuthRecord, _ configstore.VaultEntry) (configstore.AuthRecord, error) {
+			if record.UpstreamType != "newapi" || record.AuthMode != "newapi_user_login" {
+				t.Fatalf("login used stale classification: %#v", record)
+			}
+			record.AccessToken = &access
+			return record, nil
+		},
+	}
+	platform := "newapi"
+	configurator := &recoveryConfigurator{}
+	service := New(&recoveryRepository{}, private, auth, configurator, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	service.UsePlatformDetector(recoveryDetector{result: upstreamdetect.Result{
+		BaseURL: "https://api.example", Host: "api.example", UpstreamType: &platform, TypeDetected: true,
+	}})
+
+	outcome := service.recover(context.Background(), *private.record, "selected")
+	if !outcome.Success || configurator.committed == nil {
+		t.Fatalf("outcome=%#v committed=%#v", outcome, configurator.committed)
+	}
+	if configurator.committed.UpstreamType != "newapi" || configurator.committed.AuthMode != "newapi_user_login" {
+		t.Fatalf("incorrect committed classification: %#v", configurator.committed)
+	}
+	if private.saved {
+		t.Fatal("classification repair bypassed the coordinated committer")
+	}
+}
+
 func TestRecoveryUsesOnlyExplicitlySelectedVaultEntryAfterRefreshFailure(t *testing.T) {
 	username, password, refresh := "user", "password", "refresh"
 	private := &recoveryPrivate{record: &configstore.AuthRecord{
@@ -401,11 +459,11 @@ func TestRecoveryRejectsHostMissingFromPrivateAndBusinessStores(t *testing.T) {
 
 func TestResolveAuthUsesUniqueExplicitVaultHostAndRelatedMetadata(t *testing.T) {
 	username, password := "operator", "secret"
-	const host = "152.53.241.112:8080"
+	const host = "192.0.2.44:8080"
 	private := &recoveryPrivate{
 		records: map[string]configstore.AuthRecord{
-			"152.53.241.112": {
-				Host: "152.53.241.112", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
+			"192.0.2.44": {
+				Host: "192.0.2.44", BaseURL: "https://accelerated.example.test", UpstreamType: "sub2api",
 				AuthMode: "sub2api_user_token", Headers: map[string]string{}, Cookies: map[string]string{},
 			},
 			"another.example.test": {
@@ -438,7 +496,7 @@ func TestResolveAuthUsesUniqueExplicitVaultHostAndRelatedMetadata(t *testing.T) 
 }
 
 func TestResolveAuthRejectsAmbiguousVaultMatches(t *testing.T) {
-	const host = "152.53.241.112:8080"
+	const host = "192.0.2.44:8080"
 	private := &recoveryPrivate{vault: map[string]configstore.VaultEntry{
 		"first":  {Entry: "first", Hosts: []string{host}},
 		"second": {Entry: "second", Hosts: []string{host}},

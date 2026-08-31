@@ -24,10 +24,16 @@ type ManualPriorityConfig struct {
 }
 
 type ManualPriorityAssignment struct {
-	AccountID   string `json:"account_id"`
-	Priority    int64  `json:"priority"`
-	LoadFactor  string `json:"load_factor"`
-	Concurrency int64  `json:"concurrency"`
+	AccountID             string `json:"account_id"`
+	Priority              int64  `json:"priority"`
+	LoadFactor            string `json:"load_factor"`
+	Concurrency           int64  `json:"concurrency"`
+	SyncBalanceMultiplier bool   `json:"sync_balance_multiplier"`
+}
+
+type ManualPriorityControl struct {
+	AccountID             string
+	SyncBalanceMultiplier bool
 }
 
 type ManualPriorityRelease struct {
@@ -74,7 +80,7 @@ func manualPriorityConfig(document map[string]any) (ManualPriorityConfig, error)
 	return result, nil
 }
 
-func (s *Store) AssignManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, actor string) (ManualPriorityAssignment, error) {
+func (s *Store) AssignManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (ManualPriorityAssignment, error) {
 	if !positiveNumericID(accountID) {
 		return ManualPriorityAssignment{}, errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -128,9 +134,11 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO manual_priority_accounts(
-		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,created_at,updated_at
-	) VALUES(?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET priority=excluded.priority,updated_at=excluded.updated_at`,
-		accountID, priority, nullableInt64(previousPriority), nullString(previousLoadFactor), nullableInt64(previousConcurrency), now, now); err != nil {
+		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,sync_balance_multiplier,created_at,updated_at
+	) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+		priority=excluded.priority,sync_balance_multiplier=excluded.sync_balance_multiplier,updated_at=excluded.updated_at`,
+		accountID, priority, nullableInt64(previousPriority), nullString(previousLoadFactor), nullableInt64(previousConcurrency),
+		boolDatabaseValue(syncBalanceMultiplier), now, now); err != nil {
 		return ManualPriorityAssignment{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM routing_decisions WHERE account_id=?`, accountID); err != nil {
@@ -143,7 +151,7 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		target_schedulable=NULL,target_concurrency=NULL,routing_state='manual_priority',updated_at=? WHERE id=?`, now, accountID); err != nil {
 		return ManualPriorityAssignment{}, err
 	}
-	if err := recordManualPriorityEvent(ctx, tx, accountID, name, &priority, actor, now); err != nil {
+	if err := recordManualPriorityEvent(ctx, tx, accountID, name, &priority, &syncBalanceMultiplier, actor, now); err != nil {
 		return ManualPriorityAssignment{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -151,6 +159,7 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 	}
 	return ManualPriorityAssignment{
 		AccountID: accountID, Priority: priority, LoadFactor: loadFactor, Concurrency: concurrency,
+		SyncBalanceMultiplier: syncBalanceMultiplier,
 	}, nil
 }
 
@@ -196,7 +205,7 @@ func (s *Store) RevertManualPriorityReservation(ctx context.Context, accountID, 
 	} else if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected < 1 {
 		return errors.New("控制面策略记录不存在")
 	}
-	if err := recordManualPriorityEvent(ctx, tx, accountID, name, nil, actor, now); err != nil {
+	if err := recordManualPriorityEvent(ctx, tx, accountID, name, nil, nil, actor, now); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -280,7 +289,7 @@ func (s *Store) CommitManualPriorityRelease(
 	} else if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected < 1 {
 		return errors.New("控制面策略记录不存在")
 	}
-	if err := recordManualPriorityEvent(ctx, tx, release.AccountID, release.AccountName, nil, actor, now); err != nil {
+	if err := recordManualPriorityEvent(ctx, tx, release.AccountID, release.AccountName, nil, nil, actor, now); err != nil {
 		return err
 	}
 	operation.ObjectID = release.AccountID
@@ -306,7 +315,58 @@ func validateManualPriorityCapacity(ctx context.Context, tx *sql.Tx, document ma
 	return nil
 }
 
-func recordManualPriorityEvent(ctx context.Context, tx *sql.Tx, accountID, name string, priority *int64, actor, now string) error {
+func (s *Store) ManualPriorityControls(ctx context.Context, requestedIDs []string) (map[string]ManualPriorityControl, error) {
+	requested := make(map[string]struct{}, len(requestedIDs))
+	for _, accountID := range requestedIDs {
+		requested[strings.TrimSpace(accountID)] = struct{}{}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT account_id,sync_balance_multiplier FROM manual_priority_accounts ORDER BY account_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]ManualPriorityControl)
+	for rows.Next() {
+		var control ManualPriorityControl
+		if err := rows.Scan(&control.AccountID, &control.SyncBalanceMultiplier); err != nil {
+			return nil, err
+		}
+		if len(requested) > 0 {
+			if _, found := requested[control.AccountID]; !found {
+				continue
+			}
+		}
+		result[control.AccountID] = control
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) HostBalanceSyncAllowed(ctx context.Context, host string) (bool, error) {
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return false, err
+	}
+	var boundAccounts, syncableAccounts int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT b.local_account_id),
+		COUNT(DISTINCT CASE WHEN m.account_id IS NULL OR m.sync_balance_multiplier=1 THEN b.local_account_id END)
+		FROM upstream_identity_hosts h
+		JOIN binding_identities bi ON bi.upstream_id=h.upstream_id
+		JOIN bindings b ON b.id=bi.binding_id
+		LEFT JOIN manual_priority_accounts m ON m.account_id=b.local_account_id
+		WHERE h.host=?`, strings.TrimSpace(host)).Scan(&boundAccounts, &syncableAccounts)
+	if err != nil {
+		return false, err
+	}
+	return boundAccounts == 0 || syncableAccounts > 0, nil
+}
+
+func recordManualPriorityEvent(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID, name string,
+	priority *int64,
+	syncBalanceMultiplier *bool,
+	actor, now string,
+) error {
 	action, summary := "remove", fmt.Sprintf("账号 %s（%s）已取消人工优先位", name, accountID)
 	if priority != nil {
 		action = "assign"
@@ -314,7 +374,7 @@ func recordManualPriorityEvent(ctx context.Context, tx *sql.Tx, accountID, name 
 	}
 	payload, err := json.Marshal(map[string]any{
 		"account_id": accountID, "account_name": name, "action": action, "priority": priority,
-		"actor": strings.TrimSpace(actor),
+		"sync_balance_multiplier": syncBalanceMultiplier, "actor": strings.TrimSpace(actor),
 	})
 	if err != nil {
 		return err
@@ -330,6 +390,13 @@ func recordManualPriorityEvent(ctx context.Context, tx *sql.Tx, accountID, name 
 	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, "account.manual_priority", now, "succeeded", summary, string(payload))
 	return err
+}
+
+func boolDatabaseValue(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func nullableInt64(value sql.NullInt64) any {

@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjacentOnboardingUpstreams,
   canSubmitOnboarding,
+  candidateBoundAccountIDs,
+  candidateBoundLocalGroupIDs,
+  candidateBoundLocalGroups,
   candidateCanCreateKey,
   candidateCreationUnavailableReason,
+  candidateHasExistingBinding,
   composeOnboardingBaseUrl,
   localGroupSelectionLabel,
+  localGroupMultiplierLabel,
   normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryKind,
@@ -13,15 +19,35 @@ import {
   onboardingSelectionTitle,
   parseOnboardingBaseUrl,
   rechargeRatioLabel,
+  sameOnboardingGroupSelection,
 } from "../onboarding-entry";
 
 describe("onboarding entry workflow", () => {
+  it("finds the previous and next upstream in management-list order", () => {
+    const upstreams = [
+      { host: "a.example", name: "A", upstream_type: "sub2api" },
+      { host: "b.example", name: "B", upstream_type: "newapi" },
+      { host: "c.example", name: "C", upstream_type: "sub2api" },
+    ];
+
+    expect(adjacentOnboardingUpstreams(upstreams, "B.EXAMPLE")).toEqual({
+      previous: upstreams[0],
+      next: upstreams[2],
+    });
+    expect(adjacentOnboardingUpstreams(upstreams, "a.example").previous).toBeNull();
+    expect(adjacentOnboardingUpstreams(upstreams, "c.example").next).toBeNull();
+    expect(adjacentOnboardingUpstreams(upstreams, "missing.example")).toEqual({
+      previous: null,
+      next: null,
+    });
+  });
+
   it("uses the complete two-step flow when no Host is supplied", () => {
     expect(onboardingEntryKind(undefined, undefined)).toBe("full");
   });
 
   it("keeps the authorization Host independent from the accelerated Base URL", () => {
-    expect(normalizeOnboardingHost("152.53.241.112:8080")).toBe("152.53.241.112:8080");
+    expect(normalizeOnboardingHost("192.0.2.44:8080")).toBe("192.0.2.44:8080");
     expect(
       composeOnboardingBaseUrl({
         baseUrlProtocol: "https",
@@ -30,10 +56,10 @@ describe("onboarding entry workflow", () => {
     ).toBe("https://accelerated.example.test:8443/api");
     expect(
       onboardingRequestHost(
-        { host: "152.53.241.112:8080", base_url: "https://accelerated.example.test:8443" },
+        { host: "192.0.2.44:8080", base_url: "https://accelerated.example.test:8443" },
         "fallback.example.test",
       ),
-    ).toBe("152.53.241.112:8080");
+    ).toBe("192.0.2.44:8080");
   });
 
   it("preserves HTTP and ports when loading an existing Base URL", () => {
@@ -67,6 +93,48 @@ describe("onboarding entry workflow", () => {
     };
 
     expect(candidateCanCreateKey(candidate)).toBe(true);
+  });
+
+  it("prevents duplicate account creation and returns existing local groups", () => {
+    const candidate = {
+      can_create_key: true,
+      bound: true,
+      bound_accounts: [
+        {
+          binding_id: 1,
+          account_id: "41",
+          account_name: "existing",
+          account_exists: true,
+          binding_status: "verified",
+          local_group: "codex",
+          local_groups: [
+            { id: "6", name: "codex" },
+            { id: "7", name: "pro" },
+          ],
+          upstream_key_id: "key-1",
+          upstream_key_name: "existing-key",
+        },
+      ],
+    };
+
+    expect(candidateHasExistingBinding(candidate)).toBe(true);
+    expect(candidateCanCreateKey(candidate)).toBe(false);
+    expect(candidateBoundLocalGroups(candidate)).toEqual(["codex", "pro"]);
+    expect(candidateBoundLocalGroupIDs(candidate)).toEqual(["6", "7"]);
+    expect(candidateBoundAccountIDs(candidate)).toEqual(["41"]);
+    expect(sameOnboardingGroupSelection(["7", "6"], ["6", "7"])).toBe(true);
+  });
+
+  it("shows selected local-group multipliers without confusing them with account rates", () => {
+    expect(
+      localGroupMultiplierLabel([
+        { rate_multiplier: "0.08" },
+        { rate_multiplier: "0.08" },
+        { rate_multiplier: "0.12" },
+      ]),
+    ).toBe("0.08、0.12");
+    expect(localGroupMultiplierLabel([{ rate_multiplier: null }])).toBe("未设置");
+    expect(localGroupMultiplierLabel([])).toBe("—");
   });
 
   it("formats the configured recharge rate as a ratio", () => {
@@ -152,6 +220,6 @@ describe("onboarding entry workflow", () => {
       },
     ]);
 
-    expect(stats).toEqual({ selectable: 3, bound: 1 });
+    expect(stats).toEqual({ selectable: 2, bound: 1 });
   });
 });

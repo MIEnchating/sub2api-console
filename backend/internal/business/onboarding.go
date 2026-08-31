@@ -12,6 +12,7 @@ import (
 
 type OnboardingCandidate struct {
 	Number             int                    `json:"number"`
+	UpstreamID         string                 `json:"upstream_id"`
 	Host               string                 `json:"host"`
 	UpstreamName       string                 `json:"upstream_name"`
 	GroupID            *string                `json:"group_id"`
@@ -34,14 +35,15 @@ type OnboardingCandidate struct {
 }
 
 type LocalOnboardingGroup struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 type PendingOnboarding struct {
 	OperationID       string
 	UpstreamHost      string
 	UpstreamType      string
+	BaseURL           string
 	UpstreamKeyID     string
 	UpstreamKeyName   *string
 	UpstreamGroupID   string
@@ -60,15 +62,18 @@ type OnboardingProjection struct {
 	AccountName       string
 	UpstreamHost      string
 	UpstreamType      string
+	BaseURL           string
 	UpstreamKeyID     string
 	UpstreamKeyName   string
 	UpstreamGroupID   string
 	UpstreamGroupName string
 	LocalGroupID      string
 	LocalGroupName    string
+	LocalGroups       []LocalOnboardingGroup
 	Multiplier        string
 	Schedulable       bool
 	Priority          *int64
+	Concurrency       *int64
 	Notes             string
 	Actor             string
 	ReadbackConfirmed bool
@@ -96,7 +101,7 @@ func (s *Store) OnboardingCandidates(ctx context.Context, host string) ([]Onboar
 	result := make([]OnboardingCandidate, 0, len(groups))
 	for index, group := range groups {
 		candidate := OnboardingCandidate{
-			Number: index + 1, Host: host, UpstreamName: upstreamName, GroupID: group.GroupID, GroupName: group.Name,
+			Number: index + 1, UpstreamID: group.UpstreamID, Host: host, UpstreamName: upstreamName, GroupID: group.GroupID, GroupName: group.Name,
 			Description: group.Description, Platform: group.Platform, Status: group.Status,
 			Multiplier: group.EffectiveRate, RecommendedBinding: recommendedBinding(group.Name, group.Description),
 			Bound: group.Bound, BoundAccounts: group.BoundAccounts,
@@ -183,11 +188,15 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		normalizePositiveDecimal(value.Multiplier) == nil {
 		return errors.New("账号添加字段不完整")
 	}
-	metadata, err := json.Marshal(map[string]any{
+	metadataValues := map[string]any{
 		"onboarding": true, "onboarding_operation_id": value.OperationID,
 		"onboarding_upstream_group_id": value.UpstreamGroupID, "onboarding_upstream_group": value.UpstreamGroupName,
 		"onboarding_local_group_id": value.LocalGroupID, "onboarding_actor": actorOrDefault(value.Actor), "notes": value.Notes,
-	})
+	}
+	if baseURL := strings.TrimSpace(value.BaseURL); baseURL != "" {
+		metadataValues["base_url"] = baseURL
+	}
+	metadata, err := json.Marshal(metadataValues)
 	if err != nil {
 		return err
 	}
@@ -197,21 +206,27 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,
-		multiplier,paused,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,0,?,?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,concurrency,
+		multiplier,paused,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,upstream_host=excluded.upstream_host,
-		upstream_type=excluded.upstream_type,schedulable=excluded.schedulable,priority=excluded.priority,
+		upstream_type=excluded.upstream_type,schedulable=excluded.schedulable,priority=excluded.priority,concurrency=excluded.concurrency,
 		multiplier=excluded.multiplier,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
 		value.AccountID, value.AccountName, canonicalHost(value.UpstreamHost), value.UpstreamType, value.Schedulable,
-		value.Priority, value.Multiplier, string(metadata), now); err != nil {
+		value.Priority, value.Concurrency, value.Multiplier, string(metadata), now); err != nil {
 		return err
+	}
+	localGroups := value.LocalGroups
+	if len(localGroups) == 0 {
+		localGroups = []LocalOnboardingGroup{{ID: value.LocalGroupID, Name: value.LocalGroupName}}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, value.AccountID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES(?,?,?,?)`,
-		value.AccountID, value.LocalGroupName, value.LocalGroupID, value.Multiplier); err != nil {
-		return err
+	for _, group := range localGroups {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES(?,?,?,?)`,
+			value.AccountID, group.Name, group.ID, value.Multiplier); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,
 		upstream_key_name,upstream_group,upstream_group_id,local_group,local_rate,description,status,metadata_json,updated_at)
@@ -222,6 +237,16 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		value.AccountID, canonicalHost(value.UpstreamHost), value.UpstreamKeyID, value.UpstreamKeyName,
 		value.UpstreamGroupName, value.UpstreamGroupID, value.LocalGroupName, value.Multiplier,
 		onboardingBindingDescription(value.ReadbackConfirmed), fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {
+		return err
+	}
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, value.UpstreamHost)
+	if err != nil {
+		return err
+	}
+	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
+		return err
+	}
+	if err := ensureCatalogEntitiesFromBindingsTx(ctx, tx, upstreamID, now); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(SELECT COUNT(*) FROM account_groups
@@ -237,8 +262,9 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	operation := AccountOperation{
 		OperationID: value.OperationID, OperationType: "account.onboarding", State: "succeeded", Phase: phase,
 		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: value.ReadbackConfirmed, ObjectID: value.AccountID,
-		ObjectName: &name, GroupNames: []string{value.LocalGroupName}, FieldName: &field,
-		After: map[string]any{"name": value.AccountName, "group_id": value.LocalGroupID, "schedulable": value.Schedulable, "rate_multiplier": value.Multiplier}, Writeback: true,
+		ObjectName: &name, GroupNames: onboardingLocalGroupNames(localGroups), FieldName: &field,
+		After: map[string]any{"name": value.AccountName, "group_ids": onboardingLocalGroupIDs(localGroups), "schedulable": value.Schedulable,
+			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority}, Writeback: true,
 	}
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err
@@ -247,6 +273,22 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		return err
 	}
 	return tx.Commit()
+}
+
+func onboardingLocalGroupIDs(groups []LocalOnboardingGroup) []string {
+	result := make([]string, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, group.ID)
+	}
+	return result
+}
+
+func onboardingLocalGroupNames(groups []LocalOnboardingGroup) []string {
+	result := make([]string, 0, len(groups))
+	for _, group := range groups {
+		result = append(result, group.Name)
+	}
+	return result
 }
 
 func onboardingBindingDescription(readbackConfirmed bool) string {

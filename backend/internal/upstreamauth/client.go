@@ -126,6 +126,7 @@ func (c *Client) Login(ctx context.Context, record configstore.AuthRecord, crede
 		path, identityField = "/api/user/login", "username"
 	}
 	loginRecord := cloneRecord(record)
+	loginRecord.AccessToken, loginRecord.AdminKey, loginRecord.UserID = nil, nil, nil
 	if loginRecord.Headers == nil {
 		loginRecord.Headers = map[string]string{}
 	}
@@ -197,16 +198,21 @@ func (c *Client) Refresh(ctx context.Context, record configstore.AuthRecord) (co
 		return configstore.AuthRecord{}, errors.New("refresh token 无效")
 	}
 	refreshCookie, path := "sub2api_refresh_token", "/api/v1/auth/refresh"
-	body := any(map[string]string{"refresh_token": strings.TrimSpace(*record.RefreshToken)})
+	var body any
 	refreshRecord := cloneRecord(record)
-	if isNewAPI(record.UpstreamType) {
-		refreshCookie, path, body = "new_api_refresh", "/api/user/auth/refresh", nil
-		if refreshRecord.Cookies == nil {
-			refreshRecord.Cookies = map[string]string{}
-		}
-		refreshRecord.Cookies[refreshCookie] = strings.TrimSpace(*record.RefreshToken)
+	if refreshRecord.Cookies == nil {
+		refreshRecord.Cookies = map[string]string{}
 	}
+	if isNewAPI(record.UpstreamType) {
+		refreshCookie, path = "new_api_refresh", "/api/user/auth/refresh"
+	}
+	refreshRecord.Cookies[refreshCookie] = strings.TrimSpace(*record.RefreshToken)
 	payload, response, err := c.request(ctx, refreshRecord, http.MethodPost, path, body)
+	if err != nil && !isNewAPI(record.UpstreamType) && legacySub2APIRefreshBodyRequired(err) {
+		payload, response, err = c.request(ctx, refreshRecord, http.MethodPost, path, map[string]string{
+			"refresh_token": strings.TrimSpace(*record.RefreshToken),
+		})
+	}
 	if err != nil {
 		return configstore.AuthRecord{}, err
 	}
@@ -244,6 +250,16 @@ func (c *Client) Refresh(ctx context.Context, record configstore.AuthRecord) (co
 		return configstore.AuthRecord{}, fmt.Errorf("refresh 成功但鉴权复核失败：%w", err)
 	}
 	return result, nil
+}
+
+func legacySub2APIRefreshBodyRequired(err error) bool {
+	var httpError *HTTPError
+	if !errors.As(err, &httpError) || httpError.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	detail := strings.ToLower(strings.TrimSpace(httpError.Detail))
+	return strings.Contains(detail, "invalid request: eof") ||
+		(strings.Contains(detail, "refreshtokenrequest.refreshtoken") && strings.Contains(detail, "required"))
 }
 
 func (c *Client) request(ctx context.Context, record configstore.AuthRecord, method, path string, body any) (map[string]any, *http.Response, error) {

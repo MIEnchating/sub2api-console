@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +135,58 @@ func TestPreviousRoutingDecisionUsesAnySuccessfulWriteForSharedCooldown(t *testi
 	}
 	if len(rows) != 1 || rows[0].LastApplyAt.IsZero() || rows[0].LastApplyAt.Format(time.RFC3339Nano) != now {
 		t.Fatalf("priority-only writeback did not start shared cooldown: %#v", rows)
+	}
+}
+
+func TestPreviousRoutingDecisionQueryUsesDedicatedAuditIndex(t *testing.T) {
+	store := openPolicyStore(t)
+	query, arguments := previousRoutingDecisionsQuery(nil, nil)
+	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+query, arguments...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	indexUses := 0
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "ix_operation_audit_routing_lookup") {
+			indexUses++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if indexUses != 3 {
+		t.Fatalf("routing history used dedicated audit index %d times, want 3", indexUses)
+	}
+}
+
+func TestRoutingWritebackPendingUsesOrderedAuditIndex(t *testing.T) {
+	store := openPolicyStore(t)
+	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+routingWritebackPendingSQL, routingCalculationKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "ix_operation_audit_type_object_recent") {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("routing writeback pending query did not use the ordered operation audit index")
 	}
 }

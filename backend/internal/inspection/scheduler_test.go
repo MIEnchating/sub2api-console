@@ -91,6 +91,12 @@ type previewingExecutor struct {
 	item QueueItem
 }
 
+type blockingPreviewExecutor struct {
+	immediateExecutor
+	started chan struct{}
+	release chan struct{}
+}
+
 type flakyConfigRepository struct {
 	*business.Store
 	mu    sync.Mutex
@@ -109,6 +115,12 @@ func (r *flakyConfigRepository) AutoInspectionConfig(ctx context.Context) (busin
 
 func (e *previewingExecutor) Preview(context.Context, time.Time) (QueueItem, error) {
 	return e.item, nil
+}
+
+func (e *blockingPreviewExecutor) Preview(context.Context, time.Time) (QueueItem, error) {
+	close(e.started)
+	<-e.release
+	return QueueItem{TaskType: "inspection", Label: "读取完成", State: "ready"}, nil
 }
 
 func TestZeroDelayRunsImmediatelyInsteadOfWaitingForReconfiguration(t *testing.T) {
@@ -512,13 +524,58 @@ func TestStatusPublishesOnlyOneInspectionPlanQueueItem(t *testing.T) {
 	scheduler.now = func() time.Time { return now }
 	next := now.Add(15 * time.Second).Format(time.RFC3339Nano)
 	scheduler.nextRunAt = &next
+	updates, unsubscribe := scheduler.Subscribe()
+	defer unsubscribe()
 
 	status, err := scheduler.Status(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(status.Queue) != 1 || status.Queue[0].Label != "正在读取巡检计划" {
+		t.Fatalf("initial queue did not return the loading state: %#v", status.Queue)
+	}
+	select {
+	case <-updates:
+	case <-time.After(time.Second):
+		t.Fatal("queue preview did not publish its update")
+	}
+	status, err = scheduler.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(status.Queue) != 1 || status.Queue[0].TaskType != "inspection" || status.Queue[0].ScheduledFor == nil || *status.Queue[0].ScheduledFor != next {
 		t.Fatalf("unexpected queue: %#v", status.Queue)
+	}
+}
+
+func TestStatusDoesNotWaitForExpensiveQueuePreview(t *testing.T) {
+	repository := openInspectionRepository(t)
+	ctx := context.Background()
+	if _, err := repository.UpdateAutoInspectionConfig(ctx, business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &blockingPreviewExecutor{started: make(chan struct{}), release: make(chan struct{})}
+	scheduler, err := NewScheduler(repository, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { close(executor.release) })
+
+	startedAt := time.Now()
+	status, err := scheduler.Status(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(startedAt) > time.Second {
+		t.Fatal("status waited for the queue preview")
+	}
+	if len(status.Queue) != 1 || status.Queue[0].Label != "正在读取巡检计划" {
+		t.Fatalf("unexpected non-blocking queue state: %#v", status.Queue)
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("queue preview did not start in the background")
 	}
 }
 

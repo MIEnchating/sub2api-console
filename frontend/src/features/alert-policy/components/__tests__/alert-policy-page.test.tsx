@@ -85,6 +85,8 @@ describe("AlertPolicyPage", () => {
     expect(markup).toContain("主动探测告警分组");
     expect(markup).toContain("重复提醒间隔");
     expect(markup).toContain("多少条以上合并发送");
+    expect(markup).toContain("告警控制");
+    expect(markup).not.toContain("运行控制");
     expect(markup).toContain("管理通知渠道");
     expect(markup).toContain("目标类型：私聊");
     expect(markup).not.toContain("目标类型：c2c");

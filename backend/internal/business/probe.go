@@ -58,6 +58,7 @@ func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName *strin
 		clauses = append(clauses, "ag.group_name=?")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
+	clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id)")
 	query := `SELECT a.id,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id`
 	if len(clauses) > 0 {
@@ -107,6 +108,7 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		}
 		payload, err := json.Marshal(map[string]any{
 			"status_code": sample.StatusCode, "request_model": sample.RequestModel, "actual_model": sample.ActualModel,
+			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
 		})
 		if err != nil {
 			return 0, fmt.Errorf("探测样本无法序列化：%w", err)

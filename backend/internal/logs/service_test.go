@@ -2,6 +2,7 @@ package logs
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -26,7 +27,10 @@ func (f fakeBusiness) AuditEvents(context.Context, *int, bool) ([]business.Audit
 
 type fakeTasks []taskstore.Task
 
-func (f fakeTasks) List(context.Context, *int) ([]taskstore.Task, error) { return f, nil }
+func (f fakeTasks) ListLogSummaries(context.Context, *int) ([]taskstore.Task, error) { return f, nil }
+func (f fakeTasks) SearchLogs(context.Context, string, *int) ([]taskstore.Task, error) {
+	return f, nil
+}
 
 func TestUnifiedLogsLinksRunAndEventToTask(t *testing.T) {
 	now := "2026-08-26T10:00:00Z"
@@ -58,6 +62,54 @@ func TestUnifiedLogsValidatesFiltersAndPaginates(t *testing.T) {
 	}
 	if _, err := service.Query(context.Background(), Query{Kind: "event", State: "all", Level: "debug", Page: 1, PageSize: 20}); err == nil {
 		t.Fatal("invalid event level must fail")
+	}
+}
+
+type countingBusiness struct {
+	loads atomic.Int64
+}
+
+func (f *countingBusiness) RunRecords(context.Context, *int) ([]business.RunRecord, error) {
+	f.loads.Add(1)
+	return []business.RunRecord{}, nil
+}
+
+func (f *countingBusiness) Events(context.Context, *int) ([]business.RunEvent, error) {
+	f.loads.Add(1)
+	return []business.RunEvent{}, nil
+}
+
+func (f *countingBusiness) AuditEvents(context.Context, *int, bool) ([]business.AuditEvent, error) {
+	f.loads.Add(1)
+	return []business.AuditEvent{}, nil
+}
+
+type countingTasks struct {
+	loads atomic.Int64
+}
+
+func (f *countingTasks) ListLogSummaries(context.Context, *int) ([]taskstore.Task, error) {
+	f.loads.Add(1)
+	return []taskstore.Task{}, nil
+}
+
+func (f *countingTasks) SearchLogs(context.Context, string, *int) ([]taskstore.Task, error) {
+	f.loads.Add(1)
+	return []taskstore.Task{}, nil
+}
+
+func TestUnifiedLogsReuseFreshPage(t *testing.T) {
+	businessReader := &countingBusiness{}
+	taskReader := &countingTasks{}
+	service := New(businessReader, taskReader)
+	query := Query{Kind: "all", State: "all", Page: 1, PageSize: 20}
+	for index := 0; index < 2; index++ {
+		if _, err := service.Query(context.Background(), query); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if businessReader.loads.Load() != 3 || taskReader.loads.Load() != 1 {
+		t.Fatalf("fresh snapshot was reloaded: business=%d tasks=%d", businessReader.loads.Load(), taskReader.loads.Load())
 	}
 }
 

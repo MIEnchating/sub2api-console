@@ -39,6 +39,20 @@ func TestAccountsFollowsExplicitTotalWhenServerCapsPageSize(t *testing.T) {
 	}
 }
 
+func TestAccountUsageTotalsUsesExactClosedDateAndKeepsAUSemantics(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/admin/usage/stats" || request.URL.Query().Get("account_id") != "41" || request.URL.Query().Get("start_date") != "2026-08-29" || request.URL.Query().Get("end_date") != "2026-08-29" || request.URL.Query().Get("timezone") != "Asia/Shanghai" {
+			t.Fatalf("request=%s?%s", request.URL.Path, request.URL.RawQuery)
+		}
+		writeJSON(w, `{"code":0,"data":{"total_account_cost":8.25,"total_actual_cost":10.5}}`)
+	})
+	defer server.Close()
+	totals, err := client.AccountUsageTotals(context.Background(), "41", "2026-08-29", "Asia/Shanghai")
+	if err != nil || totals.AccountCost != 8.25 || totals.ActualCost != 10.5 {
+		t.Fatalf("totals=%#v err=%v", totals, err)
+	}
+}
+
 func TestGroupsFallsBackOnlyForMissingRouteOrContractShape(t *testing.T) {
 	t.Run("missing route", func(t *testing.T) {
 		client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
@@ -440,6 +454,27 @@ func TestAccountUpstreamMultiplierFallsBackToResolvedValue(t *testing.T) {
 	value, err := client.AccountUpstreamMultiplier(context.Background(), "41")
 	if err != nil || value != "0.42" {
 		t.Fatalf("value=%q err=%v", value, err)
+	}
+}
+
+func TestUpdateAccountGroupsConfirmsNumericIDsIndependentOfResponseOrder(t *testing.T) {
+	requests := 0
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch {
+		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/41":
+			writeJSON(w, `{"data":{"id":41}}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41":
+			writeJSON(w, `{"data":{"id":41,"group_ids":[10,2]}}`)
+		default:
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+	})
+	defer server.Close()
+
+	account, err := client.UpdateAccountGroups(context.Background(), "41", []int64{2, 10})
+	if err != nil || requests != 2 || fmt.Sprint(account["id"]) != "41" {
+		t.Fatalf("requests=%d account=%#v err=%v", requests, account, err)
 	}
 }
 

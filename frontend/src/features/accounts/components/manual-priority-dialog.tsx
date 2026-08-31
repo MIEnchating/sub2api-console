@@ -4,6 +4,7 @@ import { Pin, Trash2 } from "lucide-react";
 import type { AccountStatus } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -29,17 +30,19 @@ export type ManualPriorityValues = {
   priority: number;
   loadFactor: string;
   concurrency: number;
+  syncBalanceMultiplier: boolean;
 };
 
 export function manualPriorityInitialValues(
   account: AccountStatus,
 ): Omit<ManualPriorityValues, "priority"> {
   if (account.manual_priority == null) {
-    return { loadFactor: "100", concurrency: 100 };
+    return { loadFactor: "100", concurrency: 100, syncBalanceMultiplier: false };
   }
   return {
     loadFactor: (account.load_factor?.trim() ?? "") || "100",
     concurrency: account.concurrency ?? 100,
+    syncBalanceMultiplier: account.manual_sync_balance_multiplier ?? false,
   };
 }
 
@@ -83,6 +86,9 @@ export function ManualPriorityDialog(props: {
   const initialConcurrency = String(initialValues.concurrency);
   const [loadFactor, setLoadFactor] = useState(initialLoadFactor);
   const [concurrency, setConcurrency] = useState(initialConcurrency);
+  const [syncBalanceMultiplier, setSyncBalanceMultiplier] = useState(
+    initialValues.syncBalanceMultiplier,
+  );
   const slots = useMemo(
     () => manualPrioritySlots(props.accounts, props.account.id, props.reservedMax),
     [props.account.id, props.accounts, props.reservedMax],
@@ -96,7 +102,14 @@ export function ManualPriorityDialog(props: {
     setSelected(currentPriority);
     setLoadFactor(initialLoadFactor);
     setConcurrency(initialConcurrency);
-  }, [currentPriority, initialConcurrency, initialLoadFactor, props.open]);
+    setSyncBalanceMultiplier(initialValues.syncBalanceMultiplier);
+  }, [
+    currentPriority,
+    initialConcurrency,
+    initialLoadFactor,
+    initialValues.syncBalanceMultiplier,
+    props.open,
+  ]);
   const parsedLoadFactor = Number(loadFactor);
   const parsedConcurrency = Number(concurrency);
   const loadFactorValid = Number.isFinite(parsedLoadFactor) && parsedLoadFactor >= 1;
@@ -110,7 +123,7 @@ export function ManualPriorityDialog(props: {
         <DialogHeader>
           <DialogTitle>人工优先位</DialogTitle>
           <DialogDescription>
-            将“{props.account.name}”固定到保留优先级，自动调度不会再修改这个账号。
+            将“{props.account.name}”转为人工控制，自动调度、价格分组和主动探测不会再处理这个账号。
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -173,9 +186,23 @@ export function ManualPriorityDialog(props: {
               />
             </label>
           </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">同步余额与倍率</p>
+              <p className="text-muted-foreground mt-0.5 text-xs leading-5">
+                开启后仅同步这两项，不修改名称、分组或调度参数。
+              </p>
+            </div>
+            <Switch
+              checked={syncBalanceMultiplier}
+              onCheckedChange={setSyncBalanceMultiplier}
+              disabled={props.pending}
+              aria-label="允许人工控制账号同步余额与倍率"
+            />
+          </div>
           <p className="text-muted-foreground text-xs leading-5">
-            设置后会把 Sub2API
-            中的优先级、负载因子和并发上限同步为以上值。优先位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
+            设置时会把 Sub2API 中的优先级、负载因子和并发上限同步为以上值，随后由人工控制。
+            优先位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
           </p>
         </div>
         <DialogFooter className="sm:justify-between">
@@ -207,6 +234,7 @@ export function ManualPriorityDialog(props: {
                 priority: selected,
                 loadFactor: loadFactor.trim(),
                 concurrency: parsedConcurrency,
+                syncBalanceMultiplier,
               })
             }
           >

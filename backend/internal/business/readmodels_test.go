@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -27,6 +28,19 @@ func TestAccountProjectionUsesStableIDsAndPreservesInvalidBooleanAsUnknown(t *te
 	if first.Platform == nil || *first.Platform != "openai" || first.AccountType == nil || *first.AccountType != "apikey" {
 		t.Fatalf("account platform/type metadata not projected: %#v", first)
 	}
+	if first.KeyStatus == nil || *first.KeyStatus != "active" {
+		t.Fatalf("upstream Key status not projected: %#v", first.KeyStatus)
+	}
+	if first.KeyStatusReason == nil || !strings.Contains(*first.KeyStatusReason, "所属分组仍存在") {
+		t.Fatalf("upstream Key status reason not projected: %#v", first.KeyStatusReason)
+	}
+	if first.Sub2APIStatus == nil || *first.Sub2APIStatus != "active" || first.Sub2APIError != nil {
+		t.Fatalf("Sub2API account status not projected: %#v", first)
+	}
+	if first.BaseURL == nil || *first.BaseURL != "https://api.openai.com/v1" || first.UpstreamBaseURL == nil ||
+		first.BaseURLCheck != "official_mismatch" || first.BaseURLCheckReason == nil {
+		t.Fatalf("account Base URL check not projected: %#v", first)
+	}
 	if first.Schedulable != nil {
 		t.Fatalf("invalid persisted boolean must remain unknown: %#v", first.Schedulable)
 	}
@@ -38,6 +52,128 @@ func TestAccountProjectionUsesStableIDsAndPreservesInvalidBooleanAsUnknown(t *te
 	}
 	if len(first.RecentResults) != 1 || first.RecentResults[0].LatencyMS == nil || *first.RecentResults[0].LatencyMS != 120 {
 		t.Fatalf("recent evidence not projected: %#v", first.RecentResults)
+	}
+}
+
+func TestAccountBaseURLCheckAllowsDifferentCustomEndpoints(t *testing.T) {
+	accountURL := "http://10.0.0.8:8080/v1"
+	upstreamURL := "https://portal.example.test"
+	platform := "openai"
+	status, reason := accountBaseURLCheck(&accountURL, &upstreamURL, nil, nil, &platform)
+	if status != "different_allowed" || reason == nil || !strings.Contains(*reason, "不自动判错") {
+		t.Fatalf("status=%q reason=%v", status, reason)
+	}
+}
+
+func TestAccountBaseURLCheckRecognizesSameHostAcrossSchemes(t *testing.T) {
+	accountURL := "http://api.example.test:8080/v1"
+	upstreamURL := "https://api.example.test:8080"
+	status, _ := accountBaseURLCheck(&accountURL, &upstreamURL, nil, nil, nil)
+	if status != "matched" {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestAccountBaseURLCheckDistinguishesUncheckedFromMissingDetailValue(t *testing.T) {
+	status, reason := accountBaseURLCheck(nil, nil, nil, nil, nil)
+	if status != "unchecked" || reason == nil || !strings.Contains(*reason, "尚未读取") {
+		t.Fatalf("unchecked status=%q reason=%v", status, reason)
+	}
+	checkedAt := "2026-08-30T12:00:00Z"
+	status, reason = accountBaseURLCheck(nil, nil, nil, &checkedAt, nil)
+	if status != "unknown" || reason == nil || !strings.Contains(*reason, "接口未提供") {
+		t.Fatalf("missing status=%q reason=%v", status, reason)
+	}
+}
+
+func TestAccountBaseURLCheckExplainsPlatformDefaultMismatch(t *testing.T) {
+	accountURL := "https://api.openai.com"
+	upstreamURL := "https://relay.example.test"
+	source := "platform_default"
+	status, reason := accountBaseURLCheck(&accountURL, &upstreamURL, nil, nil, &source)
+	if status != "official_mismatch" || reason == nil || !strings.Contains(*reason, "未显式配置") {
+		t.Fatalf("status=%q reason=%v", status, reason)
+	}
+}
+
+func TestAccountBaseURLCheckFallsBackToUpstreamHost(t *testing.T) {
+	accountURL := "http://172.18.0.1:8317"
+	upstreamHost := "172.18.0.1:8317"
+	status, reason := accountBaseURLCheck(&accountURL, nil, &upstreamHost, nil, nil)
+	if status != "matched" || reason == nil {
+		t.Fatalf("status=%q reason=%v", status, reason)
+	}
+}
+
+func TestAccountProjectionPrefersBindingOwnershipAndMarksStoredHostRepairable(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE accounts SET upstream_host='relay.example' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts[0].UpstreamHost == nil || *accounts[0].UpstreamHost != "api.example" ||
+		accounts[0].RecordedUpstreamHost == nil || *accounts[0].RecordedUpstreamHost != "relay.example" ||
+		!accounts[0].UpstreamHostRepairable {
+		t.Fatalf("account=%#v", accounts[0])
+	}
+}
+
+func TestAccountProjectionReportsDeletedUpstreamKeyGroup(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.Accounts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE upstream_catalog_entities SET lifecycle_state='missing',missing_observations=2,
+		confirmed_missing_at='now' WHERE entity_kind='group' AND entity_id='1'`); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts[0].KeyStatus == nil || *accounts[0].KeyStatus != "group_missing" ||
+		accounts[0].KeyStatusReason == nil || !strings.Contains(*accounts[0].KeyStatusReason, "所属分组 1 已确认删除") {
+		t.Fatalf("deleted upstream group not projected: %#v", accounts[0])
+	}
+}
+
+func TestAccountProjectionUsesLiveKeyGroupWhenBindingGroupIDIsStale(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at)
+		VALUES('api.example','gptproo','gptproo','active','0.2','now');
+		UPDATE upstream_keys SET upstream_group='gptproo' WHERE host='api.example' AND key_id='key-1';
+		UPDATE bindings SET upstream_group='gptproo',upstream_group_id='4924'
+		WHERE upstream_host='api.example' AND upstream_key_id='key-1'`); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts[0].KeyStatus == nil || *accounts[0].KeyStatus != "active" ||
+		accounts[0].KeyStatusReason == nil || !strings.Contains(*accounts[0].KeyStatusReason, "所属分组仍存在") ||
+		strings.Contains(*accounts[0].KeyStatusReason, "4924") {
+		t.Fatalf("live Key group was not preferred over stale binding: %#v", accounts[0])
+	}
+}
+
+func TestAccountProjectionPreservesSub2APIErrorStatusAndMessage(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE accounts SET schedulable=0,
+		metadata_json='{"status":"error","error_message":"Access forbidden (403): quota exceeded"}'
+		WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts[0].Sub2APIStatus == nil || *accounts[0].Sub2APIStatus != "error" ||
+		accounts[0].Sub2APIError == nil || *accounts[0].Sub2APIError != "Access forbidden (403): quota exceeded" {
+		t.Fatalf("Sub2API error status was lost: %#v", accounts[0])
 	}
 }
 
@@ -60,6 +196,61 @@ func TestAccountProjectionExcludesAccountStatePlaceholdersFromRecentResults(t *t
 	if accounts[0].RecentResults[0].LatencyMS == nil || *accounts[0].RecentResults[0].LatencyMS != 120 {
 		t.Fatalf("explicit traffic first-token latency was lost: %#v", accounts[0].RecentResults)
 	}
+}
+
+func TestRecentFirstTokenLatencyRequiresExplicitFirstTokenSemantics(t *testing.T) {
+	latency := sql.NullString{String: "195843", Valid: true}
+	tests := []struct {
+		name    string
+		source  string
+		payload string
+		want    *float64
+	}{
+		{name: "active probe first content", source: "active-probe", payload: `{"latency_metric":"first_token","latency_source":"account_test.first_content","latency_unit":"ms"}`, want: float64Pointer(195843)},
+		{name: "legacy active probe", source: "active-probe", payload: `{}`, want: float64Pointer(195843)},
+		{name: "legacy duration fallback", source: "traffic", payload: `{"latency_metric":"ttfb","latency_source":"operations.duration_ms","latency_unit":"ms"}`},
+		{name: "combined traffic sample with separate first token", source: "traffic", payload: `{"latency_metric":"request_duration","latency_source":"operations.duration_ms","latency_unit":"ms","first_token_ms":"1250"}`, want: float64Pointer(1250)},
+		{name: "complete probe response", source: "active-probe", payload: `{"latency_metric":"total_duration","latency_source":"account_test.complete_response","latency_unit":"ms"}`},
+		{name: "missing metric", source: "traffic", payload: `{"duration_ms":"195843","latency_unit":"ms"}`},
+		{name: "explicit first token", source: "traffic", payload: `{"latency_metric":"first_token","latency_source":"operations.first_token_ms","latency_unit":"ms"}`, want: float64Pointer(195843)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := recentFirstTokenLatency(test.source, latency, latency, sql.NullString{String: test.payload, Valid: true})
+			if test.want == nil && got != nil {
+				t.Fatalf("latency=%v, want nil", *got)
+			}
+			if test.want != nil && (got == nil || *got != *test.want) {
+				t.Fatalf("latency=%v, want %v", got, *test.want)
+			}
+		})
+	}
+}
+
+func TestAccountProjectionKeepsTrafficDurationSeparateFromFirstTokenLatency(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`INSERT INTO health_samples(
+		account_id,group_name,result,latency_p50,latency_p95,observed_at,source,evidence_key,payload_json
+	) VALUES('41','codex','success','2795','2795','2026-08-29T18:39:18Z','traffic','request-duration',
+		'{"duration_ms":"2795","duration_unit":"ms"}')`); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := accounts[0].RecentResults[0]
+	if result.LatencyMS != nil {
+		t.Fatalf("traffic request duration was exposed as first-token latency: %#v", result)
+	}
+	if result.DurationMS == nil || *result.DurationMS != 2795 {
+		t.Fatalf("traffic request duration was not projected separately: %#v", result)
+	}
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
 }
 
 func TestAccountProjectionLimitsRecentResultsWithoutChangingScoringCount(t *testing.T) {
@@ -227,6 +418,9 @@ func TestAccountDetailExposesTypedJSONAndBindingFields(t *testing.T) {
 func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T) {
 	store := openReadModelFixture(t)
 	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE account_groups SET group_id=NULL WHERE account_id='41'`); err != nil {
+		t.Fatal(err)
+	}
 
 	upstreams, err := store.Upstreams(ctx)
 	if err != nil {
@@ -253,6 +447,10 @@ func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T)
 		groups[0].BoundAccounts[0].AccountName == nil || *groups[0].BoundAccounts[0].AccountName != "example-0.1" {
 		t.Fatalf("bound group must expose its concrete account: %#v", groups[0].BoundAccounts)
 	}
+	if len(groups[0].BoundAccounts[0].LocalGroups) != 1 || groups[0].BoundAccounts[0].LocalGroups[0].ID != "1" ||
+		groups[0].BoundAccounts[0].LocalGroups[0].Name != "codex" {
+		t.Fatalf("bound account must expose current local groups: %#v", groups[0].BoundAccounts[0].LocalGroups)
+	}
 	unbound, err := store.UpstreamGroups(ctx, "api.example", false)
 	if err != nil {
 		t.Fatal(err)
@@ -269,6 +467,51 @@ func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T)
 	}
 	if !reflect.DeepEqual(localGroups[0].Platforms, []string{"openai"}) {
 		t.Fatalf("group platforms not projected: %#v", localGroups[0].Platforms)
+	}
+}
+
+func TestUpstreamGroupsRecognizesBindingsThroughExplicitHostAlias(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts
+		SET name='renamed-account',upstream_host='moved.example',multiplier='9.9' WHERE id='41';
+		UPDATE upstreams
+		SET metadata_json='{"site_name":"Example API","alias_hosts":["edge.example:8080"]}'
+		WHERE host='api.example';
+		INSERT INTO upstreams(host,base_url,upstream_type,auth_mode,enabled,auth_status,metadata_json,updated_at)
+		VALUES('edge.example:8080','https://edge.example','newapi','newapi_admin',1,'已鉴权','{"site_name":"Example Edge"}','now');
+		INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('edge.example:8080','1','now');
+		INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,effective_rate,updated_at)
+		VALUES('edge.example:8080','1','codex','active','1','1','now');
+		INSERT INTO upstream_keys(host,key_id,name,upstream_group,rate,status,updated_at)
+		VALUES('edge.example:8080','edge-key','codex-key','1','1','active','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := store.UpstreamGroups(ctx, "edge.example:8080", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 || !groups[0].Bound || len(groups[0].BoundAccounts) != 1 ||
+		groups[0].BoundAccounts[0].AccountID != "41" || groups[0].BoundAccounts[0].AccountName == nil ||
+		*groups[0].BoundAccounts[0].AccountName != "renamed-account" {
+		t.Fatalf("explicit Host alias did not preserve the stable binding: %#v", groups)
+	}
+	summary, err := store.Upstreams(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundIdentity := false
+	for _, upstream := range summary.Hosts {
+		if upstream.Host == "api.example" {
+			foundIdentity = true
+			if upstream.UpstreamID == "" || upstream.AccountCount != 1 || len(upstream.Hosts) != 2 {
+				t.Fatalf("explicit Host alias summary is incomplete: %#v", upstream)
+			}
+		}
+	}
+	if !foundIdentity {
+		t.Fatalf("primary upstream identity missing from summary: %#v", summary.Hosts)
 	}
 }
 
@@ -304,7 +547,7 @@ func openReadModelFixture(t *testing.T) *Store {
 		`INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,load_factor,concurrency,multiplier,balance,
 			paused,routing_state,health_status,failure_streak,recovery_pass_streak,target_priority,target_load_factor,target_concurrency,
 			metadata_json,updated_at) VALUES
-			('41','example-0.1','api.example','newapi',2,10,'1',5,'0.1','20',0,'active','healthy',0,1,20,'2',8,'{"status":"active","platform":"openai","type":"apikey"}','now'),
+			('41','example-0.1','api.example','newapi',2,10,'1',5,'0.1','20',0,'active','healthy',0,1,20,'2',8,'{"status":"active","platform":"openai","type":"apikey","base_url":"https://api.openai.com/v1"}','now'),
 			('42','example-0.2','api.example','newapi',1,20,'2',5,'0.2',NULL,0,'active','healthy',0,0,NULL,NULL,NULL,'{}','now')`,
 		`INSERT INTO account_groups VALUES('41','codex','1','0.1'),('42','pro','2','0.2')`,
 		`INSERT INTO routing_decisions VALUES('41','codex',1,0,'primary','hard_open',1,'致命错误','2026-08-26T10:00:00Z','{"weight":60}')`,

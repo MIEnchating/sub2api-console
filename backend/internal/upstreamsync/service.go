@@ -25,6 +25,10 @@ type Repository interface {
 	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
 }
 
+type balanceSyncPolicy interface {
+	HostBalanceSyncAllowed(context.Context, string) (bool, error)
+}
+
 type PrivateStore interface {
 	AuthRecord(context.Context, string) (*configstore.AuthRecord, error)
 	SaveAuthRecord(context.Context, configstore.AuthRecord, map[string]bool) error
@@ -333,6 +337,21 @@ func applyBatchAccountCounts(result *BatchResult, summary business.UpstreamSumma
 }
 
 func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor string) HostResult {
+	if scope.Balance {
+		if policy, ok := s.repository.(balanceSyncPolicy); ok {
+			allowed, policyErr := policy.HostBalanceSyncAllowed(ctx, host)
+			if policyErr != nil {
+				return s.failed(ctx, host, scope, false, "人工优先位余额同步策略读取失败："+policyErr.Error())
+			}
+			if !allowed {
+				if !scope.Catalog {
+					reason := "该 Host 仅绑定完全人工控制账号，余额同步已跳过"
+					return HostResult{Host: host, Status: "succeeded", AuthStatus: "未变更", BalanceStatus: reason, Reason: &reason}
+				}
+				scope.Balance = false
+			}
+		}
+	}
 	record, recovered, err := s.authRecord(ctx, host, actor)
 	if err != nil {
 		return s.failed(ctx, host, scope, true, "私有授权恢复失败："+err.Error())

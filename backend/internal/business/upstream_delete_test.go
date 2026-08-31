@@ -92,3 +92,44 @@ func TestDeleteUpstreamProjectionRollsBackWhenEventCannotBeWritten(t *testing.T)
 		}
 	}
 }
+
+func TestDeleteUpstreamProjectionUsesStableIdentityAcrossHostAliases(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "delete-alias.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
+		 VALUES('api.example','https://api.example','sub2api','已鉴权','{"alias_hosts":["relay.example"]}','now')`,
+		`INSERT INTO upstream_groups(host,group_id,name,status,updated_at) VALUES('relay.example','6','pro','active','now')`,
+		`INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,updated_at) VALUES('relay.example','91','pro-key','6','active','now')`,
+		`INSERT INTO accounts(id,name,upstream_host,paused,updated_at) VALUES('41','example-0.2','relay.example',0,'now')`,
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group_id,local_group,updated_at)
+		 VALUES('41','relay.example','91','pro-key','6','codex','now')`,
+	} {
+		if _, err := store.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	preview, err := store.UpstreamDeletePreview(ctx, "api.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.AccountCount != 1 || preview.GroupCount != 1 {
+		t.Fatalf("preview=%#v", preview)
+	}
+	if _, err := store.DeleteUpstreamProjection(ctx, "api.example", []string{"41"}, UpstreamDeleteAudit{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"upstreams", "upstream_groups", "upstream_keys", "upstream_identities", "upstream_identity_hosts", "upstream_catalog_entities"} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s count=%d err=%v", table, count, err)
+		}
+	}
+}

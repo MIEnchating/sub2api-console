@@ -25,7 +25,9 @@ function task(status: Task["status"], result: Task["result"]): Task {
 
 describe("upstream synchronization status", () => {
   it("shows live business progress without exposing task ids", () => {
-    const markup = renderToStaticMarkup(<UpstreamSyncTaskStatus task={task("running", {})} />);
+    const markup = renderToStaticMarkup(
+      <UpstreamSyncTaskStatus task={task("running", {})} />,
+    );
 
     expect(markup).toContain("正在同步上游：已完成 1/4 个 Host");
     expect(markup).not.toContain("sync-task");
@@ -76,7 +78,9 @@ describe("upstream synchronization status", () => {
     expect(markup).toContain("refresh token 无效");
     expect(markup).toContain("broken.test");
     expect(markup).toContain("分组接口不可用");
-    expect(markup).toContain("max-h-[min(30rem,calc(100svh-16rem))]");
+    expect(markup).toContain("flex h-full min-h-0 flex-col");
+    expect(markup).toContain("min-h-0 flex-1 overflow-auto");
+    expect(markup).not.toContain("max-h-[min(30rem");
     expect(markup).toContain("overflow-auto");
     expect(markup).toContain("[&amp;_th]:sticky");
     expect(markup).not.toContain("must-not-render");
@@ -231,5 +235,30 @@ describe("upstream synchronization status", () => {
     expect(markup).toContain('data-column="result"');
     expect(markup).toContain("whitespace-normal");
     expect(markup).toContain("break-words");
+  });
+
+  it("paginates long Host result lists", () => {
+    const hosts = Array.from({ length: 25 }, (_, index) => ({
+      host: `host-${index + 1}.test`,
+      status: "succeeded",
+      auth_status: "已鉴权",
+      balance_status: "已读取",
+      balance: "10",
+      group_count: 1,
+    }));
+    const markup = renderToStaticMarkup(
+      <UpstreamSyncTaskStatus
+        task={task("succeeded", {
+          succeeded: hosts.length,
+          auth_failed: 0,
+          failed: 0,
+          hosts,
+        })}
+      />,
+    );
+
+    expect(markup).toContain("host-20.test");
+    expect(markup).not.toContain("host-21.test");
+    expect(markup).toContain("转到第 2 页");
   });
 });

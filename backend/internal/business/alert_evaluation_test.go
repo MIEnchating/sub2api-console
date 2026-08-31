@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -527,6 +528,39 @@ func TestRoutingAlertsTrackDecisionTransitionsAndApplyRecovery(t *testing.T) {
 	}
 	assertAlertStatus(t, store, "console:routing:survivor:41:codex", "recovered")
 	assertAlertStatus(t, store, "console:routing:group-survivor:codex", "recovered")
+}
+
+func TestBindingInvalidAlertNamesCauseAndRecoversWithStableIncident(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,schedulable,routing_state,metadata_json,updated_at)
+		VALUES('41','primary',0,'binding_invalid','{}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','codex','7');
+		INSERT INTO routing_decisions(account_id,group_name,schedulable,role,routing_state,reason,updated_at,payload_json)
+		VALUES('41','codex',0,'excluded','binding_invalid','上游 Key key-1 已确认删除（连续 2 次完整同步未返回）','2026-08-27T01:00:00Z','{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const incidentKey = "console:routing:binding-invalid:41:codex"
+	assertAlertStatus(t, store, incidentKey, "firing")
+	assertAlertStatus(t, store, "console:routing:group-unavailable:codex", "firing")
+	var eventType, cause string
+	if err := store.db.QueryRow(`SELECT event_type,cause_code FROM alert_incidents WHERE incident_key=?`, incidentKey).Scan(&eventType, &cause); err != nil {
+		t.Fatal(err)
+	}
+	if eventType != "account.binding_invalid" || !strings.Contains(cause, "Key key-1 已确认删除") {
+		t.Fatalf("event=%q cause=%q", eventType, cause)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE routing_decisions SET schedulable=1,role='healthy',routing_state='healthy',
+		reason='稳定绑定已恢复',updated_at='2026-08-27T01:01:00Z' WHERE account_id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertAlertStatus(t, store, incidentKey, "recovered")
 }
 
 func TestModeSwitchClosesStaleRoutingAlertWithoutFalseRecovery(t *testing.T) {

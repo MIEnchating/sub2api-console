@@ -38,7 +38,14 @@ type RuntimeSettings struct {
 	Keys                             []string
 	AdminBaseURL                     *string
 	RequestTimeoutSeconds            int
+	AccountDefaultConcurrency        int64
+	AccountDefaultPriority           int64
 	RequestTimeoutConfigurationError string
+}
+
+type AccountDefaultsSettings struct {
+	Concurrency int64 `json:"concurrency"`
+	Priority    int64 `json:"priority"`
 }
 
 type NotificationStatus struct {
@@ -108,10 +115,16 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			hosts_json TEXT NOT NULL DEFAULT '[]', headers_json TEXT NOT NULL DEFAULT '{}',
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS upstream_key_secrets (
+			host TEXT NOT NULL, key_id TEXT NOT NULL, group_id TEXT NOT NULL,
+			secret TEXT NOT NULL, updated_at TEXT NOT NULL,
+			PRIMARY KEY(host,key_id,group_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS console_sessions (
 			token_hash TEXT PRIMARY KEY, username TEXT NOT NULL,
 			expires_at TEXT NOT NULL, created_at TEXT NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS ix_console_sessions_expires_at ON console_sessions(expires_at)`,
 	}
 	for _, statement := range statements {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
@@ -189,12 +202,82 @@ func (s *Store) RuntimeSettings(ctx context.Context) (RuntimeSettings, error) {
 			timeout = parsed
 		}
 	}
+	accountDefaults, accountDefaultsErr := accountDefaultsFromValues(values)
+	if accountDefaultsErr != nil {
+		return RuntimeSettings{}, accountDefaultsErr
+	}
 	return RuntimeSettings{
 		Keys:                             keys,
 		AdminBaseURL:                     adminBaseURL,
 		RequestTimeoutSeconds:            timeout,
+		AccountDefaultConcurrency:        accountDefaults.Concurrency,
+		AccountDefaultPriority:           accountDefaults.Priority,
 		RequestTimeoutConfigurationError: timeoutError,
 	}, nil
+}
+
+func (s *Store) AccountDefaults(ctx context.Context) (AccountDefaultsSettings, error) {
+	values, err := s.settings(ctx)
+	if err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	return accountDefaultsFromValues(values)
+}
+
+func (s *Store) ConfigureAccountDefaults(ctx context.Context, concurrency, priority int64) (AccountDefaultsSettings, error) {
+	settings := AccountDefaultsSettings{Concurrency: concurrency, Priority: priority}
+	if err := validateAccountDefaults(settings); err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	defer tx.Rollback()
+	for key, value := range map[string]int64{
+		"accounts.default_concurrency": concurrency,
+		"accounts.default_priority":    priority,
+	} {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, strconv.FormatInt(value, 10)); err != nil {
+			return AccountDefaultsSettings{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	return settings, nil
+}
+
+func accountDefaultsFromValues(values map[string]string) (AccountDefaultsSettings, error) {
+	result := AccountDefaultsSettings{Concurrency: 10, Priority: 1}
+	for key, target := range map[string]*int64{
+		"accounts.default_concurrency": &result.Concurrency,
+		"accounts.default_priority":    &result.Priority,
+	} {
+		raw, present := values[key]
+		if !present {
+			continue
+		}
+		parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			return AccountDefaultsSettings{}, fmt.Errorf("%s 配置无效", key)
+		}
+		*target = parsed
+	}
+	if err := validateAccountDefaults(result); err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	return result, nil
+}
+
+func validateAccountDefaults(settings AccountDefaultsSettings) error {
+	if settings.Concurrency < 1 || settings.Concurrency > 10_000_000 {
+		return errors.New("账号默认并发必须是 1 到 10000000 之间的整数")
+	}
+	if settings.Priority < 1 || settings.Priority > 10_000_000 {
+		return errors.New("账号默认优先级必须是 1 到 10000000 之间的整数")
+	}
+	return nil
 }
 
 func (s *Store) LogCleanupSettings(ctx context.Context) (LogCleanupSettings, error) {

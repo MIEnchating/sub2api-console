@@ -571,18 +571,20 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 		if duration != nil {
 			payload["duration_ms"] = *duration
 			payload["duration_unit"] = "ms"
+			payload["latency_metric"] = "request_duration"
+			payload["latency_source"] = "operations.duration_ms"
+			payload["latency_unit"] = "ms"
 		}
-		latency := firstToken
 		if firstToken != nil {
+			payload["first_token_ms"] = *firstToken
+			payload["first_token_unit"] = "ms"
+			payload["first_token_source"] = "operations.first_token_ms"
+		}
+		latency := duration
+		if latency == nil && firstToken != nil {
+			latency = firstToken
 			payload["latency_metric"] = "first_token"
 			payload["latency_source"] = "operations.first_token_ms"
-		} else if duration != nil {
-			// Guardian 当前把运维记录的整体耗时作为真实流量的 TTFB 口径。
-			latency = duration
-			payload["latency_metric"] = "ttfb"
-			payload["latency_source"] = "operations.duration_ms"
-		}
-		if latency != nil {
 			payload["latency_unit"] = "ms"
 		}
 		result = append(result, business.TrafficSample{

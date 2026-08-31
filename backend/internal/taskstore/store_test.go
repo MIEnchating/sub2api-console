@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +43,92 @@ func TestTaskHistoryRecoveryAndStrictJSON(t *testing.T) {
 	invalid := Task{ID: "invalid", Skill: "console", Operation: "inspect", Status: "failed", Progress: 100, Message: "failed", Result: map[string]any{"sentinel": math.Inf(1)}, CreatedAt: now, UpdatedAt: now}
 	if err := store.Save(ctx, invalid); err == nil {
 		t.Fatal("non-finite result must be rejected")
+	}
+}
+
+func TestTaskLogSummaryAndSearchAvoidLoadingUnmatchedResults(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, task := range []Task{
+		{ID: "task-1", Skill: "console", Operation: "inspect", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"run_key": "run-1", "account_name": "账号一", "request_id": "request-target", "large": strings.Repeat("x", 4096)}, CreatedAt: now, UpdatedAt: now},
+		{ID: "task-2", Skill: "console", Operation: "inspect", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"request_id": "request-other", "large": strings.Repeat("y", 4096)}, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limit := 20
+	summaries, err := store.ListLogSummaries(ctx, &limit)
+	if err != nil || len(summaries) != 2 {
+		t.Fatalf("summaries=%#v err=%v", summaries, err)
+	}
+	if summaries[0].Result["large"] != nil || summaries[0].Result["request_id"] != nil {
+		t.Fatalf("log summary loaded full task result: %#v", summaries[0].Result)
+	}
+	if summaries[0].Result["run_key"] != "run-1" || summaries[0].Result["object_label"] != "账号一" {
+		t.Fatalf("log linking metadata missing: %#v", summaries[0].Result)
+	}
+	matched, err := store.SearchLogs(ctx, "REQUEST-TARGET", &limit)
+	if err != nil || len(matched) != 1 || matched[0].ID != "task-1" || matched[0].Result["request_id"] != "request-target" {
+		t.Fatalf("matched=%#v err=%v", matched, err)
+	}
+}
+
+func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	for _, task := range []Task{
+		{ID: "model-check", Skill: "sub2api-model-check", Operation: "check", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"account_ids": []string{"41"}}, CreatedAt: "2026-08-31T01:00:00Z", UpdatedAt: "2026-08-31T02:00:00Z"},
+		{ID: "inspection", Skill: "sub2api-inspection", Operation: "inspect", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"account_id": "42"}, CreatedAt: "2026-08-31T01:00:00Z", UpdatedAt: "2026-08-31T03:00:00Z"},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := store.ListBySkill(ctx, "sub2api-model-check")
+	if err != nil || len(rows) != 1 || rows[0].ID != "model-check" {
+		t.Fatalf("unexpected skill tasks: %#v err=%v", rows, err)
+	}
+	if _, err := store.ListBySkill(ctx, " "); err == nil {
+		t.Fatal("empty skill must be rejected")
+	}
+}
+
+func TestOpenCreatesAndRepairsTaskIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search"} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("task index %s missing: count=%d err=%v", name, count, err)
+		}
+	}
+	if _, err := store.db.Exec(`DROP INDEX ix_tasks_log_listing`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	var repaired int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_tasks_log_listing'`).Scan(&repaired); err != nil || repaired != 1 {
+		t.Fatalf("reopening an existing task database did not repair indexes: count=%d err=%v", repaired, err)
 	}
 }
 

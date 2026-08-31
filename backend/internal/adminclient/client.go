@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -59,6 +60,11 @@ type EvidencePage struct {
 type AccountUpstreamMultiplierResult struct {
 	Multiplier string
 	Err        error
+}
+
+type UsageTotals struct {
+	AccountCost float64
+	ActualCost  float64
 }
 
 func New(config Config, transport http.RoundTripper) (*Client, error) {
@@ -123,6 +129,109 @@ func (c *Client) Account(ctx context.Context, accountID string) (map[string]any,
 		return nil, errors.New("账号 ID 必须是稳定数字 ID")
 	}
 	return c.resourceDetail(ctx, "/admin/accounts/"+accountID, accountID, "账号")
+}
+
+func (c *Client) AccountUsageTotals(ctx context.Context, accountID, date, timezone string) (UsageTotals, error) {
+	if !stableID(accountID) {
+		return UsageTotals{}, errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	payload, err := c.request(ctx, http.MethodGet, "/admin/usage/stats", nil, map[string]string{
+		"account_id": accountID, "start_date": date, "end_date": date,
+		"timezone": timezone, "nocache": "true",
+	})
+	if err != nil {
+		return UsageTotals{}, err
+	}
+	data, err := responseObject(payload, "账号计费统计")
+	if err != nil {
+		return UsageTotals{}, err
+	}
+	accountCost, err := finiteJSONNumber(data["total_account_cost"])
+	if err != nil {
+		return UsageTotals{}, errors.New("账号计费统计未返回有效 total_account_cost")
+	}
+	actualCost, err := finiteJSONNumber(data["total_actual_cost"])
+	if err != nil {
+		return UsageTotals{}, errors.New("账号计费统计未返回有效 total_actual_cost")
+	}
+	return UsageTotals{AccountCost: accountCost, ActualCost: actualCost}, nil
+}
+
+func finiteJSONNumber(value any) (float64, error) {
+	var parsed float64
+	var err error
+	switch raw := value.(type) {
+	case json.Number:
+		parsed, err = raw.Float64()
+	case float64:
+		parsed = raw
+	default:
+		return 0, errors.New("数值字段类型无效")
+	}
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, errors.New("数值字段不是有限数值")
+	}
+	return parsed, nil
+}
+
+// UpdateAccount returns the complete account object supplied by Sub2API's
+// update response so callers can confirm changed fields without another GET.
+func (c *Client) UpdateAccount(ctx context.Context, accountID string, body map[string]any) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	payload, err := c.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body)
+	if err != nil {
+		return nil, err
+	}
+	return responseObject(payload, "账号更新")
+}
+
+func (c *Client) RecoverAccountState(ctx context.Context, accountID string) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts/"+accountID+"/recover-state", nil)
+	if err != nil {
+		return nil, err
+	}
+	return responseObject(payload, "账号状态恢复")
+}
+
+func (c *Client) SetAccountSchedulable(ctx context.Context, accountID string, schedulable bool) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts/"+accountID+"/schedulable", map[string]any{
+		"schedulable": schedulable,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return responseObject(payload, "账号调度状态更新")
+}
+
+func (c *Client) UpdateAccountGroups(ctx context.Context, accountID string, groupIDs []int64) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号 ID 必须是稳定数字 ID")
+	}
+	expected, ok := stableIDValues(groupIDs)
+	if !ok {
+		return nil, errors.New("账号分组必须使用稳定数字 ID")
+	}
+	body := map[string]any{"group_ids": groupIDs}
+	if _, err := c.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
+		return nil, err
+	}
+	account, err := c.Account(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("账号分组写后确认失败：%w", err)
+	}
+	actual, ok := stableIDValues(account["group_ids"])
+	if !ok || strings.Join(expected, ",") != strings.Join(actual, ",") {
+		return nil, errors.New("账号分组写后确认不一致")
+	}
+	return account, nil
 }
 
 // AccountUpstreamMultiplier asks Sub2API to authenticate with the selected
@@ -610,7 +719,11 @@ func stableIDValues(raw any) ([]string, bool) {
 			return nil, false
 		}
 	}
-	sort.Strings(values)
+	sort.Slice(values, func(left, right int) bool {
+		leftID, _ := strconv.ParseInt(values[left], 10, 64)
+		rightID, _ := strconv.ParseInt(values[right], 10, 64)
+		return leftID < rightID
+	})
 	return values, true
 }
 

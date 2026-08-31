@@ -12,6 +12,7 @@ const account: AccountStatus = {
   id: "16",
   name: "用于验证超长账号名称不会挤压操作区域的测试账号",
   groups: ["default"],
+  upstream_id: "up_test",
   upstream_host: "api.example.test",
   upstream_type: "oauth",
   platform: "openai",
@@ -42,16 +43,18 @@ const account: AccountStatus = {
   short_score: 100,
   long_score: 100,
   sample_count: 1,
+  model_check_status: "consistent",
+  model_check_checked_at: "2026-08-31T02:15:00Z",
   recent_results: [],
   ttfb_p50_ms: 250,
   ttfb_p95_ms: 400,
   weight: 100,
 };
 
-function selectionMarkup(): string {
+function selectionMarkup(accounts: AccountStatus[] = [account]): string {
   return renderToStaticMarkup(
     <ModelCheckSelection
-      accounts={[account]}
+      accounts={accounts}
       accountsLoading={false}
       accountsError={null}
       accountQuery=""
@@ -81,13 +84,14 @@ function selectionMarkup(): string {
 }
 
 describe("模型检测响应式布局", () => {
-  it("页面内容区域允许滚动以完整展示检测结果", () => {
+  it("页面内容区域固定并由账号和模型面板占满剩余高度", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(["accounts"], [account]);
     queryClient.setQueryData(["model-check-capabilities"], {
       claude_standards: [],
       sol_models: ["gpt-5.6-sol"],
     });
+    queryClient.setQueryData(["model-check-account-statuses"], []);
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -95,19 +99,65 @@ describe("模型检测响应式布局", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("min-h-0 flex-1 overflow-auto");
-    expect(markup).not.toContain("min-h-0 flex-1 overflow-hidden px-3");
+    expect(markup).toContain("min-h-0 flex-1 overflow-hidden px-3");
+    expect(markup).toContain("flex h-full min-h-0 flex-col");
+    expect(markup).toContain("grid min-h-0 flex-1 items-stretch");
   });
 
   it("宽屏使用账号与矩阵双栏且窄屏保持纵向排列", () => {
     const markup = selectionMarkup();
 
-    expect(markup).toContain("xl:grid-cols-[minmax(0,1fr)_21rem]");
-    expect(markup.match(/h-\[30rem\] gap-0 py-0 xl:h-\[36rem\]/g)).toHaveLength(2);
+    expect(markup).toContain("xl:grid-cols-[minmax(0,1fr)_22rem]");
+    expect(markup.match(/h-\[32rem\] gap-0 py-0 xl:h-full/g)).toHaveLength(2);
     expect(markup).toContain('data-testid="model-check-account-mobile-list"');
     expect(markup).toContain('data-testid="model-check-account-desktop-table"');
     expect(markup).toContain("divide-y md:hidden");
     expect(markup).toContain("hidden min-h-0 md:block");
+    expect(markup).not.toContain("健康");
+    expect(markup).toContain("检测状态");
+    expect(markup).toContain("上次检测");
+    expect(markup).toContain("符合特征");
+    expect(markup).toContain("08/31");
+  });
+
+  it("账号列表默认每页展示十条并显示筛选后的总数", () => {
+    const accounts = Array.from({ length: 12 }, (_, index) => ({
+      ...account,
+      id: `${index + 1}`,
+      name: `分页账号 ${index + 1}`,
+    }));
+    const markup = selectionMarkup(accounts);
+
+    expect(markup).toContain("分页账号 10");
+    expect(markup).not.toContain("分页账号 11");
+    expect(markup).toContain(">12</span>");
+    expect(markup).toContain('aria-label="转到第 2 页"');
+  });
+
+  it("检测状态只显示账号最近一次特征判定的三态结果", () => {
+    const markup = selectionMarkup([
+      { ...account, id: "16", model_check_status: "consistent" },
+      { ...account, id: "17", model_check_status: "inconsistent" },
+      { ...account, id: "18", model_check_status: "inconclusive" },
+    ]);
+
+    expect(markup).toContain("符合特征");
+    expect(markup).toContain("不符合特征");
+    expect(markup).toContain("无法判定");
+    expect(markup).not.toContain("检测完成");
+    expect(markup).not.toContain("检测失败");
+  });
+
+  it("人工优先位账号不可加入模型检测矩阵", () => {
+    const markup = selectionMarkup([
+      { ...account, manual_priority: 3, manual_sync_balance_multiplier: true },
+    ]);
+
+    expect(markup).toContain("人工控制");
+    expect(markup).toContain(
+      'aria-label="选择账号 用于验证超长账号名称不会挤压操作区域的测试账号"',
+    );
+    expect(markup).toContain("disabled");
   });
 
   it("轮次选择公开当前状态且汇总账号模型和组合数量", () => {
@@ -148,8 +198,8 @@ describe("模型检测响应式布局", () => {
 
     expect(markup).toContain('data-testid="model-check-result-desktop-table"');
     expect(markup).toContain('data-testid="model-check-result-mobile-list"');
-    expect(markup).toContain("hidden overflow-auto md:block");
-    expect(markup).toContain("divide-y md:hidden");
+    expect(markup).toContain("hidden h-full overflow-auto md:block");
+    expect(markup).toContain("h-full divide-y overflow-auto md:hidden");
     expect(markup).toContain("上游连接失败，错误详情在移动端也必须直接显示");
   });
 });

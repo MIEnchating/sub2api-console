@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +14,25 @@ import (
 
 const businessSchema = `
 CREATE TABLE IF NOT EXISTS app_state (key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS upstream_identities (
+ upstream_id TEXT PRIMARY KEY,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS upstream_identity_hosts (
+ host TEXT PRIMARY KEY,upstream_id TEXT NOT NULL,is_primary INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_upstream_identity_hosts_identity ON upstream_identity_hosts(upstream_id,is_primary DESC,host);
+CREATE TABLE IF NOT EXISTS upstream_catalog_entities (
+ upstream_id TEXT NOT NULL,entity_kind TEXT NOT NULL CHECK(entity_kind IN ('group','key')),entity_id TEXT NOT NULL,
+ parent_entity_id TEXT,name TEXT NOT NULL,observed_status TEXT,lifecycle_state TEXT NOT NULL
+ CHECK(lifecycle_state IN ('active','suspected','missing','retired')),missing_observations INTEGER NOT NULL DEFAULT 0,
+ last_seen_at TEXT,missing_since TEXT,confirmed_missing_at TEXT,updated_at TEXT NOT NULL,
+ PRIMARY KEY(upstream_id,entity_kind,entity_id),
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_upstream_catalog_entities_lifecycle ON upstream_catalog_entities(
+ upstream_id,entity_kind,lifecycle_state,entity_id
+);
 CREATE TABLE IF NOT EXISTS upstreams (
  host TEXT PRIMARY KEY,base_url TEXT NOT NULL,upstream_type TEXT NOT NULL,auth_mode TEXT,enabled INTEGER NOT NULL DEFAULT 1,
  auth_status TEXT NOT NULL,balance REAL,raw_balance TEXT,mapped_balance TEXT,checked_at TEXT,
@@ -37,6 +57,7 @@ CREATE TABLE IF NOT EXISTS account_groups (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,group_id TEXT,group_rate TEXT,PRIMARY KEY(account_id,group_name),
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS ix_account_groups_group_account ON account_groups(group_name,account_id);
 CREATE TABLE IF NOT EXISTS health_samples (
  id INTEGER PRIMARY KEY AUTOINCREMENT,account_id TEXT NOT NULL,group_name TEXT NOT NULL,result TEXT,
  latency_p50 TEXT,latency_p95 TEXT,latency_p99 TEXT,sample_count INTEGER,attempts INTEGER,failure_reason TEXT,
@@ -45,6 +66,14 @@ CREATE TABLE IF NOT EXISTS health_samples (
 );
 CREATE INDEX IF NOT EXISTS ix_health_samples_latest ON health_samples(account_id,group_name,observed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS ix_health_samples_source_latest ON health_samples(source,account_id,group_name,observed_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS ix_health_samples_normalized_source_latest ON health_samples(
+ account_id,LOWER(REPLACE(source,'_','-')),observed_at DESC,id DESC
+);
+CREATE INDEX IF NOT EXISTS ix_health_samples_probe_recent ON health_samples(
+ LOWER(REPLACE(source,'_','-')),account_id,group_name,observed_at DESC,id DESC,result,failure_reason
+);
+CREATE INDEX IF NOT EXISTS ix_health_samples_account_recent ON health_samples(account_id,observed_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS ix_health_samples_recent ON health_samples(COALESCE(observed_at,'') DESC,id DESC);
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
  rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
@@ -61,12 +90,27 @@ CREATE TABLE IF NOT EXISTS bindings (
  description TEXT,status TEXT,metadata_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL,
  UNIQUE(local_account_id,upstream_host,upstream_key_id)
 );
+CREATE INDEX IF NOT EXISTS ix_bindings_upstream_lookup ON bindings(
+ upstream_host,upstream_group_id,upstream_key_id,local_account_id
+);
+CREATE TABLE IF NOT EXISTS binding_identities (
+ binding_id INTEGER PRIMARY KEY,upstream_id TEXT NOT NULL,upstream_key_id TEXT NOT NULL,upstream_group_id TEXT,updated_at TEXT NOT NULL,
+ FOREIGN KEY(binding_id) REFERENCES bindings(id) ON DELETE CASCADE,
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS ix_binding_identities_upstream_key ON binding_identities(
+ upstream_id,upstream_key_id,upstream_group_id,binding_id
+);
 CREATE TABLE IF NOT EXISTS local_groups (
  name TEXT PRIMARY KEY,remote_id TEXT,strategy TEXT NOT NULL DEFAULT 'balanced',strategy_source TEXT NOT NULL DEFAULT 'global_default',
  platform TEXT,rate_multiplier TEXT,profit_control_enabled INTEGER,profit_min_margin TEXT,profit_safety_buffer TEXT,
  account_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS recharge_rates (host TEXT PRIMARY KEY,recharge_rate TEXT NOT NULL,note TEXT,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS billing_quota_unit_observations (
+ host TEXT NOT NULL,observed_at TEXT NOT NULL,quota_per_unit TEXT NOT NULL,PRIMARY KEY(host,observed_at)
+);
+CREATE INDEX IF NOT EXISTS ix_billing_quota_unit_host_time ON billing_quota_unit_observations(host,observed_at DESC);
 CREATE TABLE IF NOT EXISTS policy_nodes (
  id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,
  node_type TEXT NOT NULL CHECK(node_type IN ('object','array','string','integer','real','boolean','null')),
@@ -78,7 +122,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_policy_nodes_array_child ON policy_nodes(po
 CREATE TABLE IF NOT EXISTS paused_accounts (account_id TEXT PRIMARY KEY,reason TEXT,enabled INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_priority_accounts (
  account_id TEXT PRIMARY KEY,priority INTEGER NOT NULL,previous_priority INTEGER,previous_load_factor TEXT,
- previous_concurrency INTEGER,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+ previous_concurrency INTEGER,sync_balance_multiplier INTEGER NOT NULL DEFAULT 0 CHECK(sync_balance_multiplier IN (0,1)),
+ created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS routing_baselines (
@@ -88,15 +133,24 @@ CREATE TABLE IF NOT EXISTS routing_baselines (
 );
 CREATE TABLE IF NOT EXISTS cleanup_states (account_id TEXT PRIMARY KEY,eligible_since TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime_events (source_id INTEGER PRIMARY KEY,event_type TEXT NOT NULL,created_at TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS ix_runtime_events_recent ON runtime_events(created_at DESC,source_id);
+CREATE INDEX IF NOT EXISTS ix_runtime_events_log_order ON runtime_events(
+ created_at DESC,
+ CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+ CASE WHEN source_id < 0 THEN source_id END ASC,
+ CASE WHEN source_id >= 0 THEN source_id END DESC
+);
 CREATE TABLE IF NOT EXISTS alert_incidents (
  incident_key TEXT PRIMARY KEY,event_type TEXT NOT NULL,object_kind TEXT NOT NULL,object_id TEXT NOT NULL,cause_code TEXT NOT NULL,
  status TEXT NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,delivery_status TEXT,last_error TEXT
 );
+CREATE INDEX IF NOT EXISTS ix_alert_incidents_status ON alert_incidents(status,incident_key);
 CREATE TABLE IF NOT EXISTS alert_deliveries (
  incident_key TEXT NOT NULL,channel_key TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,
  last_error TEXT,delivered_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(incident_key,channel_key),
  FOREIGN KEY(incident_key) REFERENCES alert_incidents(incident_key) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS ix_alert_deliveries_channel_incident ON alert_deliveries(channel_key,incident_key);
 CREATE TABLE IF NOT EXISTS scheduler_leases (
  lease_name TEXT PRIMARY KEY,owner_id TEXT NOT NULL,owner_pid INTEGER NOT NULL,owner_host TEXT NOT NULL,
  checked_at TEXT NOT NULL,acquired_at TEXT NOT NULL,renewed_at TEXT NOT NULL,expires_at TEXT NOT NULL
@@ -107,29 +161,157 @@ CREATE TABLE IF NOT EXISTS operation_audit (
  object_type TEXT,object_id TEXT,object_name TEXT,group_names_json TEXT NOT NULL DEFAULT '[]',field_name TEXT,
  before_json TEXT,after_json TEXT,writeback INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS ix_operation_audit_routing_lookup ON operation_audit(object_id,created_at DESC)
+ WHERE operation_type='routing.writeback' AND state='succeeded' AND remote_confirmed=1 AND readback_confirmed=1;
+CREATE INDEX IF NOT EXISTS ix_operation_audit_type_object_recent ON operation_audit(
+ operation_type,object_id,created_at DESC,source_id
+);
+CREATE INDEX IF NOT EXISTS ix_operation_audit_apply_error_recent ON operation_audit(
+ object_id,created_at DESC,
+ CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+ CASE WHEN source_id < 0 THEN source_id END ASC,
+ CASE WHEN source_id >= 0 THEN source_id END DESC,
+ state,error
+) WHERE operation_type IN ('routing.writeback','cleanup.delete') AND object_id IS NOT NULL
+ AND (state='failed' OR readback_confirmed=1);
+CREATE INDEX IF NOT EXISTS ix_operation_audit_recent ON operation_audit(created_at DESC,source_id);
+CREATE INDEX IF NOT EXISTS ix_operation_audit_log_recent ON operation_audit(created_at DESC,source_id)
+ WHERE phase<>'calculation' AND operation_type<>'upstream.rate_sync' AND (
+  writeback=1 OR (operation_type IN ('account.scheduling','routing.writeback')
+   AND state='succeeded' AND remote_confirmed=0 AND readback_confirmed=1
+   AND before_json IS NOT NULL AND after_json IS NOT NULL)
+ );
 CREATE TABLE IF NOT EXISTS run_records (
  run_key TEXT PRIMARY KEY,task_name TEXT NOT NULL,status TEXT,stage TEXT,started_at TEXT,ended_at TEXT,
  duration_seconds TEXT,summary TEXT,payload_json TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS ix_run_records_display_time ON run_records(
+ COALESCE(ended_at,started_at,updated_at) DESC,run_key
+);
+CREATE INDEX IF NOT EXISTS ix_run_records_updated_at ON run_records(updated_at);
 CREATE TABLE IF NOT EXISTS usage_records (
  id INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL,account_id TEXT,account_name TEXT,group_name TEXT,
  is_error INTEGER,error_reason TEXT,first_token_ms TEXT,observed_at TEXT,source TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',
  UNIQUE(request_id,account_id,group_name,observed_at)
 );
+CREATE INDEX IF NOT EXISTS ix_usage_records_recent ON usage_records(COALESCE(observed_at,'') DESC,id DESC);
+CREATE INDEX IF NOT EXISTS ix_usage_records_request_recent ON usage_records(
+ request_id,COALESCE(observed_at,'') DESC,id DESC
+);
+CREATE INDEX IF NOT EXISTS ix_usage_records_account_recent ON usage_records(
+ account_id,COALESCE(observed_at,'') DESC,id DESC
+);
+CREATE INDEX IF NOT EXISTS ix_usage_records_source_account_recent ON usage_records(
+ LOWER(REPLACE(source,'_','-')),account_id,COALESCE(observed_at,'') DESC,id DESC
+);
 CREATE TABLE IF NOT EXISTS operational_snapshots (
  namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,observed_at TEXT,updated_at TEXT NOT NULL,
  origin TEXT NOT NULL DEFAULT 'console',PRIMARY KEY(namespace,state_key)
 );
+CREATE INDEX IF NOT EXISTS ix_operational_snapshots_state_recent ON operational_snapshots(state_key,updated_at DESC);
 CREATE TABLE IF NOT EXISTS onboarding_pending (
  operation_id TEXT PRIMARY KEY,upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,upstream_key_id TEXT NOT NULL,
  upstream_key_name TEXT,upstream_group_id TEXT NOT NULL,upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,
  local_group_name TEXT NOT NULL,multiplier TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS ix_onboarding_pending_selection ON onboarding_pending(
+ upstream_host,upstream_group_id,local_group_id,multiplier
+);
 `
 
 func (s *Store) ensureSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, businessSchema)
-	return err
+	if _, err := s.db.ExecContext(ctx, businessSchema); err != nil {
+		return err
+	}
+	if err := s.ensureManualPriorityBalanceSyncColumn(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateRemovedRuntimeModes(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return err
+	}
+	return s.ensureStableUpstreamRelations(ctx)
+}
+
+func (s *Store) ensureManualPriorityBalanceSyncColumn(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(manual_priority_accounts)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var id, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "sync_balance_multiplier" {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !found {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE manual_priority_accounts
+			ADD COLUMN sync_balance_multiplier INTEGER NOT NULL DEFAULT 0
+			CHECK(sync_balance_multiplier IN (0,1))`); err != nil {
+			return fmt.Errorf("补充人工优先位余额与倍率同步字段失败: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateRemovedRuntimeModes(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return tx.Commit()
+	}
+	if err != nil {
+		return err
+	}
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &value); err != nil || value == nil {
+		return tx.Commit()
+	}
+	var mode string
+	if err := json.Unmarshal(value["mode"], &mode); err != nil || mode != "调度模式" {
+		return tx.Commit()
+	}
+	value["mode"] = json.RawMessage(`"` + runtimepolicy.Monitoring + `"`)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE key='config'`, string(encoded), now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at)
+		VALUES('routing-decision-epoch','{}',?) ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at`, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) bootstrapFresh(ctx context.Context) error {
@@ -179,8 +361,8 @@ func readyOnConnection(ctx context.Context, queryer connectionQueryer) (bool, er
 
 func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]string, error) {
 	tables := []string{
-		"upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
-		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates",
+		"upstream_identities", "upstream_identity_hosts", "upstream_catalog_entities", "upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
+		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations",
 		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "runtime_events",
 		"alert_incidents", "alert_deliveries", "operation_audit", "run_records", "usage_records",
 		"operational_snapshots", "onboarding_pending",
@@ -214,9 +396,10 @@ func initialControlPolicy() map[string]any {
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
 		"manual_priority":     map[string]any{"reserved_max": int64(10)},
-		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180)},
+		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": false, "retry_source": "fixed", "retry_count": int64(0), "retry_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
 			"event_scores": map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
@@ -232,7 +415,7 @@ func initialControlPolicy() map[string]any {
 			"insufficient", "balance", "quota exceeded", "usage limit", "credit", "expired",
 		}, "gateway_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}},
 		"scope": map[string]any{
-			"managed_group_mode": "all", "managed_group_ids": []any{}, "excluded_group_ids": []any{},
+			"manage_all_accounts": true, "managed_group_mode": "all", "managed_group_ids": []any{}, "excluded_group_ids": []any{},
 			"account_types": []any{}, "platforms": []any{}, "paused_account_ids": []any{},
 			"excluded_account_ids": []any{}, "manual_fused_account_ids": []any{},
 		},

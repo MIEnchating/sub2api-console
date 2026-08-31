@@ -24,6 +24,9 @@ import { operationErrorMessage } from "@/lib/operation-feedback";
 
 const noModelSelected = "__not_selected__";
 
+export const accountProbeDialogContentClass =
+  "grid min-w-0 max-h-[calc(100svh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden";
+
 export type ProbeDialogTarget = {
   kind: "onboarding";
   host: string;
@@ -81,16 +84,16 @@ export function AccountProbeDialog(props: {
   const runDisabled = busy || selectedModel === noModelSelected;
 
   return (
-    <Dialog open={props.open} onOpenChange={(open) => !busy && props.onOpenChange(open)}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>探活测试：{props.target.name}</DialogTitle>
-          <DialogDescription>
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent width="medium" className={accountProbeDialogContentClass}>
+        <DialogHeader className="min-w-0 pr-8">
+          <DialogTitle className="min-w-0 break-words">探活测试：{props.target.name}</DialogTitle>
+          <DialogDescription className="min-w-0 break-words">
             添加账号前读取该上游支持的模型并执行单次测试，结果会保留在此弹窗中。
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3 py-1">
-          <div className="grid gap-1.5">
+        <div className="grid min-w-0 gap-3 overflow-x-hidden overflow-y-auto py-1">
+          <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">测试模型</span>
             <Select
               value={selectedModel}
@@ -105,7 +108,7 @@ export function AccountProbeDialog(props: {
                 runProbe.reset();
               }}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full min-w-0">
                 <SelectValue placeholder="先获取上游模型" />
               </SelectTrigger>
               <SelectContent>
@@ -121,6 +124,7 @@ export function AccountProbeDialog(props: {
           <Button
             type="button"
             variant="outline"
+            className="w-full min-w-0"
             disabled={busy}
             onClick={() => loadModels.mutate()}
           >
@@ -131,17 +135,20 @@ export function AccountProbeDialog(props: {
             <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
           ) : null}
           {loadModels.isError ? (
-            <p className="text-destructive text-sm" role="alert">
+            <p
+              className="text-destructive min-w-0 break-words text-sm [overflow-wrap:anywhere]"
+              role="alert"
+            >
               {operationErrorMessage(loadModels.error, "上游模型获取失败")}
             </p>
           ) : null}
           {runProbe.isPending ? (
             <div
-              className="bg-muted/40 flex min-h-24 items-center gap-3 rounded-lg border px-4 py-3"
+              className="bg-muted/40 flex min-h-24 min-w-0 items-center gap-3 rounded-lg border px-4 py-3"
               aria-live="polite"
             >
               <LoaderCircle className="text-primary size-5 animate-spin" />
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-medium">正在测试上游响应</p>
                 <p className="text-muted-foreground text-xs">弹窗会在测试完成后显示详细结果。</p>
               </div>
@@ -149,31 +156,49 @@ export function AccountProbeDialog(props: {
           ) : null}
           {runProbe.isError ? (
             <div
-              className="border-destructive/40 bg-destructive/5 rounded-lg border px-4 py-3"
+              className="border-destructive/40 bg-destructive/5 min-w-0 overflow-hidden rounded-lg border px-4 py-3"
               role="alert"
             >
               <div className="text-destructive flex items-center gap-2 text-sm font-medium">
                 <XCircle className="size-4" />
                 探活失败
               </div>
-              <p className="text-muted-foreground mt-1.5 text-sm">
+              <p className="text-muted-foreground mt-1.5 min-w-0 break-words text-sm [overflow-wrap:anywhere]">
                 {operationErrorMessage(runProbe.error, "探活请求失败")}
               </p>
             </div>
           ) : null}
           {result ? <ProbeResultPanel result={result} /> : null}
         </div>
-        <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>
-            关闭
-          </Button>
-          <Button disabled={runDisabled} onClick={() => runProbe.mutate()}>
-            {runProbe.isPending ? <LoaderCircle className="animate-spin" /> : <Activity />}
-            {runProbe.isPending ? "测试中" : result ? "再次探活" : "开始探活"}
-          </Button>
-        </DialogFooter>
+        <ProbeDialogActions
+          runDisabled={runDisabled}
+          probePending={runProbe.isPending}
+          hasResult={result !== null}
+          onClose={() => props.onOpenChange(false)}
+          onRun={() => runProbe.mutate()}
+        />
       </DialogContent>
     </Dialog>
+  );
+}
+
+export function ProbeDialogActions(props: {
+  runDisabled: boolean;
+  probePending: boolean;
+  hasResult: boolean;
+  onClose: () => void;
+  onRun: () => void;
+}) {
+  return (
+    <DialogFooter className="min-w-0">
+      <Button variant="outline" onClick={props.onClose}>
+        关闭
+      </Button>
+      <Button disabled={props.runDisabled} onClick={props.onRun}>
+        {props.probePending ? <LoaderCircle className="animate-spin" /> : <Activity />}
+        {props.probePending ? "测试中" : props.hasResult ? "再次探活" : "开始探活"}
+      </Button>
+    </DialogFooter>
   );
 }
 
@@ -183,8 +208,8 @@ export function ProbeResultPanel(props: { result: ProbeResult }) {
     <div
       className={
         passed
-          ? "border-emerald-500/40 bg-emerald-500/5 rounded-lg border px-4 py-3"
-          : "border-destructive/40 bg-destructive/5 rounded-lg border px-4 py-3"
+          ? "border-emerald-500/40 bg-emerald-500/5 max-w-full min-w-0 overflow-hidden rounded-lg border px-4 py-3"
+          : "border-destructive/40 bg-destructive/5 max-w-full min-w-0 overflow-hidden rounded-lg border px-4 py-3"
       }
       aria-live="polite"
     >
@@ -195,11 +220,17 @@ export function ProbeResultPanel(props: { result: ProbeResult }) {
             : "text-destructive flex items-center gap-2 text-sm font-semibold"
         }
       >
-        {passed ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+        {passed ? (
+          <CheckCircle2 className="size-4 shrink-0" />
+        ) : (
+          <XCircle className="size-4 shrink-0" />
+        )}
         {passed ? "探活通过" : "探活失败"}
       </div>
-      <p className="mt-1.5 text-sm">{props.result.message}</p>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+      <p className="mt-1.5 min-w-0 break-words text-sm [overflow-wrap:anywhere]">
+        {props.result.message}
+      </p>
+      <dl className="mt-3 grid min-w-0 grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
         <ResultValue label="请求模型" value={props.result.request_model || "未返回"} />
         <ResultValue label="实际模型" value={props.result.actual_model || "未返回"} />
         <ResultValue

@@ -10,6 +10,7 @@ const detail: AccountDetail = {
   id: "41",
   name: "channel-41",
   groups: ["codex"],
+  upstream_id: "up_test",
   upstream_host: "api.example.test",
   upstream_type: "apikey",
   schedulable: true,

@@ -132,12 +132,49 @@ type AuditEvent struct {
 }
 
 func (s *Store) Events(ctx context.Context, limit *int) ([]RunEvent, error) {
-	query := `SELECT source_id,event_type,created_at,status,summary,payload_json FROM runtime_events
+	query := `SELECT source_id,event_type,created_at,status,summary,payload_json
+		FROM runtime_events INDEXED BY ix_runtime_events_log_order
 		ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
 	arguments, err := appendLimit(&query, limit)
 	if err != nil {
 		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []RunEvent{}
+	for rows.Next() {
+		var item RunEvent
+		var payload string
+		if err := rows.Scan(&item.ID, &item.EventType, &item.CreatedAt, &item.Status, &item.Summary, &payload); err != nil {
+			return nil, err
+		}
+		item.Payload = decodedObjectOrMarker(payload, "runtime_events.payload_json")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SearchEvents(ctx context.Context, search string, limit *int) ([]RunEvent, error) {
+	recent := `SELECT source_id,event_type,created_at,status,summary,payload_json
+		FROM runtime_events INDEXED BY ix_runtime_events_log_order
+		ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
+	arguments, err := appendLimit(&recent, limit)
+	if err != nil {
+		return nil, err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(search))
+	query := `WITH recent AS (` + recent + `) SELECT source_id,event_type,created_at,status,summary,payload_json
+		FROM recent WHERE instr(lower(CAST(source_id AS TEXT)),?)>0 OR instr(lower(event_type),?)>0 OR
+		instr(lower(created_at),?)>0 OR instr(lower(status),?)>0 OR instr(lower(summary),?)>0 OR
+		instr(lower(payload_json),?)>0 ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
+	for range 6 {
+		arguments = append(arguments, normalized)
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
@@ -231,6 +268,42 @@ func (s *Store) RunRecords(ctx context.Context, limit *int) ([]RunRecord, error)
 	arguments, err := appendLimit(&query, limit)
 	if err != nil {
 		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []RunRecord{}
+	for rows.Next() {
+		var item RunRecord
+		var status, stage, started, ended, duration, summary sql.NullString
+		var payload string
+		if err := rows.Scan(&item.RunKey, &item.TaskName, &status, &stage, &started, &ended, &duration, &summary, &payload, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Status, item.Stage, item.StartedAt, item.EndedAt = nullString(status), nullString(stage), nullString(started), nullString(ended)
+		item.DurationSeconds, item.Summary = nullString(duration), nullString(summary)
+		item.Payload = decodedObjectOrMarker(payload, "run_records.payload_json")
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SearchRunRecords(ctx context.Context, search string, limit *int) ([]RunRecord, error) {
+	recent := `SELECT run_key,task_name,status,stage,started_at,ended_at,duration_seconds,summary,payload_json,updated_at
+		FROM run_records ORDER BY COALESCE(ended_at,started_at,updated_at) DESC`
+	arguments, err := appendLimit(&recent, limit)
+	if err != nil {
+		return nil, err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(search))
+	query := `WITH recent AS (` + recent + `) SELECT run_key,task_name,status,stage,started_at,ended_at,duration_seconds,summary,payload_json,updated_at
+		FROM recent WHERE instr(lower(run_key),?)>0 OR instr(lower(task_name),?)>0 OR instr(lower(COALESCE(status,'')),?)>0 OR
+		instr(lower(COALESCE(stage,'')),?)>0 OR instr(lower(COALESCE(summary,'')),?)>0 OR instr(lower(payload_json),?)>0 OR
+		instr(lower(updated_at),?)>0 ORDER BY COALESCE(ended_at,started_at,updated_at) DESC`
+	for range 7 {
+		arguments = append(arguments, normalized)
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
@@ -447,7 +520,11 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 	query := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
 		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name),oa.group_names_json,
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
-		FROM operation_audit oa LEFT JOIN accounts a ON a.id=oa.object_id`
+		FROM operation_audit oa`
+	if writebackOnly {
+		query += ` INDEXED BY ix_operation_audit_log_recent`
+	}
+	query += ` LEFT JOIN accounts a ON a.id=oa.object_id`
 	if writebackOnly {
 		query += ` WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
 			oa.writeback=1 OR (oa.operation_type IN ('account.scheduling','routing.writeback')
@@ -460,6 +537,64 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 	arguments, err := appendLimit(&query, limit)
 	if err != nil {
 		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []AuditEvent{}
+	for rows.Next() {
+		var item AuditEvent
+		var requestID, actor, source, errorText, objectType, objectID, objectName, fieldName sql.NullString
+		var remote, readback, writeback sql.NullInt64
+		var groupsRaw string
+		var beforeRaw, afterRaw sql.NullString
+		if err := rows.Scan(&item.ID, &item.OperationID, &item.OperationType, &item.State, &item.Phase,
+			&requestID, &actor, &source, &errorText, &remote, &readback, &objectType, &objectID, &objectName,
+			&groupsRaw, &fieldName, &beforeRaw, &afterRaw, &writeback, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.RequestID, item.Actor, item.Source, item.Error = nullString(requestID), nullString(actor), nullString(source), nullString(errorText)
+		item.RemoteConfirmed, item.ReadbackConfirmed = strictBool(remote), strictBool(readback)
+		item.ObjectType, item.ObjectID, item.ObjectName, item.FieldName = nullString(objectType), nullString(objectID), nullString(objectName), nullString(fieldName)
+		item.GroupNames = decodeStringArray(groupsRaw)
+		item.Before, item.After = decodeNullableJSON(beforeRaw), decodeNullableJSON(afterRaw)
+		item.Writeback = writeback.Valid && writeback.Int64 == 1
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int) ([]AuditEvent, error) {
+	recent := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
+		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name) AS object_name,oa.group_names_json,
+		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
+		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent LEFT JOIN accounts a ON a.id=oa.object_id
+		WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
+			oa.writeback=1 OR (oa.operation_type IN ('account.scheduling','routing.writeback')
+				AND oa.state='succeeded' AND oa.remote_confirmed=0 AND oa.readback_confirmed=1
+				AND oa.before_json IS NOT NULL AND oa.after_json IS NOT NULL))
+		ORDER BY oa.created_at DESC,CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,
+		CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC`
+	arguments, err := appendLimit(&recent, limit)
+	if err != nil {
+		return nil, err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(search))
+	query := `WITH recent AS (` + recent + `) SELECT source_id,operation_id,operation_type,state,phase,request_id,actor,source,error,
+		remote_confirmed,readback_confirmed,object_type,object_id,object_name,group_names_json,field_name,before_json,after_json,writeback,created_at
+		FROM recent WHERE instr(lower(CAST(source_id AS TEXT)),?)>0 OR instr(lower(operation_id),?)>0 OR
+		instr(lower(operation_type),?)>0 OR instr(lower(state),?)>0 OR instr(lower(phase),?)>0 OR
+		instr(lower(COALESCE(request_id,'')),?)>0 OR instr(lower(COALESCE(actor,'')),?)>0 OR
+		instr(lower(COALESCE(source,'')),?)>0 OR instr(lower(COALESCE(error,'')),?)>0 OR
+		instr(lower(COALESCE(object_id,'')),?)>0 OR instr(lower(COALESCE(object_name,'')),?)>0 OR
+		instr(lower(group_names_json),?)>0 OR instr(lower(COALESCE(field_name,'')),?)>0 OR
+		instr(lower(COALESCE(before_json,'')),?)>0 OR instr(lower(COALESCE(after_json,'')),?)>0 OR
+		instr(lower(created_at),?)>0 ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
+		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
+	for range 16 {
+		arguments = append(arguments, normalized)
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {

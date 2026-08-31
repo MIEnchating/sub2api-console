@@ -182,6 +182,9 @@ func TestSyncAccountMultiplierCommitsConfirmedReadback(t *testing.T) {
 		VALUES('41','codex','7','0.2')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, true, "operator"); err != nil {
+		t.Fatal(err)
+	}
 	var written atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -210,6 +213,39 @@ func TestSyncAccountMultiplierCommitsConfirmedReadback(t *testing.T) {
 	}
 	if multiplier != "0.15" || groupRate != "0.15" {
 		t.Fatalf("multiplier=%s group_rate=%s", multiplier, groupRate)
+	}
+}
+
+func TestManualPriorityWithoutSyncPermissionRejectsPlatformWrites(t *testing.T) {
+	repository, _, _ := accountRepository(t)
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	target := &testTarget{}
+	service := New(target, repository, nil)
+	multiplier := "0.15"
+	name := "renamed"
+
+	for operation, err := range map[string]error{
+		"multiplier": func() error {
+			_, err := service.SyncAccountMultiplier(context.Background(), "41", multiplier, "operator")
+			return err
+		}(),
+		"name": func() error {
+			_, err := service.SyncFields(context.Background(), "41", FieldPatch{NamePresent: true, Name: &name}, "operator")
+			return err
+		}(),
+		"control": func() error {
+			_, err := service.Control(context.Background(), "41", "pause", "operator")
+			return err
+		}(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "人工优先位") {
+			t.Fatalf("%s operation bypassed manual control: %v", operation, err)
+		}
+	}
+	if target.calls.Load() != 0 {
+		t.Fatalf("manual control rejection reached remote target %d times", target.calls.Load())
 	}
 }
 
@@ -369,7 +405,7 @@ func TestAccountControlRecoversRuntimeAndSupportsLegacySchedulingEndpoint(t *tes
 
 func TestAccountScopeControlStaysLocalAndDoesNotRequireManagementTarget(t *testing.T) {
 	repository, _, _ := accountRepository(t)
-	if _, err := repository.SetMode(context.Background(), "调度模式"); err != nil {
+	if _, err := repository.SetMode(context.Background(), "监控模式"); err != nil {
 		t.Fatal(err)
 	}
 	target := &testTarget{}
@@ -422,7 +458,7 @@ func TestManualPriorityTaskWritesSub2APIDefaultsAndCommitsAssignment(t *testing.
 	defer server.Close()
 	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, tasks)
-	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	finished := waitAccountTask(t, tasks.updates)
@@ -443,7 +479,7 @@ func TestManualPriorityTaskWritesSub2APIDefaultsAndCommitsAssignment(t *testing.
 
 func TestManualPriorityTaskRestoresPreviousSlotWhenRemoteWriteFails(t *testing.T) {
 	repository, db, _ := accountRepository(t)
-	if _, err := repository.AssignManualPriority(context.Background(), "41", 2, "100", 100, "operator"); err != nil {
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 2, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -458,7 +494,7 @@ func TestManualPriorityTaskRestoresPreviousSlotWhenRemoteWriteFails(t *testing.T
 	defer server.Close()
 	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, tasks)
-	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	finished := waitAccountTask(t, tasks.updates)
@@ -476,7 +512,7 @@ func TestManualPriorityTaskRestoresPreviousSlotWhenRemoteWriteFails(t *testing.T
 
 func TestClearManualPriorityTaskRestoresRemoteBaselineBeforeLocalRelease(t *testing.T) {
 	repository, db, _ := accountRepository(t)
-	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE accounts SET priority=3,load_factor='100',concurrency=100 WHERE id='41'`); err != nil {
@@ -536,7 +572,7 @@ func TestClearManualPriorityTaskRestoresRemoteBaselineBeforeLocalRelease(t *test
 
 func TestClearManualPriorityTaskKeepsLocalAssignmentWhenReadbackMismatches(t *testing.T) {
 	repository, db, _ := accountRepository(t)
-	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE accounts SET priority=3,load_factor='100',concurrency=100 WHERE id='41'`); err != nil {
@@ -575,7 +611,7 @@ func TestClearManualPriorityTaskRestoresNullableLoadFactor(t *testing.T) {
 	if _, err := db.Exec(`UPDATE accounts SET load_factor=NULL WHERE id='41'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, "operator"); err != nil {
+	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE accounts SET priority=3,load_factor='100',concurrency=100 WHERE id='41'`); err != nil {

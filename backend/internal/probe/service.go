@@ -63,6 +63,14 @@ type Config struct {
 	Timeout        time.Duration
 	MaxConcurrency int
 	Prompt         string
+	RetryEnabled   bool
+	RetrySource    string
+	Retry          RetryConfig
+}
+
+type RetryConfig struct {
+	Count       int
+	StatusCodes map[int]struct{}
 }
 
 type Target struct {
@@ -90,9 +98,10 @@ type Result struct {
 }
 
 type preparedRun struct {
-	config  Config
-	target  configstore.TargetSettings
-	targets []Target
+	config         Config
+	target         configstore.TargetSettings
+	targets        []Target
+	retryByAccount map[string]RetryConfig
 }
 
 type targetOptions struct {
@@ -135,13 +144,11 @@ func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (tasks
 func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, error) {
 	automatic := request.Automatic || len(request.AccountIDs) > 0
 	recoverySelection := automatic && len(request.AccountIDs) > 0
-	policy := map[string]any{}
+	policy, err := s.repository.ControlPolicy(ctx)
+	if err != nil {
+		return preparedRun{}, err
+	}
 	if automatic {
-		var err error
-		policy, err = s.repository.ControlPolicy(ctx)
-		if err != nil {
-			return preparedRun{}, err
-		}
 		probePolicy, policyErr := optionalObject(policy, "probe")
 		if policyErr != nil {
 			return preparedRun{}, errors.New("主动探测策略配置无效")
@@ -160,12 +167,14 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	if err != nil {
 		return preparedRun{}, err
 	}
-	config := Config{Timeout: 60 * time.Second, MaxConcurrency: 4, Prompt: "hi"}
+	config := defaultConfig()
 	if automatic {
 		config, err = configFromPolicy(policy)
 		if err != nil {
 			return preparedRun{}, err
 		}
+	} else if err := applyRetryPolicy(&config, policy); err != nil {
+		return preparedRun{}, err
 	}
 	candidates, err := s.repository.ProbeCandidates(ctx, request.AccountID, request.GroupName)
 	if err != nil {
@@ -214,7 +223,11 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		}
 		return preparedRun{}, errors.New(firstReason)
 	}
-	return preparedRun{config: config, target: targetSettings, targets: targets}, nil
+	retryByAccount, err := loadAccountPoolRetries(ctx, targetSettings, targets, config)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	return preparedRun{config: config, target: targetSettings, targets: targets, retryByAccount: retryByAccount}, nil
 }
 
 func (s *Service) RunNow(ctx context.Context, request Request) (RunSummary, error) {
@@ -304,7 +317,12 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 		go func() {
 			defer group.Done()
 			for index := range jobs {
-				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, prepared.targets[index], prepared.config)}
+				target := prepared.targets[index]
+				retry := prepared.config.Retry
+				if prepared.config.RetrySource == "sub2api_pool" {
+					retry = prepared.retryByAccount[target.AccountID]
+				}
+				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, target, prepared.config, retry)}
 			}
 		}()
 	}
@@ -340,13 +358,30 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 	return results, nil
 }
 
-func probeTarget(ctx context.Context, client *adminclient.Client, target Target, config Config) Result {
+func probeTarget(ctx context.Context, client *adminclient.Client, target Target, config Config, retry RetryConfig) Result {
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	if target.SkipReason != nil {
 		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "跳过", FailureReason: target.SkipReason, ObservedAt: observed}
 	}
 	started := time.Now()
-	lastStatus, firstResponse, lastReason, actualModel := probeAttempt(ctx, client, target, config)
+	var lastStatus *int
+	var firstResponse bool
+	var lastReason, actualModel string
+	attempts := 0
+	for {
+		attempts++
+		lastStatus, firstResponse, lastReason, actualModel = probeAttempt(ctx, client, target, config)
+		if firstResponse || !config.RetryEnabled || attempts > retry.Count || lastStatus == nil {
+			break
+		}
+		if _, retryable := retry.StatusCodes[*lastStatus]; !retryable {
+			break
+		}
+		if !waitForRetry(ctx, 500*time.Millisecond) {
+			lastReason = "主动探测超时"
+			break
+		}
+	}
 	requestModel := ""
 	if target.Model != nil {
 		requestModel = *target.Model
@@ -354,7 +389,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
 	if firstResponse {
 		latency := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
-		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: 1, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
+		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -365,7 +400,18 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: result, Attempts: 1, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
+	return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func probeAttempt(ctx context.Context, client *adminclient.Client, target Target, config Config) (*int, bool, string, string) {
@@ -547,7 +593,165 @@ func configFromPolicy(policy map[string]any) (Config, error) {
 			prompt = value
 		}
 	}
-	return Config{Timeout: time.Duration(timeout) * time.Second, MaxConcurrency: concurrency, Prompt: prompt}, nil
+	config := Config{Timeout: time.Duration(timeout) * time.Second, MaxConcurrency: concurrency, Prompt: prompt}
+	if err := applyRetryPolicy(&config, policy); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
+func defaultConfig() Config {
+	return Config{
+		Timeout: 60 * time.Second, MaxConcurrency: 4, Prompt: "hi",
+		RetrySource: "fixed", Retry: RetryConfig{StatusCodes: statusCodeSet([]int{429, 500, 502, 503, 504})},
+	}
+}
+
+func applyRetryPolicy(config *Config, policy map[string]any) error {
+	probeObject, err := optionalObject(policy, "probe")
+	if err != nil {
+		return errors.New("探测配置无效：probe")
+	}
+	if raw, present := probeObject["retry_enabled"]; present {
+		enabled, ok := raw.(bool)
+		if !ok {
+			return errors.New("探测配置无效：probe.retry_enabled")
+		}
+		config.RetryEnabled = enabled
+	}
+	config.RetrySource = "fixed"
+	if raw, present := probeObject["retry_source"]; present {
+		source, ok := raw.(string)
+		if !ok || (source != "fixed" && source != "sub2api_pool") {
+			return errors.New("探测配置无效：probe.retry_source")
+		}
+		config.RetrySource = source
+	}
+	count, err := currentPolicyInteger(probeObject, "retry_count", 0, 0, 10)
+	if err != nil {
+		return errors.New("探测配置无效：probe.retry_count")
+	}
+	config.Retry.Count = count
+	config.Retry.StatusCodes = statusCodeSet([]int{429, 500, 502, 503, 504})
+	if raw, present := probeObject["retry_status_codes"]; present {
+		codes, ok := raw.([]any)
+		if !ok {
+			return errors.New("探测配置无效：probe.retry_status_codes")
+		}
+		config.Retry.StatusCodes = map[int]struct{}{}
+		for _, rawCode := range codes {
+			code, parseErr := strictPolicyInteger(rawCode, 100, 599)
+			if parseErr != nil {
+				return errors.New("探测配置无效：probe.retry_status_codes")
+			}
+			config.Retry.StatusCodes[code] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func loadAccountPoolRetries(ctx context.Context, settings configstore.TargetSettings, targets []Target, config Config) (map[string]RetryConfig, error) {
+	result := map[string]RetryConfig{}
+	if !config.RetryEnabled || config.RetrySource != "sub2api_pool" {
+		return result, nil
+	}
+	client, err := adminclient.New(adminclient.Config{
+		BaseURL: settings.BaseURL, AdminKey: settings.AdminKey, Timeout: config.Timeout, Attempts: 1,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("Sub2API 账号池重试配置读取失败：%w", err)
+	}
+	accounts, err := client.Accounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("Sub2API 账号池重试配置读取失败：%w", err)
+	}
+	for _, account := range accounts {
+		accountID := strings.TrimSpace(fmt.Sprint(account["id"]))
+		if !stablePositiveID(accountID) {
+			continue
+		}
+		result[accountID] = poolRetryConfig(account)
+	}
+	for _, target := range targets {
+		if target.SkipReason != nil || target.Model == nil {
+			continue
+		}
+		if _, found := result[target.AccountID]; !found {
+			return nil, fmt.Errorf("Sub2API 账号池重试配置读取失败：账号 %s 不在管理账号目录中", target.AccountID)
+		}
+	}
+	return result, nil
+}
+
+func poolRetryConfig(account map[string]any) RetryConfig {
+	credentials, ok := account["credentials"].(map[string]any)
+	if !ok || credentials["pool_mode"] != true {
+		return RetryConfig{StatusCodes: map[int]struct{}{}}
+	}
+	count := 3
+	if raw, present := credentials["pool_mode_retry_count"]; present && raw != nil {
+		count = poolRetryCount(raw)
+	}
+	codes := []int{401, 403, 429}
+	if raw, present := credentials["pool_mode_retry_status_codes"]; present && raw != nil {
+		if items, valid := raw.([]any); valid {
+			codes = poolRetryStatusCodes(items)
+		}
+	}
+	return RetryConfig{Count: count, StatusCodes: statusCodeSet(codes)}
+}
+
+func poolRetryCount(value any) int {
+	count := 3
+	switch raw := value.(type) {
+	case int:
+		count = raw
+	case int64:
+		count = int(raw)
+	case float64:
+		count = int(raw)
+	case json.Number:
+		if parsed, err := raw.Int64(); err == nil {
+			count = int(parsed)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			count = parsed
+		}
+	}
+	if count < 0 {
+		return 0
+	}
+	if count > 10 {
+		return 10
+	}
+	return count
+}
+
+func poolRetryStatusCodes(values []any) []int {
+	result := make([]int, 0, len(values))
+	seen := map[int]struct{}{}
+	for _, value := range values {
+		code, err := strictPolicyInteger(value, 100, 599)
+		if err != nil {
+			continue
+		}
+		if _, found := seen[code]; found {
+			continue
+		}
+		seen[code] = struct{}{}
+		result = append(result, code)
+	}
+	sort.Ints(result)
+	return result
+}
+
+func statusCodeSet(codes []int) map[int]struct{} {
+	result := make(map[int]struct{}, len(codes))
+	for _, code := range codes {
+		result[code] = struct{}{}
+	}
+	return result
 }
 
 func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, options targetOptions) ([]Target, error) {

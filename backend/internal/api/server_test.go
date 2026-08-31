@@ -28,6 +28,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
+	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
@@ -56,6 +57,37 @@ type fakeBusiness struct {
 	alertPolicy          business.AlertPolicy
 	alertRows            []business.AlertListItem
 	clearedAlerts        int64
+	trafficRanking       business.TrafficRanking
+	trafficQueries       *[]business.TrafficRankingQuery
+	trafficError         error
+}
+
+type fakePricingService struct {
+	snapshot pricing.Snapshot
+	updated  pricing.Config
+	revenue  pricing.RevenueRequest
+	enqueued int
+}
+
+func (service *fakePricingService) Snapshot(context.Context) (pricing.Snapshot, error) {
+	return service.snapshot, nil
+}
+
+func (service *fakePricingService) UpdateConfig(_ context.Context, config pricing.Config, _ string) (pricing.Snapshot, error) {
+	service.updated = config
+	service.snapshot.Config = config
+	return service.snapshot, nil
+}
+
+func (service *fakePricingService) Enqueue(context.Context, string) (taskstore.Task, error) {
+	service.enqueued++
+	return taskstore.Task{ID: "pricing-task", Operation: "price-group-allocation", Status: "queued"}, nil
+}
+
+func (service *fakePricingService) EnqueueRevenue(_ context.Context, request pricing.RevenueRequest, _ string) (taskstore.Task, error) {
+	service.enqueued++
+	service.revenue = request
+	return taskstore.Task{ID: "revenue-task", Operation: "revenue-calculation", Status: "queued"}, nil
 }
 
 type fakeQueueBusiness struct {
@@ -115,6 +147,12 @@ func (f fakeBusiness) Account(context.Context, string) (*business.AccountDetail,
 		return nil, sql.ErrNoRows
 	}
 	return f.accountDetail, nil
+}
+func (f fakeBusiness) TrafficRanking(_ context.Context, query business.TrafficRankingQuery) (business.TrafficRanking, error) {
+	if f.trafficQueries != nil {
+		*f.trafficQueries = append(*f.trafficQueries, query)
+	}
+	return f.trafficRanking, f.trafficError
 }
 func (f fakeBusiness) Groups(context.Context) ([]business.GroupStatus, error) {
 	return f.groupRows, nil
@@ -315,12 +353,17 @@ func (service fakeNotificationTargetDiscovery) Cancel(taskID string) bool {
 }
 
 type fakeAccountMaintenanceTasks struct {
-	task       taskstore.Task
-	err        error
-	revalidate *[][]string
-	repair     *[][]string
-	cleanup    *[][]string
-	rates      *[][]string
+	task                taskstore.Task
+	err                 error
+	revalidate          *[][]string
+	baseURLs            *[][]string
+	configurationChecks *[][]string
+	baseURLRepairs      *[][]string
+	hosts               *[][]string
+	repair              *[][]string
+	cleanup             *[][]string
+	rates               *[][]string
+	defaults            *[][]string
 }
 
 func (tasks fakeAccountMaintenanceTasks) EnqueueAccountRateSync(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
@@ -373,6 +416,7 @@ type fakeModelChecks struct {
 	task     taskstore.Task
 	err      error
 	requests *[]modelcheck.Request
+	statuses []modelcheck.AccountCheckStatus
 }
 
 func (service fakeModelChecks) Capabilities() modelcheck.Capabilities {
@@ -380,6 +424,10 @@ func (service fakeModelChecks) Capabilities() modelcheck.Capabilities {
 		ClaudeStandards: []string{"claude-opus-5"},
 		SolModels:       []string{"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"},
 	}
+}
+
+func (service fakeModelChecks) AccountStatuses(context.Context) ([]modelcheck.AccountCheckStatus, error) {
+	return service.statuses, service.err
 }
 
 func (service fakeModelChecks) Enqueue(_ context.Context, request modelcheck.Request) (taskstore.Task, error) {
@@ -524,9 +572,9 @@ func (tasks fakeAccountTasks) EnqueueFields(_ context.Context, accountID string,
 	return tasks.task, tasks.err
 }
 
-func (tasks fakeAccountTasks) EnqueueManualPriority(_ context.Context, accountID string, priority int64, loadFactor string, concurrency int64, actor string) (taskstore.Task, error) {
+func (tasks fakeAccountTasks) EnqueueManualPriority(_ context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
 	if tasks.manualCalls != nil {
-		*tasks.manualCalls = append(*tasks.manualCalls, fmt.Sprintf("%s:%d:%s:%d:%s", accountID, priority, loadFactor, concurrency, actor))
+		*tasks.manualCalls = append(*tasks.manualCalls, fmt.Sprintf("%s:%d:%s:%d:%t:%s", accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor))
 	}
 	return tasks.task, tasks.err
 }
@@ -556,9 +604,44 @@ func (tasks fakeAccountMaintenanceTasks) EnqueueAccountRevalidation(_ context.Co
 	return tasks.task, tasks.err
 }
 
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountBaseURLValidation(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.baseURLs != nil {
+		*tasks.baseURLs = append(*tasks.baseURLs, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountConfigurationCheck(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.configurationChecks != nil {
+		*tasks.configurationChecks = append(*tasks.configurationChecks, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountBaseURLRepair(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.baseURLRepairs != nil {
+		*tasks.baseURLRepairs = append(*tasks.baseURLRepairs, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountUpstreamHostRepair(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.hosts != nil {
+		*tasks.hosts = append(*tasks.hosts, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
 func (tasks fakeAccountMaintenanceTasks) EnqueueAccountNameRepair(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
 	if tasks.repair != nil {
 		*tasks.repair = append(*tasks.repair, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountMaintenanceTasks) EnqueueAccountDefaultsRepair(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.defaults != nil {
+		*tasks.defaults = append(*tasks.defaults, append([]string{}, accountIDs...))
 	}
 	return tasks.task, tasks.err
 }
@@ -824,7 +907,7 @@ func TestPublicSetupStatusDoesNotExposeConfiguredUsername(t *testing.T) {
 }
 
 func TestBearerAdminTokenBypassesSession(t *testing.T) {
-	router, _ := testRouter(t, config.Config{AdminToken: "internal-token"}, fakeBusiness{mode: "调度模式"})
+	router, _ := testRouter(t, config.Config{AdminToken: "internal-token"}, fakeBusiness{mode: "监控模式"})
 	requestWithoutToken := request(t, router, http.MethodGet, "/api/health", nil, "")
 	if requestWithoutToken.Code != http.StatusUnauthorized {
 		t.Fatalf("missing token status = %d", requestWithoutToken.Code)
@@ -854,12 +937,69 @@ func TestOverviewConfigAndModeContract(t *testing.T) {
 		t.Fatalf("unexpected overview: %d %s", overview.Code, overview.Body.String())
 	}
 	configuration := request(t, router, http.MethodGet, "/api/config", nil, cookie.String())
-	if configuration.Code != http.StatusOK || !strings.Contains(configuration.Body.String(), `"mode":"监控模式"`) || !strings.Contains(configuration.Body.String(), `"console_username":"op***"`) {
+	if configuration.Code != http.StatusOK || !strings.Contains(configuration.Body.String(), `"mode":"监控模式"`) ||
+		!strings.Contains(configuration.Body.String(), `"console_username":"op***"`) ||
+		!strings.Contains(configuration.Body.String(), `"account_default_concurrency":10`) ||
+		!strings.Contains(configuration.Body.String(), `"account_default_priority":1`) {
 		t.Fatalf("unexpected config: %d %s", configuration.Code, configuration.Body.String())
+	}
+	accountDefaults := request(t, router, http.MethodPost, "/api/config/account-defaults", map[string]any{
+		"concurrency": 24, "priority": 7,
+	}, cookie.String())
+	if accountDefaults.Code != http.StatusOK ||
+		!strings.Contains(accountDefaults.Body.String(), `"account_default_concurrency":24`) ||
+		!strings.Contains(accountDefaults.Body.String(), `"account_default_priority":7`) {
+		t.Fatalf("unexpected account defaults update: %d %s", accountDefaults.Code, accountDefaults.Body.String())
+	}
+	invalidDefaults := request(t, router, http.MethodPost, "/api/config/account-defaults", map[string]any{
+		"concurrency": 0, "priority": 1,
+	}, cookie.String())
+	if invalidDefaults.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid account defaults response: %d %s", invalidDefaults.Code, invalidDefaults.Body.String())
 	}
 	updated := request(t, router, http.MethodPost, "/api/config/mode", map[string]any{"mode": "完全模式"}, cookie.String())
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"mode":"完全模式"`) {
 		t.Fatalf("unexpected mode update: %d %s", updated.Code, updated.Body.String())
+	}
+}
+
+func TestParseOnboardingRequestAcceptsPerAccountConcurrencyAndPriority(t *testing.T) {
+	request, err := parseOnboardingRequest(map[string]any{
+		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"local_group_id": json.Number("3"), "upstream_group_id": "6",
+		"concurrency": json.Number("24"), "priority": json.Number("7"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Concurrency == nil || *request.Concurrency != 24 || request.Priority == nil || *request.Priority != 7 {
+		t.Fatalf("request=%#v", request)
+	}
+	if _, err := parseOnboardingRequest(map[string]any{
+		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"local_group_id": json.Number("3"), "upstream_group_id": "6", "concurrency": json.Number("0"),
+	}); err == nil {
+		t.Fatal("zero per-account concurrency must be rejected")
+	}
+}
+
+func TestParseOnboardingRequestAcceptsMultipleGroupsAndExistingAccounts(t *testing.T) {
+	request, err := parseOnboardingRequest(map[string]any{
+		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"local_group_ids": []any{json.Number("3"), json.Number("4")},
+		"account_ids":     []any{"77"}, "upstream_group_id": "6",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(request.LocalGroupIDs, ",") != "3,4" || strings.Join(request.AccountIDs, ",") != "77" {
+		t.Fatalf("request=%#v", request)
+	}
+	if _, err := parseOnboardingRequest(map[string]any{
+		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"local_group_ids": []any{json.Number("0")}, "upstream_group_id": "6",
+	}); err == nil {
+		t.Fatal("invalid local group IDs must be rejected")
 	}
 }
 
@@ -1036,11 +1176,11 @@ func TestAccountMaintenanceRoutesPassCurrentVisibleStableIDs(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	task := taskstore.Task{ID: "maintenance-1", Skill: "sub2api-operations", Operation: "account-binding-revalidation",
 		Status: "queued", Progress: 0, Message: "已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
-	revalidations, repairs, cleanups, rates := [][]string{}, [][]string{}, [][]string{}, [][]string{}
+	revalidations, baseURLs, configurationChecks, baseURLRepairs, hosts, repairs, cleanups, rates, defaults := [][]string{}, [][]string{}, [][]string{}, [][]string{}, [][]string{}, [][]string{}, [][]string{}, [][]string{}, [][]string{}
 	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
-		AccountMaintenance: fakeAccountMaintenanceTasks{task: task, revalidate: &revalidations, repair: &repairs, cleanup: &cleanups, rates: &rates},
+		AccountMaintenance: fakeAccountMaintenanceTasks{task: task, revalidate: &revalidations, baseURLs: &baseURLs, configurationChecks: &configurationChecks, baseURLRepairs: &baseURLRepairs, hosts: &hosts, repair: &repairs, cleanup: &cleanups, rates: &rates, defaults: &defaults},
 	})
-	for _, path := range []string{"/api/management/accounts/rates/sync", "/api/management/accounts/revalidate", "/api/management/accounts/names/repair", "/api/management/accounts/missing-bindings/cleanup"} {
+	for _, path := range []string{"/api/management/accounts/rates/sync", "/api/management/accounts/revalidate", "/api/management/accounts/base-url/validate", "/api/management/accounts/configuration/check", "/api/management/accounts/base-url/repair", "/api/management/accounts/upstream-hosts/repair", "/api/management/accounts/names/repair", "/api/management/accounts/defaults/repair", "/api/management/accounts/missing-bindings/cleanup"} {
 		response := authenticatedRequest(t, router, http.MethodPost, path, map[string]any{"account_ids": []string{"11", "12"}})
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"id":"maintenance-1"`) {
 			t.Fatalf("%s response=%d %s", path, response.Code, response.Body.String())
@@ -1048,6 +1188,21 @@ func TestAccountMaintenanceRoutesPassCurrentVisibleStableIDs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(rates, [][]string{{"11", "12"}}) {
 		t.Fatalf("rates=%#v", rates)
+	}
+	if !reflect.DeepEqual(baseURLs, [][]string{{"11", "12"}}) {
+		t.Fatalf("baseURLs=%#v", baseURLs)
+	}
+	if !reflect.DeepEqual(configurationChecks, [][]string{{"11", "12"}}) {
+		t.Fatalf("configurationChecks=%#v", configurationChecks)
+	}
+	if !reflect.DeepEqual(baseURLRepairs, [][]string{{"11", "12"}}) {
+		t.Fatalf("baseURLRepairs=%#v", baseURLRepairs)
+	}
+	if !reflect.DeepEqual(hosts, [][]string{{"11", "12"}}) {
+		t.Fatalf("hosts=%#v", hosts)
+	}
+	if !reflect.DeepEqual(defaults, [][]string{{"11", "12"}}) {
+		t.Fatalf("defaults=%#v", defaults)
 	}
 	if !reflect.DeepEqual(revalidations, [][]string{{"11", "12"}}) || !reflect.DeepEqual(repairs, [][]string{{"11", "12"}}) || !reflect.DeepEqual(cleanups, [][]string{{"11", "12"}}) {
 		t.Fatalf("revalidations=%#v repairs=%#v cleanups=%#v", revalidations, repairs, cleanups)
@@ -1271,15 +1426,15 @@ func TestManualPriorityRoutesAssignAndClearWithoutInspection(t *testing.T) {
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
 	}
-	assigned := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 3, "load_factor": "100", "concurrency": 100})
-	if assigned.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0] != "41:3:100:100:console" {
+	assigned := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 3, "load_factor": "100", "concurrency": 100, "sync_balance_multiplier": true})
+	if assigned.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0] != "41:3:100:100:true:console" {
 		t.Fatalf("assign response=%d %s calls=%#v", assigned.Code, assigned.Body.String(), manualCalls)
 	}
 	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/accounts/41/manual-priority", nil)
 	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"id":"manual-1"`) || len(clearCalls) != 1 || clearCalls[0] != "41:console" {
 		t.Fatalf("clear response=%d %s clear=%#v", cleared.Code, cleared.Body.String(), clearCalls)
 	}
-	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 0, "load_factor": "100", "concurrency": 100})
+	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 0, "load_factor": "100", "concurrency": 100, "sync_balance_multiplier": false})
 	if invalid.Code != http.StatusUnprocessableEntity || len(manualCalls) != 1 {
 		t.Fatalf("invalid response=%d %s calls=%#v", invalid.Code, invalid.Body.String(), manualCalls)
 	}
@@ -1427,13 +1582,13 @@ func TestOnboardingPreparationSynchronizesCatalogAndBalanceBeforeReturningCandid
 	candidateHosts := []string{}
 	groupID := "6"
 	configuration := upstreamconfig.Configuration{
-		Host: "api.example", Name: "Example", BaseURL: "https://api.example", UpstreamType: "sub2api",
+		UpstreamID: "up_example", Host: "api.example", Name: "Example", BaseURL: "https://api.example", UpstreamType: "sub2api",
 		AuthMode: "sub2api_user_token", RechargeRate: "1", Headers: map[string]string{},
 		HeaderNames: []string{}, CookieNames: []string{}, Groups: []business.UpstreamGroup{},
 	}
 	multiplier := "0.1"
 	candidates := []business.OnboardingCandidate{{
-		Number: 1, Host: "api.example", GroupID: &groupID, GroupName: "codex", Multiplier: &multiplier, Bindable: true,
+		Number: 1, UpstreamID: "up_example", Host: "api.example", GroupID: &groupID, GroupName: "codex", Multiplier: &multiplier, Bindable: true,
 	}}
 	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
 		UpstreamSync:    fakeUpstreamSyncTasks{hostCalls: &hostCalls},
@@ -1441,7 +1596,8 @@ func TestOnboardingPreparationSynchronizesCatalogAndBalanceBeforeReturningCandid
 		Onboarding:      fakeOnboarding{candidates: candidates, hosts: &candidateHosts},
 	})
 	response := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/prepare", map[string]any{"host": "api.example"})
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"group_name":"codex"`) || !strings.Contains(response.Body.String(), `"upstream":{"host":"api.example"`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"group_name":"codex"`) ||
+		!strings.Contains(response.Body.String(), `"upstream_id":"up_example"`) || !strings.Contains(response.Body.String(), `"host":"api.example"`) {
 		t.Fatalf("prepare response=%d %s", response.Code, response.Body.String())
 	}
 	if len(hostCalls) != 1 || !hostCalls[0].scope.Catalog || !hostCalls[0].scope.Balance || hostCalls[0].actor != "console" || len(candidateHosts) != 1 || candidateHosts[0] != "api.example" {
@@ -1485,6 +1641,32 @@ func TestOnboardingProbeEndpointsWorkWithoutALocalAccount(t *testing.T) {
 	})
 	if invalid.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid=%d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
+	service := &fakePricingService{snapshot: pricing.Snapshot{Config: pricing.Config{
+		Enabled: false, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}}, IntervalSeconds: 120, WriteConcurrency: 4,
+	}, Accounts: 2, Changes: 1}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{Pricing: service})
+
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/pricing", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"profit_margin":0.2`) || !strings.Contains(read.Body.String(), `"enabled":false`) {
+		t.Fatalf("read=%d %s", read.Code, read.Body.String())
+	}
+	saved := authenticatedRequest(t, router, http.MethodPut, "/api/pricing/config", map[string]any{
+		"enabled": true, "profit_margin": 0.25, "exchange_group_sets": []any{[]any{"6", "7"}}, "interval_seconds": 300, "write_concurrency": 2,
+	})
+	if saved.Code != http.StatusOK || service.updated.ProfitMargin != 0.25 || !service.updated.Enabled {
+		t.Fatalf("saved=%d %s updated=%#v", saved.Code, saved.Body.String(), service.updated)
+	}
+	queued := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/apply", nil)
+	if queued.Code != http.StatusAccepted || !strings.Contains(queued.Body.String(), `"operation":"price-group-allocation"`) || service.enqueued != 1 {
+		t.Fatalf("queued=%d %s calls=%d", queued.Code, queued.Body.String(), service.enqueued)
+	}
+	revenue := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/revenue", map[string]any{"date": "2026-08-29"})
+	if revenue.Code != http.StatusAccepted || !strings.Contains(revenue.Body.String(), `"operation":"revenue-calculation"`) || service.enqueued != 2 || service.revenue.Date != "2026-08-29" {
+		t.Fatalf("revenue=%d %s calls=%d request=%#v", revenue.Code, revenue.Body.String(), service.enqueued, service.revenue)
 	}
 }
 
@@ -1620,7 +1802,7 @@ func TestPolicyUpdatePreservesExplicitEmptyCollections(t *testing.T) {
 	}, "")
 	cookie := responseCookie(t, login, sessionCookie)
 	response := request(t, router, http.MethodPut, "/api/policy", map[string]any{
-		"mode": "调度模式", "excluded_group_ids": []any{}, "group_strategies": map[string]any{"6": nil},
+		"mode": "监控模式", "excluded_group_ids": []any{}, "group_strategies": map[string]any{"6": nil},
 	}, cookie.String())
 	if response.Code != http.StatusOK {
 		t.Fatalf("policy update failed: %d %s", response.Code, response.Body.String())
@@ -1628,7 +1810,7 @@ func TestPolicyUpdatePreservesExplicitEmptyCollections(t *testing.T) {
 	if len(updates) != 1 || len(updates[0]["excluded_group_ids"].([]any)) != 0 {
 		t.Fatalf("explicit empty array was lost: %#v", updates)
 	}
-	if updates[0]["mode"] != "调度模式" {
+	if updates[0]["mode"] != "监控模式" {
 		t.Fatalf("runtime mode was not submitted with the policy: %#v", updates[0])
 	}
 	groupStrategies, ok := updates[0]["group_strategies"].(map[string]any)
@@ -1785,11 +1967,20 @@ func TestModelCheckRoutesExposeCapabilitiesAndForwardAccountMatrix(t *testing.T)
 		CreatedAt: now, UpdatedAt: now,
 	}
 	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
-		ModelChecks: fakeModelChecks{task: task, requests: &requests},
+		ModelChecks: fakeModelChecks{
+			task: task, requests: &requests,
+			statuses: []modelcheck.AccountCheckStatus{{
+				AccountID: "41", Status: "consistent", CheckedAt: now, TaskID: "model-check-previous",
+			}},
+		},
 	})
 	capabilities := authenticatedRequest(t, router, http.MethodGet, "/api/model-checks/capabilities", nil)
 	if capabilities.Code != http.StatusOK || !strings.Contains(capabilities.Body.String(), `"claude_standards":["claude-opus-5"]`) {
 		t.Fatalf("unexpected capabilities: %d %s", capabilities.Code, capabilities.Body.String())
+	}
+	statuses := authenticatedRequest(t, router, http.MethodGet, "/api/model-checks/account-statuses", nil)
+	if statuses.Code != http.StatusOK || !strings.Contains(statuses.Body.String(), `"account_id":"41"`) || !strings.Contains(statuses.Body.String(), `"status":"consistent"`) {
+		t.Fatalf("unexpected account statuses: %d %s", statuses.Code, statuses.Body.String())
 	}
 	response := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", map[string]any{
 		"account_ids": []string{"41", "42"}, "models": []string{"claude-opus-5", "gpt-5.6-sol"},
@@ -1887,6 +2078,35 @@ func TestRequestTraceAndAlertRoutesUseCurrentServicesAndBoundedLimits(t *testing
 	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/alerts", nil)
 	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"deleted":1`) {
 		t.Fatalf("clear alerts=%d %s", cleared.Code, cleared.Body.String())
+	}
+}
+
+func TestTrafficRankingRouteValidatesDimensionsAndUsesBoundedTimeWindow(t *testing.T) {
+	queries := []business.TrafficRankingQuery{}
+	score := 91.25
+	ranking := business.TrafficRanking{
+		StartAt: "2026-08-30T12:00:00Z", EndAt: "2026-08-31T12:00:00Z", SortBy: "stability",
+		TotalRequests: 20, AccountsWithTraffic: 1,
+		Accounts: []business.TrafficRankingRow{{Rank: 1, AccountID: "41", AccountName: "alpha", Requests: 20, StabilityScore: &score}},
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
+		mode: "完全模式", trafficRanking: ranking, trafficQueries: &queries,
+	}, Dependencies{})
+
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/traffic/ranking?time_range=24h&group=codex&sort_by=stability", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"account_id":"41"`) {
+		t.Fatalf("traffic ranking=%d %s", response.Code, response.Body.String())
+	}
+	if len(queries) != 1 || queries[0].GroupName != "codex" || queries[0].SortBy != "stability" || queries[0].EndAt.Sub(queries[0].StartAt) != 24*time.Hour {
+		t.Fatalf("queries=%#v", queries)
+	}
+	for _, path := range []string{
+		"/api/traffic/ranking?time_range=90d", "/api/traffic/ranking?sort_by=unknown",
+	} {
+		invalid := authenticatedRequest(t, router, http.MethodGet, path, nil)
+		if invalid.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid ranking query %s=%d %s", path, invalid.Code, invalid.Body.String())
+		}
 	}
 }
 

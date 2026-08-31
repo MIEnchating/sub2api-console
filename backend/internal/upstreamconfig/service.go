@@ -51,6 +51,10 @@ type Service struct {
 	verifier Verifier
 }
 
+type classificationStore interface {
+	UpdateUpstreamClassification(context.Context, string, string, string) error
+}
+
 type Input struct {
 	Host         string
 	Name         *string
@@ -72,6 +76,7 @@ type Input struct {
 }
 
 type Configuration struct {
+	UpstreamID      string                   `json:"upstream_id"`
 	Host            string                   `json:"host"`
 	Name            string                   `json:"name"`
 	BaseURL         string                   `json:"base_url"`
@@ -123,7 +128,7 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		return Configuration{}, err
 	}
 	result := Configuration{
-		Host: host, Name: public.Name, BaseURL: public.BaseURL, UpstreamType: public.UpstreamType,
+		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, BaseURL: public.BaseURL, UpstreamType: public.UpstreamType,
 		AuthMode: "custom_headers", RechargeRate: public.RechargeRate, RawBalance: public.RawBalance,
 		Balance: public.Balance, Headers: map[string]string{}, HeaderNames: []string{}, CookieNames: []string{}, Groups: groups,
 	}
@@ -222,6 +227,30 @@ func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string,
 		return "", errors.Join(err, rollbackFailure("密码箱", s.restoreVault(context.Background(), change)))
 	}
 	return host, nil
+}
+
+// CommitRecoveredAuth publishes a publicly fingerprinted platform correction
+// only after the recovered credentials have passed an authenticated readback.
+func (s *Service) CommitRecoveredAuth(ctx context.Context, record configstore.AuthRecord) error {
+	classification, ok := s.business.(classificationStore)
+	if !ok {
+		return errors.New("业务存储不支持修复上游平台类型")
+	}
+	previous, err := s.private.AuthRecord(ctx, record.Host)
+	if err != nil {
+		return err
+	}
+	if err := s.private.SaveAuthRecord(ctx, record, allAuthFields()); err != nil {
+		return err
+	}
+	if err := classification.UpdateUpstreamClassification(ctx, record.Host, record.UpstreamType, record.AuthMode); err != nil {
+		if previous == nil {
+			_, rollbackErr := s.private.DeleteAuthRecord(context.Background(), record.Host)
+			return errors.Join(err, rollbackFailure("鉴权记录", rollbackErr))
+		}
+		return errors.Join(err, rollbackFailure("鉴权记录", s.private.SaveAuthRecord(context.Background(), *previous, allAuthFields())))
+	}
+	return nil
 }
 
 type vaultChange struct {

@@ -36,6 +36,14 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 	if candidates[1].MetadataErr == nil {
 		t.Fatal("malformed account metadata was silently accepted")
 	}
+	if _, err := store.db.Exec(`INSERT INTO manual_priority_accounts(account_id,priority,created_at,updated_at)
+		VALUES('41',3,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err = store.ProbeCandidates(ctx, nil, nil)
+	if err != nil || len(candidates) != 1 || candidates[0].AccountID != "42" {
+		t.Fatalf("manual priority account entered probe candidates: candidates=%#v err=%v", candidates, err)
+	}
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	status := 200
 	latency := "12.345"
@@ -52,7 +60,7 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 	if err := store.db.QueryRow(`SELECT result,sample_count,payload_json FROM health_samples WHERE account_id='41' AND group_name='codex'`).Scan(&result, &sampleCount, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if result != "通过" || sampleCount != 1 || payload != `{"actual_model":"","request_model":"","status_code":200}` {
+	if result != "通过" || sampleCount != 1 || payload != `{"actual_model":"","latency_metric":"first_token","latency_source":"account_test.first_content","latency_unit":"ms","request_model":"","status_code":200}` {
 		t.Fatalf("result=%q sampleCount=%d payload=%s", result, sampleCount, payload)
 	}
 	before := 0

@@ -1,4 +1,5 @@
 import type { AccountStatus } from "@/api";
+import { CircleHelp } from "lucide-react";
 import { AccountHealthScore } from "@/components/account-health-score";
 import { AccountRecentResults } from "@/components/account-recent-results";
 import { StatusBadge } from "@/components/status-badge";
@@ -40,7 +41,7 @@ export function AccountRecentResultsCell(props: { account: AccountStatus }) {
 
 export function AccountLatencyCell(props: { account: AccountStatus }) {
   return (
-    <div className="grid gap-1 tabular-nums">
+    <div className="grid gap-1 tabular-nums" aria-label="综合延迟">
       <span className="font-medium">P95 {latencySeconds(props.account.ttfb_p95_ms)}</span>
       <span className="text-xs text-muted-foreground">
         P50 {latencySeconds(props.account.ttfb_p50_ms)}
@@ -58,7 +59,12 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
   return (
     <div className="grid gap-1 tabular-nums">
       {account.manual_priority != null ? (
-        <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
+        <>
+          <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
+          <span className="text-muted-foreground text-xs">
+            {account.manual_sync_balance_multiplier ? "仅同步余额与倍率" : "完全人工控制"}
+          </span>
+        </>
       ) : (
         <span className="font-medium">当前优先级 {account.priority ?? "—"}</span>
       )}
@@ -117,6 +123,145 @@ export function AccountIdentityCell(props: { account: AccountStatus }) {
   );
 }
 
+export function AccountBaseURLCell(props: { account: AccountStatus; expanded?: boolean }) {
+  const account = props.account;
+  const presentation = accountBaseURLPresentation(account);
+  const reason = account.base_url_check_reason?.trim() || "没有 Base URL 校验结果";
+  return (
+    <div className={cn("grid gap-1", props.expanded ? "max-w-none" : "max-w-48")}>
+      <StatusBadge label={presentation.label} variant={presentation.variant} title={reason} />
+      <TableOverflowTooltip
+        content={
+          account.base_url ?? (account.base_url_checked_at ? "详情未提供 Base URL" : "等待校验")
+        }
+        className={cn("text-xs", props.expanded ? "max-w-none" : "max-w-48")}
+      >
+        {account.base_url ?? (account.base_url_checked_at ? "详情未提供 Base URL" : "等待校验")}
+      </TableOverflowTooltip>
+      {account.base_url_source === "platform_default" ? (
+        <span className="text-muted-foreground text-xs">来源：Sub2API 平台默认地址</span>
+      ) : null}
+      {account.upstream_base_url ? (
+        <TableOverflowTooltip
+          content={`上游访问地址：${account.upstream_base_url}`}
+          className={cn(
+            "text-muted-foreground text-xs",
+            props.expanded ? "max-w-none" : "max-w-48",
+          )}
+        >
+          上游访问地址：{account.upstream_base_url}
+        </TableOverflowTooltip>
+      ) : null}
+    </div>
+  );
+}
+
+export function accountBaseURLPresentation(account: AccountStatus) {
+  return {
+    matched: { label: "同一地址", variant: "success" as const },
+    different_allowed: { label: "地址不同（允许）", variant: "info" as const },
+    official_mismatch: { label: "配置异常", variant: "danger" as const },
+    invalid: { label: "地址不可读", variant: "warning" as const },
+    unchecked: { label: "尚未校验", variant: "neutral" as const },
+    unknown: {
+      label: account.base_url ? "缺少上游信息" : "缺少账号 Base URL",
+      variant: "neutral" as const,
+    },
+  }[account.base_url_check ?? "unknown"];
+}
+
+export function AccountKeyStatusCell(props: { account: AccountStatus }) {
+  const raw = props.account.key_status?.trim().toLowerCase() ?? "";
+  const presentation = (() => {
+    if (["active", "enabled", "available", "ok", "1"].includes(raw)) {
+      return { label: "正常", variant: "success" as const };
+    }
+    if (["inactive", "disabled", "2"].includes(raw)) {
+      return { label: "已停用", variant: "warning" as const };
+    }
+    if (raw === "suspected") {
+      return { label: "待复核", variant: "warning" as const };
+    }
+    if (["key_missing", "missing", "deleted"].includes(raw)) {
+      return { label: "Key 已删除", variant: "danger" as const };
+    }
+    if (raw === "group_missing") {
+      return { label: "分组已删除", variant: "danger" as const };
+    }
+    if (raw === "key_and_group_missing") {
+      return { label: "Key、分组已删除", variant: "danger" as const };
+    }
+    if (raw === "group_inactive") {
+      return { label: "分组已停用", variant: "warning" as const };
+    }
+    if (["expired", "3"].includes(raw)) {
+      return { label: "已过期", variant: "danger" as const };
+    }
+    if (["exhausted", "4"].includes(raw)) {
+      return { label: "额度耗尽", variant: "warning" as const };
+    }
+    if (raw === "mixed") {
+      return { label: "状态不一致", variant: "warning" as const };
+    }
+    if (raw === "unbound") {
+      return { label: "未绑定 Key", variant: "neutral" as const };
+    }
+    if (raw === "unknown" || !raw) {
+      return { label: "状态未知", variant: "neutral" as const };
+    }
+    return { label: "其他状态", variant: "neutral" as const };
+  })();
+  const detail =
+    props.account.key_status_reason?.trim() ||
+    (raw ? `上游 Key 原始状态：${raw}` : "尚未从上游同步 Key 状态");
+  return <StatusBadge label={presentation.label} variant={presentation.variant} title={detail} />;
+}
+
+export function AccountSub2APIStatusCell(props: { account: AccountStatus }) {
+  const raw = props.account.sub2api_status?.trim().toLowerCase() ?? "";
+  const error = props.account.sub2api_error?.trim() ?? "";
+  const presentation = (() => {
+    if (raw === "error") return { label: "错误", variant: "danger" as const };
+    if (raw === "active" && props.account.schedulable === false) {
+      return { label: "暂停", variant: "neutral" as const };
+    }
+    if (raw === "active") return { label: "正常", variant: "success" as const };
+    if (["disabled", "inactive"].includes(raw)) {
+      return { label: "停用", variant: "neutral" as const };
+    }
+    if (raw === "expired") return { label: "已过期", variant: "danger" as const };
+    if (!raw) return { label: "未同步", variant: "neutral" as const };
+    return { label: props.account.sub2api_status!.trim(), variant: "warning" as const };
+  })();
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <StatusBadge
+        label={presentation.label}
+        variant={presentation.variant}
+        title={raw ? `Sub2API 原始状态：${raw}` : "管理快照尚未返回账号状态"}
+      />
+      {error ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="text-destructive hover:text-destructive/80 inline-flex size-5 shrink-0 items-center justify-center"
+                aria-label="查看 Sub2API 账号报错"
+              />
+            }
+          >
+            <CircleHelp className="size-3.5" aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent className="max-w-sm whitespace-pre-wrap break-words">
+            {error}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
+
 function accountStateReasonLabel(state: ReturnType<typeof accountPoolState>["value"]): string {
   const labels: Partial<Record<ReturnType<typeof accountPoolState>["value"], string>> = {
     degraded: "降级原因",
@@ -142,7 +287,10 @@ function accountStateReason(
 }
 
 function accountLatestError(account: AccountStatus): string | null {
-  if (account.last_error?.trim()) return account.last_error.trim();
+  const sub2apiError = account.sub2api_error?.trim();
+  if (account.last_error?.trim() && account.last_error.trim() !== sub2apiError) {
+    return account.last_error.trim();
+  }
   for (const result of account.recent_results) {
     if (result.failure_reason?.trim()) return result.failure_reason.trim();
   }
@@ -195,7 +343,8 @@ export function AccountStateCell(props: { account: AccountStatus }) {
   const latestError = accountLatestError(props.account);
   const stopReason = accountSchedulingStopReason(props.account, state.value);
   const errorMessage = latestError ? `最近错误：${latestError}` : null;
-  const stopMessage = stopReason ? `${stopReason.label}：${stopReason.reason}` : null;
+  const stopMessage =
+    stopReason && stopReason.reason !== reason ? `${stopReason.label}：${stopReason.reason}` : null;
   const desiredState = props.account.desired_health
     ? accountPoolState({
         ...props.account,

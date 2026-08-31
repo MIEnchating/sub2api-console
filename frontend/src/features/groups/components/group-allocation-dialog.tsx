@@ -34,9 +34,11 @@ type Props = {
 };
 
 export const groupAllocationLayout = {
-  dialog:
-    "grid max-h-[min(50rem,calc(100svh-2rem))] min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden sm:max-w-[min(96vw,82rem)]",
+  dialog: "grid min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
+  width: "table",
+  height: "tall",
   content: "flex min-h-0 flex-col gap-4 overflow-hidden",
+  loading: "grid h-full min-h-0 grid-rows-[4rem_minmax(0,1fr)] gap-4",
   metrics: "grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-3 xl:grid-cols-6",
   table: "min-w-[1060px] table-fixed",
 } as const;
@@ -144,7 +146,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
       <GroupHeader allocation={props.allocation} />
       {!props.allocation.has_allocation && props.allocation.channels.length > 0 && (
         <div className="border-info/30 bg-info/10 text-info rounded-lg border px-3 py-2 text-sm">
-          尚未生成账号最终调度状态。监控模式不会保存调度结果；切换至调度模式或完全模式后，下一轮巡检会按分组权重预算{" "}
+          尚未生成账号最终调度状态。监控模式不会保存调度结果；切换至完全模式后，下一轮巡检会按分组权重预算{" "}
           {integer(props.allocation.weight_budget)} 计算。
         </div>
       )}
@@ -182,7 +184,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
                 <TableHead className="w-[8%]">健康分</TableHead>
                 <TableHead className="w-[24%]">账号</TableHead>
                 <TableHead className="w-[10%]">状态</TableHead>
-                <TableHead className="w-[10%]">首字 P95</TableHead>
+                <TableHead className="w-[10%]">综合 P95</TableHead>
                 <TableHead className="w-[9%]">调度倍率</TableHead>
                 <TableHead className="w-[9%]">优先级</TableHead>
                 <TableHead className="w-[20%]">最终权重</TableHead>
@@ -237,7 +239,11 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
 export function GroupAllocationDialog(props: Props) {
   return (
     <Dialog open={props.group !== null} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className={groupAllocationLayout.dialog}>
+      <DialogContent
+        width={groupAllocationLayout.width}
+        height={groupAllocationLayout.height}
+        className={groupAllocationLayout.dialog}
+      >
         <DialogHeader>
           <DialogTitle>分组账号调度状态</DialogTitle>
           <DialogDescription>
@@ -247,9 +253,9 @@ export function GroupAllocationDialog(props: Props) {
           </DialogDescription>
         </DialogHeader>
         {props.loading ? (
-          <div className="grid gap-4" aria-label="正在读取分组账号调度状态">
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-72 w-full" />
+          <div className={groupAllocationLayout.loading} aria-label="正在读取分组账号调度状态">
+            <Skeleton className="h-full w-full" />
+            <Skeleton className="h-full min-h-0 w-full" />
           </div>
         ) : props.error ? (
           <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />

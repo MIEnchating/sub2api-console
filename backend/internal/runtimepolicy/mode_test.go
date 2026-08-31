@@ -8,7 +8,6 @@ func TestModeCapabilities(t *testing.T) {
 		want Capabilities
 	}{
 		{Monitoring, Capabilities{AutomaticUpstreamSync: true, ManualAccountMultiplier: true}},
-		{Scheduling, Capabilities{PersistRoutingDecisions: true, AutomaticUpstreamSync: true, AutomaticActiveProbe: true}},
 		{Full, Capabilities{
 			PersistRoutingDecisions: true, AutomaticRemoteApply: true, AutomaticUpstreamSync: true,
 			AutomaticActiveProbe: true, ManualAccountMultiplier: true, ManualAccountFields: true, RemoteTopologyChanges: true,
@@ -24,5 +23,8 @@ func TestModeCapabilities(t *testing.T) {
 	}
 	if capabilities, valid := For("配置错误"); valid || capabilities != (Capabilities{}) {
 		t.Fatalf("invalid mode capabilities=%#v valid=%v", capabilities, valid)
+	}
+	if capabilities, valid := For("调度模式"); valid || capabilities != (Capabilities{}) {
+		t.Fatalf("removed mode capabilities=%#v valid=%v", capabilities, valid)
 	}
 }

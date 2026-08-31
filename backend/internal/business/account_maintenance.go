@@ -13,17 +13,20 @@ import (
 )
 
 type BoundAccountMaintenance struct {
-	AccountID         string `json:"account_id"`
-	AccountName       string `json:"account_name"`
-	ExpectedName      string `json:"expected_name"`
-	UpstreamHost      string `json:"upstream_host"`
-	UpstreamType      string `json:"upstream_type"`
-	UpstreamKeyID     string `json:"upstream_key_id"`
-	UpstreamGroupID   string `json:"upstream_group_id"`
-	RechargeRate      string `json:"recharge_rate"`
-	CurrentMultiplier string `json:"current_multiplier"`
-	NamingSiteName    string `json:"-"`
-	NamingBaseURL     string `json:"-"`
+	AccountID             string `json:"account_id"`
+	AccountName           string `json:"account_name"`
+	ExpectedName          string `json:"expected_name"`
+	UpstreamHost          string `json:"upstream_host"`
+	UpstreamType          string `json:"upstream_type"`
+	UpstreamKeyID         string `json:"upstream_key_id"`
+	UpstreamGroupID       string `json:"upstream_group_id"`
+	RechargeRate          string `json:"recharge_rate"`
+	CurrentMultiplier     string `json:"current_multiplier"`
+	NamingSiteName        string `json:"-"`
+	NamingBaseURL         string `json:"-"`
+	ConsoleOnboarded      bool   `json:"-"`
+	ManualPriority        bool   `json:"-"`
+	SyncBalanceMultiplier bool   `json:"-"`
 }
 
 func (account BoundAccountMaintenance) NameForMultiplier(multiplier string) string {
@@ -45,10 +48,136 @@ type AccountRateObservation struct {
 	Rate      string
 }
 
+type AccountDefaultsRepairCommit struct {
+	AccountID         string
+	Priority          *int64
+	Concurrency       *int64
+	LoadFactorPresent bool
+	LoadFactor        *string
+	RemoteRepaired    bool
+}
+
 type MissingBindingCleanupResult struct {
 	Cleaned int      `json:"cleaned"`
 	IDs     []string `json:"ids"`
 	EventID int64    `json:"event_id"`
+}
+
+type AccountUpstreamHostRepairItem struct {
+	AccountID string  `json:"account_id"`
+	Name      string  `json:"account_name"`
+	Before    *string `json:"before"`
+	After     *string `json:"after"`
+	Status    string  `json:"status"`
+	Reason    *string `json:"reason,omitempty"`
+}
+
+type AccountUpstreamHostRepairResult struct {
+	Requested int                             `json:"requested"`
+	Repaired  int                             `json:"repaired"`
+	Unchanged int                             `json:"unchanged"`
+	Skipped   int                             `json:"skipped"`
+	Items     []AccountUpstreamHostRepairItem `json:"items"`
+	EventID   int64                           `json:"event_id"`
+}
+
+func (s *Store) RepairAccountUpstreamHosts(ctx context.Context, accountIDs []string, actor string) (AccountUpstreamHostRepairResult, error) {
+	result := AccountUpstreamHostRepairResult{Requested: len(accountIDs), Items: make([]AccountUpstreamHostRepairItem, 0, len(accountIDs))}
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return result, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	seen := map[string]struct{}{}
+	for _, rawID := range accountIDs {
+		accountID := strings.TrimSpace(rawID)
+		if !positiveNumericID(accountID) {
+			return result, errors.New("归属 Host 修复包含无效账号 ID")
+		}
+		if _, duplicate := seen[accountID]; duplicate {
+			return result, fmt.Errorf("归属 Host 修复包含重复账号 ID：%s", accountID)
+		}
+		seen[accountID] = struct{}{}
+		var name string
+		var current sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT name,upstream_host FROM accounts WHERE id=?`, accountID).Scan(&name, &current); err != nil {
+			return result, err
+		}
+		hostRows, err := tx.QueryContext(ctx, `SELECT DISTINCT bi.upstream_id,primary_host.host
+			FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
+			JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
+			WHERE b.local_account_id=? ORDER BY primary_host.host`, accountID)
+		if err != nil {
+			return result, err
+		}
+		hosts := make([]string, 0, 2)
+		for hostRows.Next() {
+			var upstreamID, host string
+			if err := hostRows.Scan(&upstreamID, &host); err != nil {
+				hostRows.Close()
+				return result, err
+			}
+			hosts = append(hosts, host)
+		}
+		if err := hostRows.Close(); err != nil {
+			return result, err
+		}
+		before := normalizedHost(nullString(current))
+		item := AccountUpstreamHostRepairItem{AccountID: accountID, Name: name, Before: before}
+		if len(hosts) == 0 {
+			reason := "账号没有可用于确认归属的绑定记录"
+			item.Status, item.Reason = "无法修复", &reason
+			result.Skipped++
+		} else if len(hosts) > 1 {
+			reason := "账号绑定到了多个上游 Host，需要人工确认"
+			item.Status, item.Reason = "无法自动修复", &reason
+			result.Skipped++
+		} else {
+			after := hosts[0]
+			item.After = &after
+			if before != nil && strings.EqualFold(*before, after) {
+				item.Status = "无需修复"
+				result.Unchanged++
+			} else {
+				if _, err := tx.ExecContext(ctx, `UPDATE accounts SET upstream_host=?,updated_at=? WHERE id=?`, after, now, accountID); err != nil {
+					return result, err
+				}
+				item.Status = "已修复"
+				result.Repaired++
+			}
+		}
+		result.Items = append(result.Items, item)
+	}
+	if result.Repaired > 0 {
+		payload, err := json.Marshal(map[string]any{"actor": strings.TrimSpace(actor), "items": result.Items})
+		if err != nil {
+			return result, err
+		}
+		var minimum sql.NullInt64
+		if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+			return result, err
+		}
+		result.EventID = -1
+		if minimum.Valid && minimum.Int64 <= -1 {
+			result.EventID = minimum.Int64 - 1
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
+			VALUES(?,?,?,?,?,?)`, result.EventID, "account.upstream_host.repaired", now, "succeeded",
+			fmt.Sprintf("已修复 %d 个账号的归属 Host", result.Repaired), string(payload)); err != nil {
+			return result, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func (s *Store) AccountNamesForMaintenance(ctx context.Context, requestedIDs []string) (map[string]string, error) {
@@ -82,11 +211,18 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	for _, id := range requestedIDs {
 		requested[strings.TrimSpace(id)] = struct{}{}
 	}
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,u.upstream_type,
-		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(r.recharge_rate,'1'),u.base_url,u.metadata_json
-		FROM accounts a JOIN bindings b ON b.local_account_id=a.id
-		JOIN upstreams u ON u.host=b.upstream_host
+		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(r.recharge_rate,'1'),u.base_url,u.metadata_json,
+		EXISTS(SELECT 1 FROM operation_audit oa WHERE oa.object_id=a.id AND oa.operation_type='account.onboarding' AND oa.state='succeeded'),
+		m.account_id IS NOT NULL,COALESCE(m.sync_balance_multiplier,0)
+		FROM accounts a JOIN bindings b ON b.local_account_id=a.id JOIN binding_identities bi ON bi.binding_id=b.id
+		JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
+		JOIN upstreams u ON u.host=primary_host.host
 		LEFT JOIN recharge_rates r ON r.host=u.host
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
 		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
 	if err != nil {
 		return nil, err
@@ -97,7 +233,8 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 		var item BoundAccountMaintenance
 		var multiplier, baseURL, metadataRaw string
 		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &item.UpstreamType,
-			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &baseURL, &metadataRaw); err != nil {
+			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &baseURL, &metadataRaw,
+			&item.ConsoleOnboarded, &item.ManualPriority, &item.SyncBalanceMultiplier); err != nil {
 			return nil, err
 		}
 		if len(requested) > 0 {
@@ -117,6 +254,66 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) CommitAccountDefaultsRepairs(ctx context.Context, values []AccountDefaultsRepairCommit, actor string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	accountIDs := make([]string, 0, len(values))
+	for _, value := range values {
+		if !positiveNumericID(value.AccountID) {
+			return errors.New("账号默认参数修复包含无效账号 ID")
+		}
+		updates := make([]string, 0, 4)
+		arguments := make([]any, 0, 5)
+		if value.Priority != nil {
+			updates, arguments = append(updates, "priority=?"), append(arguments, *value.Priority)
+		}
+		if value.Concurrency != nil {
+			updates, arguments = append(updates, "concurrency=?"), append(arguments, *value.Concurrency)
+		}
+		if value.LoadFactorPresent {
+			if value.LoadFactor == nil {
+				updates = append(updates, "load_factor=NULL")
+			} else {
+				updates, arguments = append(updates, "load_factor=?"), append(arguments, *value.LoadFactor)
+			}
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		updates = append(updates, "updated_at=?")
+		arguments = append(arguments, now, value.AccountID)
+		result, updateErr := tx.ExecContext(ctx, `UPDATE accounts SET `+strings.Join(updates, ",")+` WHERE id=?`, arguments...)
+		if updateErr != nil {
+			return updateErr
+		}
+		if affected, affectedErr := result.RowsAffected(); affectedErr != nil {
+			return affectedErr
+		} else if affected != 1 {
+			return fmt.Errorf("账号 %s 的本地参数记录不存在", value.AccountID)
+		}
+		accountIDs = append(accountIDs, value.AccountID)
+	}
+	remoteRepaired := 0
+	for _, value := range values {
+		if value.RemoteRepaired {
+			remoteRepaired++
+		}
+	}
+	payload := map[string]any{"actor": strings.TrimSpace(actor), "account_ids": accountIDs, "synchronized": len(accountIDs), "repaired": remoteRepaired, "remote_write": remoteRepaired > 0}
+	if err := insertRuntimeEventWithStatus(ctx, tx, "account.defaults.reconciled", "succeeded",
+		fmt.Sprintf("已核对 %d 个账号的开户默认参数，修复 %d 个", len(accountIDs), remoteRepaired), payload, now); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CommitBindingVerification(ctx context.Context, values []BindingVerification) error {

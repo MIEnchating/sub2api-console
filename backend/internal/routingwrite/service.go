@@ -31,6 +31,7 @@ type Repository interface {
 	CaptureRoutingBaseline(context.Context, business.RoutingBaseline) error
 	UpdateRoutingManagedIntent(context.Context, string, business.RoutingManagedIntent) error
 	CommitRoutingReadback(context.Context, string, business.RoutingReadback, bool, business.AccountOperation) error
+	AbandonRoutingControl(context.Context, string, business.RoutingReadback, business.AccountOperation) error
 	ClearRoutingRuntimeBlocks(context.Context, string) error
 	DeleteRoutingBaseline(context.Context, string) error
 	RecordAccountOperation(context.Context, business.AccountOperation) error
@@ -38,6 +39,10 @@ type Repository interface {
 	MarkCleanupPaused(context.Context, string, string) error
 	MarkCleanupDisabled(context.Context, string) error
 	DeleteAccountProjection(context.Context, string, business.AccountOperation) error
+}
+
+type manualPriorityRepository interface {
+	ManualPriorityControls(context.Context, []string) (map[string]business.ManualPriorityControl, error)
 }
 
 type TargetStore interface {
@@ -55,6 +60,7 @@ type AccountResult struct {
 	Changed     bool           `json:"changed"`
 	RemoteWrite bool           `json:"remote_write"`
 	Restored    bool           `json:"restored,omitempty"`
+	Released    bool           `json:"released,omitempty"`
 	Skipped     bool           `json:"skipped,omitempty"`
 	Reason      *string        `json:"reason,omitempty"`
 	Error       *string        `json:"error,omitempty"`
@@ -69,6 +75,7 @@ type Result struct {
 	RemoteWrite     bool            `json:"remote_write"`
 	Changed         int             `json:"changed"`
 	Restored        int             `json:"restored,omitempty"`
+	Released        int             `json:"released,omitempty"`
 	Succeeded       int             `json:"succeeded"`
 	Failed          int             `json:"failed"`
 	Results         []AccountResult `json:"results"`
@@ -121,6 +128,30 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	if err != nil {
 		return Result{}, err
 	}
+	if manualRepository, ok := s.repository.(manualPriorityRepository); ok {
+		controls, controlErr := manualRepository.ManualPriorityControls(ctx, sortedTargetIDs(targets))
+		if controlErr != nil {
+			return Result{}, fmt.Errorf("人工优先位保护状态读取失败：%w", controlErr)
+		}
+		if len(controls) > 0 {
+			filtered := make(map[string]business.AccountRoutingTarget, len(targets)-len(controls))
+			for _, accountID := range sortedTargetIDs(targets) {
+				target := targets[accountID]
+				if _, protected := controls[accountID]; protected {
+					reason := "账号处于人工优先位，自动调度写回已跳过"
+					result.Results = append(result.Results, AccountResult{AccountID: accountID, Skipped: true, Reason: &reason})
+					continue
+				}
+				filtered[accountID] = target
+			}
+			targets = filtered
+		}
+	}
+	if len(targets) == 0 {
+		reason := "本轮账号均处于人工优先位，没有需要自动执行的目标"
+		result.Reason = &reason
+		return result, nil
+	}
 	admin, err := s.adminClient(ctx)
 	if err != nil {
 		return Result{}, err
@@ -169,6 +200,9 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		}
 		if item.Changed {
 			result.Changed++
+		}
+		if item.Released {
+			result.Released++
 		}
 		if item.Error != nil {
 			result.Failed++
@@ -321,6 +355,17 @@ func (s *Service) applyAccountCoordinated(
 		return failedResult(result, err)
 	}
 	result.Before = current.asMap()
+	if target.AbandonControl {
+		op := operation(operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, nil)
+		if err := s.repository.AbandonRoutingControl(ctx, target.AccountID, current.readback(nil), op); err != nil {
+			s.recordLocalApplyFailure(ctx, operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, "local-release", err)
+			return failedResult(result, err)
+		}
+		result.Released, result.Effective = true, current.asMap()
+		reason := "检测到 Sub2API 人工修改，已保留当前值并停止 Console 托管"
+		result.Reason = &reason
+		return result
+	}
 	desired, err := desiredValues(target, policy, current)
 	if err != nil {
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), nil, false, false, err))
@@ -380,6 +425,11 @@ func (s *Service) applyAccountCoordinated(
 			state = &target.DesiredHealth
 		}
 		if state != nil {
+			if !target.ReleaseControl {
+				if err := s.captureManagedOwnership(ctx, target, policy, current); err != nil {
+					return failedResult(result, err)
+				}
+			}
 			op := operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), current.asMap(), false, true, nil)
 			op.FieldName = nil
 			if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, current.readback(state), target.ReleaseControl, op); err != nil {
@@ -406,16 +456,7 @@ func (s *Service) applyAccountCoordinated(
 		return result
 	}
 	if !target.ReleaseControl {
-		baseline := current.baseline(target.AccountID, s.now().UTC())
-		if err := s.repository.CaptureRoutingBaseline(ctx, baseline); err != nil {
-			s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, "baseline-capture", err)
-			return failedResult(result, err)
-		}
-		intent, err := managedIntent(desired)
-		if err != nil {
-			return failedResult(result, err)
-		}
-		if err := s.repository.UpdateRoutingManagedIntent(ctx, target.AccountID, intent); err != nil {
+		if err := s.captureManagedOwnership(ctx, target, policy, current); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, "ownership-capture", err)
 			return failedResult(result, err)
 		}
@@ -470,6 +511,39 @@ func (s *Service) applyAccountCoordinated(
 		}
 	}
 	result.Restored = target.ReleaseControl
+	return result
+}
+
+func (s *Service) captureManagedOwnership(
+	ctx context.Context,
+	target business.AccountRoutingTarget,
+	policy writePolicy,
+	current values,
+) error {
+	intent := managedIntentForTarget(target, policy)
+	if intent.Schedulable == nil && intent.Priority == nil && intent.LoadFactor == nil && intent.Concurrency == nil {
+		return nil
+	}
+	if err := s.repository.CaptureRoutingBaseline(ctx, current.baseline(target.AccountID, s.now().UTC())); err != nil {
+		return err
+	}
+	return s.repository.UpdateRoutingManagedIntent(ctx, target.AccountID, intent)
+}
+
+func managedIntentForTarget(target business.AccountRoutingTarget, policy writePolicy) business.RoutingManagedIntent {
+	result := business.RoutingManagedIntent{}
+	if policy.autoApply["schedulable"] {
+		result.Schedulable = cloneBool(target.Schedulable)
+	}
+	if policy.autoApply["priority"] {
+		result.Priority = cloneInt(target.Priority)
+	}
+	if policy.autoApply["load_factor"] {
+		result.LoadFactor = cloneString(target.LoadFactor)
+	}
+	if policy.autoApply["concurrency"] {
+		result.Concurrency = cloneInt(target.Concurrency)
+	}
 	return result
 }
 
@@ -1067,43 +1141,6 @@ func (v values) baseline(accountID string, now time.Time) business.RoutingBaseli
 		LoadFactor: cloneString(v.loadFactor), Concurrency: cloneInt(v.concurrency), Status: cloneString(v.status),
 		CapturedAt: now.Format(time.RFC3339Nano), OwnershipVersion: 1,
 	}
-}
-
-func managedIntent(desired map[string]any) (business.RoutingManagedIntent, error) {
-	result := business.RoutingManagedIntent{}
-	if raw, present := desired["schedulable"]; present {
-		value, ok := raw.(bool)
-		if !ok {
-			return result, errors.New("调度写入意图中的 schedulable 无效")
-		}
-		result.Schedulable = &value
-	}
-	for field, target := range map[string]**int64{"priority": &result.Priority, "concurrency": &result.Concurrency} {
-		if raw, present := desired[field]; present {
-			value, err := integer(raw)
-			if err != nil {
-				return result, fmt.Errorf("调度写入意图中的 %s 无效", field)
-			}
-			copy := value
-			*target = &copy
-		}
-	}
-	if raw, present := desired["load_factor"]; present {
-		value, err := optionalNonnegativeIntegerText(raw)
-		if err != nil || value == nil {
-			return result, errors.New("调度写入意图中的 load_factor 无效")
-		}
-		result.LoadFactor = value
-	}
-	if raw, present := desired["status"]; present {
-		value, ok := raw.(string)
-		if !ok || strings.TrimSpace(value) == "" {
-			return result, errors.New("调度写入意图中的 status 无效")
-		}
-		value = strings.TrimSpace(value)
-		result.Status = &value
-	}
-	return result, nil
 }
 
 func sameBool(left, right *bool) bool {

@@ -5,12 +5,127 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{
+		"ix_account_groups_group_account",
+		"ix_bindings_upstream_lookup",
+		"ix_health_samples_account_recent",
+		"ix_health_samples_normalized_source_latest",
+		"ix_health_samples_probe_recent",
+		"ix_health_samples_recent",
+		"ix_operation_audit_apply_error_recent",
+		"ix_operation_audit_log_recent",
+		"ix_operation_audit_recent",
+		"ix_operation_audit_routing_lookup",
+		"ix_operation_audit_type_object_recent",
+		"ix_runtime_events_recent",
+		"ix_runtime_events_log_order",
+		"ix_usage_records_request_recent",
+		"ix_usage_records_source_account_recent",
+	}
+	for _, name := range expected {
+		var count int
+		err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count)
+		if err != nil || count != 1 {
+			t.Fatalf("business index %s missing: count=%d err=%v", name, count, err)
+		}
+	}
+	if _, err := store.db.Exec(`DROP INDEX ix_operation_audit_recent`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	var repaired int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_operation_audit_recent'`).Scan(&repaired); err != nil || repaired != 1 {
+		t.Fatalf("reopening an existing database did not repair indexes: count=%d err=%v", repaired, err)
+	}
+}
+
+func TestOpenAddsManualPriorityBalanceSyncColumnToExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(
+		id,name,priority,load_factor,concurrency,metadata_json,updated_at
+	) VALUES('41','alpha',20,'5',8,'{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO manual_priority_accounts(
+		account_id,priority,created_at,updated_at
+	) VALUES('41',3,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `ALTER TABLE manual_priority_accounts DROP COLUMN sync_balance_multiplier`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	var syncBalanceMultiplier bool
+	if err := reopened.db.QueryRowContext(ctx, `SELECT sync_balance_multiplier
+		FROM manual_priority_accounts WHERE account_id='41'`).Scan(&syncBalanceMultiplier); err != nil {
+		t.Fatal(err)
+	}
+	if syncBalanceMultiplier {
+		t.Fatal("existing manual-priority account unexpectedly enabled balance and multiplier sync")
+	}
+	if _, err := reopened.HostBalanceSyncAllowed(ctx, "api.example"); err != nil {
+		t.Fatalf("host balance policy still fails after reopening: %v", err)
+	}
+	assignment, err := reopened.AssignManualPriority(ctx, "41", 3, "100", 100, true, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !assignment.SyncBalanceMultiplier {
+		t.Fatalf("balance and multiplier sync was not persisted: %#v", assignment)
+	}
+	if err := reopened.db.QueryRowContext(ctx, `SELECT sync_balance_multiplier
+		FROM manual_priority_accounts WHERE account_id='41'`).Scan(&syncBalanceMultiplier); err != nil {
+		t.Fatal(err)
+	}
+	if !syncBalanceMultiplier {
+		t.Fatal("enabled balance and multiplier sync was not stored")
+	}
+}
 
 func TestOpenReservesWriteLockWhenTransactionBegins(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
@@ -141,6 +256,67 @@ func TestExistingBusinessDatabaseOverviewAndModeAreCompatible(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesRemovedSchedulingModeToMonitoring(t *testing.T) {
+	path := createBusinessDatabase(t, `{"keys":["config/a"],"mode":"调度模式","custom":{"enabled":true,"large_id":9007199254740993}}`)
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+
+	snapshot, err := store.RuntimeSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Mode != "监控模式" {
+		t.Fatalf("removed mode was not migrated safely: %#v", snapshot)
+	}
+	var raw string
+	if err := store.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(raw), &config); err != nil {
+		t.Fatal(err)
+	}
+	custom, ok := config["custom"].(map[string]any)
+	if !ok || custom["enabled"] != true {
+		t.Fatalf("mode migration discarded unrelated config: %#v", config)
+	}
+	if !strings.Contains(raw, `"large_id":9007199254740993`) {
+		t.Fatalf("mode migration changed an unrelated numeric value: %s", raw)
+	}
+	var epoch string
+	if err := store.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'`).Scan(&epoch); err != nil || epoch == "" {
+		t.Fatalf("mode migration did not invalidate old routing decisions: epoch=%q err=%v", epoch, err)
+	}
+	if _, err := store.SetMode(ctx, "调度模式"); err == nil {
+		t.Fatal("removed scheduling mode was still accepted")
+	}
+}
+
+func TestOpenLeavesSupportedRuntimeModesUnchanged(t *testing.T) {
+	for _, mode := range []string{"监控模式", "完全模式"} {
+		t.Run(mode, func(t *testing.T) {
+			path := createBusinessDatabase(t, `{"keys":[],"mode":"`+mode+`","custom":"keep"}`)
+			store, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			var raw string
+			var updatedAt string
+			if err := store.db.QueryRow(`SELECT value_json,updated_at FROM app_state WHERE key='config'`).Scan(&raw, &updatedAt); err != nil {
+				t.Fatal(err)
+			}
+			if updatedAt != "now" || raw != `{"keys":[],"mode":"`+mode+`","custom":"keep"}` {
+				t.Fatalf("supported mode was unexpectedly rewritten: value=%s updated_at=%s", raw, updatedAt)
+			}
+		})
+	}
+}
+
 func TestSetModeRejectsMalformedPersistedKeys(t *testing.T) {
 	path := createBusinessDatabase(t, `{"keys":"broken","mode":"监控模式"}`)
 	store, err := Open(path)
@@ -234,6 +410,19 @@ func TestGoBootstrapInitializesFreshDatabaseWithFullModeAndTypedPolicy(t *testin
 	probe := policy["probe"].(map[string]any)
 	if probe["model"] != "" {
 		t.Fatalf("fresh probe.model=%#v, want empty string", probe["model"])
+	}
+	if probe["retry_enabled"] != false || probe["retry_source"] != "fixed" || probe["retry_count"] != int64(0) {
+		t.Fatalf("fresh probe retry policy is not disabled by default: %#v", probe)
+	}
+	if !reflect.DeepEqual(probe["retry_status_codes"], []any{int64(429), int64(500), int64(502), int64(503), int64(504)}) {
+		t.Fatalf("fresh probe retry status codes are invalid: %#v", probe["retry_status_codes"])
+	}
+	pricing := policy["price_management"].(map[string]any)
+	if pricing["enabled"] != false || pricing["profit_margin"] != 0.2 || pricing["interval_seconds"] != int64(120) || pricing["write_concurrency"] != int64(4) {
+		t.Fatalf("fresh price management must be disabled with stable defaults: %#v", pricing)
+	}
+	if groups, ok := pricing["exchange_group_sets"].([]any); !ok || len(groups) != 0 {
+		t.Fatalf("fresh pricing exchange groups must be empty: %#v", pricing["exchange_group_sets"])
 	}
 	if _, present := probe["default_model"]; present {
 		t.Fatalf("fresh policy contains retired probe.default_model: %#v", probe)

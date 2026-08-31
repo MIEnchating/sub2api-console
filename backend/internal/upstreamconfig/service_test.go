@@ -68,7 +68,7 @@ func TestCreateKeepsHostIdentityIndependentFromBaseURL(t *testing.T) {
 		host    string
 		baseURL string
 	}{
-		{host: "152.53.241.112:8080", baseURL: "https://accelerated.example.test:8443/api"},
+		{host: "192.0.2.44:8080", baseURL: "https://accelerated.example.test:8443/api"},
 		{host: "origin.example.test:8081", baseURL: "http://10.0.0.8:8000"},
 	}
 	for _, test := range tests {

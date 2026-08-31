@@ -7,13 +7,19 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
-const sourceLimit = 5000
+const (
+	sourceLimit     = 5000
+	cacheFreshness  = 10 * time.Second
+	refreshTimeout  = 30 * time.Second
+	maximumCacheAge = 5 * time.Minute
+)
 
 type BusinessReader interface {
 	RunRecords(context.Context, *int) ([]business.RunRecord, error)
@@ -22,7 +28,14 @@ type BusinessReader interface {
 }
 
 type TaskReader interface {
-	List(context.Context, *int) ([]taskstore.Task, error)
+	ListLogSummaries(context.Context, *int) ([]taskstore.Task, error)
+	SearchLogs(context.Context, string, *int) ([]taskstore.Task, error)
+}
+
+type businessLogSearcher interface {
+	SearchRunRecords(context.Context, string, *int) ([]business.RunRecord, error)
+	SearchEvents(context.Context, string, *int) ([]business.RunEvent, error)
+	SearchAuditEvents(context.Context, string, *int) ([]business.AuditEvent, error)
 }
 
 type Entry struct {
@@ -57,10 +70,33 @@ type Query struct {
 type Service struct {
 	business BusinessReader
 	tasks    TaskReader
+
+	mu      sync.Mutex
+	cache   map[Query]cachedPage
+	loading map[Query]chan struct{}
+}
+
+type cachedPage struct {
+	page     Page
+	loadedAt time.Time
+}
+
+type logSnapshot struct {
+	taskEntries   []Entry
+	eventEntries  []Entry
+	changeEntries []Entry
+	linkedEvents  map[string]struct{}
+	linkedChanges map[string]struct{}
+	truncated     bool
 }
 
 func New(businessReader BusinessReader, taskReader TaskReader) *Service {
-	return &Service{business: businessReader, tasks: taskReader}
+	return &Service{
+		business: businessReader,
+		tasks:    taskReader,
+		cache:    map[Query]cachedPage{},
+		loading:  map[Query]chan struct{}{},
+	}
 }
 
 func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
@@ -79,63 +115,15 @@ func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
 	if query.Page < 1 || query.PageSize < 1 || query.PageSize > 200 {
 		return Page{}, errors.New("page 必须大于 0，page_size 必须在 1 到 200 之间")
 	}
-	limit := sourceLimit
-	tasks, err := s.tasks.List(ctx, &limit)
-	if err != nil {
-		return Page{}, err
-	}
-	runs, err := s.business.RunRecords(ctx, &limit)
-	if err != nil {
-		return Page{}, err
-	}
-	events, err := s.business.Events(ctx, &limit)
-	if err != nil {
-		return Page{}, err
-	}
-	audits, err := s.business.AuditEvents(ctx, &limit, true)
-	if err != nil {
-		return Page{}, err
-	}
-	taskEntries := make([]Entry, 0, len(tasks)+len(runs))
-	index := map[string]*Entry{}
-	byRunKey := map[string]*Entry{}
-	for _, task := range tasks {
-		entry := taskEntry(task)
-		taskEntries = append(taskEntries, entry)
-		item := &taskEntries[len(taskEntries)-1]
-		index[item.SourceID] = item
-		if runKey := stringValue(task.Result["run_key"]); runKey != "" {
-			byRunKey[runKey] = item
-		}
-	}
-	for _, run := range runs {
-		entry := runEntry(run)
-		if parent := byRunKey[entry.SourceID]; parent != nil {
-			attach(parent, "runs", entry)
-			index[entry.SourceID] = parent
-		} else {
-			taskEntries = append(taskEntries, entry)
-			index[entry.SourceID] = &taskEntries[len(taskEntries)-1]
-		}
-	}
-	eventEntries := make([]Entry, len(events))
-	linkedEvents := map[string]struct{}{}
-	for idx, event := range events {
-		eventEntries[idx] = eventEntry(event)
-		runKey := stringValue(event.Payload["run_key"])
-		if parent := index[runKey]; parent != nil && runKey != "" {
-			attach(parent, "events", eventEntries[idx])
-			linkedEvents[eventEntries[idx].ID] = struct{}{}
-		}
-	}
-	changeEntries := changeEntries(audits)
-	linkedChanges := map[string]struct{}{}
-	for idx := range changeEntries {
-		if parent := index[changeEntries[idx].SourceID]; parent != nil {
-			attach(parent, "changes", changeEntries[idx])
-			linkedChanges[changeEntries[idx].ID] = struct{}{}
-		}
-	}
+	return s.currentPage(ctx, query, strings.TrimSpace(query.Search) == "")
+}
+
+func pageFromSnapshot(query Query, snapshot *logSnapshot) Page {
+	taskEntries := snapshot.taskEntries
+	eventEntries := snapshot.eventEntries
+	changeEntries := snapshot.changeEntries
+	linkedEvents := snapshot.linkedEvents
+	linkedChanges := snapshot.linkedChanges
 	selected := []Entry{}
 	switch query.Kind {
 	case "task":
@@ -191,13 +179,217 @@ func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
 	return Page{
 		Items: filtered[start:end], Total: total, Page: query.Page, PageSize: query.PageSize,
 		Counts:    map[string]int{"task": len(taskEntries), "event": len(eventEntries), "change": len(changeEntries)},
-		Truncated: len(tasks) >= sourceLimit || len(runs) >= sourceLimit || len(events) >= sourceLimit || len(audits) >= sourceLimit,
+		Truncated: snapshot.truncated,
+	}
+}
+
+func (s *Service) currentPage(ctx context.Context, query Query, allowStale bool) (Page, error) {
+	for {
+		s.mu.Lock()
+		current, exists := s.cache[query]
+		fresh := exists && time.Since(current.loadedAt) < cacheFreshness
+		if fresh {
+			s.mu.Unlock()
+			return current.page, nil
+		}
+		if exists && allowStale {
+			if s.loading[query] == nil {
+				s.loading[query] = make(chan struct{})
+				go s.refreshPage(query)
+			}
+			s.mu.Unlock()
+			return current.page, nil
+		}
+		if loading := s.loading[query]; loading != nil {
+			s.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return Page{}, ctx.Err()
+			case <-loading:
+			}
+			continue
+		}
+		s.loading[query] = make(chan struct{})
+		s.mu.Unlock()
+
+		loaded, err := s.loadPage(ctx, query)
+		s.finishRefresh(query, loaded, err)
+		if err != nil {
+			return Page{}, err
+		}
+		return loaded, nil
+	}
+}
+
+func (s *Service) refreshPage(query Query) {
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	defer cancel()
+	loaded, err := s.loadPage(ctx, query)
+	s.finishRefresh(query, loaded, err)
+}
+
+func (s *Service) finishRefresh(query Query, loaded Page, err error) {
+	s.mu.Lock()
+	if err == nil {
+		now := time.Now()
+		s.cache[query] = cachedPage{page: loaded, loadedAt: now}
+		for key, value := range s.cache {
+			if now.Sub(value.loadedAt) > maximumCacheAge {
+				delete(s.cache, key)
+			}
+		}
+	}
+	loading := s.loading[query]
+	delete(s.loading, query)
+	if loading != nil {
+		close(loading)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) loadPage(ctx context.Context, query Query) (Page, error) {
+	search := strings.TrimSpace(query.Search)
+	useSummaries := search == ""
+	snapshot, err := s.loadSnapshot(ctx, useSummaries, search)
+	if err != nil {
+		return Page{}, err
+	}
+	page := pageFromSnapshot(query, snapshot)
+	return page, nil
+}
+
+func (s *Service) loadSnapshot(ctx context.Context, useTaskSummaries bool, taskSearch string) (*logSnapshot, error) {
+	type taskResult struct {
+		items []taskstore.Task
+		err   error
+	}
+	type runResult struct {
+		items []business.RunRecord
+		err   error
+	}
+	type eventResult struct {
+		items []business.RunEvent
+		err   error
+	}
+	type auditResult struct {
+		items []business.AuditEvent
+		err   error
+	}
+	taskResults := make(chan taskResult, 1)
+	runResults := make(chan runResult, 1)
+	eventResults := make(chan eventResult, 1)
+	auditResults := make(chan auditResult, 1)
+	go func() {
+		limit := sourceLimit
+		var items []taskstore.Task
+		var err error
+		if useTaskSummaries {
+			items, err = s.tasks.ListLogSummaries(ctx, &limit)
+		} else if taskSearch != "" {
+			items, err = s.tasks.SearchLogs(ctx, taskSearch, &limit)
+		}
+		taskResults <- taskResult{items: items, err: err}
+	}()
+	go func() {
+		limit := sourceLimit
+		var items []business.RunRecord
+		var err error
+		if taskSearch != "" {
+			if reader, ok := s.business.(businessLogSearcher); ok {
+				items, err = reader.SearchRunRecords(ctx, taskSearch, &limit)
+			} else {
+				items, err = s.business.RunRecords(ctx, &limit)
+			}
+		} else {
+			items, err = s.business.RunRecords(ctx, &limit)
+		}
+		runResults <- runResult{items: items, err: err}
+	}()
+	go func() {
+		limit := sourceLimit
+		var items []business.RunEvent
+		var err error
+		if taskSearch != "" {
+			if reader, ok := s.business.(businessLogSearcher); ok {
+				items, err = reader.SearchEvents(ctx, taskSearch, &limit)
+			} else {
+				items, err = s.business.Events(ctx, &limit)
+			}
+		} else {
+			items, err = s.business.Events(ctx, &limit)
+		}
+		eventResults <- eventResult{items: items, err: err}
+	}()
+	go func() {
+		limit := sourceLimit
+		var items []business.AuditEvent
+		var err error
+		if taskSearch != "" {
+			if reader, ok := s.business.(businessLogSearcher); ok {
+				items, err = reader.SearchAuditEvents(ctx, taskSearch, &limit)
+			} else {
+				items, err = s.business.AuditEvents(ctx, &limit, true)
+			}
+		} else {
+			items, err = s.business.AuditEvents(ctx, &limit, true)
+		}
+		auditResults <- auditResult{items: items, err: err}
+	}()
+	taskLoad, runLoad, eventLoad, auditLoad := <-taskResults, <-runResults, <-eventResults, <-auditResults
+	if err := errors.Join(taskLoad.err, runLoad.err, eventLoad.err, auditLoad.err); err != nil {
+		return nil, err
+	}
+	tasks, runs, events, audits := taskLoad.items, runLoad.items, eventLoad.items, auditLoad.items
+	taskEntries := make([]Entry, 0, len(tasks)+len(runs))
+	index := map[string]*Entry{}
+	byRunKey := map[string]*Entry{}
+	for _, task := range tasks {
+		entry := taskEntry(task)
+		taskEntries = append(taskEntries, entry)
+		item := &taskEntries[len(taskEntries)-1]
+		index[item.SourceID] = item
+		if runKey := stringValue(task.Result["run_key"]); runKey != "" {
+			byRunKey[runKey] = item
+		}
+	}
+	for _, run := range runs {
+		entry := runEntry(run)
+		if parent := byRunKey[entry.SourceID]; parent != nil {
+			attach(parent, "runs", entry)
+			index[entry.SourceID] = parent
+		} else {
+			taskEntries = append(taskEntries, entry)
+			index[entry.SourceID] = &taskEntries[len(taskEntries)-1]
+		}
+	}
+	eventEntries := make([]Entry, len(events))
+	linkedEvents := map[string]struct{}{}
+	for idx, event := range events {
+		eventEntries[idx] = eventEntry(event)
+		runKey := stringValue(event.Payload["run_key"])
+		if parent := index[runKey]; parent != nil && runKey != "" {
+			attach(parent, "events", eventEntries[idx])
+			linkedEvents[eventEntries[idx].ID] = struct{}{}
+		}
+	}
+	changeEntries := changeEntries(audits)
+	linkedChanges := map[string]struct{}{}
+	for idx := range changeEntries {
+		if parent := index[changeEntries[idx].SourceID]; parent != nil {
+			attach(parent, "changes", changeEntries[idx])
+			linkedChanges[changeEntries[idx].ID] = struct{}{}
+		}
+	}
+	return &logSnapshot{
+		taskEntries: taskEntries, eventEntries: eventEntries, changeEntries: changeEntries,
+		linkedEvents: linkedEvents, linkedChanges: linkedChanges,
+		truncated: len(tasks) >= sourceLimit || len(runs) >= sourceLimit || len(events) >= sourceLimit || len(audits) >= sourceLimit,
 	}, nil
 }
 
 func taskEntry(task taskstore.Task) Entry {
 	var object *string
-	for _, field := range []string{"host", "account_name", "account_id"} {
+	for _, field := range []string{"host", "account_name", "account_id", "object_label"} {
 		if value := stringValue(task.Result[field]); value != "" {
 			object = &value
 			break

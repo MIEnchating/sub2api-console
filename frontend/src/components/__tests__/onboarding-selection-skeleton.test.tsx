@@ -16,7 +16,10 @@ describe("OnboardingSelectionSkeleton", () => {
     expect(markup).toContain('data-onboarding-skeleton="groups"');
     expect(markup).not.toContain('data-onboarding-skeleton="action"');
     expect(markup).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
-    expect(markup).toContain("绑定到本地分组");
+    expect(markup).toContain("min-w-[1080px]");
+    expect(markup).toContain("本地分组");
+    expect(markup).toContain("状态");
+    expect(markup).not.toContain("绑定到本地分组");
     expect(markup).toContain("操作");
     expect(markup.indexOf('data-onboarding-skeleton="groups"')).toBeLessThan(
       markup.indexOf('data-onboarding-skeleton="form"'),

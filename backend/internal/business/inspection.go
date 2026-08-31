@@ -306,6 +306,10 @@ func (s *Store) ActiveInspectionCheckedAt(ctx context.Context, now time.Time) (*
 }
 
 func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Time) (int, error) {
+	needed, err := s.inspectionReconciliationNeeded(ctx, now.UTC())
+	if err != nil || !needed {
+		return 0, err
+	}
 	connection, err := s.db.Conn(ctx)
 	if err != nil {
 		return 0, err
@@ -375,6 +379,38 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 	return interrupted, nil
 }
 
+func (s *Store) inspectionReconciliationNeeded(ctx context.Context, now time.Time) (bool, error) {
+	lease, err := readInspectionLease(ctx, s.db)
+	if err != nil {
+		return false, err
+	}
+	activeCheckedAt := ""
+	if lease != nil {
+		if !inspectionLeaseActive(*lease, now.UTC()) {
+			return true, nil
+		}
+		activeCheckedAt = lease.CheckedAt
+	}
+	var raw string
+	err = s.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	records := []InspectionHeartbeat{}
+	if json.Unmarshal([]byte(raw), &records) != nil {
+		return false, nil
+	}
+	for _, record := range records {
+		if record.Status == "running" && record.CheckedAt != activeCheckedAt {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (s *Store) InspectionTaskDue(ctx context.Context, taskName string, intervalSeconds int, now time.Time) (bool, error) {
 	if intervalSeconds < 1 || intervalSeconds > 86400 {
 		return false, errors.New("interval_seconds 必须在 1 到 86400 之间")
@@ -414,27 +450,28 @@ func (s *Store) MarkInspectionTask(ctx context.Context, taskName string, now tim
 // policy changed, or a current decision lacks a successful writeback attempt.
 // It covers policy-only changes, explicit failures, and a process interruption
 // between decision persistence and apply.
+const routingWritebackPendingSQL = `WITH current_decisions AS (
+	SELECT rd.account_id,MAX(rd.updated_at) AS decided_at
+	FROM routing_decisions rd
+	WHERE rd.updated_at>=COALESCE(
+		(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
+	GROUP BY rd.account_id
+), latest_attempt AS (
+	SELECT cd.account_id,cd.decided_at,
+		(SELECT oa.state FROM operation_audit oa
+		 WHERE oa.operation_type='routing.writeback' AND oa.object_id=cd.account_id
+		   AND oa.created_at>=cd.decided_at
+		 ORDER BY oa.created_at DESC,oa.source_id ASC LIMIT 1) AS state
+	FROM current_decisions cd
+)
+	SELECT CASE WHEN
+		COALESCE((SELECT MAX(updated_at) FROM policy_nodes WHERE policy_key='control-plane'),'') >
+		COALESCE((SELECT updated_at FROM app_state WHERE key=?),'')
+	THEN 1 ELSE EXISTS(SELECT 1 FROM latest_attempt WHERE state IS NULL OR state<>'succeeded') END`
+
 func (s *Store) RoutingWritebackPending(ctx context.Context) (bool, error) {
 	var pending int
-	err := s.db.QueryRowContext(ctx, `WITH current_decisions AS (
-		SELECT rd.account_id,MAX(rd.updated_at) AS decided_at
-		FROM routing_decisions rd
-		WHERE julianday(rd.updated_at)>=COALESCE(
-			(SELECT julianday(updated_at) FROM app_state WHERE key='routing-decision-epoch'),
-			julianday(rd.updated_at))
-		GROUP BY rd.account_id
-	), latest_attempt AS (
-		SELECT cd.account_id,cd.decided_at,
-			(SELECT oa.state FROM operation_audit oa
-			 WHERE oa.operation_type='routing.writeback' AND oa.object_id=cd.account_id
-			   AND julianday(oa.created_at)>=julianday(cd.decided_at)
-			 ORDER BY julianday(oa.created_at) DESC,oa.source_id ASC LIMIT 1) AS state
-		FROM current_decisions cd
-	)
-		SELECT CASE WHEN
-			COALESCE((SELECT MAX(julianday(updated_at)) FROM policy_nodes WHERE policy_key='control-plane'),0) >
-			COALESCE((SELECT julianday(updated_at) FROM app_state WHERE key=?),0)
-		THEN 1 ELSE EXISTS(SELECT 1 FROM latest_attempt WHERE state IS NULL OR state<>'succeeded') END`,
+	err := s.db.QueryRowContext(ctx, routingWritebackPendingSQL,
 		routingCalculationKey).Scan(&pending)
 	return pending == 1, err
 }

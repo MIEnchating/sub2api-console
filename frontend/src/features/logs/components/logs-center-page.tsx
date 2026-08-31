@@ -112,7 +112,7 @@ function LogStateFilter(props: {
   );
 }
 
-export function EventLevelFilter(props: {
+function EventLevelFilter(props: {
   value: UnifiedLogEventLevel;
   onChange: (value: UnifiedLogEventLevel) => void;
 }) {
@@ -265,7 +265,17 @@ export function LogsFilterToolbar(props: {
 }
 
 function LogDetailsDialog(props: { entry: UnifiedLogEntry | null; onClose: () => void }) {
-  const detailRows = props.entry ? logDetailRows(props.entry.details) : [];
+  const taskDetail = useQuery({
+    queryKey: ["task", props.entry?.source_id],
+    queryFn: () => api.task(props.entry!.source_id),
+    enabled: props.entry?.source === "task",
+    retry: false,
+  });
+  const details = props.entry ? { ...props.entry.details } : {};
+  if (props.entry?.source === "task" && taskDetail.data) {
+    details.result = taskDetail.data.result;
+  }
+  const detailRows = props.entry ? logDetailRows(details) : [];
   const events = props.entry ? relatedEvents(props.entry) : [];
   const changes = props.entry ? relatedChanges(props.entry) : [];
   return (

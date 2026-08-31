@@ -113,7 +113,7 @@ describe("manual priority request contract", () => {
       .mockResolvedValueOnce(taskResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.setAccountManualPriority("account/41", 3, "100", 100);
+    await api.setAccountManualPriority("account/41", 3, "100", 100, true);
     await expect(api.clearAccountManualPriority("account/41")).resolves.toMatchObject({
       id: "task-1",
       status: "queued",
@@ -126,6 +126,7 @@ describe("manual priority request contract", () => {
       priority: 3,
       load_factor: "100",
       concurrency: 100,
+      sync_balance_multiplier: true,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/account%2F41/manual-priority");
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("DELETE");
@@ -274,6 +275,20 @@ describe("model check request contract", () => {
       rounds: 2,
       timeout_seconds: 45,
     });
+  });
+
+  it("reads persisted model check status for the account selector", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.modelCheckAccountStatuses();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/model-checks/account-statuses");
   });
 });
 
@@ -436,8 +451,9 @@ describe("onboarding request contract", () => {
         host: "https://upstream.test",
         upstream_type: "sub2api",
         multiplier: "0.2",
-        local_group_id: 3,
+        local_group_ids: [3, 5],
         upstream_group_id: "group-a",
+        account_ids: ["77"],
       },
       {
         host: "https://upstream.test",
@@ -451,7 +467,10 @@ describe("onboarding request contract", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/onboarding/batch");
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(request.method).toBe("POST");
-    expect(JSON.parse(String(request.body)).items).toHaveLength(2);
+    const items = JSON.parse(String(request.body)).items;
+    expect(items).toHaveLength(2);
+    expect(items[0].local_group_ids).toEqual([3, 5]);
+    expect(items[0].account_ids).toEqual(["77"]);
   });
 
   it("creates and verifies the upstream before preparing account candidates", async () => {

@@ -133,7 +133,7 @@ func (s *Store) RuntimeSnapshot(ctx context.Context) (RuntimeSnapshot, error) {
 
 func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, error) {
 	if !validMode(mode) {
-		return RuntimeSnapshot{}, errors.New("运行模式只能是监控模式、调度模式或完全模式")
+		return RuntimeSnapshot{}, errors.New("运行模式只能是监控模式或完全模式")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -152,7 +152,7 @@ func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, erro
 
 func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now string) (bool, error) {
 	if !validMode(mode) {
-		return false, errors.New("运行模式只能是监控模式、调度模式或完全模式")
+		return false, errors.New("运行模式只能是监控模式或完全模式")
 	}
 	var raw string
 	err := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)

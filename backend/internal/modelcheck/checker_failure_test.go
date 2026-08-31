@@ -47,7 +47,7 @@ func TestClaudeCheckReportsRequestFailureWhenEveryBundleFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runClaudeCheck(context.Background(), failingBundleSender{err: visibleRequestError{message: "account test rejected"}}, profiles, targetRequest{
+	result, err := runClaudeCheck(context.Background(), failingBundleSender{err: visibleRequestError{message: "upstream request rejected"}}, profiles, targetRequest{
 		AccountID: "14", AccountName: "测试账号", Model: "claude-opus-5", Rounds: 1, TimeoutSeconds: 5,
 	})
 	if err != nil {
@@ -56,13 +56,13 @@ func TestClaudeCheckReportsRequestFailureWhenEveryBundleFails(t *testing.T) {
 	if result["verdict"] != "ERROR" {
 		t.Fatalf("verdict=%v want ERROR", result["verdict"])
 	}
-	if failure, _ := result["error"].(string); !strings.Contains(failure, "account test rejected") {
+	if failure, _ := result["error"].(string); !strings.Contains(failure, "upstream request rejected") {
 		t.Fatalf("error=%v", result["error"])
 	}
 }
 
-func TestAccountTestErrorIsRedactedAndBounded(t *testing.T) {
-	message := safeAccountTestError("api_key: top-secret " + strings.Repeat("x", 400))
+func TestDirectRequestErrorIsRedactedAndBounded(t *testing.T) {
+	message := safeCredentialText("api_key: top-secret " + strings.Repeat("x", 400))
 	if strings.Contains(message, "top-secret") {
 		t.Fatalf("secret was not redacted: %q", message)
 	}
@@ -71,12 +71,12 @@ func TestAccountTestErrorIsRedactedAndBounded(t *testing.T) {
 	}
 }
 
-func TestRequestBundleExplainsLegacyFixedGreeting(t *testing.T) {
+func TestRequestBundleExplainsFixedGreetingFromUpstream(t *testing.T) {
 	result := requestBundle(context.Background(), textBundleSender{text: "Hi! What would you like to work on?"}, targetRequest{
 		AccountID: "16", AccountName: "测试账号", Model: "gpt-5.6-sol", TimeoutSeconds: 5,
 	}, []probe{{ID: "probe-1", Kind: "numeric", Question: "1 + 1 = ?"}}, 1, "sol")
 
-	if result.Err == nil || !strings.Contains(result.Err.Error(), "不支持行为检测") {
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "上游未按检测提示返回结果") {
 		t.Fatalf("error=%v", result.Err)
 	}
 }
@@ -91,14 +91,14 @@ func TestRequestBundleKeepsGenericInvalidJSONError(t *testing.T) {
 	}
 }
 
-func TestRequestFailureReasonPrioritizesLegacyVersionError(t *testing.T) {
+func TestRequestFailureReasonPrioritizesFixedGreetingError(t *testing.T) {
 	rows := []bundleResult{
 		{Err: errors.New("响应未包含符合要求的 JSON 数组")},
-		{Err: errors.New("目标 Sub2API 版本不支持行为检测：账号测试通道未转发检测题目，请升级 Sub2API 服务端")},
+		{Err: errors.New("上游未按检测提示返回结果：响应为固定问候语，可能忽略或覆盖了提示词")},
 	}
 
 	reason := requestFailureReason(rows)
-	if reason != "目标 Sub2API 版本不支持行为检测：账号测试通道未转发检测题目，请升级 Sub2API 服务端" {
+	if reason != "上游未按检测提示返回结果：响应为固定问候语，可能忽略或覆盖了提示词" {
 		t.Fatalf("reason=%q", reason)
 	}
 }

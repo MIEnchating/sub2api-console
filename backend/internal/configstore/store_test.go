@@ -103,6 +103,14 @@ func TestSessionUsesOnlyTokenDigestAndSurvivesStoreReopen(t *testing.T) {
 	}
 }
 
+func TestOpenCreatesSessionExpiryIndex(t *testing.T) {
+	store := openTestStore(t)
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_console_sessions_expires_at'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("session expiry index missing: count=%d err=%v", count, err)
+	}
+}
+
 func TestOpenPreservesExistingSettingsTable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "console-config.sqlite3")
 	database, err := sql.Open("sqlite", "file:"+path)
@@ -160,6 +168,35 @@ func TestConfigureTargetPreservesExistingAdminKeyWhenRequestOmitsIt(t *testing.T
 	}
 	if values["target.admin_key"] != "existing-key" {
 		t.Fatal("blank Admin Key must preserve the existing secret")
+	}
+}
+
+func TestAccountDefaultsUseSharedDefaultsAndPersistOverrides(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	defaults, err := store.AccountDefaults(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaults.Concurrency != 10 || defaults.Priority != 1 {
+		t.Fatalf("defaults=%#v", defaults)
+	}
+	configured, err := store.ConfigureAccountDefaults(ctx, 24, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured.Concurrency != 24 || configured.Priority != 7 {
+		t.Fatalf("configured=%#v", configured)
+	}
+	loaded, err := store.AccountDefaults(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != configured {
+		t.Fatalf("loaded=%#v configured=%#v", loaded, configured)
+	}
+	if _, err := store.ConfigureAccountDefaults(ctx, 0, 1); err == nil {
+		t.Fatal("zero concurrency must be rejected")
 	}
 }
 

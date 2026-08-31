@@ -90,7 +90,7 @@ func TestCollectTrafficUsesConfiguredBoundedConcurrency(t *testing.T) {
 	}
 }
 
-func TestConvertTrafficRowsUsesDurationAsTrafficTTFBFallback(t *testing.T) {
+func TestConvertTrafficRowsUsesTotalDurationForCombinedLatency(t *testing.T) {
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	rows := []map[string]any{{
 		"account_id": "41", "request_id": "request-1", "kind": "success",
@@ -108,11 +108,19 @@ func TestConvertTrafficRowsUsesDurationAsTrafficTTFBFallback(t *testing.T) {
 	if malformed != 0 || len(samples) != 1 {
 		t.Fatalf("converted=%#v malformed=%d", samples, malformed)
 	}
-	if samples[0].LatencyP50 == nil || samples[0].LatencyP95 == nil || samples[0].LatencyP99 == nil || *samples[0].LatencyP95 != "195843" {
-		t.Fatalf("真实流量缺少首字字段时没有按 Guardian 口径回退到整体耗时：%#v", samples[0])
+	if samples[0].LatencyP50 == nil || *samples[0].LatencyP50 != "195843" ||
+		samples[0].LatencyP95 == nil || *samples[0].LatencyP95 != "195843" ||
+		samples[0].LatencyP99 == nil || *samples[0].LatencyP99 != "195843" {
+		t.Fatalf("真实流量总耗时没有进入综合延迟：%#v", samples[0])
 	}
-	if samples[0].Payload["duration_ms"] != "195843" || samples[0].Payload["duration_unit"] != "ms" || samples[0].Payload["latency_metric"] != "ttfb" {
+	if samples[0].Payload["duration_ms"] != "195843" || samples[0].Payload["duration_unit"] != "ms" {
 		t.Fatalf("整体请求耗时没有按原语义保存：%#v", samples[0].Payload)
+	}
+	if samples[0].Payload["latency_metric"] != "request_duration" {
+		t.Fatalf("真实流量综合延迟指标错误：%#v", samples[0].Payload)
+	}
+	if samples[0].Payload["latency_source"] != "operations.duration_ms" {
+		t.Fatalf("真实流量综合延迟来源错误：%#v", samples[0].Payload)
 	}
 }
 
@@ -131,7 +139,7 @@ func TestConvertTrafficRowsStoresOneSampleForMultiGroupAccount(t *testing.T) {
 	}
 }
 
-func TestConvertTrafficRowsUsesExplicitFirstTokenLatency(t *testing.T) {
+func TestConvertTrafficRowsKeepsExplicitFirstTokenSeparateFromCombinedLatency(t *testing.T) {
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	rows := []map[string]any{{
 		"account_id": "41", "request_id": "request-1", "kind": "success",
@@ -147,11 +155,11 @@ func TestConvertTrafficRowsUsesExplicitFirstTokenLatency(t *testing.T) {
 		10,
 	)
 
-	if malformed != 0 || len(samples) != 1 || samples[0].LatencyP95 == nil || *samples[0].LatencyP95 != "1250" {
+	if malformed != 0 || len(samples) != 1 || samples[0].LatencyP95 == nil || *samples[0].LatencyP95 != "195843" {
 		t.Fatalf("converted=%#v malformed=%d", samples, malformed)
 	}
-	if samples[0].Payload["latency_metric"] != "first_token" {
-		t.Fatalf("首字延迟缺少明确指标标记：%#v", samples[0].Payload)
+	if samples[0].Payload["latency_metric"] != "request_duration" || samples[0].Payload["first_token_ms"] != "1250" {
+		t.Fatalf("真实流量总耗时和首字没有分开保存：%#v", samples[0].Payload)
 	}
 }
 

@@ -8,6 +8,7 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     id: "1",
     name: "operator",
     groups: ["default"],
+    upstream_id: "up_test",
     upstream_host: "api.example.test",
     upstream_type: "apikey",
     schedulable: true,

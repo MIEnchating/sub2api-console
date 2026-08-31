@@ -120,13 +120,3 @@ func TestGroupAllocationCountsUnprobedSchedulableAccountAsAvailable(t *testing.T
 		t.Fatalf("unprobed account classification=%#v", allocation)
 	}
 }
-
-func TestGroupAllocationUsesEffectiveAccountStateInsteadOfPendingDecision(t *testing.T) {
-	account := &accountProjection{AccountStatus: AccountStatus{Health: AccountStateHealthy}}
-	if got := allocationHealth(account); got != AccountStateHealthy {
-		t.Fatalf("effective health=%q", got)
-	}
-	if got := allocationHealth(nil); got != AccountStateUnknown {
-		t.Fatalf("missing account health=%q", got)
-	}
-}

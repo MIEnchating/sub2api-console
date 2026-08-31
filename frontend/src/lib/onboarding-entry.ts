@@ -7,6 +7,28 @@ export type OnboardingBaseUrlFields = {
   baseUrl: string;
 };
 
+export type OnboardingUpstreamTarget = {
+  host: string;
+  name: string;
+  upstream_type: string;
+};
+
+export function adjacentOnboardingUpstreams(
+  upstreams: OnboardingUpstreamTarget[],
+  currentHost: string | null,
+): { previous: OnboardingUpstreamTarget | null; next: OnboardingUpstreamTarget | null } {
+  const normalizedCurrent = currentHost?.trim().toLocaleLowerCase();
+  if (!normalizedCurrent) return { previous: null, next: null };
+  const currentIndex = upstreams.findIndex(
+    (upstream) => upstream.host.trim().toLocaleLowerCase() === normalizedCurrent,
+  );
+  if (currentIndex < 0) return { previous: null, next: null };
+  return {
+    previous: currentIndex > 0 ? upstreams[currentIndex - 1] : null,
+    next: currentIndex + 1 < upstreams.length ? upstreams[currentIndex + 1] : null,
+  };
+}
+
 export function normalizeOnboardingHost(value: string): string {
   const trimmed = value.trim();
   if (!trimmed || trimmed.includes("://") || /[/\\?#]/.test(trimmed)) return "";
@@ -64,9 +86,71 @@ export function onboardingSelectionTitle(kind: OnboardingEntryKind): string {
 }
 
 export function candidateCanCreateKey(
-  candidate: Pick<OnboardingCandidate, "can_create_key">,
+  candidate: Pick<OnboardingCandidate, "can_create_key"> &
+    Partial<Pick<OnboardingCandidate, "bound" | "bound_accounts">>,
 ): boolean {
-  return candidate.can_create_key;
+  return candidate.can_create_key && !candidateHasExistingBinding(candidate);
+}
+
+export function candidateHasExistingBinding(
+  candidate: Partial<Pick<OnboardingCandidate, "bound" | "bound_accounts">>,
+): boolean {
+  return (candidate.bound_accounts ?? []).some(
+    (account) => account.account_exists && account.binding_status !== "missing",
+  );
+}
+
+export function candidateBoundLocalGroups(
+  candidate: Partial<Pick<OnboardingCandidate, "bound_accounts">>,
+): string[] {
+  return [
+    ...new Set(
+      (candidate.bound_accounts ?? [])
+        .filter((account) => account.account_exists && account.binding_status !== "missing")
+        .flatMap((account) => {
+          const groups = account.local_groups?.map((group) => group.name.trim()).filter(Boolean);
+          return groups?.length ? groups : [account.local_group.trim()];
+        })
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+export function candidateBoundLocalGroupIDs(
+  candidate: Partial<Pick<OnboardingCandidate, "bound_accounts">>,
+): string[] {
+  return [
+    ...new Set(
+      (candidate.bound_accounts ?? [])
+        .filter((account) => account.account_exists && account.binding_status !== "missing")
+        .flatMap((account) => account.local_groups?.map((group) => group.id.trim()) ?? [])
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+export function candidateBoundAccountIDs(
+  candidate: Partial<Pick<OnboardingCandidate, "bound_accounts">>,
+): string[] {
+  return [
+    ...new Set(
+      (candidate.bound_accounts ?? [])
+        .filter((account) => account.account_exists && account.binding_status !== "missing")
+        .map((account) => account.account_id.trim())
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+export function localGroupMultiplierLabel(
+  groups: Array<{ rate_multiplier?: string | null }>,
+): string {
+  if (groups.length === 0) return "—";
+  return [...new Set(groups.map((group) => group.rate_multiplier?.trim() || "未设置"))].join("、");
+}
+
+export function sameOnboardingGroupSelection(left: string[], right: string[]): boolean {
+  return [...new Set(left)].sort().join(",") === [...new Set(right)].sort().join(",");
 }
 
 export function rechargeRatioLabel(rechargeRate: string | null): string {

@@ -103,6 +103,42 @@ func (s *Store) CommitAccountFieldsReadback(
 	})
 }
 
+func (s *Store) CommitAccountGroupsReadback(
+	ctx context.Context,
+	accountID string,
+	groups []LocalOnboardingGroup,
+	operation AccountOperation,
+) error {
+	if len(groups) == 0 {
+		return errors.New("账号至少需要保留一个本地分组")
+	}
+	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, accountID); err != nil {
+			return err
+		}
+		for _, group := range groups {
+			result, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+				SELECT ?,name,remote_id,rate_multiplier FROM local_groups WHERE remote_id=?`, accountID, group.ID)
+			if err != nil {
+				return err
+			}
+			if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+				return errors.New("目标本地分组不存在")
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE bindings SET local_group=?,updated_at=? WHERE local_account_id=?`,
+			groups[0].Name, now, accountID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at=? WHERE id=?`, now, accountID); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(SELECT COUNT(*) FROM account_groups
+			WHERE group_name=local_groups.name),updated_at=?`, now)
+		return err
+	})
+}
+
 func (s *Store) RecordAccountOperation(ctx context.Context, operation AccountOperation) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

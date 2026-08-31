@@ -27,6 +27,17 @@ describe("模型检测页面", () => {
       claude_standards: ["claude-opus-5"],
       sol_models: ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra"],
     });
+    queryClient.setQueryData(
+      ["model-check-account-statuses"],
+      [
+        {
+          account_id: "41",
+          status: "inconclusive",
+          checked_at: "2026-08-31T02:15:00Z",
+          task_id: "model-check-previous",
+        },
+      ],
+    );
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
@@ -42,5 +53,8 @@ describe("模型检测页面", () => {
     expect(markup).toContain("开始检测");
     expect(markup).not.toContain("接口地址");
     expect(markup).not.toContain("API Key");
+    expect(markup).not.toContain("健康");
+    expect(markup).toContain("无法判定");
+    expect(markup).toContain("上次检测");
   });
 });

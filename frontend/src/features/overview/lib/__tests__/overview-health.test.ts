@@ -13,6 +13,7 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     id: "1",
     name: "账号 1",
     groups: ["codex"],
+    upstream_id: "up_test",
     upstream_host: "api.example.com",
     upstream_type: "newapi",
     schedulable: true,

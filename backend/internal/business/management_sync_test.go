@@ -25,6 +25,7 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 			"id": json.Number("11"), "name": "alpha", "schedulable": true,
 			"priority": json.Number("20"), "load_factor": json.Number("3"), "rate_multiplier": json.Number("0.25"),
 			"groups": []any{json.Number("7")}, "group_rate_by_group": map[string]any{"codex": json.Number("4")},
+			"credentials": map[string]any{"base_url": "https://api.openai.com/v1", "api_key": "must-not-persist"},
 		},
 		{"id": json.Number("12"), "name": "retained", "groups": []any{}},
 	}, []map[string]any{
@@ -88,6 +89,116 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 	}
 	if groupRate != "0.17" {
 		t.Fatalf("account multiplier update left stale membership rate: %q", groupRate)
+	}
+	var metadataRaw string
+	if err := db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='11'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metadataRaw, `"base_url":"https://api.openai.com/v1"`) || strings.Contains(metadataRaw, "must-not-persist") {
+		t.Fatalf("account Base URL was not safely projected: %s", metadataRaw)
+	}
+}
+
+func TestManagementSnapshotKeepsBaseURLWhenListCredentialsOmitIt(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "management-base-url.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("11"), "name": "alpha", "credentials": map[string]any{"base_url": "https://api.openai.com/v1"},
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("11"), "name": "alpha", "credentials": map[string]any{},
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	var metadataRaw string
+	if err := store.db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='11'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metadataRaw, `"base_url":"https://api.openai.com/v1"`) {
+		t.Fatalf("partial account list erased Base URL: %s", metadataRaw)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("11"), "name": "alpha", "base_url": nil,
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='11'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(metadataRaw, "base_url") {
+		t.Fatalf("explicit Base URL removal was ignored: %s", metadataRaw)
+	}
+}
+
+func TestCommitAccountBaseURLObservationsOnlyUpdatesBaseURLMetadata(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "base-url-observations.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO accounts(
+		id,name,schedulable,priority,load_factor,concurrency,metadata_json,updated_at
+	) VALUES('11','alpha',1,20,'80',40,'{"platform":"openai","base_url":"https://old.example.test"}','before')`); err != nil {
+		t.Fatal(err)
+	}
+	baseURL := " https://relay.example.test/v1 "
+	if err := store.CommitAccountBaseURLObservations(ctx, []AccountBaseURLObservation{{
+		AccountID: "11", BaseURL: &baseURL, Source: "platform_default",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var name, loadFactor, metadataRaw string
+	var schedulable bool
+	var priority, concurrency int
+	if err := store.db.QueryRow(`SELECT name,schedulable,priority,load_factor,concurrency,metadata_json
+		FROM accounts WHERE id='11'`).Scan(&name, &schedulable, &priority, &loadFactor, &concurrency, &metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if name != "alpha" || !schedulable || priority != 20 || loadFactor != "80" || concurrency != 40 {
+		t.Fatalf("unrelated account fields changed: name=%q schedulable=%v priority=%d load=%q concurrency=%d", name, schedulable, priority, loadFactor, concurrency)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["platform"] != "openai" || metadata["base_url"] != "https://relay.example.test/v1" ||
+		metadata["base_url_source"] != "platform_default" || metadata["base_url_checked_at"] == nil {
+		t.Fatalf("metadata=%#v", metadata)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("11"), "name": "alpha", "credentials": map[string]any{},
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='11'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metadataRaw, `"base_url":"https://relay.example.test/v1"`) ||
+		!strings.Contains(metadataRaw, `"base_url_source":"platform_default"`) {
+		t.Fatalf("partial management sync erased dedicated validation: %s", metadataRaw)
+	}
+	if err := store.CommitAccountBaseURLObservations(ctx, []AccountBaseURLObservation{{AccountID: "11"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='11'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(metadataRaw, `"base_url":`) || strings.Contains(metadataRaw, `"base_url_source":`) ||
+		!strings.Contains(metadataRaw, `"base_url_checked_at":`) || !strings.Contains(metadataRaw, `"platform":"openai"`) {
+		t.Fatalf("cleared metadata=%s", metadataRaw)
 	}
 }
 

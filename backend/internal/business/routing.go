@@ -11,29 +11,36 @@ import (
 )
 
 type RoutingAccount struct {
-	ID                 string
-	Name               string
-	GroupName          string
-	GroupID            *string
-	GroupRate          *string
-	GroupCostWall      *string
-	ProfitEnabled      *bool
-	ProfitMinMargin    *string
-	ProfitSafetyBuffer *string
-	UpstreamHost       *string
-	UpstreamType       *string
-	UpstreamAuthStatus *string
-	Schedulable        *bool
-	Priority           *int64
-	ManualPriority     *int64
-	BaselinePriority   *int64
-	LoadFactor         *string
-	Concurrency        *int64
-	Multiplier         *string
-	Paused             bool
-	PausedReason       *string
-	EffectiveState     string
-	Metadata           map[string]any
+	ID                   string
+	Name                 string
+	GroupName            string
+	GroupID              *string
+	GroupRate            *string
+	GroupCostWall        *string
+	ProfitEnabled        *bool
+	ProfitMinMargin      *string
+	ProfitSafetyBuffer   *string
+	UpstreamHost         *string
+	UpstreamType         *string
+	UpstreamAuthStatus   *string
+	Schedulable          *bool
+	Priority             *int64
+	ManualPriority       *int64
+	BaselinePriority     *int64
+	ManagedSchedulable   *bool
+	ManagedPriority      *int64
+	ManagedLoadFactor    *string
+	ManagedConcurrency   *int64
+	ExternalControl      bool
+	LoadFactor           *string
+	Concurrency          *int64
+	Multiplier           *string
+	Paused               bool
+	PausedReason         *string
+	EffectiveState       string
+	CatalogBindingState  string
+	CatalogBindingReason *string
+	Metadata             map[string]any
 }
 
 type RoutingSample struct {
@@ -107,11 +114,15 @@ type AccountRoutingTarget struct {
 	WriteCooldown      bool     `json:"write_cooldown_active"`
 	ScalingCooldown    bool     `json:"scaling_cooldown_active"`
 	ReleaseControl     bool     `json:"release_control,omitempty"`
+	AbandonControl     bool     `json:"abandon_control,omitempty"`
 	CleanupAction      *string  `json:"cleanup_action,omitempty"`
 	ConfigurationError *string  `json:"configuration_error,omitempty"`
 }
 
 func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *string) ([]RoutingAccount, error) {
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return nil, err
+	}
 	clauses := []string{}
 	arguments := []any{}
 	if accountID != nil {
@@ -124,7 +135,9 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	}
 	query := `SELECT a.id,a.name,ag.group_name,ag.group_id,ag.group_rate,
 		lg.rate_multiplier,lg.profit_control_enabled,lg.profit_min_margin,lg.profit_safety_buffer,
-		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,a.load_factor,
+		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,
+		rb.managed_schedulable,rb.managed_priority,rb.managed_load_factor,rb.managed_concurrency,
+		CASE WHEN rb.ownership_version=2 THEN 1 ELSE 0 END,a.load_factor,
 		a.concurrency,a.multiplier,a.paused,a.paused_reason,COALESCE(a.routing_state,''),a.metadata_json
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
@@ -139,19 +152,21 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	result := []RoutingAccount{}
 	for rows.Next() {
 		var item RoutingAccount
 		var groupID, groupRate, costWall, profitMargin, profitBuffer sql.NullString
 		var upstreamHost, upstreamType, authStatus, loadFactor, multiplier, pausedReason sql.NullString
 		var profitEnabled, schedulable, paused sql.NullInt64
-		var priority, manualPriority, baselinePriority, concurrency sql.NullInt64
+		var priority, manualPriority, baselinePriority, managedPriority, managedConcurrency, concurrency sql.NullInt64
+		var managedSchedulable, externalControl sql.NullInt64
+		var managedLoadFactor sql.NullString
 		var metadataRaw string
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.GroupName, &groupID, &groupRate,
 			&costWall, &profitEnabled, &profitMargin, &profitBuffer,
-			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority, &loadFactor,
+			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority,
+			&managedSchedulable, &managedPriority, &managedLoadFactor, &managedConcurrency, &externalControl, &loadFactor,
 			&concurrency, &multiplier, &paused, &pausedReason, &item.EffectiveState, &metadataRaw,
 		); err != nil {
 			return nil, err
@@ -161,6 +176,9 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		item.ProfitMinMargin, item.ProfitSafetyBuffer = nullString(profitMargin), nullString(profitBuffer)
 		item.UpstreamHost, item.UpstreamType, item.UpstreamAuthStatus = nullString(upstreamHost), nullString(upstreamType), nullString(authStatus)
 		item.Schedulable, item.Priority, item.ManualPriority, item.BaselinePriority, item.LoadFactor = strictNullBool(schedulable), nullInt(priority), nullInt(manualPriority), nullInt(baselinePriority), nullString(loadFactor)
+		item.ManagedSchedulable, item.ManagedPriority = strictNullBool(managedSchedulable), nullInt(managedPriority)
+		item.ManagedLoadFactor, item.ManagedConcurrency = nullString(managedLoadFactor), nullInt(managedConcurrency)
+		item.ExternalControl = externalControl.Valid && externalControl.Int64 == 1
 		item.Concurrency, item.Multiplier = nullInt(concurrency), nullString(multiplier)
 		item.Paused, item.PausedReason = paused.Valid && paused.Int64 == 1, nullString(pausedReason)
 		if err := json.Unmarshal([]byte(metadataRaw), &item.Metadata); err != nil || item.Metadata == nil {
@@ -168,7 +186,24 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		}
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	states, err := s.accountCatalogBindingStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index := range result {
+		if state, found := states[result[index].ID]; found {
+			result[index].CatalogBindingState = state.Status
+			result[index].CatalogBindingReason = stringPointer(state.Reason)
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) RoutingSamples(
@@ -202,43 +237,33 @@ func (s *Store) RoutingSamples(
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	arguments = append(arguments, limit)
-	query := `WITH deduplicated AS (
-		SELECT health_samples.*,
-		ROW_NUMBER() OVER(PARTITION BY account_id,LOWER(REPLACE(source,'_','-')),
-			COALESCE(NULLIF(evidence_key,''),'row:'||id) ORDER BY observed_at DESC,id DESC) duplicate_rank
-		FROM health_samples WHERE ` + strings.Join(clauses, " AND ") + `
-	), ranked AS (
-		SELECT deduplicated.*,
-		ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY observed_at DESC,id DESC) account_rank
-		FROM deduplicated WHERE duplicate_rank=1
-	) SELECT account_id,group_name,result,latency_p95,failure_reason,source,observed_at,payload_json
-	FROM ranked WHERE account_rank<=?
-	ORDER BY account_id,account_rank`
-	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true, false)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	result := []RoutingSample{}
-	for rows.Next() {
-		var item RoutingSample
-		var resultText, latency, failure, observed sql.NullString
-		var payloadRaw string
-		if err := rows.Scan(&item.AccountID, &item.GroupName, &resultText, &latency, &failure, &item.Source, &observed, &payloadRaw); err != nil {
-			return nil, err
+	samples, err := s.selectedHealthSamples(ctx, selections)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]RoutingSample, 0, len(selections))
+	for _, selection := range selections {
+		sample, present := samples[selection.id]
+		if !present {
+			continue
 		}
-		item.Result, item.FailureReason = pointerValue(nullString(resultText)), pointerValue(nullString(failure))
-		item.LatencyP95, item.ObservedAt = nullString(latency), pointerValue(nullString(observed))
-		if err := json.Unmarshal([]byte(payloadRaw), &item.Payload); err != nil || item.Payload == nil {
+		var item RoutingSample
+		item.AccountID, item.GroupName, item.Source = sample.accountID, sample.groupName, sample.source
+		item.Result, item.FailureReason = pointerValue(nullString(sample.result)), pointerValue(nullString(sample.failureReason))
+		item.LatencyP95, item.ObservedAt = nullString(sample.latencyP95), pointerValue(nullString(sample.observedAt))
+		if err := json.Unmarshal([]byte(sample.payloadJSON), &item.Payload); err != nil || item.Payload == nil {
 			return nil, fmt.Errorf("账号 %s 分组 %s 的健康样本损坏", item.AccountID, item.GroupName)
 		}
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
-func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
+func previousRoutingDecisionsQuery(accountID, groupName *string) (string, []any) {
 	clauses := []string{`julianday(rd.updated_at)>=COALESCE(
 		(SELECT julianday(updated_at) FROM app_state WHERE key='routing-decision-epoch'),julianday(rd.updated_at))`}
 	arguments := []any{}
@@ -251,17 +276,20 @@ func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupNa
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
 	query := `SELECT rd.account_id,rd.group_name,rd.priority,rd.schedulable,rd.routing_state,rd.updated_at,rd.payload_json,
-		(SELECT oa.created_at FROM operation_audit oa WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
+		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
 		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
 		 ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
 		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1),
-		(SELECT oa.created_at FROM operation_audit oa WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
+		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
 		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
 		 AND oa.field_name LIKE '%load_factor%' ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
 		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1),
-		(SELECT oa.created_at FROM operation_audit oa WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
+		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
 		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
 		 AND oa.field_name LIKE '%concurrency%' ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
@@ -271,6 +299,11 @@ func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupNa
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
 	query += ` ORDER BY rd.account_id,rd.group_name`
+	return query, arguments
+}
+
+func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
+	query, arguments := previousRoutingDecisionsQuery(accountID, groupName)
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err

@@ -106,6 +106,34 @@ func TestRecordInspectionHeartbeatRejectsCorruptHistoryWithoutOverwritingIt(t *t
 	}
 }
 
+func TestReconcileWithoutStaleStateDoesNotWaitForWriterLock(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-readonly-reconcile.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if _, err := writer.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer writer.ExecContext(context.Background(), "ROLLBACK")
+
+	checkContext, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	interrupted, err := store.ReconcileInterruptedInspections(checkContext, time.Now().UTC())
+	if err != nil || interrupted != 0 {
+		t.Fatalf("read-only reconciliation waited for writer lock: interrupted=%d err=%v", interrupted, err)
+	}
+}
+
 func TestRoutingWritebackPendingTracksAttemptsAfterCurrentDecision(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "writeback-pending.sqlite3"))
 	if err != nil {

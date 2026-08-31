@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ type AccountRecentResult struct {
 	Score                 *float64       `json:"score"`
 	ObservedAt            *string        `json:"observed_at"`
 	LatencyMS             *float64       `json:"latency_ms"`
+	DurationMS            *float64       `json:"duration_ms"`
 	FailureReason         *string        `json:"failure_reason"`
 	Source                string         `json:"source"`
 	ClassificationLatency *string        `json:"-"`
@@ -29,52 +31,67 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
-	ID                  string                `json:"id"`
-	Name                string                `json:"name"`
-	Groups              []string              `json:"groups"`
-	UpstreamHost        *string               `json:"upstream_host"`
-	UpstreamType        *string               `json:"upstream_type"`
-	Platform            *string               `json:"platform"`
-	AccountType         *string               `json:"account_type"`
-	Schedulable         *bool                 `json:"schedulable"`
-	Priority            *int64                `json:"priority"`
-	ManualPriority      *int64                `json:"manual_priority"`
-	LoadFactor          *string               `json:"load_factor"`
-	Concurrency         *int64                `json:"concurrency"`
-	Multiplier          *string               `json:"multiplier"`
-	Balance             *string               `json:"balance"`
-	Paused              *bool                 `json:"paused"`
-	PausedReason        *string               `json:"paused_reason"`
-	RoutingState        *string               `json:"routing_state"`
-	HealthStatus        *string               `json:"health_status"`
-	Health              string                `json:"health"`
-	DesiredHealth       *string               `json:"desired_health"`
-	ApplyPending        bool                  `json:"apply_pending"`
-	ApplyError          *string               `json:"apply_error"`
-	DecisionState       *string               `json:"decision_state"`
-	DecisionReason      *string               `json:"decision_reason"`
-	LastError           *string               `json:"last_error"`
-	UpstreamBlock       *string               `json:"upstream_block"`
-	UpstreamBlockReason *string               `json:"upstream_block_reason"`
-	FailureStreak       *int64                `json:"failure_streak"`
-	RecoveryPassStreak  *int64                `json:"recovery_pass_streak"`
-	TargetPriority      *int64                `json:"target_priority"`
-	TargetLoadFactor    *string               `json:"target_load_factor"`
-	TargetSchedulable   *bool                 `json:"target_schedulable"`
-	TargetConcurrency   *int64                `json:"target_concurrency"`
-	HealthScore         *float64              `json:"health_score"`
-	ShortScore          *float64              `json:"short_score"`
-	LongScore           *float64              `json:"long_score"`
-	SampleCount         int64                 `json:"sample_count"`
-	RecentResults       []AccountRecentResult `json:"recent_results"`
-	TTFBP50MS           *float64              `json:"ttfb_p50_ms"`
-	TTFBP95MS           *float64              `json:"ttfb_p95_ms"`
-	Weight              *float64              `json:"weight"`
+	ID                          string                `json:"id"`
+	Name                        string                `json:"name"`
+	Groups                      []string              `json:"groups"`
+	UpstreamID                  *string               `json:"upstream_id"`
+	UpstreamHost                *string               `json:"upstream_host"`
+	RecordedUpstreamHost        *string               `json:"recorded_upstream_host"`
+	UpstreamHostRepairable      bool                  `json:"upstream_host_repairable"`
+	UpstreamType                *string               `json:"upstream_type"`
+	BaseURL                     *string               `json:"base_url"`
+	BaseURLCheckedAt            *string               `json:"base_url_checked_at"`
+	BaseURLSource               *string               `json:"base_url_source"`
+	UpstreamBaseURL             *string               `json:"upstream_base_url"`
+	BaseURLCheck                string                `json:"base_url_check"`
+	BaseURLCheckReason          *string               `json:"base_url_check_reason"`
+	KeyStatus                   *string               `json:"key_status"`
+	KeyStatusReason             *string               `json:"key_status_reason"`
+	Sub2APIStatus               *string               `json:"sub2api_status"`
+	Sub2APIError                *string               `json:"sub2api_error"`
+	Platform                    *string               `json:"platform"`
+	AccountType                 *string               `json:"account_type"`
+	Schedulable                 *bool                 `json:"schedulable"`
+	Priority                    *int64                `json:"priority"`
+	ManualPriority              *int64                `json:"manual_priority"`
+	ManualSyncBalanceMultiplier bool                  `json:"manual_sync_balance_multiplier"`
+	LoadFactor                  *string               `json:"load_factor"`
+	Concurrency                 *int64                `json:"concurrency"`
+	Multiplier                  *string               `json:"multiplier"`
+	Balance                     *string               `json:"balance"`
+	Paused                      *bool                 `json:"paused"`
+	PausedReason                *string               `json:"paused_reason"`
+	RoutingState                *string               `json:"routing_state"`
+	HealthStatus                *string               `json:"health_status"`
+	Health                      string                `json:"health"`
+	DesiredHealth               *string               `json:"desired_health"`
+	ApplyPending                bool                  `json:"apply_pending"`
+	ApplyError                  *string               `json:"apply_error"`
+	DecisionState               *string               `json:"decision_state"`
+	DecisionReason              *string               `json:"decision_reason"`
+	LastError                   *string               `json:"last_error"`
+	UpstreamBlock               *string               `json:"upstream_block"`
+	UpstreamBlockReason         *string               `json:"upstream_block_reason"`
+	FailureStreak               *int64                `json:"failure_streak"`
+	RecoveryPassStreak          *int64                `json:"recovery_pass_streak"`
+	TargetPriority              *int64                `json:"target_priority"`
+	TargetLoadFactor            *string               `json:"target_load_factor"`
+	TargetSchedulable           *bool                 `json:"target_schedulable"`
+	TargetConcurrency           *int64                `json:"target_concurrency"`
+	HealthScore                 *float64              `json:"health_score"`
+	ShortScore                  *float64              `json:"short_score"`
+	LongScore                   *float64              `json:"long_score"`
+	SampleCount                 int64                 `json:"sample_count"`
+	RecentResults               []AccountRecentResult `json:"recent_results"`
+	TTFBP50MS                   *float64              `json:"ttfb_p50_ms"`
+	TTFBP95MS                   *float64              `json:"ttfb_p95_ms"`
+	Weight                      *float64              `json:"weight"`
 }
 
 type AccountBinding struct {
 	ID               int64   `json:"id"`
 	LocalAccountID   string  `json:"local_account_id"`
+	UpstreamID       string  `json:"upstream_id"`
 	UpstreamHost     string  `json:"upstream_host"`
 	UpstreamKeyID    string  `json:"upstream_key_id"`
 	UpstreamKeyName  string  `json:"upstream_key_name"`
@@ -128,6 +145,12 @@ type routingApplyView struct {
 	automatic bool
 }
 
+type accountProjectionOptions struct {
+	includeRecentEvidence bool
+	includeApplyState     bool
+	accountID             string
+}
+
 func (s *Store) Accounts(ctx context.Context) ([]AccountStatus, error) {
 	projections, err := s.accountProjections(ctx)
 	if err != nil {
@@ -145,7 +168,11 @@ func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, 
 	if !positiveNumericID(normalized) {
 		return nil, errors.New("账号必须使用有效的稳定 ID")
 	}
-	projections, err := s.accountProjections(ctx)
+	projections, err := s.accountProjectionsWithOptions(ctx, accountProjectionOptions{
+		includeRecentEvidence: true,
+		includeApplyState:     true,
+		accountID:             normalized,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -187,10 +214,14 @@ func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, 
 }
 
 func (s *Store) accountBindings(ctx context.Context, accountID string) ([]AccountBinding, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,local_account_id,upstream_host,upstream_key_id,
-		upstream_key_name,upstream_group,upstream_group_id,local_group,local_rate,upstream_rate,
-		source_auth_host,binding_host_alias,description,status,updated_at
-		FROM bindings WHERE local_account_id=? ORDER BY id`, accountID)
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT b.id,b.local_account_id,COALESCE(bi.upstream_id,''),b.upstream_host,b.upstream_key_id,
+		b.upstream_key_name,b.upstream_group,b.upstream_group_id,b.local_group,b.local_rate,b.upstream_rate,
+		b.source_auth_host,b.binding_host_alias,b.description,b.status,b.updated_at
+		FROM bindings b LEFT JOIN binding_identities bi ON bi.binding_id=b.id
+		WHERE b.local_account_id=? ORDER BY b.id`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +232,7 @@ func (s *Store) accountBindings(ctx context.Context, accountID string) ([]Accoun
 		var upstreamGroup, upstreamGroupID, localRate, upstreamRate sql.NullString
 		var sourceAuthHost, bindingHostAlias, description, status sql.NullString
 		if err := rows.Scan(
-			&item.ID, &item.LocalAccountID, &item.UpstreamHost, &item.UpstreamKeyID, &item.UpstreamKeyName,
+			&item.ID, &item.LocalAccountID, &item.UpstreamID, &item.UpstreamHost, &item.UpstreamKeyID, &item.UpstreamKeyName,
 			&upstreamGroup, &upstreamGroupID, &item.LocalGroup, &localRate, &upstreamRate,
 			&sourceAuthHost, &bindingHostAlias, &description, &status, &item.UpdatedAt,
 		); err != nil {
@@ -221,12 +252,42 @@ func (s *Store) accountBindings(ctx context.Context, accountID string) ([]Accoun
 }
 
 func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.upstream_host,a.upstream_type,a.schedulable,a.priority,
-		load_factor,concurrency,multiplier,balance,paused,paused_reason,routing_state,health_status,
-		failure_streak,recovery_pass_streak,target_priority,target_load_factor,target_schedulable,
-		target_concurrency,metadata_json,m.priority FROM accounts a
-		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
-		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
+	return s.accountProjectionsWithOptions(ctx, accountProjectionOptions{
+		includeRecentEvidence: true,
+		includeApplyState:     true,
+	})
+}
+
+func (s *Store) groupAccountProjections(ctx context.Context) ([]accountProjection, error) {
+	return s.accountProjectionsWithOptions(ctx, accountProjectionOptions{})
+}
+
+func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accountProjectionOptions) ([]accountProjection, error) {
+	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+		return nil, err
+	}
+	query := `SELECT a.id,a.name,COALESCE(ownership.upstream_host,a.upstream_host),a.upstream_host,
+		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
+		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
+		a.failure_streak,a.recovery_pass_streak,a.target_priority,a.target_load_factor,a.target_schedulable,
+		a.target_concurrency,a.metadata_json,m.priority,m.sync_balance_multiplier FROM accounts a
+		LEFT JOIN (
+			SELECT b.local_account_id,MIN(COALESCE(primary_host.host,b.upstream_host)) AS upstream_host,
+				MIN(bi.upstream_id) AS upstream_id,
+				COUNT(DISTINCT bi.upstream_id) AS identity_count
+			FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id
+			LEFT JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
+			WHERE TRIM(b.upstream_host)<>'' GROUP BY b.local_account_id
+		) ownership ON ownership.local_account_id=a.id
+		LEFT JOIN upstreams u ON u.host=COALESCE(ownership.upstream_host,a.upstream_host)
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id`
+	arguments := []any{}
+	if options.accountID != "" {
+		query += ` WHERE a.id=?`
+		arguments = append(arguments, options.accountID)
+	}
+	query += ` ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -234,16 +295,18 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 	projections := make([]accountProjection, 0)
 	for rows.Next() {
 		var item accountProjection
-		var upstreamHost, upstreamType, loadFactor, multiplier, balance sql.NullString
+		var upstreamID, upstreamHost, recordedUpstreamHost, bindingUpstreamHost sql.NullString
+		var upstreamType, upstreamBaseURL, loadFactor, multiplier, balance sql.NullString
 		var pausedReason, routingState, healthStatus, targetLoadFactor sql.NullString
 		var schedulable, paused, targetSchedulable sql.NullInt64
 		var priority, concurrency, failureStreak, recoveryPassStreak sql.NullInt64
-		var targetPriority, targetConcurrency, manualPriority sql.NullInt64
+		var targetPriority, targetConcurrency, manualPriority, manualSyncBalanceMultiplier, bindingHostCount sql.NullInt64
 		if err := rows.Scan(
-			&item.ID, &item.Name, &upstreamHost, &upstreamType, &schedulable, &priority,
+			&item.ID, &item.Name, &upstreamHost, &recordedUpstreamHost, &bindingUpstreamHost, &upstreamID, &bindingHostCount,
+			&upstreamType, &upstreamBaseURL, &schedulable, &priority,
 			&loadFactor, &concurrency, &multiplier, &balance, &paused, &pausedReason, &routingState,
 			&healthStatus, &failureStreak, &recoveryPassStreak, &targetPriority, &targetLoadFactor,
-			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority,
+			&targetSchedulable, &targetConcurrency, &item.metadataRaw, &manualPriority, &manualSyncBalanceMultiplier,
 		); err != nil {
 			return nil, err
 		}
@@ -252,10 +315,24 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 		item.groupIDs = map[string]*string{}
 		item.groupRates = map[string]*string{}
 		item.latestEvents = map[string]string{}
-		item.UpstreamHost = nullString(upstreamHost)
+		item.UpstreamHost = normalizedHost(nullString(upstreamHost))
+		item.UpstreamID = nullString(upstreamID)
+		item.RecordedUpstreamHost = normalizedHost(nullString(recordedUpstreamHost))
+		bindingHost := normalizedHost(nullString(bindingUpstreamHost))
+		item.UpstreamHostRepairable = bindingHostCount.Valid && bindingHostCount.Int64 == 1 && bindingHost != nil &&
+			(item.RecordedUpstreamHost == nil || !strings.EqualFold(*item.RecordedUpstreamHost, *bindingHost))
 		item.UpstreamType = nullString(upstreamType)
 		item.Platform = accountMetadataText(item.metadataRaw, "platform")
 		item.AccountType = accountMetadataText(item.metadataRaw, "account_type", "type")
+		item.BaseURL = accountMetadataText(item.metadataRaw, "base_url")
+		item.BaseURLCheckedAt = accountMetadataText(item.metadataRaw, "base_url_checked_at")
+		item.BaseURLSource = accountMetadataText(item.metadataRaw, "base_url_source")
+		item.Sub2APIStatus = accountMetadataText(item.metadataRaw, "status")
+		item.Sub2APIError = accountMetadataText(item.metadataRaw, "error_message")
+		item.UpstreamBaseURL = nullString(upstreamBaseURL)
+		item.BaseURLCheck, item.BaseURLCheckReason = accountBaseURLCheck(
+			item.BaseURL, item.UpstreamBaseURL, item.UpstreamHost, item.BaseURLCheckedAt, item.BaseURLSource,
+		)
 		if item.AccountType == nil {
 			item.AccountType = item.UpstreamType
 		}
@@ -270,6 +347,7 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 		}
 		item.Priority = nullInt(priority)
 		item.ManualPriority = nullInt(manualPriority)
+		item.ManualSyncBalanceMultiplier = manualSyncBalanceMultiplier.Valid && manualSyncBalanceMultiplier.Int64 == 1
 		item.LoadFactor = nullString(loadFactor)
 		item.Concurrency = nullInt(concurrency)
 		item.Multiplier = nullString(multiplier)
@@ -299,6 +377,9 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 	if err := s.loadAccountGroups(ctx, byID); err != nil {
 		return nil, err
 	}
+	if err := s.loadAccountKeyStatuses(ctx, byID); err != nil {
+		return nil, err
+	}
 	decisions, err := s.loadAccountDecisions(ctx, byID)
 	if err != nil {
 		return nil, err
@@ -307,32 +388,41 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadRecentEvidence(ctx, byID); err != nil {
-		return nil, err
-	}
-	for index := range projections {
-		item := &projections[index]
-		if item.LastError != nil {
-			continue
+	if options.includeRecentEvidence {
+		if err := s.loadRecentEvidence(ctx, byID); err != nil {
+			return nil, err
 		}
-		for _, result := range item.RecentResults {
-			if result.FailureReason != nil {
-				item.LastError = result.FailureReason
-				break
+		for index := range projections {
+			item := &projections[index]
+			if item.LastError != nil {
+				continue
+			}
+			for _, result := range item.RecentResults {
+				if result.FailureReason != nil {
+					item.LastError = result.FailureReason
+					break
+				}
 			}
 		}
-	}
-	applyErrors, err := s.loadApplyErrors(ctx)
-	if err != nil {
-		return nil, err
 	}
 	mode, err := s.Mode(ctx)
 	if err != nil {
 		return nil, err
 	}
-	applyView, err := s.routingApplyView(ctx, mode)
-	if err != nil {
-		return nil, err
+	applyErrors := map[string]struct {
+		message string
+		at      *string
+	}{}
+	applyView := routingApplyView{fields: map[string]bool{}}
+	if options.includeApplyState {
+		applyErrors, err = s.loadApplyErrors(ctx, options.accountID)
+		if err != nil {
+			return nil, err
+		}
+		applyView, err = s.routingApplyView(ctx, mode)
+		if err != nil {
+			return nil, err
+		}
 	}
 	excludedIDs, degradeThreshold, err := s.monitorPolicy(ctx, mode)
 	if err != nil {
@@ -346,6 +436,157 @@ func (s *Store) accountProjections(ctx context.Context) ([]accountProjection, er
 		}
 	}
 	return projections, nil
+}
+
+func (s *Store) loadAccountKeyStatuses(ctx context.Context, accounts map[string]*accountProjection) error {
+	for _, account := range accounts {
+		status, reason := "unbound", "账号没有上游 Key 绑定记录"
+		account.KeyStatus, account.KeyStatusReason = &status, &reason
+	}
+	states, err := s.accountCatalogBindingStates(ctx)
+	if err != nil {
+		return err
+	}
+	for accountID, state := range states {
+		if accounts[accountID] == nil {
+			continue
+		}
+		status, reason := state.Status, state.Reason
+		accounts[accountID].KeyStatus, accounts[accountID].KeyStatusReason = &status, &reason
+	}
+	return nil
+}
+
+func boundUpstreamKeyState(
+	keyID string,
+	groupID, groupName *string,
+	keyPresent bool,
+	keyStatus *string,
+	groupPresent bool,
+	groupStatus *string,
+) (string, string) {
+	groupReference := ""
+	if groupID != nil {
+		groupReference = strings.TrimSpace(*groupID)
+	}
+	if groupReference == "" && groupName != nil {
+		groupReference = strings.TrimSpace(*groupName)
+	}
+	keyState := normalizedCatalogStatus(keyStatus)
+	groupState := normalizedCatalogStatus(groupStatus)
+	keyMissing := !keyPresent || keyState == "missing" || keyState == "deleted"
+	groupMissing := groupReference != "" && (!groupPresent || groupState == "missing" || groupState == "deleted")
+	if keyMissing && groupMissing {
+		return "key_and_group_missing", fmt.Sprintf("上游 Key %s 和所属分组 %s 均已删除或不存在", keyID, groupReference)
+	}
+	if groupMissing {
+		return "group_missing", fmt.Sprintf("上游 Key %s 仍有绑定，但所属分组 %s 已删除或不存在", keyID, groupReference)
+	}
+	if keyMissing {
+		return "key_missing", fmt.Sprintf("绑定的上游 Key %s 已删除或不存在", keyID)
+	}
+	if groupState == "inactive" || groupState == "disabled" || groupState == "2" {
+		return "group_inactive", fmt.Sprintf("上游 Key %s 所属分组 %s 已停用", keyID, groupReference)
+	}
+	if keyState == "" {
+		return "unknown", fmt.Sprintf("上游 Key %s 存在，但未返回状态", keyID)
+	}
+	return keyState, fmt.Sprintf("上游 Key %s 状态为 %s，所属分组仍存在", keyID, keyState)
+}
+
+func normalizedCatalogStatus(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(*value))
+}
+
+func accountBaseURLCheck(baseURL, upstreamBaseURL, upstreamHost, checkedAt, source *string) (string, *string) {
+	if baseURL == nil || strings.TrimSpace(*baseURL) == "" {
+		if checkedAt == nil || strings.TrimSpace(*checkedAt) == "" {
+			reason := "尚未读取管理平台账号详情，请执行 Base URL 校验"
+			return "unchecked", &reason
+		}
+		reason := "已读取管理平台账号详情，但接口未提供 Base URL，无法与上游地址比较"
+		return "unknown", &reason
+	}
+	accountURL, accountOK := parseHTTPBaseURL(*baseURL)
+	if !accountOK {
+		reason := "账号 Base URL 不是有效的 HTTP/HTTPS 地址"
+		return "invalid", &reason
+	}
+	comparisonURL := upstreamBaseURL
+	if comparisonURL == nil || strings.TrimSpace(*comparisonURL) == "" {
+		comparisonURL = upstreamHostURL(upstreamHost)
+	}
+	if comparisonURL == nil {
+		reason := "账号 Base URL 已读取，但账号没有可用的归属上游 Host"
+		return "unknown", &reason
+	}
+	upstreamURL, upstreamOK := parseHTTPBaseURL(*comparisonURL)
+	if !upstreamOK {
+		reason := "归属上游 Host 或访问地址不是有效的 HTTP/HTTPS 地址"
+		return "invalid", &reason
+	}
+	if strings.EqualFold(accountURL.Host, upstreamURL.Host) {
+		reason := "账号 Base URL 与上游地址使用同一 Host"
+		if source != nil && strings.TrimSpace(*source) == "platform_default" {
+			reason = "账号未显式配置 Base URL，Sub2API 使用的平台默认地址与上游使用同一 Host"
+		}
+		return "matched", &reason
+	}
+	if knownOfficialAPIHost(accountURL.Hostname()) && !knownOfficialAPIHost(upstreamURL.Hostname()) {
+		reason := "上游地址不是官方服务，但账号 Base URL 指向官方地址，请检查添加账号时的 Base URL"
+		if source != nil && strings.TrimSpace(*source) == "platform_default" {
+			reason = "账号未显式配置 Base URL，Sub2API 将使用平台默认官方地址；该地址与账号归属上游不一致"
+		}
+		return "official_mismatch", &reason
+	}
+	reason := "账号 Base URL 与归属上游 Host 不同；允许独立 API 域名、IP 直连或 CDN 加速，不自动判错"
+	return "different_allowed", &reason
+}
+
+func normalizedHost(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	normalized := strings.TrimSpace(*value)
+	if normalized == "" || normalized == "-" || normalized == "—" || strings.EqualFold(normalized, "null") {
+		return nil
+	}
+	return &normalized
+}
+
+func upstreamHostURL(host *string) *string {
+	host = normalizedHost(host)
+	if host == nil {
+		return nil
+	}
+	value := *host
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	return &value
+}
+
+func parseHTTPBaseURL(value string) (*url.URL, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	validScheme := parsed != nil && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https"))
+	return parsed, err == nil && validScheme && parsed.Host != "" && parsed.User == nil
+}
+
+func knownOfficialAPIHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	suffixes := []string{
+		"openai.com", "chatgpt.com", "anthropic.com", "googleapis.com", "google.com", "x.ai",
+		"deepseek.com", "moonshot.cn", "bigmodel.cn",
+	}
+	for _, suffix := range suffixes {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) routingApplyView(ctx context.Context, mode string) (routingApplyView, error) {
@@ -383,8 +624,14 @@ func (s *Store) routingApplyView(ctx context.Context, mode string) (routingApply
 }
 
 func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*accountProjection) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT account_id,group_name,group_id,group_rate
-		FROM account_groups ORDER BY account_id,group_name`)
+	query := `SELECT account_id,group_name,group_id,group_rate FROM account_groups`
+	arguments := []any{}
+	if accountID, ok := soleProjectionAccountID(accounts); ok {
+		query += ` WHERE account_id=?`
+		arguments = append(arguments, accountID)
+	}
+	query += ` ORDER BY account_id,group_name`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return err
 	}
@@ -405,21 +652,26 @@ func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*acco
 }
 
 func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*accountProjection) (map[string][]decisionProjection, error) {
-	query := `WITH ranked AS (SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json,
-		ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY julianday(updated_at) DESC,group_name) AS decision_rank
-		FROM routing_decisions`
+	query := `SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json FROM routing_decisions`
 	args := []any{}
+	clauses := []string{}
 	var epoch string
 	err := s.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'`).Scan(&epoch)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if err == nil {
-		query += ` WHERE julianday(updated_at)>=julianday(?)`
+		clauses = append(clauses, `updated_at>=?`)
 		args = append(args, epoch)
 	}
-	query += `) SELECT account_id,group_name,routing_state,role,reason,updated_at,payload_json
-		FROM ranked WHERE decision_rank=1 ORDER BY updated_at DESC`
+	if accountID, ok := soleProjectionAccountID(accounts); ok {
+		clauses = append(clauses, `account_id=?`)
+		args = append(args, accountID)
+	}
+	if len(clauses) > 0 {
+		query += ` WHERE ` + strings.Join(clauses, ` AND `)
+	}
+	query += ` ORDER BY updated_at DESC`
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -454,12 +706,16 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 }
 
 func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]*accountProjection) (map[string][]evaluationProjection, error) {
-	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (SELECT account_id,group_name,health_score,short_score,long_score,
-		sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event,evaluated_at,
-		ROW_NUMBER() OVER(PARTITION BY account_id ORDER BY julianday(evaluated_at) DESC,group_name) AS evaluation_rank
-		FROM account_health_evaluations)
-		SELECT account_id,group_name,health_score,short_score,long_score,sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event
-		FROM ranked WHERE evaluation_rank=1 ORDER BY evaluated_at DESC`)
+	query := `SELECT account_id,group_name,health_score,short_score,long_score,
+		sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event
+		FROM account_health_evaluations`
+	arguments := []any{}
+	if accountID, ok := soleProjectionAccountID(accounts); ok {
+		query += ` WHERE account_id=?`
+		arguments = append(arguments, accountID)
+	}
+	query += ` ORDER BY evaluated_at DESC`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -492,53 +748,79 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 }
 
 func (s *Store) loadRecentEvidence(ctx context.Context, accounts map[string]*accountProjection) error {
-	rows, err := s.db.QueryContext(ctx, `WITH deduplicated AS (
-		SELECT id,account_id,result,latency_p50,latency_p95,failure_reason,observed_at,source,evidence_key,payload_json,
-		ROW_NUMBER() OVER (PARTITION BY account_id,source,COALESCE(NULLIF(evidence_key,''),'row:' || id)
-		ORDER BY COALESCE(observed_at,'') DESC,id DESC) AS duplicate_rank FROM health_samples
-		WHERE LOWER(REPLACE(source,'_','-'))<>'account-state'
-	), ranked AS (
-		SELECT *,ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY COALESCE(observed_at,'') DESC,id DESC) AS account_rank
-		FROM deduplicated WHERE duplicate_rank=1
-	) SELECT account_id,result,latency_p50,latency_p95,failure_reason,observed_at,source,payload_json
-	FROM ranked WHERE account_rank<=10 ORDER BY account_id,account_rank`)
+	clauses := []string{`LOWER(REPLACE(source,'_','-'))<>'account-state'`}
+	arguments := []any{}
+	if accountID, ok := soleProjectionAccountID(accounts); ok {
+		clauses = append(clauses, `account_id=?`)
+		arguments = append(arguments, accountID)
+	}
+	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, 10, false, true)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var accountID, source string
-		var result, p50Raw, p95Raw, failureReason, observedAt, payloadRaw sql.NullString
-		if err := rows.Scan(&accountID, &result, &p50Raw, &p95Raw, &failureReason, &observedAt, &source, &payloadRaw); err != nil {
-			return err
+	samples, err := s.selectedHealthSamples(ctx, selections)
+	if err != nil {
+		return err
+	}
+	for _, selection := range selections {
+		sample, present := samples[selection.id]
+		if !present {
+			continue
 		}
-		if account := accounts[accountID]; account != nil {
-			payload, decodeErr := decodeObject(payloadRaw.String)
+		if account := accounts[sample.accountID]; account != nil {
+			payload, decodeErr := decodeObject(sample.payloadJSON)
 			if decodeErr != nil {
 				payload = map[string]any{}
 			}
-			latency := recentFirstTokenLatency(source, p50Raw, p95Raw, payloadRaw)
-			classificationLatency := nullString(p95Raw)
+			payloadRaw := sql.NullString{String: sample.payloadJSON, Valid: true}
+			latency := recentFirstTokenLatency(sample.source, sample.latencyP50, sample.latencyP95, payloadRaw)
+			duration := recentRequestDuration(sample.source, payload)
+			classificationLatency := nullString(sample.latencyP95)
 			if classificationLatency == nil {
-				classificationLatency = nullString(p50Raw)
+				classificationLatency = nullString(sample.latencyP50)
 			}
 			account.RecentResults = append(account.RecentResults, AccountRecentResult{
-				Result: nullString(result), ObservedAt: nullString(observedAt), LatencyMS: latency,
-				FailureReason: nullString(failureReason), Source: source,
+				Result: nullString(sample.result), ObservedAt: nullString(sample.observedAt), LatencyMS: latency, DurationMS: duration,
+				FailureReason: nullString(sample.failureReason), Source: sample.source,
 				ClassificationLatency: classificationLatency, ClassificationPayload: payload,
 			})
 		}
 	}
-	return rows.Err()
+	return nil
+}
+
+func recentRequestDuration(source string, payload map[string]any) *float64 {
+	normalizedSource := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(source)), "_", "-")
+	if normalizedSource != "traffic" && normalizedSource != "ops" {
+		return nil
+	}
+	duration := finiteFloat(payload["duration_ms"])
+	if duration == nil || *duration < 0 {
+		return nil
+	}
+	return duration
 }
 
 func recentFirstTokenLatency(source string, p50Raw, p95Raw, payloadRaw sql.NullString) *float64 {
 	normalizedSource := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(source)), "_", "-")
 	trustedProbe := normalizedSource == "active-probe" || normalizedSource == "probe"
 	payload, err := decodeObject(payloadRaw.String)
+	if normalizedSource == "traffic" || normalizedSource == "ops" {
+		if firstToken := finiteFloat(payload["first_token_ms"]); firstToken != nil && *firstToken >= 0 {
+			return firstToken
+		}
+	}
 	metric, _ := payload["latency_metric"].(string)
 	metric = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(metric)), "-", "_")
+	latencySource, _ := payload["latency_source"].(string)
+	if trustedProbe && (metric == "total_duration" || metric == "request_duration" ||
+		strings.EqualFold(strings.TrimSpace(latencySource), "account_test.complete_response")) {
+		return nil
+	}
 	if !trustedProbe && (err != nil || (metric != "first_token" && metric != "ttfb")) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(latencySource), "operations.duration_ms") {
 		return nil
 	}
 	latency := finiteFloatFromNullString(p95Raw)
@@ -548,17 +830,27 @@ func recentFirstTokenLatency(source string, p50Raw, p95Raw, payloadRaw sql.NullS
 	return latency
 }
 
-func (s *Store) loadApplyErrors(ctx context.Context) (map[string]struct {
+func (s *Store) loadApplyErrors(ctx context.Context, accountID string) (map[string]struct {
 	message string
 	at      *string
 }, error) {
-	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (
-		SELECT object_id,error,state,created_at,ROW_NUMBER() OVER(PARTITION BY object_id ORDER BY created_at DESC,
-		CASE WHEN source_id < 0 THEN 0 ELSE 1 END,CASE WHEN source_id < 0 THEN source_id END ASC,
-		CASE WHEN source_id >= 0 THEN source_id END DESC) AS position
-		FROM operation_audit WHERE operation_type IN ('routing.writeback','cleanup.delete') AND object_id IS NOT NULL
-		AND (state='failed' OR readback_confirmed=1)
-	) SELECT object_id,error,created_at FROM ranked WHERE position=1 AND state='failed' ORDER BY object_id`)
+	query := `SELECT a.id,latest.error,latest.created_at
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(
+			SELECT recent.source_id FROM operation_audit recent INDEXED BY ix_operation_audit_apply_error_recent
+			WHERE recent.operation_type IN ('routing.writeback','cleanup.delete') AND recent.object_id=a.id
+			AND (recent.state='failed' OR recent.readback_confirmed=1)
+			ORDER BY recent.created_at DESC,
+			CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
+			CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
+			CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
+		) WHERE latest.state='failed'`
+	arguments := []any{}
+	if accountID != "" {
+		query += ` AND a.id=?`
+		arguments = append(arguments, accountID)
+	}
+	query += ` ORDER BY a.id`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -589,6 +881,16 @@ func (s *Store) loadApplyErrors(ctx context.Context) (map[string]struct {
 		}{text, nullString(createdAt)}
 	}
 	return result, rows.Err()
+}
+
+func soleProjectionAccountID(accounts map[string]*accountProjection) (string, bool) {
+	if len(accounts) != 1 {
+		return "", false
+	}
+	for accountID := range accounts {
+		return accountID, true
+	}
+	return "", false
 }
 
 func (s *Store) monitorPolicy(ctx context.Context, mode string) (map[string]struct{}, float64, error) {

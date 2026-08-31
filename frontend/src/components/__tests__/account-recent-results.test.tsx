@@ -13,7 +13,8 @@ describe("AccountRecentResults", () => {
             event_type: "gateway_error",
             score: 25,
             observed_at: "2026-08-26T12:00:00Z",
-            latency_ms: 1250,
+            latency_ms: null,
+            duration_ms: 2795,
             failure_reason: "上游网关错误",
             source: "traffic",
           },
@@ -23,6 +24,7 @@ describe("AccountRecentResults", () => {
             score: 100,
             observed_at: "2026-08-26T11:00:00Z",
             latency_ms: 320,
+            duration_ms: null,
             failure_reason: null,
             source: "active-probe",
           },
@@ -35,12 +37,14 @@ describe("AccountRecentResults", () => {
     expect(markup).toContain('data-slot="account-recent-results"');
     expect(markup).toContain("bg-success");
     expect(markup).toContain("bg-orange-500");
-    expect(markup).toContain("主动探测");
+    expect(markup).toContain("探针");
     expect(markup).toContain("真实流量");
     expect(markup).toContain("网关错误 · 25 分");
     expect(markup).toContain("完美健康 · 100 分");
-    expect(markup.indexOf("主动探测")).toBeLessThan(markup.indexOf("真实流量"));
-    expect(markup).toContain("首字 1250ms");
+    expect(markup.indexOf("探针")).toBeLessThan(markup.indexOf("真实流量"));
+    expect(markup).toContain("首字 320ms");
+    expect(markup).toContain("总耗时 2795ms");
+    expect(markup).not.toContain("首字 2795ms");
     expect(markup).toContain("上游网关错误");
     expect(markup).toContain("12 条样本");
   });
@@ -50,6 +54,27 @@ describe("AccountRecentResults", () => {
 
     expect(markup).toContain('data-slot="account-recent-results"');
     expect(markup).toContain("暂无样本");
+  });
+
+  it("labels a slow combined-latency event as response slow", () => {
+    const markup = renderToStaticMarkup(
+      <AccountRecentResults
+        results={[
+          {
+            result: "通过",
+            event_type: "slow",
+            observed_at: "2026-08-26T11:00:00Z",
+            latency_ms: null,
+            duration_ms: 9000,
+            failure_reason: null,
+            source: "traffic",
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("响应慢");
+    expect(markup).not.toContain("首字慢");
   });
 
   it("hides account-state placeholders instead of rendering a gray result", () => {

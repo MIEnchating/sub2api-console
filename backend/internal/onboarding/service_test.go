@@ -86,7 +86,7 @@ func (keys *checkingKeys) checkNoTransaction() error {
 	return err
 }
 
-func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing.T) {
+func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateStore(t *testing.T) {
 	reads := 0
 	const upstreamBaseURL = "http://192.0.2.10:8443/accelerated"
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -98,7 +98,9 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			var body map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
 				t.Errorf("decode remote account body: %v", err)
 			}
 			credentials, _ := body["credentials"].(map[string]any)
@@ -107,6 +109,12 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 			}
 			if credentials["base_url"] != upstreamBaseURL {
 				t.Errorf("remote account base_url = %#v, want %q", credentials["base_url"], upstreamBaseURL)
+			}
+			if body["concurrency"] != json.Number("10") || body["priority"] != json.Number("1") {
+				t.Errorf("remote account defaults = concurrency %#v priority %#v", body["concurrency"], body["priority"])
+			}
+			if _, present := body["load_factor"]; present {
+				t.Errorf("remote account must leave load_factor unset: %#v", body["load_factor"])
 			}
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
@@ -145,13 +153,140 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndNeverPersistsSecret(t *testing
 	}
 	defer database.Close()
 	var accountName, keyID string
-	if err := database.QueryRow(`SELECT a.name,b.upstream_key_id FROM accounts a JOIN bindings b ON b.local_account_id=a.id WHERE a.id='77'`).Scan(&accountName, &keyID); err != nil {
+	var priority, concurrency int64
+	if err := database.QueryRow(`SELECT a.name,b.upstream_key_id,a.priority,a.concurrency FROM accounts a JOIN bindings b ON b.local_account_id=a.id WHERE a.id='77'`).Scan(&accountName, &keyID, &priority, &concurrency); err != nil {
 		t.Fatal(err)
 	}
-	if accountName != "upstream-0.2" || keyID != "91" {
-		t.Fatalf("account=%q key=%q", accountName, keyID)
+	if accountName != "upstream-0.2" || keyID != "91" || priority != 1 || concurrency != 10 {
+		t.Fatalf("account=%q key=%q priority=%d concurrency=%d", accountName, keyID, priority, concurrency)
 	}
 	assertSecretAbsent(t, databasePath, "never-store-this")
+	stored, err := private.UpstreamKeySecret(context.Background(), "upstream.test", "91", "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Secret != "never-store-this" {
+		t.Fatalf("private key cache=%#v", stored)
+	}
+}
+
+func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			groups, _ := body["group_ids"].([]any)
+			if len(groups) != 2 || groups[0] != json.Number("3") || groups[1] != json.Number("4") {
+				t.Errorf("group_ids=%#v", body["group_ids"])
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"upstream-0.2","group_ids":[3,4],"schedulable":false,"rate_multiplier":0.2}}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
+		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupIDs: []string{"3", "4"},
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.createCalls != 1 || result["account_id"] != "77" {
+		t.Fatalf("result=%#v createCalls=%d", result, keys.createCalls)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var memberships int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM account_groups WHERE account_id='77' AND group_id IN ('3','4')`).Scan(&memberships); err != nil || memberships != 2 {
+		t.Fatalf("memberships=%d err=%v", memberships, err)
+	}
+}
+
+func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing.T) {
+	reads := 0
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			reads++
+			groups := `[3]`
+			if reads > 1 {
+				groups = `[4]`
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"existing","group_ids":` + groups + `}}`))
+		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/77":
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			groups, _ := body["group_ids"].([]any)
+			if len(groups) != 1 || groups[0] != json.Number("4") {
+				t.Errorf("group_ids=%#v", body["group_ids"])
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','existing','upstream.test','sub2api','{}','now')`,
+		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','pro-key','pro','6','codex','active','now')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+	}
+	_ = database.Close()
+	keys := &checkingKeys{databasePath: databasePath}
+	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
+		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupIDs: []string{"4"},
+		UpstreamGroupID: "6", AccountIDs: []string{"77"}, Actor: "operator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.createCalls != 0 || result["operation"] != "account.groups" || reads != 2 {
+		t.Fatalf("result=%#v keys=%#v reads=%d", result, keys, reads)
+	}
+	database, err = sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var groupID, bindingGroup string
+	if err := database.QueryRow(`SELECT group_id FROM account_groups WHERE account_id='77'`).Scan(&groupID); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT local_group FROM bindings WHERE local_account_id='77'`).Scan(&bindingGroup); err != nil {
+		t.Fatal(err)
+	}
+	if groupID != "4" || bindingGroup != "pro" {
+		t.Fatalf("groupID=%q bindingGroup=%q", groupID, bindingGroup)
+	}
 }
 
 func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
@@ -319,7 +454,7 @@ func TestEnqueueBatchRejectsDuplicateUpstreamGroupsBeforeStarting(t *testing.T) 
 		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	}
-	if _, err := service.EnqueueBatch(context.Background(), []Request{request, request}); err == nil || !strings.Contains(err.Error(), "不能在一个批次中重复添加") {
+	if _, err := service.EnqueueBatch(context.Background(), []Request{request, request}); err == nil || !strings.Contains(err.Error(), "不能在一个批次中重复提交") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -341,7 +476,7 @@ func TestValidateAllowsOnboardingInEveryRuntimeMode(t *testing.T) {
 		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	}
-	for _, mode := range []string{runtimepolicy.Monitoring, runtimepolicy.Scheduling, runtimepolicy.Full} {
+	for _, mode := range []string{runtimepolicy.Monitoring, runtimepolicy.Full} {
 		t.Run(mode, func(t *testing.T) {
 			if _, err := repository.SetMode(context.Background(), mode); err != nil {
 				t.Fatal(err)
@@ -350,6 +485,19 @@ func TestValidateAllowsOnboardingInEveryRuntimeMode(t *testing.T) {
 				t.Fatalf("账号添加不应受运行模式 %q 限制：%v", mode, err)
 			}
 		})
+	}
+}
+
+func TestAccountCreationParametersUseSharedDefaultsAndAllowPerAccountOverrides(t *testing.T) {
+	defaults := configstore.AccountDefaultsSettings{Concurrency: 24, Priority: 7}
+	priority, concurrency := accountCreationParameters(defaults, Request{UpstreamType: "grok"})
+	if priority != 7 || concurrency != 24 {
+		t.Fatalf("shared defaults priority=%d concurrency=%d", priority, concurrency)
+	}
+	customPriority, customConcurrency := int64(3), int64(40)
+	priority, concurrency = accountCreationParameters(defaults, Request{Priority: &customPriority, Concurrency: &customConcurrency})
+	if priority != 3 || concurrency != 40 {
+		t.Fatalf("overrides priority=%d concurrency=%d", priority, concurrency)
 	}
 }
 
@@ -374,6 +522,7 @@ func onboardingFixture(t *testing.T, adminURL string) (*business.Store, *configs
 		`INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('upstream.test','1','now')`,
 		`INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,updated_at) VALUES('upstream.test','6','pro','stable','openai','active','0.2','0.2','now')`,
 		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at) VALUES('codex','3','balanced','global_default','now')`,
+		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,updated_at) VALUES('pro','4','balanced','global_default','now')`,
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement); err != nil {

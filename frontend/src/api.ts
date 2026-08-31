@@ -22,13 +22,15 @@ export type RuntimeConfig = {
   probes_enabled: boolean;
   admin_base_url: string | null;
   request_timeout_seconds: number;
+  account_default_concurrency: number;
+  account_default_priority: number;
   initialized: boolean;
   target_configured: boolean;
   console_username: string | null;
   configuration_errors: string[];
 };
 
-export type RuntimeMode = "监控模式" | "调度模式" | "完全模式";
+export type RuntimeMode = "监控模式" | "完全模式";
 
 export type NotificationStatus = {
   configured: boolean;
@@ -67,6 +69,7 @@ export type PrivateAuthConfigStatus = {
 
 export type OnboardingCandidate = {
   number: number;
+  upstream_id: string;
   host: string;
   upstream_name: string;
   group_id: string | null;
@@ -95,6 +98,7 @@ export type UpstreamBoundAccount = {
   account_exists: boolean;
   binding_status: string | null;
   local_group: string;
+  local_groups?: Array<{ id: string; name: string }>;
   upstream_key_id: string;
   upstream_key_name: string;
 };
@@ -111,7 +115,9 @@ export type SessionStatus = {
 };
 
 type UpstreamHost = {
+  upstream_id: string;
   host: string;
+  hosts: string[];
   base_url: string;
   name: string;
   upstream_type: string;
@@ -144,6 +150,7 @@ export type UpstreamDeletePreview = {
 };
 
 export type UpstreamGroup = {
+  upstream_id: string;
   host: string;
   group_id: string | null;
   name: string;
@@ -161,6 +168,7 @@ export type UpstreamGroup = {
 };
 
 export type UpstreamConfiguration = {
+  upstream_id: string;
   host: string;
   name: string;
   base_url: string;
@@ -235,10 +243,13 @@ export type OnboardingRequest = {
   account_type?: string;
   notes?: string;
   multiplier: string;
-  local_group_id: number;
+  local_group_id?: number;
+  local_group_ids?: number[];
   upstream_group_id: string;
+  account_ids?: string[];
   extra?: Record<string, unknown>;
   priority?: number;
+  concurrency?: number;
   schedulable?: boolean;
 };
 
@@ -297,7 +308,7 @@ export type AutoInspectionConfig = {
   interval_seconds: number;
 };
 
-export type InspectionRoundSummary = {
+type InspectionRoundSummary = {
   channels: number;
   probed: number;
   samples: number;
@@ -455,6 +466,90 @@ export type GroupAllocation = {
   channels: GroupAllocationChannel[];
 };
 
+export type PricingConfig = {
+  enabled: boolean;
+  profit_margin: number;
+  exchange_group_sets: string[][];
+  interval_seconds: number;
+  write_concurrency: number;
+};
+
+export type PricingGroup = {
+  id: string;
+  name: string;
+  platform: string;
+  status: string;
+  rate_multiplier: string | null;
+  managed: boolean;
+  available: boolean;
+  reason: string | null;
+};
+
+export type PricingDecision = {
+  account_id: string;
+  account_name: string;
+  platform: string;
+  cost_multiplier: string | null;
+  current_group_ids: string[];
+  desired_group_ids: string[];
+  eligible_groups: string[];
+  changed: boolean;
+  skipped: boolean;
+  reason: string | null;
+};
+
+export type PricingSnapshot = {
+  config: PricingConfig;
+  groups: PricingGroup[];
+  decisions: PricingDecision[];
+  accounts: number;
+  changes: number;
+  skipped: number;
+  generated_at: string;
+};
+
+export type RevenueRow = {
+  account_id: string;
+  account_name: string;
+  local_group: string;
+  upstream_host: string;
+  upstream_key_name: string;
+  account_cost: number | null;
+  actual_cost: number | null;
+  upstream_raw_cost: number | null;
+  recharge_rate: number | null;
+  upstream_cost: number | null;
+  difference: number | null;
+  revenue: number | null;
+  category: "计费异常" | "正常" | "无法核对";
+  note: string;
+  attribution_level: "key" | "unavailable";
+};
+
+export type RevenueSummary = {
+  group: string;
+  accounts: number;
+  account_cost: number;
+  actual_cost: number;
+  upstream_raw_cost: number;
+  upstream_cost: number;
+  difference: number;
+  revenue: number;
+};
+
+export type RevenueReport = {
+  report_date: string;
+  timezone: string;
+  tolerance: number;
+  rows: RevenueRow[];
+  summaries: RevenueSummary[];
+  issues: Array<{ host: string; reason: string }>;
+  comparable: number;
+  unavailable: number;
+  abnormal: number;
+  generated_at: string;
+};
+
 type GroupPolicyOverride = {
   enabled?: boolean | null;
   strategy?: "balanced" | "price_first" | "speed_first" | "reliability" | null;
@@ -489,13 +584,33 @@ export type AccountStatus = {
   id: string;
   name: string;
   groups: string[];
+  upstream_id: string | null;
   upstream_host: string | null;
+  recorded_upstream_host?: string | null;
+  upstream_host_repairable?: boolean;
   upstream_type: string | null;
+  base_url?: string | null;
+  base_url_checked_at?: string | null;
+  base_url_source?: "explicit" | "platform_default" | null;
+  upstream_base_url?: string | null;
+  base_url_check?:
+    | "matched"
+    | "different_allowed"
+    | "official_mismatch"
+    | "invalid"
+    | "unchecked"
+    | "unknown";
+  base_url_check_reason?: string | null;
+  key_status?: string | null;
+  key_status_reason?: string | null;
+  sub2api_status?: string | null;
+  sub2api_error?: string | null;
   platform?: string | null;
   account_type?: string | null;
   schedulable: boolean | null;
   priority: number | null;
   manual_priority?: number | null;
+  manual_sync_balance_multiplier?: boolean;
   load_factor: string | null;
   concurrency: number | null;
   multiplier: string | null;
@@ -523,6 +638,8 @@ export type AccountStatus = {
   short_score: number | null;
   long_score: number | null;
   sample_count: number;
+  model_check_status?: ModelCheckAccountStatus["status"] | "loading" | "unavailable" | null;
+  model_check_checked_at?: string | null;
   recent_results: AccountRecentResult[];
   ttfb_p50_ms: number | null;
   ttfb_p95_ms: number | null;
@@ -535,6 +652,7 @@ export type AccountRecentResult = {
   score?: number | null;
   observed_at: string | null;
   latency_ms: number | null;
+  duration_ms?: number | null;
   failure_reason: string | null;
   source: string;
 };
@@ -542,6 +660,7 @@ export type AccountRecentResult = {
 type AccountBinding = {
   id: number;
   local_account_id: string;
+  upstream_id: string;
   upstream_host: string;
   upstream_key_id: string;
   upstream_key_name: string;
@@ -763,11 +882,51 @@ export type ModelCheckCapabilities = {
   sol_models: string[];
 };
 
+export type ModelCheckAccountStatus = {
+  account_id: string;
+  status: "consistent" | "inconsistent" | "inconclusive";
+  checked_at: string;
+  task_id: string;
+};
+
 export type ModelCheckRequest = {
   account_ids: string[];
   models: string[];
   rounds: number;
   timeout_seconds: number;
+};
+
+export type TrafficRankingSort = "traffic" | "stability" | "success_rate" | "latency";
+
+export type TrafficRankingRow = {
+  rank: number;
+  account_id: string;
+  account_name: string;
+  upstream_host: string;
+  platform: string;
+  groups: string[];
+  requests: number;
+  successful: number;
+  failed: number;
+  traffic_share: number | null;
+  success_rate: number | null;
+  stability_score: number | null;
+  average_latency_ms: number | null;
+  p95_latency_ms: number | null;
+  active_buckets: number;
+  total_buckets: number;
+  latest_at: string | null;
+};
+
+export type TrafficRanking = {
+  start_at: string;
+  end_at: string;
+  group_name: string;
+  sort_by: TrafficRankingSort;
+  bucket: "hour" | "day";
+  total_requests: number;
+  accounts_with_traffic: number;
+  accounts: TrafficRankingRow[];
 };
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
@@ -824,6 +983,18 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   overview: () => request<Overview>("/api/overview"),
+  trafficRanking: (filters: {
+    timeRange: "1h" | "6h" | "24h" | "7d" | "30d";
+    group?: string;
+    sortBy: TrafficRankingSort;
+  }) => {
+    const query = new URLSearchParams({
+      time_range: filters.timeRange,
+      sort_by: filters.sortBy,
+    });
+    if (filters.group) query.set("group", filters.group);
+    return request<TrafficRanking>(`/api/traffic/ranking?${query.toString()}`);
+  },
   config: () => request<RuntimeConfig>("/api/config"),
   notificationStatus: () => request<NotificationStatus>("/api/notifications/status"),
   notificationQueue: () => request<NotificationQueueDetails>("/api/notifications/queue"),
@@ -876,6 +1047,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ enabled }),
     }),
+  setAccountDefaults: (payload: { concurrency: number; priority: number }) =>
+    request<RuntimeConfig>("/api/config/account-defaults", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   setAdminTarget: (payload: {
     admin_base_url: string;
     admin_key: string;
@@ -903,6 +1079,18 @@ export const api = {
         error?: string;
       }>;
     }>("/api/policy/restore-control", { method: "POST" }),
+  pricing: () => request<PricingSnapshot>("/api/pricing"),
+  updatePricingConfig: (payload: PricingConfig) =>
+    request<PricingSnapshot>("/api/pricing/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  applyPricing: () => request<Task>("/api/pricing/apply", { method: "POST" }),
+  calculateRevenue: (date: string) =>
+    request<Task>("/api/pricing/revenue", {
+      method: "POST",
+      body: JSON.stringify({ date }),
+    }),
   groups: () => request<GroupStatus[]>("/api/groups"),
   updateGroupPolicy: (id: string, payload: GroupPolicyOverrideUpdate) =>
     request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/policy`, {
@@ -964,6 +1152,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ account_ids: accountIds }),
     }),
+  validateAccountBaseURLs: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/base-url/validate", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
+  checkAccountConfiguration: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/configuration/check", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
+  repairAccountBaseURLs: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/base-url/repair", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
+  repairAccountUpstreamHosts: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/upstream-hosts/repair", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
   repairAccountNames: (accountIds: string[]) =>
     request<Task>("/api/management/accounts/names/repair", {
       method: "POST",
@@ -1011,6 +1219,7 @@ export const api = {
     priority: number,
     loadFactor: string,
     concurrency: number,
+    syncBalanceMultiplier: boolean,
   ) =>
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/manual-priority`, {
       method: "PUT",
@@ -1018,6 +1227,7 @@ export const api = {
         priority,
         load_factor: loadFactor,
         concurrency,
+        sync_balance_multiplier: syncBalanceMultiplier,
       }),
     }),
   clearAccountManualPriority: (accountId: string) =>
@@ -1087,6 +1297,8 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     }),
   modelCheckCapabilities: () => request<ModelCheckCapabilities>("/api/model-checks/capabilities"),
+  modelCheckAccountStatuses: () =>
+    request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses"),
   runModelCheck: (payload: ModelCheckRequest) =>
     request<Task>("/api/model-checks", {
       method: "POST",

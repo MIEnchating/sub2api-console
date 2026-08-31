@@ -21,6 +21,66 @@ type ManagementSyncResult struct {
 	ReadOnly    bool  `json:"read_only"`
 }
 
+type AccountBaseURLObservation struct {
+	AccountID string
+	BaseURL   *string
+	Source    string
+}
+
+func (s *Store) CommitAccountBaseURLObservations(ctx context.Context, values []AccountBaseURLObservation) error {
+	if len(values) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		accountID := strings.TrimSpace(value.AccountID)
+		if accountID == "" {
+			return errors.New("Base URL 观测缺少账号 ID")
+		}
+		if _, duplicate := seen[accountID]; duplicate {
+			return fmt.Errorf("Base URL 观测包含重复账号 ID：%s", accountID)
+		}
+		seen[accountID] = struct{}{}
+		var metadataRaw string
+		if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&metadataRaw); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("Base URL 观测账号 %s 不存在", accountID)
+			}
+			return err
+		}
+		metadata, err := decodeObject(metadataRaw)
+		if err != nil {
+			return fmt.Errorf("账号 %s 元数据记录损坏", accountID)
+		}
+		if value.BaseURL == nil || strings.TrimSpace(*value.BaseURL) == "" {
+			delete(metadata, "base_url")
+			delete(metadata, "base_url_source")
+		} else {
+			metadata["base_url"] = strings.TrimSpace(*value.BaseURL)
+			source := strings.TrimSpace(value.Source)
+			if source == "" {
+				source = "explicit"
+			}
+			metadata["base_url_source"] = source
+		}
+		metadata["base_url_checked_at"] = now
+		encoded, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`, string(encoded), now, accountID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 type managementAccount struct {
 	ID                string
 	Name              string
@@ -288,6 +348,19 @@ func managementAccountProjection(
 			metadata[key] = value
 		}
 	}
+	baseURL, baseURLPresent, err := managementAccountBaseURL(row)
+	if err != nil {
+		return managementAccount{}, fmt.Errorf("账号 %s 的 base_url 无效：%w", id, err)
+	}
+	if baseURLPresent {
+		if baseURL == nil {
+			delete(metadata, "base_url")
+			delete(metadata, "base_url_source")
+		} else {
+			metadata["base_url"] = *baseURL
+			metadata["base_url_source"] = "explicit"
+		}
+	}
 	groups, groupsPresent, err := managementMemberships(row, groupsByID, groupsByName)
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s：%w", id, err)
@@ -345,6 +418,39 @@ func managementAccountProjection(
 		Metadata: metadata, GroupsPresent: groupsPresent, Groups: groups,
 		GroupRates: groupRates, RatesPresent: ratesPresent, MultiplierPresent: multiplierPresent,
 	}, nil
+}
+
+func managementAccountBaseURL(row map[string]any) (*string, bool, error) {
+	raw, present := row["base_url"]
+	if !present {
+		credentialsRaw, credentialsPresent := row["credentials"]
+		if !credentialsPresent {
+			return nil, false, nil
+		}
+		if credentialsRaw == nil {
+			return nil, false, nil
+		}
+		credentials, ok := credentialsRaw.(map[string]any)
+		if !ok {
+			return nil, false, errors.New("credentials 必须是对象")
+		}
+		raw, present = credentials["base_url"]
+		if !present {
+			return nil, false, nil
+		}
+	}
+	if raw == nil {
+		return nil, true, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return nil, false, errors.New("必须是字符串")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, true, nil
+	}
+	return &value, true, nil
 }
 
 func managementMemberships(row map[string]any, byID, byName map[string]string) ([]managementMembership, bool, error) {

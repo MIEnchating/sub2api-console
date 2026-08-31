@@ -65,14 +65,83 @@ func TestClassificationPriorityAndScores(t *testing.T) {
 func TestPercentilesIgnoreZeroLatencySamples(t *testing.T) {
 	zero, oneHundred := "0", "100"
 	health, err := HealthScore([]Sample{
-		{Result: "通过", Source: "active-probe", LatencyP95: &zero},
-		{Result: "通过", Source: "active-probe", LatencyP95: &oneHundred},
+		{Result: "通过", Source: "traffic", LatencyP95: &zero, Payload: map[string]any{"latency_metric": "first_token", "latency_unit": "ms"}},
+		{Result: "通过", Source: "traffic", LatencyP95: &oneHundred, Payload: map[string]any{"latency_metric": "first_token", "latency_unit": "ms"}},
 	}, testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if health.P50MS == nil || *health.P50MS != 100 || health.P95MS == nil || *health.P95MS != 100 {
 		t.Fatalf("zero latency must not enter percentiles: %#v", health)
+	}
+}
+
+func TestActiveProbeFirstContentLatencyEntersFirstTokenPercentiles(t *testing.T) {
+	firstToken, legacyFirstToken := "1250", "1500"
+	health, err := HealthScore([]Sample{
+		{
+			Result: "通过", Source: "active-probe", LatencyP95: &firstToken,
+			Payload: map[string]any{
+				"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
+			},
+		},
+		{Result: "通过", Source: "active-probe", LatencyP95: &legacyFirstToken},
+	}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.LatestEvent != EventHealthy || health.P50MS == nil || *health.P50MS != 1250 || health.P95MS == nil || *health.P95MS != 1500 {
+		t.Fatalf("主动探针首个内容事件耗时没有进入首字延迟：%#v", health)
+	}
+}
+
+func TestTrafficRequestDurationEntersCombinedLatencyPercentiles(t *testing.T) {
+	duration := "195843"
+	health, err := HealthScore([]Sample{{
+		Result: "通过", Source: "traffic", LatencyP95: &duration,
+		Payload: map[string]any{
+			"latency_metric": "ttfb", "latency_source": "operations.duration_ms", "latency_unit": "ms",
+		},
+	}}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.LatestEvent != EventSlow || health.P50MS == nil || *health.P50MS != 195843 || health.P95MS == nil || *health.P95MS != 195843 {
+		t.Fatalf("真实流量总耗时没有进入综合延迟：%#v", health)
+	}
+}
+
+func TestCompleteProbeResponseDoesNotEnterCombinedLatency(t *testing.T) {
+	duration := "195843"
+	health, err := HealthScore([]Sample{{
+		Result: "通过", Source: "active-probe", LatencyP95: &duration,
+		Payload: map[string]any{
+			"latency_metric": "total_duration", "latency_source": "account_test.complete_response", "latency_unit": "ms",
+		},
+	}}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.LatestEvent != EventHealthy || health.P50MS != nil || health.P95MS != nil {
+		t.Fatalf("完整探针响应耗时不应重复进入综合延迟：%#v", health)
+	}
+}
+
+func TestCombinedLatencyMixesProbeFirstContentAndTrafficDuration(t *testing.T) {
+	firstContent, requestDuration := "1250", "9000"
+	health, err := HealthScore([]Sample{
+		{Result: "通过", Source: "active-probe", LatencyP95: &firstContent, Payload: map[string]any{
+			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
+		}},
+		{Result: "通过", Source: "traffic", LatencyP95: &requestDuration, Payload: map[string]any{
+			"latency_metric": "request_duration", "latency_source": "operations.duration_ms", "latency_unit": "ms",
+		}},
+	}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.P50MS == nil || *health.P50MS != 1250 || health.P95MS == nil || *health.P95MS != 9000 {
+		t.Fatalf("combined latency=%#v", health)
 	}
 }
 
@@ -236,17 +305,20 @@ func TestLatencyUnitsAndPercentiles(t *testing.T) {
 	}
 }
 
-func TestTrafficDurationIsNotClassifiedAsSlowFirstToken(t *testing.T) {
+func TestTrafficDurationIsClassifiedAsSlowCombinedLatency(t *testing.T) {
 	duration := "195843"
 	health, err := HealthScore([]Sample{{
 		Result: "通过", Source: "traffic", LatencyP95: &duration,
-		Payload: map[string]any{"latency_unit": "ms", "duration_ms": duration},
+		Payload: map[string]any{
+			"latency_unit": "ms", "latency_metric": "request_duration",
+			"latency_source": "operations.duration_ms", "duration_ms": duration,
+		},
 	}}, testPolicy())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if health.LatestEvent != EventHealthy || health.HealthScore != 100 || health.P95MS != nil {
-		t.Fatalf("整体请求耗时被错误当成首字延迟：%#v", health)
+	if health.LatestEvent != EventSlow || health.HealthScore != 65 || health.P95MS == nil || *health.P95MS != 195843 {
+		t.Fatalf("真实流量总耗时没有参与综合延迟评分：%#v", health)
 	}
 }
 

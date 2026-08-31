@@ -9,7 +9,7 @@ import {
   notificationTargetField,
   targetFormFromConfig,
 } from "../App";
-import type { AutoInspectionStatus, NotificationStatus, RuntimeConfig, Task } from "../api";
+import type { NotificationStatus, RuntimeConfig, Task } from "../api";
 
 describe("系统设置页面职责", () => {
   it("只展示可操作的系统设置，不重复展示运行状态和 Host 鉴权配置", () => {
@@ -23,6 +23,8 @@ describe("系统设置页面职责", () => {
       config_keys: [],
       secret_values_hidden: true,
       probes_enabled: true,
+      account_default_concurrency: 10,
+      account_default_priority: 1,
       admin_base_url: "https://sub2api.example.test",
       request_timeout_seconds: 60,
       initialized: true,
@@ -49,33 +51,6 @@ describe("系统设置页面职责", () => {
 
     queryClient.setQueryData(["config"], config);
     queryClient.setQueryData(["notification-status"], notifications);
-    const inspection: AutoInspectionStatus = {
-      enabled: true,
-      interval_seconds: 15,
-      running: false,
-      monitoring_configured: true,
-      monitoring_enabled: true,
-      monitoring_checked_at: "2026-08-27T01:00:00Z",
-      last_run_at: "2026-08-27T01:00:00Z",
-      last_run_duration_ms: 29_681,
-      last_summary: {
-        channels: 233,
-        probed: 10,
-        samples: 112,
-        fused: 2,
-        recovered: 1,
-        applied: 24,
-        cleaned_up: 0,
-        alerts: 3,
-      },
-      next_run_at: "2026-08-27T01:00:15Z",
-      last_status: "succeeded",
-      last_error: "巡检错误只应出现在心跳记录中",
-      last_task_id: "inspection-1",
-      queue: [],
-      heartbeat_history: [],
-    };
-    queryClient.setQueryData(["auto-inspection"], inspection);
     queryClient.setQueryData(["log-cleanup"], {
       enabled: false,
       retention_days: 30,
@@ -85,43 +60,29 @@ describe("系统设置页面职责", () => {
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <ConfigPage streamConnected />
+        <ConfigPage />
       </QueryClientProvider>,
     );
 
     expect(markup).toContain("系统设置");
     expect(markup).toContain('data-testid="system-settings-flow"');
-    expect(markup).toContain("flex flex-col xl:block xl:columns-2 xl:gap-4");
-    expect(markup).toContain("order-1 mb-4 break-inside-avoid-column");
-    expect(markup).toContain("order-2 mb-4 break-inside-avoid-column xl:break-before-column");
-    expect(markup.match(/break-inside-avoid-column/g)).toHaveLength(4);
+    expect(markup).toContain("grid items-start gap-4 xl:grid-cols-2");
     expect(markup.match(/data-size="sm"/g)).toHaveLength(4);
     expect(markup).not.toContain("执行模式");
     expect(markup).toContain("Sub2API 连接");
-    expect(markup).toContain("运行状态");
-    expect(markup).toContain("自动巡检");
-    expect(markup).toContain("真实流量采集");
-    expect(markup).toContain("页面数据更新");
-    expect(markup).toContain("服务器实时推送");
-    expect(markup).toContain("29.7 秒");
-    expect(markup).not.toContain("巡检错误只应出现在心跳记录中");
-    expect(markup).toContain("上一轮概要");
-    expect(markup).toContain('data-testid="last-inspection-summary"');
-    expect(markup).toContain("受管账号");
-    expect(markup).toContain(">233<");
-    expect(markup).toContain("主动探测");
-    expect(markup).toContain(">10<");
-    expect(markup).toContain("新增样本");
-    expect(markup).toContain(">112<");
-    expect(markup).toContain("新增熔断");
-    expect(markup).toContain("恢复回池");
-    expect(markup).toContain("自动执行");
-    expect(markup).toContain(">24<");
-    expect(markup).toContain("自动处置");
-    expect(markup).toContain("当前告警");
+    expect(markup).not.toContain("运行状态");
+    expect(markup).not.toContain("自动巡检");
+    expect(markup).not.toContain("真实流量采集");
+    expect(markup).not.toContain("页面数据更新");
+    expect(markup).not.toContain("上一轮概要");
+    expect(markup).not.toContain('data-testid="last-inspection-summary"');
     expect(markup).toContain("已配置，留空则不修改");
     expect(markup).toContain("请求超时（秒）");
     expect(markup).toContain("保存并测试同步");
+    expect(markup).toContain("账号开户默认参数");
+    expect(markup).toContain("默认并发");
+    expect(markup).toContain("默认优先级");
+    expect(markup).toContain("保存默认参数");
     expect(markup).not.toContain('data-testid="runtime-controls"');
     expect(markup).not.toContain("divide-border/70 divide-y rounded-lg border px-3");
     expect(markup).not.toContain("first:pt-0 last:pb-0");
@@ -150,7 +111,7 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain('value="configured-target"');
     expect(markup.match(/placeholder="已配置，留空则不修改"/g)).toHaveLength(2);
     expect(markup).not.toContain("secret-value");
-    expect(markup).toContain("日志清理");
+    expect(markup).toContain("日志保留");
     expect(markup).toContain("定时清理");
     expect(markup).toContain('aria-label="日志保留天数"');
     expect(markup).toContain("立即按期限清理");
