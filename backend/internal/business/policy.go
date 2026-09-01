@@ -106,7 +106,7 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 		return PolicySnapshot{}, err
 	}
 	if runtimeMode != "" {
-		if _, err := updateRuntimeModeTx(ctx, tx, runtimeMode, now); err != nil {
+		if err := updateRuntimeModeTx(ctx, tx, runtimeMode, now); err != nil {
 			return PolicySnapshot{}, err
 		}
 	}

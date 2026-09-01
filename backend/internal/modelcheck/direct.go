@@ -152,6 +152,10 @@ func (sender directBundleSender) sendRequest(ctx context.Context, endpoint strin
 	if err := decoder.Decode(&result); err != nil {
 		return nil, response.StatusCode, raw, visibleRequestError{message: "上游直连接口返回的不是有效 JSON"}
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, response.StatusCode, raw, visibleRequestError{message: "上游直连接口响应包含尾随数据"}
+	}
 	return result, response.StatusCode, raw, nil
 }
 

@@ -11,10 +11,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
@@ -26,8 +28,23 @@ type checkingKeys struct {
 }
 
 type probeKeys struct {
-	creates int
-	deletes int
+	creates   int
+	deletes   int
+	reveals   int
+	revealErr error
+	catalog   []business.UpstreamCatalogKey
+	deleteIDs []string
+}
+
+type cleanupTaskStore struct {
+	final chan taskstore.Task
+}
+
+func (store *cleanupTaskStore) Save(_ context.Context, task taskstore.Task) error {
+	if task.Status == "succeeded" || task.Status == "failed" {
+		store.final <- task
+	}
+	return nil
 }
 
 func (keys *probeKeys) CreateKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
@@ -40,12 +57,21 @@ func (keys *probeKeys) CreateKeyWithVerification(ctx context.Context, record con
 }
 
 func (keys *probeKeys) RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
+	keys.reveals++
+	if keys.revealErr != nil {
+		return upstreamsync.CreatedKey{}, keys.revealErr
+	}
 	return upstreamsync.CreatedKey{}, errors.New("unexpected reveal")
 }
 
-func (keys *probeKeys) DeleteKey(context.Context, configstore.AuthRecord, string) error {
+func (keys *probeKeys) DeleteKey(_ context.Context, _ configstore.AuthRecord, keyID string) error {
 	keys.deletes++
+	keys.deleteIDs = append(keys.deleteIDs, keyID)
 	return nil
+}
+
+func (keys *probeKeys) ListKeys(context.Context, configstore.AuthRecord) ([]business.UpstreamCatalogKey, error) {
+	return append([]business.UpstreamCatalogKey{}, keys.catalog...), nil
 }
 
 func (keys *checkingKeys) CreateKeyWithVerification(_ context.Context, _ configstore.AuthRecord, _, _ string, verification bool) (upstreamsync.CreatedKey, error) {
@@ -138,7 +164,7 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 	keys := &checkingKeys{databasePath: databasePath}
 	service := New(repository, private, keys, nil)
 	result, err := service.Onboard(context.Background(), Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	})
 	if err != nil {
@@ -170,6 +196,20 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 	}
 }
 
+func TestValidateUsesCatalogConvertedMultiplierWithoutClientInput(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "http://127.0.0.1:1")
+	validated, err := New(repository, private, nil, nil).validate(context.Background(), Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.multiplier != "0.2" {
+		t.Fatalf("validated multiplier=%q", validated.multiplier)
+	}
+}
+
 func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -196,7 +236,7 @@ func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, admin.URL)
 	keys := &checkingKeys{databasePath: databasePath}
 	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupIDs: []string{"3", "4"},
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"3", "4"},
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	})
 	if err != nil {
@@ -263,7 +303,7 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 	_ = database.Close()
 	keys := &checkingKeys{databasePath: databasePath}
 	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupIDs: []string{"4"},
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"4"},
 		UpstreamGroupID: "6", AccountIDs: []string{"77"}, Actor: "operator",
 	})
 	if err != nil {
@@ -345,6 +385,107 @@ func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 	assertSecretAbsent(t, databasePath, "probe-secret")
 }
 
+func TestProbeIgnoresTemporaryKeyLeftInLocalCatalog(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Authorization") != "Bearer probe-secret" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"id":"gpt-5.2"}]}`))
+	}))
+	defer gateway.Close()
+	repository, private, databasePath := onboardingFixture(t, gateway.URL)
+	token := "upstream-token"
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "upstream.test", BaseURL: gateway.URL, UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,updated_at)
+		VALUES('upstream.test','6608','console-probe-b018dbf986fd','6','active','now')`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	_ = database.Close()
+
+	keys := &probeKeys{}
+	models, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "upstream.test", "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 0 || keys.creates != 1 || keys.deletes != 1 {
+		t.Fatalf("models=%v reveals=%d creates=%d deletes=%d", models, keys.reveals, keys.creates, keys.deletes)
+	}
+}
+
+func TestProbeReplacesExistingKeyConfirmedMissingUpstream(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Authorization") != "Bearer probe-secret" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = writer.Write([]byte(`{"data":[{"id":"gpt-5.2"}]}`))
+	}))
+	defer gateway.Close()
+	repository, private, databasePath := onboardingFixture(t, gateway.URL)
+	token := "upstream-token"
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "upstream.test", BaseURL: gateway.URL, UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,updated_at)
+		VALUES('upstream.test','6608','permanent-key','6','active','now')`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	_ = database.Close()
+
+	keys := &probeKeys{revealErr: upstreamsync.ErrKeyNotFound}
+	models, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "upstream.test", "6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 1 || keys.creates != 1 || keys.deletes != 1 {
+		t.Fatalf("models=%v reveals=%d creates=%d deletes=%d", models, keys.reveals, keys.creates, keys.deletes)
+	}
+}
+
+func TestProbeDoesNotReplaceExistingKeyAfterUnclassifiedReadFailure(t *testing.T) {
+	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,updated_at)
+		VALUES('upstream.test','6608','permanent-key','6','active','now')`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	_ = database.Close()
+
+	keys := &probeKeys{revealErr: errors.New("upstream timeout")}
+	_, err = New(repository, private, keys, nil).ProbeModels(context.Background(), "upstream.test", "6")
+	if err == nil || !strings.Contains(err.Error(), "upstream timeout") {
+		t.Fatalf("err=%v", err)
+	}
+	if keys.reveals != 1 || keys.creates != 0 || keys.deletes != 0 {
+		t.Fatalf("reveals=%d creates=%d deletes=%d", keys.reveals, keys.creates, keys.deletes)
+	}
+}
+
 func TestProbeCleansTemporaryKeyWhenGatewayFails(t *testing.T) {
 	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -395,7 +536,7 @@ func TestOnboardIgnoresAutomaticSchedulingWritebackVerification(t *testing.T) {
 	}
 	keys := &checkingKeys{databasePath: databasePath}
 	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	})
 	if err != nil {
@@ -417,7 +558,7 @@ func TestOnboardReusesPendingKeyAfterRemoteAccountFailure(t *testing.T) {
 	keys := &checkingKeys{databasePath: databasePath}
 	service := New(repository, private, keys, nil)
 	request := Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	}
 	first, firstErr := service.Onboard(context.Background(), request)
@@ -451,7 +592,7 @@ func TestEnqueueBatchRejectsDuplicateUpstreamGroupsBeforeStarting(t *testing.T) 
 	repository, private, databasePath := onboardingFixture(t, admin.URL)
 	service := New(repository, private, &checkingKeys{databasePath: databasePath}, nil)
 	request := Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	}
 	if _, err := service.EnqueueBatch(context.Background(), []Request{request, request}); err == nil || !strings.Contains(err.Error(), "不能在一个批次中重复提交") {
@@ -473,7 +614,7 @@ func TestValidateAllowsOnboardingInEveryRuntimeMode(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
 	service := New(repository, private, &checkingKeys{databasePath: databasePath}, nil)
 	request := Request{
-		Host: "upstream.test", UpstreamType: "sub2api", Multiplier: "0.2", LocalGroupID: "3",
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
 		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
 	}
 	for _, mode := range []string{runtimepolicy.Monitoring, runtimepolicy.Full} {
@@ -498,6 +639,63 @@ func TestAccountCreationParametersUseSharedDefaultsAndAllowPerAccountOverrides(t
 	priority, concurrency = accountCreationParameters(defaults, Request{Priority: &customPriority, Concurrency: &customConcurrency})
 	if priority != 3 || concurrency != 40 {
 		t.Fatalf("overrides priority=%d concurrency=%d", priority, concurrency)
+	}
+}
+
+func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.T) {
+	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,metadata_json,updated_at)
+			VALUES('41','upstream.test','bound-key','bound','codex','{}','now')`,
+		`INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,upstream_key_id,upstream_key_name,
+			upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,reason,created_at,updated_at)
+			VALUES('pending-1','upstream.test','sub2api','pending-key','pending','6','pro','3','codex','0.2','retry','now','now')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			database.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	groupID := "6"
+	status := "active"
+	keys := &probeKeys{catalog: []business.UpstreamCatalogKey{
+		{KeyID: "bound-key", Name: "bound", UpstreamGroup: &groupID, Status: &status},
+		{KeyID: "pending-key", Name: "pending", UpstreamGroup: &groupID, Status: &status},
+		{KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status},
+	}}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(repository, private, keys, tasks)
+	preview, err := service.PreviewUnboundKeys(context.Background(), "upstream.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(preview.Keys) != 1 || preview.Keys[0].KeyID != "unused-key" {
+		t.Fatalf("preview=%#v", preview)
+	}
+	if _, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"bound-key"}, "tester"); err == nil {
+		t.Fatal("bound key cleanup should be rejected")
+	}
+	queued, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.ID != queued.ID || completed.Status != "succeeded" || completed.Result["deleted"] != 1 {
+			t.Fatalf("completed=%#v", completed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup task did not complete")
+	}
+	if strings.Join(keys.deleteIDs, ",") != "unused-key" {
+		t.Fatalf("deleted=%#v", keys.deleteIDs)
 	}
 }
 

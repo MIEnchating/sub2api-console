@@ -1,4 +1,6 @@
 import type { GroupAllocation, GroupAllocationChannel, GroupStatus } from "@/api";
+import { AccountHealthScore } from "@/components/account-health-score";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import {
   Dialog,
@@ -175,28 +177,33 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
         <SummaryMetric label="分配并发" value={integer(props.allocation.assigned_concurrency)} />
       </div>
       {props.allocation.channels.length ? (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border">
+        <DataTablePanel className="flex-1">
           <Table
             className={groupAllocationLayout.table}
             containerClassName="h-full min-h-0 overflow-auto"
           >
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[8%]">健康分</TableHead>
+                <TableHead className="w-[13%]">健康分</TableHead>
                 <TableHead className="w-[24%]">账号</TableHead>
                 <TableHead className="w-[10%]">状态</TableHead>
                 <TableHead className="w-[10%]">综合 P95</TableHead>
-                <TableHead className="w-[9%]">调度倍率</TableHead>
+                <TableHead className="w-[9%]">账号成本</TableHead>
                 <TableHead className="w-[9%]">优先级</TableHead>
-                <TableHead className="w-[20%]">最终权重</TableHead>
+                <TableHead className="w-[15%]">最终权重</TableHead>
                 <TableHead className="w-[10%] text-right">分配并发</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {props.allocation.channels.map((channel) => (
                 <TableRow key={channel.account_id}>
-                  <TableCell className="font-semibold">
-                    {schedulingMetric(channel.health_score)}
+                  <TableCell>
+                    <AccountHealthScore
+                      score={channel.health_score}
+                      shortScore={channel.short_score}
+                      longScore={channel.long_score}
+                      sampleCount={channel.sample_count}
+                    />
                   </TableCell>
                   <TableCell>
                     <div className="grid min-w-0 gap-0.5">
@@ -227,7 +234,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
               ))}
             </TableBody>
           </Table>
-        </div>
+        </DataTablePanel>
       ) : (
         <div className="text-muted-foreground flex min-h-32 items-center justify-center rounded-lg border border-dashed px-4 text-sm">
           该分组暂无账号，尚未产生账号调度状态。

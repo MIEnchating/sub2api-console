@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -70,6 +72,36 @@ func TestQQBotCanonicalNullMessageIDDoesNotReviveLegacyID(t *testing.T) {
 	}, []string{"test"})
 	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].Detail != "QQBot 发送响应缺少消息 ID" {
 		t.Fatalf("unexpected outcome: %#v", outcomes)
+	}
+}
+
+func TestQQBotSenderCopiesClientAndRejectsRedirects(t *testing.T) {
+	originalRedirect := func(*http.Request, []*http.Request) error { return nil }
+	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: originalRedirect}
+	sender := NewQQBotSender(client)
+
+	if sender.client == client || sender.client.Timeout != client.Timeout {
+		t.Fatalf("sender did not copy the supplied client: sender=%p client=%p", sender.client, client)
+	}
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != nil {
+		t.Fatal("constructor mutated the caller-owned redirect policy")
+	}
+	if err := sender.client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("sender follows credential-bearing POST redirects: %v", err)
+	}
+}
+
+func TestQQBotSenderRejectsOversizedResponse(t *testing.T) {
+	transport := &responseRoundTripper{responses: []string{
+		`{"access_token":"batch-token"}` + strings.Repeat(" ", maximumQQBotResponseSize),
+	}}
+	sender := NewQQBotSender(&http.Client{Transport: transport})
+	outcomes := sender.Send(context.Background(), configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}, []string{"test"})
+
+	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].Detail != "QQBot 响应过大" {
+		t.Fatalf("oversized response was accepted: %#v", outcomes)
 	}
 }
 
@@ -136,6 +168,216 @@ func TestZeroRepeatIntervalDoesNotResendPersistentIncidents(t *testing.T) {
 	}
 	if first.Sent != 2 || second.Sent != 0 || second.Skipped != 2 || len(sender.messages) != 2 {
 		t.Fatalf("zero repeat interval resent persistent incidents: first=%#v second=%#v messages=%d", first, second, len(sender.messages))
+	}
+}
+
+func TestStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
+	path := createAlertDatabase(t)
+	channelKey := business.NotificationChannelKey("qqbot", "target")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := database.Exec(`UPDATE alert_incidents SET status='recovered' WHERE incident_key='incident-1';
+		INSERT INTO alert_deliveries(incident_key,channel_key,status,attempts,delivered_at,updated_at)
+		VALUES('incident-1',?,'transition',1,?,?)`, channelKey, now, now); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	cooling, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cooling.Sent != 1 || cooling.Skipped != 1 || len(sender.messages) != 1 {
+		t.Fatalf("cooldown did not suppress the changed incident: result=%#v messages=%#v", cooling, sender.messages)
+	}
+	details, err := repository.NotificationQueueDetails(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "状态变化冷却中" {
+		t.Fatalf("cooldown queue state is missing: %#v", details.ConsumerItems)
+	}
+
+	old := time.Now().UTC().Add(-31 * time.Minute).Format(time.RFC3339Nano)
+	verification, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verification.ExecContext(context.Background(), `UPDATE alert_deliveries SET delivered_at=? WHERE incident_key='incident-1'`, old); err != nil {
+		verification.Close()
+		t.Fatal(err)
+	}
+	stillCooling, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		verification.Close()
+		t.Fatal(err)
+	}
+	if stillCooling.Sent != 0 || stillCooling.Skipped != 2 || len(sender.messages) != 1 {
+		verification.Close()
+		t.Fatalf("old delivery time bypassed the latest transition cooldown: result=%#v messages=%#v", stillCooling, sender.messages)
+	}
+	if _, err := verification.ExecContext(context.Background(), `UPDATE alert_deliveries SET updated_at=? WHERE incident_key='incident-1'`, old); err != nil {
+		verification.Close()
+		t.Fatal(err)
+	}
+	if err := verification.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.Sent != 1 || len(sender.messages) != 2 {
+		t.Fatalf("changed incident was not sent after cooldown: result=%#v messages=%#v", ready, sender.messages)
+	}
+}
+
+func TestNewRoutingDegradedIncidentWaitsForStateChangeCooldown(t *testing.T) {
+	path := createAlertDatabase(t)
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := database.Exec(`INSERT INTO alert_incidents VALUES(
+		'console:routing:degraded:41:codex','account.routing_degraded','account','41',
+		'ROUTING_DEGRADED:健康分下降','firing',?,?,NULL,NULL)`,
+		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	channelKey := business.NotificationChannelKey("qqbot", "target")
+
+	cooling, err := repository.PrepareAlertDelivery(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cooling.Pending) != 2 || cooling.Skipped != 1 {
+		t.Fatalf("new degraded incident bypassed observation window: %#v", cooling)
+	}
+
+	verification, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-31 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := verification.Exec(`UPDATE alert_incidents SET first_seen_at=?
+		WHERE incident_key='console:routing:degraded:41:codex'`, old); err != nil {
+		verification.Close()
+		t.Fatal(err)
+	}
+	if err := verification.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ready, err := repository.PrepareAlertDelivery(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready.Pending) != 3 || ready.Skipped != 0 {
+		t.Fatalf("stable degraded incident was not released after cooldown: %#v", ready)
+	}
+}
+
+func TestRoutingDegradedDeliveriesShareChannelDigestCooldown(t *testing.T) {
+	path := createAlertDatabase(t)
+	channelKey := business.NotificationChannelKey("qqbot", "target")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	stable := now.Add(-31 * time.Minute).Format(time.RFC3339Nano)
+	recent := now.Format(time.RFC3339Nano)
+	if _, err := database.Exec(`DELETE FROM alert_incidents;
+		INSERT INTO alert_incidents VALUES
+		('console:routing:degraded:41:alpha','account.routing_degraded','account','41','ROUTING_DEGRADED:健康分下降','closed',?,?,NULL,NULL),
+		('console:routing:degraded:42:beta','account.routing_degraded','account','42','ROUTING_DEGRADED:延迟超标','firing',?,?,NULL,NULL),
+		('auth-now','upstream.auth','host','api.example','AUTH','firing',?,?,NULL,NULL)`,
+		stable, stable, stable, stable, recent, recent); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO alert_deliveries(
+		incident_key,channel_key,status,attempts,delivered_at,updated_at
+	) VALUES('console:routing:degraded:41:alpha',?,'sent',1,?,?)`, channelKey, recent, recent); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+
+	cooling, err := repository.PrepareAlertDelivery(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cooling.Pending) != 1 || cooling.Pending[0].IncidentKey != "auth-now" || cooling.Skipped != 1 {
+		t.Fatalf("recent degraded delivery did not hold later degraded changes only: %#v", cooling)
+	}
+	details, err := repository.NotificationQueueDetails(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var delayed *business.NotificationQueueItem
+	for index := range details.ConsumerItems {
+		if details.ConsumerItems[index].IncidentKey == "console:routing:degraded:42:beta" {
+			delayed = &details.ConsumerItems[index]
+			break
+		}
+	}
+	if delayed == nil || delayed.QueueStatus != "降级告警汇总冷却中" ||
+		!strings.Contains(delayed.QueueReason, "统一汇总发送") {
+		t.Fatalf("digest cooldown is not visible in queue details: %#v", details.ConsumerItems)
+	}
+
+	database, err = sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE alert_deliveries SET delivered_at=?,updated_at=?
+		WHERE incident_key='console:routing:degraded:41:alpha'`, stable, stable); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := repository.PrepareAlertDelivery(context.Background(), channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready.Pending) != 2 || ready.Skipped != 0 {
+		t.Fatalf("pending degraded changes were not released after digest cooldown: %#v", ready)
 	}
 }
 
@@ -311,6 +553,28 @@ func TestNotificationBatchesMergeOnlyWhenAlertCountReachesThreshold(t *testing.T
 	}
 }
 
+func TestNotificationBatchesMergeSmallRoutingDegradationDigest(t *testing.T) {
+	incidents := make([]business.AlertIncident, 3)
+	for index := range incidents {
+		group := fmt.Sprintf("group-%d", index%2)
+		incidents[index] = business.AlertIncident{
+			IncidentKey: fmt.Sprintf("console:routing:degraded:%d:%s", index, group),
+			EventType:   "account.routing_degraded", ObjectKind: "account", ObjectID: fmt.Sprint(index),
+			CauseCode: "ROUTING_DEGRADED:健康分下降", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		}
+	}
+
+	batches := NotificationBatches(incidents, 10)
+	if len(batches) != 1 || len(batches[0].Incidents) != 3 {
+		t.Fatalf("small degradation wave was split into separate notifications: %#v", batches)
+	}
+	if !strings.Contains(batches[0].Message, "3 个账号") ||
+		strings.Count(batches[0].Message, "账号进入降级状态") != 1 {
+		t.Fatalf("small degradation wave was not rendered as one digest: %s", batches[0].Message)
+	}
+}
+
 func TestNotificationBatchesMergeRelatedSurvivorAlertAndRecoveryBelowThreshold(t *testing.T) {
 	name := "鲨鱼辣椒-0.8"
 	for _, status := range []string{"firing", "recovered"} {
@@ -458,6 +722,38 @@ func TestNotificationBatchesCollapseRelatedRowsInsideLargeSummary(t *testing.T) 
 	}
 	if strings.Contains(message, "保底强留：保底强留") {
 		t.Fatalf("related account reason retained a duplicated prefix: %s", message)
+	}
+}
+
+func TestNotificationBatchesCollapseMassRoutingDegradationIntoOneDigest(t *testing.T) {
+	incidents := make([]business.AlertIncident, 0, 25)
+	for index := 0; index < 24; index++ {
+		group := fmt.Sprintf("group-%d", index%4)
+		incidents = append(incidents, business.AlertIncident{
+			IncidentKey: fmt.Sprintf("console:routing:degraded:%d:%s", index, group),
+			EventType:   "account.routing_degraded", ObjectKind: "account", ObjectID: fmt.Sprint(index),
+			CauseCode: "ROUTING_DEGRADED:健康分下降", Status: "firing",
+			LastSeenAt: "2026-08-30T12:00:00Z",
+		})
+	}
+	incidents = append(incidents, business.AlertIncident{
+		IncidentKey: "probe-1", EventType: "account.probe", ObjectKind: "account", ObjectID: "99",
+		CauseCode: "PROBE:上游超时", Status: "firing", LastSeenAt: "2026-08-30T12:00:01Z",
+	})
+
+	batches := NotificationBatches(incidents, 10)
+	if len(batches) != 1 || len(batches[0].Incidents) != 25 {
+		t.Fatalf("mass degradation was split into multiple notifications: %#v", batches)
+	}
+	message := batches[0].Message
+	if !strings.Contains(message, "24 个账号") || !strings.Contains(message, "4 个分组") {
+		t.Fatalf("mass degradation digest is missing its scope: %s", message)
+	}
+	if strings.Count(message, "账号进入降级状态") != 1 {
+		t.Fatalf("mass degradation was not collapsed into one row: %s", message)
+	}
+	if !strings.Contains(message, "账号主动探测失败") {
+		t.Fatalf("non-degradation alert was lost from the digest: %s", message)
 	}
 }
 
@@ -748,13 +1044,14 @@ func TestNotificationTestPersistsConfirmedOutcomeAfterNetworkSend(t *testing.T) 
 }
 
 func (s *concurrentWriteSender) Send(_ context.Context, _ configstore.NotificationSettings, messages []string) []SendOutcome {
-	s.messages = append([]string{}, messages...)
+	s.messages = append(s.messages, messages...)
 	database, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=busy_timeout%28100%29")
 	if err != nil {
 		return []SendOutcome{{Detail: err.Error()}}
 	}
 	defer database.Close()
-	if _, err := database.Exec(`INSERT INTO app_state(key,value_json,updated_at) VALUES('network-callback','{}','now')`); err != nil {
+	if _, err := database.Exec(`INSERT INTO app_state(key,value_json,updated_at) VALUES('network-callback','{}','now')
+		ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at`); err != nil {
 		return []SendOutcome{{Detail: err.Error()}}
 	}
 	outcomes := make([]SendOutcome, len(messages))

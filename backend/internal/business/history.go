@@ -274,20 +274,7 @@ func (s *Store) RunRecords(ctx context.Context, limit *int) ([]RunRecord, error)
 		return nil, err
 	}
 	defer rows.Close()
-	result := []RunRecord{}
-	for rows.Next() {
-		var item RunRecord
-		var status, stage, started, ended, duration, summary sql.NullString
-		var payload string
-		if err := rows.Scan(&item.RunKey, &item.TaskName, &status, &stage, &started, &ended, &duration, &summary, &payload, &item.UpdatedAt); err != nil {
-			return nil, err
-		}
-		item.Status, item.Stage, item.StartedAt, item.EndedAt = nullString(status), nullString(stage), nullString(started), nullString(ended)
-		item.DurationSeconds, item.Summary = nullString(duration), nullString(summary)
-		item.Payload = decodedObjectOrMarker(payload, "run_records.payload_json")
-		result = append(result, item)
-	}
-	return result, rows.Err()
+	return scanRunRecords(rows)
 }
 
 func (s *Store) SearchRunRecords(ctx context.Context, search string, limit *int) ([]RunRecord, error) {
@@ -310,6 +297,10 @@ func (s *Store) SearchRunRecords(ctx context.Context, search string, limit *int)
 		return nil, err
 	}
 	defer rows.Close()
+	return scanRunRecords(rows)
+}
+
+func scanRunRecords(rows *sql.Rows) ([]RunRecord, error) {
 	result := []RunRecord{}
 	for rows.Next() {
 		var item RunRecord
@@ -543,27 +534,7 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 		return nil, err
 	}
 	defer rows.Close()
-	result := []AuditEvent{}
-	for rows.Next() {
-		var item AuditEvent
-		var requestID, actor, source, errorText, objectType, objectID, objectName, fieldName sql.NullString
-		var remote, readback, writeback sql.NullInt64
-		var groupsRaw string
-		var beforeRaw, afterRaw sql.NullString
-		if err := rows.Scan(&item.ID, &item.OperationID, &item.OperationType, &item.State, &item.Phase,
-			&requestID, &actor, &source, &errorText, &remote, &readback, &objectType, &objectID, &objectName,
-			&groupsRaw, &fieldName, &beforeRaw, &afterRaw, &writeback, &item.CreatedAt); err != nil {
-			return nil, err
-		}
-		item.RequestID, item.Actor, item.Source, item.Error = nullString(requestID), nullString(actor), nullString(source), nullString(errorText)
-		item.RemoteConfirmed, item.ReadbackConfirmed = strictBool(remote), strictBool(readback)
-		item.ObjectType, item.ObjectID, item.ObjectName, item.FieldName = nullString(objectType), nullString(objectID), nullString(objectName), nullString(fieldName)
-		item.GroupNames = decodeStringArray(groupsRaw)
-		item.Before, item.After = decodeNullableJSON(beforeRaw), decodeNullableJSON(afterRaw)
-		item.Writeback = writeback.Valid && writeback.Int64 == 1
-		result = append(result, item)
-	}
-	return result, rows.Err()
+	return scanAuditEvents(rows)
 }
 
 func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int) ([]AuditEvent, error) {
@@ -601,6 +572,10 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 		return nil, err
 	}
 	defer rows.Close()
+	return scanAuditEvents(rows)
+}
+
+func scanAuditEvents(rows *sql.Rows) ([]AuditEvent, error) {
 	result := []AuditEvent{}
 	for rows.Next() {
 		var item AuditEvent

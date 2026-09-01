@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	qqTokenEndpoint    = "https://bots.qq.com/app/getAppAccessToken"
-	qqGatewayEndpoint  = "https://api.sgroup.qq.com/gateway"
-	groupAndC2CIntent  = 1 << 25
-	guildMessageIntent = 1 << 9
+	qqTokenEndpoint            = "https://bots.qq.com/app/getAppAccessToken"
+	qqGatewayEndpoint          = "https://api.sgroup.qq.com/gateway"
+	groupAndC2CIntent          = 1 << 25
+	guildMessageIntent         = 1 << 9
+	maximumGatewayResponseSize = 1 << 20
 )
 
 type GatewayListener struct {
@@ -55,7 +56,9 @@ func NewGatewayListener(client *http.Client) *GatewayListener {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &GatewayListener{client: client, tokenEndpoint: qqTokenEndpoint, gatewayEndpoint: qqGatewayEndpoint}
+	copy := *client
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &GatewayListener{client: &copy, tokenEndpoint: qqTokenEndpoint, gatewayEndpoint: qqGatewayEndpoint}
 }
 
 func (l *GatewayListener) Listen(ctx context.Context, request Request, ready func()) (Target, error) {
@@ -192,9 +195,12 @@ func (l *GatewayListener) doJSON(request *http.Request, target any, operation st
 		return fmt.Errorf("%s请求失败", operation)
 	}
 	defer response.Body.Close()
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maximumGatewayResponseSize+1))
 	if readErr != nil {
 		return fmt.Errorf("%s响应读取失败", operation)
+	}
+	if len(body) > maximumGatewayResponseSize {
+		return fmt.Errorf("%s响应过大", operation)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("%s失败（HTTP %d）", operation, response.StatusCode)

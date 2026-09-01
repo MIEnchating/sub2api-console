@@ -10,7 +10,6 @@ type Capabilities struct {
 	AutomaticRemoteApply    bool
 	AutomaticUpstreamSync   bool
 	AutomaticActiveProbe    bool
-	ManualAccountMultiplier bool
 	ManualAccountFields     bool
 	RemoteTopologyChanges   bool
 }
@@ -19,8 +18,7 @@ func For(mode string) (Capabilities, bool) {
 	switch mode {
 	case Monitoring:
 		return Capabilities{
-			AutomaticUpstreamSync:   true,
-			ManualAccountMultiplier: true,
+			AutomaticUpstreamSync: true,
 		}, true
 	case Full:
 		return Capabilities{
@@ -28,7 +26,6 @@ func For(mode string) (Capabilities, bool) {
 			AutomaticRemoteApply:    true,
 			AutomaticUpstreamSync:   true,
 			AutomaticActiveProbe:    true,
-			ManualAccountMultiplier: true,
 			ManualAccountFields:     true,
 			RemoteTopologyChanges:   true,
 		}, true

@@ -1,5 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": ["src/**/*.test.{ts,tsx}"],
-  "project": ["src/**/*.{ts,tsx,css}"]
+  "project": ["src/**/*.{ts,tsx,css}!"],
+  "rsbuild": { "entry": ["src/main.tsx!"] }
 }

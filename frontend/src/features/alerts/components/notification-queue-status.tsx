@@ -5,6 +5,7 @@ import type { NotificationQueueDetails, NotificationQueueItem, NotificationStatu
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -32,6 +33,7 @@ import {
   alertObjectLabel,
   alertTypeLabel,
 } from "@/features/alerts/lib/alert-display";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 
 type QueueKind = "producer" | "consumer";
 
@@ -229,23 +231,15 @@ export function NotificationQueueDetailsList(props: {
   kind: QueueKind;
 }) {
   const [search, setSearch] = useState("");
-  const [pageSize, setPageSize] = useState(20);
-  const [currentPage, setCurrentPage] = useState(1);
   const filteredItems = useMemo(
     () => queueItems(props.details, props.kind).filter((item) => queueItemMatches(item, search)),
     [props.details, props.kind, search],
   );
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
-  const page = Math.min(currentPage, totalPages);
-  const visibleItems = filteredItems.slice((page - 1) * pageSize, page * pageSize);
+  const pagination = useClientPagination(filteredItems);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [props.details, props.kind]);
-
-  useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [currentPage, totalPages]);
+    pagination.setCurrentPage(1);
+  }, [pagination.setCurrentPage, props.details, props.kind]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3" data-testid="notification-queue-details">
@@ -254,30 +248,27 @@ export function NotificationQueueDetailsList(props: {
           value={search}
           onChange={(value) => {
             setSearch(value);
-            setCurrentPage(1);
+            pagination.setCurrentPage(1);
           }}
           placeholder="搜索告警、对象、状态或原因"
         />
       </TableFilterToolbar>
-      <div className="border-border flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+      <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 overflow-auto">
-          <QueueDetailsTable items={visibleItems} kind={props.kind} />
+          <QueueDetailsTable items={pagination.visibleItems} kind={props.kind} />
         </div>
         {filteredItems.length > 0 ? (
           <DataTablePagination
-            currentPage={page}
-            totalPages={totalPages}
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
             totalItems={filteredItems.length}
-            pageSize={pageSize}
+            pageSize={pagination.pageSize}
             pageSizes={[10, 20, 50, 100]}
-            onPageChange={setCurrentPage}
-            onPageSizeChange={(value) => {
-              setPageSize(value);
-              setCurrentPage(1);
-            }}
+            onPageChange={pagination.setCurrentPage}
+            onPageSizeChange={pagination.setPageSize}
           />
         ) : null}
-      </div>
+      </DataTablePanel>
     </div>
   );
 }
@@ -307,8 +298,12 @@ export function NotificationQueueStatus(props: {
 
   return (
     <>
-      <Card className="mb-3 overflow-hidden">
-        <CardHeader className="flex-row items-center justify-between gap-3 border-b px-4 py-3">
+      <Card
+        size="sm"
+        className="shrink-0 overflow-hidden"
+        data-testid="notification-queue-overview"
+      >
+        <CardHeader className="flex-row items-center justify-between gap-3 border-b px-3 py-2.5">
           <div className="min-w-0">
             <CardTitle>告警队列</CardTitle>
             <CardDescription>查看检测结果与待处理通知</CardDescription>
@@ -320,48 +315,52 @@ export function NotificationQueueStatus(props: {
             variant={props.queues.consumer_active ? "success" : "neutral"}
           />
         </CardHeader>
-        <CardContent className="p-0">
-          <section className="grid gap-3 border-b px-4 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-center sm:gap-5">
-            <div className="flex min-w-0 items-center gap-2 font-medium">
-              <BellRing className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-              <span>告警生产队列</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-              <QueueMetric label="告警中" value={props.queues.producer_firing} />
-              <QueueMetric label="已恢复" value={props.queues.producer_recovered} />
+        <CardContent className="grid p-0 sm:grid-cols-2 sm:divide-x">
+          <section className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b px-3 py-3 sm:border-b-0">
+            <div className="min-w-0 space-y-2">
+              <div className="flex min-w-0 items-center gap-2 font-medium">
+                <BellRing className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+                <span className="truncate">告警生产队列</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 pl-6">
+                <QueueMetric label="告警中" value={props.queues.producer_firing} />
+                <QueueMetric label="已恢复" value={props.queues.producer_recovered} />
+              </div>
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="justify-self-start sm:justify-self-end"
+              className="justify-self-end"
               onClick={() => void loadQueue("producer")}
             >
               <Eye aria-hidden="true" />
               查看
             </Button>
           </section>
-          <section className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto] sm:items-center sm:gap-5">
-            <div className="flex min-w-0 items-center gap-2 font-medium">
-              <Send className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-              <span>通知消费队列</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-              <QueueMetric label="待发送" value={props.queues.consumer_pending} />
-              <QueueMetric
-                label="发送失败"
-                value={props.queues.consumer_failed}
-                danger={props.queues.consumer_failed > 0}
-              />
-              {props.queues.consumer_failed > 0 ? (
-                <CircleAlert className="text-destructive sr-only" aria-label="存在发送失败" />
-              ) : null}
+          <section className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-3">
+            <div className="min-w-0 space-y-2">
+              <div className="flex min-w-0 items-center gap-2 font-medium">
+                <Send className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+                <span className="truncate">通知消费队列</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 pl-6">
+                <QueueMetric label="待发送" value={props.queues.consumer_pending} />
+                <QueueMetric
+                  label="发送失败"
+                  value={props.queues.consumer_failed}
+                  danger={props.queues.consumer_failed > 0}
+                />
+                {props.queues.consumer_failed > 0 ? (
+                  <CircleAlert className="text-destructive sr-only" aria-label="存在发送失败" />
+                ) : null}
+              </div>
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="justify-self-start sm:justify-self-end"
+              className="justify-self-end"
               onClick={() => void loadQueue("consumer")}
             >
               <Eye aria-hidden="true" />
@@ -392,14 +391,14 @@ export function NotificationQueueStatus(props: {
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
             {loading ? (
-              <div className="border-border h-full overflow-auto rounded-lg border">
+              <DataTablePanel className="h-full overflow-auto">
                 <div className="text-muted-foreground flex min-h-40 items-center justify-center gap-2 text-sm">
                   <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
                   正在读取队列内容
                 </div>
-              </div>
+              </DataTablePanel>
             ) : error ? (
-              <div className="border-border h-full overflow-auto rounded-lg border">
+              <DataTablePanel className="h-full overflow-auto">
                 <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center text-sm">
                   <span className="text-destructive">{error}</span>
                   {dialogKind ? (
@@ -408,7 +407,7 @@ export function NotificationQueueStatus(props: {
                     </Button>
                   ) : null}
                 </div>
-              </div>
+              </DataTablePanel>
             ) : details && dialogKind ? (
               <NotificationQueueDetailsList details={details} kind={dialogKind} />
             ) : null}

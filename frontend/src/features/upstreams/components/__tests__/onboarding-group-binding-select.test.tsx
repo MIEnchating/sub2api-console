@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { OnboardingGroupBindingSelect } from "../onboarding-group-binding-select";
+import {
+  OnboardingGroupBindingOption,
+  OnboardingGroupBindingSelect,
+} from "../onboarding-group-binding-select";
 
 describe("OnboardingGroupBindingSelect", () => {
   it("puts the local-group binding control directly in an upstream-group row", () => {
@@ -19,9 +22,10 @@ describe("OnboardingGroupBindingSelect", () => {
     expect(markup).toContain('aria-label="kiro-power 本地分组"');
     expect(markup).toContain("选择本地分组");
     expect(markup).toContain("min-w-44");
+    expect(markup).toContain('data-slot="combobox-trigger"');
   });
 
-  it("shows existing local groups without a redundant binding badge", () => {
+  it("shows existing local groups in the ordinary multi-select without exposing IDs", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect
         upstreamGroupName="pro"
@@ -36,9 +40,12 @@ describe("OnboardingGroupBindingSelect", () => {
       />,
     );
 
-    expect(markup).toContain("codex, pro");
+    expect(markup).toContain(">codex<");
+    expect(markup).toContain(">pro<");
+    expect(markup).not.toContain(">8<");
+    expect(markup).not.toContain(">9<");
     expect(markup).not.toContain("已有绑定");
-    expect(markup).toContain('aria-haspopup="listbox"');
+    expect(markup).toContain('role="combobox"');
     expect(markup).not.toContain('disabled=""');
   });
 
@@ -71,5 +78,18 @@ describe("OnboardingGroupBindingSelect", () => {
     );
 
     expect(markup).toContain('aria-label="pro 不可添加：上游余额不足"');
+  });
+
+  it("shows the local group name and multiplier in account onboarding options", () => {
+    const markup = renderToStaticMarkup(
+      <OnboardingGroupBindingOption
+        group={{ id: "8", name: "codex-特价", rate_multiplier: "0.15" }}
+      />,
+    );
+
+    expect(markup).toContain("codex-特价");
+    expect(markup).toContain(">0.15<");
+    expect(markup).not.toContain("倍率");
+    expect(markup).toContain("justify-between");
   });
 });

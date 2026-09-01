@@ -3,6 +3,7 @@ package notificationtarget
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,36 @@ func TestGatewayListenerCapturesPrivateTargetWithoutReplying(t *testing.T) {
 	}
 	if target.ID != "user-open-id" || target.Type != "c2c" || target.EventType != "C2C_MESSAGE_CREATE" || target.SourceName != "测试用户" {
 		t.Fatalf("target = %#v", target)
+	}
+}
+
+func TestGatewayListenerCopiesClientAndRejectsRedirects(t *testing.T) {
+	originalRedirect := func(*http.Request, []*http.Request) error { return nil }
+	client := &http.Client{Timeout: 3 * time.Second, CheckRedirect: originalRedirect}
+	listener := NewGatewayListener(client)
+
+	if listener.client == client || listener.client.Timeout != client.Timeout {
+		t.Fatalf("listener did not copy the supplied client: listener=%p client=%p", listener.client, client)
+	}
+	if client.CheckRedirect == nil || client.CheckRedirect(nil, nil) != nil {
+		t.Fatal("constructor mutated the caller-owned redirect policy")
+	}
+	if err := listener.client.CheckRedirect(nil, nil); !errors.Is(err, http.ErrUseLastResponse) {
+		t.Fatalf("listener follows credential-bearing redirects: %v", err)
+	}
+}
+
+func TestGatewayListenerRejectsOversizedHTTPResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"access_token":"access-1"}` + strings.Repeat(" ", maximumGatewayResponseSize)))
+	}))
+	t.Cleanup(server.Close)
+	listener := NewGatewayListener(server.Client())
+	listener.tokenEndpoint = server.URL
+
+	_, err := listener.accessToken(context.Background(), Request{AppID: "app", ClientSecret: "secret"})
+	if err == nil || err.Error() != "QQBot 鉴权响应过大" {
+		t.Fatalf("oversized response was accepted: %v", err)
 	}
 }
 

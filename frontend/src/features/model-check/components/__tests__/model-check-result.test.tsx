@@ -20,6 +20,41 @@ function task(tests: Record<string, unknown>[]): Task {
 }
 
 describe("模型检测结果", () => {
+  it("任务运行中展示实时步骤和已完成组合而不是百分比", () => {
+    const runningTask = {
+      ...task([]),
+      status: "running",
+      progress: 14,
+      message: "已完成 2/20 个账号模型组合",
+      result: {
+        phase: "testing",
+        completed: 2,
+        total: 20,
+        tests: [
+          {
+            account_id: "41",
+            account_name: "实时账号",
+            claimed_model: "gpt-5.6-sol",
+            verdict: "SOL_CONSISTENT",
+            requests: { successful: 2, total: 2 },
+          },
+        ],
+      },
+    } as Task;
+    const markup = renderToStaticMarkup(<ModelCheckResult task={runningTask} />);
+
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain('data-testid="model-check-live-progress"');
+    expect(markup).toContain("已完成 2/20 个账号模型组合");
+    expect(markup).toContain("2/20");
+    expect(markup).toContain("准备账号凭据");
+    expect(markup).toContain("并行执行检测");
+    expect(markup).toContain("实时账号");
+    expect(markup).not.toContain("14%");
+    expect(markup).not.toContain('data-testid="model-check-result"');
+    expect(markup).toContain('data-table-panel=""');
+  });
+
   it("按账号和模型组合展示 Sol 与 Claude 结果", () => {
     const markup = renderToStaticMarkup(
       <ModelCheckResult
@@ -59,6 +94,7 @@ describe("模型检测结果", () => {
     expect(markup).toContain("12.4%");
     expect(markup).toContain("2/2");
     expect(markup).toContain("rewritten-model");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("零成功请求显示请求失败并隐藏无意义的相似度", () => {

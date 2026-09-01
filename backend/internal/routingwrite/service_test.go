@@ -886,6 +886,17 @@ func TestBaselineRestorePreservesExternallyChangedFields(t *testing.T) {
 	}
 }
 
+func (s *Service) applyAccount(
+	ctx context.Context,
+	admin Admin,
+	target business.AccountRoutingTarget,
+	policy writePolicy,
+	actor string,
+) AccountResult {
+	coordinator := newBatchWriteCoordinator(ctx, admin, 1, policy.verifyAfterWrite)
+	return s.applyAccountCoordinated(ctx, admin, target, policy, actor, nil, coordinator)
+}
+
 func TestReleaseControlReportsExternallyChangedFieldsWithoutRemoteWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routing-release-conflict.sqlite3")
 	repository, err := business.Open(path)

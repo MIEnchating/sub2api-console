@@ -301,7 +301,8 @@ func onboardingBindingDescription(readbackConfirmed bool) string {
 type onboardingKey struct{ id, name string }
 
 func (s *Store) onboardingKeys(ctx context.Context, host string) (map[string]onboardingKey, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key_id,name,upstream_group,status FROM upstream_keys WHERE host=? ORDER BY key_id`, host)
+	rows, err := s.db.QueryContext(ctx, `SELECT key_id,name,upstream_group,status FROM upstream_keys
+		WHERE host=? AND lower(name) NOT LIKE 'console-probe-%' ORDER BY key_id`, host)
 	if err != nil {
 		return nil, err
 	}
@@ -320,6 +321,64 @@ func (s *Store) onboardingKeys(ctx context.Context, host string) (map[string]onb
 		}
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) ProtectedUpstreamKeyIDs(ctx context.Context, host string) ([]string, error) {
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return nil, err
+	}
+	upstreamID, hosts, err := upstreamIdentityHostsForQueryer(ctx, s.db, host)
+	if err != nil {
+		return nil, err
+	}
+	placeholders, hostArguments := sqlStringArguments(hosts)
+	arguments := []any{upstreamID}
+	arguments = append(arguments, hostArguments...)
+	arguments = append(arguments, hostArguments...)
+	query := `SELECT upstream_key_id FROM binding_identities WHERE upstream_id=?
+		UNION SELECT upstream_key_id FROM bindings WHERE upstream_host IN (` + placeholders + `)
+		UNION SELECT upstream_key_id FROM onboarding_pending WHERE upstream_host IN (` + placeholders + `)
+		ORDER BY upstream_key_id`
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []string{}
+	for rows.Next() {
+		var keyID string
+		if err := rows.Scan(&keyID); err != nil {
+			return nil, err
+		}
+		if keyID = strings.TrimSpace(keyID); keyID != "" {
+			result = append(result, keyID)
+		}
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) UpstreamKeyProtected(ctx context.Context, host, keyID string) (bool, error) {
+	host, keyID = canonicalHost(host), strings.TrimSpace(keyID)
+	if host == "" || keyID == "" {
+		return false, errors.New("上游 Host 和 Key ID 不能为空")
+	}
+	var protected int
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM upstream_identity_hosts selected
+		JOIN binding_identities bi ON bi.upstream_id=selected.upstream_id
+		WHERE selected.host=? AND bi.upstream_key_id=?
+		UNION ALL
+		SELECT 1 FROM upstream_identity_hosts selected
+		JOIN upstream_identity_hosts aliases ON aliases.upstream_id=selected.upstream_id
+		JOIN bindings b ON b.upstream_host=aliases.host
+		WHERE selected.host=? AND b.upstream_key_id=?
+		UNION ALL
+		SELECT 1 FROM upstream_identity_hosts selected
+		JOIN upstream_identity_hosts aliases ON aliases.upstream_id=selected.upstream_id
+		JOIN onboarding_pending pending ON pending.upstream_host=aliases.host
+		WHERE selected.host=? AND pending.upstream_key_id=?
+	)`, host, keyID, host, keyID, host, keyID).Scan(&protected)
+	return protected == 1, err
 }
 
 func onboardingGroupReason(group UpstreamGroup) string {

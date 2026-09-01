@@ -20,6 +20,97 @@ func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 	}
 }
 
+func TestBoundAccountMaintenanceIncludesManualSyncPolicy(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.BoundAccountsForMaintenance(ctx, []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].ManualPriority || rows[0].SyncBalanceMultiplier {
+		t.Fatalf("disabled manual sync policy not preserved: %#v", rows)
+	}
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, true, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.BoundAccountsForMaintenance(ctx, []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].ManualPriority || !rows[0].SyncBalanceMultiplier {
+		t.Fatalf("enabled manual sync policy not preserved: %#v", rows)
+	}
+}
+
+func TestBoundAccountMaintenanceUsesSourceAuthHostRechargeRate(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('auth.example','10','now');
+		UPDATE bindings SET source_auth_host='auth.example' WHERE local_account_id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.BoundAccountsForMaintenance(context.Background(), []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RechargeRate != "10" {
+		t.Fatalf("rows=%#v", rows)
+	}
+}
+
+func TestBoundAccountMaintenanceKeepsLastSuccessfulRawRate(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate='1.3' WHERE local_account_id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.BoundAccountsForMaintenance(context.Background(), []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].KnownRawRate != "1.3" || rows[0].KnownRawRateSource != "account_observation" {
+		t.Fatalf("rows=%#v", rows)
+	}
+}
+
+func TestBoundAccountMaintenanceFallsBackToFixedGroupCatalogRawRate(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate=NULL WHERE local_account_id='41';
+		UPDATE upstream_groups SET raw_rate='0.2' WHERE host='api.example'
+			AND group_id=(SELECT upstream_group_id FROM bindings WHERE local_account_id='41')`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.BoundAccountsForMaintenance(context.Background(), []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].KnownRawRate != "0.2" || rows[0].KnownRawRateSource != "group_catalog" {
+		t.Fatalf("rows=%#v", rows)
+	}
+}
+
+func TestBoundAccountMaintenanceUsesSourceAuthGroupCatalogBeforePrimaryHost(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE bindings SET upstream_rate=NULL,source_auth_host='auth.example' WHERE local_account_id='41';
+		INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('auth.example','10','now');
+		INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at)
+		SELECT 'auth.example',upstream_group_id,'auth group','active','1.5','now'
+		FROM bindings WHERE local_account_id='41';
+		UPDATE upstream_groups SET raw_rate='9.9' WHERE host='api.example'
+			AND group_id=(SELECT upstream_group_id FROM bindings WHERE local_account_id='41')`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.BoundAccountsForMaintenance(context.Background(), []string{"41"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].RateSourceHost() != "auth.example" || rows[0].RechargeRate != "10" ||
+		rows[0].KnownRawRate != "1.5" || rows[0].KnownRawRateSource != "group_catalog" {
+		t.Fatalf("rows=%#v", rows)
+	}
+}
+
 func TestAccountNamesForMaintenanceIncludesAccountsWithoutBindings(t *testing.T) {
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET name='Existing Account-0.15' WHERE id='42'`); err != nil {

@@ -121,5 +121,6 @@ describe("onboarding task progress", () => {
     expect(markup).toContain("转到第 2 页");
     expect(markup).toContain("flex h-full min-h-0 flex-col");
     expect(markup).toContain("min-h-0 flex-1 overflow-auto");
+    expect(markup).toContain('data-table-panel=""');
   });
 });

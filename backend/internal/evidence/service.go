@@ -733,24 +733,6 @@ func sortedAccountIDs(values map[string][]business.EvidenceTarget) []string {
 	return result
 }
 
-func rowGroups(memberships []business.EvidenceTarget, row map[string]any) []business.EvidenceTarget {
-	raw, present := row["group_id"]
-	if !present || raw == nil {
-		return memberships
-	}
-	groupID := strings.TrimSpace(textValue(raw))
-	if groupID == "" {
-		return nil
-	}
-	result := []business.EvidenceTarget{}
-	for _, membership := range memberships {
-		if membership.GroupID != nil && *membership.GroupID == groupID {
-			result = append(result, membership)
-		}
-	}
-	return result
-}
-
 func rowKind(row map[string]any) (string, bool) {
 	if raw, present := row["kind"]; present {
 		value, ok := raw.(string)

@@ -51,11 +51,45 @@ type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
 
+type AccountRateSyncScheduler interface {
+	EnqueueHostAccountRateSync(context.Context, string, string) (string, error)
+	EnqueueAllAccountRateSync(context.Context, string) (string, error)
+}
+
 type Scope struct {
 	Catalog bool
 	Balance bool
 	Name    bool
 	KeyID   *string
+}
+
+type readScopeError struct {
+	catalog error
+	balance error
+}
+
+func (e *readScopeError) Error() string {
+	switch {
+	case e.catalog != nil && e.balance != nil:
+		return "分组目录读取失败：" + e.catalog.Error() + "；余额读取失败：" + e.balance.Error()
+	case e.catalog != nil:
+		return e.catalog.Error()
+	case e.balance != nil:
+		return e.balance.Error()
+	default:
+		return "上游读取失败"
+	}
+}
+
+func (e *readScopeError) Unwrap() []error {
+	causes := make([]error, 0, 2)
+	if e.catalog != nil {
+		causes = append(causes, e.catalog)
+	}
+	if e.balance != nil {
+		causes = append(causes, e.balance)
+	}
+	return causes
 }
 
 type siteNameReader interface {
@@ -95,12 +129,17 @@ type Service struct {
 	refresher  Refresher
 	resolver   AuthResolver
 	tasks      TaskStore
+	rateSync   AccountRateSyncScheduler
 	timeout    time.Duration
 	workers    int
 }
 
-func New(repository Repository, private PrivateStore, reader CatalogReader, refresher Refresher, tasks TaskStore) *Service {
-	return &Service{repository: repository, private: private, reader: reader, refresher: refresher, tasks: tasks, timeout: 30 * time.Minute, workers: 4}
+func New(repository Repository, private PrivateStore, reader CatalogReader, refresher Refresher, tasks TaskStore, schedulers ...AccountRateSyncScheduler) *Service {
+	service := &Service{repository: repository, private: private, reader: reader, refresher: refresher, tasks: tasks, timeout: 30 * time.Minute, workers: 4}
+	if len(schedulers) > 0 {
+		service.rateSync = schedulers[0]
+	}
+	return service
 }
 
 func (s *Service) SetAuthResolver(resolver AuthResolver) {
@@ -229,6 +268,7 @@ func (s *Service) execute(task taskstore.Task, hosts []string, scope Scope, acto
 		taskstore.PersistProgress(s.tasks, task)
 	})
 	applyBatchAccountCounts(&result, summary, scope)
+	accountRateTaskID, accountRateErr := s.enqueueAccountRateSync(ctx, hosts, scope, actor, result)
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = map[string]any{
 		"total": result.Total, "succeeded": result.Succeeded, "auth_failed": result.AuthFailed,
@@ -236,14 +276,37 @@ func (s *Service) execute(task taskstore.Task, hosts []string, scope Scope, acto
 		"account_rate_succeeded": result.AccountRateSucceeded, "account_rate_failed": result.AccountRateFailed,
 		"hosts": result.Hosts, "remote_write": false, "credentials_exposed": false,
 	}
-	if result.AuthFailed > 0 || result.Failed > 0 {
+	if accountRateTaskID != "" {
+		task.Result["account_rate_sync_task_id"] = accountRateTaskID
+	}
+	if accountRateErr != nil {
+		task.Result["account_rate_sync_error"] = accountRateErr.Error()
+	}
+	if result.AuthFailed > 0 || result.Failed > 0 || accountRateErr != nil {
 		task.Status = "failed"
 		task.Message = fmt.Sprintf("上游同步完成：成功 %d，鉴权失败 %d，其他失败 %d", result.Succeeded, result.AuthFailed, result.Failed)
+		if accountRateErr != nil {
+			task.Message += "；账号成本同步排队失败：" + accountRateErr.Error()
+		}
 	} else {
 		task.Status = "succeeded"
 		task.Message = fmt.Sprintf("上游同步完成：成功 %d", result.Succeeded)
+		if accountRateTaskID != "" {
+			task.Message += "；相关账号成本与名称同步已排队"
+		}
 	}
 	taskstore.PersistFinal(s.tasks, task)
+}
+
+func (s *Service) enqueueAccountRateSync(ctx context.Context, hosts []string, scope Scope, actor string, result BatchResult) (string, error) {
+	if s.rateSync == nil || !scope.Catalog || result.Succeeded == 0 {
+		return "", nil
+	}
+	hosts = canonicalHosts(hosts)
+	if len(hosts) == 1 {
+		return s.rateSync.EnqueueHostAccountRateSync(ctx, hosts[0], actor)
+	}
+	return s.rateSync.EnqueueAllAccountRateSync(ctx, actor)
 }
 
 func (s *Service) syncHosts(ctx context.Context, hosts []string, scope Scope, actor string, progress func(int, int)) BatchResult {
@@ -301,7 +364,7 @@ func (s *Service) syncHosts(ctx context.Context, hosts []string, scope Scope, ac
 	for index := range result.Hosts {
 		if result.Hosts[index].Host == "" {
 			reason := "上游同步超时或已取消"
-			result.Hosts[index] = failedHost(hosts[index], "failed", "未确认", reason)
+			result.Hosts[index] = failedHost(hosts[index], "failed", business.UpstreamAuthStatusUnconfirmed, reason)
 		}
 		switch result.Hosts[index].Status {
 		case "succeeded":
@@ -341,11 +404,11 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		if policy, ok := s.repository.(balanceSyncPolicy); ok {
 			allowed, policyErr := policy.HostBalanceSyncAllowed(ctx, host)
 			if policyErr != nil {
-				return s.failed(ctx, host, scope, false, "人工优先位余额同步策略读取失败："+policyErr.Error())
+				return s.failed(ctx, host, Scope{Balance: true}, false, "人工优先位余额同步策略读取失败："+policyErr.Error())
 			}
 			if !allowed {
 				if !scope.Catalog {
-					reason := "该 Host 仅绑定完全人工控制账号，余额同步已跳过"
+					reason := "该 Host 下的人工优先位账号均关闭了上游余额同步"
 					return HostResult{Host: host, Status: "succeeded", AuthStatus: "未变更", BalanceStatus: reason, Reason: &reason}
 				}
 				scope.Balance = false
@@ -360,30 +423,32 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		return s.failed(ctx, host, scope, true, "未配置私有授权记录")
 	}
 	catalog, balance, err := s.read(ctx, *record, scope)
+	failureScope := readFailureScope(scope, err)
 	if err != nil && IsAuthenticationError(err) {
 		rotated, refreshErr := s.refresher.Refresh(ctx, *record)
 		if refreshErr != nil {
-			return s.failed(ctx, host, scope, true, "refresh_token 续签失败："+refreshErr.Error())
+			return s.failed(ctx, host, failureScope, true, "refresh_token 续签失败："+refreshErr.Error())
 		}
-		if err := s.private.SaveAuthRecord(ctx, rotated, allAuthFields()); err != nil {
-			return s.failed(ctx, host, scope, true, "新鉴权信息保存失败："+err.Error())
+		if saveErr := s.private.SaveAuthRecord(ctx, rotated, allAuthFields()); saveErr != nil {
+			return s.failed(ctx, host, failureScope, true, "新鉴权信息保存失败："+saveErr.Error())
 		}
 		recovered = true
 		catalog, balance, err = s.read(ctx, rotated, scope)
+		failureScope = readFailureScope(scope, err)
 	}
 	if err != nil {
-		return s.failed(ctx, host, scope, IsAuthenticationError(err), err.Error())
+		return s.failed(ctx, host, failureScope, IsAuthenticationError(err), err.Error())
 	}
 	write := business.UpstreamSyncWrite{Host: host, Catalog: catalog, Balance: balance, NameOnly: scope.Name, KeyID: scope.KeyID, AuthRecovered: recovered, AuthenticationOK: !scope.Name}
 	persisted, err := s.repository.ApplyUpstreamSync(ctx, write)
 	if err != nil {
 		return s.failed(ctx, host, scope, false, "本地同步提交失败："+err.Error())
 	}
-	status := "已鉴权"
+	status := business.UpstreamAuthStatusAuthenticated
 	if scope.Name {
 		status = "未变更"
 	} else if recovered {
-		status = "已恢复"
+		status = business.UpstreamAuthStatusRecovered
 	}
 	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "succeeded", "上游同步完成："+host, map[string]any{
 		"actor": actorOrConsole(actor), "host": host, "catalog": scope.Catalog, "balance": scope.Balance, "name": scope.Name,
@@ -434,11 +499,8 @@ func (s *Service) read(ctx context.Context, record configstore.AuthRecord, scope
 			balanceResult <- balanceOutcome{value: value, err: err}
 		}()
 		catalogRead, balanceRead := <-catalogResult, <-balanceResult
-		if catalogRead.err != nil {
-			return nil, nil, catalogRead.err
-		}
-		if balanceRead.err != nil {
-			return nil, nil, balanceRead.err
+		if catalogRead.err != nil || balanceRead.err != nil {
+			return nil, nil, &readScopeError{catalog: catalogRead.err, balance: balanceRead.err}
 		}
 		catalog, balance = &catalogRead.value, &balanceRead.value
 		return catalog, balance, nil
@@ -446,14 +508,14 @@ func (s *Service) read(ctx context.Context, record configstore.AuthRecord, scope
 	if scope.Catalog {
 		value, err := s.reader.ReadCatalog(ctx, record)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, &readScopeError{catalog: err}
 		}
 		catalog = &value
 	}
 	if scope.Balance {
 		value, err := s.reader.ReadBalance(ctx, record)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, &readScopeError{balance: err}
 		}
 		balance = &value
 	}
@@ -476,9 +538,9 @@ func (s *Service) failed(ctx context.Context, host string, scope Scope, authenti
 	if persistenceErr := s.repository.RecordUpstreamSyncFailure(ctx, host, scopeName(scope), reason, authenticationFailure); persistenceErr != nil {
 		reason += "；失败状态保存失败：" + safeReason(persistenceErr.Error())
 	}
-	status, authStatus := "failed", "未确认"
+	status, authStatus := "failed", "未变更"
 	if authenticationFailure {
-		status, authStatus = "auth_failed", "鉴权失效"
+		status, authStatus = "auth_failed", business.UpstreamAuthStatusInvalid
 	}
 	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "failed", "上游同步失败："+host, map[string]any{
 		"host": host, "reason": reason, "authentication_failure": authenticationFailure,
@@ -513,6 +575,12 @@ func scopeName(scope Scope) string {
 	if scope.Name {
 		return "name"
 	}
+	if scope.KeyID != nil {
+		if scope.Balance {
+			return "key_balance"
+		}
+		return "key"
+	}
 	if scope.Catalog && !scope.Balance {
 		return "catalog"
 	}
@@ -520,6 +588,18 @@ func scopeName(scope Scope) string {
 		return "balance"
 	}
 	return "all"
+}
+
+func readFailureScope(requested Scope, err error) Scope {
+	var scoped *readScopeError
+	if err == nil || !errors.As(err, &scoped) {
+		return requested
+	}
+	result := Scope{Catalog: scoped.catalog != nil, Balance: scoped.balance != nil}
+	if result.Catalog {
+		result.KeyID = requested.KeyID
+	}
+	return result
 }
 
 func scopeMessage(scope Scope) string {

@@ -33,10 +33,20 @@ export const alertPolicyFormSchema = z.object({
     .int()
     .min(1, "至少连续失败 1 次")
     .max(100, "最多连续失败 100 次"),
+  probe_recovery_streak: z
+    .number()
+    .int()
+    .min(1, "至少连续成功 1 次")
+    .max(100, "最多连续成功 100 次"),
   probe_groups: z.string(),
   delivery_enabled: z.boolean(),
   notify_recovery: z.boolean(),
   repeat_interval_minutes: z.number().int().min(0, "不能小于 0 分钟").max(10080, "不能超过 7 天"),
+  state_change_cooldown_minutes: z
+    .number()
+    .int()
+    .min(0, "不能小于 0 分钟")
+    .max(10080, "不能超过 7 天"),
   merge_threshold: z.number().int().min(2, "至少 2 条").max(500, "不能超过 500 条"),
 });
 
@@ -56,10 +66,12 @@ export const defaultAlertPolicyForm: AlertPolicyFormValues = {
   group_survivor_enabled: true,
   apply_failure_enabled: true,
   balance_thresholds: [{ value: "20" }, { value: "10" }, { value: "5" }],
-  probe_failure_streak: 1,
+  probe_failure_streak: 3,
+  probe_recovery_streak: 3,
   probe_groups: "",
   delivery_enabled: true,
   notify_recovery: true,
   repeat_interval_minutes: 0,
+  state_change_cooldown_minutes: 30,
   merge_threshold: 10,
 };

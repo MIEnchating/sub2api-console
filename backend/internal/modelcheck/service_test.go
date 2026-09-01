@@ -265,11 +265,21 @@ func TestAccountMatrixRevealsBoundKeyAndCallsAccountBaseURLDirectly(t *testing.T
 	}
 	tasks.mu.Lock()
 	defer tasks.mu.Unlock()
+	foundStreamingResult := false
 	for _, task := range tasks.tasks {
 		encoded, _ := json.Marshal(task)
 		if strings.Contains(string(encoded), accountKey) {
 			t.Fatalf("account key persisted in task: %s", encoded)
 		}
+		if task.Status == "running" {
+			streamedTests, _ := task.Result["tests"].([]map[string]any)
+			if task.Result["phase"] == "testing" && len(streamedTests) == 1 {
+				foundStreamingResult = true
+			}
+		}
+	}
+	if !foundStreamingResult {
+		t.Fatalf("running task never exposed a completed test result: %#v", tasks.tasks)
 	}
 }
 

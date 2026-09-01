@@ -52,6 +52,7 @@ type fakeBusiness struct {
 	groupExcludedUpdates *[]bool
 	upstreamSummary      business.UpstreamSummary
 	upstreamGroupRows    []business.UpstreamGroup
+	upstreamGroupHistory []business.UpstreamGroupChange
 	runtimeEventIDs      *[]int64
 	runtimeEventError    error
 	alertPolicy          business.AlertPolicy
@@ -67,6 +68,7 @@ type fakePricingService struct {
 	updated  pricing.Config
 	revenue  pricing.RevenueRequest
 	enqueued int
+	backups  []business.PricingBackup
 }
 
 func (service *fakePricingService) Snapshot(context.Context) (pricing.Snapshot, error) {
@@ -88,6 +90,21 @@ func (service *fakePricingService) EnqueueRevenue(_ context.Context, request pri
 	service.enqueued++
 	service.revenue = request
 	return taskstore.Task{ID: "revenue-task", Operation: "revenue-calculation", Status: "queued"}, nil
+}
+
+func (service *fakePricingService) CreateBackup(_ context.Context, name, actor string) (business.PricingBackup, error) {
+	backup := business.PricingBackup{ID: "backup-1", Name: name, Actor: actor, AccountCount: 2}
+	service.backups = append(service.backups, backup)
+	return backup, nil
+}
+
+func (service *fakePricingService) Backups(context.Context) ([]business.PricingBackup, error) {
+	return service.backups, nil
+}
+
+func (service *fakePricingService) EnqueueRestore(_ context.Context, backupID, _ string) (taskstore.Task, error) {
+	service.enqueued++
+	return taskstore.Task{ID: "restore-task", Operation: "price-group-restore", Status: "queued", Result: map[string]any{"backup_id": backupID}}, nil
 }
 
 type fakeQueueBusiness struct {
@@ -234,6 +251,9 @@ func (f fakeBusiness) Upstreams(context.Context) (business.UpstreamSummary, erro
 func (f fakeBusiness) UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error) {
 	return f.upstreamGroupRows, nil
 }
+func (f fakeBusiness) UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error) {
+	return f.upstreamGroupHistory, nil
+}
 func (f fakeBusiness) Events(context.Context, *int) ([]business.RunEvent, error) {
 	return []business.RunEvent{}, nil
 }
@@ -373,12 +393,6 @@ func (tasks fakeAccountMaintenanceTasks) EnqueueAccountRateSync(_ context.Contex
 	return tasks.task, tasks.err
 }
 
-type fakeInspectionTasks struct {
-	task  taskstore.Task
-	err   error
-	calls *[]inspection.RunRequest
-}
-
 type fieldsCall struct {
 	accountID string
 	patch     accountops.FieldPatch
@@ -453,12 +467,18 @@ type fakeUpstreamSyncTasks struct {
 }
 
 type fakeOnboarding struct {
-	task       taskstore.Task
-	err        error
-	candidates []business.OnboardingCandidate
-	hosts      *[]string
-	models     []string
-	probe      onboarding.ProbeResult
+	task           taskstore.Task
+	err            error
+	candidates     []business.OnboardingCandidate
+	hosts          *[]string
+	models         []string
+	probe          onboarding.ProbeResult
+	cleanupPreview onboarding.KeyCleanupPreview
+	cleanupCalls   *[]struct {
+		host   string
+		keyIDs []string
+		actor  string
+	}
 }
 
 type fakeTraceReader struct {
@@ -554,13 +574,6 @@ func (detector fakeUpstreamDetector) Detect(_ context.Context, baseURL string) (
 func (tasks fakeProbeTasks) Enqueue(_ context.Context, request probe.Request, actor string) (taskstore.Task, error) {
 	if tasks.calls != nil {
 		*tasks.calls = append(*tasks.calls, probeCall{request: request, actor: actor})
-	}
-	return tasks.task, tasks.err
-}
-
-func (tasks fakeInspectionTasks) Enqueue(_ context.Context, request inspection.RunRequest) (taskstore.Task, error) {
-	if tasks.calls != nil {
-		*tasks.calls = append(*tasks.calls, request)
 	}
 	return tasks.task, tasks.err
 }
@@ -692,6 +705,21 @@ func (f fakeOnboarding) Probe(context.Context, string, string, string) (onboardi
 	return f.probe, f.err
 }
 
+func (f fakeOnboarding) PreviewUnboundKeys(context.Context, string) (onboarding.KeyCleanupPreview, error) {
+	return f.cleanupPreview, f.err
+}
+
+func (f fakeOnboarding) EnqueueKeyCleanup(_ context.Context, host string, keyIDs []string, actor string) (taskstore.Task, error) {
+	if f.cleanupCalls != nil {
+		*f.cleanupCalls = append(*f.cleanupCalls, struct {
+			host   string
+			keyIDs []string
+			actor  string
+		}{host: host, keyIDs: append([]string{}, keyIDs...), actor: actor})
+	}
+	return f.task, f.err
+}
+
 func (f fakeOnboarding) Enqueue(context.Context, onboarding.Request) (taskstore.Task, error) {
 	return f.task, f.err
 }
@@ -722,6 +750,14 @@ func (f fakeTaskRepository) Get(_ context.Context, id string) (taskstore.Task, e
 	}
 	return taskstore.Task{}, taskstore.ErrNotFound
 }
+func (f fakeTaskRepository) LatestByOperation(_ context.Context, operation, status string) (taskstore.Task, error) {
+	for _, row := range f.rows {
+		if row.Operation == operation && row.Status == status {
+			return row, nil
+		}
+	}
+	return taskstore.Task{}, taskstore.ErrNotFound
+}
 func (f *sequenceTaskRepository) Get(_ context.Context, id string) (taskstore.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -734,6 +770,14 @@ func (f *sequenceTaskRepository) Get(_ context.Context, id string) (taskstore.Ta
 	}
 	f.reads++
 	return f.rows[index], nil
+}
+func (f *sequenceTaskRepository) LatestByOperation(_ context.Context, operation, status string) (taskstore.Task, error) {
+	for _, row := range f.rows {
+		if row.Operation == operation && row.Status == status {
+			return row, nil
+		}
+	}
+	return taskstore.Task{}, taskstore.ErrNotFound
 }
 
 func (f fakeInspectionController) Status(context.Context) (inspection.Status, error) {
@@ -843,6 +887,15 @@ func TestInitializationRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
 	}, "")
 	if unknown.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("unknown field status = %d body=%s", unknown.Code, unknown.Body.String())
+	}
+
+	trailingBody := strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}{}`)
+	trailingRequest := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", trailingBody)
+	trailingRequest.Header.Set("Content-Type", "application/json")
+	trailingResponse := httptest.NewRecorder()
+	router.ServeHTTP(trailingResponse, trailingRequest)
+	if trailingResponse.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("trailing JSON status = %d body=%s", trailingResponse.Code, trailingResponse.Body.String())
 	}
 
 	body := strings.NewReader(`{"username":"admin","password":"` + strings.Repeat("x", maximumRequestBytes) + `"}`)
@@ -965,7 +1018,7 @@ func TestOverviewConfigAndModeContract(t *testing.T) {
 
 func TestParseOnboardingRequestAcceptsPerAccountConcurrencyAndPriority(t *testing.T) {
 	request, err := parseOnboardingRequest(map[string]any{
-		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"host": "upstream.example", "upstream_type": "sub2api",
 		"local_group_id": json.Number("3"), "upstream_group_id": "6",
 		"concurrency": json.Number("24"), "priority": json.Number("7"),
 	})
@@ -976,7 +1029,13 @@ func TestParseOnboardingRequestAcceptsPerAccountConcurrencyAndPriority(t *testin
 		t.Fatalf("request=%#v", request)
 	}
 	if _, err := parseOnboardingRequest(map[string]any{
-		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "9.9",
+		"local_group_id": json.Number("3"), "upstream_group_id": "6",
+	}); err == nil || !strings.Contains(err.Error(), "未知字段") {
+		t.Fatalf("client multiplier must be rejected: %v", err)
+	}
+	if _, err := parseOnboardingRequest(map[string]any{
+		"host": "upstream.example", "upstream_type": "sub2api",
 		"local_group_id": json.Number("3"), "upstream_group_id": "6", "concurrency": json.Number("0"),
 	}); err == nil {
 		t.Fatal("zero per-account concurrency must be rejected")
@@ -985,7 +1044,7 @@ func TestParseOnboardingRequestAcceptsPerAccountConcurrencyAndPriority(t *testin
 
 func TestParseOnboardingRequestAcceptsMultipleGroupsAndExistingAccounts(t *testing.T) {
 	request, err := parseOnboardingRequest(map[string]any{
-		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"host": "upstream.example", "upstream_type": "sub2api",
 		"local_group_ids": []any{json.Number("3"), json.Number("4")},
 		"account_ids":     []any{"77"}, "upstream_group_id": "6",
 	})
@@ -996,7 +1055,7 @@ func TestParseOnboardingRequestAcceptsMultipleGroupsAndExistingAccounts(t *testi
 		t.Fatalf("request=%#v", request)
 	}
 	if _, err := parseOnboardingRequest(map[string]any{
-		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "0.2",
+		"host": "upstream.example", "upstream_type": "sub2api",
 		"local_group_ids": []any{json.Number("0")}, "upstream_group_id": "6",
 	}); err == nil {
 		t.Fatal("invalid local group IDs must be rejected")
@@ -1350,7 +1409,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 
 	fields := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{
 		"priority": 120, "load_factor": "2.5", "concurrency": 3000,
-		"multiplier": "0.125", "notes": nil,
+		"notes": nil,
 	})
 	if fields.Code != http.StatusOK || len(fieldsCalls) != 1 {
 		t.Fatalf("unexpected fields response: %d %s calls=%#v", fields.Code, fields.Body.String(), fieldsCalls)
@@ -1359,7 +1418,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	if patch.NamePresent || !patch.PriorityPresent || patch.Priority == nil || *patch.Priority != 120 ||
 		!patch.LoadFactorPresent || patch.LoadFactor == nil || *patch.LoadFactor != "2.5" ||
 		!patch.ConcurrencyPresent || patch.Concurrency == nil || *patch.Concurrency != 3000 ||
-		!patch.MultiplierPresent || patch.Multiplier == nil || *patch.Multiplier != "0.125" || !patch.NotesPresent || patch.Notes != nil {
+		patch.MultiplierPresent || patch.Multiplier != nil || !patch.NotesPresent || patch.Notes != nil {
 		t.Fatalf("field presence/null semantics lost: %#v", patch)
 	}
 
@@ -1373,10 +1432,11 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	}
 
 	unknown := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{"website": "invalid"})
+	manualMultiplier := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{"multiplier": "1.5"})
 	nullName := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{"name": nil})
 	leadingZero := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/041/control", map[string]any{"action": "pause"})
 	for label, response := range map[string]*httptest.ResponseRecorder{
-		"unknown": unknown, "null name": nullName, "leading zero": leadingZero,
+		"unknown": unknown, "manual multiplier": manualMultiplier, "null name": nullName, "leading zero": leadingZero,
 	} {
 		if response.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%s status=%d body=%s", label, response.Code, response.Body.String())
@@ -1405,7 +1465,7 @@ func TestAccountMutationReturnsNotFoundBeforeQueuing(t *testing.T) {
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
 	}
-	response := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/99/sync", map[string]any{"multiplier": "1"})
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/99/sync", map[string]any{"priority": 10})
 	if response.Code != http.StatusNotFound || len(calls) != 0 {
 		t.Fatalf("response=%d %s calls=%#v", response.Code, response.Body.String(), calls)
 	}
@@ -1493,6 +1553,9 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 			Host: "api.example", GroupID: &groupID, Name: "codex", RawRate: &rawRate,
 			EffectiveRate: &rawRate, RechargeRate: &rawRate, KeyPresent: true, Bindable: true,
 		}},
+		upstreamGroupHistory: []business.UpstreamGroupChange{{
+			ID: 1, UpstreamID: "up_example", GroupID: "7", GroupName: "新分组", ChangeType: "added", ChangedAt: "2026-08-31T00:00:00Z",
+		}},
 	})
 
 	groups := authenticatedRequest(t, router, http.MethodGet, "/api/groups", nil)
@@ -1510,6 +1573,10 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 	upstreamGroups := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/groups?include_bound=false", nil)
 	if upstreamGroups.Code != http.StatusOK || !strings.Contains(upstreamGroups.Body.String(), `"bindable":true`) {
 		t.Fatalf("unexpected upstream groups response: %d %s", upstreamGroups.Code, upstreamGroups.Body.String())
+	}
+	history := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/group-history?limit=50", nil)
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), `"change_type":"added"`) || !strings.Contains(history.Body.String(), `"group_name":"新分组"`) {
+		t.Fatalf("unexpected upstream group history response: %d %s", history.Code, history.Body.String())
 	}
 	invalid := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/groups?include_bound=perhaps", nil)
 	if invalid.Code != http.StatusUnprocessableEntity {
@@ -1644,11 +1711,55 @@ func TestOnboardingProbeEndpointsWorkWithoutALocalAccount(t *testing.T) {
 	}
 }
 
+func TestOnboardingKeyCleanupRequiresPreviewAndStableKeyIDs(t *testing.T) {
+	calls := []struct {
+		host   string
+		keyIDs []string
+		actor  string
+	}{}
+	service := fakeOnboarding{
+		task: taskstore.Task{ID: "cleanup-task", Operation: "upstream-key-cleanup", Status: "queued"},
+		cleanupPreview: onboarding.KeyCleanupPreview{Host: "api.example", Keys: []onboarding.UnboundUpstreamKey{{
+			KeyID: "key-17", Name: "unused-key",
+		}}},
+		cleanupCalls: &calls,
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Onboarding: service,
+	})
+	preview := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/keys/cleanup-preview", map[string]any{
+		"host": "api.example",
+	})
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `"key_id":"key-17"`) {
+		t.Fatalf("preview=%d %s", preview.Code, preview.Body.String())
+	}
+	cleanup := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/keys/cleanup", map[string]any{
+		"host": "api.example", "key_ids": []any{"key-17"},
+	})
+	if cleanup.Code != http.StatusOK || !strings.Contains(cleanup.Body.String(), `"id":"cleanup-task"`) || len(calls) != 1 ||
+		calls[0].host != "api.example" || strings.Join(calls[0].keyIDs, ",") != "key-17" || calls[0].actor != "console" {
+		t.Fatalf("cleanup=%d %s calls=%#v", cleanup.Code, cleanup.Body.String(), calls)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/keys/cleanup", map[string]any{
+		"host": "api.example", "key_ids": []any{""},
+	})
+	if invalid.Code != http.StatusUnprocessableEntity || len(calls) != 1 {
+		t.Fatalf("invalid=%d %s calls=%#v", invalid.Code, invalid.Body.String(), calls)
+	}
+}
+
 func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 	service := &fakePricingService{snapshot: pricing.Snapshot{Config: pricing.Config{
 		Enabled: false, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}}, IntervalSeconds: 120, WriteConcurrency: 4,
 	}, Accounts: 2, Changes: 1}}
-	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{Pricing: service})
+	revenueTask := taskstore.Task{
+		ID: "latest-revenue", Skill: "sub2api-billing-reconciliation", Operation: "revenue-calculation", Status: "succeeded",
+		Progress: 100, Message: "完成", Result: map[string]any{"report_date": "2026-08-29"},
+		CreatedAt: "2026-08-30T00:00:00Z", UpdatedAt: "2026-08-30T00:00:01Z",
+	}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Pricing: service, Tasks: fakeTaskRepository{rows: []taskstore.Task{revenueTask}},
+	})
 
 	read := authenticatedRequest(t, router, http.MethodGet, "/api/pricing", nil)
 	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"profit_margin":0.2`) || !strings.Contains(read.Body.String(), `"enabled":false`) {
@@ -1667,6 +1778,22 @@ func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 	revenue := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/revenue", map[string]any{"date": "2026-08-29"})
 	if revenue.Code != http.StatusAccepted || !strings.Contains(revenue.Body.String(), `"operation":"revenue-calculation"`) || service.enqueued != 2 || service.revenue.Date != "2026-08-29" {
 		t.Fatalf("revenue=%d %s calls=%d request=%#v", revenue.Code, revenue.Body.String(), service.enqueued, service.revenue)
+	}
+	latestRevenue := authenticatedRequest(t, router, http.MethodGet, "/api/pricing/revenue/latest", nil)
+	if latestRevenue.Code != http.StatusOK || !strings.Contains(latestRevenue.Body.String(), `"id":"latest-revenue"`) {
+		t.Fatalf("latest revenue=%d %s", latestRevenue.Code, latestRevenue.Body.String())
+	}
+	backup := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/backups", map[string]any{"name": "调价前"})
+	if backup.Code != http.StatusCreated || !strings.Contains(backup.Body.String(), `"name":"调价前"`) {
+		t.Fatalf("backup=%d %s", backup.Code, backup.Body.String())
+	}
+	backups := authenticatedRequest(t, router, http.MethodGet, "/api/pricing/backups", nil)
+	if backups.Code != http.StatusOK || !strings.Contains(backups.Body.String(), `"id":"backup-1"`) {
+		t.Fatalf("backups=%d %s", backups.Code, backups.Body.String())
+	}
+	restore := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/backups/backup-1/restore", nil)
+	if restore.Code != http.StatusAccepted || !strings.Contains(restore.Body.String(), `"operation":"price-group-restore"`) || service.enqueued != 3 {
+		t.Fatalf("restore=%d %s calls=%d", restore.Code, restore.Body.String(), service.enqueued)
 	}
 }
 
@@ -2187,8 +2314,8 @@ func TestAlertPolicyContracts(t *testing.T) {
 		"balance_enabled": true, "probe_enabled": true, "balance_thresholds": []any{"20", "10", "5"},
 		"routing_breaker_enabled": true, "routing_degraded_enabled": true, "routing_survivor_enabled": true,
 		"group_unavailable_enabled": true, "group_survivor_enabled": true, "apply_failure_enabled": true,
-		"probe_failure_streak": 1, "probe_groups": []any{}, "delivery_enabled": true, "notify_recovery": true,
-		"repeat_interval_minutes": 0, "merge_threshold": 10,
+		"probe_failure_streak": 3, "probe_recovery_streak": 3, "probe_groups": []any{}, "delivery_enabled": true, "notify_recovery": true,
+		"repeat_interval_minutes": 0, "state_change_cooldown_minutes": 30, "merge_threshold": 10,
 	}
 	updated := authenticatedRequest(t, router, http.MethodPut, "/api/alerts/policy", payload)
 	if updated.Code != http.StatusOK {
@@ -2200,11 +2327,11 @@ func TestParseOnboardingBatchRequestsKeepsEachBindingExplicit(t *testing.T) {
 	requests, err := parseOnboardingBatchRequests(map[string]any{
 		"items": []any{
 			map[string]any{
-				"host": "https://upstream.test", "upstream_type": "sub2api", "multiplier": "0.2",
+				"host": "https://upstream.test", "upstream_type": "sub2api",
 				"local_group_id": json.Number("3"), "upstream_group_id": "6",
 			},
 			map[string]any{
-				"host": "https://upstream.test", "upstream_type": "sub2api", "multiplier": "0.3",
+				"host": "https://upstream.test", "upstream_type": "sub2api",
 				"local_group_id": json.Number("4"), "upstream_group_id": "7",
 			},
 		},

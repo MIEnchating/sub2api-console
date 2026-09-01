@@ -219,6 +219,12 @@ func TestAlertEvaluationStatusDistinguishesExpectedSkipAndNotificationFailure(t 
 func TestProbeAlertsKeepAccountGroupsIndependent(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
+	policy := DefaultAlertPolicy()
+	policy.ProbeFailureStreak = 1
+	policy.ProbeRecoveryStreak = 1
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC()
 	reason := "timeout"
 	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{
@@ -243,6 +249,53 @@ func TestProbeAlertsKeepAccountGroupsIndependent(t *testing.T) {
 	}
 	assertAlertStatus(t, store, "console:probe:41:codex", "recovered")
 	assertAlertStatus(t, store, "console:probe:41:pro", "firing")
+}
+
+func TestProbeAlertWaitsForConsecutiveRecoveryEvidence(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	reason := "timeout"
+	policy := DefaultAlertPolicy()
+	policy.ProbeFailureStreak = 1
+	policy.ProbeRecoveryStreak = 3
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
+		AccountID: "41", GroupName: "codex", Result: "失败", FailureReason: &reason,
+		ObservedAt: now.Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const incidentKey = "console:probe:41:codex"
+	assertAlertStatus(t, store, incidentKey, "firing")
+
+	for index := 1; index <= 2; index++ {
+		if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
+			AccountID: "41", GroupName: "codex", Result: "通过",
+			ObservedAt: now.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano),
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+			t.Fatal(err)
+		}
+		assertAlertStatus(t, store, incidentKey, "firing")
+	}
+	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
+		AccountID: "41", GroupName: "codex", Result: "通过",
+		ObservedAt: now.Add(3 * time.Second).Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertAlertStatus(t, store, incidentKey, "recovered")
 }
 
 func TestProbeAlertsIgnoreUnevaluatedSamples(t *testing.T) {
@@ -302,6 +355,11 @@ func TestProbeAlertsTreatEveryAcceptedSuccessSpellingAsSuccess(t *testing.T) {
 func TestExpiredProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
+	policy := DefaultAlertPolicy()
+	policy.ProbeFailureStreak = 1
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
 	reason := "timeout"
 	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
 		AccountID: "41", GroupName: "codex", Result: "失败", FailureReason: &reason,
@@ -334,6 +392,11 @@ func TestExpiredProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
 func TestRemovingProbeGroupFromScopeClosesWithoutFalseRecovery(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
+	initialPolicy := DefaultAlertPolicy()
+	initialPolicy.ProbeFailureStreak = 1
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(initialPolicy)); err != nil {
+		t.Fatal(err)
+	}
 	reason := "timeout"
 	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
 		AccountID: "41", GroupName: "codex", Result: "失败", FailureReason: &reason,
@@ -367,6 +430,11 @@ func TestRemovingProbeGroupFromScopeClosesWithoutFalseRecovery(t *testing.T) {
 func TestRemovedProbeEvidenceClosesWithoutFalseRecovery(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
+	policy := DefaultAlertPolicy()
+	policy.ProbeFailureStreak = 1
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
 	reason := "timeout"
 	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
 		AccountID: "41", GroupName: "codex", Result: "失败", FailureReason: &reason,

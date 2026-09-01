@@ -13,11 +13,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
@@ -48,8 +48,6 @@ const (
 	maximumRequestBytes = 2 << 20
 )
 
-var configureJSONBinding sync.Once
-
 type Business interface {
 	Bootstrap(context.Context) error
 	Mode(context.Context) (string, error)
@@ -74,6 +72,7 @@ type Business interface {
 	SetGroupExcluded(context.Context, string, bool, string) (business.GroupStatus, error)
 	Upstreams(context.Context) (business.UpstreamSummary, error)
 	UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error)
+	UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error)
 	Events(context.Context, *int) ([]business.RunEvent, error)
 	Alerts(context.Context, *int) ([]business.AlertListItem, error)
 	ClearAlerts(context.Context) (int64, error)
@@ -130,6 +129,7 @@ type RoutingControlRestorer interface {
 
 type TaskRepository interface {
 	Get(context.Context, string) (taskstore.Task, error)
+	LatestByOperation(context.Context, string, string) (taskstore.Task, error)
 }
 
 type LogReader interface {
@@ -185,6 +185,9 @@ type PricingService interface {
 	UpdateConfig(context.Context, pricing.Config, string) (pricing.Snapshot, error)
 	Enqueue(context.Context, string) (taskstore.Task, error)
 	EnqueueRevenue(context.Context, pricing.RevenueRequest, string) (taskstore.Task, error)
+	CreateBackup(context.Context, string, string) (business.PricingBackup, error)
+	Backups(context.Context) ([]business.PricingBackup, error)
+	EnqueueRestore(context.Context, string, string) (taskstore.Task, error)
 }
 
 type UpstreamDetector interface {
@@ -207,6 +210,8 @@ type OnboardingService interface {
 	Candidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProbeModels(context.Context, string, string) ([]string, error)
 	Probe(context.Context, string, string, string) (onboarding.ProbeResult, error)
+	PreviewUnboundKeys(context.Context, string) (onboarding.KeyCleanupPreview, error)
+	EnqueueKeyCleanup(context.Context, string, []string, string) (taskstore.Task, error)
 	Enqueue(context.Context, onboarding.Request) (taskstore.Task, error)
 	EnqueueBatch(context.Context, []onboarding.Request) (taskstore.Task, error)
 }
@@ -407,7 +412,6 @@ type runtimeConfigResponse struct {
 }
 
 func New(cfg config.Config, private *configstore.Store, business Business, dependencies ...Dependencies) *gin.Engine {
-	configureJSONBinding.Do(gin.EnableJsonDecoderDisallowUnknownFields)
 	var services Dependencies
 	if len(dependencies) > 0 {
 		services = dependencies[0]
@@ -489,6 +493,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/onboarding", server.createOnboarding)
 	authorized.POST("/onboarding/batch", server.createOnboardingBatch)
 	authorized.POST("/onboarding/prepare", server.prepareOnboarding)
+	authorized.POST("/onboarding/keys/cleanup-preview", server.onboardingKeyCleanupPreview)
+	authorized.POST("/onboarding/keys/cleanup", server.onboardingKeyCleanup)
 	authorized.POST("/onboarding/probe/models", server.onboardingProbeModels)
 	authorized.POST("/onboarding/probe", server.onboardingProbe)
 	authorized.GET("/groups", server.groups)
@@ -503,6 +509,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/pricing/config", server.updatePricingConfig)
 	authorized.POST("/pricing/apply", server.applyPricing)
 	authorized.POST("/pricing/revenue", server.calculatePricingRevenue)
+	authorized.GET("/pricing/revenue/latest", server.latestPricingRevenue)
+	authorized.GET("/pricing/backups", server.pricingBackups)
+	authorized.POST("/pricing/backups", server.createPricingBackup)
+	authorized.POST("/pricing/backups/:backup_id/restore", server.restorePricingBackup)
 	authorized.GET("/upstreams", server.upstreams)
 	authorized.POST("/upstreams", server.createUpstream)
 	authorized.POST("/upstreams/detect", server.detectUpstream)
@@ -515,6 +525,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/upstreams/:host/configuration", server.upstreamConfiguration)
 	authorized.PUT("/upstreams/:host/configuration", server.updateUpstreamConfiguration)
 	authorized.GET("/upstreams/:host/groups", server.upstreamGroups)
+	authorized.GET("/upstreams/:host/group-history", server.upstreamGroupHistory)
 	authorized.GET("/upstreams/:host/delete-preview", server.upstreamDeletePreview)
 	authorized.POST("/upstreams/:host/delete", server.deleteUpstream)
 	authorized.GET("/auth-recovery/config", server.authRecoveryConfiguration)
@@ -583,7 +594,7 @@ func (s *Server) setupStatus(c *gin.Context) {
 
 func (s *Server) initialize(c *gin.Context) {
 	var payload initializeRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "初始化参数无效")
 		return
 	}
@@ -644,7 +655,7 @@ func (s *Server) authSession(c *gin.Context) {
 
 func (s *Server) login(c *gin.Context) {
 	var payload loginRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "登录参数无效")
 		return
 	}
@@ -706,7 +717,7 @@ func (s *Server) logout(c *gin.Context) {
 
 func (s *Server) updateProfile(c *gin.Context) {
 	var payload profileRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "个人资料参数无效")
 		return
 	}
@@ -810,7 +821,7 @@ func (s *Server) runtimeConfig(c *gin.Context) {
 
 func (s *Server) updateRuntimeMode(c *gin.Context) {
 	var payload runtimeModeRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "运行模式参数无效")
 		return
 	}
@@ -833,7 +844,7 @@ func (s *Server) updateRuntimeMode(c *gin.Context) {
 
 func (s *Server) updateAdminTarget(c *gin.Context) {
 	var payload adminTargetRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "管理目标参数无效")
 		return
 	}
@@ -865,7 +876,7 @@ func (s *Server) updateAdminTarget(c *gin.Context) {
 
 func (s *Server) updateProbeSettings(c *gin.Context) {
 	var payload probeSettingsRequest
-	if err := c.ShouldBindJSON(&payload); err != nil || payload.Enabled == nil {
+	if err := bindRequestJSON(c, &payload); err != nil || payload.Enabled == nil {
 		writeError(c, http.StatusUnprocessableEntity, "主动探测设置参数无效")
 		return
 	}
@@ -892,7 +903,7 @@ func (s *Server) updateProbeSettings(c *gin.Context) {
 
 func (s *Server) updateAccountDefaults(c *gin.Context) {
 	var payload accountDefaultsRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "账号默认参数无效")
 		return
 	}
@@ -939,7 +950,7 @@ func (s *Server) notificationQueue(c *gin.Context) {
 
 func (s *Server) configureNotification(c *gin.Context) {
 	var payload notificationConfigRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "通知配置参数无效")
 		return
 	}
@@ -989,7 +1000,7 @@ func (s *Server) discoverNotificationTarget(c *gin.Context) {
 		return
 	}
 	var payload notificationTargetDiscoveryRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "QQBot 目标获取参数无效")
 		return
 	}
@@ -1061,7 +1072,7 @@ func (s *Server) testNotification(c *gin.Context) {
 		return
 	}
 	var payload notificationTestRequest
-	if err := c.ShouldBindJSON(&payload); err != nil || payload.DryRun == nil {
+	if err := bindRequestJSON(c, &payload); err != nil || payload.DryRun == nil {
 		writeError(c, http.StatusUnprocessableEntity, "通知测试参数无效")
 		return
 	}
@@ -1269,12 +1280,8 @@ func (s *Server) syncAccountFields(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if mode == runtimepolicy.Monitoring && (!patch.MultiplierPresent || patch.NamePresent || patch.PriorityPresent || patch.LoadFactorPresent || patch.ConcurrencyPresent || patch.NotesPresent) {
-		writeError(c, http.StatusConflict, "监控模式只允许同步账号倍率")
-		return
-	}
-	if mode != runtimepolicy.Monitoring && mode != runtimepolicy.Full {
-		writeError(c, http.StatusConflict, "账号字段同步需要监控模式或完全模式")
+	if mode != runtimepolicy.Full {
+		writeError(c, http.StatusConflict, "账号字段同步需要完全模式；账号成本请使用同步倍率")
 		return
 	}
 	actor, err := s.requestActor(c)
@@ -1379,7 +1386,7 @@ func (s *Server) clearAccountManualPriority(c *gin.Context) {
 
 func accountFieldPatch(payload map[string]any) (accountops.FieldPatch, error) {
 	allowed := map[string]struct{}{
-		"name": {}, "priority": {}, "load_factor": {}, "concurrency": {}, "multiplier": {}, "notes": {},
+		"name": {}, "priority": {}, "load_factor": {}, "concurrency": {}, "notes": {},
 	}
 	for key := range payload {
 		if _, present := allowed[key]; !present {
@@ -1414,13 +1421,6 @@ func accountFieldPatch(payload map[string]any) (accountops.FieldPatch, error) {
 			return accountops.FieldPatch{}, err
 		}
 		result.ConcurrencyPresent, result.Concurrency = true, &value
-	}
-	if raw, present := payload["multiplier"]; present {
-		value, err := nullableTextField(raw, "multiplier", 1, 128)
-		if err != nil || value == nil {
-			return accountops.FieldPatch{}, errors.New("multiplier 必须是长度在 1 到 128 之间的字符串")
-		}
-		result.MultiplierPresent, result.Multiplier = true, value
 	}
 	if raw, present := payload["notes"]; present {
 		value, err := nullableTextField(raw, "notes", 0, 65536)
@@ -1658,6 +1658,62 @@ func (s *Server) onboardingProbeModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
+func (s *Server) onboardingKeyCleanupPreview(c *gin.Context) {
+	if s.onboarding == nil {
+		writeError(c, http.StatusServiceUnavailable, "上游 Key 清理服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "无绑定 Key 扫描参数必须只包含 host")
+		return
+	}
+	host, err := requiredText(payload, "host", 1, 255)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	preview, err := s.onboarding.PreviewUnboundKeys(c.Request.Context(), host)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Server) onboardingKeyCleanup(c *gin.Context) {
+	if s.onboarding == nil {
+		writeError(c, http.StatusServiceUnavailable, "上游 Key 清理服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 2 {
+		writeError(c, http.StatusUnprocessableEntity, "无绑定 Key 清理参数必须只包含 host 和 key_ids")
+		return
+	}
+	host, err := requiredText(payload, "host", 1, 255)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	keyIDs, err := onboardingKeyIDList(payload, "key_ids", 500)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.onboarding.EnqueueKeyCleanup(c.Request.Context(), host, keyIDs, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
 func (s *Server) onboardingProbe(c *gin.Context) {
 	if s.onboarding == nil {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
@@ -1807,7 +1863,7 @@ func parseOnboardingBatchRequests(payload map[string]any) ([]onboarding.Request,
 
 func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) {
 	allowed := map[string]struct{}{
-		"host": {}, "upstream_type": {}, "platform": {}, "account_type": {}, "notes": {}, "multiplier": {},
+		"host": {}, "upstream_type": {}, "platform": {}, "account_type": {}, "notes": {},
 		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
 		"priority": {}, "concurrency": {}, "schedulable": {},
 	}
@@ -1821,10 +1877,6 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 		return onboarding.Request{}, err
 	}
 	upstreamType, err := requiredText(payload, "upstream_type", 2, 64)
-	if err != nil {
-		return onboarding.Request{}, err
-	}
-	multiplier, err := requiredText(payload, "multiplier", 1, 128)
 	if err != nil {
 		return onboarding.Request{}, err
 	}
@@ -1852,7 +1904,7 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 		return onboarding.Request{}, err
 	}
 	result := onboarding.Request{
-		Host: host, UpstreamType: strings.ToLower(upstreamType), Multiplier: multiplier,
+		Host: host, UpstreamType: strings.ToLower(upstreamType),
 		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
 		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
 	}
@@ -1933,6 +1985,29 @@ func onboardingStableIDList(payload map[string]any, field string, maximum int) (
 		}
 		if !positiveNumericID(value) {
 			return nil, fmt.Errorf("%s 必须只包含稳定正整数", field)
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
+func onboardingKeyIDList(payload map[string]any, field string, maximum int) ([]string, error) {
+	raw, present := payload[field]
+	values, ok := raw.([]any)
+	if !present || !ok || len(values) == 0 || len(values) > maximum {
+		return nil, fmt.Errorf("%s 必须是包含 1 到 %d 个稳定 Key ID 的数组", field, maximum)
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawValue := range values {
+		value, ok := rawValue.(string)
+		value = strings.TrimSpace(value)
+		if !ok || value == "" || len(value) > 255 {
+			return nil, fmt.Errorf("%s 必须只包含有效的稳定 Key ID", field)
 		}
 		if _, duplicate := seen[value]; duplicate {
 			continue
@@ -2224,7 +2299,7 @@ func (s *Server) updatePricingConfig(c *gin.Context) {
 		return
 	}
 	var request pricing.Config
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := bindRequestJSON(c, &request); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "价格管理配置必须是完整 JSON 对象")
 		return
 	}
@@ -2265,7 +2340,7 @@ func (s *Server) calculatePricingRevenue(c *gin.Context) {
 		return
 	}
 	var request pricing.RevenueRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
+	if err := bindRequestJSON(c, &request); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "收入核算参数必须是 JSON 对象")
 		return
 	}
@@ -2275,6 +2350,91 @@ func (s *Server) calculatePricingRevenue(c *gin.Context) {
 		return
 	}
 	task, err := s.pricing.EnqueueRevenue(c.Request.Context(), request, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, task)
+}
+
+func (s *Server) latestPricingRevenue(c *gin.Context) {
+	if s.tasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "收益分析历史尚未就绪")
+		return
+	}
+	task, err := s.tasks.LatestByOperation(c.Request.Context(), "revenue-calculation", "succeeded")
+	if errors.Is(err, taskstore.ErrNotFound) {
+		c.JSON(http.StatusOK, nil)
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "最近收益分析读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) pricingBackups(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	backups, err := s.pricing.Backups(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, backups)
+}
+
+func (s *Server) createPricingBackup(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "创建价格分组备份参数必须只包含 name")
+		return
+	}
+	name, err := requiredText(payload, "name", 1, 80)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	backup, err := s.pricing.CreateBackup(c.Request.Context(), name, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, backup)
+}
+
+func (s *Server) restorePricingBackup(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	backupID := strings.TrimSpace(c.Param("backup_id"))
+	if backupID == "" || len(backupID) > 128 {
+		writeError(c, http.StatusUnprocessableEntity, "备份 ID 无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.pricing.EnqueueRestore(c.Request.Context(), backupID, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
@@ -2352,6 +2512,22 @@ func (s *Server) setGroupExcluded(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, row)
+}
+
+func bindRequestJSON(c *gin.Context, target any) error {
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return errors.New("request body contains trailing JSON")
+	}
+	return binding.Validator.ValidateStruct(target)
 }
 
 func decodeRequestObject(c *gin.Context) (map[string]any, error) {
@@ -2990,6 +3166,33 @@ func (s *Server) upstreamGroups(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+func (s *Server) upstreamGroupHistory(c *gin.Context) {
+	host := strings.TrimSpace(c.Param("host"))
+	if host == "" {
+		writeError(c, http.StatusUnprocessableEntity, "上游 Host 不能为空")
+		return
+	}
+	limit := 200
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			writeError(c, http.StatusUnprocessableEntity, "limit 必须在 1 到 500 之间")
+			return
+		}
+		limit = parsed
+	}
+	rows, err := s.business.UpstreamGroupHistory(c.Request.Context(), host, limit)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(c, http.StatusNotFound, "上游 Host 不存在")
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "上游分组变化历史读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
 func (s *Server) events(c *gin.Context) {
 	limit, ok := optionalLimit(c)
 	if !ok {
@@ -3049,7 +3252,7 @@ func (s *Server) runModelCheck(c *gin.Context) {
 		return
 	}
 	var payload modelCheckRequest
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "模型检测参数无效")
 		return
 	}
@@ -3140,7 +3343,7 @@ func (s *Server) updateAutoInspection(c *gin.Context) {
 		return
 	}
 	var payload autoInspectionRequest
-	if err := c.ShouldBindJSON(&payload); err != nil || payload.Enabled == nil {
+	if err := bindRequestJSON(c, &payload); err != nil || payload.Enabled == nil {
 		writeError(c, http.StatusUnprocessableEntity, "自动巡检配置参数无效")
 		return
 	}
@@ -3616,7 +3819,7 @@ func (s *Server) updateLogCleanup(c *gin.Context) {
 		return
 	}
 	var payload logCleanupRequest
-	if err := c.ShouldBindJSON(&payload); err != nil || payload.Enabled == nil {
+	if err := bindRequestJSON(c, &payload); err != nil || payload.Enabled == nil {
 		writeError(c, http.StatusUnprocessableEntity, "日志清理配置参数无效")
 		return
 	}

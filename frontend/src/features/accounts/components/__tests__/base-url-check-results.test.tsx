@@ -76,6 +76,7 @@ describe("BaseURLCheckResults", () => {
     expect(markup).toContain("转到第 2 页");
     expect(markup).toContain("min-w-[1120px]");
     expect(markup).toContain("grid h-full min-h-0");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("does not repeat result counts above the searchable table", () => {

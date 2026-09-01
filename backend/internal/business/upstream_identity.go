@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -337,23 +336,5 @@ func sortedStringMapKeys[T any](values map[string]T) []string {
 		result = append(result, key)
 	}
 	sort.Strings(result)
-	return result
-}
-
-func decodeAliasHosts(metadataRaw string) []string {
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
-		return nil
-	}
-	rawAliases, ok := metadata["alias_hosts"].([]any)
-	if !ok {
-		return nil
-	}
-	result := make([]string, 0, len(rawAliases))
-	for _, raw := range rawAliases {
-		if alias, ok := raw.(string); ok && strings.TrimSpace(alias) != "" {
-			result = append(result, alias)
-		}
-	}
 	return result
 }

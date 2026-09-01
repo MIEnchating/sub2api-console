@@ -2,9 +2,39 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ModelCheckPage } from "../model-check-page";
+import { modelCheckDialogLayout, ModelCheckPage } from "../model-check-page";
 
 describe("模型检测页面", () => {
+  it("运行和结果阶段使用稳定的大尺寸弹窗", () => {
+    expect(
+      modelCheckDialogLayout({
+        id: "model-check-running",
+        skill: "sub2api-model-check",
+        operation: "account-model-behavior-check",
+        status: "running",
+        progress: 14,
+        message: "已完成 2/20 个账号模型组合",
+        result: {},
+        created_at: "2026-08-31T00:00:00Z",
+        updated_at: "2026-08-31T00:00:01Z",
+      }),
+    ).toEqual({ width: "table", height: "tall", resultsReady: false });
+
+    expect(
+      modelCheckDialogLayout({
+        id: "model-check-succeeded",
+        skill: "sub2api-model-check",
+        operation: "account-model-behavior-check",
+        status: "succeeded",
+        progress: 100,
+        message: "账号模型检测完成",
+        result: { tests: [] },
+        created_at: "2026-08-31T00:00:00Z",
+        updated_at: "2026-08-31T00:00:02Z",
+      }),
+    ).toEqual({ width: "table", height: "tall", resultsReady: true });
+  });
+
   it("使用账号与模型矩阵选择界面且不展示接口凭据字段", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(

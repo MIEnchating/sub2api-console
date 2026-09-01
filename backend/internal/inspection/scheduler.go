@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -19,6 +20,7 @@ const (
 	renewEvery           = 30 * time.Second
 	queuePreviewCacheTTL = 15 * time.Second
 	queuePreviewTimeout  = 30 * time.Second
+	finalizationTimeout  = 10 * time.Second
 )
 
 type Repository interface {
@@ -128,6 +130,8 @@ type Scheduler struct {
 	reconfigure         chan struct{}
 	subscribers         map[chan struct{}]struct{}
 	loopDone            chan struct{}
+	configVersion       uint64
+	leaseRenewInterval  time.Duration
 	previewMu           sync.Mutex
 	previewItem         *QueueItem
 	previewedAt         time.Time
@@ -144,13 +148,14 @@ func NewScheduler(repository Repository, executor Executor) (*Scheduler, error) 
 		return nil, err
 	}
 	return &Scheduler{
-		repository:  repository,
-		executor:    executor,
-		ownerID:     ownerID,
-		ownerHost:   host,
-		now:         time.Now,
-		reconfigure: make(chan struct{}, 1),
-		subscribers: make(map[chan struct{}]struct{}),
+		repository:         repository,
+		executor:           executor,
+		ownerID:            ownerID,
+		ownerHost:          host,
+		now:                time.Now,
+		leaseRenewInterval: renewEvery,
+		reconfigure:        make(chan struct{}, 1),
+		subscribers:        make(map[chan struct{}]struct{}),
 	}, nil
 }
 
@@ -327,6 +332,7 @@ func (s *Scheduler) UpdateConfig(ctx context.Context, config business.AutoInspec
 	}
 	now := s.now().UTC()
 	s.mu.Lock()
+	s.configVersion++
 	s.nextRunAt = scheduledAfter(now, stored)
 	cancel := s.currentCancel
 	if !stored.Enabled && cancel != nil {
@@ -489,6 +495,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 		return false, nil
 	}
 	executionContext, cancelExecution := context.WithCancel(ctx)
+	runConfigVersion := s.configVersion
 	s.running = true
 	s.cancelRequested = false
 	s.currentCancel = cancelExecution
@@ -537,7 +544,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 			return
 		}
 		reportOnce.Do(func() {
-			if err := s.repository.RecordInspectionHeartbeat(context.Background(), business.InspectionHeartbeat{
+			if err := s.recordHeartbeat(business.InspectionHeartbeat{
 				CheckedAt: current.Format(time.RFC3339Nano), Status: "running", TaskID: stringPointer(taskID),
 				Operations: []string{}, OperationTiming: []business.OperationTiming{},
 			}); err != nil {
@@ -549,11 +556,11 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 			s.notify()
 		})
 	})
-	renewalDone := make(chan struct{})
-	go s.renewLease(executionContext, renewalDone)
+	renewalDone := make(chan error, 1)
+	go func() { renewalDone <- s.renewLease(executionContext, cancelExecution) }()
 	result, executionErr := executor.Execute(executorContext, config)
 	cancelExecution()
-	<-renewalDone
+	renewalErr := <-renewalDone
 	completed := s.now().UTC()
 	status := result.Status
 	if status == "" {
@@ -563,6 +570,11 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	if executionErr != nil {
 		status = "failed"
 		message := stringsOrType(executionErr)
+		errorText = &message
+	}
+	if renewalErr != nil {
+		status = "failed"
+		message := stringsOrType(renewalErr)
 		errorText = &message
 	}
 	s.mu.Lock()
@@ -579,7 +591,11 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 		TaskID: result.TaskID, Error: errorText, Skipped: result.Skipped,
 		Summary: result.Summary, MonitoringEnabled: result.MonitoringEnabled,
 	}
-	historyErr := s.repository.RecordInspectionHeartbeat(context.Background(), heartbeat)
+	s.mu.Lock()
+	scheduleVersion := s.configVersion
+	s.mu.Unlock()
+	scheduleConfig, scheduleConfigLoaded := s.latestScheduleConfig(config)
+	historyErr := s.recordHeartbeat(heartbeat)
 	releaseErr := s.releaseLease()
 	s.mu.Lock()
 	s.running = false
@@ -593,7 +609,9 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	if result.Summary != nil {
 		s.lastSummary = *result.Summary
 	}
-	s.nextRunAt = scheduledAfter(completed, config)
+	if s.configVersion == scheduleVersion && (scheduleConfigLoaded || scheduleVersion == runConfigVersion) {
+		s.nextRunAt = scheduledAfter(completed, scheduleConfig)
+	}
 	if result.MonitoringEnabled != nil {
 		s.monitoringKnown = true
 		s.monitoringEnabled = *result.MonitoringEnabled
@@ -610,25 +628,54 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	return true, nil
 }
 
-func (s *Scheduler) renewLease(ctx context.Context, done chan<- struct{}) {
-	defer close(done)
-	ticker := time.NewTicker(renewEvery)
+func (s *Scheduler) renewLease(ctx context.Context, cancel context.CancelFunc) error {
+	interval := s.leaseRenewInterval
+	if interval <= 0 {
+		interval = renewEvery
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case now := <-ticker.C:
 			renewed, err := s.repository.RenewInspectionLease(ctx, s.ownerID, now.UTC(), leaseTTL)
-			if err == nil && !renewed {
-				return
+			if ctx.Err() != nil {
+				return nil
+			}
+			if err != nil {
+				cause := fmt.Errorf("巡检租约续期失败：%w", err)
+				cancel()
+				return cause
+			}
+			if !renewed {
+				cause := errors.New("巡检租约已丢失，已停止当前巡检")
+				cancel()
+				return cause
 			}
 		}
 	}
 }
 
+func (s *Scheduler) recordHeartbeat(heartbeat business.InspectionHeartbeat) error {
+	ctx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
+	defer cancel()
+	return s.repository.RecordInspectionHeartbeat(ctx, heartbeat)
+}
+
+func (s *Scheduler) latestScheduleConfig(fallback business.AutoInspectionConfig) (business.AutoInspectionConfig, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
+	defer cancel()
+	config, err := s.repository.AutoInspectionConfig(ctx)
+	if err != nil {
+		return fallback, false
+	}
+	return config, true
+}
+
 func (s *Scheduler) releaseLease() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
 	defer cancel()
 	return s.repository.ReleaseInspectionLease(ctx, s.ownerID)
 }

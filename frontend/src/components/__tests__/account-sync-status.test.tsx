@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { AccountSyncTaskStatus } from "../../App";
+import { AccountSyncTaskStatus, BalanceTaskProgress } from "../../App";
 import type { Task } from "../../api";
 
 function failedTask(operation: Task["operation"], remoteWrite: boolean): Task {
@@ -22,6 +22,39 @@ function failedTask(operation: Task["operation"], remoteWrite: boolean): Task {
 }
 
 describe("account synchronization status", () => {
+  it("reads a single-host balance from the upstream sync batch result", () => {
+    const task: Task = {
+      id: "balance-sync-task",
+      skill: "sub2api-upstream-info",
+      operation: "balance-sync",
+      status: "succeeded",
+      progress: 100,
+      message: "上游同步完成：成功 1",
+      result: {
+        succeeded: 1,
+        failed: 0,
+        hosts: [
+          {
+            host: "api.example.test",
+            status: "succeeded",
+            auth_status: "已鉴权",
+            balance_status: "已读取",
+            balance: "199.62365227",
+          },
+        ],
+      },
+      created_at: "2026-08-31T10:12:03Z",
+      updated_at: "2026-08-31T10:12:04Z",
+    };
+
+    const markup = renderToStaticMarkup(<BalanceTaskProgress task={task} />);
+
+    expect(markup).toContain("同步成功");
+    expect(markup).toContain("api.example.test");
+    expect(markup).toContain("$199.6237");
+    expect(markup).not.toContain("上游未返回余额");
+  });
+
   it("shows the failed account, reason, and completed remote write for field sync", () => {
     const markup = renderToStaticMarkup(
       <AccountSyncTaskStatus

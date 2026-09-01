@@ -96,6 +96,38 @@ describe("alert request contract", () => {
   });
 });
 
+describe("history request contracts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the latest revenue report and encoded upstream group history", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.latestRevenue()).resolves.toBeNull();
+    await expect(api.upstreamGroupHistory("api/example")).resolves.toEqual([]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pricing/revenue/latest");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/upstreams/api%2Fexample/group-history?limit=200",
+    );
+  });
+});
+
 describe("manual priority request contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -242,6 +274,7 @@ describe("automatic inspection control contract", () => {
 
   it("builds the scheduler event stream through the shared API base", () => {
     expect(api.autoInspectionEventsURL()).toBe("/api/inspection/automation/events");
+    expect(api.taskEventsURL("task / 1")).toBe("/api/tasks/task%20%2F%201/events");
   });
 });
 
@@ -426,7 +459,6 @@ describe("onboarding request contract", () => {
     await api.onboard({
       host: "https://upstream.test",
       upstream_type: "sub2api",
-      multiplier: "1",
       local_group_id: 3,
       upstream_group_id: "codex",
     });
@@ -435,6 +467,7 @@ describe("onboarding request contract", () => {
     const body = JSON.parse(String(request.body));
     expect(body).not.toHaveProperty("credentials");
     expect(body).not.toHaveProperty("account_mode");
+    expect(body).not.toHaveProperty("multiplier");
   });
 
   it("submits multiple explicit group bindings through one batch task", async () => {
@@ -450,7 +483,6 @@ describe("onboarding request contract", () => {
       {
         host: "https://upstream.test",
         upstream_type: "sub2api",
-        multiplier: "0.2",
         local_group_ids: [3, 5],
         upstream_group_id: "group-a",
         account_ids: ["77"],
@@ -458,7 +490,6 @@ describe("onboarding request contract", () => {
       {
         host: "https://upstream.test",
         upstream_type: "sub2api",
-        multiplier: "0.3",
         local_group_id: 4,
         upstream_group_id: "group-b",
       },
@@ -630,14 +661,12 @@ describe("account field request contract", () => {
       priority: 120,
       load_factor: "2.5",
       concurrency: 3000,
-      multiplier: "0.08",
     });
 
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       priority: 120,
       load_factor: "2.5",
       concurrency: 3000,
-      multiplier: "0.08",
     });
   });
 
@@ -706,6 +735,37 @@ describe("account field request contract", () => {
       host: "api.example",
       group_id: "6",
       model: "gpt-5.2",
+    });
+  });
+
+  it("previews and submits unbound upstream keys by stable id", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ host: "api.example", keys: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "cleanup-1", status: "queued", result: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.previewUnboundUpstreamKeys("api.example");
+    await api.cleanupUnboundUpstreamKeys("api.example", ["key-17", "token-a"]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/onboarding/keys/cleanup-preview");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      host: "api.example",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/onboarding/keys/cleanup");
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      host: "api.example",
+      key_ids: ["key-17", "token-a"],
     });
   });
 });
@@ -945,6 +1005,34 @@ describe("upstream operator action contracts", () => {
       admin_key: "secret",
       user_id: "9",
     });
+  });
+});
+
+describe("pricing backup request contracts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("creates a named backup and restores it by encoded stable ID", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ id: "backup/1" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createPricingBackup("调价前");
+    await api.restorePricingBackup("backup/1");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pricing/backups");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      name: "调价前",
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pricing/backups/backup%2F1/restore");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("POST");
   });
 });
 

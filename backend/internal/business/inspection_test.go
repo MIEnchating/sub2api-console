@@ -106,6 +106,27 @@ func TestRecordInspectionHeartbeatRejectsCorruptHistoryWithoutOverwritingIt(t *t
 	}
 }
 
+func TestInspectionHeartbeatsReportsCorruptHistoryInsteadOfReturningEmpty(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-corrupt-read.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)`,
+		inspectionHistoryKey, `{not-json}`, "now"); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.InspectionHeartbeats(ctx, 20)
+	if err == nil || !strings.Contains(err.Error(), "心跳历史损坏") {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+}
+
 func TestReconcileWithoutStaleStateDoesNotWaitForWriterLock(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "inspection-readonly-reconcile.sqlite3"))
 	if err != nil {

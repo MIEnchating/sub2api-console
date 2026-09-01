@@ -189,7 +189,7 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 		item.AccountCount = accountCounts[item.UpstreamID]
 		item.GroupCount = groupCounts[item.Host]
 		if metadataErr != nil {
-			item.AuthStatus = "配置错误"
+			item.AuthStatus = UpstreamAuthStatusConfigurationError
 			item.BalanceStatus = "配置错误"
 		} else {
 			item.AuthStatus = effectiveAuthStatus(item.AuthStatus, item.RawBalance, item.CheckedAt, metadata)
@@ -202,7 +202,7 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 	}
 	result.TotalHosts = len(result.Hosts)
 	for _, item := range result.Hosts {
-		if authenticatedStatus(item.AuthStatus) {
+		if UpstreamAuthStatusIsReady(item.AuthStatus) {
 			result.AuthenticatedHosts++
 		}
 	}
@@ -237,18 +237,12 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 	} else if hostReason == nil && snapshotReason != nil {
 		hostReason = snapshotReason
 	}
-	var rechargeRaw sql.NullString
-	err = s.db.QueryRowContext(ctx, `SELECT recharge_rate FROM recharge_rates WHERE host=?`, normalized).Scan(&rechargeRaw)
+	recharge, _, err := stableRechargeRate(ctx, s.db, normalized)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	recharge := "1"
-	if err == nil {
-		if rechargeRaw.Valid {
-			recharge = rechargeRaw.String
-		} else {
-			recharge = ""
-		}
+	if errors.Is(err, sql.ErrNoRows) {
+		recharge = "1"
 	}
 	rechargeValue := normalizePositiveDecimal(recharge)
 	if rechargeValue == nil && hostReason == nil {
@@ -294,20 +288,32 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 		item.RechargeRate = stringPointer(recharge)
 		item.BoundAccounts = append([]UpstreamBoundAccount{}, boundAccounts[groupID]...)
 		item.Bound = len(item.BoundAccounts) > 0
-		state, keyPresent := keyStates[groupID]
+		_, keyPresent := keyStates[groupID]
 		item.KeyPresent = keyPresent
 		if !includeBound && item.Bound {
 			continue
 		}
 		var rowReason *string
-		if item.Status == nil {
+		switch {
+		case item.Status == nil:
 			rowReason = stringPointer("上游分组状态不可读")
+		case !activeStatus(*item.Status):
+			rowReason = stringPointer("上游分组当前未启用")
+		case strings.TrimSpace(groupID) == "":
+			rowReason = stringPointer("上游分组缺少稳定 ID")
+		case strings.TrimSpace(item.Name) == "":
+			rowReason = stringPointer("上游分组名称为空")
+		case item.EffectiveRate == nil || strings.TrimSpace(*item.EffectiveRate) == "":
+			rowReason = stringPointer("上游分组倍率不可读")
 		}
 		item.UnavailableReason = hostReason
 		if item.UnavailableReason == nil {
 			item.UnavailableReason = rowReason
 		}
-		item.Bindable = activeStatus(pointerValue(item.Status)) && activeStatus(state) && !item.Bound && item.UnavailableReason == nil
+		// A missing key is handled by the onboarding flow, which creates one before
+		// adding the account. Key presence only controls whether an existing key can
+		// be reused; it must not disable an otherwise available group.
+		item.Bindable = !item.Bound && item.UnavailableReason == nil
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -390,17 +396,6 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 		result[groupID] = accounts
 	}
 	return result, nil
-}
-
-func (s *Store) equivalentUpstreamHosts(ctx context.Context, host string) ([]string, error) {
-	if err := s.ensureUpstreamIdentities(ctx); err != nil {
-		return nil, err
-	}
-	_, hosts, err := upstreamIdentityHostsForQueryer(ctx, s.db, host)
-	if err != nil {
-		return nil, err
-	}
-	return hosts, nil
 }
 
 func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
@@ -586,11 +581,11 @@ func upstreamDisplayName(metadata map[string]any, baseURL, derived string) strin
 }
 
 func effectiveAuthStatus(current string, rawBalance, checkedAt *string, metadata map[string]any) string {
-	if strings.TrimSpace(current) == "已鉴权" {
+	if strings.TrimSpace(current) == UpstreamAuthStatusAuthenticated {
 		_, verified := metadata["auth_verified_at"]
 		rateSync := stringValue(metadata["rate_sync_status"]) == "succeeded"
 		if !verified && !rateSync && (checkedAt == nil || rawBalance == nil) {
-			return "待验证"
+			return UpstreamAuthStatusPendingVerification
 		}
 	}
 	return current
@@ -634,7 +629,7 @@ func upstreamUnavailableReason(authStatus string, mappedBalance, legacyBalance s
 			return stringPointer("上游鉴权不可用")
 		}
 	}
-	if !authenticatedStatus(authStatus) {
+	if !UpstreamAuthStatusIsReady(authStatus) {
 		return stringPointer("上游鉴权状态不可识别")
 	}
 	if value, present := metadata["balance_hard_closed"]; present {
@@ -1116,6 +1111,19 @@ func ConvertMultiplier(rawRate, rechargeRate string) (string, error) {
 	return text, nil
 }
 
+func stableRechargeRate(ctx context.Context, queryer policyQueryer, host string) (string, string, error) {
+	host = canonicalHost(host)
+	var rate, sourceHost string
+	err := queryer.QueryRowContext(ctx, `SELECT r.recharge_rate,candidate.host
+		FROM upstream_identity_hosts target
+		JOIN upstream_identity_hosts candidate ON candidate.upstream_id=target.upstream_id
+		JOIN recharge_rates r ON r.host=candidate.host
+		WHERE target.host=?
+		ORDER BY CASE WHEN candidate.host=? THEN 0 ELSE 1 END,candidate.is_primary DESC,r.updated_at DESC,candidate.host
+		LIMIT 1`, host, host).Scan(&rate, &sourceHost)
+	return rate, sourceHost, err
+}
+
 func divideMultiplierPointers(numerator, denominator *string) *string {
 	if numerator == nil || denominator == nil || *numerator == "" || *denominator == "" {
 		return nil
@@ -1167,16 +1175,6 @@ func strictAnyBool(value any) *bool {
 		}
 	}
 	return nil
-}
-
-func authenticatedStatus(value string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	for _, healthy := range []string{"已鉴权", "已发现鉴权记录", "已恢复", "已认证", "authenticated", "authorized", "healthy", "valid", "ok", "succeeded"} {
-		if normalized == strings.ToLower(healthy) {
-			return true
-		}
-	}
-	return false
 }
 
 func activeStatus(value string) bool {

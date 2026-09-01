@@ -434,20 +434,20 @@ describe("account pool cells", () => {
     expect(markup).not.toContain("→");
   });
 
-  it("shows whether a manual priority account is fully manual or sync-only", () => {
-    const fullyManual = renderToStaticMarkup(
+  it("shows that manual priority only controls upstream balance syncing", () => {
+    const withoutBalanceSync = renderToStaticMarkup(
       <AccountRoutingParametersCell
         account={{ ...account, manual_priority: 3, manual_sync_balance_multiplier: false }}
       />,
     );
-    const syncOnly = renderToStaticMarkup(
+    const withBalanceSync = renderToStaticMarkup(
       <AccountRoutingParametersCell
         account={{ ...account, manual_priority: 3, manual_sync_balance_multiplier: true }}
       />,
     );
 
-    expect(fullyManual).toContain("人工优先位 #3");
-    expect(fullyManual).toContain("完全人工控制");
-    expect(syncOnly).toContain("仅同步余额与倍率");
+    expect(withoutBalanceSync).toContain("人工优先位 #3");
+    expect(withoutBalanceSync).toContain("不同步上游余额");
+    expect(withBalanceSync).toContain("同步上游余额");
   });
 });

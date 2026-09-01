@@ -53,7 +53,7 @@ function SheetContent({
   side = "right",
   showCloseButton = true,
   ...props
-}: SheetPrimitive.Popup.Props & {
+}: Omit<SheetPrimitive.Popup.Props, "initialFocus"> & {
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
 }) {
@@ -81,6 +81,7 @@ function SheetContent({
           className,
         )}
         {...props}
+        initialFocus={false}
       >
         {children}
         {showCloseButton && (

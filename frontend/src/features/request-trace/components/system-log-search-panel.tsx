@@ -332,14 +332,14 @@ export function SystemLogSearchPanel() {
                   value={form.timeRange}
                   onValueChange={(value) => value && update("timeRange", value)}
                 >
-                  <SelectTrigger aria-label="时间范围">
+                  <SelectTrigger appearance="faceted" aria-label="时间范围">
                     <SelectValue>
                       {timeRanges.find((option) => option.value === form.timeRange)?.label}
                     </SelectValue>
                   </SelectTrigger>
-                  <SelectContent align="start">
+                  <SelectContent appearance="faceted" align="start">
                     {timeRanges.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
+                      <SelectItem appearance="faceted" key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>
                     ))}
@@ -365,14 +365,14 @@ export function SystemLogSearchPanel() {
                   value={form.level || "all"}
                   onValueChange={(value) => value && update("level", value)}
                 >
-                  <SelectTrigger aria-label="级别">
+                  <SelectTrigger appearance="faceted" aria-label="级别">
                     <SelectValue>
                       {levels.find((option) => option.value === (form.level || "all"))?.label}
                     </SelectValue>
                   </SelectTrigger>
-                  <SelectContent align="start">
+                  <SelectContent appearance="faceted" align="start">
                     {levels.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
+                      <SelectItem appearance="faceted" key={option.value} value={option.value}>
                         {option.label}
                       </SelectItem>
                     ))}

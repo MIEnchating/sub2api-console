@@ -24,6 +24,7 @@ describe("VaultEntryTable", () => {
     expect(toolbarStart).toBeGreaterThan(-1);
     expect(toolbarStart).toBeLessThan(cardStart);
     expect(markup).toContain('aria-label="搜索凭据"');
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("shows only the redacted password entry index and exposes edit and delete actions", () => {

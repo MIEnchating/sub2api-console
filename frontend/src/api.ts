@@ -91,6 +91,18 @@ export type OnboardingCandidate = {
   unavailable_reason: string | null;
 };
 
+type UnboundUpstreamKey = {
+  key_id: string;
+  name: string;
+  group_id: string | null;
+  status: string | null;
+};
+
+export type KeyCleanupPreview = {
+  host: string;
+  keys: UnboundUpstreamKey[];
+};
+
 export type UpstreamBoundAccount = {
   binding_id: number;
   account_id: string;
@@ -167,6 +179,15 @@ export type UpstreamGroup = {
   unavailable_reason: string | null;
 };
 
+export type UpstreamGroupChange = {
+  id: number;
+  upstream_id: string;
+  group_id: string;
+  group_name: string;
+  change_type: "added" | "removed";
+  changed_at: string;
+};
+
 export type UpstreamConfiguration = {
   upstream_id: string;
   host: string;
@@ -185,6 +206,8 @@ export type UpstreamConfiguration = {
   header_names: string[];
   cookie_names: string[];
   groups: UpstreamGroup[];
+  rate_sync_task_id?: string;
+  rate_sync_error?: string;
 };
 
 export type UpstreamConfigurationUpdate = {
@@ -242,7 +265,6 @@ export type OnboardingRequest = {
   platform?: string;
   account_type?: string;
   notes?: string;
-  multiplier: string;
   local_group_id?: number;
   local_group_ids?: number[];
   upstream_group_id: string;
@@ -429,6 +451,8 @@ export type GroupAllocationChannel = {
   account_name: string;
   health: string;
   health_score: number | null;
+  short_score: number | null;
+  long_score: number | null;
   sample_count: number;
   ttfb_p95_ms: number | null;
   rate: string | null;
@@ -508,6 +532,14 @@ export type PricingSnapshot = {
   generated_at: string;
 };
 
+export type PricingBackup = {
+  id: string;
+  name: string;
+  actor: string;
+  account_count: number;
+  created_at: string;
+};
+
 export type RevenueRow = {
   account_id: string;
   account_name: string;
@@ -526,7 +558,7 @@ export type RevenueRow = {
   attribution_level: "key" | "unavailable";
 };
 
-export type RevenueSummary = {
+type RevenueSummary = {
   group: string;
   accounts: number;
   account_cost: number;
@@ -830,10 +862,12 @@ export type AlertPolicy = {
   apply_failure_enabled: boolean;
   balance_thresholds: string[];
   probe_failure_streak: number;
+  probe_recovery_streak: number;
   probe_groups: string[];
   delivery_enabled: boolean;
   notify_recovery: boolean;
   repeat_interval_minutes: number;
+  state_change_cooldown_minutes: number;
   merge_threshold: number;
 };
 
@@ -959,6 +993,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   autoInspectionEventsURL: () => apiEndpoint("/api/inspection/automation/events"),
+  taskEventsURL: (id: string) => apiEndpoint(`/api/tasks/${encodeURIComponent(id)}/events`),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   initialize: (payload: {
     username: string;
@@ -1086,11 +1121,22 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   applyPricing: () => request<Task>("/api/pricing/apply", { method: "POST" }),
+  pricingBackups: () => request<PricingBackup[]>("/api/pricing/backups"),
+  createPricingBackup: (name: string) =>
+    request<PricingBackup>("/api/pricing/backups", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  restorePricingBackup: (backupId: string) =>
+    request<Task>(`/api/pricing/backups/${encodeURIComponent(backupId)}/restore`, {
+      method: "POST",
+    }),
   calculateRevenue: (date: string) =>
     request<Task>("/api/pricing/revenue", {
       method: "POST",
       body: JSON.stringify({ date }),
     }),
+  latestRevenue: () => request<Task | null>("/api/pricing/revenue/latest"),
   groups: () => request<GroupStatus[]>("/api/groups"),
   updateGroupPolicy: (id: string, payload: GroupPolicyOverrideUpdate) =>
     request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/policy`, {
@@ -1127,6 +1173,10 @@ export const api = {
   upstreamGroups: (host: string, includeBound = true) =>
     request<UpstreamGroup[]>(
       `/api/upstreams/${encodeURIComponent(host)}/groups?include_bound=${includeBound ? "true" : "false"}`,
+    ),
+  upstreamGroupHistory: (host: string) =>
+    request<UpstreamGroupChange[]>(
+      `/api/upstreams/${encodeURIComponent(host)}/group-history?limit=200`,
     ),
   upstreamDeletePreview: (host: string) =>
     request<UpstreamDeletePreview>(`/api/upstreams/${encodeURIComponent(host)}/delete-preview`),
@@ -1206,7 +1256,6 @@ export const api = {
       priority?: number;
       load_factor?: string;
       concurrency?: number;
-      multiplier?: string;
       notes?: string | null;
     },
   ) =>
@@ -1417,6 +1466,16 @@ export const api = {
     request<OnboardingContext>("/api/onboarding/prepare", {
       method: "POST",
       body: JSON.stringify({ host }),
+    }),
+  previewUnboundUpstreamKeys: (host: string) =>
+    request<KeyCleanupPreview>("/api/onboarding/keys/cleanup-preview", {
+      method: "POST",
+      body: JSON.stringify({ host }),
+    }),
+  cleanupUnboundUpstreamKeys: (host: string, keyIds: string[]) =>
+    request<Task>("/api/onboarding/keys/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ host, key_ids: keyIds }),
     }),
   onboardingProbeModels: (host: string, groupId: string) =>
     request<{ models: string[] }>("/api/onboarding/probe/models", {

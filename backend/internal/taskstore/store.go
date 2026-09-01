@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -72,6 +73,7 @@ func Open(path string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS ix_tasks_updated_at ON tasks(updated_at DESC,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_status_updated_at ON tasks(status,updated_at,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_skill_updated_at ON tasks(skill,updated_at DESC,id)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_operation_status_updated_at ON tasks(operation,status,updated_at DESC,id DESC)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_log_listing ON tasks(
 			updated_at DESC,id,skill,operation,status,progress,message,created_at,
 			` + taskRunKeySQL + `,` + taskObjectSQL + `
@@ -110,6 +112,20 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 
 func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id,skill,operation,status,progress,message,result_json,created_at,updated_at FROM tasks WHERE id=?`, strings.TrimSpace(id))
+	return scanTask(row)
+}
+
+func (s *Store) LatestByOperation(ctx context.Context, operation, status string) (Task, error) {
+	operation = strings.TrimSpace(operation)
+	status = strings.TrimSpace(status)
+	if operation == "" {
+		return Task{}, errors.New("operation 不能为空")
+	}
+	if _, valid := validStatuses[status]; !valid {
+		return Task{}, errors.New("status 无效")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id,skill,operation,status,progress,message,result_json,created_at,updated_at
+		FROM tasks WHERE operation=? AND status=? ORDER BY updated_at DESC,id DESC LIMIT 1`, operation, status)
 	return scanTask(row)
 }
 
@@ -304,7 +320,7 @@ func scanTask(row scanner) (Task, error) {
 		return corruptTask(task, "任务持久化结果损坏"), nil
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); err == nil {
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return corruptTask(task, "任务持久化结果损坏"), nil
 	}
 	return task, nil

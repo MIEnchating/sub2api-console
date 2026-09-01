@@ -4,7 +4,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 type Props = {
   name: string;
-  upstreamId: string;
   host: string;
   hosts: string[];
   baseUrl: string;
@@ -15,7 +14,6 @@ export const upstreamIdentityLayout = {
   name: "truncate font-medium",
   link: "text-muted-foreground hover:text-primary inline-flex min-w-0 items-center gap-1 text-xs",
   host: "truncate",
-  id: "text-muted-foreground truncate font-mono text-[11px]",
 } as const;
 
 export function UpstreamIdentity(props: Props) {
@@ -47,12 +45,6 @@ export function UpstreamIdentity(props: Props) {
         <TooltipContent className="max-w-sm whitespace-pre-line break-all">
           {props.hosts.length > 1 ? props.hosts.join("\n") : props.host}
         </TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger render={<span className={upstreamIdentityLayout.id} />}>
-          ID {props.upstreamId}
-        </TooltipTrigger>
-        <TooltipContent className="max-w-sm break-all">{props.upstreamId}</TooltipContent>
       </Tooltip>
     </div>
   );

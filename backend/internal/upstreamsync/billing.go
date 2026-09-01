@@ -7,15 +7,12 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
-
-const newAPIBillingPageSize = 100
 
 type KeyUsageObservation struct {
 	Cost   float64
@@ -60,9 +57,8 @@ func (r *Reader) ReadSub2APIKeyUsage(
 	return KeyUsageObservation{Cost: cost, Source: "sub2api-key-stats"}, nil
 }
 
-// ReadNewAPIKeyUsage reads the full positive-consume and refund log windows
-// twice. It returns only stable Token-ID totals and fails closed when pagination
-// or attribution cannot be proven complete.
+// ReadNewAPIKeyUsage uses NewAPI's server-side flow aggregation. It never scans
+// request logs or allocates host totals across Tokens.
 func (r *Reader) ReadNewAPIKeyUsage(
 	ctx context.Context,
 	record configstore.AuthRecord,
@@ -83,142 +79,56 @@ func (r *Reader) ReadNewAPIKeyUsage(
 	if err != nil || quotaPerUnit <= 0 {
 		return NewAPIUsageObservations{}, errors.New("NewAPI quota_per_unit 缺失或无效")
 	}
-
-	totals := map[string]float64{}
-	for _, logType := range []int{2, 6} {
-		first, firstFingerprint, err := r.readNewAPILogPass(ctx, record, logType, start, end)
-		if err != nil {
-			return NewAPIUsageObservations{}, err
+	if enabled, present := strictBool(status["enable_data_export"]); present && !enabled {
+		return NewAPIUsageObservations{}, errors.New("NewAPI 未开启数据看板，无法按稳定 Token ID 核对消费")
+	}
+	payload, responseStatus, err := r.request(ctx, record, "/api/data/flow/self", url.Values{
+		"start_timestamp": {strconv.FormatInt(start.Unix(), 10)},
+		"end_timestamp":   {strconv.FormatInt(end.Unix()-1, 10)},
+	}, true)
+	if err != nil {
+		if responseStatus == 404 || responseStatus == 405 {
+			return NewAPIUsageObservations{}, errors.New("NewAPI 版本不支持稳定 Token ID 消费聚合，无法精确核对")
 		}
-		second, secondFingerprint, err := r.readNewAPILogPass(ctx, record, logType, start, end)
-		if err != nil {
-			return NewAPIUsageObservations{}, err
+		return NewAPIUsageObservations{}, fmt.Errorf("NewAPI Token 消费聚合读取失败：%w", err)
+	}
+	rows, err := newAPIFlowRows(payload)
+	if err != nil {
+		return NewAPIUsageObservations{}, err
+	}
+	totals := make(map[string]float64)
+	for _, row := range rows {
+		quota, quotaErr := finiteNumber(row["quota"])
+		tokenID, tokenErr := strictInteger(row["token_id"])
+		if quotaErr != nil || quota < 0 {
+			return NewAPIUsageObservations{}, errors.New("NewAPI Token 消费聚合包含无效 quota")
 		}
-		if firstFingerprint != secondFingerprint {
-			return NewAPIUsageObservations{}, errors.New("NewAPI 计费日志在双次分页读取期间发生变化，无法精确核对")
+		if tokenErr != nil || tokenID <= 0 {
+			return NewAPIUsageObservations{}, errors.New("NewAPI Token 消费聚合缺少稳定 Token ID")
 		}
-		for tokenID, quota := range first {
-			if logType == 6 {
-				totals[tokenID] -= quota
-			} else {
-				totals[tokenID] += quota
-			}
-		}
-		_ = second
+		totals[strconv.Itoa(tokenID)] += quota
 	}
 	result := make(map[string]KeyUsageObservation, len(totals))
 	for tokenID, quota := range totals {
-		result[tokenID] = KeyUsageObservation{Cost: quota / quotaPerUnit, Source: "newapi-token-logs"}
+		result[tokenID] = KeyUsageObservation{Cost: quota / quotaPerUnit, Source: "newapi-token-flow"}
 	}
 	return NewAPIUsageObservations{Keys: result, QuotaPerUnit: quotaPerUnit}, nil
 }
 
-func (r *Reader) readNewAPILogPass(
-	ctx context.Context,
-	record configstore.AuthRecord,
-	logType int,
-	start, end time.Time,
-) (map[string]float64, string, error) {
-	totals := map[string]float64{}
-	fingerprints := make([]string, 0)
-	seen := map[string]struct{}{}
-	expectedTotal := -1
-	fetched := 0
-	for page := 1; page <= maximumPages; page++ {
-		payload, _, err := r.request(ctx, record, "/api/log/self", url.Values{
-			"p": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(newAPIBillingPageSize)},
-			"type": {strconv.Itoa(logType)}, "start_timestamp": {strconv.FormatInt(start.Unix(), 10)},
-			"end_timestamp": {strconv.FormatInt(end.Unix()-1, 10)},
-		}, true)
-		if err != nil {
-			return nil, "", err
-		}
-		pageData, err := payloadObject(payload, "NewAPI 计费日志")
-		if err != nil {
-			return nil, "", err
-		}
-		pageNumber, err := strictInteger(pageData["page"])
-		if err != nil || pageNumber != page {
-			return nil, "", errors.New("NewAPI 计费日志返回无效页码")
-		}
-		pageSize, err := strictInteger(pageData["page_size"])
-		if err != nil || pageSize <= 0 || pageSize > newAPIBillingPageSize {
-			return nil, "", errors.New("NewAPI 计费日志返回无效分页大小")
-		}
-		total, err := strictInteger(pageData["total"])
-		if err != nil || total < 0 || total >= 10000 {
-			return nil, "", errors.New("NewAPI 计费日志总数无效或达到查询上限")
-		}
-		if expectedTotal == -1 {
-			expectedTotal = total
-		} else if expectedTotal != total {
-			return nil, "", errors.New("NewAPI 计费日志分页总数发生变化")
-		}
-		rawItems, ok := pageData["items"].([]any)
-		if !ok {
-			return nil, "", errors.New("NewAPI 计费日志未返回 items")
-		}
-		if len(rawItems) == 0 && fetched < expectedTotal {
-			return nil, "", errors.New("NewAPI 计费日志分页提前结束")
-		}
-		for _, raw := range rawItems {
-			item, ok := raw.(map[string]any)
-			if !ok {
-				return nil, "", errors.New("NewAPI 计费日志包含无效项目")
-			}
-			rowType, err := strictInteger(item["type"])
-			if err != nil || rowType != logType {
-				return nil, "", errors.New("NewAPI 计费日志类型与查询条件不一致")
-			}
-			quota, err := finiteNumber(item["quota"])
-			if err != nil || quota < 0 {
-				return nil, "", errors.New("NewAPI 计费日志包含无效 quota")
-			}
-			tokenID, err := strictInteger(item["token_id"])
-			if err != nil || (quota != 0 && tokenID <= 0) {
-				return nil, "", errors.New("NewAPI 非零计费日志缺少稳定 Token ID")
-			}
-			fingerprint, err := newAPILogFingerprint(item)
-			if err != nil {
-				return nil, "", err
-			}
-			if _, duplicate := seen[fingerprint]; duplicate {
-				return nil, "", errors.New("NewAPI 计费日志分页包含重复项目")
-			}
-			seen[fingerprint] = struct{}{}
-			fingerprints = append(fingerprints, fingerprint)
-			if quota != 0 {
-				totals[strconv.Itoa(tokenID)] += quota
-			}
-		}
-		fetched += len(rawItems)
-		if fetched == expectedTotal {
-			break
-		}
-		if fetched > expectedTotal {
-			return nil, "", errors.New("NewAPI 计费日志分页数量超过 total")
-		}
+func newAPIFlowRows(payload any) ([]map[string]any, error) {
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return nil, errors.New("NewAPI Token 消费聚合返回格式不可读")
 	}
-	if fetched != expectedTotal {
-		return nil, "", errors.New("NewAPI 计费日志分页未完整读取")
+	rawRows, ok := object["data"].([]any)
+	if !ok {
+		return nil, errors.New("NewAPI Token 消费聚合未返回数据列表")
 	}
-	sort.Strings(fingerprints)
-	return totals, strings.Join(fingerprints, "\n"), nil
-}
-
-func newAPILogFingerprint(item map[string]any) (string, error) {
-	copy := make(map[string]any, len(item))
-	for key, value := range item {
-		if key == "id" {
-			continue
-		}
-		copy[key] = value
-	}
-	encoded, err := json.Marshal(copy)
+	rows, err := objectRows(rawRows, "NewAPI Token 消费聚合")
 	if err != nil {
-		return "", errors.New("NewAPI 计费日志指纹生成失败")
+		return nil, err
 	}
-	return string(encoded), nil
+	return rows, nil
 }
 
 func finiteNumber(value any) (float64, error) {

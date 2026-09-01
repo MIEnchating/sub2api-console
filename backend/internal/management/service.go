@@ -17,6 +17,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -61,6 +62,18 @@ type accountNameRepository interface {
 
 type UpstreamAuthResolver interface {
 	ResolveAuth(context.Context, string, string) (*configstore.AuthRecord, error)
+}
+
+type accountRateProbe struct {
+	account              business.BoundAccountMaintenance
+	observedMultiplier   string
+	multiplier           string
+	manualMultiplierOnly bool
+	skippedReason        string
+	fallbackEligible     bool
+	fallback             bool
+	fallbackSource       string
+	err                  error
 }
 
 type Service struct {
@@ -128,6 +141,92 @@ func (s *Service) EnqueueAccountUpstreamHostRepair(ctx context.Context, accountI
 
 func (s *Service) EnqueueAccountRateSync(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
 	return s.enqueueMaintenance(ctx, "account-rate-sync", "账号倍率同步已排队", accountIDs, actor)
+}
+
+func (s *Service) EnqueueHostAccountRateSync(ctx context.Context, host, actor string) (string, error) {
+	allowed, err := s.automaticRateSyncAllowed(ctx)
+	if err != nil || !allowed {
+		return "", err
+	}
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
+	}
+	accountIDs := accountIDsForHost(bound, host)
+	if len(accountIDs) == 0 {
+		return "", nil
+	}
+	task, err := s.EnqueueAccountRateSync(ctx, accountIDs, actor)
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+func (s *Service) EnqueueAllAccountRateSync(ctx context.Context, actor string) (string, error) {
+	allowed, err := s.automaticRateSyncAllowed(ctx)
+	if err != nil || !allowed {
+		return "", err
+	}
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
+	}
+	accountIDs := uniqueMaintenanceAccountIDs(bound)
+	if len(accountIDs) == 0 {
+		return "", nil
+	}
+	task, err := s.EnqueueAccountRateSync(ctx, accountIDs, actor)
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+func (s *Service) automaticRateSyncAllowed(ctx context.Context) (bool, error) {
+	reader, ok := s.repository.(interface {
+		Mode(context.Context) (string, error)
+	})
+	if !ok {
+		return true, nil
+	}
+	mode, err := reader.Mode(ctx)
+	if err != nil {
+		return false, err
+	}
+	return mode == runtimepolicy.Full, nil
+}
+
+func accountIDsForHost(bound []business.BoundAccountMaintenance, host string) []string {
+	host = configstore.CanonicalHost(host)
+	if host == "" {
+		return nil
+	}
+	matched := make([]business.BoundAccountMaintenance, 0, len(bound))
+	for _, account := range bound {
+		if configstore.CanonicalHost(account.UpstreamHost) != host && configstore.CanonicalHost(account.SourceAuthHost) != host {
+			continue
+		}
+		matched = append(matched, account)
+	}
+	return uniqueMaintenanceAccountIDs(matched)
+}
+
+func uniqueMaintenanceAccountIDs(bound []business.BoundAccountMaintenance) []string {
+	seen := make(map[string]struct{}, len(bound))
+	result := make([]string, 0, len(bound))
+	for _, account := range bound {
+		accountID := strings.TrimSpace(account.AccountID)
+		if accountID == "" {
+			continue
+		}
+		if _, found := seen[accountID]; found {
+			continue
+		}
+		seen[accountID] = struct{}{}
+		result = append(result, accountID)
+	}
+	return result
 }
 
 func (s *Service) SyncAllAccountRates(ctx context.Context, actor string) (map[string]any, error) {
@@ -213,10 +312,12 @@ func (s *Service) executeMaintenance(task taskstore.Task, operation string, acco
 	} else {
 		task.Status = "succeeded"
 		if operation == "account-rate-sync" {
-			task.Message = fmt.Sprintf("账号倍率同步完成：更新 %v 个，未变 %v 个，缺失 %v 个，失败 %v 个", result["updated"], result["unchanged"], result["missing"], result["failed"])
+			task.Message = fmt.Sprintf("账号倍率同步完成：更新 %v 个，未变 %v 个，跳过 %v 个（其中只读降级 %v 个），缺失 %v 个，失败 %v 个",
+				result["updated"], result["unchanged"], result["skipped"], result["fallback"], result["missing"], result["failed"])
 			if failed, _ := result["failed"].(int); failed > 0 {
 				task.Status = "failed"
-				task.Message = fmt.Sprintf("账号倍率同步部分失败：更新 %v 个，未变 %v 个，缺失 %v 个，失败 %v 个", result["updated"], result["unchanged"], result["missing"], result["failed"])
+				task.Message = fmt.Sprintf("账号倍率同步部分失败：更新 %v 个，未变 %v 个，跳过 %v 个（其中只读降级 %v 个），缺失 %v 个，失败 %v 个",
+					result["updated"], result["unchanged"], result["skipped"], result["fallback"], result["missing"], result["failed"])
 			}
 		} else if operation == "account-base-url-validation" {
 			task.Message = fmt.Sprintf("Base URL 校验完成：已读取 %v 个，未返回 %v 个，失败 %v 个", result["resolved"], result["unavailable"], result["failed"])
@@ -427,16 +528,20 @@ func (s *Service) validateAccountBaseURLs(ctx context.Context, accountIDs []stri
 		}
 		observations = append(observations, observation)
 	}
-	if len(observations) > 0 {
-		if err := s.repository.CommitAccountBaseURLObservations(ctx, observations); err != nil {
-			return nil, fmt.Errorf("Base URL 校验结果保存失败：%w", err)
-		}
-	}
-	return map[string]any{
+	response := map[string]any{
 		"operation": "account.base_url.validation", "requested": len(accountIDs),
 		"resolved": resolved, "unavailable": unavailable, "failed": failed,
 		"items": items, "actor": actor, "remote_write": false, "read_only": true,
-	}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return response, err
+	}
+	if len(observations) > 0 {
+		if err := s.repository.CommitAccountBaseURLObservations(ctx, observations); err != nil {
+			return response, fmt.Errorf("Base URL 校验结果保存失败：%w", err)
+		}
+	}
+	return response, nil
 }
 
 func (s *Service) checkAccountConfiguration(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
@@ -751,7 +856,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	if len(accountIDs) == 0 {
 		return map[string]any{
 			"operation": "account.rate.sync", "source": "upstream_live", "requested": 0,
-			"updated": 0, "unchanged": 0, "skipped": 0, "missing": 0, "failed": 0,
+			"updated": 0, "unchanged": 0, "skipped": 0, "fallback": 0, "missing": 0, "failed": 0,
 			"items": []map[string]any{}, "read_only": false, "remote_write": false,
 		}, nil
 	}
@@ -770,21 +875,22 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		byID[account.AccountID] = append(byID[account.AccountID], account)
 	}
 	type catalogLoad struct {
-		ready    chan struct{}
-		snapshot business.UpstreamCatalogSnapshot
-		err      error
+		ready            chan struct{}
+		snapshot         business.UpstreamCatalogSnapshot
+		fallbackEligible bool
+		err              error
 	}
 	loads := map[string]*catalogLoad{}
 	var loadsMu sync.Mutex
-	loadCatalog := func(run context.Context, host string) (business.UpstreamCatalogSnapshot, error) {
+	loadCatalog := func(run context.Context, host string) (business.UpstreamCatalogSnapshot, bool, error) {
 		loadsMu.Lock()
 		if existing := loads[host]; existing != nil {
 			loadsMu.Unlock()
 			select {
 			case <-existing.ready:
-				return existing.snapshot, existing.err
+				return existing.snapshot, existing.fallbackEligible, existing.err
 			case <-run.Done():
-				return business.UpstreamCatalogSnapshot{}, run.Err()
+				return business.UpstreamCatalogSnapshot{}, false, run.Err()
 			}
 		}
 		load := &catalogLoad{ready: make(chan struct{})}
@@ -793,47 +899,49 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		defer close(load.ready)
 		if s.upstreams == nil {
 			load.err = errors.New("NewAPI 上游目录读取服务尚未就绪")
-			return load.snapshot, load.err
+			return load.snapshot, false, load.err
 		}
 		auths, ok := s.targets.(upstreamAuthStore)
 		if !ok {
 			load.err = errors.New("NewAPI 私有授权读取服务尚未就绪")
-			return load.snapshot, load.err
+			return load.snapshot, false, load.err
 		}
 		record, authErr := auths.AuthRecord(run, host)
 		if authErr != nil {
 			load.err = authErr
-			return load.snapshot, load.err
+			return load.snapshot, false, load.err
 		}
 		if record == nil {
 			if s.resolver != nil {
 				record, authErr = s.resolver.ResolveAuth(run, host, actor)
 				if authErr != nil {
 					load.err = fmt.Errorf("Host %q 的私有授权恢复失败：%w", host, authErr)
-					return load.snapshot, load.err
+					return load.snapshot, false, load.err
 				}
 			}
 			if record == nil {
 				load.err = fmt.Errorf("未找到 Host %q 的私有授权记录", host)
-				return load.snapshot, load.err
+				return load.snapshot, false, load.err
 			}
 		}
 		load.snapshot, load.err = s.upstreams.ReadCatalog(run, *record)
-		return load.snapshot, load.err
+		load.fallbackEligible = fallbackEligibleRateReadError(load.err)
+		return load.snapshot, load.fallbackEligible, load.err
 	}
 
-	client, err := s.maintenanceClient(ctx)
-	if err != nil {
-		return nil, err
+	var client *adminclient.Client
+	loadManagementClient := func() (*adminclient.Client, error) {
+		if client != nil {
+			return client, nil
+		}
+		loaded, loadErr := s.maintenanceClient(ctx)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		client = loaded
+		return client, nil
 	}
-	type upstreamRate struct {
-		account              business.BoundAccountMaintenance
-		multiplier           string
-		manualMultiplierOnly bool
-		skippedReason        string
-		err                  error
-	}
-	upstreamRates := make([]upstreamRate, len(accountIDs))
+	upstreamRates := make([]accountRateProbe, len(accountIDs))
 	sub2APIIDs := make([]string, 0, len(accountIDs))
 	newAPIIndexes := make([]int, 0, len(accountIDs))
 	for index, accountID := range accountIDs {
@@ -861,6 +969,10 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		}
 	}
 	if len(sub2APIIDs) > 0 {
+		client, err = loadManagementClient()
+		if err != nil {
+			return nil, err
+		}
 		batch, batchErr := client.AccountUpstreamMultipliers(ctx, sub2APIIDs)
 		for index, accountID := range accountIDs {
 			if upstreamRates[index].err != nil || upstreamRates[index].skippedReason != "" || isNewAPIType(upstreamRates[index].account.UpstreamType) {
@@ -868,14 +980,29 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 			}
 			if batchErr != nil {
 				upstreamRates[index].err = batchErr
+				upstreamRates[index].fallbackEligible = fallbackEligibleRateReadError(batchErr)
 				continue
 			}
 			item, found := batch[accountID]
 			if !found {
 				upstreamRates[index].err = errors.New("批量上游倍率探测未返回该账号结果")
+				upstreamRates[index].fallbackEligible = true
 				continue
 			}
-			upstreamRates[index].multiplier, upstreamRates[index].err = item.Multiplier, item.Err
+			if item.Err != nil {
+				upstreamRates[index].err = item.Err
+				upstreamRates[index].fallbackEligible = fallbackEligibleRateReadError(item.Err)
+				continue
+			}
+			upstreamRates[index].observedMultiplier = item.Multiplier
+			rechargeRate := strings.TrimSpace(upstreamRates[index].account.RechargeRate)
+			if rechargeRate == "" {
+				rechargeRate = "1"
+			}
+			upstreamRates[index].multiplier, upstreamRates[index].err = business.ConvertMultiplier(item.Multiplier, rechargeRate)
+			if upstreamRates[index].err != nil {
+				upstreamRates[index].err = fmt.Errorf("Sub2API 上游折算倍率无效: %w", upstreamRates[index].err)
+			}
 		}
 	}
 	newAPIJobs := make(chan int)
@@ -886,12 +1013,13 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 			defer probeWorkers.Done()
 			for index := range newAPIJobs {
 				account := upstreamRates[index].account
-				catalog, catalogErr := loadCatalog(ctx, account.UpstreamHost)
+				catalog, fallbackEligible, catalogErr := loadCatalog(ctx, account.RateSourceHost())
 				if catalogErr != nil {
 					upstreamRates[index].err = catalogErr
+					upstreamRates[index].fallbackEligible = fallbackEligible
 					continue
 				}
-				upstreamRates[index].multiplier, upstreamRates[index].err = newAPIAccountMultiplier(account, catalog)
+				upstreamRates[index].observedMultiplier, upstreamRates[index].multiplier, upstreamRates[index].err = newAPIAccountRates(account, catalog)
 			}
 		}()
 	}
@@ -900,32 +1028,53 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	}
 	close(newAPIJobs)
 	probeWorkers.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	for index := range upstreamRates {
+		applyStoredRateFallback(&upstreamRates[index])
+	}
 	observations := make([]business.AccountRateObservation, 0, len(upstreamRates))
 	for _, probe := range upstreamRates {
-		if probe.err == nil && probe.skippedReason == "" {
-			observations = append(observations, business.AccountRateObservation{AccountID: probe.account.AccountID, Rate: probe.multiplier})
+		if probe.err == nil && probe.skippedReason == "" && !probe.fallback {
+			observations = append(observations, business.AccountRateObservation{AccountID: probe.account.AccountID, Rate: probe.observedMultiplier})
 		}
 	}
 	if err := s.repository.CommitAccountRateObservations(ctx, observations); err != nil {
 		return nil, fmt.Errorf("上游倍率观测保存失败：%w", err)
 	}
 
-	// Upstream collection is complete before this point. Read the management
-	// catalog once, compare stable IDs, and only write changed multipliers.
-	remoteRows, err := client.Accounts(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("管理平台账号目录读取失败：%w", err)
+	// Read the management catalog only when at least one live observation can
+	// actually be compared and written. Manual skips, read-only fallbacks, and
+	// permanent probe failures do not need it.
+	needsRemoteCatalog := false
+	for _, probe := range upstreamRates {
+		if probe.err == nil && probe.skippedReason == "" && !probe.fallback {
+			needsRemoteCatalog = true
+			break
+		}
 	}
-	remoteByID := make(map[string]map[string]any, len(remoteRows))
-	for _, row := range remoteRows {
-		accountID := strings.TrimSpace(fmt.Sprint(firstValue(row, "id", "account_id")))
-		if accountID == "" {
-			continue
+	remoteByID := map[string]map[string]any{}
+	if needsRemoteCatalog {
+		client, err = loadManagementClient()
+		if err != nil {
+			return nil, err
 		}
-		if _, duplicate := remoteByID[accountID]; duplicate {
-			return nil, fmt.Errorf("管理平台返回重复账号 ID：%s", accountID)
+		remoteRows, accountsErr := client.Accounts(ctx)
+		if accountsErr != nil {
+			return nil, fmt.Errorf("管理平台账号目录读取失败：%w", accountsErr)
 		}
-		remoteByID[accountID] = row
+		remoteByID = make(map[string]map[string]any, len(remoteRows))
+		for _, row := range remoteRows {
+			accountID := strings.TrimSpace(fmt.Sprint(firstValue(row, "id", "account_id")))
+			if accountID == "" {
+				continue
+			}
+			if _, duplicate := remoteByID[accountID]; duplicate {
+				return nil, fmt.Errorf("管理平台返回重复账号 ID：%s", accountID)
+			}
+			remoteByID[accountID] = row
+		}
 	}
 	type rateResult struct {
 		item      map[string]any
@@ -953,6 +1102,19 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 					item["status"], item["reason"] = "人工控制，已跳过", probe.skippedReason
 					results[index] = rateResult{item: item, skipped: true}
 					continue
+				}
+				if probe.fallback {
+					item["observation_source"] = probe.fallbackSource
+					item["probe_error"] = probe.err.Error()
+					item["upstream_raw_multiplier"] = probe.observedMultiplier
+					item["recharge_rate"] = account.RechargeRate
+					item["account_multiplier"] = probe.multiplier
+					item["read_only"] = true
+					item["status"] = "只读降级，已跳过写回"
+					results[index] = rateResult{item: item, skipped: true}
+					continue
+				} else {
+					item["observation_source"] = "live"
 				}
 				if probe.err != nil {
 					item["status"], item["error"] = "上游探测失败", probe.err.Error()
@@ -983,7 +1145,9 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 				if !probe.manualMultiplierOnly {
 					item["name_after"] = expectedName
 				}
-				item["upstream_multiplier"] = probe.multiplier
+				item["upstream_raw_multiplier"] = probe.observedMultiplier
+				item["recharge_rate"] = account.RechargeRate
+				item["account_multiplier"] = probe.multiplier
 				nameMatches := probe.manualMultiplierOnly || (remoteName == expectedName && account.AccountName == expectedName)
 				if remoteMultiplier == probe.multiplier && sameRate(account.CurrentMultiplier, probe.multiplier) && nameMatches {
 					item["status"] = "已确认一致"
@@ -1020,9 +1184,12 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	writeWorkers.Wait()
 
 	items := make([]map[string]any, 0, len(results))
-	updated, unchanged, skipped, missing, failed, written := 0, 0, 0, 0, 0, 0
+	updated, unchanged, skipped, missing, failed, written, fallback := 0, 0, 0, 0, 0, 0, 0
 	for _, result := range results {
 		items = append(items, result.item)
+		if source := result.item["observation_source"]; source == "last_successful" || source == "group_catalog" {
+			fallback++
+		}
 		if result.updated {
 			updated++
 		}
@@ -1045,8 +1212,37 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	return map[string]any{
 		"operation": "account.rate.sync", "source": "upstream_live", "requested": len(accountIDs),
 		"updated": updated, "unchanged": unchanged, "skipped": skipped, "missing": missing, "failed": failed,
-		"items": items, "read_only": false, "remote_write": written > 0,
+		"fallback": fallback, "items": items, "read_only": false, "remote_write": written > 0,
 	}, nil
+}
+
+func applyStoredRateFallback(probe *accountRateProbe) {
+	if probe == nil || probe.err == nil || !probe.fallbackEligible {
+		return
+	}
+	raw := strings.TrimSpace(probe.account.KnownRawRate)
+	if raw == "" {
+		return
+	}
+	rechargeRate := strings.TrimSpace(probe.account.RechargeRate)
+	if rechargeRate == "" {
+		rechargeRate = "1"
+	}
+	converted, err := business.ConvertMultiplier(raw, rechargeRate)
+	if err != nil {
+		return
+	}
+	probe.observedMultiplier = raw
+	probe.multiplier = converted
+	probe.fallback = true
+	probe.fallbackSource = "last_successful"
+	if probe.account.KnownRawRateSource == "group_catalog" {
+		probe.fallbackSource = "group_catalog"
+	}
+}
+
+func fallbackEligibleRateReadError(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 func sameRate(left, right string) bool {
@@ -1075,47 +1271,47 @@ func managementAccountMultiplier(row map[string]any) (string, error) {
 	return normalized, nil
 }
 
-func newAPIAccountMultiplier(account business.BoundAccountMaintenance, catalog business.UpstreamCatalogSnapshot) (string, error) {
+func newAPIAccountRates(account business.BoundAccountMaintenance, catalog business.UpstreamCatalogSnapshot) (string, string, error) {
 	var matched *business.UpstreamCatalogKey
 	for index := range catalog.Keys {
 		if strings.TrimSpace(catalog.Keys[index].KeyID) != strings.TrimSpace(account.UpstreamKeyID) {
 			continue
 		}
 		if matched != nil {
-			return "", errors.New("NewAPI 上游返回重复的稳定 Token ID")
+			return "", "", errors.New("NewAPI 上游返回重复的稳定 Token ID")
 		}
 		matched = &catalog.Keys[index]
 	}
 	if matched == nil {
-		return "", errors.New("NewAPI 上游未找到绑定的稳定 Token ID")
+		return "", "", errors.New("NewAPI 上游未找到绑定的稳定 Token ID")
 	}
 	if matched.RateAmbiguous {
-		return "", errors.New("NewAPI Token 使用多分组路由，无法判定单一倍率")
+		return "", "", errors.New("NewAPI Token 使用多分组路由，无法判定单一倍率")
 	}
 	groupID := strings.TrimSpace(account.UpstreamGroupID)
 	if matched.UpstreamGroup != nil && strings.TrimSpace(*matched.UpstreamGroup) != "" {
 		groupID = strings.TrimSpace(*matched.UpstreamGroup)
 	}
 	if groupID == "" || strings.EqualFold(groupID, "auto") {
-		return "", errors.New("NewAPI Token 未绑定唯一固定分组，无法判定单一倍率")
+		return "", "", errors.New("NewAPI Token 未绑定唯一固定分组，无法判定单一倍率")
 	}
 	var rawRate *string
 	for _, group := range catalog.Groups {
 		if strings.TrimSpace(group.GroupID) == groupID || strings.TrimSpace(group.Name) == groupID {
 			if rawRate != nil {
-				return "", fmt.Errorf("NewAPI 上游分组 %q 不唯一", groupID)
+				return "", "", fmt.Errorf("NewAPI 上游分组 %q 不唯一", groupID)
 			}
 			rawRate = group.RawRate
 		}
 	}
 	if rawRate == nil || strings.TrimSpace(*rawRate) == "" {
-		return "", fmt.Errorf("NewAPI 上游分组 %q 未返回有效倍率", groupID)
+		return "", "", fmt.Errorf("NewAPI 上游分组 %q 未返回有效倍率", groupID)
 	}
 	text, err := business.ConvertMultiplier(*rawRate, account.RechargeRate)
 	if err != nil {
-		return "", fmt.Errorf("NewAPI 上游折算倍率无效: %w", err)
+		return "", "", fmt.Errorf("NewAPI 上游折算倍率无效: %w", err)
 	}
-	return text, nil
+	return *rawRate, text, nil
 }
 
 func (s *Service) maintenanceClient(ctx context.Context) (*adminclient.Client, error) {

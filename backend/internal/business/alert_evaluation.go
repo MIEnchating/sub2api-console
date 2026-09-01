@@ -68,7 +68,7 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 			return AlertEvidenceResult{}, err
 		}
 		if previous.Valid && previous.String != "firing" {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM alert_deliveries WHERE incident_key=?`, finding.key); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE alert_deliveries SET status='transition',updated_at=? WHERE incident_key=?`, now, finding.key); err != nil {
 				return AlertEvidenceResult{}, err
 			}
 		}
@@ -135,7 +135,7 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 		default:
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM alert_deliveries WHERE incident_key=?`, incident.key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE alert_deliveries SET status='transition',updated_at=? WHERE incident_key=?`, now, incident.key); err != nil {
 			return AlertEvidenceResult{}, err
 		}
 	}
@@ -282,7 +282,7 @@ func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy) ([]alertF
 		}
 		normalizedAuth := strings.ToLower(strings.TrimSpace(authText))
 		authFailure := containsAny(normalizedAuth, "失效", "失败", "未鉴权", "过期", "unauthorized", "expired", "invalid")
-		authHealthy := valueIn(normalizedAuth, "已鉴权", "已恢复", "已认证", "authenticated", "authorized", "healthy", "valid", "ok", "succeeded")
+		authHealthy := UpstreamAuthStatusIsReady(authText)
 		if policy.ConfigurationEnabled && normalizedAuth == "" {
 			findings = append(findings, alertFinding{"console:configuration:upstream-auth:" + host, "upstream.configuration", "host", host, "CONFIG_AUTH_STATUS_MISSING"})
 		} else if policy.ConfigurationEnabled && !authHealthy && !authFailure {
@@ -564,17 +564,19 @@ func (s *Store) probeFailureFindings(ctx context.Context, policy AlertPolicy) ([
 	if err := rows.Close(); err != nil {
 		return nil, nil, err
 	}
-	activeRows, err := s.db.QueryContext(ctx, `SELECT incident_key,object_id FROM alert_incidents
+	activeRows, err := s.db.QueryContext(ctx, `SELECT incident_key,object_id,cause_code FROM alert_incidents
 		WHERE event_type='account.probe' AND status IN ('firing','suppressed') ORDER BY incident_key`)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer activeRows.Close()
+	activeCauses := map[string]string{}
 	for activeRows.Next() {
-		var incidentKey, accountID string
-		if err := activeRows.Scan(&incidentKey, &accountID); err != nil {
+		var incidentKey, accountID, causeCode string
+		if err := activeRows.Scan(&incidentKey, &accountID, &causeCode); err != nil {
 			return nil, nil, err
 		}
+		activeCauses[incidentKey] = causeCode
 		if _, found := seen[incidentKey]; found {
 			continue
 		}
@@ -605,56 +607,76 @@ func (s *Store) probeFailureFindings(ctx context.Context, policy AlertPolicy) ([
 				continue
 			}
 		}
-		count, failed, latestReason, err := s.probeFailureEvidence(ctx, key.accountID, key.groupName, policy.ProbeFailureStreak, cutoff)
+		limit := max(policy.ProbeFailureStreak, policy.ProbeRecoveryStreak)
+		count, failureStreak, recoveryStreak, latestReason, err := s.probeEvidence(ctx, key.accountID, key.groupName, limit, cutoff)
 		if err != nil {
 			return nil, nil, err
 		}
-		if count >= policy.ProbeFailureStreak && failed {
+		if failureStreak >= policy.ProbeFailureStreak {
 			findings = append(findings, alertFinding{key.incidentKey, "account.probe", "account", key.accountID, alertCause("PROBE", latestReason)})
-		} else if count == 0 || failed {
+		} else if count == 0 {
 			notEvaluated[key.incidentKey] = "主动探测证据不足或已过期"
+		} else if activeCause, active := activeCauses[key.incidentKey]; active && recoveryStreak < policy.ProbeRecoveryStreak {
+			findings = append(findings, alertFinding{key.incidentKey, "account.probe", "account", key.accountID, activeCause})
 		}
 	}
 	return findings, notEvaluated, nil
 }
 
-func (s *Store) probeFailureEvidence(
+func (s *Store) probeEvidence(
 	ctx context.Context,
 	accountID string,
 	groupName string,
 	limit int,
 	cutoff time.Time,
-) (int, bool, string, error) {
+) (int, int, int, string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at FROM health_samples INDEXED BY ix_health_samples_probe_recent
 		WHERE account_id=? AND group_name=? AND LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe')
 		AND LOWER(TRIM(result)) IN ('通过','passed','pass','success','succeeded','healthy','ok',
 			'失败','failed','error','timeout','超时','probe failed','unhealthy','管理 api 异常')
 		ORDER BY observed_at DESC,id DESC LIMIT ?`, accountID, groupName, limit)
 	if err != nil {
-		return 0, false, "", err
+		return 0, 0, 0, "", err
 	}
 	defer rows.Close()
-	count, failed, latestReason := 0, true, ""
+	count, failureStreak, recoveryStreak, latestReason := 0, 0, 0, ""
+	latestKind := ""
+	streakComplete := false
 	for rows.Next() {
 		var result, failureReason, observedAt sql.NullString
 		if err := rows.Scan(&result, &failureReason, &observedAt); err != nil {
-			return 0, false, "", err
+			return 0, 0, 0, "", err
 		}
 		observed, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(observedAt.String))
 		if parseErr != nil || observed.Before(cutoff) {
 			continue
 		}
 		count++
+		kind := "failure"
 		if valueIn(strings.ToLower(strings.TrimSpace(result.String)), "通过", "passed", "pass", "success", "succeeded", "healthy", "ok") {
-			failed = false
+			kind = "success"
 		} else if latestReason == "" && failureReason.Valid {
 			latestReason = strings.TrimSpace(failureReason.String)
 		}
+		if latestKind == "" {
+			latestKind = kind
+		}
+		if kind != latestKind {
+			streakComplete = true
+		}
+		if streakComplete {
+			continue
+		}
+		if kind == "success" {
+			recoveryStreak++
+		} else {
+			failureStreak++
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, false, "", err
+		return 0, 0, 0, "", err
 	}
-	return count, failed, latestReason, nil
+	return count, failureStreak, recoveryStreak, latestReason, nil
 }
 
 func (s *Store) probeAlertEvidenceMaxAge(ctx context.Context) (time.Duration, error) {

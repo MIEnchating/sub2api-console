@@ -25,8 +25,11 @@ import { operationErrorMessage } from "@/lib/operation-feedback";
 
 const noModelSelected = "__not_selected__";
 
-export const accountProbeDialogContentClass =
-  "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden";
+export const accountProbeDialogLayout = {
+  width: "medium",
+  height: "adaptive",
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+} as const;
 
 export type ProbeDialogTarget = {
   kind: "onboarding";
@@ -37,6 +40,15 @@ export type ProbeDialogTarget = {
 
 export function onboardingProbeModelOptions(models: string[]): string[] {
   return [...new Set(models)].sort((left, right) => left.localeCompare(right));
+}
+
+export function shouldLoadProbeModels(
+  open: boolean,
+  modelCount: number,
+  pending: boolean,
+  succeeded: boolean,
+): boolean {
+  return open && modelCount === 0 && !pending && !succeeded;
 }
 
 export function AccountProbeDialog(props: {
@@ -81,12 +93,16 @@ export function AccountProbeDialog(props: {
   }, [props.open]);
 
   const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
-  const busy = Boolean(props.pending) || loadModels.isPending || runProbe.isPending;
-  const runDisabled = busy || selectedModel === noModelSelected;
+  const selectDisabled = Boolean(props.pending) || runProbe.isPending;
+  const runDisabled = selectDisabled || loadModels.isPending || selectedModel === noModelSelected;
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent width="medium" height="large" className={accountProbeDialogContentClass}>
+      <DialogContent
+        width={accountProbeDialogLayout.width}
+        height={accountProbeDialogLayout.height}
+        className={accountProbeDialogLayout.content}
+      >
         <DialogHeader className="min-w-0 pr-8">
           <DialogTitle className="min-w-0 break-words">探活测试：{props.target.name}</DialogTitle>
           <DialogDescription className="min-w-0 break-words">
@@ -99,9 +115,21 @@ export function AccountProbeDialog(props: {
             <Select
               value={selectedModel}
               itemToStringLabel={(value) =>
-                value === noModelSelected ? "请先获取上游模型" : String(value)
+                value === noModelSelected ? "选择上游模型" : String(value)
               }
-              disabled={busy}
+              disabled={selectDisabled}
+              onOpenChange={(open) => {
+                if (
+                  shouldLoadProbeModels(
+                    open,
+                    models.length,
+                    loadModels.isPending,
+                    loadModels.isSuccess,
+                  )
+                ) {
+                  loadModels.mutate();
+                }
+              }}
               onValueChange={(value) => {
                 if (!value) return;
                 setSelectedModel(value);
@@ -110,10 +138,19 @@ export function AccountProbeDialog(props: {
               }}
             >
               <SelectTrigger className="w-full min-w-0">
-                <SelectValue placeholder="先获取上游模型" />
+                <SelectValue placeholder="选择上游模型" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={noModelSelected}>请先获取上游模型</SelectItem>
+                {loadModels.isPending ? (
+                  <SelectItem value={noModelSelected} disabled>
+                    正在获取上游模型
+                  </SelectItem>
+                ) : null}
+                {!loadModels.isPending && options.length === 0 ? (
+                  <SelectItem value={noModelSelected} disabled>
+                    {loadModels.isError ? "获取失败，重新打开可重试" : "暂无可用模型"}
+                  </SelectItem>
+                ) : null}
                 {options.map((model) => (
                   <SelectItem key={model} value={model}>
                     {model}
@@ -122,16 +159,12 @@ export function AccountProbeDialog(props: {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="w-full min-w-0"
-            disabled={busy}
-            onClick={() => loadModels.mutate()}
-          >
-            <RefreshCw className={loadModels.isPending ? "animate-spin" : undefined} />
-            {loadModels.isPending ? "正在获取" : "获取上游模型"}
-          </Button>
+          <ProbeModelLoadButton
+            pending={loadModels.isPending}
+            succeeded={loadModels.isSuccess}
+            disabled={selectDisabled}
+            onLoad={() => loadModels.mutate()}
+          />
           {loadModels.isSuccess ? (
             <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
           ) : null}
@@ -143,33 +176,11 @@ export function AccountProbeDialog(props: {
               {operationErrorMessage(loadModels.error, "上游模型获取失败")}
             </p>
           ) : null}
-          {runProbe.isPending ? (
-            <div
-              className="bg-muted/40 flex min-h-24 min-w-0 items-center gap-3 rounded-lg border px-4 py-3"
-              aria-live="polite"
-            >
-              <LoaderCircle className="text-primary size-5 animate-spin" />
-              <div className="min-w-0">
-                <p className="text-sm font-medium">正在测试上游响应</p>
-                <p className="text-muted-foreground text-xs">弹窗会在测试完成后显示详细结果。</p>
-              </div>
-            </div>
-          ) : null}
-          {runProbe.isError ? (
-            <div
-              className="border-destructive/40 bg-destructive/5 min-w-0 overflow-hidden rounded-lg border px-4 py-3"
-              role="alert"
-            >
-              <div className="text-destructive flex items-center gap-2 text-sm font-medium">
-                <XCircle className="size-4" />
-                探活失败
-              </div>
-              <p className="text-muted-foreground mt-1.5 min-w-0 break-words text-sm [overflow-wrap:anywhere]">
-                {operationErrorMessage(runProbe.error, "探活请求失败")}
-              </p>
-            </div>
-          ) : null}
-          {result ? <ProbeResultPanel result={result} /> : null}
+          <ProbeResultSlot
+            pending={runProbe.isPending}
+            error={runProbe.isError ? runProbe.error : null}
+            result={result}
+          />
         </DialogBody>
         <ProbeDialogActions
           runDisabled={runDisabled}
@@ -181,6 +192,72 @@ export function AccountProbeDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+export function ProbeModelLoadButton(props: {
+  pending: boolean;
+  succeeded: boolean;
+  disabled: boolean;
+  onLoad: () => void;
+}) {
+  let label = "获取上游模型";
+  if (props.pending) label = "正在获取";
+  else if (props.succeeded) label = "重新获取上游模型";
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="w-full min-w-0"
+      disabled={props.disabled || props.pending}
+      onClick={props.onLoad}
+    >
+      <RefreshCw className={props.pending ? "animate-spin" : undefined} />
+      {label}
+    </Button>
+  );
+}
+
+export function ProbeResultSlot(props: {
+  pending: boolean;
+  error: Error | null;
+  result: ProbeResult | null;
+}) {
+  if (!props.pending && !props.error && !props.result) return null;
+
+  let content = null;
+  if (props.pending) {
+    content = (
+      <div
+        className="bg-muted/40 flex min-w-0 items-center gap-3 rounded-lg border px-4 py-3"
+        aria-live="polite"
+      >
+        <LoaderCircle className="text-primary size-5 shrink-0 animate-spin" />
+        <div className="min-w-0">
+          <p className="text-sm font-medium">正在测试上游响应</p>
+          <p className="text-muted-foreground text-xs">弹窗会在测试完成后显示详细结果。</p>
+        </div>
+      </div>
+    );
+  } else if (props.error) {
+    content = (
+      <div
+        className="border-destructive/40 bg-destructive/5 min-w-0 overflow-hidden rounded-lg border px-4 py-3"
+        role="alert"
+      >
+        <div className="text-destructive flex items-center gap-2 text-sm font-medium">
+          <XCircle className="size-4 shrink-0" />
+          探活失败
+        </div>
+        <p className="text-muted-foreground mt-1.5 min-w-0 break-words text-sm [overflow-wrap:anywhere]">
+          {operationErrorMessage(props.error, "探活请求失败")}
+        </p>
+      </div>
+    );
+  } else if (props.result) {
+    content = <ProbeResultPanel result={props.result} />;
+  }
+
+  return <div className="grid min-h-36 min-w-0">{content}</div>;
 }
 
 export function ProbeDialogActions(props: {
@@ -203,7 +280,7 @@ export function ProbeDialogActions(props: {
   );
 }
 
-export function ProbeResultPanel(props: { result: ProbeResult }) {
+function ProbeResultPanel(props: { result: ProbeResult }) {
   const passed = props.result.status === "passed";
   return (
     <div

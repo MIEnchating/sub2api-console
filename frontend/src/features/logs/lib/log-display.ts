@@ -396,7 +396,7 @@ export function formatLogValue(value: unknown, key?: string): string {
     const entries = Object.entries(value as Record<string, unknown>);
     if (!entries.length) return "无";
     return entries
-      .map(([key, item]) => `${detailLabel(key)}：${formatLogValue(item, key)}`)
+      .map(([entryKey, item]) => `${detailLabel(entryKey)}：${formatLogValue(item, entryKey)}`)
       .join("；");
   }
   if (typeof value === "string" || typeof value === "number") {

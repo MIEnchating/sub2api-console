@@ -23,6 +23,7 @@ type DialogContentWidth = keyof typeof dialogWidthLayouts;
 
 export const dialogHeightLayouts = {
   content: "",
+  adaptive: "max-h-[calc(100svh-2rem)]",
   medium: "h-[min(40rem,calc(100svh-2rem))]",
   large: "h-[min(42rem,calc(100svh-2rem))]",
   tall: "h-[min(46rem,calc(100svh-2rem))]",
@@ -74,7 +75,7 @@ function DialogOverlay(props: DialogPrimitive.Backdrop.Props) {
 }
 
 function DialogContent(
-  props: DialogPrimitive.Popup.Props & {
+  props: Omit<DialogPrimitive.Popup.Props, "initialFocus"> & {
     showCloseButton?: boolean;
     width?: DialogContentWidth;
     height?: DialogContentHeight;
@@ -94,6 +95,7 @@ function DialogContent(
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         {...popupProps}
+        initialFocus={false}
         className={
           typeof className === "function"
             ? (state) => dialogContentClass(width, height, className(state))

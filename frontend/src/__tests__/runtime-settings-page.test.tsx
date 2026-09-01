@@ -65,8 +65,15 @@ describe("系统设置页面职责", () => {
     );
 
     expect(markup).toContain("系统设置");
+    const pageShell = markup.match(/<div[^>]*data-testid="system-settings-page"[^>]*>/)?.[0];
+    expect(pageShell).toContain('class="w-full space-y-4"');
+    expect(markup).not.toContain("max-w-7xl");
     expect(markup).toContain('data-testid="system-settings-flow"');
     expect(markup).toContain("grid items-start gap-4 xl:grid-cols-2");
+    expect(markup).toContain('data-testid="system-settings-flow-primary"');
+    expect(markup).toContain('data-testid="system-settings-flow-secondary"');
+    expect(markup.match(/grid min-w-0 content-start gap-4/g)).toHaveLength(2);
+    expect(markup).not.toContain("xl:row-span-2");
     expect(markup.match(/data-size="sm"/g)).toHaveLength(4);
     expect(markup).not.toContain("执行模式");
     expect(markup).toContain("Sub2API 连接");
@@ -79,14 +86,16 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("已配置，留空则不修改");
     expect(markup).toContain("请求超时（秒）");
     expect(markup).toContain("保存并测试同步");
-    expect(markup).toContain("账号开户默认参数");
+    expect(markup).toContain("账号创建默认值");
+    expect(markup).toContain('aria-label="平台接入"');
+    expect(markup).toContain('aria-label="默认值与数据维护"');
     expect(markup).toContain("默认并发");
     expect(markup).toContain("默认优先级");
     expect(markup).toContain("保存默认参数");
     expect(markup).not.toContain('data-testid="runtime-controls"');
     expect(markup).not.toContain("divide-border/70 divide-y rounded-lg border px-3");
     expect(markup).not.toContain("first:pt-0 last:pb-0");
-    expect(markup).toContain("通知设置");
+    expect(markup).toContain("QQBot 通知接入");
     expect(markup).not.toContain("告警生产者队列");
     expect(markup).not.toContain("通知消费者队列");
     expect(markup).not.toContain('data-testid="notification-queues"');
@@ -122,6 +131,9 @@ describe("系统设置页面职责", () => {
     expect(cleanupLabel?.[1]).toBeTruthy();
     expect(markup).toContain(`id="${cleanupLabel?.[1]}"`);
     expect(markup).not.toContain("运行环境");
+    expect(markup).not.toContain("目标盈利比例");
+    expect(markup).not.toContain("全局默认策略");
+    expect(markup).not.toContain("余额告警阈值");
     expect(markup).not.toContain("数据库状态");
     expect(markup).not.toContain("控制台初始化");
     expect(markup).not.toContain("数据目录");

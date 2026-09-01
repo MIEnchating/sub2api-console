@@ -46,7 +46,10 @@ func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 		t.Fatalf("decision state summary mismatch: %#v", allocation)
 	}
 	channel := allocation.Channels[0]
-	if channel.HealthScore == nil || *channel.HealthScore != 82.5 || channel.Weight == nil || *channel.Weight != 117 {
+	if channel.HealthScore == nil || *channel.HealthScore != 82.5 ||
+		channel.ShortScore == nil || *channel.ShortScore != 80 ||
+		channel.LongScore == nil || *channel.LongScore != 85 ||
+		channel.Weight == nil || *channel.Weight != 117 {
 		t.Fatalf("decision metrics missing: %#v", channel)
 	}
 	if channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 || allocation.AssignedConcurrency != 32 {

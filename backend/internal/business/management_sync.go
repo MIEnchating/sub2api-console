@@ -82,24 +82,21 @@ func (s *Store) CommitAccountBaseURLObservations(ctx context.Context, values []A
 }
 
 type managementAccount struct {
-	ID                string
-	Name              string
-	UpstreamHost      *string
-	UpstreamType      *string
-	Schedulable       *bool
-	Priority          *int64
-	LoadFactor        *string
-	Concurrency       *int64
-	Multiplier        *string
-	Balance           *string
-	RoutingState      *string
-	HealthStatus      *string
-	Metadata          map[string]any
-	GroupsPresent     bool
-	Groups            []managementMembership
-	GroupRates        map[string]*string
-	RatesPresent      bool
-	MultiplierPresent bool
+	ID            string
+	Name          string
+	UpstreamHost  *string
+	UpstreamType  *string
+	Schedulable   *bool
+	Priority      *int64
+	LoadFactor    *string
+	Concurrency   *int64
+	Multiplier    *string
+	Balance       *string
+	RoutingState  *string
+	HealthStatus  *string
+	Metadata      map[string]any
+	GroupsPresent bool
+	Groups        []managementMembership
 }
 
 type managementMembership struct {
@@ -193,30 +190,13 @@ func (s *Store) SyncManagementSnapshot(
 		); err != nil {
 			return ManagementSyncResult{}, err
 		}
-		if account.MultiplierPresent && !account.RatesPresent {
-			if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_rate=? WHERE account_id=?`,
-				managementNullableString(account.Multiplier), account.ID); err != nil {
-				return ManagementSyncResult{}, err
-			}
-		}
 		if account.GroupsPresent {
-			existingRates, err := managementExistingGroupRates(ctx, tx, account.ID)
-			if err != nil {
-				return ManagementSyncResult{}, err
-			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, account.ID); err != nil {
 				return ManagementSyncResult{}, err
 			}
 			for _, membership := range account.Groups {
-				rate := existingRates[membership.Name]
-				if account.MultiplierPresent {
-					rate = account.Multiplier
-				}
-				if account.RatesPresent {
-					rate = account.GroupRates[membership.Name]
-				}
 				if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
-					VALUES(?,?,?,?)`, account.ID, membership.Name, managementNullableString(membership.ID), managementNullableString(rate)); err != nil {
+					VALUES(?,?,?,?)`, account.ID, membership.Name, managementNullableString(membership.ID), managementNullableString(account.Multiplier)); err != nil {
 					return ManagementSyncResult{}, err
 				}
 				if _, found := groupsByName[membership.Name]; !found {
@@ -365,10 +345,6 @@ func managementAccountProjection(
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s：%w", id, err)
 	}
-	groupRates, ratesPresent, err := managementGroupRates(row)
-	if err != nil {
-		return managementAccount{}, fmt.Errorf("账号 %s：%w", id, err)
-	}
 	upstreamHost, err := managementOptionalText(row, existing.upstreamHost, "upstream_host")
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s 的 upstream_host 无效", id)
@@ -397,7 +373,19 @@ func managementAccountProjection(
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s 的 multiplier 无效", id)
 	}
-	_, multiplierPresent := managementPresent(row, "rate_multiplier", "multiplier")
+	if exists {
+		var bound bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM bindings
+			WHERE local_account_id=? AND COALESCE(status,'')<>'missing')`, id).Scan(&bound); err != nil {
+			return managementAccount{}, err
+		}
+		if bound {
+			// A bound account's rate-derived name and converted cost are owned by
+			// upstream rate sync, not by a potentially stale management snapshot.
+			name = existing.name
+			multiplier = nullString(existing.multiplier)
+		}
+	}
 	balance, err := managementOptionalDecimalExisting(row, existing.balance, "balance")
 	if err != nil {
 		return managementAccount{}, fmt.Errorf("账号 %s 的 balance 无效", id)
@@ -416,7 +404,6 @@ func managementAccountProjection(
 		LoadFactor: loadFactor, Concurrency: concurrency, Multiplier: multiplier, Balance: balance,
 		RoutingState: routingState, HealthStatus: healthStatus,
 		Metadata: metadata, GroupsPresent: groupsPresent, Groups: groups,
-		GroupRates: groupRates, RatesPresent: ratesPresent, MultiplierPresent: multiplierPresent,
 	}, nil
 }
 
@@ -519,48 +506,6 @@ func managementMemberships(row map[string]any, byID, byName map[string]string) (
 		result = append(result, managementMembership{Name: name, ID: id})
 	}
 	return result, true, nil
-}
-
-func managementGroupRates(row map[string]any) (map[string]*string, bool, error) {
-	raw, present := row["group_rate_by_group"]
-	if !present {
-		return map[string]*string{}, false, nil
-	}
-	object, ok := raw.(map[string]any)
-	if !ok {
-		return nil, true, errors.New("group_rate_by_group 必须是对象")
-	}
-	result := map[string]*string{}
-	for name, value := range object {
-		parsed, err := managementDecimal(value)
-		if err != nil {
-			return nil, true, fmt.Errorf("分组 %s 的倍率无效", name)
-		}
-		result[name] = parsed
-	}
-	return result, true, nil
-}
-
-func managementExistingGroupRates(ctx context.Context, tx *sql.Tx, accountID string) (map[string]*string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT group_name,group_rate FROM account_groups WHERE account_id=?`, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]*string{}
-	for rows.Next() {
-		var name string
-		var rate sql.NullString
-		if err := rows.Scan(&name, &rate); err != nil {
-			return nil, err
-		}
-		if rate.Valid {
-			result[name] = stringPointer(rate.String)
-		} else {
-			result[name] = nil
-		}
-	}
-	return result, rows.Err()
 }
 
 func managementGlobalStrategy(ctx context.Context, store *Store, tx *sql.Tx) (string, error) {

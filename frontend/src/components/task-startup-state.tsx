@@ -28,11 +28,7 @@ export function TaskProgressState(props: ProgressProps) {
       aria-label={props.message}
     >
       <div className={taskStartupStateLayout.heading}>
-        <RefreshCw
-          className="shrink-0 animate-spin text-primary"
-          size={16}
-          aria-hidden="true"
-        />
+        <RefreshCw className="shrink-0 animate-spin text-primary" size={16} aria-hidden="true" />
         <span className="truncate">{props.message}</span>
         <span className="text-muted-foreground ml-auto shrink-0 tabular-nums">
           {props.progress}%

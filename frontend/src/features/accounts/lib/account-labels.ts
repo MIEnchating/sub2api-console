@@ -1,4 +1,7 @@
 import type { AccountStatus, GroupStatus } from "@/api";
+import { accountTypeLabel, accountTypeOptions, accountTypeValue } from "@/lib/domain-dictionaries";
+
+export { accountTypeLabel, accountTypeOptions, accountTypeValue };
 
 const platformLabels: Record<string, string> = {
   openai: "OpenAI",
@@ -6,16 +9,6 @@ const platformLabels: Record<string, string> = {
   anthropic: "Anthropic",
   grok: "Grok",
   gemini: "Gemini",
-};
-
-const accountTypeLabels: Record<string, string> = {
-  apikey: "API Key",
-  api_key: "API Key",
-  "api-key": "API Key",
-  oauth: "OAuth",
-  sub2api: "Sub2API",
-  newapi: "New API",
-  oneapi: "OneAPI",
 };
 
 function mappedLabel(
@@ -29,10 +22,6 @@ function mappedLabel(
 
 function accountPlatformLabel(value: string | null | undefined): string | null {
   return mappedLabel(value, platformLabels);
-}
-
-export function accountTypeLabel(value: string | null | undefined): string | null {
-  return mappedLabel(value, accountTypeLabels);
 }
 
 export function accountIdentityMeta(account: AccountStatus): string {

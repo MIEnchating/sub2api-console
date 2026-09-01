@@ -1,7 +1,7 @@
 import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
-const candidateColumns = ["上游分组", "介绍", "倍率", "本地分组", "状态", "操作"];
+const candidateColumns = ["上游分组", "介绍", "账号成本", "本地分组", "状态", "操作"];
 
 export function OnboardingSelectionSkeleton(props: {
   fillAvailableHeight: boolean;

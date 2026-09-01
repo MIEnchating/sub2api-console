@@ -203,7 +203,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
       <PageHeading
         eyebrow="OPERATIONS / ALERT POLICY"
         title="告警策略"
-        description="配置告警检测范围、触发阈值和通知发送行为。"
+        description="配置告警检测范围、触发阈值和通知发送行为；渠道凭据统一在系统设置中管理。"
         action={
           <PageActions>
             <Button
@@ -234,7 +234,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
               <CardHeader className="border-b">
                 <CardTitle className="flex items-center gap-2">
                   <ShieldAlert className="text-primary" />
-                  告警控制
+                  告警检测
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -250,78 +250,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     />
                   )}
                 />
-                <Controller
-                  control={form.control}
-                  name="delivery_enabled"
-                  render={({ field }) => (
-                    <SettingSwitch
-                      label="启用通知发送"
-                      description="不影响异常检测和告警记录，仅控制是否发送通知消息"
-                      checked={field.value}
-                      disabled={!enabled}
-                      onCheckedChange={field.onChange}
-                    />
-                  )}
-                />
-                <Controller
-                  control={form.control}
-                  name="notify_recovery"
-                  render={({ field }) => (
-                    <SettingSwitch
-                      label="发送恢复通知"
-                      description="异常恢复时发送一次恢复消息"
-                      checked={field.value}
-                      disabled={!enabled || !deliveryEnabled}
-                      onCheckedChange={field.onChange}
-                    />
-                  )}
-                />
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-sm font-medium" htmlFor="repeat_interval_minutes">
-                      重复提醒间隔（分钟）
-                    </label>
-                    <Input
-                      id="repeat_interval_minutes"
-                      type="number"
-                      min={0}
-                      max={10080}
-                      className="mt-2"
-                      disabled={!enabled || !deliveryEnabled}
-                      {...form.register("repeat_interval_minutes", { valueAsNumber: true })}
-                    />
-                    <p className="text-muted-foreground mt-1.5 text-xs">
-                      设为 0 表示持续告警只发送一次。
-                    </p>
-                    {form.formState.errors.repeat_interval_minutes && (
-                      <p className="text-destructive mt-1 text-xs">
-                        {form.formState.errors.repeat_interval_minutes.message}
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium" htmlFor="merge_threshold">
-                      多少条以上合并发送
-                    </label>
-                    <Input
-                      id="merge_threshold"
-                      type="number"
-                      min={2}
-                      max={500}
-                      className="mt-2"
-                      disabled={!enabled || !deliveryEnabled}
-                      {...form.register("merge_threshold", { valueAsNumber: true })}
-                    />
-                    <p className="text-muted-foreground mt-1.5 text-xs">
-                      少于该数量时，每条告警单独发送。
-                    </p>
-                    {form.formState.errors.merge_threshold && (
-                      <p className="text-destructive mt-1 text-xs">
-                        {form.formState.errors.merge_threshold.message}
-                      </p>
-                    )}
-                  </div>
-                </div>
               </CardContent>
             </Card>
 
@@ -332,7 +260,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
               <CardContent className="grid gap-5 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <div className="flex items-center justify-between gap-3">
-                    <label className="text-sm font-medium">余额告警阈值</label>
+                    <span className="text-sm font-medium">余额告警阈值</span>
                     <Button
                       type="button"
                       variant="outline"
@@ -417,6 +345,28 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     </p>
                   )}
                 </div>
+                <div>
+                  <label className="text-sm font-medium" htmlFor="probe_recovery_streak">
+                    连续主动探测成功次数
+                  </label>
+                  <Input
+                    id="probe_recovery_streak"
+                    type="number"
+                    min={1}
+                    max={100}
+                    className="mt-2"
+                    disabled={!enabled || !probeEnabled}
+                    {...form.register("probe_recovery_streak", { valueAsNumber: true })}
+                  />
+                  <p className="text-muted-foreground mt-1.5 text-xs">
+                    达到次数后才确认恢复并发送恢复通知。
+                  </p>
+                  {form.formState.errors.probe_recovery_streak && (
+                    <p className="text-destructive mt-1 text-xs">
+                      {form.formState.errors.probe_recovery_streak.message}
+                    </p>
+                  )}
+                </div>
                 <div className="sm:col-span-2">
                   <label className="text-sm font-medium" htmlFor="probe_groups">
                     主动探测告警分组
@@ -434,14 +384,159 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                 </div>
               </CardContent>
             </Card>
+
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2">
+                    <BellRing className="text-primary" />
+                    通知渠道
+                  </span>
+                  <Badge variant={notification.data?.configured ? "secondary" : "warning"}>
+                    {notification.data?.configured ? "已连接" : "未配置"}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
+                <div className="min-w-0">
+                  <p className="text-sm">当前支持 QQBot 通知渠道。</p>
+                  <p className="text-muted-foreground mt-1 text-xs leading-5">
+                    {notification.data?.configured
+                      ? `目标类型：${notificationTargetTypeLabel(notification.data.channel_type)}。敏感凭据继续由系统设置统一管理。`
+                      : "未配置渠道时仍会检测并保存告警，但不会发送通知。"}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={props.onOpenSettings}
+                >
+                  <Settings2 /> 管理通知渠道
+                </Button>
+              </CardContent>
+            </Card>
           </div>
 
           <div className="grid min-w-0 gap-4">
             <Card>
               <CardHeader className="border-b">
-                <CardTitle>检测规则</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  <BellRing className="text-primary" />
+                  通知发送
+                </CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="grid gap-x-6 sm:grid-cols-2" data-slot="alert-delivery-switches">
+                  <Controller
+                    control={form.control}
+                    name="delivery_enabled"
+                    render={({ field }) => (
+                      <SettingSwitch
+                        label="启用通知发送"
+                        description="不影响异常检测和告警记录，仅控制是否发送通知消息"
+                        checked={field.value}
+                        disabled={!enabled}
+                        onCheckedChange={field.onChange}
+                      />
+                    )}
+                  />
+                  <Controller
+                    control={form.control}
+                    name="notify_recovery"
+                    render={({ field }) => (
+                      <SettingSwitch
+                        label="发送恢复通知"
+                        description="异常恢复时发送一次恢复消息"
+                        checked={field.value}
+                        disabled={!enabled || !deliveryEnabled}
+                        onCheckedChange={field.onChange}
+                      />
+                    )}
+                  />
+                </div>
+                <div
+                  className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
+                  data-slot="alert-delivery-fields"
+                >
+                  <div>
+                    <label className="block text-sm font-medium" htmlFor="repeat_interval_minutes">
+                      重复提醒间隔（分钟）
+                    </label>
+                    <Input
+                      id="repeat_interval_minutes"
+                      type="number"
+                      min={0}
+                      max={10080}
+                      className="mt-2"
+                      disabled={!enabled || !deliveryEnabled}
+                      {...form.register("repeat_interval_minutes", { valueAsNumber: true })}
+                    />
+                    <p className="text-muted-foreground mt-1.5 text-xs">
+                      设为 0 表示持续告警只发送一次。
+                    </p>
+                    {form.formState.errors.repeat_interval_minutes && (
+                      <p className="text-destructive mt-1 text-xs">
+                        {form.formState.errors.repeat_interval_minutes.message}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label
+                      className="block text-sm font-medium"
+                      htmlFor="state_change_cooldown_minutes"
+                    >
+                      状态变化冷却（分钟）
+                    </label>
+                    <Input
+                      id="state_change_cooldown_minutes"
+                      type="number"
+                      min={0}
+                      max={10080}
+                      className="mt-2"
+                      disabled={!enabled || !deliveryEnabled}
+                      {...form.register("state_change_cooldown_minutes", { valueAsNumber: true })}
+                    />
+                    <p className="text-muted-foreground mt-1.5 text-xs">
+                      异常与恢复反复切换时，只在冷却结束后发送当前状态。
+                    </p>
+                    {form.formState.errors.state_change_cooldown_minutes && (
+                      <p className="text-destructive mt-1 text-xs">
+                        {form.formState.errors.state_change_cooldown_minutes.message}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium" htmlFor="merge_threshold">
+                      多少条以上合并发送
+                    </label>
+                    <Input
+                      id="merge_threshold"
+                      type="number"
+                      min={2}
+                      max={500}
+                      className="mt-2"
+                      disabled={!enabled || !deliveryEnabled}
+                      {...form.register("merge_threshold", { valueAsNumber: true })}
+                    />
+                    <p className="text-muted-foreground mt-1.5 text-xs">
+                      少于该数量时，每条告警单独发送。
+                    </p>
+                    {form.formState.errors.merge_threshold && (
+                      <p className="text-destructive mt-1 text-xs">
+                        {form.formState.errors.merge_threshold.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>检测规则</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-x-6 xl:grid-cols-2" data-slot="alert-rule-grid">
                 {ruleFields.map((rule) => (
                   <Controller
                     key={rule.name}
@@ -458,38 +553,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     )}
                   />
                 ))}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2">
-                    <BellRing className="text-primary" />
-                    通知渠道
-                  </span>
-                  <Badge variant={notification.data?.configured ? "secondary" : "warning"}>
-                    {notification.data?.configured ? "已连接" : "未配置"}
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-5">
-                <div>
-                  <p className="text-sm">当前支持 QQBot 通知渠道。</p>
-                  <p className="text-muted-foreground mt-2 text-xs leading-5">
-                    {notification.data?.configured
-                      ? `目标类型：${notificationTargetTypeLabel(notification.data.channel_type)}。敏感凭据继续由系统设置统一管理。`
-                      : "未配置渠道时仍会检测并保存告警，但不会发送通知。"}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="self-start"
-                  onClick={props.onOpenSettings}
-                >
-                  <Settings2 /> 管理通知渠道
-                </Button>
               </CardContent>
             </Card>
           </div>

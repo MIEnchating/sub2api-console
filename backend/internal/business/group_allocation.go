@@ -15,6 +15,8 @@ type GroupAllocationChannel struct {
 	AccountName         string   `json:"account_name"`
 	Health              string   `json:"health"`
 	HealthScore         *float64 `json:"health_score"`
+	ShortScore          *float64 `json:"short_score"`
+	LongScore           *float64 `json:"long_score"`
 	SampleCount         int64    `json:"sample_count"`
 	TTFBP95MS           *float64 `json:"ttfb_p95_ms"`
 	Rate                *string  `json:"rate"`
@@ -75,13 +77,15 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		AverageHealthScore: group.AverageHealthScore, Channels: []GroupAllocationChannel{},
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
-		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.sample_count,he.ttfb_p95_ms,
+		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.short_score,he.long_score,
+		he.sample_count,he.ttfb_p95_ms,
 		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
 		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND rd.updated_at>=COALESCE(
 			(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
 		LEFT JOIN account_health_evaluations he ON he.account_id=a.id
+			AND LOWER(TRIM(he.group_name))=LOWER(TRIM(ag.group_name))
 		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
 		ORDER BY a.name,a.id`, groupID, group.Name)
 	if err != nil {
@@ -94,15 +98,18 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		var accountMultiplier, role, state, reason, updatedAt, payloadRaw sql.NullString
 		var accountRoutingState, accountHealthStatus sql.NullString
 		var metadataRaw string
-		var healthScore, p95 sql.NullFloat64
+		var healthScore, shortScore, longScore, p95 sql.NullFloat64
 		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &accountMultiplier, &priority, &schedulable, &role, &state,
-			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &sampleCount, &p95,
+			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &shortScore, &longScore, &sampleCount, &p95,
 			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw); err != nil {
 			return GroupAllocation{}, err
 		}
 		channel.Priority, channel.Schedulable, channel.Rank = nullInt(priority), strictBool(schedulable), nullInt(rank)
 		channel.Reason, channel.UpdatedAt = nullString(reason), nullString(updatedAt)
-		channel.HealthScore, channel.TTFBP95MS = nullFiniteFloat(healthScore), nullFiniteFloat(p95)
+		channel.HealthScore = nullFiniteFloat(healthScore)
+		channel.ShortScore = nullFiniteFloat(shortScore)
+		channel.LongScore = nullFiniteFloat(longScore)
+		channel.TTFBP95MS = nullFiniteFloat(p95)
 		if sampleCount.Valid && sampleCount.Int64 > 0 {
 			channel.SampleCount = sampleCount.Int64
 		}

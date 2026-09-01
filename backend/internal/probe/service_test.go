@@ -217,6 +217,33 @@ func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 	}
 }
 
+func TestActiveProbeRejectsRedirectBodyThatLooksLikeAValidStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		response.WriteHeader(http.StatusFound)
+		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{}},
+		candidates: []business.ProbeCandidate{{
+			AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{},
+		}},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+	}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Passed != 0 || summary.Failed != 1 || len(summary.Results) != 1 ||
+		summary.Results[0].StatusCode == nil || *summary.Results[0].StatusCode != http.StatusFound {
+		t.Fatalf("redirect response was accepted as a successful probe: %#v", summary)
+	}
+}
+
 func TestFixedRetryDoesNotRunForUnconfiguredStatusOrDisabledSwitch(t *testing.T) {
 	for name, retryEnabled := range map[string]bool{"unconfigured status": true, "disabled": false} {
 		t.Run(name, func(t *testing.T) {

@@ -62,7 +62,7 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
         <>
           <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
           <span className="text-muted-foreground text-xs">
-            {account.manual_sync_balance_multiplier ? "仅同步余额与倍率" : "完全人工控制"}
+            {account.manual_sync_balance_multiplier ? "同步上游余额" : "不同步上游余额"}
           </span>
         </>
       ) : (

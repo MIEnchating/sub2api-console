@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useState } from "react";
-import { Eye, RefreshCw, Search } from "lucide-react";
+import { Eye, RefreshCw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
@@ -13,6 +13,9 @@ import {
 } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { SearchField } from "@/components/data-table/search-field";
+import { DataTablePanel } from "@/components/data-table/table-panel";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { TableActionButton } from "@/components/data-table/table-action-button";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -20,7 +23,6 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,
@@ -29,7 +31,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -78,18 +79,23 @@ export function LogKindFilter(props: {
   onChange: (value: UnifiedLogKind) => void;
 }) {
   return (
-    <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger className="w-36" aria-label="日志类型">
-        <SelectValue>{logKindLabel(props.value)}</SelectValue>
-      </SelectTrigger>
-      <SelectContent align="start">
-        {kinds.map((option) => (
-          <SelectItem key={option} value={option}>
+    <SegmentedControl role="tablist" aria-label="记录类型">
+      {kinds.map((option) => {
+        const selected = props.value === option;
+        return (
+          <SegmentedControlItem
+            key={option}
+            type="button"
+            role="tab"
+            selected={selected}
+            aria-selected={selected}
+            onClick={() => props.onChange(option)}
+          >
             {logKindLabel(option)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+          </SegmentedControlItem>
+        );
+      })}
+    </SegmentedControl>
   );
 }
 
@@ -99,12 +105,12 @@ function LogStateFilter(props: {
 }) {
   return (
     <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger className="w-32" aria-label="执行结果">
+      <SelectTrigger appearance="faceted" className="w-32" aria-label="执行结果">
         <SelectValue>{logStateLabel(props.value)}</SelectValue>
       </SelectTrigger>
-      <SelectContent align="start">
+      <SelectContent appearance="faceted" align="start">
         {states.map((option) => (
-          <SelectItem key={option} value={option}>
+          <SelectItem appearance="faceted" key={option} value={option}>
             {logStateLabel(option)}
           </SelectItem>
         ))}
@@ -119,12 +125,12 @@ function EventLevelFilter(props: {
 }) {
   return (
     <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger className="w-32" aria-label="事件级别">
+      <SelectTrigger appearance="faceted" className="w-32" aria-label="事件级别">
         <SelectValue>{logEventLevelLabel(props.value)}</SelectValue>
       </SelectTrigger>
-      <SelectContent align="start">
+      <SelectContent appearance="faceted" align="start">
         {eventLevels.map((option) => (
-          <SelectItem key={option} value={option}>
+          <SelectItem appearance="faceted" key={option} value={option}>
             {logEventLevelLabel(option)}
           </SelectItem>
         ))}
@@ -140,13 +146,15 @@ function EventGroupFilter(props: {
 }) {
   return (
     <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger className="w-40" aria-label="事件分组">
+      <SelectTrigger appearance="faceted" className="w-40" aria-label="事件分组">
         <SelectValue>{props.value === "all" ? "全部分组" : props.value}</SelectValue>
       </SelectTrigger>
-      <SelectContent align="start">
-        <SelectItem value="all">全部分组</SelectItem>
+      <SelectContent appearance="faceted" align="start">
+        <SelectItem appearance="faceted" value="all">
+          全部分组
+        </SelectItem>
         {props.groups.map((group) => (
-          <SelectItem key={group.id ?? group.name} value={group.name}>
+          <SelectItem appearance="faceted" key={group.id ?? group.name} value={group.name}>
             {group.name}
           </SelectItem>
         ))}
@@ -157,53 +165,52 @@ function EventGroupFilter(props: {
 
 export function LogChangesTable(props: { changes: LogChangeRow[] }) {
   return (
-    <Table
-      containerClassName="max-h-[28rem] overflow-auto rounded border"
-      className="min-w-[72rem]"
-    >
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-36">时间</TableHead>
-          <TableHead className="w-44">渠道</TableHead>
-          <TableHead className="w-32">分组</TableHead>
-          <TableHead className="w-40">操作</TableHead>
-          <TableHead>变更</TableHead>
-          <TableHead className="w-24">结果</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {props.changes.map((change) => (
-          <TableRow key={change.id}>
-            <TableCell className="text-xs">{formatLogDate(change.occurredAt)}</TableCell>
-            <TableCell>
-              <div className="grid min-w-0 gap-0.5">
-                <span className="truncate font-medium">{change.object}</span>
-                {change.objectId && (
-                  <span className="text-muted-foreground text-xs">#{change.objectId}</span>
-                )}
-              </div>
-            </TableCell>
-            <TableCell className="text-muted-foreground text-xs">
-              {change.groups.length ? change.groups.join("、") : "未记录"}
-            </TableCell>
-            <TableCell>
-              <Badge variant="outline">{change.operation}</Badge>
-            </TableCell>
-            <TableCell overflowTooltip={false}>
-              <Tooltip>
-                <TooltipTrigger render={<p className="whitespace-nowrap text-xs leading-5" />}>
-                  {change.change}
-                </TooltipTrigger>
-                <TooltipContent className="max-w-sm">{change.change}</TooltipContent>
-              </Tooltip>
-            </TableCell>
-            <TableCell overflowTooltip={false}>
-              <StatusBadge label={change.result} variant={logStatusVariant(change.status)} />
-            </TableCell>
+    <DataTablePanel>
+      <Table containerClassName="max-h-[28rem] overflow-auto" className="min-w-[72rem]">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-36">时间</TableHead>
+            <TableHead className="w-44">渠道</TableHead>
+            <TableHead className="w-32">分组</TableHead>
+            <TableHead className="w-40">操作</TableHead>
+            <TableHead>变更</TableHead>
+            <TableHead className="w-24">结果</TableHead>
           </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+        </TableHeader>
+        <TableBody>
+          {props.changes.map((change) => (
+            <TableRow key={change.id}>
+              <TableCell className="text-xs">{formatLogDate(change.occurredAt)}</TableCell>
+              <TableCell>
+                <div className="grid min-w-0 gap-0.5">
+                  <span className="truncate font-medium">{change.object}</span>
+                  {change.objectId && (
+                    <span className="text-muted-foreground text-xs">#{change.objectId}</span>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell className="text-muted-foreground text-xs">
+                {change.groups.length ? change.groups.join("、") : "未记录"}
+              </TableCell>
+              <TableCell>
+                <Badge variant="outline">{change.operation}</Badge>
+              </TableCell>
+              <TableCell overflowTooltip={false}>
+                <Tooltip>
+                  <TooltipTrigger render={<p className="whitespace-nowrap text-xs leading-5" />}>
+                    {change.change}
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">{change.change}</TooltipContent>
+                </Tooltip>
+              </TableCell>
+              <TableCell overflowTooltip={false}>
+                <StatusBadge label={change.result} variant={logStatusVariant(change.status)} />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </DataTablePanel>
   );
 }
 
@@ -224,18 +231,13 @@ export function LogsFilterToolbar(props: {
   onRefresh: () => void;
 }) {
   return (
-    <TableFilterToolbar data-testid="logs-filter-toolbar">
-      <div className="relative w-full sm:w-56">
-        <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
-        <Input
-          className="pl-8"
-          value={props.search}
-          onChange={(event) => props.onSearchChange(event.target.value)}
-          placeholder="搜索任务、对象或原因"
-          aria-label="搜索日志"
-        />
-      </div>
+    <TableFilterToolbar className="min-w-0" data-testid="logs-filter-toolbar" aria-label="日志筛选">
       <LogKindFilter value={props.kind} onChange={props.onKindChange} />
+      <SearchField
+        value={props.search}
+        onChange={props.onSearchChange}
+        placeholder="搜索任务、对象或原因"
+      />
       {props.kind === "event" ? (
         <>
           <EventLevelFilter value={props.eventLevel} onChange={props.onEventLevelChange} />
@@ -248,7 +250,7 @@ export function LogsFilterToolbar(props: {
       ) : (
         <LogStateFilter value={props.state} onChange={props.onStateChange} />
       )}
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:ml-auto sm:w-auto">
         {props.truncated && <Badge variant="outline">仅显示最近记录</Badge>}
         <Button
           type="button"
@@ -454,103 +456,114 @@ export function LogsCenterPage() {
           }}
           onRefresh={() => void logs.refetch()}
         />
-        <Card className="min-h-0 flex-1 gap-0 py-0">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[920px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-40">时间</TableHead>
-                <TableHead className="w-28">类型</TableHead>
-                <TableHead>记录</TableHead>
-                <TableHead className="w-44">对象 / 执行人</TableHead>
-                <TableHead className="w-24">{kind === "event" ? "级别" : "状态"}</TableHead>
-                <TableHead className="w-16 text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {logs.isLoading &&
-                Array.from({ length: 6 }, (_, index) => (
-                  <TableRow key={index} aria-label="正在加载日志">
-                    {Array.from({ length: 6 }, (_, column) => (
-                      <TableCell key={column}>
-                        <Skeleton className="h-4 w-4/5" />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              {!logs.isLoading && !logs.error && !logs.data?.items.length && (
+        <DataTablePanel className="flex-1" data-testid="logs-table-shell">
+          <div className="min-h-0 flex-1 overflow-hidden" data-testid="logs-table-scroll-region">
+            <Table
+              containerClassName="h-full min-h-0 overflow-auto overscroll-contain"
+              className="min-w-[920px]"
+            >
+              <TableHeader>
                 <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-28 text-center text-muted-foreground"
-                    overflowTooltip={false}
-                  >
-                    {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
-                      ? "没有匹配的记录"
-                      : "暂无日志记录"}
-                  </TableCell>
+                  <TableHead className="w-40">时间</TableHead>
+                  <TableHead className="w-28">类型</TableHead>
+                  <TableHead>记录</TableHead>
+                  <TableHead className="w-44">对象 / 执行人</TableHead>
+                  <TableHead className="w-24">{kind === "event" ? "级别" : "状态"}</TableHead>
+                  <TableHead className="w-16 text-right">操作</TableHead>
                 </TableRow>
-              )}
-              {!logs.error &&
-                logs.data?.items.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="text-xs">{formatLogDate(entry.occurred_at)}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{logKindLabel(entry.kind)}</Badge>
-                    </TableCell>
-                    <TableCell tooltipContent={`${logTitleLabel(entry.title)}：${entry.summary}`}>
-                      <div className="grid min-w-0 gap-0.5">
-                        <span className="truncate font-medium">{logTitleLabel(entry.title)}</span>
-                        <span className="text-muted-foreground truncate text-xs">
-                          {entry.summary}
-                          {entry.related_count > 0 ? ` · 关联 ${entry.related_count} 条` : ""}
-                        </span>
-                      </div>
-                    </TableCell>
+              </TableHeader>
+              <TableBody>
+                {logs.isLoading &&
+                  Array.from({ length: 6 }, (_, index) => (
+                    <TableRow key={index} aria-label="正在加载日志">
+                      {Array.from({ length: 6 }, (_, column) => (
+                        <TableCell key={column}>
+                          <Skeleton className="h-4 w-4/5" />
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                {!logs.isLoading && !logs.error && !logs.data?.items.length && (
+                  <TableRow>
                     <TableCell
-                      tooltipContent={[entry.object_label, entry.actor].filter(Boolean).join(" · ")}
+                      colSpan={6}
+                      className="h-28 text-center text-muted-foreground"
+                      overflowTooltip={false}
                     >
-                      <div className="grid min-w-0 gap-0.5">
-                        <span className={entry.object_label ? "truncate" : "text-muted-foreground"}>
-                          {entry.object_label ?? "未记录对象"}
-                        </span>
-                        <span className="text-muted-foreground truncate text-xs">
-                          {entry.actor ? `执行人：${entry.actor}` : logSourceLabel(entry.source)}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell overflowTooltip={false}>
-                      <StatusBadge
-                        label={
-                          entry.kind === "event"
-                            ? logEventLevelLabel(logEventLevel(entry.status))
-                            : logStatusLabel(entry.status)
-                        }
-                        variant={logStatusVariant(entry.status)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right" overflowTooltip={false}>
-                      <TableActionButton label="查看日志详情" onClick={() => setSelected(entry)}>
-                        <Eye />
-                      </TableActionButton>
+                      {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
+                        ? "没有匹配的记录"
+                        : "暂无日志记录"}
                     </TableCell>
                   </TableRow>
-                ))}
-            </TableBody>
-          </Table>
+                )}
+                {!logs.error &&
+                  logs.data?.items.map((entry) => (
+                    <TableRow key={entry.id}>
+                      <TableCell className="text-xs">{formatLogDate(entry.occurred_at)}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{logKindLabel(entry.kind)}</Badge>
+                      </TableCell>
+                      <TableCell tooltipContent={`${logTitleLabel(entry.title)}：${entry.summary}`}>
+                        <div className="grid min-w-0 gap-0.5">
+                          <span className="truncate font-medium">{logTitleLabel(entry.title)}</span>
+                          <span className="text-muted-foreground truncate text-xs">
+                            {entry.summary}
+                            {entry.related_count > 0 ? ` · 关联 ${entry.related_count} 条` : ""}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell
+                        tooltipContent={[entry.object_label, entry.actor]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      >
+                        <div className="grid min-w-0 gap-0.5">
+                          <span
+                            className={entry.object_label ? "truncate" : "text-muted-foreground"}
+                          >
+                            {entry.object_label ?? "未记录对象"}
+                          </span>
+                          <span className="text-muted-foreground truncate text-xs">
+                            {entry.actor ? `执行人：${entry.actor}` : logSourceLabel(entry.source)}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell overflowTooltip={false}>
+                        <StatusBadge
+                          label={
+                            entry.kind === "event"
+                              ? logEventLevelLabel(logEventLevel(entry.status))
+                              : logStatusLabel(entry.status)
+                          }
+                          variant={logStatusVariant(entry.status)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right" overflowTooltip={false}>
+                        <TableActionButton label="查看日志详情" onClick={() => setSelected(entry)}>
+                          <Eye />
+                        </TableActionButton>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </div>
           {!logs.error && (logs.data?.total ?? 0) > 0 && (
-            <DataTablePagination
-              currentPage={page}
-              totalPages={totalPages}
-              totalItems={logs.data?.total ?? 0}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={(value) => {
-                setPageSize(value);
-                setPage(1);
-              }}
-            />
+            <div className="shrink-0" data-testid="logs-pagination-region">
+              <DataTablePagination
+                currentPage={page}
+                totalPages={totalPages}
+                totalItems={logs.data?.total ?? 0}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={(value) => {
+                  setPageSize(value);
+                  setPage(1);
+                }}
+              />
+            </div>
           )}
-        </Card>
+        </DataTablePanel>
       </div>
       <LogDetailsDialog entry={selected} onClose={() => setSelected(null)} />
     </PageLayout>

@@ -141,7 +141,7 @@ func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, erro
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := updateRuntimeModeTx(ctx, tx, mode, now); err != nil {
+	if err := updateRuntimeModeTx(ctx, tx, mode, now); err != nil {
 		return RuntimeSnapshot{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -150,33 +150,33 @@ func (s *Store) SetMode(ctx context.Context, mode string) (RuntimeSnapshot, erro
 	return s.RuntimeSnapshot(ctx)
 }
 
-func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now string) (bool, error) {
+func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now string) error {
 	if !validMode(mode) {
-		return false, errors.New("运行模式只能是监控模式或完全模式")
+		return errors.New("运行模式只能是监控模式或完全模式")
 	}
 	var raw string
 	err := tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, err
+		return err
 	}
 	value := make(map[string]any)
 	if err == nil {
 		if decodeErr := json.Unmarshal([]byte(raw), &value); decodeErr != nil || value == nil {
-			return false, errors.New("运行配置记录损坏，无法切换模式；请先修复 Console 配置")
+			return errors.New("运行配置记录损坏，无法切换模式；请先修复 Console 配置")
 		}
 	}
 	if keys, present := value["keys"]; present {
 		if _, ok := keys.([]any); !ok {
-			return false, errors.New("运行配置字段 keys 无效，无法切换模式；请先修复 Console 配置")
+			return errors.New("运行配置字段 keys 无效，无法切换模式；请先修复 Console 配置")
 		}
 	}
 	if previous, _ := value["mode"].(string); previous == mode {
-		return false, nil
+		return nil
 	}
 	value["mode"] = mode
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if _, err := tx.ExecContext(
 		ctx,
@@ -184,13 +184,13 @@ func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now strin
 		 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
 		string(encoded), now,
 	); err != nil {
-		return false, err
+		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at)
 		VALUES('routing-decision-epoch','{}',?) ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at`, now); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (s *Store) OverviewSummary(ctx context.Context) (OverviewSummary, error) {
@@ -527,14 +527,14 @@ func (s *Store) writePolicyDocument(ctx context.Context, tx *sql.Tx, policyKey s
 	if _, err := tx.ExecContext(ctx, `DELETE FROM policy_nodes WHERE policy_key=?`, policyKey); err != nil {
 		return err
 	}
-	if _, err := insertPolicyNode(ctx, tx, policyKey, value, nil, nil, nil, updatedAt); err != nil {
+	if err := insertPolicyNode(ctx, tx, policyKey, value, nil, nil, nil, updatedAt); err != nil {
 		return err
 	}
 	return nil
 }
 
-func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value any, parentID *int64, keyName *string, listIndex *int64, updatedAt string) (int64, error) {
-	nodeType := ""
+func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value any, parentID *int64, keyName *string, listIndex *int64, updatedAt string) error {
+	var nodeType string
 	var scalar any
 	switch item := value.(type) {
 	case map[string]any:
@@ -558,11 +558,11 @@ func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value a
 		nodeType, scalar = "integer", strconv.FormatInt(item, 10)
 	case float64:
 		if math.IsNaN(item) || math.IsInf(item, 0) {
-			return 0, errors.New("策略包含非有限数值")
+			return errors.New("策略包含非有限数值")
 		}
 		nodeType, scalar = "real", strconv.FormatFloat(item, 'g', -1, 64)
 	default:
-		return 0, fmt.Errorf("策略包含不支持的值类型：%T", value)
+		return fmt.Errorf("策略包含不支持的值类型：%T", value)
 	}
 	result, err := tx.ExecContext(
 		ctx,
@@ -571,11 +571,11 @@ func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value a
 		policyKey, parentID, keyName, listIndex, nodeType, scalar, updatedAt,
 	)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	id, err := result.LastInsertId()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	switch item := value.(type) {
 	case map[string]any:
@@ -586,19 +586,19 @@ func insertPolicyNode(ctx context.Context, tx *sql.Tx, policyKey string, value a
 		sort.Strings(keys)
 		for _, key := range keys {
 			childKey := key
-			if _, err := insertPolicyNode(ctx, tx, policyKey, item[key], &id, &childKey, nil, updatedAt); err != nil {
-				return 0, err
+			if err := insertPolicyNode(ctx, tx, policyKey, item[key], &id, &childKey, nil, updatedAt); err != nil {
+				return err
 			}
 		}
 	case []any:
 		for index, child := range item {
 			childIndex := int64(index)
-			if _, err := insertPolicyNode(ctx, tx, policyKey, child, &id, nil, &childIndex, updatedAt); err != nil {
-				return 0, err
+			if err := insertPolicyNode(ctx, tx, policyKey, child, &id, nil, &childIndex, updatedAt); err != nil {
+				return err
 			}
 		}
 	}
-	return id, nil
+	return nil
 }
 
 func decodeJSONObject(raw string) (map[string]any, error) {

@@ -1,9 +1,9 @@
 "use client";
 
 import { Select as SelectPrimitive } from "@base-ui/react/select";
-import { ArrowDown01Icon, ArrowUp01Icon, Tick02Icon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
+import { Check, ChevronDown, CirclePlus, Search } from "lucide-react";
 import * as React from "react";
+import { knownUpstreamTypeLabel } from "@/lib/domain-dictionaries";
 import { cn } from "@/lib/utils";
 
 const selectLabels: Record<string, string> = {
@@ -27,10 +27,6 @@ const selectLabels: Record<string, string> = {
   probe: "主动探测",
   active_probe: "主动探测",
   hybrid: "流量与探测",
-  sub2api: "Sub2API",
-  newapi: "New API",
-  oneapi: "OneAPI",
-  custom: "自定义上游",
   new: "新账号",
   existing: "已有账号",
   sub2api_user_token: "Token + 刷新 Token",
@@ -54,12 +50,10 @@ function selectValueLabel(value: unknown): string {
   if (vaultSeparator >= 0) {
     return `${raw.slice(0, vaultSeparator)} / ${raw.slice(vaultSeparator + 1)}`;
   }
-  return selectLabels[raw] ?? raw;
+  return selectLabels[raw] ?? knownUpstreamTypeLabel(raw) ?? raw;
 }
 
-function Select<Value, Multiple extends boolean | undefined = false>(
-  props: SelectPrimitive.Root.Props<Value, Multiple>,
-) {
+function Select<Value>(props: SelectPrimitive.Root.Props<Value, false>) {
   return (
     <SelectPrimitive.Root
       {...props}
@@ -91,33 +85,83 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
 function SelectTrigger({
   className,
   size = "default",
+  appearance = "classic",
   children,
   ...props
-}: SelectPrimitive.Trigger.Props & { size?: "sm" | "default" }) {
+}: SelectPrimitive.Trigger.Props & {
+  size?: "sm" | "default";
+  appearance?: "faceted" | "classic";
+}) {
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       data-size={size}
+      data-appearance={appearance}
       className={cn(
-        "border-input focus-visible:border-ring focus-visible:ring-ring/50 data-popup-open:border-ring data-popup-open:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 flex w-full max-w-full items-center justify-between gap-1.5 rounded-lg border bg-transparent py-2 pr-2 pl-2.5 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:ring-3 data-popup-open:ring-1 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:ring-3 data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-md *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "border-input focus-visible:border-ring focus-visible:ring-ring/50 data-popup-open:border-ring data-popup-open:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 flex w-full max-w-full items-center gap-1.5 rounded-lg border bg-transparent py-2 text-sm whitespace-nowrap transition-colors outline-none select-none focus-visible:ring-3 data-popup-open:ring-1 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:ring-3 data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=sm]:rounded-md *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:flex-1 *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        appearance === "classic"
+          ? "dark:bg-input/30 dark:hover:bg-input/50 justify-between pr-2 pl-2.5"
+          : "dark:bg-input/20 dark:hover:bg-input/40 !h-8 justify-start pr-2.5 pl-2.5",
         className,
       )}
       {...props}
       data-press-animation="none"
     >
+      {appearance === "faceted" ? (
+        <CirclePlus className="size-4 shrink-0" aria-hidden="true" />
+      ) : null}
       {children}
-      <SelectPrimitive.Icon
-        render={
-          <HugeiconsIcon
-            icon={ArrowDown01Icon}
-            strokeWidth={2}
-            className="text-muted-foreground pointer-events-none size-4 transition-transform duration-150 data-popup-open:rotate-180"
-          />
-        }
-      />
+      {appearance === "classic" ? (
+        <SelectPrimitive.Icon
+          render={
+            <ChevronDown className="text-muted-foreground size-4 transition-transform duration-150 data-popup-open:rotate-180" />
+          }
+        />
+      ) : null}
     </SelectPrimitive.Trigger>
   );
 }
+
+function selectItemText(node: React.ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (React.isValidElement<{ children?: React.ReactNode }>(node)) {
+    return selectItemText(node.props.children);
+  }
+  return React.Children.toArray(node).map(selectItemText).join(" ");
+}
+
+function selectOptionMatches(value: unknown, label: string, search: string): boolean {
+  const query = search.trim().toLocaleLowerCase();
+  if (!query) return true;
+  return `${String(value)} ${label}`.toLocaleLowerCase().includes(query);
+}
+
+function filterSelectChildren(node: React.ReactNode, search: string): React.ReactNode {
+  const query = search.trim().toLocaleLowerCase();
+  if (!query) return node;
+
+  return React.Children.map(node, (child) => {
+    if (!React.isValidElement<{ children?: React.ReactNode; value?: unknown }>(child)) return child;
+    if (child.type === SelectItem) {
+      return selectOptionMatches(child.props.value, selectItemText(child.props.children), query)
+        ? child
+        : null;
+    }
+    if (child.type === SelectGroup || child.type === React.Fragment) {
+      const filtered = filterSelectChildren(child.props.children, search);
+      if (React.Children.toArray(filtered).length === 0) return null;
+      return React.cloneElement(child, undefined, filtered);
+    }
+    return child;
+  });
+}
+
+export const selectContentAppearanceLayouts = {
+  classic: "flex min-w-36 flex-col overflow-hidden",
+  faceted: "flex min-w-60 flex-col overflow-hidden",
+} as const;
+
+export const selectContentSearchableByDefault = true;
 
 function SelectContent({
   className,
@@ -128,12 +172,21 @@ function SelectContent({
   align = "center",
   alignOffset = 0,
   alignItemWithTrigger = false,
+  appearance = "classic",
+  searchable = selectContentSearchableByDefault,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
     SelectPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
-  > & { portalContainer?: SelectPrimitive.Portal.Props["container"] }) {
+  > & {
+    portalContainer?: SelectPrimitive.Portal.Props["container"];
+    appearance?: "faceted" | "classic";
+    searchable?: boolean;
+  }) {
+  const [search, setSearch] = React.useState("");
+  const filteredChildren = filterSelectChildren(children, search);
+  const hasFilteredChildren = React.Children.toArray(filteredChildren).length > 0;
   const content = (
     <SelectPrimitive.Positioner
       side={side}
@@ -146,83 +199,99 @@ function SelectContent({
       <SelectPrimitive.Popup
         data-slot="select-content"
         data-align-trigger={alignItemWithTrigger}
+        data-appearance={appearance}
         className={cn(
-          "bg-popover text-popover-foreground ring-foreground/10 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-lg shadow-md ring-1",
+          "bg-popover text-popover-foreground ring-foreground/10 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) rounded-lg shadow-md ring-1",
+          selectContentAppearanceLayouts[appearance],
           !alignItemWithTrigger &&
             "transition-[opacity,scale] duration-100 ease-out data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0",
           className,
         )}
         {...props}
       >
-        <SelectScrollUpButton />
-        <SelectPrimitive.List>{children}</SelectPrimitive.List>
-        <SelectScrollDownButton />
+        {searchable ? (
+          <div className="relative m-2 mb-1">
+            <Search
+              className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
+              aria-hidden="true"
+            />
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (!["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(event.key)) {
+                  event.stopPropagation();
+                }
+              }}
+              placeholder="搜索选项"
+              aria-label="搜索选项"
+              data-slot="select-search"
+              className="border-input/50 bg-input/30 placeholder:text-muted-foreground h-8 w-full rounded-lg border pr-2.5 pl-8 text-sm outline-none"
+            />
+          </div>
+        ) : null}
+        <SelectPrimitive.List className="no-scrollbar min-h-0 overflow-y-auto p-1">
+          {hasFilteredChildren ? (
+            filteredChildren
+          ) : (
+            <div className="text-muted-foreground py-6 text-center text-sm">没有匹配的选项</div>
+          )}
+        </SelectPrimitive.List>
       </SelectPrimitive.Popup>
     </SelectPrimitive.Positioner>
   );
   return <SelectPrimitive.Portal container={portalContainer}>{content}</SelectPrimitive.Portal>;
 }
 
-function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Props) {
+function SelectItem({
+  className,
+  children,
+  appearance = "classic",
+  ...props
+}: SelectPrimitive.Item.Props & { appearance?: "faceted" | "classic" }) {
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
+      data-appearance={appearance}
       className={cn(
-        "focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1 pr-8 pl-1.5 text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground relative flex w-full cursor-default items-center rounded-md text-sm outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        appearance === "classic"
+          ? "gap-1.5 py-1 pr-8 pl-1.5"
+          : "group/select-item gap-2 px-2 py-1.5",
         className,
       )}
       {...props}
     >
+      {appearance === "faceted" ? (
+        <span className="border-primary/50 flex size-4 shrink-0 items-center justify-center rounded-full border">
+          <SelectPrimitive.ItemIndicator
+            data-slot="select-item-indicator"
+            className="bg-primary text-primary-foreground -m-px flex size-4 items-center justify-center rounded-full"
+          >
+            <Check className="size-3" aria-hidden="true" />
+          </SelectPrimitive.ItemIndicator>
+        </span>
+      ) : null}
       <SelectPrimitive.ItemText
         data-slot="select-item-text"
-        className="flex flex-1 shrink-0 gap-2 whitespace-nowrap"
+        className={cn(
+          "flex flex-1 gap-2",
+          appearance === "classic" ? "shrink-0 whitespace-nowrap" : "min-w-0",
+        )}
       >
         {children}
       </SelectPrimitive.ItemText>
-      <SelectPrimitive.ItemIndicator
-        render={
-          <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
-        }
-      >
-        <HugeiconsIcon icon={Tick02Icon} strokeWidth={2} className="pointer-events-none" />
-      </SelectPrimitive.ItemIndicator>
+      {appearance === "classic" ? (
+        <SelectPrimitive.ItemIndicator
+          render={
+            <span className="pointer-events-none absolute right-2 flex size-4 items-center justify-center" />
+          }
+        >
+          <Check className="size-4" aria-hidden="true" />
+        </SelectPrimitive.ItemIndicator>
+      ) : null}
     </SelectPrimitive.Item>
-  );
-}
-
-function SelectScrollUpButton({
-  className,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollUpArrow>) {
-  return (
-    <SelectPrimitive.ScrollUpArrow
-      data-slot="select-scroll-up-button"
-      className={cn(
-        "bg-popover top-0 z-10 flex w-full cursor-default items-center justify-center py-1 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    >
-      <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
-    </SelectPrimitive.ScrollUpArrow>
-  );
-}
-
-function SelectScrollDownButton({
-  className,
-  ...props
-}: React.ComponentProps<typeof SelectPrimitive.ScrollDownArrow>) {
-  return (
-    <SelectPrimitive.ScrollDownArrow
-      data-slot="select-scroll-down-button"
-      className={cn(
-        "bg-popover bottom-0 z-10 flex w-full cursor-default items-center justify-center py-1 [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    >
-      <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
-    </SelectPrimitive.ScrollDownArrow>
   );
 }
 
@@ -233,5 +302,6 @@ export {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  selectOptionMatches,
   selectValueLabel,
 };

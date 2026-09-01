@@ -23,22 +23,25 @@ describe("shared toolbar controls", () => {
     expect(filterMarkup).not.toContain("h-7");
   });
 
-  it("matches the NewAPI faceted-filter trigger when a group is selected", () => {
+  it("matches the faceted-filter trigger without exposing account counts", () => {
     const markup = renderToStaticMarkup(
       <FilterMenu
         label="分组"
         options={["default", "codex"]}
         value="codex"
         onValueChange={() => undefined}
-        optionCount={(value) => (value === "codex" ? 12 : 4)}
+        // @ts-expect-error Account filter options intentionally do not support count suffixes.
+        optionCount={() => 12}
       />,
     );
 
     expect(markup).toContain('aria-label="分组筛选"');
-    expect(markup).toContain("border-dashed");
+    expect(markup).toContain("border");
+    expect(markup).not.toContain("border-dashed");
     expect(markup).toContain('data-press-animation="none"');
     expect(markup).toContain(">分组<");
     expect(markup).toContain(">codex<");
     expect(markup).toContain('data-slot="badge"');
+    expect(markup).not.toContain(">12<");
   });
 });

@@ -14,6 +14,8 @@ import { cn, getPageNumbers } from "@/lib/utils";
 
 const defaultPageSizes = [10, 20, 30, 50, 100];
 
+export const paginationPageSizeSearchable = false;
+
 export type DataTablePaginationProps = {
   currentPage: number;
   totalPages: number;
@@ -54,13 +56,21 @@ export function DataTablePagination(props: DataTablePaginationProps) {
               value={`${props.pageSize}`}
               onValueChange={(value) => props.onPageSizeChange(Number(value))}
             >
-              <SelectTrigger className="text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]">
+              <SelectTrigger
+                appearance="classic"
+                className="text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]"
+              >
                 <SelectValue placeholder={props.pageSize} />
               </SelectTrigger>
-              <SelectContent side="top" alignItemWithTrigger={false}>
+              <SelectContent
+                appearance="classic"
+                side="top"
+                alignItemWithTrigger={false}
+                searchable={paginationPageSizeSearchable}
+              >
                 <SelectGroup>
                   {pageSizes.map((pageSize) => (
-                    <SelectItem key={pageSize} value={`${pageSize}`}>
+                    <SelectItem appearance="classic" key={pageSize} value={`${pageSize}`}>
                       {pageSize}
                     </SelectItem>
                   ))}

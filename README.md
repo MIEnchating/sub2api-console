@@ -86,4 +86,12 @@ cd backend && go test -race ./...
 cd frontend && bun run test && bun run typecheck && bun run lint && bun run build
 ```
 
+首次克隆仓库后启用提交前检查：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`pre-commit` 会先检查暂存区空白错误，再执行与 CI 相同的前端格式检查。检查失败时提交会被阻止；运行 `cd frontend && bun run format` 修复格式后重新暂存并提交。
+
 Console 不提供外部运行库实时读取或同步接口。主动探测只使用 Console 私有配置库中的授权信息和业务库中的账号记录；探测结果写回 Console 业务库。业务写回按当前控制台策略和权限执行，与 skills 数据库没有关联。

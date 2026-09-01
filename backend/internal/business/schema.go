@@ -33,6 +33,14 @@ CREATE TABLE IF NOT EXISTS upstream_catalog_entities (
 CREATE INDEX IF NOT EXISTS ix_upstream_catalog_entities_lifecycle ON upstream_catalog_entities(
  upstream_id,entity_kind,lifecycle_state,entity_id
 );
+CREATE TABLE IF NOT EXISTS upstream_group_change_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,upstream_id TEXT NOT NULL,group_id TEXT NOT NULL,group_name TEXT NOT NULL,
+ change_type TEXT NOT NULL CHECK(change_type IN ('added','removed')),changed_at TEXT NOT NULL,
+ FOREIGN KEY(upstream_id) REFERENCES upstream_identities(upstream_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_upstream_group_change_events_recent ON upstream_group_change_events(
+ upstream_id,changed_at DESC,id DESC
+);
 CREATE TABLE IF NOT EXISTS upstreams (
  host TEXT PRIMARY KEY,base_url TEXT NOT NULL,upstream_type TEXT NOT NULL,auth_mode TEXT,enabled INTEGER NOT NULL DEFAULT 1,
  auth_status TEXT NOT NULL,balance REAL,raw_balance TEXT,mapped_balance TEXT,checked_at TEXT,
@@ -58,6 +66,24 @@ CREATE TABLE IF NOT EXISTS account_groups (
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_account_groups_group_account ON account_groups(group_name,account_id);
+CREATE TRIGGER IF NOT EXISTS trg_account_groups_use_account_cost_after_insert
+AFTER INSERT ON account_groups
+BEGIN
+ UPDATE account_groups SET group_rate=(SELECT multiplier FROM accounts WHERE id=NEW.account_id)
+ WHERE account_id=NEW.account_id AND group_name=NEW.group_name;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_account_groups_use_account_cost_after_update
+AFTER UPDATE OF group_rate ON account_groups
+WHEN NEW.group_rate IS NOT (SELECT multiplier FROM accounts WHERE id=NEW.account_id)
+BEGIN
+ UPDATE account_groups SET group_rate=(SELECT multiplier FROM accounts WHERE id=NEW.account_id)
+ WHERE account_id=NEW.account_id AND group_name=NEW.group_name;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_accounts_cascade_cost_to_groups
+AFTER UPDATE OF multiplier ON accounts
+BEGIN
+ UPDATE account_groups SET group_rate=NEW.multiplier WHERE account_id=NEW.id;
+END;
 CREATE TABLE IF NOT EXISTS health_samples (
  id INTEGER PRIMARY KEY AUTOINCREMENT,account_id TEXT NOT NULL,group_name TEXT NOT NULL,result TEXT,
  latency_p50 TEXT,latency_p95 TEXT,latency_p99 TEXT,sample_count INTEGER,attempts INTEGER,failure_reason TEXT,
@@ -93,6 +119,24 @@ CREATE TABLE IF NOT EXISTS bindings (
 CREATE INDEX IF NOT EXISTS ix_bindings_upstream_lookup ON bindings(
  upstream_host,upstream_group_id,upstream_key_id,local_account_id
 );
+CREATE TRIGGER IF NOT EXISTS trg_bindings_use_account_cost_after_insert
+AFTER INSERT ON bindings
+BEGIN
+ UPDATE bindings SET local_rate=(SELECT multiplier FROM accounts WHERE id=NEW.local_account_id)
+ WHERE id=NEW.id AND EXISTS(SELECT 1 FROM accounts WHERE id=NEW.local_account_id);
+END;
+CREATE TRIGGER IF NOT EXISTS trg_bindings_use_account_cost_after_update
+AFTER UPDATE OF local_rate ON bindings
+WHEN EXISTS(SELECT 1 FROM accounts WHERE id=NEW.local_account_id)
+ AND NEW.local_rate IS NOT (SELECT multiplier FROM accounts WHERE id=NEW.local_account_id)
+BEGIN
+ UPDATE bindings SET local_rate=(SELECT multiplier FROM accounts WHERE id=NEW.local_account_id) WHERE id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_accounts_cascade_cost_to_bindings
+AFTER UPDATE OF multiplier ON accounts
+BEGIN
+ UPDATE bindings SET local_rate=NEW.multiplier WHERE local_account_id=NEW.id;
+END;
 CREATE TABLE IF NOT EXISTS binding_identities (
  binding_id INTEGER PRIMARY KEY,upstream_id TEXT NOT NULL,upstream_key_id TEXT NOT NULL,upstream_group_id TEXT,updated_at TEXT NOT NULL,
  FOREIGN KEY(binding_id) REFERENCES bindings(id) ON DELETE CASCADE,
@@ -111,6 +155,14 @@ CREATE TABLE IF NOT EXISTS billing_quota_unit_observations (
  host TEXT NOT NULL,observed_at TEXT NOT NULL,quota_per_unit TEXT NOT NULL,PRIMARY KEY(host,observed_at)
 );
 CREATE INDEX IF NOT EXISTS ix_billing_quota_unit_host_time ON billing_quota_unit_observations(host,observed_at DESC);
+CREATE TABLE IF NOT EXISTS pricing_backups (
+ id TEXT PRIMARY KEY,name TEXT NOT NULL COLLATE NOCASE UNIQUE,actor TEXT NOT NULL,account_count INTEGER NOT NULL,created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pricing_backup_accounts (
+ backup_id TEXT NOT NULL,account_id TEXT NOT NULL,account_name TEXT NOT NULL,group_ids_json TEXT NOT NULL,group_names_json TEXT NOT NULL,
+ PRIMARY KEY(backup_id,account_id),FOREIGN KEY(backup_id) REFERENCES pricing_backups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_pricing_backups_created ON pricing_backups(created_at DESC,id DESC);
 CREATE TABLE IF NOT EXISTS policy_nodes (
  id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,
  node_type TEXT NOT NULL CHECK(node_type IN ('object','array','string','integer','real','boolean','null')),
@@ -222,6 +274,29 @@ CREATE INDEX IF NOT EXISTS ix_onboarding_pending_selection ON onboarding_pending
 func (s *Store) ensureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, businessSchema); err != nil {
 		return err
+	}
+	var accountMultiplierColumns int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name='multiplier'`).Scan(&accountMultiplierColumns); err != nil {
+		return err
+	}
+	if accountMultiplierColumns == 1 {
+		if _, err := s.db.ExecContext(ctx, `UPDATE account_groups
+			SET group_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)
+			WHERE group_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)`); err != nil {
+			return fmt.Errorf("归一账号分组成本失败: %w", err)
+		}
+		var bindingLocalRateColumns int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('bindings') WHERE name='local_rate'`).Scan(&bindingLocalRateColumns); err != nil {
+			return err
+		}
+		if bindingLocalRateColumns == 1 {
+			if _, err := s.db.ExecContext(ctx, `UPDATE bindings
+				SET local_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)
+				WHERE EXISTS(SELECT 1 FROM accounts a WHERE a.id=bindings.local_account_id)
+				 AND local_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)`); err != nil {
+				return fmt.Errorf("归一账号绑定成本失败: %w", err)
+			}
+		}
 	}
 	if err := s.ensureManualPriorityBalanceSyncColumn(ctx); err != nil {
 		return err
@@ -362,7 +437,7 @@ func readyOnConnection(ctx context.Context, queryer connectionQueryer) (bool, er
 func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]string, error) {
 	tables := []string{
 		"upstream_identities", "upstream_identity_hosts", "upstream_catalog_entities", "upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
-		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations",
+		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations", "pricing_backups", "pricing_backup_accounts",
 		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "runtime_events",
 		"alert_incidents", "alert_deliveries", "operation_audit", "run_records", "usage_records",
 		"operational_snapshots", "onboarding_pending",

@@ -303,17 +303,6 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 	return result, nil
 }
 
-func (s *Service) applyAccount(
-	ctx context.Context,
-	admin Admin,
-	target business.AccountRoutingTarget,
-	policy writePolicy,
-	actor string,
-) AccountResult {
-	coordinator := newBatchWriteCoordinator(ctx, admin, 1, policy.verifyAfterWrite)
-	return s.applyAccountCoordinated(ctx, admin, target, policy, actor, nil, coordinator)
-}
-
 func (s *Service) applyAccountCoordinated(
 	ctx context.Context,
 	admin Admin,
@@ -906,19 +895,6 @@ func desiredValues(target business.AccountRoutingTarget, policy writePolicy, cur
 		}
 	}
 	return changedFields(result, current), nil
-}
-
-func changedFieldNames(values map[string]any) *string {
-	if len(values) == 0 {
-		return nil
-	}
-	fields := make([]string, 0, len(values))
-	for field := range values {
-		fields = append(fields, field)
-	}
-	sort.Strings(fields)
-	text := strings.Join(fields, ",")
-	return &text
 }
 
 func parseWritePolicy(document map[string]any) (writePolicy, error) {

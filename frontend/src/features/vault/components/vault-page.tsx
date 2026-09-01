@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, type VaultEntryIndex } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { TableActionButton } from "@/components/data-table/table-action-button";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -13,7 +14,6 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,
@@ -317,7 +317,7 @@ export function VaultPage() {
           </span>
         </TableFilterToolbar>
 
-        <Card className="gap-0 py-0">
+        <DataTablePanel>
           {config.error ? (
             <QueryErrorToast error={config.error} fallback="密码箱读取失败" />
           ) : !config.isLoading && entries.length === 0 ? (
@@ -333,7 +333,7 @@ export function VaultPage() {
           ) : (
             <VaultEntryTable entries={entries} onEdit={openEdit} onDelete={setDeleteTarget} />
           )}
-        </Card>
+        </DataTablePanel>
       </div>
 
       <Dialog

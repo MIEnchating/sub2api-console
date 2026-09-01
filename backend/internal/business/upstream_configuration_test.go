@@ -46,6 +46,59 @@ func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testin
 	if err != nil || len(groups) != 1 || groups[0].EffectiveRate == nil || *groups[0].EffectiveRate != "0.666667" {
 		t.Fatalf("unexpected groups: %#v err=%v", groups, err)
 	}
+	if groups[0].KeyPresent || !groups[0].Bindable {
+		t.Fatalf("active unbound group must allow onboarding to create its key: %#v", groups[0])
+	}
+}
+
+func TestUpstreamConfigurationUpdateAppliesRechargeRateToEveryStableHost(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := "HX｜Relay"
+	created, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example",
+		UpstreamType: "newapi", AuthMode: "newapi_user_login", RechargeRate: "1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstreams(
+		host,base_url,upstream_type,auth_mode,enabled,auth_status,metadata_json,updated_at
+	) VALUES('auth.example','https://auth.example','newapi','newapi_user_login',1,'已鉴权','{}','now');
+		INSERT INTO upstream_identity_hosts(upstream_id,host,is_primary,updated_at)
+		VALUES(?,'auth.example',0,'now');
+		INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+		VALUES('auth.example','1','old','now');
+		INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,effective_rate,updated_at)
+		VALUES('auth.example','7','pro','active','1.5','1.5','now')`, created.UpstreamID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.UpdateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "auth.example", Name: &name, BaseURL: "https://auth.example",
+		UpstreamType: "newapi", AuthMode: "newapi_user_login", RechargeRate: "10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var primaryRate, aliasRate, aliasCost string
+	if err := store.db.QueryRowContext(ctx, `SELECT
+		(SELECT recharge_rate FROM recharge_rates WHERE host='api.example'),
+		(SELECT recharge_rate FROM recharge_rates WHERE host='auth.example'),
+		(SELECT effective_rate FROM upstream_groups WHERE host='auth.example' AND group_id='7')`).Scan(
+		&primaryRate, &aliasRate, &aliasCost,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Host != "auth.example" || updated.PrimaryHost != "api.example" || updated.ConvertedGroups != 1 || primaryRate != "10" || aliasRate != "10" || aliasCost != "0.15" {
+		t.Fatalf("updated=%#v primary=%q alias=%q cost=%q", updated, primaryRate, aliasRate, aliasCost)
+	}
 }
 
 func TestUpstreamGroupsRoundsPreviouslyStoredConvertedMultiplier(t *testing.T) {

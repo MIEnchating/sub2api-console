@@ -81,10 +81,11 @@ type NotificationQueueDetails struct {
 }
 
 type alertPolicy struct {
-	DeliveryEnabled      bool
-	NotifyRecovery       bool
-	RepeatIntervalMinute int
-	MergeThreshold       int
+	DeliveryEnabled           bool
+	NotifyRecovery            bool
+	RepeatIntervalMinute      int
+	StateChangeCooldownMinute int
+	MergeThreshold            int
 }
 
 func NotificationChannelKey(channelType, destination string) string {
@@ -110,7 +111,7 @@ func (s *Store) PrepareAlertDelivery(
 		return AlertDeliveryPlan{}, err
 	}
 	plan := AlertDeliveryPlan{
-		Pending: []AlertIncident{}, Configured: enabled && qqbotEnabled, ChannelKey: channelKey,
+		Pending: []AlertIncident{}, Configured: enabled && qqbotEnabled && privateConfigured, ChannelKey: channelKey,
 		MergeThreshold: policy.MergeThreshold,
 	}
 	if !policy.DeliveryEnabled {
@@ -162,6 +163,15 @@ func (s *Store) PrepareAlertDelivery(
 		plan.Configured = false
 		return plan, nil
 	}
+	if !privateConfigured {
+		detail := "QQBot 通知凭据或目标未配置完整"
+		if err := s.markIncidentDeliveryState(ctx, incidents, "未配置渠道", &detail); err != nil {
+			return AlertDeliveryPlan{}, err
+		}
+		plan.Skipped = len(incidents)
+		plan.Configured = false
+		return plan, nil
+	}
 	if !enabled || !qqbotEnabled {
 		detail := "未配置通知渠道"
 		if err := s.markIncidentDeliveryState(ctx, incidents, "未配置渠道", &detail); err != nil {
@@ -176,8 +186,32 @@ func (s *Store) PrepareAlertDelivery(
 		return AlertDeliveryPlan{}, err
 	}
 	now := time.Now().UTC()
+	degradedDigestCooling := !deliveryCooldownDue(
+		latestDegradedDelivery(prior),
+		policy.StateChangeCooldownMinute,
+		now,
+	)
 	for _, incident := range incidents {
 		previous, found := prior[incident.IncidentKey]
+		if !found && incident.EventType == "account.routing_degraded" && incident.Status == "recovered" {
+			plan.Skipped++
+			continue
+		}
+		if !found && incident.EventType == "account.routing_degraded" &&
+			!incidentObservationDue(incident.FirstSeenAt, policy.StateChangeCooldownMinute, now) {
+			plan.Skipped++
+			continue
+		}
+		coolingDown := found && previous.status == "transition" &&
+			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now)
+		if coolingDown {
+			plan.Skipped++
+			continue
+		}
+		if incident.EventType == "account.routing_degraded" && degradedDigestCooling {
+			plan.Skipped++
+			continue
+		}
 		repeatDue := incident.Status == "firing" && deliveryRepeatDue(previous.deliveredAt, policy.RepeatIntervalMinute, now)
 		if found && previous.status == "sent" && !repeatDue {
 			plan.Skipped++
@@ -226,6 +260,11 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		ConsumerItems:     []NotificationQueueItem{},
 	}
 	now := time.Now().UTC()
+	degradedDigestCooling := !deliveryCooldownDue(
+		latestDegradedDelivery(prior),
+		policy.StateChangeCooldownMinute,
+		now,
+	)
 	for _, incident := range incidents {
 		previous, found := prior[incident.IncidentKey]
 		item := NotificationQueueItem{AlertIncident: incident}
@@ -237,6 +276,19 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			result.ProducerFiring = append(result.ProducerFiring, item)
 		} else if incident.Status == "recovered" {
 			result.ProducerRecovered = append(result.ProducerRecovered, item)
+		}
+		if !found && incident.EventType == "account.routing_degraded" && incident.Status == "recovered" {
+			item.QueueStatus = "无需发送"
+			item.QueueReason = "异常在首次通知前已恢复"
+			result.ConsumerItems = append(result.ConsumerItems, item)
+			continue
+		}
+		if !found && incident.EventType == "account.routing_degraded" &&
+			!incidentObservationDue(incident.FirstSeenAt, policy.StateChangeCooldownMinute, now) {
+			item.QueueStatus = "状态观察中"
+			item.QueueReason = fmt.Sprintf("持续 %d 分钟后才通知，避免瞬时降级刷屏", policy.StateChangeCooldownMinute)
+			result.ConsumerItems = append(result.ConsumerItems, item)
+			continue
 		}
 		if !policy.DeliveryEnabled {
 			item.QueueStatus = "已抑制"
@@ -282,6 +334,19 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			}
 			result.ConsumerFailed = append(result.ConsumerFailed, item)
 			result.ConsumerPending = append(result.ConsumerPending, item)
+			result.ConsumerItems = append(result.ConsumerItems, item)
+			continue
+		}
+		if found && previous.status == "transition" &&
+			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now) {
+			item.QueueStatus = "状态变化冷却中"
+			item.QueueReason = fmt.Sprintf("距离上次通知不足 %d 分钟", policy.StateChangeCooldownMinute)
+			result.ConsumerItems = append(result.ConsumerItems, item)
+			continue
+		}
+		if incident.EventType == "account.routing_degraded" && degradedDigestCooling {
+			item.QueueStatus = "降级告警汇总冷却中"
+			item.QueueReason = fmt.Sprintf("本渠道 %d 分钟内的降级变化将在冷却结束后统一汇总发送", policy.StateChangeCooldownMinute)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
@@ -360,7 +425,7 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 }
 
 func (s *Store) readAlertPolicy(ctx context.Context) (alertPolicy, error) {
-	result := alertPolicy{DeliveryEnabled: true, NotifyRecovery: true, MergeThreshold: 10}
+	result := alertPolicy{DeliveryEnabled: true, NotifyRecovery: true, StateChangeCooldownMinute: 30, MergeThreshold: 10}
 	document, err := s.readPolicyDocument(ctx, s.db, "alert-policy")
 	if err != nil {
 		return alertPolicy{}, err
@@ -388,6 +453,13 @@ func (s *Store) readAlertPolicy(ctx context.Context) (alertPolicy, error) {
 			return alertPolicy{}, errors.New("告警策略 repeat_interval_minutes 必须在 0 到 10080 之间")
 		}
 		result.RepeatIntervalMinute = parsed
+	}
+	if value, present := document["state_change_cooldown_minutes"]; present {
+		parsed, parseErr := strictInteger(value)
+		if parseErr != nil || parsed < 0 || parsed > 10080 {
+			return alertPolicy{}, errors.New("告警策略 state_change_cooldown_minutes 必须在 0 到 10080 之间")
+		}
+		result.StateChangeCooldownMinute = parsed
 	}
 	if value, present := document["merge_threshold"]; present {
 		parsed, parseErr := strictInteger(value)
@@ -529,27 +601,33 @@ func (s *Store) markIncidentDeliveryState(ctx context.Context, incidents []Alert
 }
 
 type priorDelivery struct {
+	eventType   string
 	status      string
 	attempts    int
 	deliveredAt *string
+	updatedAt   *string
 }
 
 func (s *Store) priorDeliveries(ctx context.Context, channelKey string) (map[string]priorDelivery, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT incident_key,status,attempts,delivered_at FROM alert_deliveries
-		WHERE channel_key=?`, channelKey)
+	rows, err := s.db.QueryContext(ctx, `SELECT d.incident_key,i.event_type,d.status,d.attempts,d.delivered_at,d.updated_at
+		FROM alert_deliveries d JOIN alert_incidents i ON i.incident_key=d.incident_key
+		WHERE d.channel_key=?`, channelKey)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	result := map[string]priorDelivery{}
 	for rows.Next() {
-		var incidentKey, status string
+		var incidentKey, eventType, status string
 		var attempts int
-		var deliveredAt sql.NullString
-		if err := rows.Scan(&incidentKey, &status, &attempts, &deliveredAt); err != nil {
+		var deliveredAt, updatedAt sql.NullString
+		if err := rows.Scan(&incidentKey, &eventType, &status, &attempts, &deliveredAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		result[incidentKey] = priorDelivery{status: status, attempts: attempts, deliveredAt: nullString(deliveredAt)}
+		result[incidentKey] = priorDelivery{
+			eventType: eventType, status: status, attempts: attempts,
+			deliveredAt: nullString(deliveredAt), updatedAt: nullString(updatedAt),
+		}
 	}
 	return result, rows.Err()
 }
@@ -562,6 +640,48 @@ func deliveryRepeatDue(deliveredAt *string, intervalMinutes int, now time.Time) 
 		return true
 	}
 	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*deliveredAt))
+	if err != nil {
+		return true
+	}
+	return now.Sub(parsed) >= time.Duration(intervalMinutes)*time.Minute
+}
+
+func deliveryCooldownDue(deliveredAt *string, intervalMinutes int, now time.Time) bool {
+	if intervalMinutes <= 0 {
+		return true
+	}
+	return deliveryRepeatDue(deliveredAt, intervalMinutes, now)
+}
+
+func latestDegradedDelivery(prior map[string]priorDelivery) *string {
+	var latest time.Time
+	var latestText string
+	for _, previous := range prior {
+		if previous.eventType != "account.routing_degraded" {
+			continue
+		}
+		if previous.deliveredAt == nil {
+			continue
+		}
+		text := strings.TrimSpace(*previous.deliveredAt)
+		parsed, err := time.Parse(time.RFC3339Nano, text)
+		if err != nil || (!latest.IsZero() && !parsed.After(latest)) {
+			continue
+		}
+		latest = parsed
+		latestText = text
+	}
+	if latestText == "" {
+		return nil
+	}
+	return &latestText
+}
+
+func incidentObservationDue(firstSeenAt string, intervalMinutes int, now time.Time) bool {
+	if intervalMinutes <= 0 {
+		return true
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(firstSeenAt))
 	if err != nil {
 		return true
 	}

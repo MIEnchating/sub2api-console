@@ -19,8 +19,18 @@ describe("alertPolicyFormSchema", () => {
         .success,
     ).toBe(false);
     expect(
+      alertPolicyFormSchema.safeParse({ ...defaultAlertPolicyForm, probe_recovery_streak: 0 })
+        .success,
+    ).toBe(false);
+    expect(
       alertPolicyFormSchema.safeParse({ ...defaultAlertPolicyForm, repeat_interval_minutes: 10081 })
         .success,
+    ).toBe(false);
+    expect(
+      alertPolicyFormSchema.safeParse({
+        ...defaultAlertPolicyForm,
+        state_change_cooldown_minutes: 10081,
+      }).success,
     ).toBe(false);
     expect(
       alertPolicyFormSchema.safeParse({ ...defaultAlertPolicyForm, merge_threshold: 1 }).success,

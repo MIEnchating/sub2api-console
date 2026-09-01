@@ -27,6 +27,8 @@ const (
 	maximumPages         = 10000
 )
 
+var ErrKeyNotFound = errors.New("上游 Key 不存在")
+
 type StatusError struct {
 	StatusCode int
 	Path       string
@@ -114,6 +116,9 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 	if err != nil {
 		return business.UpstreamCatalogSnapshot{}, err
 	}
+	keys = slices.DeleteFunc(keys, func(key business.UpstreamCatalogKey) bool {
+		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key.Name)), "console-probe-")
+	})
 	return business.UpstreamCatalogSnapshot{Groups: groups, Keys: keys}, nil
 }
 
@@ -329,7 +334,10 @@ func (r *Reader) RevealKey(ctx context.Context, record configstore.AuthRecord, k
 			matches = append(matches, row)
 		}
 	}
-	if len(matches) != 1 {
+	if len(matches) == 0 {
+		return CreatedKey{}, fmt.Errorf("%w：Key ID %s", ErrKeyNotFound, keyID)
+	}
+	if len(matches) > 1 {
 		return CreatedKey{}, errors.New("待续开户的上游 Key 无法唯一读回")
 	}
 	row := matches[0]
@@ -369,6 +377,10 @@ func (r *Reader) DeleteKey(ctx context.Context, record configstore.AuthRecord, k
 		paths[0], paths[1] = paths[1], paths[0]
 	}
 	return r.deleteFallback(ctx, record, paths)
+}
+
+func (r *Reader) ListKeys(ctx context.Context, record configstore.AuthRecord) ([]business.UpstreamCatalogKey, error) {
+	return r.readKeys(ctx, record)
 }
 
 func (r *Reader) readKeys(ctx context.Context, record configstore.AuthRecord) ([]business.UpstreamCatalogKey, error) {

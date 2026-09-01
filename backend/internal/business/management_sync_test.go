@@ -79,6 +79,12 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 	if platform != "openai" || groupRate != "2" {
 		t.Fatalf("partial group snapshot erased metadata: platform=%q rate=%q", platform, groupRate)
 	}
+	if err := db.QueryRow(`SELECT group_rate FROM account_groups WHERE account_id='11' AND group_name='codex'`).Scan(&groupRate); err != nil {
+		t.Fatal(err)
+	}
+	if groupRate != "0.25" {
+		t.Fatalf("management per-group rate replaced the account cost: %q", groupRate)
+	}
 	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{
 		{"id": json.Number("11"), "rate_multiplier": json.Number("0.17")},
 	}, []map[string]any{}, "tester"); err != nil {
@@ -136,6 +142,69 @@ func TestManagementSnapshotKeepsBaseURLWhenListCredentialsOmitIt(t *testing.T) {
 	}
 	if strings.Contains(metadataRaw, "base_url") {
 		t.Fatalf("explicit Base URL removal was ignored: %s", metadataRaw)
+	}
+}
+
+func TestManagementSnapshotCannotOverwriteBoundAccountConvertedCostOrName(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "management-bound-rate.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
+		VALUES('83','HX｜Relay-0.15','0.15','{}','now');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,local_rate,status,metadata_json,updated_at)
+		VALUES('83','api.example','91','relay','codex','0.15','active','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("83"), "name": "HX｜Relay-1.5", "rate_multiplier": json.Number("1.5"),
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	var name, multiplier, localRate string
+	if err := store.db.QueryRowContext(ctx, `SELECT a.name,a.multiplier,b.local_rate FROM accounts a
+		JOIN bindings b ON b.local_account_id=a.id WHERE a.id='83'`).Scan(&name, &multiplier, &localRate); err != nil {
+		t.Fatal(err)
+	}
+	if name != "HX｜Relay-0.15" || multiplier != "0.15" || localRate != "0.15" {
+		t.Fatalf("bound converted rate was overwritten: name=%q multiplier=%q local_rate=%q", name, multiplier, localRate)
+	}
+}
+
+func TestManagementSnapshotCannotPopulateBoundAccountMissingCostFromRemoteRawRate(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "management-bound-empty-rate.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
+		VALUES('83','HX｜Relay',NULL,'{}','now');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,local_rate,status,metadata_json,updated_at)
+		VALUES('83','api.example','91','relay','codex',NULL,'active','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{{
+		"id": json.Number("83"), "name": "HX｜Relay-1.5", "rate_multiplier": json.Number("1.5"),
+	}}, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	var multiplier, localRate sql.NullString
+	if err := store.db.QueryRowContext(ctx, `SELECT a.name,a.multiplier,b.local_rate FROM accounts a
+		JOIN bindings b ON b.local_account_id=a.id WHERE a.id='83'`).Scan(&name, &multiplier, &localRate); err != nil {
+		t.Fatal(err)
+	}
+	if name != "HX｜Relay" || multiplier.Valid || localRate.Valid {
+		t.Fatalf("remote raw rate leaked into bound account: name=%q multiplier=%#v local_rate=%#v", name, multiplier, localRate)
 	}
 }
 

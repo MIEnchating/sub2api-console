@@ -27,6 +27,7 @@ describe("DialogContent layout", () => {
     expect(dialogWidthLayouts.wide).toContain("100vw-2rem");
     expect(dialogWidthLayouts.table).toContain("100vw-2rem");
     expect(dialogHeightLayouts.content).toBe("");
+    expect(dialogHeightLayouts.adaptive).toContain("max-h-[calc(100svh-2rem)]");
     expect(dialogHeightLayouts.medium).toContain("40rem");
     expect(dialogHeightLayouts.large).toContain("42rem");
     expect(dialogHeightLayouts.tall).toContain("46rem");

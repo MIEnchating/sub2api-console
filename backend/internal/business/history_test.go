@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -89,6 +90,54 @@ func TestLogSearchFiltersBeforeDecodingPayloads(t *testing.T) {
 	audits, err := store.SearchAuditEvents(ctx, "needle-error", &limit)
 	if err != nil || len(audits) != 1 || audits[0].ID != 103 {
 		t.Fatalf("audits=%#v err=%v", audits, err)
+	}
+}
+
+func TestHistorySearchAndUnfilteredReadersDecodeRowsIdentically(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at)
+		VALUES('41','shared-decoder','{}','2026-08-31T09:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO run_records(
+		run_key,task_name,status,stage,started_at,ended_at,duration_seconds,summary,payload_json,updated_at
+	) VALUES('shared-run','共享解码','succeeded','finished','2026-08-31T09:00:00Z',NULL,'1.25',NULL,
+		'{"nested":{"ok":true}}','2026-08-31T09:00:02Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO operation_audit(
+		source_id,operation_id,operation_type,state,phase,request_id,actor,source,error,
+		remote_confirmed,readback_confirmed,object_type,object_id,object_name,group_names_json,
+		field_name,before_json,after_json,writeback,created_at
+	) VALUES(-1,'shared-operation','routing.writeback','succeeded','readback','request-1','operator',NULL,NULL,
+		1,0,'account','41',NULL,'["codex"]','priority','1','2',1,'2026-08-31T09:00:03Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	limit := 10
+	runs, err := store.RunRecords(ctx, &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchedRuns, err := store.SearchRunRecords(ctx, "shared-run", &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(runs, searchedRuns) {
+		t.Fatalf("run decoders diverged: unfiltered=%#v searched=%#v", runs, searchedRuns)
+	}
+
+	audits, err := store.AuditEvents(ctx, &limit, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	searchedAudits, err := store.SearchAuditEvents(ctx, "shared-operation", &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(audits, searchedAudits) {
+		t.Fatalf("audit decoders diverged: unfiltered=%#v searched=%#v", audits, searchedAudits)
 	}
 }
 

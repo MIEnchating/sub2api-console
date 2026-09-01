@@ -423,16 +423,33 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("本轮仅检查任务是否到期，未执行其他操作");
   });
 
-  it("使用占满内容区的全宽单列布局", () => {
+  it("在宽屏固定工作区内分别滚动任务队列和心跳记录", () => {
     const markup = renderPage();
 
     expect(markup).toContain('data-testid="auto-inspection-layout"');
-    expect(markup).toContain('class="w-full space-y-4"');
+    expect(markup).toContain(
+      "flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto overscroll-contain",
+    );
+    expect(markup).toContain('data-testid="auto-inspection-overview"');
+    expect(markup).toContain("grid shrink-0 items-stretch gap-3");
+    expect(markup).toContain("xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]");
     expect(markup).toContain('data-testid="auto-inspection-settings"');
-    expect(markup).toContain('class="grid gap-3 xl:grid-cols-2"');
+    expect(markup).toContain('class="grid gap-2.5"');
+    expect(markup).toContain('data-testid="inspection-summary-grid"');
+    expect(markup).toContain("grid grid-cols-2 gap-px border-b");
+    expect(markup).not.toContain("grid grid-cols-2 divide-x divide-y");
+    expect(markup).toContain('data-testid="auto-inspection-workspace"');
+    expect(markup).toContain("min-[1700px]:min-h-80 min-[1700px]:flex-1");
+    expect(markup).toContain("min-[1700px]:grid-cols-[minmax(38rem,0.95fr)_minmax(0,1.55fr)]");
+    expect(markup).toContain('data-testid="auto-inspection-queue-scroll-area"');
+    expect(markup).toContain('data-testid="auto-inspection-heartbeat-table"');
+    expect(markup).toContain("max-h-[min(30rem,55vh)]");
+    expect(markup).toContain("overflow-y-auto overscroll-contain");
+    expect(markup).toMatch(/data-slot="table-container" class="[^"]*overflow-auto[^"]*"/);
+    expect(markup).toContain("min-[1700px]:h-full min-[1700px]:max-h-none");
+    expect(markup).not.toContain("max-h-[42rem]");
     expect(markup).not.toContain("max-w-5xl");
     expect(markup).not.toContain("max-w-7xl");
-    expect(markup).not.toContain("lg:grid-cols-2");
     expect(markup).not.toContain("border-t pt-3 xl:col-span-3");
   });
 

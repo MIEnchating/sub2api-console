@@ -3,6 +3,7 @@ package upstreamsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,6 +145,35 @@ func TestReaderFallsBackOn404AndStopsRepeatedLegacyKeyPage(t *testing.T) {
 	}
 	if len(catalog.Groups) != 1 || len(catalog.Keys) != 1 || pages != 2 {
 		t.Fatalf("catalog=%#v pages=%d", catalog, pages)
+	}
+}
+
+func TestReaderExcludesTemporaryProbeKeysFromCatalog(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v1/groups/available":
+			_, _ = writer.Write([]byte(`{"data":[{"id":6,"name":"pro","rate":"0.3"}]}`))
+		case "/api/v1/keys":
+			_, _ = writer.Write([]byte(`{"data":{"items":[
+				{"id":17,"name":"permanent-key","group_id":6,"status":"active"},
+				{"id":18,"name":"console-probe-b018dbf986fd","group_id":6,"status":"active"}
+			],"total":2}}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	token := "token"
+	catalog, err := NewReader(server.Client()).ReadCatalog(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Keys) != 1 || catalog.Keys[0].KeyID != "17" || catalog.Keys[0].Name != "permanent-key" {
+		t.Fatalf("keys=%#v", catalog.Keys)
 	}
 }
 
@@ -389,6 +419,22 @@ func TestCreateKeyRejectsAmbiguousInventoryFallbackWhenResponseIDMissing(t *test
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "codex-key", "6", false)
 	if err == nil || !strings.Contains(err.Error(), "目录补读无法唯一定位新 Key") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRevealKeyClassifiesMissingStableID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":{"items":[{"id":18,"name":"other-key","group_id":6}],"total":1}}`))
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).RevealKey(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "17", "6")
+	if !errors.Is(err, ErrKeyNotFound) || !strings.Contains(err.Error(), "Key ID 17") || strings.Contains(err.Error(), "待续开户") {
 		t.Fatalf("err=%v", err)
 	}
 }

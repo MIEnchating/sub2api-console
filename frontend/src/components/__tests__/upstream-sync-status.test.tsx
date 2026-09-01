@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { UpstreamSyncTaskStatus } from "../../App";
+import { upstreamSyncAuthStatusMeta, UpstreamSyncTaskStatus } from "../../App";
 import type { Task } from "../../api";
 
 function task(status: Task["status"], result: Task["result"]): Task {
@@ -24,10 +24,19 @@ function task(status: Task["status"], result: Task["result"]): Task {
 }
 
 describe("upstream synchronization status", () => {
+  it("uses the fixed auth dictionary for unknown and unchanged result values", () => {
+    expect(upstreamSyncAuthStatusMeta("上游新增状态")).toEqual({
+      label: "未知状态（上游新增状态）",
+      tone: "neutral",
+    });
+    expect(upstreamSyncAuthStatusMeta("未变更")).toEqual({
+      label: "未变更",
+      tone: "neutral",
+    });
+  });
+
   it("shows live business progress without exposing task ids", () => {
-    const markup = renderToStaticMarkup(
-      <UpstreamSyncTaskStatus task={task("running", {})} />,
-    );
+    const markup = renderToStaticMarkup(<UpstreamSyncTaskStatus task={task("running", {})} />);
 
     expect(markup).toContain("正在同步上游：已完成 1/4 个 Host");
     expect(markup).not.toContain("sync-task");
@@ -85,6 +94,7 @@ describe("upstream synchronization status", () => {
     expect(markup).toContain("[&amp;_th]:sticky");
     expect(markup).not.toContain("must-not-render");
     expect(markup).not.toContain("raw_response");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("shows the failed Hosts and reasons when a batch completes with partial failures", () => {

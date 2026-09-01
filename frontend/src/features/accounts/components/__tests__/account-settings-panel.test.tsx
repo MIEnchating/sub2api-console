@@ -83,6 +83,8 @@ describe("账号设置面板", () => {
     expect(markup).not.toContain("倍率超阈值");
     expect(markup).not.toContain("账号名称");
     expect(markup).not.toContain("备注");
+    expect(markup).toContain('aria-readonly="true"');
+    expect(markup).toContain("请使用“同步倍率”更新");
   });
 
   it("makes the complete pause and exclude rows operable buttons", () => {

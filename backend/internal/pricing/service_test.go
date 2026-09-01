@@ -17,7 +17,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
-func TestEvaluateAssignsEveryProfitableCompatibleManagedGroup(t *testing.T) {
+func TestEvaluateSelectsLowestProfitableCompatibleManagedGroup(t *testing.T) {
 	config := Config{Enabled: true, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}, {"8", "10"}}, IntervalSeconds: 120, WriteConcurrency: 4}
 	catalog := business.PricingCatalog{
 		Groups: []business.PricingGroup{
@@ -43,7 +43,7 @@ func TestEvaluateAssignsEveryProfitableCompatibleManagedGroup(t *testing.T) {
 	if !reflect.DeepEqual(snapshot.Decisions[0].DesiredGroupIDs, []string{"6", "9", "10"}) {
 		t.Fatalf("high-cost desired groups=%#v", snapshot.Decisions[0])
 	}
-	if !reflect.DeepEqual(snapshot.Decisions[1].DesiredGroupIDs, []string{"6", "7"}) {
+	if !reflect.DeepEqual(snapshot.Decisions[1].DesiredGroupIDs, []string{"7"}) {
 		t.Fatalf("low-cost desired groups=%#v", snapshot.Decisions[1])
 	}
 	if !snapshot.Decisions[2].Skipped || !reflect.DeepEqual(snapshot.Decisions[2].DesiredGroupIDs, []string{"7"}) {
@@ -72,8 +72,59 @@ func TestEvaluateKeepsExchangeGroupSetsIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(snapshot.Decisions[0].DesiredGroupIDs, []string{"6", "7"}) {
+	if !reflect.DeepEqual(snapshot.Decisions[0].DesiredGroupIDs, []string{"7"}) {
 		t.Fatalf("account crossed exchange-group boundary: %#v", snapshot.Decisions[0])
+	}
+}
+
+func TestEvaluateUsesStableGroupIDToBreakEqualPriceTie(t *testing.T) {
+	config := Config{Enabled: true, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"7", "6"}}, IntervalSeconds: 120, WriteConcurrency: 4}
+	catalog := business.PricingCatalog{
+		Groups: []business.PricingGroup{
+			{ID: "6", Name: "先选", Platform: "openai", RateMultiplier: testString("0.5")},
+			{ID: "7", Name: "后选", Platform: "openai", RateMultiplier: testString("0.5")},
+		},
+		Accounts: []business.PricingAccount{{
+			ID: "41", Name: "equal-price", Platform: "openai", Multiplier: testString("0.2"), GroupIDs: []string{"7"}, GroupsValid: true,
+		}},
+	}
+
+	snapshot, err := evaluate(config, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Decisions[0].DesiredGroupIDs, []string{"6"}) || !reflect.DeepEqual(snapshot.Decisions[0].EligibleGroups, []string{"先选"}) {
+		t.Fatalf("equal-price decision=%#v", snapshot.Decisions[0])
+	}
+}
+
+func TestEvaluateRepairsMultipleMembershipsWithinExchangeSet(t *testing.T) {
+	config := Config{Enabled: true, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}}, IntervalSeconds: 120, WriteConcurrency: 4}
+	catalog := business.PricingCatalog{
+		Groups: []business.PricingGroup{
+			{ID: "6", Name: "标准", Platform: "openai", RateMultiplier: testString("1")},
+			{ID: "7", Name: "低价", Platform: "openai", RateMultiplier: testString("0.5")},
+		},
+		Accounts: []business.PricingAccount{{
+			ID: "41", Name: "duplicate", Platform: "openai", Multiplier: testString("0.4"), GroupIDs: []string{"6", "7", "9"}, GroupsValid: true,
+		}},
+	}
+
+	snapshot, err := evaluate(config, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.Decisions[0].Changed || !reflect.DeepEqual(snapshot.Decisions[0].DesiredGroupIDs, []string{"7", "9"}) {
+		t.Fatalf("duplicate membership was not repaired: %#v", snapshot.Decisions[0])
+	}
+}
+
+func TestValidatePriceGroupUniquenessRejectsMultipleTargetsInOneSet(t *testing.T) {
+	err := validatePriceGroupUniqueness([]Decision{{
+		AccountID: "41", DesiredGroupIDs: []string{"6", "7", "9"}, Changed: true,
+	}}, Config{ExchangeGroupSets: [][]string{{"6", "7"}}})
+	if err == nil || !strings.Contains(err.Error(), "多个目标分组") {
+		t.Fatalf("duplicate target validation error=%v", err)
 	}
 }
 
@@ -98,6 +149,63 @@ func TestEvaluateNeverChangesManualPriorityAccountGroups(t *testing.T) {
 	if !decision.Skipped || decision.Changed || !reflect.DeepEqual(decision.DesiredGroupIDs, []string{"6"}) ||
 		decision.Reason == nil || !strings.Contains(*decision.Reason, "人工优先") {
 		t.Fatalf("manual priority account was not protected: %#v", decision)
+	}
+}
+
+func TestRestoreBackupUpdatesExistingAccountsAndSkipsManualPriority(t *testing.T) {
+	accountGroups := map[string][]int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !strings.HasPrefix(request.URL.Path, "/api/v1/admin/accounts/") {
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+		accountID := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/accounts/")
+		if request.Method == http.MethodGet {
+			writer.Header().Set("Content-Type", "application/json")
+			groups := []int64{6}
+			if saved, found := accountGroups[accountID]; found {
+				groups = saved
+			}
+			_, _ = io.WriteString(writer, `{"success":true,"data":`+accountJSON(accountID, "0.4", groups)+`}`)
+			return
+		}
+		if request.Method != http.MethodPut {
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+		var payload struct {
+			GroupIDs []int64 `json:"group_ids"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		accountGroups[accountID] = payload.GroupIDs
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"success":true,"data":{"id":41}}`)
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		catalog: business.PricingCatalog{
+			Groups: []business.PricingGroup{{ID: "6"}, {ID: "7"}},
+			Accounts: []business.PricingAccount{
+				{ID: "41", GroupIDs: []string{"6"}, GroupsValid: true},
+				{ID: "42", GroupIDs: []string{"6"}, GroupsValid: true, ManualPriority: true},
+			},
+		},
+		backups: []business.PricingBackup{{ID: "backup-1", Accounts: []business.PricingBackupAccount{
+			{AccountID: "41", GroupIDs: []string{"7"}}, {AccountID: "42", GroupIDs: []string{"7"}},
+		}}},
+	}
+	service := New(repository, &fakeTargets{settings: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+	}}, nil)
+	result, err := service.RestoreBackupNow(context.Background(), "backup-1", "operator")
+	if err != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result.Changed != 1 || result.Skipped != 1 || !reflect.DeepEqual(accountGroups["41"], []int64{7}) {
+		t.Fatalf("result=%#v groups=%#v", result, accountGroups)
+	}
+	if _, changed := accountGroups["42"]; changed {
+		t.Fatal("manual priority account was changed")
 	}
 }
 
@@ -244,7 +352,7 @@ func TestApplyNowWritesOnlyChangesAndRefreshesLocalSnapshot(t *testing.T) {
 		},
 		Accounts: []business.PricingAccount{
 			{ID: "41", Name: "account-41", Platform: "openai", Multiplier: testString("0.6"), GroupIDs: []string{"7", "9"}, GroupsValid: true},
-			{ID: "42", Name: "account-42", Platform: "openai", Multiplier: testString("0.4"), GroupIDs: []string{"6", "7"}, GroupsValid: true},
+			{ID: "42", Name: "account-42", Platform: "openai", Multiplier: testString("0.4"), GroupIDs: []string{"7"}, GroupsValid: true},
 		},
 	}}
 	service := New(repository, &fakeTargets{settings: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5}}, nil)
@@ -279,6 +387,7 @@ type fakeRepository struct {
 	revenue      business.RevenueCatalog
 	syncCalls    int
 	syncedGroups map[string][]string
+	backups      []business.PricingBackup
 }
 
 func (repository *fakeRepository) ControlPolicy(context.Context) (map[string]any, error) {
@@ -307,6 +416,25 @@ func (repository *fakeRepository) SyncPricingAccountGroups(_ context.Context, gr
 	repository.syncCalls++
 	repository.syncedGroups = groups
 	return business.PricingSyncResult{Accounts: len(groups)}, nil
+}
+
+func (repository *fakeRepository) CreatePricingBackup(_ context.Context, name, actor string) (business.PricingBackup, error) {
+	backup := business.PricingBackup{ID: "backup-1", Name: name, Actor: actor, AccountCount: len(repository.catalog.Accounts)}
+	repository.backups = append(repository.backups, backup)
+	return backup, nil
+}
+
+func (repository *fakeRepository) PricingBackups(context.Context) ([]business.PricingBackup, error) {
+	return repository.backups, nil
+}
+
+func (repository *fakeRepository) PricingBackup(_ context.Context, id string) (business.PricingBackup, error) {
+	for _, backup := range repository.backups {
+		if backup.ID == id {
+			return backup, nil
+		}
+	}
+	return business.PricingBackup{}, errors.New("missing backup")
 }
 
 type fakeTargets struct {

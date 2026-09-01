@@ -11,16 +11,6 @@ import (
 
 const catalogMissingConfirmationCount = 2
 
-type upstreamCatalogEntity struct {
-	kind                string
-	id                  string
-	parentID            *string
-	name                string
-	observedStatus      *string
-	lifecycleState      string
-	missingObservations int64
-}
-
 type accountCatalogBindingState struct {
 	Status string
 	Reason string
@@ -197,7 +187,13 @@ func upsertLiveCatalogEntitiesTx(
 	groups []UpstreamCatalogGroup,
 	keys []UpstreamCatalogKey,
 	now string,
+	recordGroupAdditions bool,
 ) error {
+	if recordGroupAdditions {
+		if err := recordLiveGroupAdditionsTx(ctx, tx, upstreamID, groups, now); err != nil {
+			return err
+		}
+	}
 	groupIDs := make(map[string]string, len(groups)*2)
 	ambiguousNames := map[string]struct{}{}
 	for _, group := range groups {
@@ -247,24 +243,79 @@ func upsertLiveCatalogEntitiesTx(
 	return nil
 }
 
+func recordLiveGroupAdditionsTx(ctx context.Context, tx *sql.Tx, upstreamID string, groups []UpstreamCatalogGroup, now string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT entity_id,lifecycle_state FROM upstream_catalog_entities
+		WHERE upstream_id=? AND entity_kind='group'`, upstreamID)
+	if err != nil {
+		return err
+	}
+	existing := map[string]string{}
+	for rows.Next() {
+		var id, lifecycle string
+		if err := rows.Scan(&id, &lifecycle); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[id] = lifecycle
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	recorded := map[string]struct{}{}
+	for _, group := range groups {
+		groupID := strings.TrimSpace(group.GroupID)
+		if groupID == "" {
+			continue
+		}
+		lifecycle, found := existing[groupID]
+		if found && lifecycle != "missing" && lifecycle != "retired" {
+			continue
+		}
+		if _, duplicate := recorded[groupID]; duplicate {
+			continue
+		}
+		recorded[groupID] = struct{}{}
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			name = groupID
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_group_change_events(
+			upstream_id,group_id,group_name,change_type,changed_at
+		) VALUES(?,?,?,'added',?)`, upstreamID, groupID, name, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kind string, live map[string]struct{}, now string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT entity_id,missing_observations FROM upstream_catalog_entities
+	rows, err := tx.QueryContext(ctx, `SELECT entity_id,name,lifecycle_state,missing_observations FROM upstream_catalog_entities
 		WHERE upstream_id=? AND entity_kind=?`, upstreamID, kind)
 	if err != nil {
 		return err
 	}
 	type existingEntity struct {
 		id           string
+		name         string
+		lifecycle    string
 		observations int64
 	}
 	items := []existingEntity{}
 	for rows.Next() {
 		var item existingEntity
-		if err := rows.Scan(&item.id, &item.observations); err != nil {
+		if err := rows.Scan(&item.id, &item.name, &item.lifecycle, &item.observations); err != nil {
 			rows.Close()
 			return err
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	if err := rows.Close(); err != nil {
 		return err
@@ -278,6 +329,13 @@ func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kin
 		var confirmed any
 		if observations >= catalogMissingConfirmationCount {
 			state, confirmed = "missing", now
+		}
+		if kind == "group" && state == "missing" && item.lifecycle != "missing" {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO upstream_group_change_events(
+				upstream_id,group_id,group_name,change_type,changed_at
+			) VALUES(?,?,?,'removed',?)`, upstreamID, item.id, item.name, now); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE upstream_catalog_entities SET lifecycle_state=?,missing_observations=?,
 			missing_since=COALESCE(missing_since,?),confirmed_missing_at=COALESCE(confirmed_missing_at,?),updated_at=?

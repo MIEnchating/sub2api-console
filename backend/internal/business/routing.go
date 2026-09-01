@@ -15,7 +15,6 @@ type RoutingAccount struct {
 	Name                 string
 	GroupName            string
 	GroupID              *string
-	GroupRate            *string
 	GroupCostWall        *string
 	ProfitEnabled        *bool
 	ProfitMinMargin      *string
@@ -133,7 +132,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		clauses = append(clauses, "a.id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	query := `SELECT a.id,a.name,ag.group_name,ag.group_id,ag.group_rate,
+	query := `SELECT a.id,a.name,ag.group_name,ag.group_id,
 		lg.rate_multiplier,lg.profit_control_enabled,lg.profit_min_margin,lg.profit_safety_buffer,
 		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,
 		rb.managed_schedulable,rb.managed_priority,rb.managed_load_factor,rb.managed_concurrency,
@@ -155,7 +154,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	result := []RoutingAccount{}
 	for rows.Next() {
 		var item RoutingAccount
-		var groupID, groupRate, costWall, profitMargin, profitBuffer sql.NullString
+		var groupID, costWall, profitMargin, profitBuffer sql.NullString
 		var upstreamHost, upstreamType, authStatus, loadFactor, multiplier, pausedReason sql.NullString
 		var profitEnabled, schedulable, paused sql.NullInt64
 		var priority, manualPriority, baselinePriority, managedPriority, managedConcurrency, concurrency sql.NullInt64
@@ -163,7 +162,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		var managedLoadFactor sql.NullString
 		var metadataRaw string
 		if err := rows.Scan(
-			&item.ID, &item.Name, &item.GroupName, &groupID, &groupRate,
+			&item.ID, &item.Name, &item.GroupName, &groupID,
 			&costWall, &profitEnabled, &profitMargin, &profitBuffer,
 			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority,
 			&managedSchedulable, &managedPriority, &managedLoadFactor, &managedConcurrency, &externalControl, &loadFactor,
@@ -171,7 +170,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		); err != nil {
 			return nil, err
 		}
-		item.GroupID, item.GroupRate, item.GroupCostWall = nullString(groupID), nullString(groupRate), nullString(costWall)
+		item.GroupID, item.GroupCostWall = nullString(groupID), nullString(costWall)
 		item.ProfitEnabled = strictNullBool(profitEnabled)
 		item.ProfitMinMargin, item.ProfitSafetyBuffer = nullString(profitMargin), nullString(profitBuffer)
 		item.UpstreamHost, item.UpstreamType, item.UpstreamAuthStatus = nullString(upstreamHost), nullString(upstreamType), nullString(authStatus)
@@ -237,7 +236,7 @@ func (s *Store) RoutingSamples(
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true, false)
+	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true)
 	if err != nil {
 		return nil, err
 	}

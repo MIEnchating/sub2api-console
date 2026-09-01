@@ -30,6 +30,9 @@ type Repository interface {
 	RevenueCatalog(context.Context) (business.RevenueCatalog, error)
 	ValidateNewAPIQuotaUnit(context.Context, string, float64, time.Time, time.Time) error
 	SyncPricingAccountGroups(context.Context, map[string][]string, string) (business.PricingSyncResult, error)
+	CreatePricingBackup(context.Context, string, string) (business.PricingBackup, error)
+	PricingBackups(context.Context) ([]business.PricingBackup, error)
+	PricingBackup(context.Context, string) (business.PricingBackup, error)
 }
 
 type TargetStore interface {
@@ -135,6 +138,117 @@ func New(repository Repository, targets TargetStore, tasks TaskStore) *Service {
 }
 
 func (s *Service) UseAuthResolver(resolver AuthResolver) { s.resolver = resolver }
+
+func (s *Service) CreateBackup(ctx context.Context, name, actor string) (business.PricingBackup, error) {
+	return s.repository.CreatePricingBackup(ctx, name, actor)
+}
+
+func (s *Service) Backups(ctx context.Context) ([]business.PricingBackup, error) {
+	return s.repository.PricingBackups(ctx)
+}
+
+func (s *Service) RestoreBackupNow(ctx context.Context, backupID, actor string) (Result, error) {
+	backup, err := s.repository.PricingBackup(ctx, strings.TrimSpace(backupID))
+	if err != nil {
+		return Result{}, err
+	}
+	catalog, err := s.repository.PricingCatalog(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	accounts := make(map[string]business.PricingAccount, len(catalog.Accounts))
+	for _, account := range catalog.Accounts {
+		accounts[account.ID] = account
+	}
+	groups := make(map[string]struct{}, len(catalog.Groups))
+	for _, group := range catalog.Groups {
+		groups[group.ID] = struct{}{}
+	}
+	for _, account := range catalog.Accounts {
+		for _, groupID := range account.GroupIDs {
+			groups[groupID] = struct{}{}
+		}
+	}
+	decisions := make([]Decision, 0, len(backup.Accounts))
+	for _, saved := range backup.Accounts {
+		account, found := accounts[saved.AccountID]
+		decision := Decision{AccountID: saved.AccountID, AccountName: saved.AccountName,
+			CurrentGroupIDs: append([]string{}, account.GroupIDs...), DesiredGroupIDs: append([]string{}, saved.GroupIDs...)}
+		switch {
+		case !found:
+			reason := "备份中的账号已不存在"
+			decision.Skipped, decision.Reason = true, &reason
+		case account.ManualPriority:
+			reason := "账号处于人工优先位，备份还原不调整分组"
+			decision.Skipped, decision.Reason = true, &reason
+		default:
+			for _, groupID := range saved.GroupIDs {
+				if _, exists := groups[groupID]; !exists {
+					reason := fmt.Sprintf("备份中的分组 %s 已不存在", groupID)
+					decision.Skipped, decision.Reason = true, &reason
+					break
+				}
+			}
+		}
+		if !decision.Skipped {
+			decision.Changed = strings.Join(decision.CurrentGroupIDs, ",") != strings.Join(decision.DesiredGroupIDs, ",")
+		}
+		decisions = append(decisions, decision)
+	}
+	changes, skipped := 0, 0
+	for _, decision := range decisions {
+		if decision.Changed {
+			changes++
+		}
+		if decision.Skipped {
+			skipped++
+		}
+	}
+	config := Config{WriteConcurrency: 4}
+	return s.applyPlan(ctx, plan{snapshot: Snapshot{Decisions: decisions, Accounts: len(decisions), Changes: changes, Skipped: skipped}}, config, actor)
+}
+
+func (s *Service) EnqueueRestore(ctx context.Context, backupID, actor string) (taskstore.Task, error) {
+	if s.tasks == nil {
+		return taskstore.Task{}, errors.New("价格备份还原任务服务尚未就绪")
+	}
+	if _, err := s.repository.PricingBackup(ctx, strings.TrimSpace(backupID)); err != nil {
+		return taskstore.Task{}, err
+	}
+	id, err := randomID()
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{ID: id, Skill: "sub2api-pricing", Operation: "price-group-restore", Status: "queued", Progress: 0,
+		Message: "价格分组备份还原已排队", Result: map[string]any{"backup_id": backupID}, CreatedAt: now, UpdatedAt: now}
+	if err := s.tasks.Save(ctx, task); err != nil {
+		return taskstore.Task{}, err
+	}
+	go s.executeRestore(task, backupID, actor)
+	return task, nil
+}
+
+func (s *Service) executeRestore(task taskstore.Task, backupID, actor string) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 20, "正在还原价格分组备份", time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.tasks.Save(ctx, task); err != nil {
+		return
+	}
+	result, err := s.RestoreBackupNow(ctx, backupID, actor)
+	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
+	encoded, _ := json.Marshal(result)
+	_ = json.Unmarshal(encoded, &task.Result)
+	if err != nil {
+		task.Status, task.Message = "failed", "价格分组备份还原失败："+err.Error()
+		task.Result["error"] = err.Error()
+	} else {
+		task.Status = "succeeded"
+		task.Message = fmt.Sprintf("价格分组备份还原完成：更新 %d，未变 %d，跳过 %d", result.Changed, result.Unchanged, result.Skipped)
+	}
+	taskstore.PersistFinal(s.tasks, task)
+}
 
 func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
 	policy, err := s.repository.ControlPolicy(ctx)
@@ -468,26 +582,51 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 		}
 		desired := make([]string, 0, len(current)+len(managed))
 		activeSets := map[int]struct{}{}
+		currentBySet := map[int][]string{}
 		for _, groupID := range current {
-			group := groupByID[groupID]
 			setIndex, controlled := setByGroup[groupID]
 			if controlled {
 				activeSets[setIndex] = struct{}{}
+				currentBySet[setIndex] = append(currentBySet[setIndex], groupID)
 			}
-			if !controlled || !group.Available || group.Platform != decision.Platform {
+			if !controlled {
 				desired = append(desired, groupID)
 			}
 		}
+		activeSetIndexes := make([]int, 0, len(activeSets))
 		for setIndex := range activeSets {
+			activeSetIndexes = append(activeSetIndexes, setIndex)
+		}
+		sort.Ints(activeSetIndexes)
+		for _, setIndex := range activeSetIndexes {
+			chosenID := ""
+			var chosenRate *big.Rat
+			compatible := 0
 			for _, groupID := range config.ExchangeGroupSets[setIndex] {
 				group := groupByID[groupID]
 				if !group.Available || group.Platform != decision.Platform {
 					continue
 				}
+				compatible++
 				limit := new(big.Rat).Mul(groupPrice[groupID], oneMinusMargin)
-				if cost.Cmp(limit) <= 0 {
-					desired = append(desired, groupID)
-					decision.EligibleGroups = append(decision.EligibleGroups, group.Name)
+				if cost.Cmp(limit) > 0 {
+					continue
+				}
+				rate := groupPrice[groupID]
+				if chosenRate == nil || rate.Cmp(chosenRate) < 0 || (rate.Cmp(chosenRate) == 0 && numericLess(groupID, chosenID)) {
+					chosenID, chosenRate = groupID, rate
+				}
+			}
+			profitableChosen := chosenID != ""
+			if chosenID == "" && compatible == 0 && len(currentBySet[setIndex]) > 0 {
+				preserved := append([]string{}, currentBySet[setIndex]...)
+				sort.Slice(preserved, func(left, right int) bool { return numericLess(preserved[left], preserved[right]) })
+				chosenID = preserved[0]
+			}
+			if chosenID != "" {
+				desired = append(desired, chosenID)
+				if profitableChosen {
+					decision.EligibleGroups = append(decision.EligibleGroups, groupByID[chosenID].Name)
 				}
 			}
 		}
@@ -536,6 +675,9 @@ func pointerText(value *string) string {
 }
 
 func (s *Service) applyPlan(ctx context.Context, value plan, config Config, actor string) (Result, error) {
+	if err := validatePriceGroupUniqueness(value.snapshot.Decisions, config); err != nil {
+		return Result{}, err
+	}
 	settings, err := s.targets.TargetSettings(ctx)
 	if err != nil {
 		return Result{}, err
@@ -603,6 +745,32 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		return result, fmt.Errorf("%d 个账号分组调整失败", result.Failed)
 	}
 	return result, nil
+}
+
+func validatePriceGroupUniqueness(decisions []Decision, config Config) error {
+	setByGroup := make(map[string]int)
+	for setIndex, groupSet := range config.ExchangeGroupSets {
+		for _, groupID := range groupSet {
+			setByGroup[groupID] = setIndex
+		}
+	}
+	for _, decision := range decisions {
+		if decision.Skipped || !decision.Changed {
+			continue
+		}
+		counts := make(map[int]int)
+		for _, groupID := range decision.DesiredGroupIDs {
+			setIndex, controlled := setByGroup[groupID]
+			if !controlled {
+				continue
+			}
+			counts[setIndex]++
+			if counts[setIndex] > 1 {
+				return fmt.Errorf("账号 %s 在互换组 %d 中生成了多个目标分组，已拒绝写入", decision.AccountID, setIndex+1)
+			}
+		}
+	}
+	return nil
 }
 
 func number(value any) (float64, bool) {

@@ -39,27 +39,33 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	privateStore, err := configstore.Open(cfg.ConfigDB)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer privateStore.Close()
 	businessStore, err := business.Open(cfg.DataDB)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer businessStore.Close()
 	taskStore, err := taskstore.Open(cfg.TaskDB)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer taskStore.Close()
 	if recovered, err := taskStore.RecoverInterrupted(context.Background()); err != nil {
-		log.Fatal(err)
+		return err
 	} else if recovered > 0 {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
 	}
@@ -82,7 +88,7 @@ func main() {
 	probeTasks := probe.New(businessStore, privateStore, taskStore)
 	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore, upstreamReader)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	upstreamDetector := upstreamdetect.New(&http.Client{Timeout: 8 * time.Second})
 	authClient := upstreamauth.New(&http.Client{Timeout: 20 * time.Second})
@@ -90,6 +96,7 @@ func main() {
 		businessStore,
 		privateStore,
 		authClient,
+		managementTasks,
 	)
 	upstreamSyncTasks := upstreamsync.New(
 		businessStore,
@@ -97,6 +104,7 @@ func main() {
 		upstreamReader,
 		authClient,
 		taskStore,
+		managementTasks,
 	)
 	upstreamDeleteService := upstreamdelete.New(businessStore, privateStore, taskStore)
 	onboardingService := onboarding.New(businessStore, privateStore, upstreamReader, taskStore)
@@ -140,16 +148,16 @@ func main() {
 	)
 	inspectionScheduler, err := inspection.NewScheduler(businessStore, inspectionRunner)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	serviceContext, cancelServices := context.WithCancel(context.Background())
 	defer cancelServices()
 	if err := logMaintenance.Start(serviceContext); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer logMaintenance.Stop()
 	if err := inspectionScheduler.Start(serviceContext); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer inspectionScheduler.Stop()
 	manualInspections := inspection.NewManualService(inspectionScheduler, inspectionRunner, taskStore)
@@ -194,8 +202,9 @@ func main() {
 	}()
 	log.Printf("Sub2API Console Go API listening on %s", cfg.ListenAddress)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		return err
 	}
+	return nil
 }
 
 func newHTTPServer(address string, handler http.Handler) *http.Server {

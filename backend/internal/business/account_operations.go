@@ -118,7 +118,8 @@ func (s *Store) CommitAccountGroupsReadback(
 		}
 		for _, group := range groups {
 			result, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
-				SELECT ?,name,remote_id,rate_multiplier FROM local_groups WHERE remote_id=?`, accountID, group.ID)
+				SELECT ?,lg.name,lg.remote_id,a.multiplier FROM local_groups lg
+				JOIN accounts a ON a.id=? WHERE lg.remote_id=?`, accountID, accountID, group.ID)
 			if err != nil {
 				return err
 			}

@@ -54,13 +54,49 @@ func TestSyncPricingAccountGroupsUpdatesOnlyConfirmedLocalMemberships(t *testing
 		}
 		memberships = append(memberships, item)
 	}
-	want := []membership{{name: "标准", id: "6", rate: "0.35"}, {name: "低价", id: "7", rate: "0.4"}}
+	want := []membership{{name: "标准", id: "6", rate: "0.4"}, {name: "低价", id: "7", rate: "0.4"}}
 	if !reflect.DeepEqual(memberships, want) {
 		t.Fatalf("confirmed local memberships=%#v want=%#v", memberships, want)
 	}
 	var eventType string
 	if err := store.db.QueryRowContext(ctx, `SELECT event_type FROM runtime_events WHERE source_id=?`, result.EventID).Scan(&eventType); err != nil || eventType != "pricing.groups.synced" {
 		t.Fatalf("pricing sync event=%q err=%v", eventType, err)
+	}
+}
+
+func TestPricingBackupCapturesStableAccountGroupMemberships(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	backup, err := store.CreatePricingBackup(context.Background(), "调价前", "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup.Name != "调价前" || backup.AccountCount != 2 || backup.Actor != "operator" {
+		t.Fatalf("backup=%#v", backup)
+	}
+	loaded, err := store.PricingBackup(context.Background(), backup.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Accounts) != 2 || !reflect.DeepEqual(loaded.Accounts[0].GroupIDs, []string{"6", "9"}) ||
+		!reflect.DeepEqual(loaded.Accounts[0].GroupNames, []string{"标准", "外部分组"}) {
+		t.Fatalf("loaded=%#v", loaded)
+	}
+	backups, err := store.PricingBackups(context.Background())
+	if err != nil || len(backups) != 1 || backups[0].ID != backup.ID {
+		t.Fatalf("backups=%#v err=%v", backups, err)
+	}
+}
+
+func TestPricingBackupRejectsBlankOrDuplicateNames(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	if _, err := store.CreatePricingBackup(context.Background(), " ", "operator"); err == nil {
+		t.Fatal("blank backup name was accepted")
+	}
+	if _, err := store.CreatePricingBackup(context.Background(), "基线", "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreatePricingBackup(context.Background(), "基线", "operator"); err == nil {
+		t.Fatal("duplicate backup name was accepted")
 	}
 }
 

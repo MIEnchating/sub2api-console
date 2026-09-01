@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
@@ -78,6 +78,7 @@ import {
   type SetupStatus,
   type Task,
   type UpstreamConfiguration,
+  type UpstreamGroup,
   type UpstreamSummary,
 } from "./api";
 import { Button } from "./components/ui/button";
@@ -99,6 +100,22 @@ import { Skeleton } from "./components/ui/skeleton";
 import { Switch } from "./components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { UpstreamIdentity } from "./features/upstreams/components/upstream-identity";
+import {
+  UpstreamGroupDialogHeader,
+  type UpstreamGroupDialogView,
+} from "./features/upstreams/components/upstream-group-dialog-header";
+import {
+  accountTypeLabel,
+  accountTypeOptions,
+  accountTypeValue,
+  configurableUpstreamTypeOptions,
+  upstreamAuthStatusIsReady,
+  upstreamAuthStatusMeta,
+  upstreamAuthStatusOptions,
+  upstreamAuthStatuses,
+  upstreamTypeLabel as displayUpstreamType,
+  upstreamTypeOptions,
+} from "./lib/domain-dictionaries";
 import { SystemLogSearchPanel } from "./features/request-trace/components/system-log-search-panel";
 import { GroupAllocationDialog } from "./features/groups/components/group-allocation-dialog";
 import {
@@ -146,8 +163,10 @@ import {
   SidebarTrigger,
 } from "./components/ui/sidebar";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "./lib/task-state";
+import { useClientPagination } from "./hooks/use-client-pagination";
 import { terminalRefreshKeys, type TaskRefreshScope } from "./lib/task-refresh";
 import { flattenTaskResult } from "./lib/task-result";
+import { MultiSelect } from "./components/multi-select";
 import { OverviewPage } from "./features/overview/components/overview-page";
 import { AlertPolicyPage } from "./features/alert-policy/components/alert-policy-page";
 import { PricingConfigPage, PricingPage } from "./features/pricing/components/pricing-page";
@@ -178,8 +197,10 @@ import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
 import { TableFilterToolbar } from "./components/data-table/filter-toolbar";
 import { DataTablePagination } from "./components/data-table/pagination";
+import { DataTablePanel } from "./components/data-table/table-panel";
 import { TableActionButton } from "./components/data-table/table-action-button";
 import { SearchField } from "./components/data-table/search-field";
+import { SegmentedControl, SegmentedControlItem } from "./components/ui/segmented-control";
 import { ConfirmActionDialog } from "./components/confirm-action-dialog";
 import { OnboardingSelectionSkeleton } from "./components/onboarding-selection-skeleton";
 import { QueryErrorToast } from "./components/query-error-toast";
@@ -191,7 +212,10 @@ import { UpstreamEditDialog } from "./features/upstreams/components/upstream-edi
 import { UpstreamBoundAccountSelect } from "./features/upstreams/components/upstream-bound-account-select";
 import { OnboardingHeadingActions } from "./features/upstreams/components/onboarding-heading-actions";
 import { OnboardingMaintenanceActions } from "./features/upstreams/components/onboarding-maintenance-actions";
+import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
+import { UpstreamGroupBindingEditor } from "./features/upstreams/components/upstream-group-binding-editor";
+import { UpstreamGroupHistory } from "./features/upstreams/components/upstream-group-history";
 import {
   OnboardingConfirmDialog,
   type OnboardingBindingPreview,
@@ -228,7 +252,7 @@ import {
   accountMatchesPoolFilter,
   type AccountPoolFilter,
 } from "./features/accounts/lib/account-pool";
-import { accountTypeLabel, groupPlatformSummary } from "./features/accounts/lib/account-labels";
+import { groupPlatformSummary } from "./features/accounts/lib/account-labels";
 import {
   authModesForPlatform,
   parseStringMap,
@@ -249,7 +273,6 @@ import {
   candidateCreationUnavailableReason,
   candidateHasExistingBinding,
   composeOnboardingBaseUrl,
-  localGroupMultiplierLabel,
   normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryDescription,
@@ -1182,7 +1205,6 @@ export function LoginPage(props: { onLogin: () => void; reason?: string | null }
               error={form.formState.errors.username?.message}
             >
               <Input
-                autoFocus
                 autoComplete="username"
                 aria-invalid={Boolean(form.formState.errors.username)}
                 {...form.register("username")}
@@ -1313,7 +1335,7 @@ const statusLabels: Record<string, string> = {
   disabled: "已停用",
   available: "可用",
   unavailable: "不可用",
-  authenticated: "已鉴权",
+  authenticated: upstreamAuthStatuses.authenticated,
   unauthenticated: "未鉴权",
   synced: "已同步",
   unsynced: "未同步",
@@ -1323,13 +1345,13 @@ const statusLabels: Record<string, string> = {
   not_read: "未读取",
   pending: "待处理",
   firing: "告警中",
-  recovered: "已恢复",
+  recovered: upstreamAuthStatuses.recovered,
   suppressed: "规则已停用",
   closed: "已关闭",
   sent: "已发送",
   delivered: "已发送",
   failed_delivery: "通知发送失败",
-  credential_invalid: "鉴权失效",
+  credential_invalid: upstreamAuthStatuses.invalid,
   auth_recovery_failed: "鉴权恢复失败",
   refresh_token_invalid: "刷新令牌失效",
   image_captcha_required: "需要人工完成图片验证码",
@@ -1376,13 +1398,6 @@ const eventLabels: Record<string, string> = {
   "account.onboarding": "账号添加",
   "routing.writeback": "自动执行",
   "automatic-inspection": "自动巡检",
-};
-const upstreamTypeLabels: Record<string, string> = {
-  sub2api: "Sub2API",
-  newapi: "New API",
-  oneapi: "OneAPI",
-  custom: "自定义上游",
-  apikey: "API Key",
 };
 const operationLabels: Record<string, string> = {
   "management-balances-sync": "账号余额同步",
@@ -1549,9 +1564,6 @@ function displayStrategy(value: string | null | undefined) {
 function displayFallback(value: string | null | undefined) {
   return displayLabel(value, fallbackLabels);
 }
-function displayUpstreamType(value: string | null | undefined) {
-  return displayLabel(value, upstreamTypeLabels);
-}
 function splitConfigList(value: string) {
   return value
     .split(/[,，\n]/)
@@ -1697,7 +1709,6 @@ export function FilterMenu(props: {
   value: string | null;
   onValueChange: (value: string | null) => void;
   optionLabel?: (value: string) => string;
-  optionCount?: (value: string) => number | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1748,7 +1759,7 @@ export function FilterMenu(props: {
             variant="outline"
             size="sm"
             data-press-animation="none"
-            className="h-8 max-w-64 border-dashed bg-transparent"
+            className="h-8 max-w-64 bg-transparent"
             aria-label={`${props.label}筛选`}
           />
         }
@@ -1774,6 +1785,7 @@ export function FilterMenu(props: {
         >
           <Popover.Popup
             data-slot="faceted-filter-content"
+            initialFocus={false}
             className="bg-popover text-popover-foreground w-[min(22rem,calc(100vw-1rem))] min-w-52 rounded-lg border p-1 shadow-lg outline-none"
           >
             <div className="relative p-1 pb-0">
@@ -1782,7 +1794,6 @@ export function FilterMenu(props: {
                 className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 opacity-60"
               />
               <Input
-                autoFocus
                 value={query}
                 onChange={(event) => {
                   setQuery(event.target.value);
@@ -1829,11 +1840,6 @@ export function FilterMenu(props: {
                   <span className="min-w-0 flex-1 truncate">
                     {props.optionLabel ? props.optionLabel(option) : option}
                   </span>
-                  {props.optionCount?.(option) !== undefined ? (
-                    <span className="text-muted-foreground ml-auto font-mono text-xs tabular-nums">
-                      {props.optionCount(option)}
-                    </span>
-                  ) : null}
                 </button>
               ))}
             </div>
@@ -1979,8 +1985,9 @@ function UpstreamsPage() {
     onError: (error) => notifyOperationError(error, "验证码取消失败"),
   });
   const [selectedHost, setSelectedHost] = useState<string | null>(null);
-  const [groupPage, setGroupPage] = useState(1);
-  const [groupPageSize, setGroupPageSize] = useState(20);
+  const [groupDialogView, setGroupDialogView] = useState<UpstreamGroupDialogView>("catalog");
+  const [groupBindings, setGroupBindings] = useState<Record<string, string[]>>({});
+  const [groupBindingTaskId, setGroupBindingTaskId] = useState<string | null>(null);
   const [editHost, setEditHost] = useState<string | null>(null);
   const emptyUpstreamFilters = {
     keyword: "",
@@ -1997,22 +2004,120 @@ function UpstreamsPage() {
     enabled: Boolean(selectedHost),
     retry: false,
   });
+  const groupHistory = useQuery({
+    queryKey: ["upstream-group-history", selectedHost],
+    queryFn: () => api.upstreamGroupHistory(selectedHost!),
+    enabled: Boolean(selectedHost) && groupDialogView === "history",
+    retry: false,
+  });
+  const localBindingGroups = useQuery({
+    queryKey: ["groups"],
+    queryFn: api.groups,
+    enabled: Boolean(selectedHost),
+  });
+  const saveGroupBindings = useMutation({
+    mutationFn: (requests: OnboardingRequest[]) => api.onboardBatch(requests),
+    onSuccess: (task) => {
+      setGroupBindingTaskId(task.id);
+      queryClient.setQueryData(["task", task.id], task);
+      toast.success("账号分组绑定变更已开始");
+    },
+    onError: (error) => notifyOperationError(error, "账号分组绑定变更失败"),
+  });
+  const groupBindingTask = useQuery({
+    queryKey: ["task", groupBindingTaskId],
+    queryFn: () => api.task(groupBindingTaskId!),
+    enabled: Boolean(groupBindingTaskId),
+    refetchInterval: taskPollInterval,
+  });
   const groupRows = groups.data ?? [];
-  const groupTotalPages = Math.max(1, Math.ceil(groupRows.length / groupPageSize));
-  const groupPageRows = groupRows.slice((groupPage - 1) * groupPageSize, groupPage * groupPageSize);
+  const localGroupOptions = (localBindingGroups.data ?? []).flatMap((group) =>
+    group.id ? [{ id: group.id, name: group.name, rate_multiplier: group.rate_multiplier }] : [],
+  );
+  const currentGroupBindingIDs = (group: UpstreamGroup) => [
+    ...new Set(
+      group.bound_accounts.flatMap((account) =>
+        (account.local_groups ?? []).map((localGroup) => localGroup.id),
+      ),
+    ),
+  ];
+  const changedGroupBindings = groupRows.filter((group) => {
+    if (!group.group_id) return false;
+    const selected = groupBindings[group.group_id] ?? currentGroupBindingIDs(group);
+    return !sameOnboardingGroupSelection(selected, currentGroupBindingIDs(group));
+  });
+  const invalidGroupBindings = changedGroupBindings.filter((group) => {
+    if (!group.group_id) return true;
+    const selected = groupBindings[group.group_id] ?? [];
+    return selected.length === 0 || !group.effective_rate;
+  });
+  const groupBindingRequests = changedGroupBindings.flatMap((group) => {
+    if (!selectedHost || !group.group_id || !group.effective_rate) return [];
+    const localGroupIDs = groupBindings[group.group_id] ?? [];
+    if (localGroupIDs.length === 0) return [];
+    const upstream = upstreams.data?.hosts.find((item) => item.host === selectedHost);
+    if (!upstream) return [];
+    const accountIDs = group.bound_accounts
+      .filter((account) => account.account_exists && account.binding_status !== "missing")
+      .map((account) => account.account_id);
+    return [
+      {
+        host: selectedHost,
+        upstream_type: upstream.upstream_type,
+        platform: group.platform ?? undefined,
+        local_group_ids: localGroupIDs.map(Number),
+        upstream_group_id: group.group_id,
+        account_ids: accountIDs.length > 0 ? accountIDs : undefined,
+        concurrency: config.data?.account_default_concurrency,
+        priority: config.data?.account_default_priority,
+        schedulable: false,
+      } satisfies OnboardingRequest,
+    ];
+  });
+  let groupBindingSummary = "当前没有待保存的分组变更";
+  if (invalidGroupBindings.length > 0) {
+    groupBindingSummary = "每个变更项至少需要一个有效的本地分组和账号成本";
+  } else if (changedGroupBindings.length > 0) {
+    groupBindingSummary = `待保存 ${changedGroupBindings.length} 个分组变更`;
+  }
+  const groupPagination = useClientPagination(groupRows);
+  const groupPageRows = groupPagination.visibleItems;
   useEffect(() => {
-    setGroupPage(1);
-  }, [selectedHost]);
+    groupPagination.setCurrentPage(1);
+    setGroupBindings({});
+    setGroupBindingTaskId(null);
+  }, [groupPagination.setCurrentPage, selectedHost]);
   useEffect(() => {
-    setGroupPage((current) => Math.min(current, groupTotalPages));
-  }, [groupTotalPages]);
+    if (!groups.data) return;
+    setGroupBindings((current) => {
+      if (Object.keys(current).length > 0) return current;
+      return Object.fromEntries(
+        groups.data.flatMap((group) => {
+          if (!group.group_id) return [];
+          const ids = group.bound_accounts.flatMap((account) =>
+            (account.local_groups ?? []).map((localGroup) => localGroup.id),
+          );
+          return [[group.group_id, [...new Set(ids)]]];
+        }),
+      );
+    });
+  }, [groups.data]);
+  useEffect(() => {
+    if (!groupBindingTask.data || !taskStopsPolling(groupBindingTask.data)) return;
+    if (groupBindingTask.data.status === "succeeded") {
+      toast.success(groupBindingTask.data.message || "账号分组绑定变更已完成");
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["upstream-groups", selectedHost] }),
+        queryClient.invalidateQueries({ queryKey: ["accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["groups"] }),
+      ]);
+      setGroupBindings({});
+    } else {
+      toast.error(groupBindingTask.data.message || "账号分组绑定变更失败");
+    }
+    setGroupBindingTaskId(null);
+  }, [groupBindingTask.data, queryClient, selectedHost]);
   const data = upstreams.data;
-  const upstreamTypeOptions = Array.from(
-    new Set((data?.hosts ?? []).map((host) => host.upstream_type).filter(Boolean)),
-  ).sort((a, b) => displayUpstreamType(a).localeCompare(displayUpstreamType(b)));
-  const authStatusOptions = Array.from(
-    new Set((data?.hosts ?? []).map((host) => host.auth_status).filter(Boolean)),
-  ).sort((a, b) => a.localeCompare(b));
   const minimumBalance = filters.minimumBalance ? Number(filters.minimumBalance) : null;
   const maximumBalance = filters.maximumBalance ? Number(filters.maximumBalance) : null;
   const hasActiveFilters = Object.values(filters).some((value) => value !== "" && value !== "all");
@@ -2034,13 +2139,8 @@ function UpstreamsPage() {
           balanceMatches
         );
       }) ?? []);
-  const [pageSize, setPageSize] = useState(20);
-  const [page, setPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(allHosts.length / pageSize));
-  const hosts = allHosts.slice((page - 1) * pageSize, page * pageSize);
-  useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
+  const hostPagination = useClientPagination(allHosts);
+  const hosts = hostPagination.visibleItems;
   function applyFilters(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const minimum = filterDraft.minimumBalance ? Number(filterDraft.minimumBalance) : null;
@@ -2050,12 +2150,12 @@ function UpstreamsPage() {
       return;
     }
     setFilters({ ...filterDraft });
-    setPage(1);
+    hostPagination.setCurrentPage(1);
   }
   function resetFilters() {
     setFilterDraft({ ...emptyUpstreamFilters });
     setFilters({ ...emptyUpstreamFilters });
-    setPage(1);
+    hostPagination.setCurrentPage(1);
   }
   useEffect(() => {
     const keys = terminalRefreshKeys("upstream-action", actionTask.data);
@@ -2219,21 +2319,25 @@ function UpstreamsPage() {
               }))
             }
           >
-            <SelectTrigger className="w-36">
+            <SelectTrigger appearance="faceted" className="w-36">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部类型</SelectItem>
+            <SelectContent appearance="faceted">
+              <SelectItem appearance="faceted" value="all">
+                全部类型
+              </SelectItem>
               {upstreamTypeOptions.map((option) => (
-                <SelectItem value={option} key={option}>
-                  {displayUpstreamType(option)}
+                <SelectItem appearance="faceted" value={option.value} key={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select
             value={filterDraft.authStatus}
-            itemToStringLabel={(value) => (value === "all" ? "全部状态" : value)}
+            itemToStringLabel={(value) =>
+              value === "all" ? "全部状态" : upstreamAuthStatusMeta(value).label
+            }
             onValueChange={(authStatus) =>
               setFilterDraft((current) => ({
                 ...current,
@@ -2241,14 +2345,16 @@ function UpstreamsPage() {
               }))
             }
           >
-            <SelectTrigger className="w-36">
+            <SelectTrigger appearance="faceted" className="w-36">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              {authStatusOptions.map((option) => (
-                <SelectItem value={option} key={option}>
-                  {option}
+            <SelectContent appearance="faceted">
+              <SelectItem appearance="faceted" value="all">
+                全部状态
+              </SelectItem>
+              {upstreamAuthStatusOptions.map((option) => (
+                <SelectItem appearance="faceted" value={option.value} key={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -2300,7 +2406,7 @@ function UpstreamsPage() {
             </Button>
           </div>
         </form>
-        <Card className="min-h-0 flex-1 gap-0 py-0">
+        <DataTablePanel className="flex-1">
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1040px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
@@ -2326,12 +2432,12 @@ function UpstreamsPage() {
                 const recovering = recover.isPending && recover.variables?.host === host.host;
                 const readingBalance =
                   refreshBalance.isPending && refreshBalance.variables === host.host;
+                const authStatus = upstreamAuthStatusMeta(host.auth_status);
                 return (
                   <TableRow key={host.host}>
                     <TableCell className="max-w-80">
                       <UpstreamIdentity
                         name={host.name}
-                        upstreamId={host.upstream_id}
                         host={host.host}
                         hosts={host.hosts}
                         baseUrl={host.base_url}
@@ -2341,16 +2447,7 @@ function UpstreamsPage() {
                     <TableCell>{host.group_count}</TableCell>
                     <TableCell>{host.account_count}</TableCell>
                     <TableCell>
-                      <StatusPill
-                        label={host.auth_status}
-                        tone={
-                          host.auth_status === "鉴权失效"
-                            ? "danger"
-                            : host.auth_status === "待验证"
-                              ? "warning"
-                              : "success"
-                        }
-                      />
+                      <StatusPill label={authStatus.label} tone={authStatus.tone} />
                     </TableCell>
                     <TableCell>
                       <div className="grid gap-0.5">
@@ -2385,7 +2482,10 @@ function UpstreamsPage() {
                         </TableActionButton>
                         <TableActionButton
                           label="查看分组"
-                          onClick={() => setSelectedHost(host.host)}
+                          onClick={() => {
+                            setGroupDialogView("catalog");
+                            setSelectedHost(host.host);
+                          }}
                         >
                           <FolderOpen />
                         </TableActionButton>
@@ -2459,18 +2559,15 @@ function UpstreamsPage() {
           </Table>
           {allHosts.length > 0 && (
             <DataTablePagination
-              currentPage={page}
-              totalPages={totalPages}
+              currentPage={hostPagination.currentPage}
+              totalPages={hostPagination.totalPages}
               totalItems={allHosts.length}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize);
-                setPage(1);
-              }}
+              pageSize={hostPagination.pageSize}
+              onPageChange={hostPagination.setCurrentPage}
+              onPageSizeChange={hostPagination.setPageSize}
             />
           )}
-        </Card>
+        </DataTablePanel>
       </div>
       <UpstreamEditDialog
         host={editHost}
@@ -2768,99 +2865,133 @@ function UpstreamsPage() {
       <Dialog
         open={selectedHost !== null}
         onOpenChange={(open) => {
-          if (!open) setSelectedHost(null);
+          if (!open) {
+            setSelectedHost(null);
+            setGroupDialogView("catalog");
+          }
         }}
       >
         <DialogContent
           width="table"
           height="tall"
-          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
-          <DialogHeader>
-            <DialogTitle>上游分组</DialogTitle>
-          </DialogHeader>
-          <DialogBody className="grid grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-lg border pr-0">
-            <Table className="min-w-[820px] table-fixed" containerClassName="min-h-0 overflow-auto">
-              <TableHeader className="sticky top-0 z-10">
-                <TableRow>
-                  <TableHead className="w-[18%]">分组</TableHead>
-                  <TableHead className="w-[22%]">介绍</TableHead>
-                  <TableHead className="w-[11%]">{upstreamRateLabels.rawRate}</TableHead>
-                  <TableHead className="w-[12%]">{upstreamRateLabels.effectiveRate}</TableHead>
-                  <TableHead className="w-[19%]">绑定账号</TableHead>
-                  <TableHead className="w-[11%] text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {groups.isLoading && <TableLoadingRows columns={6} />}
-                {groups.isError && (
-                  <TableMessageRow columns={6}>
-                    <QueryError error={groups.error} fallback="分组目录读取失败" embedded />
-                  </TableMessageRow>
+          <UpstreamGroupDialogHeader view={groupDialogView} onViewChange={setGroupDialogView} />
+          <DialogBody className="overflow-hidden pr-0">
+            {groupDialogView === "catalog" ? (
+              <DataTablePanel className="h-full">
+                <Table
+                  className="min-w-[860px] table-fixed"
+                  containerClassName="min-h-0 flex-1 overflow-auto"
+                >
+                  <TableHeader className="sticky top-0 z-10">
+                    <TableRow>
+                      <TableHead className="w-[18%]">分组</TableHead>
+                      <TableHead className="w-[24%]">介绍</TableHead>
+                      <TableHead className="w-[12%]">{upstreamRateLabels.rawRate}</TableHead>
+                      <TableHead className="w-[13%]">{upstreamRateLabels.effectiveRate}</TableHead>
+                      <TableHead className="w-[33%]">本地分组</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {groups.isLoading && <TableLoadingRows columns={5} />}
+                    {groups.isError && (
+                      <TableMessageRow columns={5}>
+                        <QueryError error={groups.error} fallback="分组目录读取失败" embedded />
+                      </TableMessageRow>
+                    )}
+                    {!groups.isLoading && !groups.isError && !groups.data?.length && (
+                      <TableMessageRow columns={5}>
+                        <EmptyRow text="上游没有返回分组" />
+                      </TableMessageRow>
+                    )}
+                    {!groups.isError &&
+                      groupPageRows.map((group) => {
+                        return (
+                          <TableRow key={`${group.host}:${group.group_id}`}>
+                            <TableCell className="font-medium" tooltipContent={group.name}>
+                              {group.name}
+                            </TableCell>
+                            <TableCell tooltipContent={group.description || "未提供"}>
+                              {group.description || "未提供"}
+                            </TableCell>
+                            <TableCell>{group.raw_rate ?? "未读取"}</TableCell>
+                            <TableCell>{group.effective_rate ?? "未计算"}</TableCell>
+                            <TableCell overflowTooltip={false}>
+                              <UpstreamGroupBindingEditor
+                                upstreamGroupName={group.name}
+                                groups={localGroupOptions}
+                                value={
+                                  group.group_id
+                                    ? (groupBindings[group.group_id] ??
+                                      currentGroupBindingIDs(group))
+                                    : []
+                                }
+                                disabled={
+                                  !group.group_id ||
+                                  (!group.bound && !group.bindable) ||
+                                  saveGroupBindings.isPending ||
+                                  Boolean(groupBindingTaskId)
+                                }
+                                disabledReason={
+                                  group.bound ? null : (group.unavailable_reason ?? null)
+                                }
+                                onValueChange={(value) => {
+                                  if (!group.group_id) return;
+                                  setGroupBindings((current) => ({
+                                    ...current,
+                                    [group.group_id!]: value,
+                                  }));
+                                }}
+                              />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                  </TableBody>
+                </Table>
+                {groupRows.length > 0 && (
+                  <DataTablePagination
+                    currentPage={groupPagination.currentPage}
+                    totalPages={groupPagination.totalPages}
+                    totalItems={groupRows.length}
+                    pageSize={groupPagination.pageSize}
+                    onPageChange={groupPagination.setCurrentPage}
+                    onPageSizeChange={groupPagination.setPageSize}
+                  />
                 )}
-                {!groups.isLoading && !groups.isError && !groups.data?.length && (
-                  <TableMessageRow columns={6}>
-                    <EmptyRow text="上游没有返回分组" />
-                  </TableMessageRow>
-                )}
-                {!groups.isError &&
-                  groupPageRows.map((group) => {
-                    return (
-                      <TableRow key={`${group.host}:${group.group_id}`}>
-                        <TableCell className="font-medium" tooltipContent={group.name}>
-                          {group.name}
-                        </TableCell>
-                        <TableCell tooltipContent={group.description || "未提供"}>
-                          {group.description || "未提供"}
-                        </TableCell>
-                        <TableCell>{group.raw_rate ?? "未读取"}</TableCell>
-                        <TableCell>{group.effective_rate ?? "未计算"}</TableCell>
-                        <TableCell>
-                          <UpstreamBoundAccountSelect accounts={group.bound_accounts} />
-                        </TableCell>
-                        <TableCell className="text-right" overflowTooltip={false}>
-                          <div className="flex justify-end">
-                            <TableActionButton
-                              label="添加账号"
-                              disabled={!group.group_id}
-                              onClick={() => {
-                                const upstream = data?.hosts.find(
-                                  (item) => item.host === selectedHost,
-                                );
-                                navigate({
-                                  to: "/onboarding",
-                                  search: {
-                                    host: selectedHost ?? undefined,
-                                    upstream_type: upstream?.upstream_type,
-                                    group_id: group.group_id ?? undefined,
-                                  },
-                                });
-                                setSelectedHost(null);
-                              }}
-                            >
-                              <UserPlus />
-                            </TableActionButton>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-              </TableBody>
-            </Table>
-            {groupRows.length > 0 && (
-              <DataTablePagination
-                currentPage={groupPage}
-                totalPages={groupTotalPages}
-                totalItems={groupRows.length}
-                pageSize={groupPageSize}
-                onPageChange={setGroupPage}
-                onPageSizeChange={(nextPageSize) => {
-                  setGroupPageSize(nextPageSize);
-                  setGroupPage(1);
-                }}
-              />
+              </DataTablePanel>
+            ) : groupHistory.isLoading ? (
+              <div className="flex min-h-0 items-center justify-center">
+                <span className="text-muted-foreground text-sm">正在读取变化历史</span>
+              </div>
+            ) : groupHistory.isError ? (
+              <QueryError error={groupHistory.error} fallback="上游分组变化历史读取失败" embedded />
+            ) : (
+              <UpstreamGroupHistory rows={groupHistory.data ?? []} />
             )}
           </DialogBody>
+          {groupDialogView === "catalog" ? (
+            <DialogFooter className="grid items-center gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="grid min-w-0 gap-1">
+                {invalidGroupBindings.length > 0 ? (
+                  <span className="text-destructive text-xs">{groupBindingSummary}</span>
+                ) : null}
+              </div>
+              <Button
+                disabled={
+                  groupBindingRequests.length === 0 ||
+                  invalidGroupBindings.length > 0 ||
+                  saveGroupBindings.isPending ||
+                  Boolean(groupBindingTaskId)
+                }
+                onClick={() => saveGroupBindings.mutate(groupBindingRequests)}
+              >
+                <Save />
+                {groupBindingTaskId ? "保存中" : "保存全部变更"}
+              </Button>
+            </DialogFooter>
+          ) : null}
         </DialogContent>
       </Dialog>
       <Sheet
@@ -3379,8 +3510,6 @@ export function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<AccountPoolFilter>("all");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
-  const [pageSize, setPageSize] = useState(50);
-  const [page, setPage] = useState(1);
   const [baseURLCheckOpen, setBaseURLCheckOpen] = useState(false);
   const [baseURLCheckTaskId, setBaseURLCheckTaskId] = useState<string | null>(null);
   const [baseURLCheckResultsReady, setBaseURLCheckResultsReady] = useState(false);
@@ -3392,24 +3521,6 @@ export function AccountsPage() {
   const groupOptions = Array.from(new Set(rows.flatMap((account) => account.groups))).sort((a, b) =>
     a.localeCompare(b),
   );
-  const groupCounts = new Map<string, number>();
-  for (const account of rows) {
-    for (const group of new Set(account.groups)) {
-      groupCounts.set(group, (groupCounts.get(group) ?? 0) + 1);
-    }
-  }
-  const typeOptions = Array.from(
-    new Set(
-      rows
-        .map((account) => account.account_type ?? account.upstream_type)
-        .filter((type): type is string => Boolean(type)),
-    ),
-  ).sort((a, b) => a.localeCompare(b));
-  const typeCounts = new Map<string, number>();
-  for (const account of rows) {
-    const type = account.account_type ?? account.upstream_type;
-    if (type) typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-  }
   const filteredRows = rows.filter(
     (account) =>
       searchable(
@@ -3434,18 +3545,14 @@ export function AccountsPage() {
       ) &&
       accountMatchesPoolFilter(account, statusFilter) &&
       (!groupFilter || account.groups.includes(groupFilter)) &&
-      (!typeFilter || (account.account_type ?? account.upstream_type) === typeFilter),
+      (!typeFilter ||
+        accountTypeValue(account.account_type ?? account.upstream_type) === typeFilter),
   );
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
+  const pagination = useClientPagination(filteredRows, 50);
+  const pageRows = pagination.visibleItems;
   const automaticAccountRows = filteredRows.filter((account) => account.manual_priority == null);
   const automaticAccountIDs = automaticAccountRows.map((account) => account.id);
-  const rateSyncAccountIDs = filteredRows
-    .filter(
-      (account) =>
-        account.manual_priority == null || account.manual_sync_balance_multiplier === true,
-    )
-    .map((account) => account.id);
+  const rateSyncAccountIDs = filteredRows.map((account) => account.id);
   const baseURLCheckMutation = useMutation({
     mutationFn: () => api.checkAccountConfiguration(automaticAccountIDs),
     onSuccess: (task) => setBaseURLCheckTaskId(task.id),
@@ -3560,15 +3667,12 @@ export function AccountsPage() {
       });
     }
   }
-  useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
   return (
     <PageLayout fixedContent>
       <PageHeading
         eyebrow="ACCOUNTS / MANAGEMENT"
         title="账号管理"
-        description="健康分、最近结果、综合延迟、调度倍率和组内分配权重集中查看，可按状态快速定位。"
+        description="健康分、最近结果、综合延迟、账号成本和组内分配权重集中查看，可按状态快速定位。"
         action={
           <PageActions>
             <Button
@@ -3621,7 +3725,7 @@ export function AccountsPage() {
             value={search}
             onChange={(value) => {
               setSearch(value);
-              setPage(1);
+              pagination.setCurrentPage(1);
             }}
             placeholder="搜索账号、ID、Host 或分组"
           />
@@ -3631,26 +3735,24 @@ export function AccountsPage() {
             value={groupFilter}
             onValueChange={(value) => {
               setGroupFilter(value);
-              setPage(1);
+              pagination.setCurrentPage(1);
             }}
-            optionCount={(value) => groupCounts.get(value)}
           />
           <FilterMenu
             label="类型"
-            options={typeOptions}
+            options={accountTypeOptions.map((option) => option.value)}
             value={typeFilter}
             onValueChange={(value) => {
               setTypeFilter(value);
-              setPage(1);
+              pagination.setCurrentPage(1);
             }}
             optionLabel={(value) => accountTypeLabel(value) ?? value}
-            optionCount={(value) => typeCounts.get(value)}
           />
           <AccountStatusFilter
             value={statusFilter}
             onValueChange={(value) => {
               setStatusFilter(value);
-              setPage(1);
+              pagination.setCurrentPage(1);
             }}
           />
           <Tooltip>
@@ -3669,7 +3771,7 @@ export function AccountsPage() {
             <TooltipContent>刷新</TooltipContent>
           </Tooltip>
         </TableFilterToolbar>
-        <Card className="min-h-0 flex-1 gap-0 py-0">
+        <DataTablePanel className="flex-1">
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1500px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
@@ -3679,7 +3781,7 @@ export function AccountsPage() {
                 <TableHead className="w-36">健康分</TableHead>
                 <TableHead className="w-40">最近结果</TableHead>
                 <TableHead className="w-32">综合延迟</TableHead>
-                <TableHead className="w-28">调度倍率</TableHead>
+                <TableHead className="w-28">账号成本</TableHead>
                 <TableHead className="w-24">调度权重</TableHead>
                 <TableHead className="w-48">调度参数</TableHead>
                 <TableHead className="w-36">状态</TableHead>
@@ -3728,18 +3830,15 @@ export function AccountsPage() {
           </Table>
           {filteredRows.length > 0 && (
             <DataTablePagination
-              currentPage={page}
-              totalPages={totalPages}
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
               totalItems={filteredRows.length}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize);
-                setPage(1);
-              }}
+              pageSize={pagination.pageSize}
+              onPageChange={pagination.setCurrentPage}
+              onPageSizeChange={pagination.setPageSize}
             />
           )}
-        </Card>
+        </DataTablePanel>
       </div>
       <Dialog
         open={baseURLCheckOpen}
@@ -3875,7 +3974,7 @@ export function AccountsPage() {
                 {maintenanceKind === "cleanup"
                   ? `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`
                   : maintenanceKind === "rate"
-                    ? `将使用账号凭据向上游探测 ${rateSyncAccountIDs.length} 个允许同步的账号当前有效倍率，并写回管理平台；写后读回一致才更新本地。`
+                    ? `将使用账号凭据向上游探测 ${rateSyncAccountIDs.length} 个账号当前有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`
                     : `当前筛选结果中有 ${automaticAccountIDs.length} 个自动管理账号，只处理其中已有绑定的账号。`}
               </DialogDescription>
             )}
@@ -4012,6 +4111,9 @@ type AccountRateSyncItem = {
   accountName: string;
   upstreamHost: string;
   status: string;
+  upstreamRawMultiplier: string;
+  rechargeRate: string;
+  accountMultiplier: string;
   before: string;
   after: string;
   nameBefore: string;
@@ -4030,6 +4132,9 @@ function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
         accountName: String(item.account_name ?? ""),
         upstreamHost: String(item.upstream_host ?? ""),
         status: String(item.status ?? "未返回"),
+        upstreamRawMultiplier: String(item.upstream_raw_multiplier ?? ""),
+        rechargeRate: String(item.recharge_rate ?? ""),
+        accountMultiplier: String(item.account_multiplier ?? ""),
         before: item.before == null ? "—" : String(item.before),
         after: item.after == null ? "—" : String(item.after),
         nameBefore: String(item.name_before ?? ""),
@@ -4040,34 +4145,10 @@ function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
   });
 }
 
-function usePaginatedItems<T>(items: T[], initialPageSize = 20) {
-  const [pageSize, setPageSize] = useState(initialPageSize);
-  const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
-  const page = Math.min(currentPage, totalPages);
-  const visibleItems = items.slice((page - 1) * pageSize, page * pageSize);
-
-  useEffect(() => {
-    if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [currentPage, totalPages]);
-
-  return {
-    currentPage: page,
-    pageSize,
-    totalPages,
-    visibleItems,
-    setCurrentPage,
-    setPageSize: (value: number) => {
-      setPageSize(value);
-      setCurrentPage(1);
-    },
-  };
-}
-
 export function AccountRateSyncTaskStatus(props: { task: Task }) {
   const pending = ["queued", "running"].includes(props.task.status);
   const items = accountRateSyncItems(props.task);
-  const pagination = usePaginatedItems(items);
+  const pagination = useClientPagination(items);
   if (pending) {
     return (
       <TaskProgressState
@@ -4096,7 +4177,7 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
       {props.task.status === "failed" && items.length === 0 && (
         <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+      <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => (
             <div
@@ -4119,6 +4200,12 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
                       名称 {item.nameBefore} → {item.nameAfter}
                     </span>
                   )}
+                {item.upstreamRawMultiplier && item.rechargeRate && item.accountMultiplier && (
+                  <span className="text-muted-foreground mt-1 block truncate text-xs">
+                    上游原始倍率 {item.upstreamRawMultiplier} ÷ 充值比例 {item.rechargeRate} =
+                    账号成本 {item.accountMultiplier}
+                  </span>
+                )}
               </div>
               <span className="text-muted-foreground tabular-nums">
                 {item.before} → {item.after}
@@ -4157,7 +4244,7 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
             onPageSizeChange={pagination.setPageSize}
           />
         ) : null}
-      </div>
+      </DataTablePanel>
     </div>
   );
 }
@@ -4184,7 +4271,7 @@ function accountMaintenanceItems(task: Task): AccountMaintenanceItem[] {
 export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
   const pending = ["queued", "running"].includes(props.task.status);
   const items = accountMaintenanceItems(props.task);
-  const pagination = usePaginatedItems(items);
+  const pagination = useClientPagination(items);
   if (pending) {
     return (
       <TaskProgressState
@@ -4213,7 +4300,7 @@ export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
       {props.task.status === "failed" && (
         <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+      <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => (
             <div
@@ -4268,7 +4355,7 @@ export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
             onPageSizeChange={pagination.setPageSize}
           />
         ) : null}
-      </div>
+      </DataTablePanel>
     </div>
   );
 }
@@ -4313,7 +4400,7 @@ export function AccountMaintenanceTaskStatus(props: {
 }) {
   const pending = ["queued", "running"].includes(props.task.status);
   const items = accountMaintenanceItems(props.task);
-  const pagination = usePaginatedItems(items);
+  const pagination = useClientPagination(items);
   const missingItems = items.filter((item) => item.status === "管理平台不存在");
   if (pending) {
     return (
@@ -4343,7 +4430,7 @@ export function AccountMaintenanceTaskStatus(props: {
       {props.task.status === "failed" && (
         <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+      <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => (
             <div
@@ -4399,7 +4486,7 @@ export function AccountMaintenanceTaskStatus(props: {
             onPageSizeChange={pagination.setPageSize}
           />
         ) : null}
-      </div>
+      </DataTablePanel>
       {missingItems.length > 0 && props.onCleanupMissing ? (
         <div className="flex justify-end">
           <Button
@@ -4707,8 +4794,6 @@ export function GroupsPage() {
   };
   const rows = groups.data ?? [];
   const [search, setSearch] = useState("");
-  const [pageSize, setPageSize] = useState(20);
-  const [page, setPage] = useState(1);
   const filteredRows = rows.filter((group) =>
     searchable(
       [
@@ -4723,10 +4808,8 @@ export function GroupsPage() {
       search,
     ),
   );
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  const pageRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
-  useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
-  useEffect(() => setPage(1), [search]);
+  const pagination = useClientPagination(filteredRows);
+  const pageRows = pagination.visibleItems;
   if (groups.error)
     return (
       <PageLayout>
@@ -4751,12 +4834,12 @@ export function GroupsPage() {
             value={search}
             onChange={(value) => {
               setSearch(value);
-              setPage(1);
+              pagination.setCurrentPage(1);
             }}
             placeholder="搜索分组、类型或策略"
           />
         </div>
-        <Card className="min-h-0 flex-1 gap-0 py-0">
+        <DataTablePanel className="flex-1">
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1240px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
@@ -4853,18 +4936,15 @@ export function GroupsPage() {
           </Table>
           {filteredRows.length > 0 && (
             <DataTablePagination
-              currentPage={page}
-              totalPages={totalPages}
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
               totalItems={filteredRows.length}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={(nextPageSize) => {
-                setPageSize(nextPageSize);
-                setPage(1);
-              }}
+              pageSize={pagination.pageSize}
+              onPageChange={pagination.setCurrentPage}
+              onPageSizeChange={pagination.setPageSize}
             />
           )}
-        </Card>
+        </DataTablePanel>
       </div>
       <GroupAllocationDialog
         group={allocationGroup}
@@ -4937,7 +5017,7 @@ export function GroupsPage() {
   );
 }
 
-function AlertsPage() {
+export function AlertsPage() {
   const alerts = useQuery({
     queryKey: ["alerts"],
     queryFn: api.alerts,
@@ -4949,9 +5029,10 @@ function AlertsPage() {
     refetchInterval: 15_000,
   });
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const alertRows = Array.isArray(alerts.data) ? alerts.data : [];
+  const pagination = useClientPagination(alertRows, 10);
+  const pageAlerts = pagination.visibleItems;
+  const clearableAlertCount = alertRows.filter((alert) => alert.status !== "firing").length;
   const [taskId, setTaskId] = useState<string | null>(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
   const task = useQuery({
@@ -4968,7 +5049,7 @@ function AlertsPage() {
   const clearAlerts = useMutation({
     mutationFn: api.clearAlerts,
     onSuccess: async (result) => {
-      setPage(1);
+      pagination.setCurrentPage(1);
       setClearDialogOpen(false);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["alerts"] }),
@@ -4985,36 +5066,8 @@ function AlertsPage() {
       void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
   }, [queryClient, task.data?.status]);
   const evaluating = evaluate.isPending || taskIsPending(taskId, task);
-  const alertRows = Array.isArray(alerts.data) ? alerts.data : [];
-  const clearableAlertCount = alertRows.filter((alert) => alert.status !== "firing").length;
-  const filteredAlerts =
-    alertRows.filter((alert) => {
-      const objectLabel = alertObjectLabel(alert);
-      return searchable(
-        [
-          alert.event_type,
-          alertTypeLabel(alert.event_type),
-          alert.object_kind,
-          alert.object_id,
-          objectLabel,
-          alert.cause_code,
-          alertCauseLabel(alert.cause_code),
-          alert.status,
-          alertStatusLabel(alert.status),
-          alert.delivery_status,
-          alertDeliveryLabel(alert.delivery_status),
-          alert.last_error,
-        ],
-        search,
-      );
-    }) ?? [];
-  const totalPages = Math.max(1, Math.ceil(filteredAlerts.length / pageSize));
-  const pageAlerts = filteredAlerts.slice((page - 1) * pageSize, page * pageSize);
-  useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
   return (
-    <PageLayout>
+    <PageLayout fixedContent>
       <PageHeading
         eyebrow="OPERATIONS / ALERTS"
         title="告警通知"
@@ -5032,89 +5085,82 @@ function AlertsPage() {
           </PageActions>
         }
       />
-      {!notifications.isLoading &&
-        !notifications.error &&
-        notifications.data?.configured !== true && (
-          <div className="text-muted-foreground mb-3 text-sm">
-            尚未配置通知渠道；仍可检测并记录告警，但不会发送通知。
+      <div className="flex h-full min-h-0 flex-col gap-3" data-testid="alerts-operations-layout">
+        {!notifications.isLoading &&
+          !notifications.error &&
+          notifications.data?.configured !== true && (
+            <div className="border-warning/30 bg-warning/10 text-warning shrink-0 rounded-lg border px-3 py-2 text-sm">
+              尚未配置通知渠道；仍可检测并记录告警，但不会发送通知。
+            </div>
+          )}
+        {notifications.error && (
+          <QueryError error={notifications.error} fallback="告警队列状态读取失败" />
+        )}
+        {notifications.data ? (
+          <NotificationQueueStatus
+            queues={notifications.data.queues}
+            loadDetails={api.notificationQueue}
+          />
+        ) : null}
+        {alerts.error && <QueryError error={alerts.error} fallback="告警读取失败" />}
+        {task.error && <QueryError error={task.error} fallback="告警检测任务状态读取失败" />}
+        {task.data && (
+          <AlertEvaluationTaskStatus task={task.data} onClose={() => setTaskId(null)} />
+        )}
+        <Card className="min-h-0 flex-1" data-testid="alert-list-panel">
+          <PanelHeading
+            title="告警列表"
+            subtitle={`共 ${alertRows.length} 条记录；查看对象、原因、时间和通知状态`}
+            action={
+              <AlertListActions
+                loading={alerts.isLoading}
+                failed={Boolean(alerts.error)}
+                clearableCount={clearableAlertCount}
+                onClear={() => {
+                  clearAlerts.reset();
+                  setClearDialogOpen(true);
+                }}
+              />
+            }
+          />
+          <div
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+            data-testid="alert-list-scroll-area"
+          >
+            {alerts.isLoading && <LoadingRows columns={1} />}
+            {!alerts.isLoading && !alerts.error && !alertRows.length && (
+              <EmptyRow text="暂无告警" detail="新的鉴权、余额或主动探测异常会出现在这里。" />
+            )}
+            {!alerts.error &&
+              pageAlerts.map((alert) => (
+                <RunRow
+                  key={alert.incident_key}
+                  status={
+                    alert.status === "firing"
+                      ? "failed"
+                      : alert.status === "suppressed"
+                        ? "suppressed"
+                        : "succeeded"
+                  }
+                  title={`${alertTypeLabel(alert.event_type)} · ${alertObjectLabel(alert)}`}
+                  detail={`${alertCauseLabel(alert.cause_code)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
+                  state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
+                  icon={<BellRing size={15} />}
+                />
+              ))}
           </div>
-        )}
-      {notifications.error && (
-        <QueryError error={notifications.error} fallback="告警队列状态读取失败" />
-      )}
-      {notifications.data ? (
-        <NotificationQueueStatus
-          queues={notifications.data.queues}
-          loadDetails={api.notificationQueue}
-        />
-      ) : null}
-      {alerts.error && <QueryError error={alerts.error} fallback="告警读取失败" />}
-      {task.error && <QueryError error={task.error} fallback="告警检测任务状态读取失败" />}
-      {task.data && <TaskStatus task={task.data} onClose={() => setTaskId(null)} />}
-      <Card>
-        <PanelHeading
-          title="告警列表"
-          subtitle="每条记录包含对象、原因、时间和通知状态"
-          action={
-            <AlertListActions
-              loading={alerts.isLoading}
-              failed={Boolean(alerts.error)}
-              clearableCount={clearableAlertCount}
-              onClear={() => {
-                clearAlerts.reset();
-                setClearDialogOpen(true);
-              }}
+          {!alerts.error && alertRows.length > 0 && (
+            <DataTablePagination
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
+              totalItems={alertRows.length}
+              pageSize={pagination.pageSize}
+              onPageChange={pagination.setCurrentPage}
+              onPageSizeChange={pagination.setPageSize}
             />
-          }
-        />
-        <TableFilterToolbar className="border-b px-4 py-3">
-          <SearchField
-            value={search}
-            onChange={(value) => {
-              setSearch(value);
-              setPage(1);
-            }}
-            placeholder="搜索类型、对象或原因"
-          />
-        </TableFilterToolbar>
-        {alerts.isLoading && <LoadingRows columns={1} />}
-        {!alerts.isLoading && !alerts.error && !filteredAlerts.length && (
-          <EmptyRow
-            text={search ? "没有匹配的告警" : "暂无告警"}
-            detail="新的鉴权、余额或主动探测异常会出现在这里。"
-          />
-        )}
-        {!alerts.error &&
-          pageAlerts.map((alert) => (
-            <RunRow
-              key={alert.incident_key}
-              status={
-                alert.status === "firing"
-                  ? "failed"
-                  : alert.status === "suppressed"
-                    ? "suppressed"
-                    : "succeeded"
-              }
-              title={`${alertTypeLabel(alert.event_type)} · ${alertObjectLabel(alert)}`}
-              detail={`${alertCauseLabel(alert.cause_code)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
-              state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
-              icon={<BellRing size={15} />}
-            />
-          ))}
-        {!alerts.error && filteredAlerts.length > 0 && (
-          <DataTablePagination
-            currentPage={page}
-            totalPages={totalPages}
-            totalItems={filteredAlerts.length}
-            pageSize={pageSize}
-            onPageChange={setPage}
-            onPageSizeChange={(nextPageSize) => {
-              setPageSize(nextPageSize);
-              setPage(1);
-            }}
-          />
-        )}
-      </Card>
+          )}
+        </Card>
+      </div>
       <Dialog
         open={clearDialogOpen}
         onOpenChange={(open) => {
@@ -5172,10 +5218,6 @@ const onboardingSchema = z.object({
       }
     }, "请输入有效的域名或 IP，可包含端口和路径"),
   upstream_type: z.string().min(2, "请选择上游类型"),
-  multiplier: z
-    .string()
-    .regex(/^\d+(\.\d+)?$/, "倍率必须是正数")
-    .refine((value) => Number(value) > 0, "倍率必须大于 0"),
   concurrency: z
     .string()
     .regex(/^\d+$/, "并发必须是整数")
@@ -5223,11 +5265,15 @@ function OnboardingPage() {
   const entryKind = onboardingEntryKind(onboardingSearch.host, onboardingSearch.group_id);
   const entryHost = onboardingSearch.host?.trim() || null;
   const activeEntryHost = React.useRef(entryHost);
-  activeEntryHost.current = entryHost;
+  useLayoutEffect(() => {
+    activeEntryHost.current = entryHost;
+  }, [entryHost]);
   const entryGroupId = entryKind === "group" ? onboardingSearch.group_id?.trim() || null : null;
   const [taskId, setTaskId] = useState<string | null>(null);
   const [balanceDialogOpen, setBalanceDialogOpen] = useState(false);
   const [balanceTaskId, setBalanceTaskId] = useState<string | null>(null);
+  const [keyCleanupOpen, setKeyCleanupOpen] = useState(false);
+  const [keyCleanupTaskId, setKeyCleanupTaskId] = useState<string | null>(null);
   const [onboardingMaintenanceKind, setOnboardingMaintenanceKind] = useState<
     "revalidate" | "repair" | "cleanup" | null
   >(null);
@@ -5267,7 +5313,6 @@ function OnboardingPage() {
       base_url_protocol: "https",
       base_url: "",
       upstream_type: "sub2api",
-      multiplier: "1",
       concurrency: "10",
       priority: "1",
       target_group: "",
@@ -5329,6 +5374,18 @@ function OnboardingPage() {
     enabled: balanceTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
+  const keyCleanupPreview = useQuery({
+    queryKey: ["onboarding-unbound-keys", verifiedUpstream?.host],
+    queryFn: () => api.previewUnboundUpstreamKeys(verifiedUpstream!.host),
+    enabled: keyCleanupOpen && verifiedUpstream !== null && keyCleanupTaskId === null,
+    retry: false,
+  });
+  const keyCleanupTask = useQuery({
+    queryKey: ["onboarding-key-cleanup-task", keyCleanupTaskId],
+    queryFn: () => api.task(keyCleanupTaskId!),
+    enabled: keyCleanupTaskId !== null,
+    refetchInterval: (query) => taskPollInterval(query, 300),
+  });
   const onboardingMaintenanceTask = useQuery({
     queryKey: ["onboarding-account-maintenance", onboardingMaintenanceTaskId],
     queryFn: () => api.task(onboardingMaintenanceTaskId!),
@@ -5368,6 +5425,12 @@ function OnboardingPage() {
     mutationFn: api.runBalanceSync,
     onSuccess: (queuedTask) => setBalanceTaskId(queuedTask.id),
     onError: (error) => notifyOperationError(error, "余额同步启动失败"),
+  });
+  const keyCleanup = useMutation({
+    mutationFn: (input: { host: string; keyIds: string[] }) =>
+      api.cleanupUnboundUpstreamKeys(input.host, input.keyIds),
+    onSuccess: (queuedTask) => setKeyCleanupTaskId(queuedTask.id),
+    onError: (error) => notifyOperationError(error, "无绑定 Key 清理任务启动失败"),
   });
   const onboardingMaintenance = useMutation({
     mutationFn: (input: { kind: "revalidate" | "repair" | "cleanup"; accountIds: string[] }) => {
@@ -5454,17 +5517,7 @@ function OnboardingPage() {
       (item) => item.host.toLowerCase() === normalizedHost,
     );
     if (existing) {
-      const authReady = new Set([
-        "已鉴权",
-        "已恢复",
-        "已认证",
-        "authenticated",
-        "authorized",
-        "healthy",
-        "valid",
-        "ok",
-        "succeeded",
-      ]).has(existing.auth_status.trim().toLowerCase());
+      const authReady = upstreamAuthStatusIsReady(existing.auth_status);
       if (!authReady) {
         toast.error(`该上游当前${existing.auth_status}，请先在上游管理中恢复鉴权`);
         return;
@@ -5543,7 +5596,7 @@ function OnboardingPage() {
     }
   }
   async function execute() {
-    const valid = await form.trigger(["multiplier", "concurrency", "priority", "local_group_id"]);
+    const valid = await form.trigger(["concurrency", "priority", "local_group_id"]);
     if (!valid) return;
     const values = form.getValues();
     form.clearErrors("host");
@@ -5552,6 +5605,7 @@ function OnboardingPage() {
     if (
       !candidate ||
       !candidate.group_id ||
+      !candidate.multiplier ||
       (!candidateCanCreateKey(candidate) && !existingBinding)
     ) {
       form.setError("host", {
@@ -5582,7 +5636,6 @@ function OnboardingPage() {
       host: onboardingRequestHost(verifiedUpstream, values.host),
       upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
       notes: values.notes,
-      multiplier: values.multiplier,
       concurrency: Number(values.concurrency),
       priority: Number(values.priority),
       local_group_ids: localGroupIDs.map(Number),
@@ -5597,8 +5650,7 @@ function OnboardingPage() {
         {
           upstream: preparedData?.upstream.name ?? verifiedUpstream?.name ?? request.host,
           upstreamGroup: candidate.group_name,
-          multiplier: request.multiplier,
-          localGroupMultiplier: localGroupMultiplierLabel(selectedLocalGroups),
+          multiplier: candidate.multiplier,
           localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
           concurrency: request.concurrency ?? 0,
           priority: request.priority ?? 0,
@@ -5635,7 +5687,6 @@ function OnboardingPage() {
             host: onboardingRequestHost(verifiedUpstream, values.host),
             upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
             notes: values.notes,
-            multiplier: candidate.multiplier,
             concurrency: Number(values.concurrency),
             priority: Number(values.priority),
             local_group_ids: localGroupIDs.map(Number),
@@ -5647,7 +5698,6 @@ function OnboardingPage() {
             upstream: preparedData?.upstream.name ?? verifiedUpstream?.name ?? values.host.trim(),
             upstreamGroup: candidate.group_name,
             multiplier: candidate.multiplier,
-            localGroupMultiplier: localGroupMultiplierLabel(selectedLocalGroups),
             localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
             concurrency: Number(values.concurrency),
             priority: Number(values.priority),
@@ -5737,15 +5787,6 @@ function OnboardingPage() {
   const entryCandidate = entryGroupId
     ? visibleCandidates.find((candidate) => candidate.group_id === entryGroupId)
     : undefined;
-  const entrySelectedLocalGroups =
-    entryCandidate && entryGroupId
-      ? (batchBindings[entryGroupId] ?? candidateBoundLocalGroupIDs(entryCandidate)).flatMap(
-          (groupID) => {
-            const group = localGroups.find((item) => item.id === groupID);
-            return group ? [group] : [];
-          },
-        )
-      : [];
   const displayedCandidates = entryGroupId
     ? entryCandidate
       ? [entryCandidate]
@@ -5791,6 +5832,8 @@ function OnboardingPage() {
   function switchOnboardingUpstream(target: NonNullable<typeof adjacentUpstreams.previous>) {
     setTaskId(null);
     setBalanceTaskId(null);
+    setKeyCleanupOpen(false);
+    setKeyCleanupTaskId(null);
     setOnboardingMaintenanceKind(null);
     setOnboardingMaintenanceTaskId(null);
     setMissingBindingTargets([]);
@@ -5850,11 +5893,6 @@ function OnboardingPage() {
       return;
     }
     setSelectedGroupId(entryGroupId);
-    if (candidate.multiplier && Number(candidate.multiplier) > 0) {
-      form.setValue("multiplier", candidate.multiplier, {
-        shouldValidate: true,
-      });
-    }
   }, [entryGroupId, form, preparedData]);
   if (groups.error)
     return (
@@ -5930,7 +5968,7 @@ function OnboardingPage() {
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong>{verifiedUpstream.name}</strong>
-                    <StatusPill label="已鉴权" tone="success" />
+                    <StatusPill label={upstreamAuthStatuses.authenticated} tone="success" />
                     <Badge variant="outline">
                       {displayUpstreamType(verifiedUpstream.upstream_type)}
                     </Badge>
@@ -6034,10 +6072,11 @@ function OnboardingPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="sub2api">Sub2API</SelectItem>
-                            <SelectItem value="newapi">New API</SelectItem>
-                            <SelectItem value="oneapi">OneAPI</SelectItem>
-                            <SelectItem value="custom">自定义上游</SelectItem>
+                            {configurableUpstreamTypeOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       )}
@@ -6057,7 +6096,7 @@ function OnboardingPage() {
                       </SelectContent>
                     </Select>
                   </FormField>
-                  <FormField label="倍率">
+                  <FormField label="充值比例">
                     <Input
                       value={rechargeRate}
                       onChange={(event) => setRechargeRate(event.target.value)}
@@ -6313,9 +6352,19 @@ function OnboardingPage() {
                   </Button>
                   <OnboardingMaintenanceActions
                     accountCount={boundAccountIDs.length}
-                    pending={onboardingMaintenancePending || preparing}
+                    pending={
+                      onboardingMaintenancePending ||
+                      preparing ||
+                      keyCleanup.isPending ||
+                      taskIsPending(keyCleanupTaskId, keyCleanupTask)
+                    }
                     onRevalidate={() => startOnboardingMaintenance("revalidate")}
                     onRepairNames={() => startOnboardingMaintenance("repair")}
+                    onCleanupKeys={() => {
+                      setKeyCleanupTaskId(null);
+                      keyCleanup.reset();
+                      setKeyCleanupOpen(true);
+                    }}
                   />
                 </div>
               ) : null}
@@ -6371,15 +6420,11 @@ function OnboardingPage() {
                 </div>
                 {entryGroupId && entryCandidate ? (
                   <div className="grid gap-3">
-                    <div className="grid grid-cols-2 divide-x divide-y rounded-lg border lg:grid-cols-5 lg:divide-y-0">
+                    <div className="grid grid-cols-2 divide-x divide-y rounded-lg border lg:grid-cols-4 lg:divide-y-0">
                       <ResultSummaryRow label="上游分组" value={entryCandidate.group_name} />
                       <ResultSummaryRow
-                        label="上游倍率"
+                        label="账号成本"
                         value={entryCandidate.multiplier ?? "未计算"}
-                      />
-                      <ResultSummaryRow
-                        label="本地分组倍率"
-                        value={localGroupMultiplierLabel(entrySelectedLocalGroups)}
                       />
                       <ResultSummaryRow
                         label="本地分组"
@@ -6428,7 +6473,7 @@ function OnboardingPage() {
                 ) : null}
                 {!entryGroupId ? (
                   <Table
-                    className="min-w-[1180px] table-fixed"
+                    className="min-w-[1020px] table-fixed"
                     containerClassName={
                       entryKind === "host"
                         ? "min-h-0 overflow-auto rounded-lg border"
@@ -6437,18 +6482,17 @@ function OnboardingPage() {
                   >
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[14%]">上游分组</TableHead>
-                        <TableHead className="w-[25%]">介绍</TableHead>
-                        <TableHead className="w-[8%]">上游倍率</TableHead>
-                        <TableHead className="w-[10%]">本地分组倍率</TableHead>
-                        <TableHead className="w-[26%]">本地分组</TableHead>
-                        <TableHead className="w-[9%]">状态</TableHead>
-                        <TableHead className="w-[8%] text-right">操作</TableHead>
+                        <TableHead className="w-[15%]">上游分组</TableHead>
+                        <TableHead className="w-[27%]">介绍</TableHead>
+                        <TableHead className="w-[10%]">账号成本</TableHead>
+                        <TableHead className="w-[29%]">本地分组</TableHead>
+                        <TableHead className="w-[10%]">状态</TableHead>
+                        <TableHead className="w-[9%] text-right">操作</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {!visibleCandidates.length ? (
-                        <TableMessageRow columns={7}>
+                        <TableMessageRow columns={6}>
                           <EmptyRow text="上游没有返回分组" />
                         </TableMessageRow>
                       ) : null}
@@ -6463,12 +6507,6 @@ function OnboardingPage() {
                           ? (batchBindings[candidate.group_id] ??
                             candidateBoundLocalGroupIDs(candidate))
                           : [];
-                        const selectedLocalGroupRecords = selectedLocalGroupIDs.flatMap(
-                          (groupID) => {
-                            const group = localGroups.find((item) => item.id === groupID);
-                            return group ? [group] : [];
-                          },
-                        );
                         const pendingChange = alreadyBound
                           ? !sameOnboardingGroupSelection(
                               selectedLocalGroupIDs,
@@ -6486,9 +6524,6 @@ function OnboardingPage() {
                               {candidate.description ?? "未提供说明"}
                             </TableCell>
                             <TableCell>{candidate.multiplier ?? "未计算"}</TableCell>
-                            <TableCell className="tabular-nums">
-                              {localGroupMultiplierLabel(selectedLocalGroupRecords)}
-                            </TableCell>
                             <TableCell overflowTooltip={false}>
                               <OnboardingGroupBindingSelect
                                 upstreamGroupName={candidate.group_name}
@@ -6560,10 +6595,11 @@ function OnboardingPage() {
                           }}
                         />
                       </FormField>
-                      <FormField label="账号倍率" error={form.formState.errors.multiplier?.message}>
+                      <FormField label="账号成本（已换算）">
                         <Input
-                          {...form.register("multiplier")}
+                          value={entryCandidate?.multiplier ?? ""}
                           disabled={!selectedGroupId}
+                          readOnly
                           inputMode="decimal"
                         />
                       </FormField>
@@ -6679,6 +6715,39 @@ function OnboardingPage() {
           }}
         />
       ) : null}
+
+      <OnboardingKeyCleanupDialog
+        open={keyCleanupOpen}
+        preview={keyCleanupPreview.isFetching ? null : (keyCleanupPreview.data ?? null)}
+        previewPending={keyCleanupPreview.isFetching}
+        previewError={keyCleanupPreview.error}
+        task={keyCleanupTask.data ?? null}
+        taskPending={keyCleanup.isPending}
+        taskError={keyCleanup.error ?? keyCleanupTask.error}
+        onOpenChange={(open) => {
+          if (!open) {
+            setKeyCleanupOpen(false);
+            setKeyCleanupTaskId(null);
+            keyCleanup.reset();
+          }
+        }}
+        onRefresh={() => void keyCleanupPreview.refetch()}
+        onConfirm={() => {
+          const preview = keyCleanupPreview.data;
+          if (!preview || preview.keys.length === 0) return;
+          keyCleanup.mutate({
+            host: preview.host,
+            keyIds: preview.keys.map((key) => key.key_id),
+          });
+        }}
+        onComplete={() => {
+          setKeyCleanupOpen(false);
+          setKeyCleanupTaskId(null);
+          keyCleanup.reset();
+          const host = verifiedUpstream?.host;
+          if (host) prepare.mutate(host);
+        }}
+      />
 
       <OnboardingConfirmDialog
         open={onboardingConfirmation !== null}
@@ -6939,9 +7008,27 @@ function RequestTracePage() {
   );
 }
 
-function TaskStatus(props: { task: Task; onClose: () => void }) {
+export function AlertEvaluationTaskStatus(props: { task: Task; onClose: () => void }) {
   return (
-    <Card className={cn("relative mb-4", props.task.status === "failed" && "border-destructive")}>
+    <div
+      className="max-h-[min(14rem,30vh)] shrink-0 overflow-y-auto overscroll-contain rounded-lg"
+      data-testid="alert-evaluation-task-status"
+      aria-label="告警检测任务状态"
+    >
+      <TaskStatus task={props.task} onClose={props.onClose} className="mb-0" />
+    </div>
+  );
+}
+
+function TaskStatus(props: { task: Task; onClose: () => void; className?: string }) {
+  return (
+    <Card
+      className={cn(
+        "relative mb-4",
+        props.task.status === "failed" && "border-destructive",
+        props.className,
+      )}
+    >
       <CardContent className="pt-4">
         <TaskProgress task={props.task} onClose={props.onClose} />
       </CardContent>
@@ -6990,7 +7077,7 @@ export function OnboardingTaskProgress(props: { task: Task }) {
   const pending = ["queued", "running", "waiting_input"].includes(props.task.status);
   const failed = props.task.status === "failed";
   const items = onboardingTaskItems(props.task);
-  const pagination = usePaginatedItems(items);
+  const pagination = useClientPagination(items);
   const batch = props.task.operation === "onboard-batch" || items.length > 0;
   const succeeded = syncResultCount(props.task.result.succeeded);
   const failedCount = syncResultCount(props.task.result.failed);
@@ -7053,7 +7140,7 @@ export function OnboardingTaskProgress(props: { task: Task }) {
             <ResultSummaryRow label="处理成功" value={`${succeeded} 项`} />
             <ResultSummaryRow label="处理失败" value={`${failedCount} 项`} />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+          <DataTablePanel className="flex-1">
             <Table className="min-w-[520px]" containerClassName="min-h-0 flex-1 overflow-auto">
               <TableHeader className="sticky top-0 z-10">
                 <TableRow>
@@ -7101,7 +7188,7 @@ export function OnboardingTaskProgress(props: { task: Task }) {
                 onPageSizeChange={pagination.setPageSize}
               />
             ) : null}
-          </div>
+          </DataTablePanel>
         </>
       ) : null}
 
@@ -7334,21 +7421,35 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
     </div>
   );
 }
-function BalanceTaskProgress(props: { task: Task }) {
+export function BalanceTaskProgress(props: { task: Task }) {
   const result = props.task.result;
+  const hostResult = upstreamSyncRows(props.task)[0] ?? null;
+  const rawBalance =
+    hostResult?.balance ??
+    (typeof result.balance === "string" || typeof result.balance === "number"
+      ? result.balance
+      : null);
   const balance =
-    typeof result.balance === "string" || typeof result.balance === "number"
-      ? formatBalance(String(result.balance))
+    typeof rawBalance === "string" || typeof rawBalance === "number"
+      ? formatBalance(String(rawBalance))
       : null;
+  const host = hostResult?.host ?? String(result.host ?? "未返回");
+  const balanceStatus =
+    hostResult?.balanceStatus ??
+    (typeof result.balance_status === "string" ? result.balance_status : "未返回余额");
+  const reason = hostResult?.reason ?? String(result.reason ?? props.task.message);
   const pending = ["queued", "running"].includes(props.task.status);
-  const completedWithoutBalance = !pending && props.task.status === "succeeded" && balance === null;
-  const failedTask = props.task.status === "failed";
+  const failedTask = props.task.status === "failed" || hostResult?.status === "failed";
+  const completedWithoutBalance = !pending && !failedTask && balance === null;
+  const missingBalanceText = ["", "未读取", "未返回余额"].includes(balanceStatus.trim())
+    ? "上游未返回余额"
+    : balanceStatus;
   const statusText = pending
     ? "正在同步余额"
     : failedTask
       ? "同步失败"
       : completedWithoutBalance
-        ? "上游未返回余额"
+        ? missingBalanceText
         : "同步成功";
   return (
     <div>
@@ -7375,8 +7476,8 @@ function BalanceTaskProgress(props: { task: Task }) {
       </div>
       {!pending && (
         <div className="mt-4 divide-y rounded-lg border">
-          <ResultSummaryRow label="上游 Host" value={String(result.host ?? "未返回")} />
-          <ResultSummaryRow label="当前余额" value={balance ?? "未返回"} />
+          <ResultSummaryRow label="上游 Host" value={host} />
+          <ResultSummaryRow label="当前余额" value={balance ?? missingBalanceText} />
           <ResultSummaryRow
             label="读取时间"
             value={formatDate(String(result.checked_at ?? props.task.updated_at))}
@@ -7385,7 +7486,7 @@ function BalanceTaskProgress(props: { task: Task }) {
       )}
       {!pending && failedTask && (
         <div className="mt-4">
-          <TaskFailureDetail reason={String(result.reason ?? props.task.message)} />
+          <TaskFailureDetail reason={reason} />
         </div>
       )}
     </div>
@@ -7419,7 +7520,8 @@ function upstreamSyncRows(task: Task): UpstreamSyncRow[] {
       {
         host: row.host,
         status,
-        authStatus: typeof row.auth_status === "string" ? row.auth_status : "未确认",
+        authStatus:
+          typeof row.auth_status === "string" ? row.auth_status : upstreamAuthStatuses.unconfirmed,
         balanceStatus: typeof row.balance_status === "string" ? row.balance_status : "未读取",
         balance,
         groupCount:
@@ -7441,6 +7543,14 @@ function syncRowResult(row: ReturnType<typeof upstreamSyncRows>[number]): string
   return row.status === "auth_failed" ? "鉴权恢复未通过" : "同步失败";
 }
 
+export function upstreamSyncAuthStatusMeta(authStatus: string): {
+  label: string;
+  tone: "success" | "warning" | "danger" | "info" | "neutral";
+} {
+  if (authStatus.trim() === "未变更") return { label: "未变更", tone: "neutral" };
+  return upstreamAuthStatusMeta(authStatus);
+}
+
 export function UpstreamSyncTaskStatus(props: {
   task: Task;
   scope?: "all" | "balance" | "groups" | "names";
@@ -7451,7 +7561,7 @@ export function UpstreamSyncTaskStatus(props: {
   const rows = upstreamSyncRows(props.task);
   const failedRows = rows.filter((row) => row.status !== "succeeded");
   const visibleRows = failed ? failedRows : rows;
-  const pagination = usePaginatedItems(visibleRows);
+  const pagination = useClientPagination(visibleRows);
   if (pending) {
     return (
       <TaskProgressState
@@ -7471,7 +7581,7 @@ export function UpstreamSyncTaskStatus(props: {
           value={`${syncResultCount(props.task.result.succeeded)} 个`}
         />
         <ResultSummaryRow
-          label="鉴权失效"
+          label={upstreamAuthStatuses.invalid}
           value={`${syncResultCount(props.task.result.auth_failed)} 个`}
         />
         <ResultSummaryRow
@@ -7485,7 +7595,7 @@ export function UpstreamSyncTaskStatus(props: {
           <span className="text-muted-foreground text-xs">共 {failedRows.length} 个 Host</span>
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+      <DataTablePanel className="flex-1">
         <Table
           className={
             scope === "all"
@@ -7521,16 +7631,7 @@ export function UpstreamSyncTaskStatus(props: {
               <TableRow key={row.host}>
                 <TableCell className="font-medium">{row.host}</TableCell>
                 <TableCell>
-                  <StatusPill
-                    label={row.authStatus}
-                    tone={
-                      row.status === "auth_failed"
-                        ? "danger"
-                        : row.status === "succeeded"
-                          ? "success"
-                          : "warning"
-                    }
-                  />
+                  <StatusPill {...upstreamSyncAuthStatusMeta(row.authStatus)} />
                 </TableCell>
                 {scope !== "groups" && scope !== "names" && (
                   <TableCell>
@@ -7569,7 +7670,7 @@ export function UpstreamSyncTaskStatus(props: {
             onPageSizeChange={pagination.setPageSize}
           />
         ) : null}
-      </div>
+      </DataTablePanel>
     </div>
   );
 }
@@ -7975,10 +8076,10 @@ export function ConfigPage() {
         priority: String(value.account_default_priority),
       });
       setAccountDefaultsEdited(false);
-      toast.success("账号开户默认参数已保存");
+      toast.success("账号创建默认值已保存");
     },
     onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "账号开户默认参数保存失败"),
+      toast.error(error instanceof Error ? error.message : "账号创建默认值保存失败"),
   });
   if (config.error)
     return (
@@ -7986,7 +8087,7 @@ export function ConfigPage() {
         <PageHeading
           eyebrow="SYSTEM / SETTINGS"
           title="系统设置"
-          description="管理平台连接、通知渠道和日志保留；调度决策与执行参数统一在调度策略中配置。"
+          description="管理外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
         />
         <QueryError error={config.error} fallback="系统设置读取失败" />
       </PageLayout>
@@ -7996,9 +8097,9 @@ export function ConfigPage() {
       <PageHeading
         eyebrow="SYSTEM / SETTINGS"
         title="系统设置"
-        description="管理平台连接、通知渠道和日志保留；调度决策与执行参数统一在调度策略中配置。"
+        description="管理外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
       />
-      <div className="mx-auto w-full max-w-7xl space-y-4">
+      <div className="w-full space-y-4" data-testid="system-settings-page">
         {config.data?.configuration_errors?.length ? (
           <div className="border-warning/40 bg-warning/10 text-warning rounded-lg border px-3 py-2 text-sm">
             配置存在无效值：{config.data.configuration_errors.join("、")}
@@ -8007,534 +8108,560 @@ export function ConfigPage() {
         ) : null}
 
         <div className="grid items-start gap-4 xl:grid-cols-2" data-testid="system-settings-flow">
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle>Sub2API 连接</CardTitle>
-              <CardDescription>
-                Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <FormField label="Sub2API 地址">
-                <Input
-                  type="url"
-                  value={targetForm.admin_base_url}
-                  onChange={(event) => {
-                    setTargetEdited(true);
-                    setTargetForm({
-                      ...targetForm,
-                      admin_base_url: event.target.value,
-                    });
-                  }}
-                  placeholder="https://sub2api.example.com"
-                />
-              </FormField>
-              <FormField label="Admin API Key">
-                <>
-                  <Input
-                    type="password"
-                    value={targetForm.admin_key}
-                    onChange={(event) => {
-                      setTargetEdited(true);
-                      setTargetForm({
-                        ...targetForm,
-                        admin_key: event.target.value,
-                      });
-                    }}
-                    placeholder={sensitiveFieldPlaceholder(
-                      config.data?.target_configured === true,
-                      "输入 Admin API Key",
-                    )}
-                  />
-                  {config.data?.target_configured ? (
-                    <p className="text-muted-foreground text-xs font-normal">
-                      已配置，留空则不修改。
-                    </p>
-                  ) : null}
-                </>
-              </FormField>
-              <FormField label="请求超时（秒）">
-                <>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={120}
-                    inputMode="numeric"
-                    value={targetForm.request_timeout_seconds}
-                    onChange={(event) => {
-                      setTargetEdited(true);
-                      setTargetForm({
-                        ...targetForm,
-                        request_timeout_seconds: event.target.value,
-                      });
-                    }}
-                  />
-                  <p className="text-muted-foreground text-xs font-normal">
-                    Admin API 请求超时，允许 1–120 秒。
-                  </p>
-                </>
-              </FormField>
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button
-                  onClick={() => saveTarget.mutate(false)}
-                  disabled={
-                    saveTarget.isPending ||
-                    !targetForm.admin_base_url.trim() ||
-                    (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
-                    !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
-                    Number(targetForm.request_timeout_seconds) < 1 ||
-                    Number(targetForm.request_timeout_seconds) > 120
-                  }
-                >
-                  <Save size={16} />
-                  {saveTarget.isPending ? "保存中…" : "保存连接"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => saveTarget.mutate(true)}
-                  disabled={
-                    saveTarget.isPending ||
-                    taskIsPending(managementTaskId, managementTask) ||
-                    !targetForm.admin_base_url.trim() ||
-                    (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
-                    !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
-                    Number(targetForm.request_timeout_seconds) < 1 ||
-                    Number(targetForm.request_timeout_seconds) > 120
-                  }
-                >
-                  <RefreshCw size={16} />
-                  {taskIsPending(managementTaskId, managementTask)
-                    ? `测试同步 ${managementTask.data?.progress ?? 0}%`
-                    : "保存并测试同步"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle>账号开户默认参数</CardTitle>
-              <CardDescription>添加账号和参数修复统一使用；添加时仍可单独覆盖</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <FormField label="默认并发">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10_000_000}
-                    inputMode="numeric"
-                    value={accountDefaultsForm.concurrency}
-                    onChange={(event) => {
-                      setAccountDefaultsEdited(true);
-                      setAccountDefaultsForm({
-                        ...accountDefaultsForm,
-                        concurrency: event.target.value,
-                      });
-                    }}
-                  />
-                </FormField>
-                <FormField label="默认优先级">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10_000_000}
-                    inputMode="numeric"
-                    value={accountDefaultsForm.priority}
-                    onChange={(event) => {
-                      setAccountDefaultsEdited(true);
-                      setAccountDefaultsForm({
-                        ...accountDefaultsForm,
-                        priority: event.target.value,
-                      });
-                    }}
-                  />
-                </FormField>
-              </div>
-              <div>
-                <Button
-                  onClick={() => saveAccountDefaults.mutate()}
-                  disabled={
-                    saveAccountDefaults.isPending ||
-                    !accountDefaultsEdited ||
-                    ![accountDefaultsForm.concurrency, accountDefaultsForm.priority].every(
-                      (value) =>
-                        Number.isInteger(Number(value)) &&
-                        Number(value) >= 1 &&
-                        Number(value) <= 10_000_000,
-                    )
-                  }
-                >
-                  <Save size={16} />
-                  {saveAccountDefaults.isPending ? "保存中…" : "保存默认参数"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card size="sm" className="xl:row-span-2">
-            <CardHeader className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <CardTitle>通知设置</CardTitle>
-                <CardDescription className="mt-1">
-                  配置 QQBot 通知发送目标，密钥只写入后端
+          <div
+            className="grid min-w-0 content-start gap-4"
+            data-testid="system-settings-flow-primary"
+            aria-label="平台接入"
+          >
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>Sub2API 连接</CardTitle>
+                <CardDescription>
+                  Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
                 </CardDescription>
-              </div>
-              <StatusPill
-                label={
-                  notifications.isLoading
-                    ? "读取中"
-                    : notifications.error
-                      ? "读取失败"
-                      : notifications.data?.configured
-                        ? "已配置"
-                        : "未配置"
-                }
-                tone={
-                  notifications.data?.configured && !notifications.error ? "success" : "neutral"
-                }
-              />
-            </CardHeader>
-            <CardContent className="grid gap-5">
-              {notifications.error ? (
-                <QueryError error={notifications.error} fallback="通知状态读取失败" embedded />
-              ) : null}
-              <div
-                className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-2"
-                data-testid="notification-credentials"
-              >
-                <FormField label="App ID">
-                  <>
-                    <Input
-                      value={notificationForm.app_id}
-                      disabled={notificationTargetTaskActive}
-                      onChange={(event) => {
-                        setNotificationEdited(true);
-                        setNotificationForm({
-                          ...notificationForm,
-                          app_id: event.target.value,
-                        });
-                      }}
-                      placeholder="输入 App ID"
-                    />
-                    <NotificationFieldHelp href={qqBotDeveloperSettingsURL} link="打开 QQ 开放平台">
-                      在机器人管理页的“开发设置”中复制 App ID。
-                    </NotificationFieldHelp>
-                  </>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <FormField label="Sub2API 地址">
+                  <Input
+                    type="url"
+                    value={targetForm.admin_base_url}
+                    onChange={(event) => {
+                      setTargetEdited(true);
+                      setTargetForm({
+                        ...targetForm,
+                        admin_base_url: event.target.value,
+                      });
+                    }}
+                    placeholder="https://sub2api.example.com"
+                  />
                 </FormField>
-                <FormField label="Client Secret">
+                <FormField label="Admin API Key">
                   <>
                     <Input
                       type="password"
-                      value={notificationForm.client_secret}
-                      disabled={notificationTargetTaskActive}
+                      value={targetForm.admin_key}
                       onChange={(event) => {
-                        setNotificationEdited(true);
-                        setNotificationForm({
-                          ...notificationForm,
-                          client_secret: event.target.value,
+                        setTargetEdited(true);
+                        setTargetForm({
+                          ...targetForm,
+                          admin_key: event.target.value,
                         });
                       }}
                       placeholder={sensitiveFieldPlaceholder(
-                        notifications.data?.client_secret_configured === true,
-                        "输入 Client Secret",
+                        config.data?.target_configured === true,
+                        "输入 Admin API Key",
                       )}
                     />
-                    <NotificationFieldHelp href={qqBotDeveloperSettingsURL} link="打开 QQ 开放平台">
-                      与 App ID 在同一“开发设置”页面获取；保存后不会回显。
-                    </NotificationFieldHelp>
+                    {config.data?.target_configured ? (
+                      <p className="text-muted-foreground text-xs font-normal">
+                        已配置，留空则不修改。
+                      </p>
+                    ) : null}
                   </>
                 </FormField>
-              </div>
-              <div
-                className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]"
-                data-testid="notification-destination"
-              >
-                <FormField label="目标类型">
-                  <Select
-                    value={notificationForm.home_channel_type}
-                    disabled={notificationTargetTaskActive}
-                    onValueChange={(value) => {
-                      if (!value) return;
-                      setNotificationEdited(true);
-                      setNotificationForm({
-                        ...notificationForm,
-                        home_channel_type: value as "c2c" | "group" | "channel",
-                      });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="c2c">私聊</SelectItem>
-                      <SelectItem value="group">群聊</SelectItem>
-                      <SelectItem value="channel">频道</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </FormField>
-                <FormField label="目标 ID">
+                <FormField label="请求超时（秒）">
                   <>
-                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={120}
+                      inputMode="numeric"
+                      value={targetForm.request_timeout_seconds}
+                      onChange={(event) => {
+                        setTargetEdited(true);
+                        setTargetForm({
+                          ...targetForm,
+                          request_timeout_seconds: event.target.value,
+                        });
+                      }}
+                    />
+                    <p className="text-muted-foreground text-xs font-normal">
+                      Admin API 请求超时，允许 1–120 秒。
+                    </p>
+                  </>
+                </FormField>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    onClick={() => saveTarget.mutate(false)}
+                    disabled={
+                      saveTarget.isPending ||
+                      !targetForm.admin_base_url.trim() ||
+                      (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
+                      !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
+                      Number(targetForm.request_timeout_seconds) < 1 ||
+                      Number(targetForm.request_timeout_seconds) > 120
+                    }
+                  >
+                    <Save size={16} />
+                    {saveTarget.isPending ? "保存中…" : "保存连接"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => saveTarget.mutate(true)}
+                    disabled={
+                      saveTarget.isPending ||
+                      taskIsPending(managementTaskId, managementTask) ||
+                      !targetForm.admin_base_url.trim() ||
+                      (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
+                      !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
+                      Number(targetForm.request_timeout_seconds) < 1 ||
+                      Number(targetForm.request_timeout_seconds) > 120
+                    }
+                  >
+                    <RefreshCw size={16} />
+                    {taskIsPending(managementTaskId, managementTask)
+                      ? `测试同步 ${managementTask.data?.progress ?? 0}%`
+                      : "保存并测试同步"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card size="sm">
+              <CardHeader className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle>QQBot 通知接入</CardTitle>
+                  <CardDescription className="mt-1">
+                    配置 QQBot 通知发送目标，密钥只写入后端
+                  </CardDescription>
+                </div>
+                <StatusPill
+                  label={
+                    notifications.isLoading
+                      ? "读取中"
+                      : notifications.error
+                        ? "读取失败"
+                        : notifications.data?.configured
+                          ? "已配置"
+                          : "未配置"
+                  }
+                  tone={
+                    notifications.data?.configured && !notifications.error ? "success" : "neutral"
+                  }
+                />
+              </CardHeader>
+              <CardContent className="grid gap-5">
+                {notifications.error ? (
+                  <QueryError error={notifications.error} fallback="通知状态读取失败" embedded />
+                ) : null}
+                <div
+                  className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-2"
+                  data-testid="notification-credentials"
+                >
+                  <FormField label="App ID">
+                    <>
                       <Input
-                        value={notificationForm.home_channel}
+                        value={notificationForm.app_id}
                         disabled={notificationTargetTaskActive}
                         onChange={(event) => {
                           setNotificationEdited(true);
                           setNotificationForm({
                             ...notificationForm,
-                            home_channel: event.target.value,
+                            app_id: event.target.value,
                           });
                         }}
-                        placeholder={notificationTarget.placeholder}
+                        placeholder="输入 App ID"
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => discoverNotificationTarget.mutate()}
-                        disabled={
-                          discoverNotificationTarget.isPending ||
-                          notificationTargetTaskActive ||
-                          !notificationForm.app_id.trim() ||
-                          (!notifications.data?.client_secret_configured &&
-                            !notificationForm.client_secret.trim())
-                        }
+                      <NotificationFieldHelp
+                        href={qqBotDeveloperSettingsURL}
+                        link="打开 QQ 开放平台"
                       >
-                        <ScanSearch size={16} aria-hidden="true" />
-                        {notificationTargetTaskActive ? "等待消息" : "连接获取"}
-                      </Button>
-                    </div>
-                    <NotificationFieldHelp href={qqBotEventDocsURL} link="查看事件服务接入说明">
-                      {notificationTarget.description}
-                    </NotificationFieldHelp>
-                  </>
-                </FormField>
-                {(discoverNotificationTarget.isPending || notificationTargetTaskId) && (
-                  <div
-                    className="border-border/70 bg-muted/30 grid gap-3 rounded-md border px-3 py-3 sm:col-span-2"
-                    data-testid="notification-target-discovery"
-                    role="status"
-                  >
-                    {discoverNotificationTarget.isPending && !notificationTargetTaskId ? (
-                      <div className="flex items-center gap-2 text-sm">
-                        <RefreshCw className="animate-spin" size={16} aria-hidden="true" />
-                        正在创建 QQBot 连接任务
-                      </div>
-                    ) : null}
-                    {notificationTargetTask.error ? (
-                      <QueryError
-                        error={notificationTargetTask.error}
-                        fallback="QQBot 目标获取状态读取失败"
-                        embedded
+                        在机器人管理页的“开发设置”中复制 App ID。
+                      </NotificationFieldHelp>
+                    </>
+                  </FormField>
+                  <FormField label="Client Secret">
+                    <>
+                      <Input
+                        type="password"
+                        value={notificationForm.client_secret}
+                        disabled={notificationTargetTaskActive}
+                        onChange={(event) => {
+                          setNotificationEdited(true);
+                          setNotificationForm({
+                            ...notificationForm,
+                            client_secret: event.target.value,
+                          });
+                        }}
+                        placeholder={sensitiveFieldPlaceholder(
+                          notifications.data?.client_secret_configured === true,
+                          "输入 Client Secret",
+                        )}
                       />
-                    ) : null}
-                    {notificationTargetTask.data ? (
-                      <>
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium">自动获取目标 ID</p>
-                            <p className="text-muted-foreground mt-1 text-xs leading-5">
-                              {notificationTargetTask.data.message}
-                            </p>
-                          </div>
-                          <StatusPill
-                            label={
-                              notificationTargetTaskPresentation(notificationTargetTask.data.status)
-                                .label
-                            }
-                            tone={
-                              notificationTargetTaskPresentation(notificationTargetTask.data.status)
-                                .tone
-                            }
-                          />
+                      <NotificationFieldHelp
+                        href={qqBotDeveloperSettingsURL}
+                        link="打开 QQ 开放平台"
+                      >
+                        与 App ID 在同一“开发设置”页面获取；保存后不会回显。
+                      </NotificationFieldHelp>
+                    </>
+                  </FormField>
+                </div>
+                <div
+                  className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]"
+                  data-testid="notification-destination"
+                >
+                  <FormField label="目标类型">
+                    <Select
+                      value={notificationForm.home_channel_type}
+                      disabled={notificationTargetTaskActive}
+                      onValueChange={(value) => {
+                        if (!value) return;
+                        setNotificationEdited(true);
+                        setNotificationForm({
+                          ...notificationForm,
+                          home_channel_type: value as "c2c" | "group" | "channel",
+                        });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="c2c">私聊</SelectItem>
+                        <SelectItem value="group">群聊</SelectItem>
+                        <SelectItem value="channel">频道</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField label="目标 ID">
+                    <>
+                      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                        <Input
+                          value={notificationForm.home_channel}
+                          disabled={notificationTargetTaskActive}
+                          onChange={(event) => {
+                            setNotificationEdited(true);
+                            setNotificationForm({
+                              ...notificationForm,
+                              home_channel: event.target.value,
+                            });
+                          }}
+                          placeholder={notificationTarget.placeholder}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => discoverNotificationTarget.mutate()}
+                          disabled={
+                            discoverNotificationTarget.isPending ||
+                            notificationTargetTaskActive ||
+                            !notificationForm.app_id.trim() ||
+                            (!notifications.data?.client_secret_configured &&
+                              !notificationForm.client_secret.trim())
+                          }
+                        >
+                          <ScanSearch size={16} aria-hidden="true" />
+                          {notificationTargetTaskActive ? "等待消息" : "连接获取"}
+                        </Button>
+                      </div>
+                      <NotificationFieldHelp href={qqBotEventDocsURL} link="查看事件服务接入说明">
+                        {notificationTarget.description}
+                      </NotificationFieldHelp>
+                    </>
+                  </FormField>
+                  {(discoverNotificationTarget.isPending || notificationTargetTaskId) && (
+                    <div
+                      className="border-border/70 bg-muted/30 grid gap-3 rounded-md border px-3 py-3 sm:col-span-2"
+                      data-testid="notification-target-discovery"
+                      role="status"
+                    >
+                      {discoverNotificationTarget.isPending && !notificationTargetTaskId ? (
+                        <div className="flex items-center gap-2 text-sm">
+                          <RefreshCw className="animate-spin" size={16} aria-hidden="true" />
+                          正在创建 QQBot 连接任务
                         </div>
-                        {notificationTargetResult ? (
-                          <div className="border-border/70 bg-background grid gap-1 rounded-md border px-3 py-2">
-                            <span className="text-muted-foreground text-xs">已自动填入目标 ID</span>
-                            <code className="break-all text-sm">{notificationTargetResult.id}</code>
-                            {notificationTargetResult.sourceName ? (
+                      ) : null}
+                      {notificationTargetTask.error ? (
+                        <QueryError
+                          error={notificationTargetTask.error}
+                          fallback="QQBot 目标获取状态读取失败"
+                          embedded
+                        />
+                      ) : null}
+                      {notificationTargetTask.data ? (
+                        <>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium">自动获取目标 ID</p>
+                              <p className="text-muted-foreground mt-1 text-xs leading-5">
+                                {notificationTargetTask.data.message}
+                              </p>
+                            </div>
+                            <StatusPill
+                              label={
+                                notificationTargetTaskPresentation(
+                                  notificationTargetTask.data.status,
+                                ).label
+                              }
+                              tone={
+                                notificationTargetTaskPresentation(
+                                  notificationTargetTask.data.status,
+                                ).tone
+                              }
+                            />
+                          </div>
+                          {notificationTargetResult ? (
+                            <div className="border-border/70 bg-background grid gap-1 rounded-md border px-3 py-2">
                               <span className="text-muted-foreground text-xs">
-                                触发用户：{notificationTargetResult.sourceName}
+                                已自动填入目标 ID
                               </span>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {notificationTargetTaskActive ? (
-                          <div className="flex justify-end">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => cancelNotificationTargetDiscovery.mutate()}
-                              disabled={cancelNotificationTargetDiscovery.isPending}
-                            >
-                              <X size={15} aria-hidden="true" />
-                              {cancelNotificationTargetDiscovery.isPending ? "取消中…" : "取消等待"}
-                            </Button>
-                          </div>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-              {notifications.data?.configuration_errors?.length ? (
-                <p className="text-destructive text-sm">
-                  通知配置无效：
-                  {notifications.data.configuration_errors.join("、")}
-                </p>
-              ) : null}
-              <div className="border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => testNotification.mutate()}
-                  disabled={
-                    testNotification.isPending ||
-                    notificationTargetTaskActive ||
-                    notifications.error != null ||
-                    !notifications.data?.configured
-                  }
-                >
-                  <BellRing size={16} />
-                  {testNotification.isPending ? "测试中…" : "测试通知"}
-                </Button>
-                <Button
-                  onClick={() => saveNotification.mutate()}
-                  disabled={
-                    saveNotification.isPending ||
-                    notificationTargetTaskActive ||
-                    notifications.isLoading ||
-                    notifications.error != null ||
-                    !notificationForm.app_id.trim() ||
-                    !notificationForm.home_channel.trim() ||
-                    (!notifications.data?.client_secret_configured &&
-                      !notificationForm.client_secret.trim())
-                  }
-                >
-                  <Save size={16} />
-                  {saveNotification.isPending ? "保存中…" : "保存通知设置"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+                              <code className="break-all text-sm">
+                                {notificationTargetResult.id}
+                              </code>
+                              {notificationTargetResult.sourceName ? (
+                                <span className="text-muted-foreground text-xs">
+                                  触发用户：{notificationTargetResult.sourceName}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {notificationTargetTaskActive ? (
+                            <div className="flex justify-end">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => cancelNotificationTargetDiscovery.mutate()}
+                                disabled={cancelNotificationTargetDiscovery.isPending}
+                              >
+                                <X size={15} aria-hidden="true" />
+                                {cancelNotificationTargetDiscovery.isPending
+                                  ? "取消中…"
+                                  : "取消等待"}
+                              </Button>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+                {notifications.data?.configuration_errors?.length ? (
+                  <p className="text-destructive text-sm">
+                    通知配置无效：
+                    {notifications.data.configuration_errors.join("、")}
+                  </p>
+                ) : null}
+                <div className="border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4">
+                  <Button
+                    variant="outline"
+                    onClick={() => testNotification.mutate()}
+                    disabled={
+                      testNotification.isPending ||
+                      notificationTargetTaskActive ||
+                      notifications.error != null ||
+                      !notifications.data?.configured
+                    }
+                  >
+                    <BellRing size={16} />
+                    {testNotification.isPending ? "测试中…" : "测试通知"}
+                  </Button>
+                  <Button
+                    onClick={() => saveNotification.mutate()}
+                    disabled={
+                      saveNotification.isPending ||
+                      notificationTargetTaskActive ||
+                      notifications.isLoading ||
+                      notifications.error != null ||
+                      !notificationForm.app_id.trim() ||
+                      !notificationForm.home_channel.trim() ||
+                      (!notifications.data?.client_secret_configured &&
+                        !notificationForm.client_secret.trim())
+                    }
+                  >
+                    <Save size={16} />
+                    {saveNotification.isPending ? "保存中…" : "保存通知设置"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
-          <Card size="sm">
-            <CardHeader className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <CardTitle>日志保留</CardTitle>
-                <CardDescription className="mt-1">
-                  管理日志中心的任务、运行、事件和变更记录，不影响业务数据
-                </CardDescription>
-              </div>
-              <StatusPill
-                label={
-                  logCleanup.isLoading
-                    ? "读取中"
-                    : logCleanup.error
-                      ? "读取失败"
-                      : logCleanup.data?.enabled
-                        ? "自动清理已开启"
-                        : "自动清理已关闭"
-                }
-                tone={logCleanup.data?.enabled && !logCleanup.error ? "success" : "neutral"}
-              />
-            </CardHeader>
-            <CardContent className="grid gap-3">
-              {logCleanup.error ? (
-                <div>
-                  <QueryError error={logCleanup.error} fallback="日志清理配置读取失败" embedded />
-                </div>
-              ) : null}
-              <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-                <div className="flex min-w-0 items-center justify-between gap-3">
-                  <label className="min-w-0 cursor-pointer" htmlFor="log-cleanup-enabled">
-                    <span className="block text-sm font-medium">定时清理</span>
-                    <span className="text-muted-foreground block text-xs leading-4">
-                      每天检查并删除超过保留期的日志
-                    </span>
-                  </label>
-                  <Switch
-                    id="log-cleanup-enabled"
-                    className="shrink-0"
-                    checked={logCleanupForm.enabled}
-                    disabled={saveLogCleanup.isPending || logCleanup.isLoading}
-                    aria-label="定时清理"
-                    onCheckedChange={(enabled) => {
-                      setLogCleanupEdited(true);
-                      setLogCleanupForm({ ...logCleanupForm, enabled });
-                    }}
-                  />
-                </div>
-                <div className="flex min-w-0 items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="block text-sm font-medium">日志保留天数</span>
-                    <span className="text-muted-foreground block text-xs leading-4">
-                      允许 1–3650 天
-                    </span>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
+          <div
+            className="grid min-w-0 content-start gap-4"
+            data-testid="system-settings-flow-secondary"
+            aria-label="默认值与数据维护"
+          >
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>账号创建默认值</CardTitle>
+                <CardDescription>添加账号和参数修复统一使用；单次添加时仍可覆盖</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="默认并发">
                     <Input
-                      className="w-20"
                       type="number"
                       min={1}
-                      max={3650}
-                      aria-label="日志保留天数"
-                      value={logCleanupForm.retention_days}
+                      max={10_000_000}
+                      inputMode="numeric"
+                      value={accountDefaultsForm.concurrency}
                       onChange={(event) => {
-                        setLogCleanupEdited(true);
-                        setLogCleanupForm({
-                          ...logCleanupForm,
-                          retention_days: event.target.value,
+                        setAccountDefaultsEdited(true);
+                        setAccountDefaultsForm({
+                          ...accountDefaultsForm,
+                          concurrency: event.target.value,
                         });
                       }}
                     />
-                    <span className="text-muted-foreground text-sm">天</span>
+                  </FormField>
+                  <FormField label="默认优先级">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10_000_000}
+                      inputMode="numeric"
+                      value={accountDefaultsForm.priority}
+                      onChange={(event) => {
+                        setAccountDefaultsEdited(true);
+                        setAccountDefaultsForm({
+                          ...accountDefaultsForm,
+                          priority: event.target.value,
+                        });
+                      }}
+                    />
+                  </FormField>
+                </div>
+                <div>
+                  <Button
+                    onClick={() => saveAccountDefaults.mutate()}
+                    disabled={
+                      saveAccountDefaults.isPending ||
+                      !accountDefaultsEdited ||
+                      ![accountDefaultsForm.concurrency, accountDefaultsForm.priority].every(
+                        (value) =>
+                          Number.isInteger(Number(value)) &&
+                          Number(value) >= 1 &&
+                          Number(value) <= 10_000_000,
+                      )
+                    }
+                  >
+                    <Save size={16} />
+                    {saveAccountDefaults.isPending ? "保存中…" : "保存默认参数"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card size="sm">
+              <CardHeader className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle>日志保留</CardTitle>
+                  <CardDescription className="mt-1">
+                    管理日志中心的任务、运行、事件和变更记录，不影响业务数据
+                  </CardDescription>
+                </div>
+                <StatusPill
+                  label={
+                    logCleanup.isLoading
+                      ? "读取中"
+                      : logCleanup.error
+                        ? "读取失败"
+                        : logCleanup.data?.enabled
+                          ? "自动清理已开启"
+                          : "自动清理已关闭"
+                  }
+                  tone={logCleanup.data?.enabled && !logCleanup.error ? "success" : "neutral"}
+                />
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                {logCleanup.error ? (
+                  <div>
+                    <QueryError error={logCleanup.error} fallback="日志清理配置读取失败" embedded />
+                  </div>
+                ) : null}
+                <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <label className="min-w-0 cursor-pointer" htmlFor="log-cleanup-enabled">
+                      <span className="block text-sm font-medium">定时清理</span>
+                      <span className="text-muted-foreground block text-xs leading-4">
+                        每天检查并删除超过保留期的日志
+                      </span>
+                    </label>
+                    <Switch
+                      id="log-cleanup-enabled"
+                      className="shrink-0"
+                      checked={logCleanupForm.enabled}
+                      disabled={saveLogCleanup.isPending || logCleanup.isLoading}
+                      aria-label="定时清理"
+                      onCheckedChange={(enabled) => {
+                        setLogCleanupEdited(true);
+                        setLogCleanupForm({ ...logCleanupForm, enabled });
+                      }}
+                    />
+                  </div>
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="block text-sm font-medium">日志保留天数</span>
+                      <span className="text-muted-foreground block text-xs leading-4">
+                        允许 1–3650 天
+                      </span>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Input
+                        className="w-20"
+                        type="number"
+                        min={1}
+                        max={3650}
+                        aria-label="日志保留天数"
+                        value={logCleanupForm.retention_days}
+                        onChange={(event) => {
+                          setLogCleanupEdited(true);
+                          setLogCleanupForm({
+                            ...logCleanupForm,
+                            retention_days: event.target.value,
+                          });
+                        }}
+                      />
+                      <span className="text-muted-foreground text-sm">天</span>
+                    </div>
+                  </div>
+                  <div className="border-border/70 flex flex-wrap items-end justify-between gap-3 border-t pt-3 sm:col-span-2">
+                    <div className="min-w-0">
+                      <span className="block text-sm font-medium">
+                        {logCleanup.data?.last_run_at
+                          ? `上次完成 ${formatDate(logCleanup.data.last_run_at, true)}`
+                          : "尚未执行"}
+                      </span>
+                      <span className="text-muted-foreground block text-xs leading-4">
+                        {logCleanup.data?.next_run_at
+                          ? `下次清理 ${formatDate(logCleanup.data.next_run_at, true)}`
+                          : "开启后立即检查，之后每 24 小时检查一次"}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <Button
+                        variant="outline"
+                        disabled={
+                          clearLogs.isPending ||
+                          !Number.isInteger(Number(logCleanupForm.retention_days)) ||
+                          Number(logCleanupForm.retention_days) < 1 ||
+                          Number(logCleanupForm.retention_days) > 3650
+                        }
+                        onClick={() => setClearLogsOpen(true)}
+                      >
+                        <Trash2 size={16} />
+                        立即按期限清理
+                      </Button>
+                      <Button
+                        disabled={
+                          saveLogCleanup.isPending ||
+                          !Number.isInteger(Number(logCleanupForm.retention_days)) ||
+                          Number(logCleanupForm.retention_days) < 1 ||
+                          Number(logCleanupForm.retention_days) > 3650
+                        }
+                        onClick={() => saveLogCleanup.mutate()}
+                      >
+                        <Save size={16} />
+                        {saveLogCleanup.isPending ? "保存中…" : "保存日志设置"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
-                <div className="border-border/70 flex flex-wrap items-end justify-between gap-3 border-t pt-3 sm:col-span-2">
-                  <div className="min-w-0">
-                    <span className="block text-sm font-medium">
-                      {logCleanup.data?.last_run_at
-                        ? `上次完成 ${formatDate(logCleanup.data.last_run_at, true)}`
-                        : "尚未执行"}
-                    </span>
-                    <span className="text-muted-foreground block text-xs leading-4">
-                      {logCleanup.data?.next_run_at
-                        ? `下次清理 ${formatDate(logCleanup.data.next_run_at, true)}`
-                        : "开启后立即检查，之后每 24 小时检查一次"}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      disabled={
-                        clearLogs.isPending ||
-                        !Number.isInteger(Number(logCleanupForm.retention_days)) ||
-                        Number(logCleanupForm.retention_days) < 1 ||
-                        Number(logCleanupForm.retention_days) > 3650
-                      }
-                      onClick={() => setClearLogsOpen(true)}
-                    >
-                      <Trash2 size={16} />
-                      立即按期限清理
-                    </Button>
-                    <Button
-                      disabled={
-                        saveLogCleanup.isPending ||
-                        !Number.isInteger(Number(logCleanupForm.retention_days)) ||
-                        Number(logCleanupForm.retention_days) < 1 ||
-                        Number(logCleanupForm.retention_days) > 3650
-                      }
-                      onClick={() => saveLogCleanup.mutate()}
-                    >
-                      <Save size={16} />
-                      {saveLogCleanup.isPending ? "保存中…" : "保存日志设置"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
       <Dialog
@@ -8638,7 +8765,7 @@ function autoInspectionLastRunState(status: AutoInspectionStatus["last_status"])
 
 function InspectionSummaryCount(props: { label: string; value: number }) {
   return (
-    <div className="min-w-0 px-3 py-3 sm:px-4">
+    <div className="bg-card min-w-0 px-3 py-3 sm:px-4">
       <div className="text-muted-foreground text-xs leading-5">{props.label}</div>
       <strong className="mt-0.5 block text-lg leading-6 font-semibold tabular-nums">
         {props.value}
@@ -9424,7 +9551,7 @@ function AutoInspectionCard() {
     current.interval_seconds >= 15 &&
     current.interval_seconds <= 86400;
   return (
-    <PageLayout>
+    <PageLayout fixedContent>
       <PageHeading
         eyebrow="INSPECTION / AUTOMATION"
         title="自动巡检"
@@ -9444,329 +9571,367 @@ function AutoInspectionCard() {
           </PageActions>
         }
       />
-      <div className="w-full space-y-4" data-testid="auto-inspection-layout">
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>巡检服务</CardTitle>
-            <CardDescription>
-              这里只控制后台服务与心跳；各任务执行周期统一在调度策略中配置
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {status.error && (
-              <QueryError error={status.error} fallback="自动巡检状态读取失败" embedded />
-            )}
-            {status.isLoading && !current ? <Skeleton className="h-36 w-full" /> : null}
-            {current ? (
-              <div className="grid gap-3 xl:grid-cols-2" data-testid="auto-inspection-settings">
-                <PolicySwitchRow
-                  label="启用自动巡检"
-                  description="开启后由后台持续检查到期任务，不依赖浏览器登录状态。"
-                  checked={current.enabled}
-                  disabled={save.isPending}
-                  onCheckedChange={(enabled) => setDraft({ ...current, enabled })}
-                />
-                <SettingsControlRow
-                  title="调度心跳"
-                  description="每次心跳只检查任务是否到期，不会直接探测全部账号。"
-                >
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="w-24"
-                      type="number"
-                      min={15}
-                      max={86400}
-                      value={current.interval_seconds}
-                      aria-label="调度心跳周期"
-                      onChange={(event) =>
-                        setDraft({
-                          ...current,
-                          interval_seconds: Number(event.target.value),
-                        })
-                      }
-                    />
-                    <span className="text-muted-foreground text-sm">秒</span>
-                  </div>
-                </SettingsControlRow>
-                {!intervalValid ? (
-                  <p className="text-destructive text-xs xl:col-span-2">
-                    调度心跳必须为 15 到 86400 秒
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
-
-        <Card size="sm" data-testid="last-inspection-summary">
-          <CardHeader className="gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-            <div className="min-w-0">
-              <CardTitle>上一轮概要</CardTitle>
+      <div
+        className="flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto overscroll-contain"
+        data-testid="auto-inspection-layout"
+      >
+        <div
+          className="grid shrink-0 items-stretch gap-3 xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]"
+          data-testid="auto-inspection-overview"
+        >
+          <Card size="sm">
+            <CardHeader>
+              <CardTitle>巡检服务</CardTitle>
               <CardDescription>
-                {status.data?.last_run_at
-                  ? `执行时间：${formatDate(status.data.last_run_at, true)}`
-                  : "自动巡检完成一轮后会在这里显示汇总"}
+                这里只控制后台服务与心跳；各任务执行周期统一在调度策略中配置
               </CardDescription>
-            </div>
-            {status.data ? (
-              <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                <StatusPill
-                  label={autoInspectionLastRunState(status.data.last_status).label}
-                  tone={autoInspectionLastRunState(status.data.last_status).tone}
-                />
-                <span className="text-muted-foreground text-xs">
-                  耗时：
-                  <strong className="text-foreground font-medium">
-                    {status.data.last_run_at
-                      ? formatInspectionRunDuration(status.data.last_run_duration_ms)
-                      : "—"}
-                  </strong>
-                </span>
-              </div>
-            ) : null}
-          </CardHeader>
-          {status.isLoading ? <Skeleton className="m-3 h-20 w-auto" /> : null}
-          {!status.isLoading && status.data?.last_run_at ? (
-            <CardContent className="p-0 group-data-[size=sm]/card:p-0">
-              <div className="divide-border/70 grid grid-cols-2 divide-x divide-y sm:grid-cols-4 xl:grid-cols-8">
-                <InspectionSummaryCount
-                  label="受管账号"
-                  value={status.data.last_summary.channels}
-                />
-                <InspectionSummaryCount label="主动探测" value={status.data.last_summary.probed} />
-                <InspectionSummaryCount label="新增样本" value={status.data.last_summary.samples} />
-                <InspectionSummaryCount label="新增熔断" value={status.data.last_summary.fused} />
-                <InspectionSummaryCount
-                  label="恢复回池"
-                  value={status.data.last_summary.recovered}
-                />
-                <InspectionSummaryCount label="自动执行" value={status.data.last_summary.applied} />
-                <InspectionSummaryCount
-                  label="自动处置"
-                  value={status.data.last_summary.cleaned_up}
-                />
-                <InspectionSummaryCount label="当前告警" value={status.data.last_summary.alerts} />
-              </div>
+            </CardHeader>
+            <CardContent>
+              {status.error && (
+                <QueryError error={status.error} fallback="自动巡检状态读取失败" embedded />
+              )}
+              {status.isLoading && !current ? <Skeleton className="h-28 w-full" /> : null}
+              {current ? (
+                <div className="grid gap-2.5" data-testid="auto-inspection-settings">
+                  <PolicySwitchRow
+                    label="启用自动巡检"
+                    description="开启后由后台持续检查到期任务，不依赖浏览器登录状态。"
+                    checked={current.enabled}
+                    disabled={save.isPending}
+                    onCheckedChange={(enabled) => setDraft({ ...current, enabled })}
+                  />
+                  <SettingsControlRow
+                    title="调度心跳"
+                    description="每次心跳只检查任务是否到期，不会直接探测全部账号。"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="w-24"
+                        type="number"
+                        min={15}
+                        max={86400}
+                        value={current.interval_seconds}
+                        aria-label="调度心跳周期"
+                        onChange={(event) =>
+                          setDraft({
+                            ...current,
+                            interval_seconds: Number(event.target.value),
+                          })
+                        }
+                      />
+                      <span className="text-muted-foreground text-sm">秒</span>
+                    </div>
+                  </SettingsControlRow>
+                  {!intervalValid ? (
+                    <p className="text-destructive text-xs">调度心跳必须为 15 到 86400 秒</p>
+                  ) : null}
+                </div>
+              ) : null}
             </CardContent>
-          ) : null}
-        </Card>
+          </Card>
 
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>任务队列</CardTitle>
-            <CardDescription>操作到期后组合为一项巡检任务，并明确展示本轮包含内容</CardDescription>
-          </CardHeader>
-          <CardContent className="p-0 group-data-[size=sm]/card:p-0">
-            {status.isLoading ? <LoadingRows columns={1} rows={4} /> : null}
-            {!status.isLoading && !status.data?.queue.length ? (
-              <EmptyRow text="暂无调度计划，自动巡检状态更新后会显示任务计划" />
+          <Card size="sm" data-testid="last-inspection-summary">
+            <CardHeader className="gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div className="min-w-0">
+                <CardTitle>上一轮概要</CardTitle>
+                <CardDescription>
+                  {status.data?.last_run_at
+                    ? `执行时间：${formatDate(status.data.last_run_at, true)}`
+                    : "自动巡检完成一轮后会在这里显示汇总"}
+                </CardDescription>
+              </div>
+              {status.data ? (
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                  <StatusPill
+                    label={autoInspectionLastRunState(status.data.last_status).label}
+                    tone={autoInspectionLastRunState(status.data.last_status).tone}
+                  />
+                  <span className="text-muted-foreground text-xs">
+                    耗时：
+                    <strong className="text-foreground font-medium">
+                      {status.data.last_run_at
+                        ? formatInspectionRunDuration(status.data.last_run_duration_ms)
+                        : "—"}
+                    </strong>
+                  </span>
+                </div>
+              ) : null}
+            </CardHeader>
+            {status.isLoading ? <Skeleton className="m-3 h-20 w-auto" /> : null}
+            {!status.isLoading && status.data?.last_run_at ? (
+              <CardContent className="p-0 group-data-[size=sm]/card:p-0">
+                <div
+                  className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4 2xl:grid-cols-8"
+                  data-testid="inspection-summary-grid"
+                >
+                  <InspectionSummaryCount
+                    label="受管账号"
+                    value={status.data.last_summary.channels}
+                  />
+                  <InspectionSummaryCount
+                    label="主动探测"
+                    value={status.data.last_summary.probed}
+                  />
+                  <InspectionSummaryCount
+                    label="新增样本"
+                    value={status.data.last_summary.samples}
+                  />
+                  <InspectionSummaryCount label="新增熔断" value={status.data.last_summary.fused} />
+                  <InspectionSummaryCount
+                    label="恢复回池"
+                    value={status.data.last_summary.recovered}
+                  />
+                  <InspectionSummaryCount
+                    label="自动执行"
+                    value={status.data.last_summary.applied}
+                  />
+                  <InspectionSummaryCount
+                    label="自动处置"
+                    value={status.data.last_summary.cleaned_up}
+                  />
+                  <InspectionSummaryCount
+                    label="当前告警"
+                    value={status.data.last_summary.alerts}
+                  />
+                </div>
+              </CardContent>
             ) : null}
-            <div data-slot="queue-list" className="divide-border/70 divide-y">
-              {status.data?.queue.map((item) => {
-                const state = autoInspectionQueueState(item);
-                const operations = item.operations ?? [];
-                let dueIndex = 0;
-                return (
-                  <section key={item.task_type} data-slot="queue-round">
-                    <div className="grid gap-3 px-3 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto_auto] sm:items-center sm:px-4">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
-                          <AutoInspectionTaskIcon />
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <strong className="font-medium">{item.label}</strong>
-                            {item.target_count !== null ? (
-                              <span className="text-muted-foreground text-xs">
-                                {item.target_count} 个目标
-                              </span>
-                            ) : null}
+          </Card>
+        </div>
+
+        <div
+          className="grid items-start gap-3 min-[1700px]:min-h-80 min-[1700px]:flex-1 min-[1700px]:grid-cols-[minmax(38rem,0.95fr)_minmax(0,1.55fr)] min-[1700px]:items-stretch"
+          data-testid="auto-inspection-workspace"
+        >
+          <Card size="sm" className="min-w-0 min-[1700px]:min-h-0">
+            <CardHeader>
+              <CardTitle>任务队列</CardTitle>
+              <CardDescription>
+                操作到期后组合为一项巡检任务，并明确展示本轮包含内容
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:overflow-hidden">
+              <div
+                data-slot="queue-list"
+                className="divide-border/70 max-h-[min(30rem,55vh)] divide-y overflow-y-auto overscroll-contain [scrollbar-gutter:stable] min-[1700px]:h-full min-[1700px]:max-h-none"
+                data-testid="auto-inspection-queue-scroll-area"
+              >
+                {status.isLoading ? <LoadingRows columns={1} rows={4} /> : null}
+                {!status.isLoading && !status.data?.queue.length ? (
+                  <EmptyRow text="暂无调度计划，自动巡检状态更新后会显示任务计划" />
+                ) : null}
+                {status.data?.queue.map((item) => {
+                  const state = autoInspectionQueueState(item);
+                  const operations = item.operations ?? [];
+                  let dueIndex = 0;
+                  return (
+                    <section key={item.task_type} data-slot="queue-round">
+                      <div className="grid gap-3 px-3 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto_auto] sm:items-center sm:px-4">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
+                            <AutoInspectionTaskIcon />
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                              <strong className="font-medium">{item.label}</strong>
+                              {item.target_count !== null ? (
+                                <span className="text-muted-foreground text-xs">
+                                  {item.target_count} 个目标
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <StatusPill label={state.label} tone={state.tone} />
-                      <div className="sm:min-w-40 sm:text-right">
-                        {item.scheduled_for ? (
-                          <>
-                            <div className="text-sm font-medium">
-                              {formatAutoInspectionCountdown(item.scheduled_for, durationClock)}
-                            </div>
-                            <div className="text-muted-foreground mt-0.5 font-mono text-xs">
-                              {formatDate(item.scheduled_for, true)}
-                            </div>
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">等待排期</span>
-                        )}
-                      </div>
-                      {operations.length ? (
-                        <TableActionButton
-                          label="查看任务详情"
-                          onClick={() => setSelectedQueueItem(item)}
-                          className="justify-self-end"
-                        >
-                          <Eye />
-                        </TableActionButton>
-                      ) : (
-                        <span className="text-muted-foreground justify-self-end text-sm">—</span>
-                      )}
-                    </div>
-
-                    {operations.length ? (
-                      <div data-slot="queue-operations" className="border-border/70 border-t">
-                        <div className="text-muted-foreground hidden min-h-9 grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] items-center gap-3 px-4 text-xs font-medium sm:grid">
-                          <span className="text-center">顺序</span>
-                          <span>操作</span>
-                          <span>执行周期</span>
-                          <span className="text-right">本轮安排</span>
+                        <StatusPill label={state.label} tone={state.tone} />
+                        <div className="sm:min-w-40 sm:text-right">
+                          {item.scheduled_for ? (
+                            <>
+                              <div className="text-sm font-medium">
+                                {formatAutoInspectionCountdown(item.scheduled_for, durationClock)}
+                              </div>
+                              <div className="text-muted-foreground mt-0.5 font-mono text-xs">
+                                {formatDate(item.scheduled_for, true)}
+                              </div>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">等待排期</span>
+                          )}
                         </div>
-                        <ol className="divide-border/60 divide-y">
-                          {operations.map((operation) => {
-                            const operationDue = operation.due ?? item.state === "ready";
-                            if (operationDue) dueIndex += 1;
-                            return (
-                              <li
-                                key={operation.operation}
-                                data-slot="queue-operation"
-                                className="grid min-h-12 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] sm:px-4"
-                              >
-                                <span
-                                  data-sequence={operationDue ? dueIndex : undefined}
-                                  className={cn(
-                                    "flex size-6 items-center justify-center justify-self-center rounded-full font-mono text-xs",
-                                    operationDue
-                                      ? "bg-primary/10 text-primary font-medium"
-                                      : "bg-muted text-muted-foreground",
-                                  )}
-                                >
-                                  {operationDue ? dueIndex : "—"}
-                                </span>
-                                <div className="min-w-0">
-                                  <span className="block text-sm font-medium">
-                                    {operation.label}
-                                  </span>
-                                  {operation.target_count !== null ? (
-                                    <span className="text-muted-foreground mt-0.5 block text-xs">
-                                      {operation.target_count} 个账号
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <span className="text-muted-foreground col-span-2 col-start-2 text-xs leading-5 sm:col-span-1 sm:col-start-auto">
-                                  {operation.cycle || "继承调度策略"}
-                                </span>
-                                <span
-                                  className={cn(
-                                    "row-start-1 text-right text-xs font-medium sm:row-auto",
-                                    operationDue ? "text-primary" : "text-muted-foreground",
-                                  )}
-                                >
-                                  {operationDue ? "本轮执行" : "本轮不执行"}
-                                </span>
-                              </li>
-                            );
-                          })}
-                        </ol>
-                      </div>
-                    ) : (
-                      <div className="border-border/70 text-muted-foreground border-t px-4 py-4 text-sm">
-                        {item.state === "disabled"
-                          ? "启用自动巡检后才会生成执行计划"
-                          : "当前没有可执行操作"}
-                      </div>
-                    )}
-                  </section>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card size="sm">
-          <CardHeader className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <CardTitle>心跳记录</CardTitle>
-              <CardDescription className="mt-1">
-                保留最近 20 次调度检查，包括没有任务到期的心跳
-              </CardDescription>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={
-                clearHistory.isPending ||
-                status.data?.running === true ||
-                !status.data?.heartbeat_history.length
-              }
-              onClick={() => setClearHistoryOpen(true)}
-            >
-              <Trash2 size={15} />
-              清空记录
-            </Button>
-          </CardHeader>
-          <CardContent className="p-0 group-data-[size=sm]/card:p-0">
-            <Table className="min-w-[900px]" containerClassName="min-h-0 overflow-auto">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[18%]">检查时间</TableHead>
-                  <TableHead className="w-[10%]">结果</TableHead>
-                  <TableHead className="w-[10%]">总耗时</TableHead>
-                  <TableHead className="w-[32%]">执行概况</TableHead>
-                  <TableHead className="w-[24%]">错误</TableHead>
-                  <TableHead className="w-[6%] text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {status.isLoading && <TableLoadingRows columns={6} />}
-                {!status.isLoading && !status.data?.heartbeat_history.length ? (
-                  <TableMessageRow columns={6}>
-                    <EmptyRow text="暂无心跳记录，启用自动巡检后会记录每次调度检查" />
-                  </TableMessageRow>
-                ) : null}
-                {status.data?.heartbeat_history.map((record) => (
-                  <TableRow key={`${record.checked_at}:${record.task_id ?? "skipped"}`}>
-                    <TableCell>{formatDate(record.checked_at, true)}</TableCell>
-                    <TableCell>
-                      <StatusPill {...autoInspectionHeartbeatState(record)} />
-                    </TableCell>
-                    <TableCell className="font-mono text-xs tabular-nums">
-                      <span
-                        data-live-duration={record.status === "running" ? true : undefined}
-                        suppressHydrationWarning={record.status === "running"}
-                      >
-                        {formatAutoInspectionDuration(
-                          record.checked_at,
-                          record.completed_at,
-                          durationClock,
+                        {operations.length ? (
+                          <TableActionButton
+                            label="查看任务详情"
+                            onClick={() => setSelectedQueueItem(item)}
+                            className="justify-self-end"
+                          >
+                            <Eye />
+                          </TableActionButton>
+                        ) : (
+                          <span className="text-muted-foreground justify-self-end text-sm">—</span>
                         )}
-                      </span>
-                    </TableCell>
-                    <TableCell tooltipContent={autoInspectionOperationSummary(record)}>
-                      {autoInspectionOperationSummary(record)}
-                    </TableCell>
-                    <TableCell
-                      className={record.error ? "text-destructive" : undefined}
-                      tooltipContent={record.error ?? "—"}
-                    >
-                      {record.error ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-right" overflowTooltip={false}>
-                      {record.error || record.task_id || (record.operation_timings ?? []).length ? (
-                        <TableActionButton
-                          label="查看心跳详情"
-                          onClick={() => setSelectedHeartbeat(record)}
-                        >
-                          <Eye />
-                        </TableActionButton>
+                      </div>
+
+                      {operations.length ? (
+                        <div data-slot="queue-operations" className="border-border/70 border-t">
+                          <div className="text-muted-foreground hidden min-h-9 grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] items-center gap-3 px-4 text-xs font-medium sm:grid">
+                            <span className="text-center">顺序</span>
+                            <span>操作</span>
+                            <span>执行周期</span>
+                            <span className="text-right">本轮安排</span>
+                          </div>
+                          <ol className="divide-border/60 divide-y">
+                            {operations.map((operation) => {
+                              const operationDue = operation.due ?? item.state === "ready";
+                              if (operationDue) dueIndex += 1;
+                              return (
+                                <li
+                                  key={operation.operation}
+                                  data-slot="queue-operation"
+                                  className="grid min-h-12 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] sm:px-4"
+                                >
+                                  <span
+                                    data-sequence={operationDue ? dueIndex : undefined}
+                                    className={cn(
+                                      "flex size-6 items-center justify-center justify-self-center rounded-full font-mono text-xs",
+                                      operationDue
+                                        ? "bg-primary/10 text-primary font-medium"
+                                        : "bg-muted text-muted-foreground",
+                                    )}
+                                  >
+                                    {operationDue ? dueIndex : "—"}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <span className="block text-sm font-medium">
+                                      {operation.label}
+                                    </span>
+                                    {operation.target_count !== null ? (
+                                      <span className="text-muted-foreground mt-0.5 block text-xs">
+                                        {operation.target_count} 个账号
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <span className="text-muted-foreground col-span-2 col-start-2 text-xs leading-5 sm:col-span-1 sm:col-start-auto">
+                                    {operation.cycle || "继承调度策略"}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "row-start-1 text-right text-xs font-medium sm:row-auto",
+                                      operationDue ? "text-primary" : "text-muted-foreground",
+                                    )}
+                                  >
+                                    {operationDue ? "本轮执行" : "本轮不执行"}
+                                  </span>
+                                </li>
+                              );
+                            })}
+                          </ol>
+                        </div>
                       ) : (
-                        "—"
+                        <div className="border-border/70 text-muted-foreground border-t px-4 py-4 text-sm">
+                          {item.state === "disabled"
+                            ? "启用自动巡检后才会生成执行计划"
+                            : "当前没有可执行操作"}
+                        </div>
                       )}
-                    </TableCell>
+                    </section>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card size="sm" className="min-w-0 min-[1700px]:min-h-0">
+            <CardHeader className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <CardTitle>心跳记录</CardTitle>
+                <CardDescription className="mt-1">
+                  保留最近 20 次调度检查，包括没有任务到期的心跳
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={
+                  clearHistory.isPending ||
+                  status.data?.running === true ||
+                  !status.data?.heartbeat_history.length
+                }
+                onClick={() => setClearHistoryOpen(true)}
+              >
+                <Trash2 size={15} />
+                清空记录
+              </Button>
+            </CardHeader>
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:overflow-hidden">
+              <Table
+                className="min-w-[900px]"
+                containerClassName="max-h-[min(30rem,55vh)] overflow-auto overscroll-contain [scrollbar-gutter:stable] min-[1700px]:h-full min-[1700px]:max-h-none"
+                data-testid="auto-inspection-heartbeat-table"
+              >
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[18%]">检查时间</TableHead>
+                    <TableHead className="w-[10%]">结果</TableHead>
+                    <TableHead className="w-[10%]">总耗时</TableHead>
+                    <TableHead className="w-[32%]">执行概况</TableHead>
+                    <TableHead className="w-[24%]">错误</TableHead>
+                    <TableHead className="w-[6%] text-right">操作</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                </TableHeader>
+                <TableBody>
+                  {status.isLoading && <TableLoadingRows columns={6} />}
+                  {!status.isLoading && !status.data?.heartbeat_history.length ? (
+                    <TableMessageRow columns={6}>
+                      <EmptyRow text="暂无心跳记录，启用自动巡检后会记录每次调度检查" />
+                    </TableMessageRow>
+                  ) : null}
+                  {status.data?.heartbeat_history.map((record) => (
+                    <TableRow key={`${record.checked_at}:${record.task_id ?? "skipped"}`}>
+                      <TableCell>{formatDate(record.checked_at, true)}</TableCell>
+                      <TableCell>
+                        <StatusPill {...autoInspectionHeartbeatState(record)} />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs tabular-nums">
+                        <span
+                          data-live-duration={record.status === "running" ? true : undefined}
+                          suppressHydrationWarning={record.status === "running"}
+                        >
+                          {formatAutoInspectionDuration(
+                            record.checked_at,
+                            record.completed_at,
+                            durationClock,
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell tooltipContent={autoInspectionOperationSummary(record)}>
+                        {autoInspectionOperationSummary(record)}
+                      </TableCell>
+                      <TableCell
+                        className={record.error ? "text-destructive" : undefined}
+                        tooltipContent={record.error ?? "—"}
+                      >
+                        {record.error ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-right" overflowTooltip={false}>
+                        {record.error ||
+                        record.task_id ||
+                        (record.operation_timings ?? []).length ? (
+                          <TableActionButton
+                            label="查看心跳详情"
+                            onClick={() => setSelectedHeartbeat(record)}
+                          >
+                            <Eye />
+                          </TableActionButton>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </div>
       </div>
       <Dialog
         open={clearHistoryOpen}
@@ -9925,7 +10090,12 @@ export function PolicyPage() {
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<PolicyDraft | null>(null);
-  const [category, setCategory] = useState<"operations" | "rules" | "scope">("operations");
+  const [category, setCategory] = useState<"routing" | "health" | "sampling" | "scope">("routing");
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: api.accounts,
+    enabled: category === "scope",
+  });
   const [dangerousSaveOpen, setDangerousSaveOpen] = useState(false);
   const [restoreControlOpen, setRestoreControlOpen] = useState(false);
   const save = useMutation({
@@ -10016,7 +10186,7 @@ export function PolicyPage() {
       <PageHeading
         eyebrow="SCHEDULING / POLICY"
         title="调度策略"
-        description="设置全局默认、健康判定、熔断回池和自动执行范围；分组覆盖在分组管理中配置。"
+        description="按调度写入、健康处置、巡检采样和守护范围分类管理；分组覆盖在分组管理中配置。"
         action={
           <PageActions>
             <Button variant="outline" onClick={() => void refreshPolicy()}>
@@ -10030,7 +10200,7 @@ export function PolicyPage() {
           </PageActions>
         }
       />
-      <div className="w-full space-y-4">
+      <div className="w-full space-y-3" data-testid="policy-page-layout">
         {data?.configuration_errors?.length ? (
           <div className="border-warning/40 bg-warning/10 text-warning rounded-lg border px-3 py-2 text-sm">
             策略配置存在无效值：{data.configuration_errors.join("、")}
@@ -10044,202 +10214,189 @@ export function PolicyPage() {
           </div>
         ) : null}
         {policy.error ? <QueryError error={policy.error} fallback="调度策略读取失败" /> : null}
-        <div className="bg-muted flex w-fit gap-1 rounded-lg p-1">
-          {(
-            [
-              ["operations", "调度与执行"],
-              ["rules", "健康判定"],
-              ["scope", "守护范围"],
-            ] as const
-          ).map(([value, label]) => (
-            <Button
-              key={value}
-              size="sm"
-              variant={category === value ? "secondary" : "ghost"}
-              aria-pressed={category === value}
-              onClick={() => setCategory(value)}
-            >
-              {label}
-            </Button>
-          ))}
+        <div
+          className="bg-background/95 sticky top-0 z-20 -mx-1 overflow-x-auto px-1 py-1 backdrop-blur-sm"
+          data-testid="policy-category-navigation"
+        >
+          <SegmentedControl className="w-max min-w-full sm:min-w-0">
+            {(
+              [
+                ["routing", "调度与写入"],
+                ["health", "健康与处置"],
+                ["sampling", "巡检与采样"],
+                ["scope", "守护范围"],
+              ] as const
+            ).map(([value, label]) => (
+              <SegmentedControlItem
+                key={value}
+                className="shrink-0"
+                selected={category === value}
+                onClick={() => setCategory(value)}
+              >
+                {label}
+              </SegmentedControlItem>
+            ))}
+          </SegmentedControl>
         </div>
         {policy.isLoading && !current ? <PolicyPageLoading /> : null}
-        {category === "operations" && current ? (
-          <div className="flex flex-col gap-4" data-testid="policy-operations-layout">
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>运行控制</CardTitle>
-                <CardDescription>
-                  选择监控告警、仅保存调度结果或自动应用到 Sub2API；随“保存策略”一起生效
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <SettingsControlRow title="执行模式" description={runtimeModeDescription}>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    {data?.mode !== current.mode ? (
-                      <StatusPill label="待保存" tone="warning" />
-                    ) : null}
-                    <div
-                      className="bg-muted flex flex-wrap justify-end gap-1 rounded-lg p-1"
-                      role="group"
-                      aria-label="执行模式"
-                      data-testid="policy-runtime-modes"
-                    >
-                      {runtimeModeOptions.map((option) => (
-                        <Tooltip key={option.value}>
-                          <TooltipTrigger render={<span className="inline-flex" />}>
-                            <Button
-                              size="sm"
-                              variant={activeRuntimeMode === option.value ? "secondary" : "ghost"}
-                              disabled={save.isPending}
-                              aria-pressed={activeRuntimeMode === option.value}
-                              aria-label={`${option.value}：${option.description}`}
-                              onClick={() => setDraft({ ...current, mode: option.value })}
-                            >
-                              {option.value}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>{option.description}</TooltipContent>
-                        </Tooltip>
-                      ))}
-                    </div>
-                  </div>
-                </SettingsControlRow>
-              </CardContent>
-            </Card>
-            {current && (
+        {category === "routing" && current ? (
+          <div className="flex flex-col gap-3" data-testid="policy-operations-layout">
+            <div
+              className="grid items-stretch gap-3 xl:grid-cols-[minmax(20rem,0.8fr)_minmax(0,1.7fr)]"
+              data-testid="policy-routing-overview"
+            >
               <Card size="sm">
                 <CardHeader>
-                  <CardTitle>全局默认策略</CardTitle>
+                  <CardTitle>运行控制</CardTitle>
                   <CardDescription>
-                    分组没有单独设置时使用；分组级选择在分组管理中配置。
-                    {schedulingWeightFormula}
+                    选择监控告警、仅保存调度结果或自动应用到 Sub2API；随“保存策略”一起生效
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <FormField label="全局默认策略">
-                    <Select
-                      value={current.global_strategy}
-                      onValueChange={(value) =>
-                        value && setDraft({ ...current, global_strategy: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {schedulingStrategyOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
+                <CardContent>
+                  <SettingsControlRow title="执行模式" description={runtimeModeDescription}>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      {data?.mode !== current.mode ? (
+                        <StatusPill label="待保存" tone="warning" />
+                      ) : null}
+                      <SegmentedControl
+                        className="flex-wrap justify-end"
+                        role="group"
+                        aria-label="执行模式"
+                        data-testid="policy-runtime-modes"
+                      >
+                        {runtimeModeOptions.map((option) => (
+                          <Tooltip key={option.value}>
+                            <TooltipTrigger render={<span className="inline-flex" />}>
+                              <SegmentedControlItem
+                                selected={activeRuntimeMode === option.value}
+                                disabled={save.isPending}
+                                aria-label={`${option.value}：${option.description}`}
+                                onClick={() => setDraft({ ...current, mode: option.value })}
+                              >
+                                {option.value}
+                              </SegmentedControlItem>
+                            </TooltipTrigger>
+                            <TooltipContent>{option.description}</TooltipContent>
+                          </Tooltip>
                         ))}
-                      </SelectContent>
-                    </Select>
-                    <span className="text-muted-foreground text-xs leading-4 font-normal">
-                      {schedulingStrategyDescription(current.global_strategy)}
-                    </span>
-                  </FormField>
-                  <FormField label="倍率缺失回退">
-                    <Select
-                      value={current.missing_rate_fallback}
-                      onValueChange={(value) =>
-                        value && setDraft({ ...current, missing_rate_fallback: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue>{displayFallback(current.missing_rate_fallback)}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
-                        <SelectItem value="fail_closed">严格关闭</SelectItem>
-                        <SelectItem value="fail_open">允许继续</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </FormField>
-                  <PolicyNumberField
-                    label="每组总权重预算"
-                    description="由同一分组内参与调度的账号按策略共享"
-                    min={1}
-                    max={1000000}
-                    value={policyAdvancedValue(current, "weights", "budget")}
-                    onChange={(value) =>
-                      setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
-                    }
-                  />
-                  <PolicyNumberField
-                    label="人工优先位范围"
-                    description="保留优先级 1 至 N；自动调度从 N+1 开始"
-                    min={1}
-                    max={1000}
-                    value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
-                    onChange={(value) =>
-                      setDraft(
-                        withPolicyAdvancedValue(current, "manual_priority", "reserved_max", value),
-                      )
-                    }
-                  />
-                  <PolicyNumberField
-                    label="权重健康闸门"
-                    unit="分"
-                    min={0}
-                    max={100}
-                    step="any"
-                    value={policyAdvancedValue(current, "weights", "gate_floor")}
-                    onChange={(value) =>
-                      setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
-                    }
-                  />
-                  <PolicyNumberField
-                    label="均衡中价格占比"
-                    min={0}
-                    max={1}
-                    value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
-                    step="0.05"
-                    onChange={(value) =>
-                      setDraft(
-                        withPolicyAdvancedValue(current, "weights", "balanced_price_ratio", value),
-                      )
-                    }
-                  />
+                      </SegmentedControl>
+                    </div>
+                  </SettingsControlRow>
                 </CardContent>
               </Card>
-            )}
-            {current ? (
-              <PolicyConfigCard
-                title="巡检任务周期"
-                description="心跳只检查任务是否到期；上游数据会同时刷新倍率、余额和鉴权状态。"
-              >
-                <PolicyNumberField
-                  label="上游数据拉取间隔"
-                  unit="秒"
-                  min={30}
-                  max={86400}
-                  value={policyAdvancedValue(current, "upstream_multiplier", "interval_seconds")}
-                  onChange={(value) =>
-                    setDraft(
-                      withPolicyAdvancedValue(
-                        current,
-                        "upstream_multiplier",
-                        "interval_seconds",
-                        value,
-                      ),
-                    )
-                  }
-                />
-                <PolicyNumberField
-                  label="请求记录拉取间隔"
-                  unit="秒"
-                  min={1}
-                  max={86400}
-                  value={policyAdvancedValue(current, "traffic", "refresh_seconds")}
-                  onChange={(value) =>
-                    setDraft(withPolicyAdvancedValue(current, "traffic", "refresh_seconds", value))
-                  }
-                />
-              </PolicyConfigCard>
-            ) : null}
+              {current && (
+                <Card size="sm">
+                  <CardHeader>
+                    <CardTitle>全局默认策略</CardTitle>
+                    <CardDescription>
+                      分组没有单独设置时使用；分组级选择在分组管理中配置。
+                      {schedulingWeightFormula}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <FormField label="全局默认策略">
+                      <Select
+                        value={current.global_strategy}
+                        onValueChange={(value) =>
+                          value && setDraft({ ...current, global_strategy: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {schedulingStrategyOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <span className="text-muted-foreground text-xs leading-4 font-normal">
+                        {schedulingStrategyDescription(current.global_strategy)}
+                      </span>
+                    </FormField>
+                    <FormField label="倍率缺失回退">
+                      <Select
+                        value={current.missing_rate_fallback}
+                        onValueChange={(value) =>
+                          value && setDraft({ ...current, missing_rate_fallback: value })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue>
+                            {displayFallback(current.missing_rate_fallback)}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
+                          <SelectItem value="fail_closed">严格关闭</SelectItem>
+                          <SelectItem value="fail_open">允许继续</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    <PolicyNumberField
+                      label="每组总权重预算"
+                      description="由同一分组内参与调度的账号按策略共享"
+                      min={1}
+                      max={1000000}
+                      value={policyAdvancedValue(current, "weights", "budget")}
+                      onChange={(value) =>
+                        setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
+                      }
+                    />
+                    <PolicyNumberField
+                      label="人工优先位范围"
+                      description="保留优先级 1 至 N；自动调度从 N+1 开始"
+                      min={1}
+                      max={1000}
+                      value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "manual_priority",
+                            "reserved_max",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                    <PolicyNumberField
+                      label="权重健康闸门"
+                      unit="分"
+                      min={0}
+                      max={100}
+                      step="any"
+                      value={policyAdvancedValue(current, "weights", "gate_floor")}
+                      onChange={(value) =>
+                        setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
+                      }
+                    />
+                    <PolicyNumberField
+                      label="均衡中价格占比"
+                      min={0}
+                      max={1}
+                      value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
+                      step="0.05"
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "weights",
+                            "balanced_price_ratio",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                  </CardContent>
+                </Card>
+              )}
+            </div>
             {current ? (
               <PolicyOperationsEditor
+                section="routing"
                 value={current}
                 onChange={setDraft}
                 probesEnabled={config.data?.probes_enabled}
@@ -10249,19 +10406,47 @@ export function PolicyPage() {
             ) : null}
           </div>
         ) : null}
-        {category === "rules" && current ? (
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+        {category === "health" && current ? (
+          <div className="flex flex-col gap-3" data-testid="policy-health-layout">
             <PolicyRulesEditor value={current} onChange={setDraft} />
+            <PolicyOperationsEditor
+              section="health"
+              value={current}
+              onChange={setDraft}
+              probesEnabled={config.data?.probes_enabled}
+              probesPending={updateProbes.isPending || config.isLoading}
+              onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
+            />
+          </div>
+        ) : null}
+        {category === "sampling" && current ? (
+          <div className="flex flex-col gap-3" data-testid="policy-sampling-layout">
+            <PolicyInspectionSchedule value={current} onChange={setDraft} />
+            <PolicyOperationsEditor
+              section="sampling"
+              value={current}
+              onChange={setDraft}
+              probesEnabled={config.data?.probes_enabled}
+              probesPending={updateProbes.isPending || config.isLoading}
+              onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
+            />
           </div>
         ) : null}
         {category === "scope" && current ? (
-          <PolicyScopeLayout
-            value={current}
-            onChange={setDraft}
-            groups={data?.group_strategies ?? []}
-            onRestoreControl={() => setRestoreControlOpen(true)}
-            restorePending={restoreControl.isPending}
-          />
+          <>
+            {accounts.error ? (
+              <QueryError error={accounts.error} fallback="账号选项读取失败" />
+            ) : null}
+            <PolicyScopeLayout
+              value={current}
+              onChange={setDraft}
+              groups={data?.group_strategies ?? []}
+              accounts={accounts.data ?? []}
+              accountsPending={accounts.isLoading}
+              onRestoreControl={() => setRestoreControlOpen(true)}
+              restorePending={restoreControl.isPending}
+            />
+          </>
         ) : null}
       </div>
       <Dialog open={dangerousSaveOpen} onOpenChange={setDangerousSaveOpen}>
@@ -10323,10 +10508,45 @@ type PolicyEditorProps = {
 };
 
 type PolicyOperationsEditorProps = PolicyEditorProps & {
+  section: "routing" | "health" | "sampling";
   probesEnabled?: boolean;
   probesPending: boolean;
   onProbesEnabledChange: (enabled: boolean) => void;
 };
+
+export function PolicyInspectionSchedule(props: PolicyEditorProps) {
+  return (
+    <PolicyConfigCard
+      title="巡检任务周期"
+      description="控制巡检何时拉取上游目录、余额与请求记录；不改变调度计算公式。"
+    >
+      <PolicyNumberField
+        label="上游数据拉取间隔"
+        description="同一轮刷新倍率、站点余额和鉴权状态"
+        unit="秒"
+        min={30}
+        max={86400}
+        value={policyAdvancedValue(props.value, "upstream_multiplier", "interval_seconds")}
+        onChange={(value) =>
+          props.onChange(
+            withPolicyAdvancedValue(props.value, "upstream_multiplier", "interval_seconds", value),
+          )
+        }
+      />
+      <PolicyNumberField
+        label="请求记录拉取间隔"
+        description="用于补充真实流量健康样本"
+        unit="秒"
+        min={1}
+        max={86400}
+        value={policyAdvancedValue(props.value, "traffic", "refresh_seconds")}
+        onChange={(value) =>
+          props.onChange(withPolicyAdvancedValue(props.value, "traffic", "refresh_seconds", value))
+        }
+      />
+    </PolicyConfigCard>
+  );
+}
 
 function policyAdvancedValue(value: PolicyDraft, section: string, path: string): unknown {
   let current: unknown = value.advanced_policy[section];
@@ -10467,7 +10687,11 @@ function PolicyConfigCard(props: {
     </>
   );
   return (
-    <Card size="sm" className={props.wide ? "xl:col-span-2" : undefined}>
+    <Card
+      size="sm"
+      className={props.wide ? "xl:col-span-2" : undefined}
+      data-policy-section={props.title}
+    >
       <CardHeader className="flex items-start justify-between gap-4">
         {props.switchAction ? (
           <label
@@ -10517,670 +10741,679 @@ function PolicyConfigCard(props: {
   );
 }
 
-function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
+export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
   const set = (section: string, path: string, value: unknown) =>
     props.onChange(withPolicyAdvancedValue(props.value, section, path, value));
   const retryEnabled = policyAdvancedValue(props.value, "probe", "retry_enabled") === true;
   const retrySource = String(policyAdvancedValue(props.value, "probe", "retry_source") ?? "fixed");
   return (
-    <>
-      <PolicyConfigCard
-        title="自动执行范围"
-        description="关闭某一项后仍计算期望值，但不自动应用到 Sub2API。"
-        wide
-      >
-        <div className="col-span-full grid gap-2 sm:grid-cols-2" data-testid="policy-auto-apply">
-          {Object.entries(autoApplyLabels).map(([key, label]) => (
+    <div
+      className="grid items-stretch gap-3 xl:grid-cols-2"
+      data-testid={`policy-${props.section}-sections`}
+    >
+      {props.section === "routing" ? (
+        <PolicyConfigCard
+          title="自动执行范围"
+          description="关闭某一项后仍计算期望值，但不自动应用到 Sub2API。"
+          wide
+        >
+          <div className="col-span-full grid gap-2 sm:grid-cols-2" data-testid="policy-auto-apply">
+            {Object.entries(autoApplyLabels).map(([key, label]) => (
+              <SettingsControlRow
+                key={key}
+                title={label}
+                description={`控制是否自动执行${label}变更`}
+                controlId={`policy-auto-apply-${key}`}
+              >
+                <Switch
+                  id={`policy-auto-apply-${key}`}
+                  checked={props.value.auto_apply?.[key] === true}
+                  aria-label={`${label}自动执行`}
+                  onCheckedChange={(enabled) =>
+                    props.onChange({
+                      ...props.value,
+                      auto_apply: {
+                        ...props.value.auto_apply,
+                        [key]: enabled,
+                      },
+                    })
+                  }
+                />
+              </SettingsControlRow>
+            ))}
+            <PolicyNumberField
+              label="调度写入并发"
+              unit="个账号"
+              min={1}
+              max={16}
+              value={policyAdvancedValue(props.value, "writeback", "concurrency")}
+              onChange={(value) => set("writeback", "concurrency", value)}
+            />
             <SettingsControlRow
-              key={key}
-              title={label}
-              description={`控制是否自动执行${label}变更`}
-              controlId={`policy-auto-apply-${key}`}
+              title="调度写后确认"
+              description="开启后只复核自动调度实际修改的字段。"
+              controlId="policy-writeback-verification"
             >
               <Switch
-                id={`policy-auto-apply-${key}`}
-                checked={props.value.auto_apply?.[key] === true}
-                aria-label={`${label}自动执行`}
-                onCheckedChange={(enabled) =>
-                  props.onChange({
-                    ...props.value,
-                    auto_apply: {
-                      ...(props.value.auto_apply ?? {}),
-                      [key]: enabled,
-                    },
-                  })
-                }
+                id="policy-writeback-verification"
+                checked={policyAdvancedValue(props.value, "writeback", "verification") === true}
+                aria-label="调度写后确认"
+                onCheckedChange={(value) => set("writeback", "verification", value)}
               />
             </SettingsControlRow>
-          ))}
-          <PolicyNumberField
-            label="调度写入并发"
-            unit="个账号"
-            min={1}
-            max={16}
-            value={policyAdvancedValue(props.value, "writeback", "concurrency")}
-            onChange={(value) => set("writeback", "concurrency", value)}
-          />
-          <SettingsControlRow
-            title="调度写后确认"
-            description="开启后只复核自动调度实际修改的字段。"
-            controlId="policy-writeback-verification"
+          </div>
+        </PolicyConfigCard>
+      ) : null}
+      {props.section === "health" ? (
+        <>
+          <PolicyConfigCard
+            title="熔断"
+            description="致命错误立即熔断；错误率与延迟触发软熔断，且受保底池与每轮切换上限约束。"
+            columns={3}
+            wide
+            switchAction={{
+              checked: policyAdvancedValue(props.value, "breaker", "enabled") !== false,
+              label: "启用熔断",
+              onCheckedChange: (value) => set("breaker", "enabled", value),
+            }}
           >
-            <Switch
-              id="policy-writeback-verification"
-              checked={policyAdvancedValue(props.value, "writeback", "verification") === true}
-              aria-label="调度写后确认"
-              onCheckedChange={(value) => set("writeback", "verification", value)}
+            <PolicyNumberField
+              label="错误率窗口"
+              unit="次请求"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "http_window")}
+              onChange={(value) => set("breaker", "http_window", value)}
             />
-          </SettingsControlRow>
-        </div>
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="熔断"
-        description="致命错误立即熔断；错误率与延迟触发软熔断，且受保底池与每轮切换上限约束。"
-        columns={3}
-        wide
-        switchAction={{
-          checked: policyAdvancedValue(props.value, "breaker", "enabled") !== false,
-          label: "启用熔断",
-          onCheckedChange: (value) => set("breaker", "enabled", value),
-        }}
-      >
-        <PolicyNumberField
-          label="错误率窗口"
-          unit="次请求"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "http_window")}
-          onChange={(value) => set("breaker", "http_window", value)}
-        />
-        <PolicyNumberField
-          label="窗口内失败次数"
-          unit="次"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "http_failures")}
-          onChange={(value) => set("breaker", "http_failures", value)}
-        />
-        <PolicyNumberField
-          label="且健康分低于"
-          unit="分"
-          min={0}
-          max={100}
-          value={policyAdvancedValue(props.value, "breaker", "http_score_below")}
-          onChange={(value) => set("breaker", "http_score_below", value)}
-        />
-        <PolicyNumberField
-          label="延迟窗口"
-          unit="次请求"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "latency_window")}
-          onChange={(value) => set("breaker", "latency_window", value)}
-        />
-        <PolicyNumberField
-          label="窗口内慢响应次数"
-          unit="次"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "latency_occurrences")}
-          onChange={(value) => set("breaker", "latency_occurrences", value)}
-        />
-        <PolicyNumberField
-          label="慢响应首字界限"
-          unit="毫秒"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "latency_ttfb_ms")}
-          onChange={(value) => set("breaker", "latency_ttfb_ms", value)}
-        />
-        <PolicyNumberField
-          label="每轮最多熔断"
-          unit="个"
-          min={1}
-          value={policyAdvancedValue(props.value, "breaker", "max_switch_per_round")}
-          onChange={(value) => set("breaker", "max_switch_per_round", value)}
-        />
-        <PolicyNumberField
-          label="熔断冷却"
-          unit="秒"
-          min={0}
-          value={policyAdvancedValue(props.value, "breaker", "fused_cooldown_seconds")}
-          onChange={(value) => set("breaker", "fused_cooldown_seconds", value)}
-        />
-        <FormField label="见到即熔断的错误码">
-          <Input
-            value={advancedList(
-              policyAdvancedValue(props.value, "breaker", "instant_status_codes"),
-            )}
-            placeholder="例如 402, 429"
-            onChange={(event) =>
-              set(
-                "breaker",
-                "instant_status_codes",
-                splitConfigList(event.target.value).map(Number),
-              )
-            }
+            <PolicyNumberField
+              label="窗口内失败次数"
+              unit="次"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "http_failures")}
+              onChange={(value) => set("breaker", "http_failures", value)}
+            />
+            <PolicyNumberField
+              label="且健康分低于"
+              unit="分"
+              min={0}
+              max={100}
+              value={policyAdvancedValue(props.value, "breaker", "http_score_below")}
+              onChange={(value) => set("breaker", "http_score_below", value)}
+            />
+            <PolicyNumberField
+              label="延迟窗口"
+              unit="次请求"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "latency_window")}
+              onChange={(value) => set("breaker", "latency_window", value)}
+            />
+            <PolicyNumberField
+              label="窗口内慢响应次数"
+              unit="次"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "latency_occurrences")}
+              onChange={(value) => set("breaker", "latency_occurrences", value)}
+            />
+            <PolicyNumberField
+              label="慢响应首字界限"
+              unit="毫秒"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "latency_ttfb_ms")}
+              onChange={(value) => set("breaker", "latency_ttfb_ms", value)}
+            />
+            <PolicyNumberField
+              label="每轮最多熔断"
+              unit="个"
+              min={1}
+              value={policyAdvancedValue(props.value, "breaker", "max_switch_per_round")}
+              onChange={(value) => set("breaker", "max_switch_per_round", value)}
+            />
+            <PolicyNumberField
+              label="熔断冷却"
+              unit="秒"
+              min={0}
+              value={policyAdvancedValue(props.value, "breaker", "fused_cooldown_seconds")}
+              onChange={(value) => set("breaker", "fused_cooldown_seconds", value)}
+            />
+            <FormField label="见到即熔断的错误码">
+              <Input
+                value={advancedList(
+                  policyAdvancedValue(props.value, "breaker", "instant_status_codes"),
+                )}
+                placeholder="例如 402, 429"
+                onChange={(event) =>
+                  set(
+                    "breaker",
+                    "instant_status_codes",
+                    splitConfigList(event.target.value).map(Number),
+                  )
+                }
+              />
+            </FormField>
+            <div className="col-span-full grid gap-2 lg:grid-cols-3">
+              <PolicySwitchRow
+                label="凭据失效立即熔断"
+                description="认证失败无需累计；仍受保底池约束。"
+                checked={policyAdvancedValue(props.value, "breaker", "hard_fatal") !== false}
+                onCheckedChange={(value) => set("breaker", "hard_fatal", value)}
+              />
+              <PolicySwitchRow
+                label="网关错误只降级不熔断"
+                description="临时网关异常只压低权重和优先级。"
+                checked={policyAdvancedValue(props.value, "breaker", "http_degrade_only") === true}
+                onCheckedChange={(value) => set("breaker", "http_degrade_only", value)}
+              />
+              <PolicySwitchRow
+                label="延迟超标只降级不熔断"
+                description="慢账号仍留在池内，但减少流量。"
+                checked={
+                  policyAdvancedValue(props.value, "breaker", "latency_degrade_only") === true
+                }
+                onCheckedChange={(value) => set("breaker", "latency_degrade_only", value)}
+              />
+            </div>
+          </PolicyConfigCard>
+          <PolicyConfigCard
+            title="保底与降级"
+            description="保底池避免分组断供；低分账号可只降级而不停止调度。"
+            columns={2}
+          >
+            <PolicyNumberField
+              label="保底可用账号数"
+              unit="个"
+              min={0}
+              value={policyAdvancedValue(props.value, "breaker", "min_pool_size")}
+              onChange={(value) => set("breaker", "min_pool_size", value)}
+            />
+            <PolicyNumberField
+              label="计入可用池的最低分"
+              unit="分"
+              min={0}
+              max={100}
+              value={policyAdvancedValue(props.value, "breaker", "min_pool_score")}
+              onChange={(value) => set("breaker", "min_pool_score", value)}
+            />
+            <PolicyNumberField
+              label="降级线"
+              unit="分"
+              min={0}
+              max={100}
+              value={policyAdvancedValue(props.value, "degrade", "score_threshold")}
+              onChange={(value) => set("degrade", "score_threshold", value)}
+            />
+            <PolicyNumberField
+              label="降级优先级步进"
+              min={1}
+              value={policyAdvancedValue(props.value, "degrade", "priority_step")}
+              onChange={(value) => set("degrade", "priority_step", value)}
+            />
+            <PolicyNumberField
+              label="降级负载乘数"
+              min={0.000001}
+              max={1}
+              step="any"
+              value={policyAdvancedValue(props.value, "degrade", "load_factor_ratio")}
+              onChange={(value) => set("degrade", "load_factor_ratio", value)}
+            />
+            <PolicyNumberField
+              label="最低负载因子"
+              min={1}
+              value={policyAdvancedValue(props.value, "degrade", "min_load_factor")}
+              onChange={(value) => set("degrade", "min_load_factor", value)}
+            />
+            <div className="col-span-full">
+              <PolicySwitchRow
+                label="启用降级"
+                description="低分账号压低权重但不停止调度。"
+                checked={policyAdvancedValue(props.value, "degrade", "enabled") !== false}
+                onCheckedChange={(value) => set("degrade", "enabled", value)}
+              />
+            </div>
+          </PolicyConfigCard>
+          <PolicyConfigCard
+            title="健康回池"
+            description="熔断账号按低频探测恢复，连续达标后重新进入调度。"
+            columns={2}
+            switchAction={{
+              checked: policyAdvancedValue(props.value, "recovery", "enabled") !== false,
+              label: "启用健康回池",
+              onCheckedChange: (value) => set("recovery", "enabled", value),
+            }}
+          >
+            <PolicyNumberField
+              label="恢复探测间隔"
+              unit="秒"
+              min={1}
+              value={policyAdvancedValue(props.value, "recovery", "probe_interval_seconds")}
+              onChange={(value) => set("recovery", "probe_interval_seconds", value)}
+            />
+            <PolicyNumberField
+              label="回池目标分"
+              unit="分"
+              min={0}
+              max={100}
+              value={policyAdvancedValue(props.value, "recovery", "target_score")}
+              onChange={(value) => set("recovery", "target_score", value)}
+            />
+            <PolicyNumberField
+              label="连续成功次数"
+              unit="次"
+              min={1}
+              value={policyAdvancedValue(props.value, "recovery", "success_count")}
+              onChange={(value) => set("recovery", "success_count", value)}
+            />
+            <PolicyNumberField
+              label="健康持续时长"
+              unit="秒"
+              min={0}
+              value={policyAdvancedValue(props.value, "recovery", "hold_seconds")}
+              onChange={(value) => set("recovery", "hold_seconds", value)}
+            />
+          </PolicyConfigCard>
+        </>
+      ) : null}
+      {props.section === "routing" ? (
+        <PolicyConfigCard
+          title="负载因子调权"
+          description="权重变化小于阈值时不执行，应用到 Sub2API 后进入冷却期，避免路由反复震荡。"
+          columns={3}
+          switchAction={{
+            checked: policyAdvancedValue(props.value, "weights", "enabled") !== false,
+            label: "启用负载因子调权",
+            onCheckedChange: (value) => set("weights", "enabled", value),
+          }}
+        >
+          <FormField label="变化阈值">
+            <Input
+              type="number"
+              min={0.000001}
+              max={1}
+              step="any"
+              value={props.value.change_threshold}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  change_threshold: event.target.value,
+                })
+              }
+            />
+          </FormField>
+          <FormField label="调权冷却（秒）">
+            <Input
+              type="number"
+              min={0}
+              max={86400}
+              value={props.value.cooldown_seconds ?? ""}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  cooldown_seconds: policyNumberInput(event.target.value),
+                })
+              }
+            />
+          </FormField>
+          <PolicyNumberField
+            label="负载因子下限"
+            min={1}
+            value={policyAdvancedValue(props.value, "weights", "min_load_factor")}
+            onChange={(value) => set("weights", "min_load_factor", value)}
           />
-        </FormField>
-        <div className="col-span-full grid gap-2 lg:grid-cols-3">
-          <PolicySwitchRow
-            label="凭据失效立即熔断"
-            description="认证失败无需累计；仍受保底池约束。"
-            checked={policyAdvancedValue(props.value, "breaker", "hard_fatal") !== false}
-            onCheckedChange={(value) => set("breaker", "hard_fatal", value)}
+          <PolicyNumberField
+            label="负载因子上限"
+            min={1}
+            value={policyAdvancedValue(props.value, "weights", "max_load_factor")}
+            onChange={(value) => set("weights", "max_load_factor", value)}
           />
-          <PolicySwitchRow
-            label="网关错误只降级不熔断"
-            description="临时网关异常只压低权重和优先级。"
-            checked={policyAdvancedValue(props.value, "breaker", "http_degrade_only") === true}
-            onCheckedChange={(value) => set("breaker", "http_degrade_only", value)}
+          <PolicyNumberField
+            label="价格权重强度"
+            min={0.000001}
+            max={100}
+            step="any"
+            value={policyAdvancedValue(props.value, "weights", "price_exp")}
+            onChange={(value) => set("weights", "price_exp", value)}
           />
-          <PolicySwitchRow
-            label="延迟超标只降级不熔断"
-            description="慢账号仍留在池内，但减少流量。"
-            checked={policyAdvancedValue(props.value, "breaker", "latency_degrade_only") === true}
-            onCheckedChange={(value) => set("breaker", "latency_degrade_only", value)}
+          <PolicyNumberField
+            label="速度权重强度"
+            min={0.000001}
+            max={100}
+            step="any"
+            value={policyAdvancedValue(props.value, "weights", "speed_exp")}
+            onChange={(value) => set("weights", "speed_exp", value)}
           />
-        </div>
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="保底与降级"
-        description="保底池避免分组断供；低分账号可只降级而不停止调度。"
-        columns={3}
-        wide
-      >
-        <PolicyNumberField
-          label="保底可用账号数"
-          unit="个"
-          min={0}
-          value={policyAdvancedValue(props.value, "breaker", "min_pool_size")}
-          onChange={(value) => set("breaker", "min_pool_size", value)}
-        />
-        <PolicyNumberField
-          label="计入可用池的最低分"
-          unit="分"
-          min={0}
-          max={100}
-          value={policyAdvancedValue(props.value, "breaker", "min_pool_score")}
-          onChange={(value) => set("breaker", "min_pool_score", value)}
-        />
-        <PolicyNumberField
-          label="降级线"
-          unit="分"
-          min={0}
-          max={100}
-          value={policyAdvancedValue(props.value, "degrade", "score_threshold")}
-          onChange={(value) => set("degrade", "score_threshold", value)}
-        />
-        <PolicyNumberField
-          label="降级优先级步进"
-          min={1}
-          value={policyAdvancedValue(props.value, "degrade", "priority_step")}
-          onChange={(value) => set("degrade", "priority_step", value)}
-        />
-        <PolicyNumberField
-          label="降级负载乘数"
-          min={0.000001}
-          max={1}
-          step="any"
-          value={policyAdvancedValue(props.value, "degrade", "load_factor_ratio")}
-          onChange={(value) => set("degrade", "load_factor_ratio", value)}
-        />
-        <PolicyNumberField
-          label="最低负载因子"
-          min={1}
-          value={policyAdvancedValue(props.value, "degrade", "min_load_factor")}
-          onChange={(value) => set("degrade", "min_load_factor", value)}
-        />
-        <div className="col-span-full">
-          <PolicySwitchRow
-            label="启用降级"
-            description="低分账号压低权重但不停止调度。"
-            checked={policyAdvancedValue(props.value, "degrade", "enabled") !== false}
-            onCheckedChange={(value) => set("degrade", "enabled", value)}
+        </PolicyConfigCard>
+      ) : null}
+      {props.section === "health" ? (
+        <PolicyConfigCard
+          title="认证失效自动处置"
+          description="账号反复出现认证失效时自动暂停、停用或删除；默认关闭。"
+          columns={3}
+          wide
+          switchAction={{
+            checked: policyAdvancedValue(props.value, "cleanup", "enabled") === true,
+            label: "启用认证失效自动处置",
+            onCheckedChange: (value) => set("cleanup", "enabled", value),
+          }}
+        >
+          <FormField label="处置动作">
+            <Select
+              value={String(policyAdvancedValue(props.value, "cleanup", "action") ?? "pause")}
+              onValueChange={(value) => value && set("cleanup", "action", value)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">仅熔断，不额外处置</SelectItem>
+                <SelectItem value="pause">暂停调度</SelectItem>
+                <SelectItem value="disable">停用账号</SelectItem>
+                <SelectItem value="delete">删除账号</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+          <PolicyNumberField
+            label="判定窗口"
+            unit="次样本"
+            min={1}
+            value={policyAdvancedValue(props.value, "cleanup", "window")}
+            onChange={(value) => set("cleanup", "window", value)}
           />
-        </div>
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="健康回池"
-        description="熔断账号按低频探测恢复，连续达标后重新进入调度。"
-        columns={3}
-        wide
-        switchAction={{
-          checked: policyAdvancedValue(props.value, "recovery", "enabled") !== false,
-          label: "启用健康回池",
-          onCheckedChange: (value) => set("recovery", "enabled", value),
-        }}
-      >
-        <PolicyNumberField
-          label="恢复探测间隔"
-          unit="秒"
-          min={1}
-          value={policyAdvancedValue(props.value, "recovery", "probe_interval_seconds")}
-          onChange={(value) => set("recovery", "probe_interval_seconds", value)}
-        />
-        <PolicyNumberField
-          label="回池目标分"
-          unit="分"
-          min={0}
-          max={100}
-          value={policyAdvancedValue(props.value, "recovery", "target_score")}
-          onChange={(value) => set("recovery", "target_score", value)}
-        />
-        <PolicyNumberField
-          label="连续成功次数"
-          unit="次"
-          min={1}
-          value={policyAdvancedValue(props.value, "recovery", "success_count")}
-          onChange={(value) => set("recovery", "success_count", value)}
-        />
-        <PolicyNumberField
-          label="健康持续时长"
-          unit="秒"
-          min={0}
-          value={policyAdvancedValue(props.value, "recovery", "hold_seconds")}
-          onChange={(value) => set("recovery", "hold_seconds", value)}
-        />
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="负载因子调权"
-        description="权重变化小于阈值时不执行，应用到 Sub2API 后进入冷却期，避免路由反复震荡。"
-        columns={3}
-        wide
-        switchAction={{
-          checked: policyAdvancedValue(props.value, "weights", "enabled") !== false,
-          label: "启用负载因子调权",
-          onCheckedChange: (value) => set("weights", "enabled", value),
-        }}
-      >
-        <FormField label="变化阈值">
-          <Input
-            type="number"
+          <PolicyNumberField
+            label="窗口内失效次数"
+            unit="次"
+            min={1}
+            value={policyAdvancedValue(props.value, "cleanup", "occurrences")}
+            onChange={(value) => set("cleanup", "occurrences", value)}
+          />
+          <PolicyNumberField
+            label="最短观察时长"
+            unit="分钟"
+            min={0}
+            value={policyAdvancedValue(props.value, "cleanup", "min_fused_minutes")}
+            onChange={(value) => set("cleanup", "min_fused_minutes", value)}
+          />
+          <PolicyNumberField
+            label="每轮最多处置"
+            unit="个"
+            min={1}
+            value={policyAdvancedValue(props.value, "cleanup", "max_per_round")}
+            onChange={(value) => set("cleanup", "max_per_round", value)}
+          />
+          <FormField label="触发处置的错误码">
+            <Input
+              value={advancedList(
+                policyAdvancedValue(props.value, "cleanup", "trigger_status_codes"),
+              )}
+              placeholder="例如 401, 403"
+              onChange={(event) =>
+                set(
+                  "cleanup",
+                  "trigger_status_codes",
+                  splitConfigList(event.target.value).map(Number),
+                )
+              }
+            />
+          </FormField>
+          <div className="col-span-full grid gap-2 sm:grid-cols-2">
+            <PolicySwitchRow
+              label="保留分组内最后一个账号"
+              description="避免自动处置清空整个分组。"
+              checked={policyAdvancedValue(props.value, "cleanup", "keep_last_in_group") !== false}
+              onCheckedChange={(value) => set("cleanup", "keep_last_in_group", value)}
+            />
+            <PolicySwitchRow
+              label="仅处置凭据失效"
+              description="余额不足与额度耗尽不会触发。"
+              checked={policyAdvancedValue(props.value, "cleanup", "only_auth_errors") !== false}
+              onCheckedChange={(value) => set("cleanup", "only_auth_errors", value)}
+            />
+          </div>
+        </PolicyConfigCard>
+      ) : null}
+      {props.section === "routing" ? (
+        <PolicyConfigCard
+          title="智能扩容"
+          description="负载率达到阈值时小步提高并发，健康状态变差时按步长缩容。"
+          columns={3}
+          switchAction={{
+            checked: policyAdvancedValue(props.value, "scaling", "enabled") === true,
+            label: "启用智能扩容",
+            onCheckedChange: (value) => set("scaling", "enabled", value),
+          }}
+        >
+          <PolicyNumberField
+            label="全局并发上限"
+            min={1}
+            max={10000000}
+            value={policyAdvancedValue(props.value, "scaling", "global_max_concurrency")}
+            onChange={(value) => set("scaling", "global_max_concurrency", value)}
+          />
+          <PolicyNumberField
+            label="单账号并发下限"
+            min={1}
+            max={1000000}
+            value={policyAdvancedValue(props.value, "scaling", "min_per_account")}
+            onChange={(value) => set("scaling", "min_per_account", value)}
+          />
+          <PolicyNumberField
+            label="单账号并发上限"
+            min={1}
+            max={1000000}
+            value={policyAdvancedValue(props.value, "scaling", "max_per_account")}
+            onChange={(value) => set("scaling", "max_per_account", value)}
+          />
+          <PolicyNumberField
+            label="扩容触发负载率"
             min={0.000001}
             max={1}
             step="any"
-            value={props.value.change_threshold}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                change_threshold: event.target.value,
-              })
-            }
+            value={policyAdvancedValue(props.value, "scaling", "scale_up_ratio")}
+            onChange={(value) => set("scaling", "scale_up_ratio", value)}
           />
-        </FormField>
-        <FormField label="调权冷却（秒）">
-          <Input
-            type="number"
+          <PolicyNumberField
+            label="扩容步长"
+            min={1}
+            max={1000000}
+            value={policyAdvancedValue(props.value, "scaling", "step_up")}
+            onChange={(value) => set("scaling", "step_up", value)}
+          />
+          <PolicyNumberField
+            label="缩容步长"
+            min={1}
+            max={1000000}
+            value={policyAdvancedValue(props.value, "scaling", "step_down")}
+            onChange={(value) => set("scaling", "step_down", value)}
+          />
+          <PolicyNumberField
+            label="扩缩容冷却"
+            unit="秒"
             min={0}
             max={86400}
-            value={props.value.cooldown_seconds ?? ""}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                cooldown_seconds: policyNumberInput(event.target.value),
-              })
-            }
+            value={policyAdvancedValue(props.value, "scaling", "cooldown_seconds")}
+            onChange={(value) => set("scaling", "cooldown_seconds", value)}
           />
-        </FormField>
-        <PolicyNumberField
-          label="负载因子下限"
-          min={1}
-          value={policyAdvancedValue(props.value, "weights", "min_load_factor")}
-          onChange={(value) => set("weights", "min_load_factor", value)}
-        />
-        <PolicyNumberField
-          label="负载因子上限"
-          min={1}
-          value={policyAdvancedValue(props.value, "weights", "max_load_factor")}
-          onChange={(value) => set("weights", "max_load_factor", value)}
-        />
-        <PolicyNumberField
-          label="价格权重强度"
-          min={0.000001}
-          max={100}
-          step="any"
-          value={policyAdvancedValue(props.value, "weights", "price_exp")}
-          onChange={(value) => set("weights", "price_exp", value)}
-        />
-        <PolicyNumberField
-          label="速度权重强度"
-          min={0.000001}
-          max={100}
-          step="any"
-          value={policyAdvancedValue(props.value, "weights", "speed_exp")}
-          onChange={(value) => set("weights", "speed_exp", value)}
-        />
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="认证失效自动处置"
-        description="账号反复出现认证失效时自动暂停、停用或删除；默认关闭。"
-        columns={3}
-        wide
-        switchAction={{
-          checked: policyAdvancedValue(props.value, "cleanup", "enabled") === true,
-          label: "启用认证失效自动处置",
-          onCheckedChange: (value) => set("cleanup", "enabled", value),
-        }}
-      >
-        <FormField label="处置动作">
-          <Select
-            value={String(policyAdvancedValue(props.value, "cleanup", "action") ?? "pause")}
-            onValueChange={(value) => value && set("cleanup", "action", value)}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">仅熔断，不额外处置</SelectItem>
-              <SelectItem value="pause">暂停调度</SelectItem>
-              <SelectItem value="disable">停用账号</SelectItem>
-              <SelectItem value="delete">删除账号</SelectItem>
-            </SelectContent>
-          </Select>
-        </FormField>
-        <PolicyNumberField
-          label="判定窗口"
-          unit="次样本"
-          min={1}
-          value={policyAdvancedValue(props.value, "cleanup", "window")}
-          onChange={(value) => set("cleanup", "window", value)}
-        />
-        <PolicyNumberField
-          label="窗口内失效次数"
-          unit="次"
-          min={1}
-          value={policyAdvancedValue(props.value, "cleanup", "occurrences")}
-          onChange={(value) => set("cleanup", "occurrences", value)}
-        />
-        <PolicyNumberField
-          label="最短观察时长"
-          unit="分钟"
-          min={0}
-          value={policyAdvancedValue(props.value, "cleanup", "min_fused_minutes")}
-          onChange={(value) => set("cleanup", "min_fused_minutes", value)}
-        />
-        <PolicyNumberField
-          label="每轮最多处置"
-          unit="个"
-          min={1}
-          value={policyAdvancedValue(props.value, "cleanup", "max_per_round")}
-          onChange={(value) => set("cleanup", "max_per_round", value)}
-        />
-        <FormField label="触发处置的错误码">
-          <Input
-            value={advancedList(
-              policyAdvancedValue(props.value, "cleanup", "trigger_status_codes"),
-            )}
-            placeholder="例如 401, 403"
-            onChange={(event) =>
-              set(
-                "cleanup",
-                "trigger_status_codes",
-                splitConfigList(event.target.value).map(Number),
-              )
-            }
-          />
-        </FormField>
-        <div className="col-span-full grid gap-2 sm:grid-cols-2">
-          <PolicySwitchRow
-            label="保留分组内最后一个账号"
-            description="避免自动处置清空整个分组。"
-            checked={policyAdvancedValue(props.value, "cleanup", "keep_last_in_group") !== false}
-            onCheckedChange={(value) => set("cleanup", "keep_last_in_group", value)}
-          />
-          <PolicySwitchRow
-            label="仅处置凭据失效"
-            description="余额不足与额度耗尽不会触发。"
-            checked={policyAdvancedValue(props.value, "cleanup", "only_auth_errors") !== false}
-            onCheckedChange={(value) => set("cleanup", "only_auth_errors", value)}
-          />
-        </div>
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="智能扩容"
-        description="负载率达到阈值时小步提高并发，健康状态变差时按步长缩容。"
-        columns={3}
-        wide
-        switchAction={{
-          checked: policyAdvancedValue(props.value, "scaling", "enabled") === true,
-          label: "启用智能扩容",
-          onCheckedChange: (value) => set("scaling", "enabled", value),
-        }}
-      >
-        <PolicyNumberField
-          label="全局并发上限"
-          min={1}
-          max={10000000}
-          value={policyAdvancedValue(props.value, "scaling", "global_max_concurrency")}
-          onChange={(value) => set("scaling", "global_max_concurrency", value)}
-        />
-        <PolicyNumberField
-          label="单账号并发下限"
-          min={1}
-          max={1000000}
-          value={policyAdvancedValue(props.value, "scaling", "min_per_account")}
-          onChange={(value) => set("scaling", "min_per_account", value)}
-        />
-        <PolicyNumberField
-          label="单账号并发上限"
-          min={1}
-          max={1000000}
-          value={policyAdvancedValue(props.value, "scaling", "max_per_account")}
-          onChange={(value) => set("scaling", "max_per_account", value)}
-        />
-        <PolicyNumberField
-          label="扩容触发负载率"
-          min={0.000001}
-          max={1}
-          step="any"
-          value={policyAdvancedValue(props.value, "scaling", "scale_up_ratio")}
-          onChange={(value) => set("scaling", "scale_up_ratio", value)}
-        />
-        <PolicyNumberField
-          label="扩容步长"
-          min={1}
-          max={1000000}
-          value={policyAdvancedValue(props.value, "scaling", "step_up")}
-          onChange={(value) => set("scaling", "step_up", value)}
-        />
-        <PolicyNumberField
-          label="缩容步长"
-          min={1}
-          max={1000000}
-          value={policyAdvancedValue(props.value, "scaling", "step_down")}
-          onChange={(value) => set("scaling", "step_down", value)}
-        />
-        <PolicyNumberField
-          label="扩缩容冷却"
-          unit="秒"
-          min={0}
-          max={86400}
-          value={policyAdvancedValue(props.value, "scaling", "cooldown_seconds")}
-          onChange={(value) => set("scaling", "cooldown_seconds", value)}
-        />
-      </PolicyConfigCard>
-      <PolicyConfigCard
-        title="采样（真实流量 / 主动探测）"
-        description="真实流量优先；没有新鲜样本时使用主动探测。"
-        columns={3}
-        wide
-      >
-        <FormField label="默认探测模型">
-          <Input
-            value={props.value.probe_model ?? ""}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                probe_model: event.target.value,
-              })
-            }
-            placeholder="例如 gpt-5.1-codex"
-          />
-        </FormField>
-        <FormField label="探测间隔（秒）">
-          <Input
-            type="number"
-            min={30}
-            max={86400}
-            value={props.value.probe_interval_seconds ?? ""}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                probe_interval_seconds: policyNumberInput(event.target.value),
-              })
-            }
-          />
-        </FormField>
-        <FormField label="流量回溯（分钟）">
-          <Input
-            type="number"
-            min={1}
-            max={10080}
-            value={props.value.traffic_lookback_minutes ?? ""}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                traffic_lookback_minutes: policyNumberInput(event.target.value),
-              })
-            }
-          />
-        </FormField>
-        <FormField label="每账号样本上限">
-          <Input
-            type="number"
-            min={1}
-            max={200}
-            value={props.value.max_samples_per_account ?? ""}
-            onChange={(event) =>
-              props.onChange({
-                ...props.value,
-                max_samples_per_account: policyNumberInput(event.target.value),
-              })
-            }
-          />
-        </FormField>
-        <PolicyNumberField
-          label="探测超时"
-          unit="秒"
-          min={1}
-          max={86400}
-          value={policyAdvancedValue(props.value, "probe", "timeout_seconds")}
-          onChange={(value) => set("probe", "timeout_seconds", value)}
-        />
-        <PolicyNumberField
-          label="探测并发"
-          min={1}
-          max={32}
-          value={policyAdvancedValue(props.value, "probe", "concurrency")}
-          onChange={(value) => set("probe", "concurrency", value)}
-        />
-        <PolicyNumberField
-          label="真实样本新鲜期"
-          unit="秒"
-          min={1}
-          max={86400}
-          value={policyAdvancedValue(props.value, "probe", "traffic_fresh_seconds")}
-          onChange={(value) => set("probe", "traffic_fresh_seconds", value)}
-        />
-        <FormField label="探测提示词">
-          <Input
-            value={String(policyAdvancedValue(props.value, "probe", "prompt") ?? "")}
-            onChange={(event) => set("probe", "prompt", event.target.value)}
-          />
-        </FormField>
-        <div className="col-span-full space-y-3 border-y py-3" data-testid="policy-probe-retry">
-          <PolicySwitchRow
-            label="失败重试"
-            description="主动探测失败后，按选定规则在同一账号上再次请求。"
-            checked={retryEnabled}
-            onCheckedChange={(value) => set("probe", "retry_enabled", value)}
-          />
-          {retryEnabled ? (
-            <div className="space-y-3 pl-0 sm:pl-3">
-              <div
-                className="bg-muted flex w-fit gap-1 rounded-lg p-1"
-                role="group"
-                aria-label="探测失败重试模式"
-              >
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={retrySource === "fixed" ? "secondary" : "ghost"}
-                  aria-pressed={retrySource === "fixed"}
-                  onClick={() => set("probe", "retry_source", "fixed")}
-                >
-                  固定规则
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={retrySource === "sub2api_pool" ? "secondary" : "ghost"}
-                  aria-pressed={retrySource === "sub2api_pool"}
-                  onClick={() => set("probe", "retry_source", "sub2api_pool")}
-                >
-                  跟随账号池
-                </Button>
-              </div>
-              {retrySource === "sub2api_pool" ? (
-                <p className="text-muted-foreground text-sm leading-5">
-                  读取每个 Sub2API 账号的池模式、重试次数和状态码；未启用池模式的账号不重试。
-                </p>
-              ) : (
-                <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
-                  <PolicyNumberField
-                    label="失败重试次数"
-                    min={0}
-                    max={10}
-                    value={policyAdvancedValue(props.value, "probe", "retry_count")}
-                    onChange={(value) => set("probe", "retry_count", value)}
-                  />
-                  <FormField label="触发重试状态码">
-                    <Input
-                      value={advancedList(
-                        policyAdvancedValue(props.value, "probe", "retry_status_codes"),
-                      )}
-                      placeholder="429, 500, 502, 503, 504"
-                      onChange={(event) =>
-                        set(
-                          "probe",
-                          "retry_status_codes",
-                          splitConfigList(event.target.value).map(Number),
-                        )
-                      }
-                    />
-                  </FormField>
-                </div>
-              )}
-            </div>
-          ) : null}
-        </div>
-        <div
-          className="col-span-full grid gap-2 lg:grid-cols-3"
-          data-testid="policy-sampling-switches"
+        </PolicyConfigCard>
+      ) : null}
+      {props.section === "sampling" ? (
+        <PolicyConfigCard
+          title="采样（真实流量 / 主动探测）"
+          description="真实流量优先；没有新鲜样本时使用主动探测。"
+          columns={3}
+          wide
         >
-          <PolicySwitchRow
-            label="接入真实流量样本"
-            description="开启后真实流量优先，无新鲜流量的账号回退主动探测；关闭后只使用主动探测样本。"
-            checked={props.value.traffic_enabled}
-            onCheckedChange={(enabled) =>
-              props.onChange({
-                ...props.value,
-                traffic_enabled: enabled,
-              })
-            }
+          <FormField label="默认探测模型">
+            <Input
+              value={props.value.probe_model ?? ""}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  probe_model: event.target.value,
+                })
+              }
+              placeholder="例如 gpt-5.1-codex"
+            />
+          </FormField>
+          <FormField label="探测间隔（秒）">
+            <Input
+              type="number"
+              min={30}
+              max={86400}
+              value={props.value.probe_interval_seconds ?? ""}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  probe_interval_seconds: policyNumberInput(event.target.value),
+                })
+              }
+            />
+          </FormField>
+          <FormField label="流量回溯（分钟）">
+            <Input
+              type="number"
+              min={1}
+              max={10080}
+              value={props.value.traffic_lookback_minutes ?? ""}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  traffic_lookback_minutes: policyNumberInput(event.target.value),
+                })
+              }
+            />
+          </FormField>
+          <FormField label="每账号样本上限">
+            <Input
+              type="number"
+              min={1}
+              max={200}
+              value={props.value.max_samples_per_account ?? ""}
+              onChange={(event) =>
+                props.onChange({
+                  ...props.value,
+                  max_samples_per_account: policyNumberInput(event.target.value),
+                })
+              }
+            />
+          </FormField>
+          <PolicyNumberField
+            label="探测超时"
+            unit="秒"
+            min={1}
+            max={86400}
+            value={policyAdvancedValue(props.value, "probe", "timeout_seconds")}
+            onChange={(value) => set("probe", "timeout_seconds", value)}
           />
-          <PolicySwitchRow
-            label="启用主动探测"
-            description="为没有新鲜真实流量的账号补充健康样本。"
-            checked={props.probesEnabled === true}
-            disabled={props.probesPending}
-            onCheckedChange={props.onProbesEnabledChange}
+          <PolicyNumberField
+            label="探测并发"
+            min={1}
+            max={32}
+            value={policyAdvancedValue(props.value, "probe", "concurrency")}
+            onChange={(value) => set("probe", "concurrency", value)}
           />
-          <PolicySwitchRow
-            label="有新鲜流量时跳过探测"
-            description="减少对上游的额外请求。"
-            checked={policyAdvancedValue(props.value, "probe", "skip_when_traffic_fresh") !== false}
-            onCheckedChange={(value) => set("probe", "skip_when_traffic_fresh", value)}
+          <PolicyNumberField
+            label="真实样本新鲜期"
+            unit="秒"
+            min={1}
+            max={86400}
+            value={policyAdvancedValue(props.value, "probe", "traffic_fresh_seconds")}
+            onChange={(value) => set("probe", "traffic_fresh_seconds", value)}
           />
-        </div>
-      </PolicyConfigCard>
-    </>
+          <FormField label="探测提示词">
+            <Input
+              value={String(policyAdvancedValue(props.value, "probe", "prompt") ?? "")}
+              onChange={(event) => set("probe", "prompt", event.target.value)}
+            />
+          </FormField>
+          <div className="col-span-full space-y-3 border-y py-3" data-testid="policy-probe-retry">
+            <PolicySwitchRow
+              label="失败重试"
+              description="主动探测失败后，按选定规则在同一账号上再次请求。"
+              checked={retryEnabled}
+              onCheckedChange={(value) => set("probe", "retry_enabled", value)}
+            />
+            {retryEnabled ? (
+              <div className="space-y-3 pl-0 sm:pl-3">
+                <SegmentedControl role="group" aria-label="探测失败重试模式">
+                  <SegmentedControlItem
+                    type="button"
+                    selected={retrySource === "fixed"}
+                    onClick={() => set("probe", "retry_source", "fixed")}
+                  >
+                    固定规则
+                  </SegmentedControlItem>
+                  <SegmentedControlItem
+                    type="button"
+                    selected={retrySource === "sub2api_pool"}
+                    onClick={() => set("probe", "retry_source", "sub2api_pool")}
+                  >
+                    跟随账号池
+                  </SegmentedControlItem>
+                </SegmentedControl>
+                {retrySource === "sub2api_pool" ? (
+                  <p className="text-muted-foreground text-sm leading-5">
+                    读取每个 Sub2API 账号的池模式、重试次数和状态码；未启用池模式的账号不重试。
+                  </p>
+                ) : (
+                  <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+                    <PolicyNumberField
+                      label="失败重试次数"
+                      min={0}
+                      max={10}
+                      value={policyAdvancedValue(props.value, "probe", "retry_count")}
+                      onChange={(value) => set("probe", "retry_count", value)}
+                    />
+                    <FormField label="触发重试状态码">
+                      <Input
+                        value={advancedList(
+                          policyAdvancedValue(props.value, "probe", "retry_status_codes"),
+                        )}
+                        placeholder="429, 500, 502, 503, 504"
+                        onChange={(event) =>
+                          set(
+                            "probe",
+                            "retry_status_codes",
+                            splitConfigList(event.target.value).map(Number),
+                          )
+                        }
+                      />
+                    </FormField>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+          <div
+            className="col-span-full grid gap-2 lg:grid-cols-3"
+            data-testid="policy-sampling-switches"
+          >
+            <PolicySwitchRow
+              label="接入真实流量样本"
+              description="开启后真实流量优先，无新鲜流量的账号回退主动探测；关闭后只使用主动探测样本。"
+              checked={props.value.traffic_enabled}
+              onCheckedChange={(enabled) =>
+                props.onChange({
+                  ...props.value,
+                  traffic_enabled: enabled,
+                })
+              }
+            />
+            <PolicySwitchRow
+              label="启用主动探测"
+              description="为没有新鲜真实流量的账号补充健康样本。"
+              checked={props.probesEnabled === true}
+              disabled={props.probesPending}
+              onCheckedChange={props.onProbesEnabledChange}
+            />
+            <PolicySwitchRow
+              label="有新鲜流量时跳过探测"
+              description="减少对上游的额外请求。"
+              checked={
+                policyAdvancedValue(props.value, "probe", "skip_when_traffic_fresh") !== false
+              }
+              onCheckedChange={(value) => set("probe", "skip_when_traffic_fresh", value)}
+            />
+          </div>
+        </PolicyConfigCard>
+      ) : null}
+    </div>
   );
 }
 
@@ -11201,7 +11434,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
     typeof shortRatioValue === "number" ? shortRatioValue : Number(shortRatioValue);
   const longRatio = Number.isFinite(shortRatio) ? Math.max(0, 1 - shortRatio).toFixed(2) : "-";
   return (
-    <>
+    <div className="grid items-stretch gap-3 xl:grid-cols-2" data-testid="policy-rules-sections">
       <PolicyConfigCard
         title="健康分公式"
         description="短期分按最新样本加权，最终分由短期分与长期分合成。"
@@ -11287,7 +11520,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
         description="401 / 403 和鉴权关键字视为凭据失效；余额不足、额度耗尽和限流始终按可恢复问题处理。"
         wide
       >
-        <div className="sm:col-span-2 lg:col-span-4">
+        <div className="col-span-full">
           <FormField label="致命错误关键字（每行一个）">
             <Textarea
               className="min-h-28"
@@ -11317,23 +11550,75 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
           </FormField>
         </div>
       </PolicyConfigCard>
-    </>
+    </div>
+  );
+}
+
+function policyStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(
+      value
+        .map(String)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function policyScopeValueOptions(
+  availableValues: string[],
+  selectedValues: string[],
+  label: (value: string, stale: boolean) => string,
+) {
+  const available = new Set(
+    availableValues.map((value) => value.trim().toLocaleLowerCase()).filter(Boolean),
+  );
+  const values = new Set([
+    ...available,
+    ...selectedValues.map((value) => value.trim().toLocaleLowerCase()).filter(Boolean),
+  ]);
+  return [...values]
+    .map((value) => ({ value, label: label(value, !available.has(value)) }))
+    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+}
+
+function policyScopeEntityOptions(
+  availableOptions: Array<{ value: string; label: string }>,
+  selectedValues: string[],
+  entityLabel: string,
+) {
+  const byValue = new Map(availableOptions.map((option) => [option.value, option]));
+  selectedValues.forEach((value) => {
+    if (!byValue.has(value)) {
+      byValue.set(value, {
+        value,
+        label: `${entityLabel} #${value}（当前配置，列表中未找到）`,
+      });
+    }
+  });
+  return [...byValue.values()].sort((left, right) =>
+    left.label.localeCompare(right.label, "zh-CN"),
   );
 }
 
 type PolicyScopeEditorProps = PolicyEditorProps & {
   groups: import("./api").PolicySnapshot["group_strategies"];
+  accounts: AccountStatus[];
+  accountsPending?: boolean;
   onRestoreControl: () => void;
   restorePending: boolean;
 };
 
 export function PolicyScopeLayout(props: PolicyScopeEditorProps) {
   return (
-    <div className="flex flex-col gap-4" data-testid="policy-scope-layout">
+    <div className="grid items-stretch gap-3 xl:grid-cols-2" data-testid="policy-scope-layout">
       <PolicyScopeEditor
         value={props.value}
         onChange={props.onChange}
         groups={props.groups}
+        accounts={props.accounts}
+        accountsPending={props.accountsPending}
         onRestoreControl={props.onRestoreControl}
         restorePending={props.restorePending}
       />
@@ -11350,6 +11635,73 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
   const selectedMode = configuredMode === "selected";
   const selectedIDs = new Set(managedIDs);
   const stableGroupIDs = props.groups.flatMap((group) => (group.id === null ? [] : [group.id]));
+  const selectedAccountTypes = policyStringArray(
+    policyAdvancedValue(props.value, "scope", "account_types"),
+  ).map((value) => value.toLocaleLowerCase());
+  const selectedPlatforms = policyStringArray(
+    policyAdvancedValue(props.value, "scope", "platforms"),
+  ).map((value) => value.toLocaleLowerCase());
+  const selectedExcludedGroups = props.value.excluded_group_ids ?? [];
+  const selectedPausedAccounts = policyStringArray(
+    policyAdvancedValue(props.value, "scope", "paused_account_ids"),
+  );
+  const selectedExcludedAccounts = policyStringArray(
+    policyAdvancedValue(props.value, "scope", "excluded_account_ids"),
+  );
+  const accountTypeOptionsForScope = policyScopeValueOptions(
+    [
+      ...accountTypeOptions.map((option) => option.value),
+      ...props.accounts.flatMap((account) => {
+        const value = accountTypeValue(account.account_type);
+        return value ? [value] : [];
+      }),
+    ],
+    selectedAccountTypes,
+    (value, stale) =>
+      `${accountTypeLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+  );
+  const platformOptions = policyScopeValueOptions(
+    props.accounts.flatMap((account) => {
+      const value = (account.platform ?? account.upstream_type)?.trim().toLocaleLowerCase();
+      return value ? [value] : [];
+    }),
+    selectedPlatforms,
+    (value, stale) => `${value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+  );
+  const excludedGroupOptions = policyScopeEntityOptions(
+    props.groups.flatMap((group) =>
+      group.id === null
+        ? []
+        : [
+            {
+              value: group.id,
+              label: [
+                `${group.name}（#${group.id}）`,
+                group.platforms.join("、"),
+                `${group.account_count} 个账号`,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            },
+          ],
+    ),
+    selectedExcludedGroups,
+    "分组",
+  );
+  const accountOptions = policyScopeEntityOptions(
+    props.accounts.map((account) => ({
+      value: account.id,
+      label: [
+        `${account.name}（#${account.id}）`,
+        account.platform ?? account.upstream_type,
+        account.groups.length ? account.groups.join("、") : "未分组",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    })),
+    [...new Set([...selectedPausedAccounts, ...selectedExcludedAccounts])],
+    "账号",
+  );
   function updateManagedGroups(mode: "all" | "selected", ids: string[]) {
     props.onChange(withManagedGroupScope(props.value, mode, ids));
   }
@@ -11432,25 +11784,32 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
       </PolicyConfigCard>
       <PolicyConfigCard
         title="账号类型与平台"
-        description="留空表示不限；填写后只有匹配的账号类型或平台会被守护。"
+        description="留空表示不限；选择后只有匹配的账号类型或平台会被守护。"
       >
         <div className="sm:col-span-2">
           <FormField label="账号类型">
-            <Input
-              value={advancedList(policyAdvancedValue(props.value, "scope", "account_types"))}
-              onChange={(event) =>
-                set("scope", "account_types", splitConfigList(event.target.value))
-              }
-              placeholder="例如 apikey, oauth"
+            <MultiSelect
+              options={accountTypeOptionsForScope}
+              selected={selectedAccountTypes}
+              onChange={(values) => set("scope", "account_types", values)}
+              title="选择账号类型"
+              searchPlaceholder="搜索账号类型"
+              emptyText="没有可选择的账号类型"
+              ariaLabel="选择参与守护的账号类型"
             />
           </FormField>
         </div>
         <div className="sm:col-span-2">
           <FormField label="平台">
-            <Input
-              value={advancedList(policyAdvancedValue(props.value, "scope", "platforms"))}
-              onChange={(event) => set("scope", "platforms", splitConfigList(event.target.value))}
-              placeholder="留空表示全部平台"
+            <MultiSelect
+              options={platformOptions}
+              selected={selectedPlatforms}
+              onChange={(values) => set("scope", "platforms", values)}
+              title={props.accountsPending ? "正在加载平台…" : "选择平台"}
+              searchPlaceholder="搜索平台"
+              emptyText="当前账号中没有可选择的平台"
+              ariaLabel="选择参与守护的平台"
+              disabled={props.accountsPending}
             />
           </FormField>
         </div>
@@ -11459,46 +11818,50 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
         title="排除的分组"
         description="被排除的分组不探测、不熔断、不调权，现有配置保持不动。"
       >
-        <div className="sm:col-span-2 lg:col-span-4">
-          <FormField label="稳定分组 ID">
-            <Input
-              value={props.value.excluded_group_ids?.join(", ") ?? ""}
-              onChange={(event) =>
-                props.onChange({
-                  ...props.value,
-                  excluded_group_ids: splitConfigList(event.target.value),
-                })
-              }
-              placeholder="留空表示没有排除"
+        <div className="col-span-full">
+          <FormField label="排除分组">
+            <MultiSelect
+              options={excludedGroupOptions}
+              selected={selectedExcludedGroups}
+              onChange={(values) => props.onChange({ ...props.value, excluded_group_ids: values })}
+              title="选择排除分组"
+              searchPlaceholder="按分组名称、ID 或平台搜索"
+              emptyText="没有可选择的分组"
+              ariaLabel="选择不参与守护的分组"
             />
           </FormField>
         </div>
       </PolicyConfigCard>
       <PolicyConfigCard
-        title="暂停与排除的渠道"
+        title="暂停与排除的账号"
         description="暂停账号不接流量但继续计分；排除账号完全不参与，并恢复接管前配置。"
+        wide
       >
         <div className="sm:col-span-2">
-          <FormField label="暂停调度的稳定账号 ID">
-            <Input
-              value={advancedList(policyAdvancedValue(props.value, "scope", "paused_account_ids"))}
-              onChange={(event) =>
-                set("scope", "paused_account_ids", splitConfigList(event.target.value))
-              }
-              placeholder="例如 12, 34"
+          <FormField label="暂停调度的账号">
+            <MultiSelect
+              options={accountOptions}
+              selected={selectedPausedAccounts}
+              onChange={(values) => set("scope", "paused_account_ids", values)}
+              title={props.accountsPending ? "正在加载账号…" : "选择暂停账号"}
+              searchPlaceholder="按账号名称、ID、平台或分组搜索"
+              emptyText="没有可选择的账号"
+              ariaLabel="选择暂停调度的账号"
+              disabled={props.accountsPending}
             />
           </FormField>
         </div>
         <div className="sm:col-span-2">
-          <FormField label="排除的稳定账号 ID">
-            <Input
-              value={advancedList(
-                policyAdvancedValue(props.value, "scope", "excluded_account_ids"),
-              )}
-              onChange={(event) =>
-                set("scope", "excluded_account_ids", splitConfigList(event.target.value))
-              }
-              placeholder="例如 12, 34"
+          <FormField label="排除的账号">
+            <MultiSelect
+              options={accountOptions}
+              selected={selectedExcludedAccounts}
+              onChange={(values) => set("scope", "excluded_account_ids", values)}
+              title={props.accountsPending ? "正在加载账号…" : "选择排除账号"}
+              searchPlaceholder="按账号名称、ID、平台或分组搜索"
+              emptyText="没有可选择的账号"
+              ariaLabel="选择不参与守护的账号"
+              disabled={props.accountsPending}
             />
           </FormField>
         </div>

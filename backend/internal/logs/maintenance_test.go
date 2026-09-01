@@ -2,6 +2,9 @@ package logs
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,11 +53,29 @@ type cancellableTaskCleaner struct {
 	stopped chan struct{}
 }
 
+type blockingTaskCleaner struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   atomic.Int32
+}
+
 func (s *cancellableTaskCleaner) ClearLogs(ctx context.Context, _ *time.Time) (int64, int64, error) {
 	close(s.started)
 	<-ctx.Done()
 	close(s.stopped)
 	return 0, 0, ctx.Err()
+}
+
+func (s *blockingTaskCleaner) ClearLogs(ctx context.Context, _ *time.Time) (int64, int64, error) {
+	s.calls.Add(1)
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+		return 1, 0, nil
+	case <-ctx.Done():
+		return 0, 0, ctx.Err()
+	}
 }
 
 func (s *taskCleanerStub) ClearLogs(_ context.Context, before *time.Time) (int64, int64, error) {
@@ -124,6 +145,84 @@ func TestDisabledAutomaticCleanupDoesNotDeleteLogs(t *testing.T) {
 	ran, _, err := maintenance.RunDue(context.Background())
 	if err != nil || ran || businessCleaner.calls != 0 || taskCleaner.calls != 0 {
 		t.Fatalf("disabled cleanup executed: ran=%v business=%d tasks=%d err=%v", ran, businessCleaner.calls, taskCleaner.calls, err)
+	}
+}
+
+func TestRunDueWaitingForAnotherCleanupHonorsCancellation(t *testing.T) {
+	settings := &cleanupSettingsStub{value: configstore.LogCleanupSettings{Enabled: true, RetentionDays: 30}}
+	taskCleaner := &blockingTaskCleaner{started: make(chan struct{}), release: make(chan struct{})}
+	maintenance := NewMaintenance(settings, &businessCleanerStub{}, taskCleaner)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, _, err := maintenance.RunDue(context.Background())
+		firstDone <- err
+	}()
+	select {
+	case <-taskCleaner.started:
+	case <-time.After(time.Second):
+		t.Fatal("first cleanup did not start")
+	}
+
+	waitingContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	secondDone := make(chan error, 1)
+	go func() {
+		_, _, err := maintenance.RunDue(waitingContext)
+		secondDone <- err
+	}()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting cleanup returned %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		close(taskCleaner.release)
+		<-firstDone
+		t.Fatal("waiting cleanup ignored context cancellation")
+	}
+
+	close(taskCleaner.release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if calls := taskCleaner.calls.Load(); calls != 1 {
+		t.Fatalf("cancelled waiter reached cleanup stores: calls=%d", calls)
+	}
+}
+
+func TestConcurrentRunDueRechecksDueStateAfterTheActiveCleanup(t *testing.T) {
+	settings := &cleanupSettingsStub{value: configstore.LogCleanupSettings{Enabled: true, RetentionDays: 30}}
+	taskCleaner := &blockingTaskCleaner{started: make(chan struct{}), release: make(chan struct{})}
+	maintenance := NewMaintenance(settings, &businessCleanerStub{}, taskCleaner)
+
+	results := make(chan bool, 2)
+	errors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			ran, _, err := maintenance.RunDue(context.Background())
+			results <- ran
+			errors <- err
+		}()
+	}
+	select {
+	case <-taskCleaner.started:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup did not start")
+	}
+	close(taskCleaner.release)
+
+	ranCount := 0
+	for range 2 {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+		if <-results {
+			ranCount++
+		}
+	}
+	if calls := taskCleaner.calls.Load(); calls != 1 || ranCount != 1 {
+		t.Fatalf("concurrent due checks repeated cleanup: calls=%d ran=%d", calls, ranCount)
 	}
 }
 

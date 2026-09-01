@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +20,11 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
-const revenueTimezone = "Asia/Shanghai"
+const (
+	revenueTimezone     = "Asia/Shanghai"
+	revenueDecimalScale = 6
+	revenueTolerance    = int64(2)
+)
 
 type RevenueRequest struct {
 	Date string `json:"date"`
@@ -153,12 +158,21 @@ func (s *Service) CalculateRevenue(ctx context.Context, request RevenueRequest, 
 	if !ok {
 		return RevenueReport{}, errors.New("收入核算私有授权存储尚未就绪")
 	}
+	if err := ctx.Err(); err != nil {
+		return RevenueReport{}, err
+	}
 
 	local := fetchLocalRevenueUsage(ctx, management, catalog.Accounts, date)
+	if err := ctx.Err(); err != nil {
+		return RevenueReport{}, err
+	}
 	upstream, issues := s.fetchUpstreamRevenueUsage(ctx, authStore, catalog.Accounts, date, start, end, actor)
+	if err := ctx.Err(); err != nil {
+		return RevenueReport{}, err
+	}
 	shared := sharedRevenueKeys(catalog.Accounts)
 	report := RevenueReport{
-		ReportDate: date, Timezone: revenueTimezone, Tolerance: 2,
+		ReportDate: date, Timezone: revenueTimezone, Tolerance: float64(revenueTolerance),
 		Rows: []RevenueRow{}, Summaries: []RevenueSummary{}, Issues: issues,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
@@ -344,7 +358,7 @@ func (s *Service) fetchRevenueHost(
 				keyID := strings.TrimSpace(binding.UpstreamKeyID)
 				if keyID != "" {
 					if _, found := result.values[keyID]; !found {
-						result.values[keyID] = upstreamsync.KeyUsageObservation{Cost: 0, Source: "newapi-token-logs"}
+						result.values[keyID] = upstreamsync.KeyUsageObservation{Cost: 0, Source: "newapi-token-flow"}
 					}
 				}
 			}
@@ -353,8 +367,8 @@ func (s *Service) fetchRevenueHost(
 		if !strings.Contains(kind, "sub2api") {
 			return errors.New("未知上游类型，无法读取稳定 Key 消费")
 		}
+		keyIDs := make([]string, 0, len(bindings))
 		seen := map[string]struct{}{}
-		failures := make([]string, 0)
 		for _, binding := range bindings {
 			keyID := strings.TrimSpace(binding.UpstreamKeyID)
 			if keyID == "" {
@@ -364,20 +378,13 @@ func (s *Service) fetchRevenueHost(
 				continue
 			}
 			seen[keyID] = struct{}{}
-			value, err := s.usage.ReadSub2APIKeyUsage(ctx, current, keyID, date, revenueTimezone)
-			if err != nil {
-				if upstreamsync.IsAuthenticationError(err) {
-					return fmt.Errorf("Key %s：%w", keyID, err)
-				}
-				failures = append(failures, fmt.Sprintf("Key %s：%s", keyID, err.Error()))
-				continue
-			}
+			keyIDs = append(keyIDs, keyID)
+		}
+		values, readErr := s.readSub2APIRevenueKeys(ctx, current, keyIDs, date)
+		for keyID, value := range values {
 			result.values[keyID] = value
 		}
-		if len(failures) > 0 {
-			return errors.New(strings.Join(failures, "；"))
-		}
-		return nil
+		return readErr
 	}
 	err = read(*record)
 	if err != nil && upstreamsync.IsAuthenticationError(err) && s.resolver != nil {
@@ -395,6 +402,71 @@ func (s *Service) fetchRevenueHost(
 	return result
 }
 
+func (s *Service) readSub2APIRevenueKeys(
+	ctx context.Context,
+	record configstore.AuthRecord,
+	keyIDs []string,
+	date string,
+) (map[string]upstreamsync.KeyUsageObservation, error) {
+	type readResult struct {
+		keyID string
+		value upstreamsync.KeyUsageObservation
+		err   error
+	}
+	values := make(map[string]upstreamsync.KeyUsageObservation, len(keyIDs))
+	if len(keyIDs) == 0 {
+		return values, nil
+	}
+	jobs := make(chan string)
+	results := make(chan readResult, len(keyIDs))
+	workers := 4
+	if len(keyIDs) < workers {
+		workers = len(keyIDs)
+	}
+	var wait sync.WaitGroup
+	for index := 0; index < workers; index++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for keyID := range jobs {
+				value, err := s.usage.ReadSub2APIKeyUsage(ctx, record, keyID, date, revenueTimezone)
+				results <- readResult{keyID: keyID, value: value, err: err}
+			}
+		}()
+	}
+	go func() {
+		for _, keyID := range keyIDs {
+			jobs <- keyID
+		}
+		close(jobs)
+		wait.Wait()
+		close(results)
+	}()
+	failures := make([]string, 0)
+	var authenticationError error
+	for result := range results {
+		if result.err == nil {
+			values[result.keyID] = result.value
+			continue
+		}
+		if upstreamsync.IsAuthenticationError(result.err) {
+			if authenticationError == nil {
+				authenticationError = fmt.Errorf("Key %s：%w", result.keyID, result.err)
+			}
+			continue
+		}
+		failures = append(failures, fmt.Sprintf("Key %s：%s", result.keyID, result.err.Error()))
+	}
+	if authenticationError != nil {
+		return values, authenticationError
+	}
+	if len(failures) > 0 {
+		sort.Strings(failures)
+		return values, errors.New(strings.Join(failures, "；"))
+	}
+	return values, nil
+}
+
 func buildRevenueRow(
 	account business.RevenueAccount,
 	local localUsageResult,
@@ -408,9 +480,17 @@ func buildRevenueRow(
 	if row.LocalGroup == "" {
 		row.LocalGroup = "未分组"
 	}
+	var accountCost, actualCost *big.Rat
 	if local.err == nil {
-		row.AccountCost = revenueFloat(local.totals.AccountCost)
-		row.ActualCost = revenueFloat(local.totals.ActualCost)
+		var accountCostOK, actualCostOK bool
+		accountCost, accountCostOK = revenueAmount(local.totals.AccountCost)
+		actualCost, actualCostOK = revenueAmount(local.totals.ActualCost)
+		if !accountCostOK || !actualCostOK {
+			local.err = errors.New("本地计费金额无效")
+		} else {
+			row.AccountCost = revenueFloat(accountCost)
+			row.ActualCost = revenueFloat(actualCost)
+		}
 	}
 	if len(account.Bindings) == 0 {
 		row.Note = localRevenueNote(local.err, "缺少上游绑定")
@@ -441,48 +521,56 @@ func buildRevenueRow(
 		row.Note = "未取到该稳定 Key/Token 的精确消费"
 		return row
 	}
-	recharge, err := strconv.ParseFloat(strings.TrimSpace(binding.RechargeRate), 64)
-	if err != nil || math.IsNaN(recharge) || math.IsInf(recharge, 0) || recharge <= 0 {
+	recharge, validRecharge := positiveRevenueDecimal(binding.RechargeRate)
+	if !validRecharge {
 		row.Note = "充值倍率缺失或无效"
 		return row
 	}
-	converted := observation.Cost / recharge
-	difference := local.totals.AccountCost - converted
-	revenue := local.totals.ActualCost - converted
-	row.UpstreamRawCost, row.RechargeRate, row.UpstreamCost = revenueFloat(observation.Cost), revenueFloat(recharge), revenueFloat(converted)
-	row.Difference, row.Revenue = revenueFloat(difference), revenueFloat(revenue)
+	upstreamRawCost, upstreamCostOK := revenueAmount(observation.Cost)
+	if !upstreamCostOK {
+		row.Note = "计费金额无效"
+		return row
+	}
+	converted := new(big.Rat).Quo(upstreamRawCost, recharge)
+	difference := new(big.Rat).Sub(accountCost, converted)
+	revenue := new(big.Rat).Sub(actualCost, converted)
+	row.UpstreamRawCost = revenueFloat(upstreamRawCost)
+	row.RechargeRate = revenueFloat(recharge)
+	row.UpstreamCost = revenueFloat(converted)
+	row.Difference = revenueFloat(difference)
+	row.Revenue = revenueFloat(revenue)
+	if row.UpstreamRawCost == nil || row.RechargeRate == nil || row.UpstreamCost == nil || row.Difference == nil || row.Revenue == nil {
+		row.Note = "计费金额超出可核算范围"
+		return row
+	}
 	row.AttributionLevel = "key"
-	if math.Abs(difference) <= 2 {
+	absDifference := new(big.Rat).Abs(new(big.Rat).Set(difference))
+	if absDifference.Cmp(big.NewRat(revenueTolerance, 1)) <= 0 {
 		row.Category, row.Note = "正常", "-"
 	} else {
 		row.Category = "计费异常"
-		if difference < 0 {
-			row.Note = fmt.Sprintf("差额亏损 %.2f", math.Abs(difference))
+		if difference.Sign() < 0 {
+			row.Note = "差额亏损 " + absDifference.FloatString(2)
 		} else {
-			row.Note = fmt.Sprintf("差额盈余 %.2f", difference)
+			row.Note = "差额盈余 " + difference.FloatString(2)
 		}
 	}
 	return row
 }
 
 func summarizeRevenue(rows []RevenueRow) []RevenueSummary {
-	grouped := map[string]*RevenueSummary{}
+	grouped := map[string]*revenueSummaryAmounts{}
 	for _, row := range rows {
-		if row.AttributionLevel != "key" || row.AccountCost == nil || row.ActualCost == nil || row.UpstreamRawCost == nil || row.UpstreamCost == nil {
+		amounts, ok := revenueAmountsFromRow(row)
+		if !ok {
 			continue
 		}
 		summary := grouped[row.LocalGroup]
 		if summary == nil {
-			summary = &RevenueSummary{Group: row.LocalGroup}
+			summary = newRevenueSummaryAmounts()
 			grouped[row.LocalGroup] = summary
 		}
-		summary.Accounts++
-		summary.AccountCost += *row.AccountCost
-		summary.ActualCost += *row.ActualCost
-		summary.UpstreamRaw += *row.UpstreamRawCost
-		summary.UpstreamCost += *row.UpstreamCost
-		summary.Difference += *row.Difference
-		summary.Revenue += *row.Revenue
+		summary.add(amounts)
 	}
 	groups := make([]string, 0, len(grouped))
 	for group := range grouped {
@@ -490,20 +578,92 @@ func summarizeRevenue(rows []RevenueRow) []RevenueSummary {
 	}
 	sort.Strings(groups)
 	result := make([]RevenueSummary, 0, len(groups)+1)
-	total := RevenueSummary{Group: "合计"}
+	total := newRevenueSummaryAmounts()
 	for _, group := range groups {
-		value := *grouped[group]
-		result = append(result, value)
-		total.Accounts += value.Accounts
-		total.AccountCost += value.AccountCost
-		total.ActualCost += value.ActualCost
-		total.UpstreamRaw += value.UpstreamRaw
-		total.UpstreamCost += value.UpstreamCost
-		total.Difference += value.Difference
-		total.Revenue += value.Revenue
+		value := grouped[group]
+		result = append(result, value.response(group))
+		total.addSummary(value)
 	}
-	result = append(result, total)
+	result = append(result, total.response("合计"))
 	return result
+}
+
+type revenueAmounts struct {
+	accountCost     *big.Rat
+	actualCost      *big.Rat
+	upstreamRawCost *big.Rat
+	upstreamCost    *big.Rat
+	difference      *big.Rat
+	revenue         *big.Rat
+}
+
+type revenueSummaryAmounts struct {
+	accounts int
+	revenueAmounts
+}
+
+func newRevenueSummaryAmounts() *revenueSummaryAmounts {
+	return &revenueSummaryAmounts{revenueAmounts: revenueAmounts{
+		accountCost:     new(big.Rat),
+		actualCost:      new(big.Rat),
+		upstreamRawCost: new(big.Rat),
+		upstreamCost:    new(big.Rat),
+		difference:      new(big.Rat),
+		revenue:         new(big.Rat),
+	}}
+}
+
+func (summary *revenueSummaryAmounts) add(amounts revenueAmounts) {
+	summary.accounts++
+	summary.accountCost.Add(summary.accountCost, amounts.accountCost)
+	summary.actualCost.Add(summary.actualCost, amounts.actualCost)
+	summary.upstreamRawCost.Add(summary.upstreamRawCost, amounts.upstreamRawCost)
+	summary.upstreamCost.Add(summary.upstreamCost, amounts.upstreamCost)
+	summary.difference.Add(summary.difference, amounts.difference)
+	summary.revenue.Add(summary.revenue, amounts.revenue)
+}
+
+func (summary *revenueSummaryAmounts) addSummary(value *revenueSummaryAmounts) {
+	summary.accounts += value.accounts
+	summary.accountCost.Add(summary.accountCost, value.accountCost)
+	summary.actualCost.Add(summary.actualCost, value.actualCost)
+	summary.upstreamRawCost.Add(summary.upstreamRawCost, value.upstreamRawCost)
+	summary.upstreamCost.Add(summary.upstreamCost, value.upstreamCost)
+	summary.difference.Add(summary.difference, value.difference)
+	summary.revenue.Add(summary.revenue, value.revenue)
+}
+
+func (summary *revenueSummaryAmounts) response(group string) RevenueSummary {
+	return RevenueSummary{
+		Group:        group,
+		Accounts:     summary.accounts,
+		AccountCost:  revenueFloatValue(summary.accountCost),
+		ActualCost:   revenueFloatValue(summary.actualCost),
+		UpstreamRaw:  revenueFloatValue(summary.upstreamRawCost),
+		UpstreamCost: revenueFloatValue(summary.upstreamCost),
+		Difference:   revenueFloatValue(summary.difference),
+		Revenue:      revenueFloatValue(summary.revenue),
+	}
+}
+
+func revenueAmountsFromRow(row RevenueRow) (revenueAmounts, bool) {
+	if row.AttributionLevel != "key" || row.AccountCost == nil || row.ActualCost == nil || row.UpstreamRawCost == nil || row.UpstreamCost == nil || row.Difference == nil || row.Revenue == nil {
+		return revenueAmounts{}, false
+	}
+	accountCost, accountCostOK := revenueAmount(*row.AccountCost)
+	actualCost, actualCostOK := revenueAmount(*row.ActualCost)
+	upstreamRawCost, upstreamRawCostOK := revenueAmount(*row.UpstreamRawCost)
+	upstreamCost, upstreamCostOK := revenueAmount(*row.UpstreamCost)
+	difference, differenceOK := revenueAmount(*row.Difference)
+	revenue, revenueOK := revenueAmount(*row.Revenue)
+	if !accountCostOK || !actualCostOK || !upstreamRawCostOK || !upstreamCostOK || !differenceOK || !revenueOK {
+		return revenueAmounts{}, false
+	}
+	return revenueAmounts{
+		accountCost: accountCost, actualCost: actualCost,
+		upstreamRawCost: upstreamRawCost, upstreamCost: upstreamCost,
+		difference: difference, revenue: revenue,
+	}, true
 }
 
 func sharedRevenueKeys(accounts []business.RevenueAccount) map[string]struct{} {
@@ -529,9 +689,44 @@ func revenueKey(host, keyID string) string {
 	return configstore.CanonicalHost(host) + "\x00" + strings.TrimSpace(keyID)
 }
 
-func revenueFloat(value float64) *float64 {
-	value = math.Round(value*1_000_000) / 1_000_000
-	return &value
+func revenueAmount(value float64) (*big.Rat, bool) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil, false
+	}
+	parsed, ok := new(big.Rat).SetString(strconv.FormatFloat(value, 'g', -1, 64))
+	if !ok {
+		return nil, false
+	}
+	// Upstream DTOs currently expose numbers, so normalize their binary float
+	// representation to the report's established six-decimal money scale.
+	return new(big.Rat).SetString(parsed.FloatString(revenueDecimalScale))
+}
+
+func positiveRevenueDecimal(raw string) (*big.Rat, bool) {
+	value, ok := new(big.Rat).SetString(strings.TrimSpace(raw))
+	return value, ok && value.Sign() > 0
+}
+
+func revenueFloat(value *big.Rat) *float64 {
+	if value == nil {
+		return nil
+	}
+	result, err := strconv.ParseFloat(value.FloatString(revenueDecimalScale), 64)
+	if err != nil || math.IsNaN(result) || math.IsInf(result, 0) {
+		return nil
+	}
+	if result == 0 {
+		result = 0 // Do not expose negative zero in the JSON response.
+	}
+	return &result
+}
+
+func revenueFloatValue(value *big.Rat) float64 {
+	result, _ := strconv.ParseFloat(value.FloatString(revenueDecimalScale), 64)
+	if result == 0 {
+		return 0
+	}
+	return result
 }
 
 func localRevenueNote(err error, fallback string) string {

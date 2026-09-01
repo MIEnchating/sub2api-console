@@ -427,7 +427,7 @@ func probeAttempt(ctx context.Context, client *adminclient.Client, target Target
 	}
 	defer response.Body.Close()
 	status := response.StatusCode
-	if status >= http.StatusBadRequest {
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 500))
 		return &status, false, failure(status, string(body)), ""
 	}

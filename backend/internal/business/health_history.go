@@ -38,10 +38,10 @@ func (s *Store) selectHealthSampleWindow(
 	arguments []any,
 	limit int,
 	normalizeSource bool,
-	coalesceObservedAt bool,
 ) ([]healthSampleSelection, error) {
 	query := `SELECT id,account_id,observed_at,source,evidence_key
-		FROM health_samples INDEXED BY ix_health_samples_account_recent` + whereSQL(clauses)
+		FROM health_samples INDEXED BY ix_health_samples_account_recent` + whereSQL(clauses) +
+		` ORDER BY account_id,observed_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -112,6 +112,10 @@ func (s *Store) selectedHealthSamples(
 				return nil, err
 			}
 			result[item.id] = item
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
 		}
 		if err := rows.Close(); err != nil {
 			return nil, err

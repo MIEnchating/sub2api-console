@@ -127,6 +127,21 @@ func TestHTTP200BusinessFailureIsRejected(t *testing.T) {
 	}
 }
 
+func TestHTTP200ResponseRejectsTrailingJSONData(t *testing.T) {
+	_, err, retry := decodeResponse(response(http.StatusOK, `{"success":true,"data":{}} garbage`))
+	if err == nil || !strings.Contains(err.Error(), "尾随数据") || retry {
+		t.Fatalf("err=%v retry=%t", err, retry)
+	}
+}
+
+func TestHTTPResponseRejectsBodyBeyondSafetyLimit(t *testing.T) {
+	oversized := `{"success":true,"data":{}}` + strings.Repeat(" ", maximumResponseBytes)
+	_, err, retry := decodeResponse(response(http.StatusOK, oversized))
+	if err == nil || !strings.Contains(err.Error(), "4 MiB") || retry {
+		t.Fatalf("err=%v retry=%t", err, retry)
+	}
+}
+
 func TestDecodeResponseRetryClassification(t *testing.T) {
 	for _, status := range []int{408, 425, 429, 500, 503} {
 		_, _, retry := decodeResponse(response(status, `{"message":"retry"}`))
@@ -134,7 +149,7 @@ func TestDecodeResponseRetryClassification(t *testing.T) {
 			t.Fatalf("status %d must retry", status)
 		}
 	}
-	for _, status := range []int{400, 401, 403, 404, 409, 422} {
+	for _, status := range []int{300, 302, 307, 308, 400, 401, 403, 404, 409, 422} {
 		_, _, retry := decodeResponse(response(status, `{"message":"stop"}`))
 		if retry {
 			t.Fatalf("status %d must not retry", status)
@@ -158,6 +173,22 @@ func TestTransportFailureIsRetriedAndHeadersAreStable(t *testing.T) {
 	}
 	if transport.apiKey != "secret" || transport.accept != "application/json" {
 		t.Fatalf("headers: apiKey=%q accept=%q", transport.apiKey, transport.accept)
+	}
+}
+
+func TestNonIdempotentTransportFailureIsNotRetried(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodPatch} {
+		transport := &retryTransport{}
+		client, err := New(Config{BaseURL: "https://admin.example", AdminKey: "secret", Timeout: time.Second, Attempts: 3}, transport)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Mutate(context.Background(), method, "/admin/accounts", map[string]any{"name": "account"}); err == nil {
+			t.Fatalf("%s transport failure must be returned", method)
+		}
+		if calls := transport.calls.Load(); calls != 1 {
+			t.Fatalf("%s was retried %d times; non-idempotent writes must not be replayed", method, calls)
+		}
 	}
 }
 

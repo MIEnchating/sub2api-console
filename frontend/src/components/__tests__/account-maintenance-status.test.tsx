@@ -53,9 +53,7 @@ describe("account maintenance status", () => {
       failed: 0,
     };
 
-    const markup = renderToStaticMarkup(
-      <AccountDefaultsRepairTaskStatus task={task} />,
-    );
+    const markup = renderToStaticMarkup(<AccountDefaultsRepairTaskStatus task={task} />);
 
     expect(markup).toContain("已修复");
     expect(markup).toContain("无需修复");
@@ -63,6 +61,7 @@ describe("account maintenance status", () => {
     expect(markup).toContain("并发 0");
     expect(markup).toContain("并发 10");
     expect(markup).toContain("非本控制台添加，未修改");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("offers cleanup and shows account identity when a stable ID is missing remotely", () => {
@@ -125,6 +124,7 @@ describe("account maintenance status", () => {
     expect(markup).toContain("转到第 2 页");
     expect(markup).toContain("flex h-full min-h-0 flex-col");
     expect(markup).toContain("min-h-0 flex-1 divide-y overflow-y-auto");
+    expect(markup).toContain('data-table-panel=""');
   });
 });
 
@@ -149,6 +149,9 @@ describe("account rate sync status", () => {
             status: "已同步",
             before: "0.1",
             after: "0.75",
+            upstream_raw_multiplier: "1.5",
+            recharge_rate: "2",
+            account_multiplier: "0.75",
             name_before: "Example-0.1",
             name_after: "Example-0.75",
           },
@@ -171,15 +174,15 @@ describe("account rate sync status", () => {
       updated_at: "2026-08-29T00:00:01Z",
     };
 
-    const markup = renderToStaticMarkup(
-      <AccountRateSyncTaskStatus task={task} />,
-    );
+    const markup = renderToStaticMarkup(<AccountRateSyncTaskStatus task={task} />);
 
     expect(markup).toContain("alpha");
     expect(markup).toContain("0.1 → 0.75");
+    expect(markup).toContain("上游原始倍率 1.5 ÷ 充值比例 2 = 账号成本 0.75");
     expect(markup).toContain("名称 Example-0.1 → Example-0.75");
     expect(markup).toContain("管理平台不存在");
     expect(markup).toContain("管理平台账号倍率必须大于 0");
     expect(markup).not.toContain("account-rate-task");
+    expect(markup).toContain('data-table-panel=""');
   });
 });

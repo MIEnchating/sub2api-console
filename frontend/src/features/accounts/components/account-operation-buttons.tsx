@@ -26,7 +26,6 @@ export function AccountOperationButtons(props: {
   const resumable = paused || (!policyStopped && props.account.schedulable === false);
   const excluded = state === "excluded";
   const manualControlled = props.account.manual_priority != null;
-  const manualSyncAllowed = props.account.manual_sync_balance_multiplier === true;
   return (
     <div className="ml-auto grid w-[7rem] grid-cols-3 gap-1">
       {excluded ? (
@@ -80,11 +79,7 @@ export function AccountOperationButtons(props: {
           </TableActionButton>
         </>
       )}
-      <TableActionButton
-        label="同步账号倍率"
-        disabled={props.pending || (manualControlled && !manualSyncAllowed)}
-        onClick={props.onRateSync}
-      >
+      <TableActionButton label="同步账号倍率" disabled={props.pending} onClick={props.onRateSync}>
         <RefreshCw />
       </TableActionButton>
       <TableActionButton

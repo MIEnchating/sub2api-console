@@ -26,10 +26,12 @@ type AlertPolicy struct {
 	ApplyFailureEnabled     bool     `json:"apply_failure_enabled"`
 	BalanceThresholds       []string `json:"balance_thresholds"`
 	ProbeFailureStreak      int      `json:"probe_failure_streak"`
+	ProbeRecoveryStreak     int      `json:"probe_recovery_streak"`
 	ProbeGroups             []string `json:"probe_groups"`
 	DeliveryEnabled         bool     `json:"delivery_enabled"`
 	NotifyRecovery          bool     `json:"notify_recovery"`
 	RepeatIntervalMinutes   int      `json:"repeat_interval_minutes"`
+	StateChangeCooldown     int      `json:"state_change_cooldown_minutes"`
 	MergeThreshold          int      `json:"merge_threshold"`
 }
 
@@ -39,8 +41,8 @@ func DefaultAlertPolicy() AlertPolicy {
 		BalanceEnabled: true, ProbeEnabled: true, BalanceThresholds: []string{"20", "10", "5"},
 		RoutingBreakerEnabled: true, RoutingDegradedEnabled: true, RoutingSurvivorEnabled: true,
 		GroupUnavailableEnabled: true, GroupSurvivorEnabled: true, ApplyFailureEnabled: true,
-		ProbeFailureStreak: 1, ProbeGroups: []string{}, DeliveryEnabled: true, NotifyRecovery: true,
-		MergeThreshold: 10,
+		ProbeFailureStreak: 3, ProbeRecoveryStreak: 3, ProbeGroups: []string{}, DeliveryEnabled: true,
+		NotifyRecovery: true, StateChangeCooldown: 30, MergeThreshold: 10,
 	}
 }
 
@@ -139,7 +141,7 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 	allowed := valueStringSet("enabled", "configuration_enabled", "auth_enabled", "rate_sync_enabled", "balance_enabled", "probe_enabled",
 		"routing_breaker_enabled", "routing_degraded_enabled", "routing_survivor_enabled", "group_unavailable_enabled",
 		"group_survivor_enabled", "apply_failure_enabled",
-		"balance_thresholds", "balance_threshold", "probe_failure_streak", "probe_groups", "delivery_enabled", "notify_recovery", "repeat_interval_minutes", "merge_threshold")
+		"balance_thresholds", "balance_threshold", "probe_failure_streak", "probe_recovery_streak", "probe_groups", "delivery_enabled", "notify_recovery", "repeat_interval_minutes", "state_change_cooldown_minutes", "merge_threshold")
 	for field := range raw {
 		if _, ok := allowed[field]; !ok {
 			return AlertPolicy{}, fmt.Errorf("告警策略包含未知字段：%s", field)
@@ -210,7 +212,15 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 	if err != nil {
 		return AlertPolicy{}, err
 	}
+	recoveryStreak, err := boundedInteger("probe_recovery_streak", document["probe_recovery_streak"], 1, 100)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
 	repeat, err := boundedInteger("repeat_interval_minutes", document["repeat_interval_minutes"], 0, 10080)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+	cooldown, err := boundedInteger("state_change_cooldown_minutes", document["state_change_cooldown_minutes"], 0, 10080)
 	if err != nil {
 		return AlertPolicy{}, err
 	}
@@ -224,9 +234,9 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 		RoutingBreakerEnabled: booleans["routing_breaker_enabled"], RoutingDegradedEnabled: booleans["routing_degraded_enabled"],
 		RoutingSurvivorEnabled: booleans["routing_survivor_enabled"], GroupUnavailableEnabled: booleans["group_unavailable_enabled"],
 		GroupSurvivorEnabled: booleans["group_survivor_enabled"], ApplyFailureEnabled: booleans["apply_failure_enabled"],
-		BalanceThresholds: thresholdTexts, ProbeFailureStreak: streak, ProbeGroups: groupTexts,
+		BalanceThresholds: thresholdTexts, ProbeFailureStreak: streak, ProbeRecoveryStreak: recoveryStreak, ProbeGroups: groupTexts,
 		DeliveryEnabled: booleans["delivery_enabled"], NotifyRecovery: booleans["notify_recovery"], RepeatIntervalMinutes: repeat,
-		MergeThreshold: mergeThreshold,
+		StateChangeCooldown: cooldown, MergeThreshold: mergeThreshold,
 	}, nil
 }
 
@@ -245,8 +255,8 @@ func alertPolicyDocument(policy AlertPolicy) map[string]any {
 		"routing_breaker_enabled": policy.RoutingBreakerEnabled, "routing_degraded_enabled": policy.RoutingDegradedEnabled,
 		"routing_survivor_enabled": policy.RoutingSurvivorEnabled, "group_unavailable_enabled": policy.GroupUnavailableEnabled,
 		"group_survivor_enabled": policy.GroupSurvivorEnabled, "apply_failure_enabled": policy.ApplyFailureEnabled,
-		"balance_thresholds": thresholds, "probe_failure_streak": int64(policy.ProbeFailureStreak), "probe_groups": groups,
+		"balance_thresholds": thresholds, "probe_failure_streak": int64(policy.ProbeFailureStreak), "probe_recovery_streak": int64(policy.ProbeRecoveryStreak), "probe_groups": groups,
 		"delivery_enabled": policy.DeliveryEnabled, "notify_recovery": policy.NotifyRecovery, "repeat_interval_minutes": int64(policy.RepeatIntervalMinutes),
-		"merge_threshold": int64(policy.MergeThreshold),
+		"state_change_cooldown_minutes": int64(policy.StateChangeCooldown), "merge_threshold": int64(policy.MergeThreshold),
 	}
 }

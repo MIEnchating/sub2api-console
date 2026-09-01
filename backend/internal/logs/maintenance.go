@@ -50,17 +50,17 @@ type Maintenance struct {
 	tasks    TaskCleaner
 	now      func() time.Time
 
-	runMu  sync.Mutex
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	wake   chan struct{}
+	runGate chan struct{}
+	mu      sync.Mutex
+	cancel  context.CancelFunc
+	done    chan struct{}
+	wake    chan struct{}
 }
 
 func NewMaintenance(settings CleanupSettingsStore, businessCleaner BusinessCleaner, taskCleaner TaskCleaner) *Maintenance {
 	return &Maintenance{
 		settings: settings, business: businessCleaner, tasks: taskCleaner,
-		now: time.Now, wake: make(chan struct{}, 1),
+		now: time.Now, runGate: make(chan struct{}, 1), wake: make(chan struct{}, 1),
 	}
 }
 
@@ -89,10 +89,18 @@ func (m *Maintenance) ClearExpired(ctx context.Context, retentionDays int) (Clea
 		return CleanupResult{}, errors.New("日志保留天数必须在 1 到 3650 之间")
 	}
 	cutoff := m.now().UTC().AddDate(0, 0, -retentionDays)
+	if err := m.acquireRun(ctx); err != nil {
+		return CleanupResult{}, err
+	}
+	defer m.releaseRun()
 	return m.clear(ctx, cutoff, retentionDays)
 }
 
 func (m *Maintenance) RunDue(ctx context.Context) (bool, CleanupResult, error) {
+	if err := m.acquireRun(ctx); err != nil {
+		return false, CleanupResult{}, err
+	}
+	defer m.releaseRun()
 	settings, err := m.settings.LogCleanupSettings(ctx)
 	if err != nil {
 		return false, CleanupResult{}, err
@@ -162,8 +170,6 @@ func (m *Maintenance) loop(ctx context.Context) {
 }
 
 func (m *Maintenance) clear(ctx context.Context, cutoff time.Time, retentionDays int) (CleanupResult, error) {
-	m.runMu.Lock()
-	defer m.runMu.Unlock()
 	if m.business == nil || m.tasks == nil || m.settings == nil {
 		return CleanupResult{}, errors.New("日志清理服务尚未就绪")
 	}
@@ -188,6 +194,17 @@ func (m *Maintenance) clear(ctx context.Context, cutoff time.Time, retentionDays
 	result.Total = result.Tasks + result.Runs + result.Events + result.Changes
 	return result, nil
 }
+
+func (m *Maintenance) acquireRun(ctx context.Context) error {
+	select {
+	case m.runGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *Maintenance) releaseRun() { <-m.runGate }
 
 func cleanupDue(settings configstore.LogCleanupSettings, now time.Time) bool {
 	if settings.LastRunAt == nil {

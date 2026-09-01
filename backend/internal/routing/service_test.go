@@ -65,13 +65,19 @@ func (r *routingRepositoryStub) PersistRoutingRound(
 	return nil
 }
 
-func TestResolveRateUsesCurrentAccountMultiplierBeforeStaleMembershipRate(t *testing.T) {
-	accountMultiplier, membershipRate := "0.17", "0.2"
+func TestResolveRateUsesCurrentAccountMultiplier(t *testing.T) {
+	accountMultiplier := "0.17"
 	rate, text, known, reason := resolveRate(business.RoutingAccount{
 		Multiplier: &accountMultiplier,
-		GroupRate:  &membershipRate,
 	}, engineConfig{}, nil)
 	if rate == nil || rate.Cmp(big.NewRat(17, 100)) != 0 || text == nil || *text != "0.17" || !known || reason != nil {
+		t.Fatalf("rate=%v text=%v known=%v reason=%v", rate, text, known, reason)
+	}
+}
+
+func TestResolveRateFailsClosedWhenAccountCostIsMissing(t *testing.T) {
+	rate, text, known, reason := resolveRate(business.RoutingAccount{}, engineConfig{missingRateFallback: "fail_closed"}, nil)
+	if rate != nil || text != nil || known || reason == nil || *reason != "倍率缺失，严格关闭" {
 		t.Fatalf("rate=%v text=%v known=%v reason=%v", rate, text, known, reason)
 	}
 }
@@ -409,11 +415,11 @@ func TestStrategyQualityFallsBackFromP95ToP50(t *testing.T) {
 func TestCostWallStopsSchedulingWhenEveryManagedMembershipIsAboveWall(t *testing.T) {
 	policy := routingPolicy()
 	schedulable := true
-	groupRate, costWall := "2", "1"
+	accountMultiplier, costWall := "2", "1"
 	repository := &routingRepositoryStub{
 		policy: policy,
 		accounts: []business.RoutingAccount{{
-			ID: "41", Name: "above-wall", GroupName: "codex", GroupRate: &groupRate,
+			ID: "41", Name: "above-wall", GroupName: "codex", Multiplier: &accountMultiplier,
 			GroupCostWall: &costWall, Schedulable: &schedulable, Metadata: map[string]any{},
 		}},
 		samples: []business.RoutingSample{{
@@ -448,8 +454,8 @@ func TestCostWallKeepsMultiGroupAccountWhenAnyManagedMembershipIsWithinWall(t *t
 	repository := &routingRepositoryStub{
 		policy: policy,
 		accounts: []business.RoutingAccount{
-			{ID: "41", Name: "mixed-wall", GroupName: "group-a", GroupID: &group1, GroupRate: &rate, GroupCostWall: &lowWall, Schedulable: &schedulable, EffectiveState: "cost_blocked", Metadata: map[string]any{}},
-			{ID: "41", Name: "mixed-wall", GroupName: "group-b", GroupID: &group2, GroupRate: &rate, GroupCostWall: &highWall, Schedulable: &schedulable, EffectiveState: "cost_blocked", Metadata: map[string]any{}},
+			{ID: "41", Name: "mixed-wall", GroupName: "group-a", GroupID: &group1, Multiplier: &rate, GroupCostWall: &lowWall, Schedulable: &schedulable, EffectiveState: "cost_blocked", Metadata: map[string]any{}},
+			{ID: "41", Name: "mixed-wall", GroupName: "group-b", GroupID: &group2, Multiplier: &rate, GroupCostWall: &highWall, Schedulable: &schedulable, EffectiveState: "cost_blocked", Metadata: map[string]any{}},
 		},
 		samples: []business.RoutingSample{{
 			AccountID: "41", GroupName: "group-a", Result: "通过", Source: "traffic",

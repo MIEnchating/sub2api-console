@@ -1,8 +1,18 @@
-import { AlertTriangle, CheckCircle2, CircleHelp, LoaderCircle, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Circle,
+  CircleHelp,
+  LoaderCircle,
+  Radio,
+  XCircle,
+} from "lucide-react";
+import { useEffect } from "react";
 
 import type { Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -13,6 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 
 type ResultRecord = Record<string, unknown>;
 
@@ -156,41 +167,125 @@ function ResultMetrics(props: { result: ResultRecord }) {
   );
 }
 
-export function ModelCheckResult(props: { task: Task }) {
-  const rows = resultRows(props.task.result.tests);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const pageRows = rows.slice((page - 1) * pageSize, page * pageSize);
+function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
+  const completed = numberValue(props.task.result.completed) ?? props.rows.length;
+  const total = numberValue(props.task.result.total) ?? Math.max(completed, 1);
+  const phase = textValue(props.task.result.phase) ?? "queued";
+  const activeStep = completed >= total && total > 0 ? 2 : phase === "testing" ? 1 : 0;
+  const steps = ["准备账号凭据", "并行执行检测", "汇总检测结果"];
 
-  useEffect(() => {
-    setPage(1);
-  }, [props.task.id]);
-
-  useEffect(() => {
-    setPage((current) => Math.min(current, totalPages));
-  }, [totalPages]);
-
-  if (["queued", "running", "waiting_input"].includes(props.task.status)) {
-    return (
-      <div className="grid h-full place-items-center" aria-live="polite">
-        <div className="w-full max-w-lg rounded-md border p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="flex items-center gap-2 font-medium">
-                <LoaderCircle className="text-primary size-4 animate-spin" aria-hidden="true" />
-                正在检测
-              </p>
-              <p className="text-muted-foreground mt-1 text-sm">{props.task.message}</p>
-            </div>
-            <strong className="text-primary text-lg tabular-nums">{props.task.progress}%</strong>
-          </div>
-          <div className="mt-4">
-            <Progress value={props.task.progress} aria-label="模型检测进度" />
-          </div>
+  return (
+    <div
+      className="flex h-full min-h-0 flex-col gap-4"
+      role="status"
+      aria-live="polite"
+      data-testid="model-check-live-progress"
+    >
+      <div className="grid shrink-0 gap-3 rounded-md border p-4 sm:grid-cols-[1fr_auto] sm:items-center">
+        <div className="min-w-0">
+          <p className="flex items-center gap-2 font-medium">
+            <Radio className="text-primary size-4 animate-pulse" aria-hidden="true" />
+            实时检测过程
+          </p>
+          <p className="text-muted-foreground mt-1 truncate text-sm">{props.task.message}</p>
+        </div>
+        <div className="text-left sm:text-right">
+          <strong className="text-lg tabular-nums">
+            {completed}/{total}
+          </strong>
+          <span className="text-muted-foreground ml-1 text-xs">个组合已完成</span>
         </div>
       </div>
-    );
+
+      <ol className="grid shrink-0 grid-cols-3 gap-2" aria-label="检测步骤">
+        {steps.map((label, index) => {
+          const done = index < activeStep;
+          const active = index === activeStep;
+          return (
+            <li
+              key={label}
+              className={`flex min-w-0 items-center gap-2 rounded-md border px-3 py-2.5 ${
+                active ? "border-primary/40 bg-primary/5" : "bg-muted/20"
+              }`}
+            >
+              {done ? (
+                <Check className="text-primary size-4 shrink-0" aria-hidden="true" />
+              ) : active ? (
+                <LoaderCircle
+                  className="text-primary size-4 shrink-0 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Circle className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+              )}
+              <span className="truncate text-xs font-medium sm:text-sm">{label}</span>
+            </li>
+          );
+        })}
+      </ol>
+
+      <DataTablePanel className="flex-1">
+        {props.rows.length === 0 ? (
+          <div className="text-muted-foreground grid h-full min-h-48 place-items-center text-sm">
+            <span className="flex items-center gap-2">
+              <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
+              {props.task.message}
+            </span>
+          </div>
+        ) : (
+          <Table containerClassName="h-full overflow-auto" className="min-w-[640px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[30%]">账号</TableHead>
+                <TableHead className="w-[30%]">模型</TableHead>
+                <TableHead className="w-[22%]">检测结果</TableHead>
+                <TableHead>成功请求</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {props.rows.map((result, index) => {
+                const verdict = displayVerdict(result);
+                const requests = objectValue(result.requests);
+                return (
+                  <TableRow
+                    key={`${textValue(result.account_id) ?? index}-${textValue(result.claimed_model) ?? index}`}
+                  >
+                    <TableCell>
+                      <span className="block truncate font-medium">
+                        {textValue(result.account_name) ?? "-"}
+                      </span>
+                      <span className="text-muted-foreground block text-xs">
+                        ID {textValue(result.account_id) ?? "-"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-medium">
+                      {textValue(result.claimed_model) ?? "-"}
+                    </TableCell>
+                    <TableCell>{verdictBadge(verdict)}</TableCell>
+                    <TableCell className={verdict === "ERROR" ? "text-destructive" : undefined}>
+                      {numberValue(requests.successful) ?? 0}/{numberValue(requests.total) ?? 0}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </DataTablePanel>
+    </div>
+  );
+}
+
+export function ModelCheckResult(props: { task: Task }) {
+  const rows = resultRows(props.task.result.tests);
+  const pagination = useClientPagination(rows, 10);
+
+  useEffect(() => {
+    pagination.setCurrentPage(1);
+  }, [pagination.setCurrentPage, props.task.id]);
+
+  if (["queued", "running", "waiting_input"].includes(props.task.status)) {
+    return <LiveModelCheckResult task={props.task} rows={rows} />;
   }
   if (props.task.status === "failed" || props.task.status === "cancelled") {
     return (
@@ -225,7 +320,7 @@ export function ModelCheckResult(props: { task: Task }) {
           {summaryBadges(summary)}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-hidden rounded-md border">
+      <DataTablePanel className="flex-1">
         <Table
           containerClassName="hidden h-full overflow-auto md:block"
           className="min-w-[840px]"
@@ -249,7 +344,7 @@ export function ModelCheckResult(props: { task: Task }) {
                 </TableCell>
               </TableRow>
             ) : null}
-            {pageRows.map((result, index) => {
+            {pagination.visibleItems.map((result, index) => {
               const verdict = displayVerdict(result);
               const requests = objectValue(result.requests);
               const error =
@@ -309,7 +404,7 @@ export function ModelCheckResult(props: { task: Task }) {
           {rows.length === 0 ? (
             <div className="text-muted-foreground p-6 text-center text-sm">任务未返回检测明细</div>
           ) : null}
-          {pageRows.map((result, index) => {
+          {pagination.visibleItems.map((result, index) => {
             const verdict = displayVerdict(result);
             const requests = objectValue(result.requests);
             const error =
@@ -360,19 +455,16 @@ export function ModelCheckResult(props: { task: Task }) {
             );
           })}
         </div>
-      </div>
+      </DataTablePanel>
       <div className="shrink-0">
         <DataTablePagination
-          currentPage={page}
-          totalPages={totalPages}
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
           totalItems={rows.length}
-          pageSize={pageSize}
+          pageSize={pagination.pageSize}
           pageSizes={[10, 20, 50]}
-          onPageChange={setPage}
-          onPageSizeChange={(value) => {
-            setPageSize(value);
-            setPage(1);
-          }}
+          onPageChange={pagination.setCurrentPage}
+          onPageSizeChange={pagination.setPageSize}
         />
       </div>
     </div>

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,14 +116,21 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 		return probeCredential{}, errors.New("上游分组不存在或不在 Console 业务库中")
 	}
 	credential := probeCredential{auth: *auth, candidate: *candidate}
+	staleExistingKey := false
 	if candidate.UpstreamKeyID != nil && strings.TrimSpace(*candidate.UpstreamKeyID) != "" {
 		credential.key, err = s.keys.RevealKey(ctx, *auth, strings.TrimSpace(*candidate.UpstreamKeyID), groupID)
-		if err != nil {
+		if err == nil {
+			return credential, nil
+		}
+		if !errors.Is(err, upstreamsync.ErrKeyNotFound) {
 			return probeCredential{}, fmt.Errorf("上游已有 Key 读取失败：%w", err)
 		}
-		return credential, nil
+		staleExistingKey = true
 	}
 	if !candidate.CanCreateKey {
+		if staleExistingKey {
+			return probeCredential{}, errors.New("本地记录的上游 Key 已不存在，且该分组当前无法创建临时测试 Key")
+		}
 		if candidate.UnavailableReason != nil && strings.TrimSpace(*candidate.UnavailableReason) != "" {
 			return probeCredential{}, errors.New(strings.TrimSpace(*candidate.UnavailableReason))
 		}
@@ -164,11 +172,9 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 	if status < 200 || status >= 300 {
 		return nil, gatewayStatusError(status, body)
 	}
-	var payload any
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil {
-		return nil, errors.New("上游模型接口返回不是有效 JSON")
+	payload, err := decodeGatewayJSON(body, "上游模型接口")
+	if err != nil {
+		return nil, err
 	}
 	seen := map[string]struct{}{}
 	models := make([]string, 0)
@@ -224,9 +230,24 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 		result.Message = err.Error()
 		return result, err
 	}
-	result.ActualModel = responseModel(raw)
 	if status < 200 || status >= 300 {
+		result.ActualModel = responseModel(raw)
 		err := gatewayStatusError(status, raw)
+		result.Message = err.Error()
+		return result, err
+	}
+	payload, err := decodeGatewayJSON(raw, "上游探活接口")
+	if err != nil {
+		result.Message = err.Error()
+		return result, err
+	}
+	result.ActualModel = responseModelFromPayload(payload)
+	if err := gatewayBusinessError(payload); err != nil {
+		result.Message = err.Error()
+		return result, err
+	}
+	if !gatewaySuccessEvidence(payload) {
+		err := errors.New("上游探活响应缺少可验证的模型调用结果")
 		result.Message = err.Error()
 		return result, err
 	}
@@ -288,13 +309,144 @@ func gatewayStatusError(status int, raw []byte) error {
 	return fmt.Errorf("上游返回 HTTP %d：%s", status, detail)
 }
 
-func responseModel(raw []byte) string {
-	var payload any
+func decodeGatewayJSON(raw []byte, label string) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	if decoder.Decode(&payload) != nil {
+	var payload any
+	if err := decoder.Decode(&payload); err != nil || payload == nil {
+		return nil, fmt.Errorf("%s返回不是有效 JSON", label)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("%s响应包含尾随数据", label)
+	}
+	return payload, nil
+}
+
+func gatewayBusinessError(payload any) error {
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+	failed := false
+	for _, key := range []string{"success", "ok"} {
+		if value, present := object[key]; present && explicitFailure(value) {
+			failed = true
+		}
+	}
+	for _, key := range []string{"error", "errors"} {
+		if value, present := object[key]; present && nonemptyFailure(value) {
+			failed = true
+		}
+	}
+	if value, present := object["code"]; present && failedBusinessCode(value) {
+		failed = true
+	}
+	if status, ok := object["status"].(string); ok {
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "error", "failed", "failure":
+			failed = true
+		}
+	}
+	if !failed {
+		return nil
+	}
+	detail := gatewayFailureDetail(object)
+	if detail == "" {
+		return errors.New("上游探活响应明确表示业务失败")
+	}
+	return errors.New("上游探活响应明确表示业务失败：" + detail)
+}
+
+func failedBusinessCode(value any) bool {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	code, err := strconv.Atoi(text)
+	return err == nil && code != 0 && (code < http.StatusOK || code >= http.StatusMultipleChoices)
+}
+
+func explicitFailure(value any) bool {
+	switch item := value.(type) {
+	case bool:
+		return !item
+	case json.Number:
+		return item.String() == "0"
+	case string:
+		switch strings.ToLower(strings.TrimSpace(item)) {
+		case "0", "false", "error", "failed", "failure":
+			return true
+		}
+	}
+	return false
+}
+
+func nonemptyFailure(value any) bool {
+	switch item := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(item) != ""
+	case []any:
+		return len(item) > 0
+	case map[string]any:
+		return len(item) > 0
+	case bool:
+		return item
+	case json.Number:
+		return item.String() != "0"
+	default:
+		return true
+	}
+}
+
+func gatewaySuccessEvidence(payload any) bool {
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range []string{"id", "object", "model", "output", "choices", "content", "candidates", "data", "response", "result"} {
+		if value, present := object[key]; present && value != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayFailureDetail(object map[string]any) string {
+	sources := []map[string]any{object}
+	for _, key := range []string{"error", "data"} {
+		if nested, ok := object[key].(map[string]any); ok {
+			sources = append(sources, nested)
+		}
+	}
+	for _, source := range sources {
+		for _, key := range []string{"message", "msg", "detail", "reason", "error"} {
+			value, ok := source[key].(string)
+			if !ok {
+				continue
+			}
+			value = strings.TrimSpace(strings.ReplaceAll(redact.Secrets(value), "\n", " "))
+			if value == "" {
+				continue
+			}
+			runes := []rune(value)
+			if len(runes) > 300 {
+				value = string(runes[:300])
+			}
+			return value
+		}
+	}
+	return ""
+}
+
+func responseModel(raw []byte) string {
+	payload, err := decodeGatewayJSON(raw, "上游探活接口")
+	if err != nil {
 		return ""
 	}
+	return responseModelFromPayload(payload)
+}
+
+func responseModelFromPayload(payload any) string {
 	var find func(any) string
 	find = func(value any) string {
 		switch item := value.(type) {

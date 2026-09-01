@@ -3,6 +3,7 @@ package taskstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -103,13 +104,38 @@ func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
 	}
 }
 
+func TestLatestByOperationReturnsNewestMatchingStatus(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	for _, task := range []Task{
+		{ID: "older", Skill: "billing", Operation: "revenue-calculation", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"report_date": "2026-08-28"}, CreatedAt: "2026-08-29T00:00:00Z", UpdatedAt: "2026-08-29T00:00:01Z"},
+		{ID: "failed-newer", Skill: "billing", Operation: "revenue-calculation", Status: "failed", Progress: 100, Message: "失败", Result: map[string]any{}, CreatedAt: "2026-08-30T00:00:00Z", UpdatedAt: "2026-08-30T00:00:01Z"},
+		{ID: "other", Skill: "billing", Operation: "price-group-allocation", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{}, CreatedAt: "2026-08-31T00:00:00Z", UpdatedAt: "2026-08-31T00:00:01Z"},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task, err := store.LatestByOperation(ctx, "revenue-calculation", "succeeded")
+	if err != nil || task.ID != "older" || task.Result["report_date"] != "2026-08-28" {
+		t.Fatalf("task=%#v err=%v", task, err)
+	}
+	if _, err := store.LatestByOperation(ctx, "revenue-calculation", "cancelled"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing status err=%v", err)
+	}
+}
+
 func TestOpenCreatesAndRepairsTaskIndexes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.sqlite3")
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search"} {
+	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_operation_status_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search"} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("task index %s missing: count=%d err=%v", name, count, err)
@@ -145,12 +171,20 @@ func TestCorruptStoredResultProjectsFailedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO tasks VALUES('broken','console','inspect','succeeded',100,'done','[]',?,?)`, now, now); err != nil {
-		t.Fatal(err)
-	}
-	task, err := store.Get(context.Background(), "broken")
-	if err != nil || task.Status != "failed" || task.Result["storage_corrupt"] != true {
-		t.Fatalf("unexpected corrupt projection: %#v err=%v", task, err)
+	for _, row := range []struct {
+		id     string
+		result string
+	}{
+		{id: "wrong-shape", result: `[]`},
+		{id: "trailing-garbage", result: `{} garbage`},
+	} {
+		if _, err := db.Exec(`INSERT INTO tasks VALUES(?, 'console','inspect','succeeded',100,'done',?,?,?)`, row.id, row.result, now, now); err != nil {
+			t.Fatal(err)
+		}
+		task, err := store.Get(context.Background(), row.id)
+		if err != nil || task.Status != "failed" || task.Result["storage_corrupt"] != true {
+			t.Fatalf("%s unexpected corrupt projection: %#v err=%v", row.id, task, err)
+		}
 	}
 }
 

@@ -1749,9 +1749,6 @@ func decisionWrite(item Decision) business.RoutingDecisionWrite {
 
 func resolveRate(account business.RoutingAccount, config engineConfig, wall *big.Rat) (*big.Rat, *string, bool, *string) {
 	raw := account.Multiplier
-	if raw == nil {
-		raw = account.GroupRate
-	}
 	if value, text := nonnegativeDecimal(raw); value != nil {
 		return value, text, true, nil
 	}
@@ -2108,18 +2105,6 @@ func integerSet(source map[string]any, key string, minimum, maximum int) (map[in
 		result[value] = struct{}{}
 	}
 	return result, nil
-}
-
-func (r *policyReader) optionalNestedInteger(policy map[string]any, first, second, key string, fallback, minimum, maximum int) int {
-	section, ok := policy[first].(map[string]any)
-	if !ok {
-		return fallback
-	}
-	nested, ok := section[second].(map[string]any)
-	if !ok {
-		return fallback
-	}
-	return r.integer(nested, first+"."+second+"."+key, key, fallback, minimum, maximum)
 }
 
 func nonnegativeDecimal(raw *string) (*big.Rat, *string) {

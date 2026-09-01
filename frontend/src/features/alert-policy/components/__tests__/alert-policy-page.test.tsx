@@ -20,10 +20,12 @@ const policy: AlertPolicy = {
   apply_failure_enabled: true,
   balance_thresholds: ["20", "10", "5"],
   probe_failure_streak: 3,
+  probe_recovery_streak: 3,
   probe_groups: ["codex", "pro"],
   delivery_enabled: true,
   notify_recovery: false,
   repeat_interval_minutes: 30,
+  state_change_cooldown_minutes: 30,
   merge_threshold: 10,
 };
 
@@ -82,16 +84,30 @@ describe("AlertPolicyPage", () => {
     expect(markup).not.toContain("-translate-y-1/2");
     expect(markup).not.toContain("sm:grid-cols-3");
     expect(markup).toContain("连续主动探测失败次数");
+    expect(markup).toContain("连续主动探测成功次数");
     expect(markup).toContain("主动探测告警分组");
     expect(markup).toContain("重复提醒间隔");
+    expect(markup).toContain("状态变化冷却");
     expect(markup).toContain("多少条以上合并发送");
-    expect(markup).toContain("告警控制");
+    expect(markup).toContain("告警检测");
+    expect(markup).toContain("通知发送");
+    expect(markup.indexOf("告警检测")).toBeLessThan(markup.indexOf("阈值与范围"));
+    expect(markup.indexOf("通知渠道")).toBeLessThan(markup.indexOf("通知发送"));
+    expect(markup.indexOf("通知发送")).toBeLessThan(markup.indexOf("检测规则"));
     expect(markup).not.toContain("运行控制");
     expect(markup).toContain("管理通知渠道");
     expect(markup).toContain("目标类型：私聊");
     expect(markup).not.toContain("目标类型：c2c");
+    expect(markup).not.toContain("App ID");
+    expect(markup).not.toContain("Client Secret");
+    expect(markup).not.toContain("目标 ID");
     expect(markup).toContain('data-slot="alert-policy-columns"');
     expect(markup).toContain("grid items-start gap-4 lg:grid-cols-2");
+    expect(markup).toContain('data-slot="alert-delivery-switches"');
+    expect(markup).toContain('data-slot="alert-delivery-fields"');
+    expect(markup).toContain("xl:grid-cols-3");
+    expect(markup).toContain('data-slot="alert-rule-grid"');
+    expect(markup).toContain("xl:grid-cols-2");
     expect(markup).not.toContain("min-h-44");
   });
 });

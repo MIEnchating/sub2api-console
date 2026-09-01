@@ -24,6 +24,8 @@ import (
 
 type Repository interface {
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
+	ProtectedUpstreamKeyIDs(context.Context, string) ([]string, error)
+	UpstreamKeyProtected(context.Context, string, string) (bool, error)
 	LocalOnboardingGroup(context.Context, string) (business.LocalOnboardingGroup, error)
 	PendingOnboarding(context.Context, string, string, string, string) (*business.PendingOnboarding, error)
 	SavePendingOnboarding(context.Context, business.PendingOnboarding) error
@@ -59,7 +61,6 @@ type Request struct {
 	Platform        *string
 	AccountType     *string
 	Notes           *string
-	Multiplier      string
 	LocalGroupID    string
 	LocalGroupIDs   []string
 	UpstreamGroupID string
@@ -379,10 +380,6 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	if request.Concurrency != nil && (*request.Concurrency < 1 || *request.Concurrency > 10_000_000) {
 		return validatedRequest{}, errors.New("并发必须是 1 到 10000000 之间的整数")
 	}
-	multiplier, err := positiveDecimal(request.Multiplier)
-	if err != nil {
-		return validatedRequest{}, err
-	}
 	localGroupIDs := append([]string{}, request.LocalGroupIDs...)
 	if len(localGroupIDs) == 0 && strings.TrimSpace(request.LocalGroupID) != "" {
 		localGroupIDs = []string{request.LocalGroupID}
@@ -427,6 +424,13 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	}
 	if candidate == nil {
 		return validatedRequest{}, errors.New("上游分组不存在或不在 Console 业务库中")
+	}
+	if candidate.Multiplier == nil {
+		return validatedRequest{}, errors.New("上游分组缺少换算后的账号成本")
+	}
+	multiplier, err := positiveDecimal(*candidate.Multiplier)
+	if err != nil {
+		return validatedRequest{}, errors.New("上游分组换算后的账号成本无效")
 	}
 	accountIDs, err := validatedBoundAccountIDs(request.AccountIDs, *candidate)
 	if err != nil {

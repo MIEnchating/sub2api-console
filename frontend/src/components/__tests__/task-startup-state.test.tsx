@@ -1,17 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import {
-  TaskProgressState,
-  TaskStartupState,
-  taskStartupStateLayout,
-} from "../task-startup-state";
+import { TaskProgressState, TaskStartupState, taskStartupStateLayout } from "../task-startup-state";
 
 describe("task startup state", () => {
   it("shows immediate task creation feedback with a progress track", () => {
-    const markup = renderToStaticMarkup(
-      <TaskStartupState message="正在创建余额同步任务" />,
-    );
+    const markup = renderToStaticMarkup(<TaskStartupState message="正在创建余额同步任务" />);
 
     expect(markup).toContain("正在创建余额同步任务");
     expect(markup).toContain("0%");
@@ -26,9 +20,7 @@ describe("task startup state", () => {
   });
 
   it("uses the same layout for running task progress", () => {
-    const markup = renderToStaticMarkup(
-      <TaskProgressState message="正在校验账号" progress={46} />,
-    );
+    const markup = renderToStaticMarkup(<TaskProgressState message="正在校验账号" progress={46} />);
 
     expect(markup).toContain("正在校验账号");
     expect(markup).toContain("46%");

@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	tokenEndpoint = "https://bots.qq.com/app/getAppAccessToken"
-	messageLimit  = 4000
-	batchLimit    = 3900
+	tokenEndpoint            = "https://bots.qq.com/app/getAppAccessToken"
+	messageLimit             = 4000
+	batchLimit               = 3900
+	maximumQQBotResponseSize = 1 << 20
 )
 
 type Repository interface {
@@ -210,8 +211,22 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 	}
 	groups := notificationGroups(incidents)
 	if len(incidents) < mergeThreshold {
-		result := make([]NotificationBatch, 0, len(groups))
+		degraded := make([]business.AlertIncident, 0)
 		for _, group := range groups {
+			if len(group.incidents) == 1 && group.incidents[0].EventType == "account.routing_degraded" {
+				degraded = append(degraded, group.incidents[0])
+			}
+		}
+		result := make([]NotificationBatch, 0, len(groups))
+		degradedAdded := false
+		for _, group := range groups {
+			if len(degraded) >= 2 && len(group.incidents) == 1 && group.incidents[0].EventType == "account.routing_degraded" {
+				if !degradedAdded {
+					result = append(result, NotificationBatch{Incidents: degraded, Message: BatchMessage(degraded)})
+					degradedAdded = true
+				}
+				continue
+			}
 			result = append(result, NotificationBatch{Incidents: group.incidents, Message: BatchMessage(group.incidents)})
 		}
 		return result
@@ -360,6 +375,7 @@ var objectLabels = map[string]string{"host": "上游", "account": "账号", "gro
 
 func BatchMessage(incidents []business.AlertIncident) string {
 	groups := notificationGroups(incidents)
+	degradedDigests := routingDegradedDigests(groups)
 	statuses := map[string]struct{}{}
 	for _, incident := range incidents {
 		statuses[incident.Status] = struct{}{}
@@ -398,13 +414,28 @@ func BatchMessage(incidents []business.AlertIncident) string {
 		}
 		return truncateRunes(strings.Join(lines, "\n"), messageLimit)
 	}
+	displayCount := len(groups)
+	for _, digest := range degradedDigests {
+		displayCount -= len(digest) - 1
+	}
 	lines := []string{
-		fmt.Sprintf("## Sub2API · %s（%d项）", title, len(groups)),
+		fmt.Sprintf("## Sub2API · %s（%d项）", title, displayCount),
 		"",
 		"| 类型 | 对象 | 原因 | 状态 | 时间（北京时间） |",
 		"| --- | --- | --- | --- | --- |",
 	}
+	renderedDigests := map[string]struct{}{}
 	for _, group := range groups {
+		if len(group.incidents) == 1 && group.incidents[0].EventType == "account.routing_degraded" {
+			status := group.incidents[0].Status
+			if digest := degradedDigests[status]; len(digest) > 0 {
+				if _, rendered := renderedDigests[status]; !rendered {
+					lines = append(lines, routingDegradedDigestRow(digest))
+					renderedDigests[status] = struct{}{}
+				}
+				continue
+			}
+		}
 		if group.parent != nil {
 			lines = append(lines, relatedRoutingTableRow(group))
 			continue
@@ -412,6 +443,59 @@ func BatchMessage(incidents []business.AlertIncident) string {
 		lines = append(lines, incidentTableRow(group.incidents[0]))
 	}
 	return truncateRunes(strings.Join(lines, "\n"), messageLimit)
+}
+
+func routingDegradedDigests(groups []notificationGroup) map[string][]business.AlertIncident {
+	result := map[string][]business.AlertIncident{}
+	for _, group := range groups {
+		if len(group.incidents) != 1 || group.incidents[0].EventType != "account.routing_degraded" {
+			continue
+		}
+		incident := group.incidents[0]
+		result[incident.Status] = append(result[incident.Status], incident)
+	}
+	for status, incidents := range result {
+		if len(incidents) < 2 {
+			delete(result, status)
+		}
+	}
+	return result
+}
+
+func routingDegradedDigestRow(incidents []business.AlertIncident) string {
+	groups := map[string]struct{}{}
+	latest := incidents[0]
+	for _, incident := range incidents {
+		group := routingIncidentGroup(incident)
+		if group != "" {
+			groups[group] = struct{}{}
+		}
+		if incident.LastSeenAt > latest.LastSeenAt {
+			latest = incident
+		}
+	}
+	groupNames := make([]string, 0, len(groups))
+	for group := range groups {
+		groupNames = append(groupNames, group)
+	}
+	sort.Strings(groupNames)
+	groupSummary := strings.Join(groupNames, "、")
+	if len(groupNames) > 8 {
+		groupSummary = strings.Join(groupNames[:8], "、") + fmt.Sprintf(" 等 %d 个分组", len(groupNames))
+	}
+	if groupSummary == "" {
+		groupSummary = "分组未记录"
+	}
+	status := "告警中"
+	if latest.Status == "recovered" {
+		status = "已恢复"
+	}
+	object := fmt.Sprintf("%d 个账号 · %d 个分组", len(incidents), len(groups))
+	cause := "批量状态变化；分组：" + groupSummary + "。账号明细请在账号管理中查看"
+	return fmt.Sprintf("| %s | %s | %s | %s | %s |",
+		markdownTableValue(eventLabels["account.routing_degraded"]), markdownTableValue(object),
+		markdownTableValue(cause), status, markdownTableValue(notificationTime(latest.LastSeenAt)),
+	)
 }
 
 func relatedRoutingMessage(title string, group notificationGroup) string {
@@ -623,7 +707,9 @@ func NewQQBotSender(client *http.Client) *QQBotSender {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &QQBotSender{client: client}
+	copy := *client
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &QQBotSender{client: &copy}
 }
 
 func (s *QQBotSender) Send(
@@ -705,9 +791,12 @@ func (s *QQBotSender) postJSON(ctx context.Context, endpoint string, payload any
 		return nil, fmt.Errorf("QQBot 网络请求失败：%T", err)
 	}
 	defer response.Body.Close()
-	limited, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	limited, readErr := io.ReadAll(io.LimitReader(response.Body, maximumQQBotResponseSize+1))
 	if readErr != nil {
 		return nil, errors.New("QQBot 响应读取失败")
+	}
+	if len(limited) > maximumQQBotResponseSize {
+		return nil, errors.New("QQBot 响应过大")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail := redactSecrets(strings.ReplaceAll(string(limited), "\n", " "))

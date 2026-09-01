@@ -82,7 +82,7 @@ describe("log center contracts", () => {
     expect(viewForPath("/logs")).toBe("logs");
   });
 
-  it("renders the selected log type as a dropdown", () => {
+  it("renders record types as compact tabs matching the revenue analysis view switcher", () => {
     const markup = renderToStaticMarkup(
       createElement(LogKindFilter, {
         value: "event",
@@ -90,10 +90,17 @@ describe("log center contracts", () => {
       }),
     );
 
+    expect(markup).toContain('role="tablist"');
+    expect(markup).toContain('aria-label="记录类型"');
+    expect(markup.match(/role="tab"/g)).toHaveLength(4);
+    expect(markup).toContain("全部记录");
+    expect(markup).toContain("任务记录");
     expect(markup).toContain("事件日志");
-    expect(markup).toContain('aria-label="日志类型"');
-    expect(markup).toContain('data-slot="select-trigger"');
-    expect(markup).not.toContain('role="tablist"');
+    expect(markup).toContain("远程读写");
+    expect(markup).toMatch(/role="tab"[^>]*aria-selected="true"[^>]*>事件日志<\/button>/);
+    expect(markup).toContain('data-slot="segmented-control"');
+    expect(markup).toContain("bg-background shadow-xs");
+    expect(markup).not.toContain('data-slot="select-trigger"');
   });
 
   it("places filters and refresh in one toolbar without a duplicate total", () => {
@@ -117,11 +124,15 @@ describe("log center contracts", () => {
     );
 
     expect(markup).toContain('data-testid="logs-filter-toolbar"');
-    expect(markup).toContain('aria-label="搜索日志"');
-    expect(markup).toContain('aria-label="日志类型"');
+    expect(markup).toContain('aria-label="日志筛选"');
+    expect(markup).toContain('aria-label="搜索任务、对象或原因"');
+    expect(markup).toContain('aria-label="记录类型"');
     expect(markup).toContain('aria-label="执行结果"');
     expect(markup).toContain('aria-label="刷新日志"');
-    expect(markup.match(/data-slot="select-trigger"/g)).toHaveLength(2);
+    expect(markup.match(/data-slot="select-trigger"/g)).toHaveLength(1);
+    expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
+      markup.indexOf('aria-label="搜索任务、对象或原因"'),
+    );
     expect(markup).not.toContain("条");
   });
 
@@ -218,6 +229,7 @@ describe("log center contracts", () => {
     expect(markup).toContain("更新账号");
     expect(markup).toContain("负载因子：17 → 4；优先级：100 → 20");
     expect(markup).toContain("whitespace-nowrap");
+    expect(markup).toContain('data-table-panel=""');
     expect(markup).not.toContain("update_account");
     expect(markup).not.toContain("load_factor");
     expect(markup).not.toContain("concurrency");

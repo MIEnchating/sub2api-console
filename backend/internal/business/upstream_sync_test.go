@@ -225,7 +225,7 @@ func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testi
 	if err := store.db.QueryRow(`SELECT group_rate FROM account_groups WHERE account_id='11'`).Scan(&observedGroupRate); err != nil {
 		t.Fatal(err)
 	}
-	if localRate != "0.1" || upstreamRate != "0.2" || observedGroupRate != "0.2" {
+	if localRate != "0.1" || upstreamRate != "0.2" || observedGroupRate != "0.1" {
 		t.Fatalf("observed rates local=%q upstream=%q group=%q", localRate, upstreamRate, observedGroupRate)
 	}
 	name := "Example-0.2"
@@ -304,13 +304,50 @@ func TestApplyUpstreamSyncRepairsMissingRechargeRate(t *testing.T) {
 	}
 }
 
+func TestApplyUpstreamSyncInheritsRechargeRateFromStableUpstreamHost(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	var upstreamID string
+	if err := store.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host='api.example'`).Scan(&upstreamID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE recharge_rates SET recharge_rate='10' WHERE host='api.example';
+		INSERT INTO upstreams(host,base_url,upstream_type,auth_mode,enabled,auth_status,metadata_json,updated_at)
+		VALUES('auth.example','https://auth.example','sub2api','sub2api_user_token',1,'已鉴权','{}','now');
+		INSERT INTO upstream_identity_hosts(upstream_id,host,is_primary,updated_at) VALUES(?,'auth.example',0,'now')`, upstreamID); err != nil {
+		t.Fatal(err)
+	}
+	active, rate := "active", "1.5"
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
+		Host: "auth.example", AuthenticationOK: true,
+		Catalog: &UpstreamCatalogSnapshot{Groups: []UpstreamCatalogGroup{{
+			GroupID: "7", Name: "pro", Status: &active, RawRate: &rate,
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var recharge, effective string
+	if err := store.db.QueryRowContext(ctx, `SELECT
+		(SELECT recharge_rate FROM recharge_rates WHERE host='auth.example'),
+		(SELECT effective_rate FROM upstream_groups WHERE host='auth.example' AND group_id='7')`).Scan(
+		&recharge, &effective,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if recharge != "10" || effective != "0.15" {
+		t.Fatalf("recharge=%q effective=%q", recharge, effective)
+	}
+}
+
 func TestApplyUpstreamSyncForOneKeyDoesNotReconcileUnselectedCatalogRows(t *testing.T) {
 	store := upstreamSyncTestStore(t)
 	ctx := context.Background()
 	if _, err := store.db.Exec(`INSERT INTO upstream_groups(host,group_id,name,status,raw_rate,updated_at) VALUES
 		('api.example','old-group','old group','active','9','now');
 		INSERT INTO upstream_keys(host,key_id,name,upstream_group,rate,status,metadata_json,updated_at) VALUES
-		('api.example','old-key','old key','old-group','9','active','{}','now')`); err != nil {
+		('api.example','old-key','old key','old-group','9','active','{}','now');
+		UPDATE upstreams SET metadata_json='{"catalog_status":"同步失败","rate_sync_status":"failed","rate_sync_error":"完整目录读取失败","rate_sync_at":"before"}'
+		WHERE host='api.example'`); err != nil {
 		t.Fatal(err)
 	}
 	active, rate, selected := "active", "0.6", "selected-key"
@@ -344,6 +381,17 @@ func TestApplyUpstreamSyncForOneKeyDoesNotReconcileUnselectedCatalogRows(t *test
 	var otherCount int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM upstream_keys WHERE host='api.example' AND key_id='other-key'`).Scan(&otherCount); err != nil || otherCount != 0 {
 		t.Fatalf("partial sync wrote an unselected key: count=%d err=%v", otherCount, err)
+	}
+	var metadataRaw string
+	if err := store.db.QueryRow(`SELECT metadata_json FROM upstreams WHERE host='api.example'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["rate_sync_status"] != "failed" || metadata["rate_sync_error"] != "完整目录读取失败" || metadata["rate_sync_at"] != "before" {
+		t.Fatalf("partial sync overwrote Host-wide rate status: %#v", metadata)
 	}
 }
 
@@ -403,6 +451,162 @@ func TestRecordUpstreamSyncFailurePreservesLastKnownValues(t *testing.T) {
 	var metadata map[string]any
 	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil || metadata["auth_error"] != "HTTP 401" {
 		t.Fatalf("failure metadata=%#v err=%v", metadata, err)
+	}
+}
+
+func TestRecordBalanceFailurePreservesAuthenticationAndRateStatus(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
+		metadata_json='{"rate_sync_status":"succeeded","rate_sync_error":null,"rate_sync_at":"before","balance_status":"已读取"}'
+		WHERE host='api.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUpstreamSyncFailure(ctx, "api.example", "balance", "balance timeout", false); err != nil {
+		t.Fatal(err)
+	}
+	var authStatus, metadataRaw string
+	if err := store.db.QueryRowContext(ctx, `SELECT auth_status,metadata_json FROM upstreams WHERE host='api.example'`).Scan(&authStatus, &metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if authStatus != "已鉴权" || metadata["rate_sync_status"] != "succeeded" || metadata["rate_sync_at"] != "before" ||
+		metadata["balance_status"] != "读取失败" || metadata["balance_error"] != "balance timeout" {
+		t.Fatalf("balance failure changed unrelated Host state: auth=%q metadata=%#v", authStatus, metadata)
+	}
+}
+
+func TestRecordCatalogFailureMarksRateFailedWithoutChangingAuthentication(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
+		metadata_json='{"rate_sync_status":"succeeded","rate_sync_error":null,"rate_sync_at":"before","balance_status":"已读取"}'
+		WHERE host='api.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUpstreamSyncFailure(ctx, "api.example", "catalog", "catalog timeout", false); err != nil {
+		t.Fatal(err)
+	}
+	var authStatus, metadataRaw string
+	if err := store.db.QueryRowContext(ctx, `SELECT auth_status,metadata_json FROM upstreams WHERE host='api.example'`).Scan(&authStatus, &metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if authStatus != "已鉴权" || metadata["rate_sync_status"] != "failed" || metadata["rate_sync_error"] != "catalog timeout" ||
+		metadata["balance_status"] != "已读取" {
+		t.Fatalf("catalog failure state: auth=%q metadata=%#v", authStatus, metadata)
+	}
+}
+
+func TestRecordSingleKeyFailurePreservesHostRateStatus(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status='已鉴权',
+		metadata_json='{"catalog_status":"已同步","rate_sync_status":"succeeded","rate_sync_error":null,"rate_sync_at":"before"}'
+		WHERE host='api.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordUpstreamSyncFailure(ctx, "api.example", "key", "single key timeout", false); err != nil {
+		t.Fatal(err)
+	}
+	var authStatus, metadataRaw string
+	if err := store.db.QueryRowContext(ctx, `SELECT auth_status,metadata_json FROM upstreams WHERE host='api.example'`).Scan(&authStatus, &metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if authStatus != "已鉴权" || metadata["catalog_status"] != "已同步" || metadata["rate_sync_status"] != "succeeded" ||
+		metadata["rate_sync_at"] != "before" {
+		t.Fatalf("single-Key failure changed Host-wide state: auth=%q metadata=%#v", authStatus, metadata)
+	}
+}
+
+func TestUpstreamGroupHistoryRecordsChangesAfterInitialCatalogBaseline(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	active, rate := "active", "0.2"
+	baseline := &UpstreamCatalogSnapshot{Groups: []UpstreamCatalogGroup{{
+		GroupID: "group-1", Name: "标准组", Status: &active, RawRate: &rate,
+	}}}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: baseline, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.UpstreamGroupHistory(ctx, "api.example", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("initial catalog was recorded as a change: %#v", rows)
+	}
+
+	changed := &UpstreamCatalogSnapshot{Groups: []UpstreamCatalogGroup{
+		{GroupID: "group-1", Name: "标准组", Status: &active, RawRate: &rate},
+		{GroupID: "group-2", Name: "新增组", Status: &active, RawRate: &rate},
+	}}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: changed, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.UpstreamGroupHistory(ctx, "api.example", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ChangeType != "added" || rows[0].GroupID != "group-2" || rows[0].GroupName != "新增组" {
+		t.Fatalf("added history=%#v", rows)
+	}
+
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: baseline, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.UpstreamGroupHistory(ctx, "api.example", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("suspected missing group was recorded too early: %#v", rows)
+	}
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{Host: "api.example", Catalog: baseline, AuthenticationOK: true}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = store.UpstreamGroupHistory(ctx, "api.example", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].ChangeType != "removed" || rows[0].GroupID != "group-2" {
+		t.Fatalf("removed history=%#v", rows)
+	}
+}
+
+func TestUpstreamGroupHistoryTreatsAnEmptyCompleteCatalogAsBaseline(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
+		Host: "api.example", Catalog: &UpstreamCatalogSnapshot{}, AuthenticationOK: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	active, rate := "active", "0.2"
+	if _, err := store.ApplyUpstreamSync(ctx, UpstreamSyncWrite{
+		Host: "api.example", AuthenticationOK: true,
+		Catalog: &UpstreamCatalogSnapshot{Groups: []UpstreamCatalogGroup{{
+			GroupID: "first-group", Name: "首个分组", Status: &active, RawRate: &rate,
+		}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.UpstreamGroupHistory(ctx, "api.example", 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ChangeType != "added" || rows[0].GroupID != "first-group" {
+		t.Fatalf("history=%#v", rows)
 	}
 }
 

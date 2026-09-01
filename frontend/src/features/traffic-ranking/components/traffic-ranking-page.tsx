@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api, type TrafficRankingSort } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -28,6 +30,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 
 import {
   formatTrafficCount,
@@ -80,8 +83,6 @@ export function TrafficRankingPage() {
   const [group, setGroup] = useState("all");
   const [sortBy, setSortBy] = useState<TrafficRankingSort>("traffic");
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
   const ranking = useQuery({
     queryKey: ["traffic-ranking", timeRange, group, sortBy],
@@ -97,14 +98,15 @@ export function TrafficRankingPage() {
     () => (ranking.data?.accounts ?? []).filter((row) => trafficAccountMatches(row, search)),
     [ranking.data?.accounts, search],
   );
-  const totalPages = Math.max(1, Math.ceil(visibleAccounts.length / pageSize));
-  const pageAccounts = visibleAccounts.slice((page - 1) * pageSize, page * pageSize);
+  const pagination = useClientPagination(visibleAccounts);
   const timeRangeLabel =
     timeRanges.find((option) => option.value === timeRange)?.label ?? timeRange;
   const sortByLabel = rankingSorts.find((option) => option.value === sortBy)?.label ?? sortBy;
 
-  useEffect(() => setPage((current) => Math.min(current, totalPages)), [totalPages]);
-  useEffect(() => setPage(1), [search, timeRange, group, sortBy]);
+  useEffect(
+    () => pagination.setCurrentPage(1),
+    [pagination.setCurrentPage, search, timeRange, group, sortBy],
+  );
 
   return (
     <PageLayout fixedContent>
@@ -135,48 +137,50 @@ export function TrafficRankingPage() {
       />
       {ranking.error ? <QueryErrorToast error={ranking.error} fallback="流量排行读取失败" /> : null}
       <div className="flex h-full min-h-0 flex-col gap-3">
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <TableFilterToolbar>
           <SearchField value={search} onChange={setSearch} placeholder="搜索账号" />
           <Select value={timeRange} onValueChange={(value) => setTimeRange(value as TimeRange)}>
-            <SelectTrigger size="sm" className="w-36" aria-label="时间范围">
+            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="时间范围">
               <SelectValue>{timeRangeLabel}</SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent appearance="faceted">
               {timeRanges.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
+                <SelectItem appearance="faceted" key={option.value} value={option.value}>
                   {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select value={group} onValueChange={(value) => setGroup(value ?? "all")}>
-            <SelectTrigger size="sm" className="w-36" aria-label="账号分组">
+            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="账号分组">
               <SelectValue>{group === "all" ? "全部分组" : group}</SelectValue>
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部分组</SelectItem>
+            <SelectContent appearance="faceted">
+              <SelectItem appearance="faceted" value="all">
+                全部分组
+              </SelectItem>
               {(groups.data ?? []).map((item) => (
-                <SelectItem key={item.name} value={item.name}>
+                <SelectItem appearance="faceted" key={item.name} value={item.name}>
                   {item.name}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Select value={sortBy} onValueChange={(value) => setSortBy(value as TrafficRankingSort)}>
-            <SelectTrigger size="sm" className="w-36" aria-label="排行维度">
+            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="排行维度">
               <SelectValue>{sortByLabel}</SelectValue>
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent appearance="faceted">
               {rankingSorts.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
+                <SelectItem appearance="faceted" key={option.value} value={option.value}>
                   {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-        </div>
+        </TableFilterToolbar>
 
-        <div className="border-border flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+        <DataTablePanel className="flex-1">
           {ranking.isLoading ? (
             <TrafficRankingSkeleton />
           ) : (
@@ -196,14 +200,14 @@ export function TrafficRankingPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pageAccounts.length === 0 ? (
+                    {pagination.visibleItems.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={8} className="text-muted-foreground h-28 text-center">
                           当前范围没有匹配的账号流量
                         </TableCell>
                       </TableRow>
                     ) : (
-                      pageAccounts.map((row) => {
+                      pagination.visibleItems.map((row) => {
                         const stability = trafficStabilityLabel(row.stability_score);
                         return (
                           <TableRow key={row.account_id}>
@@ -258,20 +262,17 @@ export function TrafficRankingPage() {
                 </Table>
               </div>
               <DataTablePagination
-                currentPage={page}
-                totalPages={totalPages}
+                currentPage={pagination.currentPage}
+                totalPages={pagination.totalPages}
                 totalItems={visibleAccounts.length}
-                pageSize={pageSize}
+                pageSize={pagination.pageSize}
                 pageSizes={[10, 20, 50, 100]}
-                onPageChange={setPage}
-                onPageSizeChange={(nextPageSize) => {
-                  setPageSize(nextPageSize);
-                  setPage(1);
-                }}
+                onPageChange={pagination.setCurrentPage}
+                onPageSizeChange={pagination.setPageSize}
               />
             </>
           )}
-        </div>
+        </DataTablePanel>
       </div>
     </PageLayout>
   );

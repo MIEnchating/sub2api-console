@@ -59,6 +59,23 @@ func TestInitializePersistsCompatibleStatusAndRejectsOverwrite(t *testing.T) {
 	}
 }
 
+func TestInitializePreservesPasswordWhitespace(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	password := "  password with spaces  "
+	if err := store.Initialize(ctx, "admin", password, "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := store.Authenticate(ctx, "admin", password)
+	if err != nil || !authenticated {
+		t.Fatalf("exact password did not authenticate: authenticated=%t err=%v", authenticated, err)
+	}
+	authenticated, err = store.Authenticate(ctx, "admin", strings.TrimSpace(password))
+	if err != nil || authenticated {
+		t.Fatalf("trimmed password unexpectedly authenticated: authenticated=%t err=%v", authenticated, err)
+	}
+}
+
 func TestSessionUsesOnlyTokenDigestAndSurvivesStoreReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "console-config.sqlite3")
 	store, err := Open(path)
@@ -168,6 +185,22 @@ func TestConfigureTargetPreservesExistingAdminKeyWhenRequestOmitsIt(t *testing.T
 	}
 	if values["target.admin_key"] != "existing-key" {
 		t.Fatal("blank Admin Key must preserve the existing secret")
+	}
+}
+
+func TestValidateBaseURLRejectsQueryAndFragment(t *testing.T) {
+	for _, value := range []string{
+		"https://api.example?tenant=one",
+		"https://api.example?",
+		"https://api.example#section",
+		"https://api.example/#",
+	} {
+		if _, err := ValidateBaseURL(value); err == nil {
+			t.Fatalf("base URL %q with query or fragment was accepted", value)
+		}
+	}
+	if value, err := ValidateBaseURL("https://api.example/prefix/"); err != nil || value != "https://api.example/prefix" {
+		t.Fatalf("path-prefixed base URL was changed: value=%q err=%v", value, err)
 	}
 }
 

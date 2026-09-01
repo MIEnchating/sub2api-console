@@ -17,11 +17,14 @@ type BoundAccountMaintenance struct {
 	AccountName           string `json:"account_name"`
 	ExpectedName          string `json:"expected_name"`
 	UpstreamHost          string `json:"upstream_host"`
+	SourceAuthHost        string `json:"source_auth_host"`
 	UpstreamType          string `json:"upstream_type"`
 	UpstreamKeyID         string `json:"upstream_key_id"`
 	UpstreamGroupID       string `json:"upstream_group_id"`
 	RechargeRate          string `json:"recharge_rate"`
 	CurrentMultiplier     string `json:"current_multiplier"`
+	KnownRawRate          string `json:"known_raw_rate"`
+	KnownRawRateSource    string `json:"known_raw_rate_source"`
 	NamingSiteName        string `json:"-"`
 	NamingBaseURL         string `json:"-"`
 	ConsoleOnboarded      bool   `json:"-"`
@@ -31,6 +34,13 @@ type BoundAccountMaintenance struct {
 
 func (account BoundAccountMaintenance) NameForMultiplier(multiplier string) string {
 	return naming.AccountName(account.NamingSiteName, account.NamingBaseURL, multiplier)
+}
+
+func (account BoundAccountMaintenance) RateSourceHost() string {
+	if host := strings.TrimSpace(account.SourceAuthHost); host != "" {
+		return host
+	}
+	return strings.TrimSpace(account.UpstreamHost)
 }
 
 type BindingVerification struct {
@@ -126,6 +136,10 @@ func (s *Store) RepairAccountUpstreamHosts(ctx context.Context, accountIDs []str
 			}
 			hosts = append(hosts, host)
 		}
+		if err := hostRows.Err(); err != nil {
+			hostRows.Close()
+			return result, err
+		}
 		if err := hostRows.Close(); err != nil {
 			return result, err
 		}
@@ -214,14 +228,24 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,u.upstream_type,
-		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(r.recharge_rate,'1'),u.base_url,u.metadata_json,
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,COALESCE(b.source_auth_host,''),u.upstream_type,
+		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(source_rate.recharge_rate,primary_rate.recharge_rate,'1'),
+		COALESCE(NULLIF(TRIM(b.upstream_rate),''),source_group_catalog.raw_rate,primary_group_catalog.raw_rate,''),
+		CASE WHEN NULLIF(TRIM(b.upstream_rate),'') IS NOT NULL THEN 'account_observation'
+			WHEN NULLIF(TRIM(source_group_catalog.raw_rate),'') IS NOT NULL
+				OR NULLIF(TRIM(primary_group_catalog.raw_rate),'') IS NOT NULL THEN 'group_catalog' ELSE '' END,
+		u.base_url,u.metadata_json,
 		EXISTS(SELECT 1 FROM operation_audit oa WHERE oa.object_id=a.id AND oa.operation_type='account.onboarding' AND oa.state='succeeded'),
 		m.account_id IS NOT NULL,COALESCE(m.sync_balance_multiplier,0)
 		FROM accounts a JOIN bindings b ON b.local_account_id=a.id JOIN binding_identities bi ON bi.binding_id=b.id
 		JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=bi.upstream_id AND primary_host.is_primary=1
 		JOIN upstreams u ON u.host=primary_host.host
-		LEFT JOIN recharge_rates r ON r.host=u.host
+		LEFT JOIN upstream_groups source_group_catalog ON source_group_catalog.host=NULLIF(TRIM(b.source_auth_host),'')
+			AND source_group_catalog.group_id=b.upstream_group_id
+		LEFT JOIN upstream_groups primary_group_catalog ON primary_group_catalog.host=primary_host.host
+			AND primary_group_catalog.group_id=b.upstream_group_id
+		LEFT JOIN recharge_rates source_rate ON source_rate.host=NULLIF(TRIM(b.source_auth_host),'')
+		LEFT JOIN recharge_rates primary_rate ON primary_rate.host=u.host
 		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
 		ORDER BY CASE WHEN a.id GLOB '[0-9]*' THEN CAST(a.id AS INTEGER) ELSE 0 END,a.id`)
 	if err != nil {
@@ -232,8 +256,8 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	for rows.Next() {
 		var item BoundAccountMaintenance
 		var multiplier, baseURL, metadataRaw string
-		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &item.UpstreamType,
-			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &baseURL, &metadataRaw,
+		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &item.SourceAuthHost, &item.UpstreamType,
+			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &item.KnownRawRate, &item.KnownRawRateSource, &baseURL, &metadataRaw,
 			&item.ConsoleOnboarded, &item.ManualPriority, &item.SyncBalanceMultiplier); err != nil {
 			return nil, err
 		}
@@ -372,9 +396,6 @@ func (s *Store) CommitAccountRateObservations(ctx context.Context, values []Acco
 			return err
 		} else if affected == 0 {
 			return fmt.Errorf("账号 %s 没有可更新的上游绑定", value.AccountID)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_rate=? WHERE account_id=?`, value.Rate, value.AccountID); err != nil {
-			return err
 		}
 	}
 	return tx.Commit()

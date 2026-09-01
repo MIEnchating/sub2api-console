@@ -87,15 +87,6 @@ type solScore struct {
 	EvidenceCoverage float64
 }
 
-type solAudit struct {
-	Verdict            string
-	Stage              string
-	Score              solScore
-	SuccessfulRequests int
-	TotalRequests      int
-	ResponseModels     []string
-}
-
 func runClaudeCheck(ctx context.Context, sender bundleSender, profiles map[string]claudeProfile, request targetRequest) (map[string]any, error) {
 	standard := inferClaudeStandard(request.Model, profiles)
 	profile, found := profiles[standard]

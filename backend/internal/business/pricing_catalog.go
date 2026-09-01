@@ -185,10 +185,6 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 			}
 			return PricingSyncResult{}, err
 		}
-		existingRates, err := pricingExistingGroupRates(ctx, tx, accountID)
-		if err != nil {
-			return PricingSyncResult{}, err
-		}
 		groupIDs := uniqueStableIDs(changes[accountID])
 		if groupIDs == nil {
 			return PricingSyncResult{}, fmt.Errorf("价格管理写回账号 %s 包含无效分组 ID", accountID)
@@ -201,12 +197,8 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 			if !found {
 				return PricingSyncResult{}, fmt.Errorf("价格管理写回分组 %s 不在 Console 本地目录中", groupID)
 			}
-			rate := existingRates[groupID]
-			if !rate.Valid && multiplier.Valid {
-				rate = multiplier
-			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
-				VALUES(?,?,?,?)`, accountID, name, groupID, nullablePricingString(rate)); err != nil {
+				VALUES(?,?,?,?)`, accountID, name, groupID, nullablePricingString(multiplier)); err != nil {
 				return PricingSyncResult{}, err
 			}
 			groupLinks++
@@ -255,30 +247,6 @@ func pricingGroupNames(ctx context.Context, queryer policyQueryer) (map[string]s
 			return nil, fmt.Errorf("Console 本地分组 ID %s 对应多个名称", id)
 		}
 		result[id] = name
-	}
-	return result, rows.Err()
-}
-
-func pricingExistingGroupRates(ctx context.Context, queryer policyQueryer, accountID string) (map[string]sql.NullString, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT ag.group_id,lg.remote_id,ag.group_rate
-		FROM account_groups ag LEFT JOIN local_groups lg ON lg.name=ag.group_name WHERE ag.account_id=?`, accountID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]sql.NullString{}
-	for rows.Next() {
-		var membershipID, catalogID, rate sql.NullString
-		if err := rows.Scan(&membershipID, &catalogID, &rate); err != nil {
-			return nil, err
-		}
-		id := membershipID.String
-		if !membershipID.Valid {
-			id = catalogID.String
-		}
-		if positiveNumericID(id) {
-			result[id] = rate
-		}
 	}
 	return result, rows.Err()
 }

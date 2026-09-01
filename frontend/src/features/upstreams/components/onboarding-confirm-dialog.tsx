@@ -1,5 +1,6 @@
 import { ShieldCheck } from "lucide-react";
 
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,7 +25,6 @@ export type OnboardingBindingPreview = {
   upstream: string;
   upstreamGroup: string;
   multiplier: string;
-  localGroupMultiplier: string;
   localGroup: string;
   concurrency: number;
   priority: number;
@@ -45,37 +45,39 @@ export function OnboardingConfirmContent(props: {
           请核对 {props.items.length} 条分组绑定；新增项将创建账号，更新项只修改现有账号分组。
         </DialogDescription>
       </DialogHeader>
-      <DialogBody className="overflow-auto rounded-md border pr-0">
-        <Table className="min-w-[960px] table-fixed">
-          <TableHeader className="sticky top-0 z-10">
-            <TableRow>
-              <TableHead className="w-[16%]">上游</TableHead>
-              <TableHead className="w-[18%]">上游分组</TableHead>
-              <TableHead className="w-[10%]">上游倍率</TableHead>
-              <TableHead className="w-[13%]">本地分组倍率</TableHead>
-              <TableHead className="w-[17%]">本地分组</TableHead>
-              <TableHead className="w-[8%]">并发</TableHead>
-              <TableHead className="w-[8%]">优先级</TableHead>
-              <TableHead className="w-[10%]">状态</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {props.items.map((item, index) => (
-              <TableRow key={`${item.upstream}:${item.upstreamGroup}:${item.localGroup}:${index}`}>
-                <TableCell className="font-medium">{item.upstream}</TableCell>
-                <TableCell>{item.upstreamGroup}</TableCell>
-                <TableCell className="tabular-nums">{item.multiplier}</TableCell>
-                <TableCell className="tabular-nums">{item.localGroupMultiplier}</TableCell>
-                <TableCell>{item.localGroup}</TableCell>
-                <TableCell className="tabular-nums">{item.concurrency}</TableCell>
-                <TableCell className="tabular-nums">{item.priority}</TableCell>
-                <TableCell>
-                  <Badge variant="outline">{item.status}</Badge>
-                </TableCell>
+      <DialogBody className="overflow-hidden pr-0">
+        <DataTablePanel className="h-full">
+          <Table className="min-w-[840px] table-fixed" containerClassName="h-full overflow-auto">
+            <TableHeader className="sticky top-0 z-10">
+              <TableRow>
+                <TableHead className="w-[18%]">上游</TableHead>
+                <TableHead className="w-[20%]">上游分组</TableHead>
+                <TableHead className="w-[12%]">账号成本</TableHead>
+                <TableHead className="w-[22%]">本地分组</TableHead>
+                <TableHead className="w-[9%]">并发</TableHead>
+                <TableHead className="w-[9%]">优先级</TableHead>
+                <TableHead className="w-[10%]">状态</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {props.items.map((item, index) => (
+                <TableRow
+                  key={`${item.upstream}:${item.upstreamGroup}:${item.localGroup}:${index}`}
+                >
+                  <TableCell className="font-medium">{item.upstream}</TableCell>
+                  <TableCell>{item.upstreamGroup}</TableCell>
+                  <TableCell className="tabular-nums">{item.multiplier}</TableCell>
+                  <TableCell>{item.localGroup}</TableCell>
+                  <TableCell className="tabular-nums">{item.concurrency}</TableCell>
+                  <TableCell className="tabular-nums">{item.priority}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{item.status}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DataTablePanel>
       </DialogBody>
       <DialogFooter>
         <Button variant="outline" disabled={props.pending} onClick={props.onCancel}>

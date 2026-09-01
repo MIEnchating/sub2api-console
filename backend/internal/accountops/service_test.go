@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,6 +36,38 @@ type accountTaskObserver struct {
 	updates chan taskstore.Task
 }
 
+type firstAccountSnapshotRepository struct {
+	*business.Store
+	snapshotRead chan struct{}
+	release      chan struct{}
+	calls        atomic.Int32
+}
+
+func (repository *firstAccountSnapshotRepository) Account(ctx context.Context, accountID string) (*business.AccountDetail, error) {
+	detail, err := repository.Store.Account(ctx, accountID)
+	if err != nil || repository.calls.Add(1) != 1 {
+		return detail, err
+	}
+	close(repository.snapshotRead)
+	select {
+	case <-repository.release:
+		return detail, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type observedDoneContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+func (ctx *observedDoneContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.doneObserved) })
+	return ctx.Context.Done()
+}
+
 func (observer *accountTaskObserver) Save(_ context.Context, task taskstore.Task) error {
 	if task.Status == "succeeded" || task.Status == "failed" {
 		observer.updates <- task
@@ -49,6 +83,89 @@ func waitAccountTask(t *testing.T, updates <-chan taskstore.Task) taskstore.Task
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for account task")
 		return taskstore.Task{}
+	}
+}
+
+func TestManualPriorityCannotOvertakeInFlightFieldProtectionCheck(t *testing.T) {
+	store, db, _ := accountRepository(t)
+	repository := &firstAccountSnapshotRepository{
+		Store: store, snapshotRead: make(chan struct{}), release: make(chan struct{}),
+	}
+	var nameChanged atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodPut {
+			nameChanged.Store(true)
+			_, _ = io.WriteString(w, `{"success":true}`)
+			return
+		}
+		name := "alpha"
+		if nameChanged.Load() {
+			name = "renamed"
+		}
+		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"`+name+`","priority":10,"load_factor":2,"concurrency":3,"rate_multiplier":0.1}}`)
+	}))
+	defer server.Close()
+	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, nil)
+
+	name := "renamed"
+	fieldResult := make(chan error, 1)
+	go func() {
+		_, err := service.SyncFields(context.Background(), "41", FieldPatch{NamePresent: true, Name: &name}, "operator")
+		fieldResult <- err
+	}()
+	select {
+	case <-repository.snapshotRead:
+	case <-time.After(3 * time.Second):
+		t.Fatal("field sync did not reach the protected account snapshot")
+	}
+	releaseSnapshot := sync.OnceFunc(func() { close(repository.release) })
+	defer releaseSnapshot()
+
+	manualRepository := any(repository).(manualPriorityRepository)
+	config, err := manualRepository.ManualPriorityConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitContext, cancelWait := context.WithCancel(context.Background())
+	observedContext := &observedDoneContext{Context: waitContext, doneObserved: make(chan struct{})}
+	manualResult := make(chan error, 1)
+	go func() {
+		_, err := service.setManualPriority(observedContext, manualRepository, config, "41", 3, "100", 100, false, "operator")
+		manualResult <- err
+	}()
+	select {
+	case <-observedContext.doneObserved:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual-priority operation did not wait for the account lock")
+	}
+	cancelWait()
+	var manualErr error
+	select {
+	case manualErr = <-manualResult:
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual-priority operation did not honor lock-wait cancellation")
+	}
+	var assignments int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM manual_priority_accounts WHERE account_id='41'`).Scan(&assignments); err != nil {
+		t.Fatal(err)
+	}
+	releaseSnapshot()
+	var fieldErr error
+	select {
+	case fieldErr = <-fieldResult:
+	case <-time.After(3 * time.Second):
+		t.Fatal("field sync did not finish after releasing the account snapshot")
+	}
+
+	if !errors.Is(manualErr, context.Canceled) {
+		t.Fatalf("manual-priority wait error=%v, want context cancellation", manualErr)
+	}
+	if assignments != 0 {
+		t.Fatalf("waiting manual-priority operation changed protection state: %d assignments", assignments)
+	}
+	if fieldErr != nil {
+		t.Fatalf("in-flight field sync failed after releasing account lock: %v", fieldErr)
 	}
 }
 
@@ -144,7 +261,7 @@ func TestAccountFieldsRejectMismatchedReadbackBeforeLocalCommit(t *testing.T) {
 	}
 }
 
-func TestSyncAccountMultiplierRequiresMatchingReadbackBeforeLocalCommit(t *testing.T) {
+func TestSyncAccountRateRequiresMatchingReadbackBeforeLocalCommit(t *testing.T) {
 	repository, db, _ := accountRepository(t)
 	var reads atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -163,7 +280,7 @@ func TestSyncAccountMultiplierRequiresMatchingReadbackBeforeLocalCommit(t *testi
 	defer server.Close()
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, nil)
 
-	_, err := service.SyncAccountMultiplier(context.Background(), "41", "0.15", "operator")
+	_, err := service.SyncAccountRate(context.Background(), "41", "alpha-0.15", "0.15", "operator")
 	if err == nil || !strings.Contains(err.Error(), "读回不一致") || reads.Load() != 2 {
 		t.Fatalf("reads=%d err=%v", reads.Load(), err)
 	}
@@ -176,7 +293,7 @@ func TestSyncAccountMultiplierRequiresMatchingReadbackBeforeLocalCommit(t *testi
 	}
 }
 
-func TestSyncAccountMultiplierCommitsConfirmedReadback(t *testing.T) {
+func TestManualPriorityMultiplierSyncPreservesAccountName(t *testing.T) {
 	repository, db, _ := accountRepository(t)
 	if _, err := db.Exec(`INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
 		VALUES('41','codex','7','0.2')`); err != nil {
@@ -206,13 +323,16 @@ func TestSyncAccountMultiplierCommitsConfirmedReadback(t *testing.T) {
 	if err != nil || result["readback_confirmed"] != true {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	var multiplier, groupRate string
-	if err := db.QueryRow(`SELECT a.multiplier,ag.group_rate FROM accounts a
-		JOIN account_groups ag ON ag.account_id=a.id WHERE a.id='41'`).Scan(&multiplier, &groupRate); err != nil {
+	var name, multiplier, groupRate string
+	if err := db.QueryRow(`SELECT a.name,a.multiplier,ag.group_rate FROM accounts a
+		JOIN account_groups ag ON ag.account_id=a.id WHERE a.id='41'`).Scan(&name, &multiplier, &groupRate); err != nil {
 		t.Fatal(err)
 	}
-	if multiplier != "0.15" || groupRate != "0.15" {
-		t.Fatalf("multiplier=%s group_rate=%s", multiplier, groupRate)
+	if name != "alpha" || multiplier != "0.15" || groupRate != "0.15" {
+		t.Fatalf("name=%s multiplier=%s group_rate=%s", name, multiplier, groupRate)
+	}
+	if _, err := service.SyncAccountRate(context.Background(), "41", "alpha-0.15", "0.15", "operator"); err == nil || !strings.Contains(err.Error(), "人工优先位") {
+		t.Fatalf("manual account name rewrite was accepted: %v", err)
 	}
 }
 
@@ -237,6 +357,10 @@ func TestManualPriorityWithoutSyncPermissionRejectsPlatformWrites(t *testing.T) 
 		}(),
 		"control": func() error {
 			_, err := service.Control(context.Background(), "41", "pause", "operator")
+			return err
+		}(),
+		"scope": func() error {
+			_, err := service.scopeControl(context.Background(), "41", "exclude", "operator")
 			return err
 		}(),
 	} {

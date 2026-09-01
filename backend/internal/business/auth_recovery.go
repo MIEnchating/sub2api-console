@@ -52,14 +52,14 @@ func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRe
 	}
 	result := AuthRecoverySummary{Hosts: len(values)}
 	for _, item := range values {
-		status := "鉴权失效"
+		status := UpstreamAuthStatusInvalid
 		if item.Success {
-			status = "已恢复"
+			status = UpstreamAuthStatusRecovered
 			result.Recovered++
 		} else {
 			result.Failed++
 			if item.Transient {
-				status = "恢复暂时失败"
+				status = UpstreamAuthStatusRecoveryTemporarilyFailed
 			}
 		}
 		var metadataRaw string
@@ -107,10 +107,10 @@ func normalizeAuthRecoveryOutcomes(values []AuthRecoveryOutcome) ([]AuthRecovery
 		if item.Host == "" {
 			return nil, errors.New("鉴权恢复结果缺少 Host")
 		}
-		item.Code = normalizedOptionalText(item.Code, 200)
-		item.InteractionKind = normalizedOptionalText(item.InteractionKind, 200)
-		item.RefreshKind = normalizedOptionalText(item.RefreshKind, 200)
-		item.TriggerStatus = normalizedOptionalText(item.TriggerStatus, 200)
+		item.Code = normalizedAuthRecoveryText(item.Code)
+		item.InteractionKind = normalizedAuthRecoveryText(item.InteractionKind)
+		item.RefreshKind = normalizedAuthRecoveryText(item.RefreshKind)
+		item.TriggerStatus = normalizedAuthRecoveryText(item.TriggerStatus)
 		item.Reason = redactedOptionalText(item.Reason, 2000)
 		item.RefreshAttempt = redactedOptionalText(item.RefreshAttempt, 200)
 		result[index] = item
@@ -118,13 +118,13 @@ func normalizeAuthRecoveryOutcomes(values []AuthRecoveryOutcome) ([]AuthRecovery
 	return result, nil
 }
 
-func normalizedOptionalText(value *string, maximum int) *string {
+func normalizedAuthRecoveryText(value *string) *string {
 	if value == nil {
 		return nil
 	}
 	text := strings.TrimSpace(*value)
-	if len(text) > maximum {
-		text = text[:maximum]
+	if len(text) > 200 {
+		text = text[:200]
 	}
 	return &text
 }

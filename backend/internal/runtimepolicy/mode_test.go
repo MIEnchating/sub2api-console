@@ -7,10 +7,10 @@ func TestModeCapabilities(t *testing.T) {
 		mode string
 		want Capabilities
 	}{
-		{Monitoring, Capabilities{AutomaticUpstreamSync: true, ManualAccountMultiplier: true}},
+		{Monitoring, Capabilities{AutomaticUpstreamSync: true}},
 		{Full, Capabilities{
 			PersistRoutingDecisions: true, AutomaticRemoteApply: true, AutomaticUpstreamSync: true,
-			AutomaticActiveProbe: true, ManualAccountMultiplier: true, ManualAccountFields: true, RemoteTopologyChanges: true,
+			AutomaticActiveProbe: true, ManualAccountFields: true, RemoteTopologyChanges: true,
 		}},
 	}
 	for _, test := range tests {

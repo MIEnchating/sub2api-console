@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+printf '%s\n' "[pre-commit] Checking staged whitespace..."
+git diff --cached --check
+
+if ! command -v bun >/dev/null 2>&1; then
+  printf '%s\n' "[pre-commit] Bun is required. Install Bun before committing." >&2
+  exit 1
+fi
+if [ ! -d frontend/node_modules ]; then
+  printf '%s\n' "[pre-commit] Frontend dependencies are missing. Run: cd frontend && bun install" >&2
+  exit 1
+fi
+
+printf '%s\n' "[pre-commit] Checking frontend formatting..."
+if ! (cd frontend && bun run format:check); then
+  printf '%s\n' "[pre-commit] Commit blocked. Run: cd frontend && bun run format" >&2
+  exit 1
+fi
+
+printf '%s\n' "[pre-commit] Checks passed."

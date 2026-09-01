@@ -73,10 +73,11 @@ func (e *OperationError) Error() string { return e.Message }
 func (e *OperationError) RemoteWriteSucceeded() bool { return e.RemoteWritten }
 
 type Service struct {
-	targets    TargetStore
-	repository Repository
-	tasks      TaskStore
-	timeout    time.Duration
+	targets           TargetStore
+	repository        Repository
+	tasks             TaskStore
+	timeout           time.Duration
+	accountOperations accountOperationLocks
 }
 
 func New(targets TargetStore, repository Repository, tasks TaskStore) *Service {
@@ -88,8 +89,7 @@ func (s *Service) SyncFields(ctx context.Context, accountID string, patch FieldP
 }
 
 // SyncAccountMultiplier writes a multiplier obtained from the account's
-// upstream billing probe through the same mandatory management readback path
-// as other account field edits.
+// upstream billing probe through the mandatory management readback path.
 func (s *Service) SyncAccountMultiplier(ctx context.Context, accountID, multiplier, actor string) (map[string]any, error) {
 	return s.syncFields(ctx, accountID, FieldPatch{
 		MultiplierPresent: true,
@@ -116,6 +116,15 @@ func (s *Service) Control(ctx context.Context, accountID, action, actor string) 
 	if !remoteAction {
 		return nil, errors.New("账号远端控制 action 无效")
 	}
+	release, err := s.accountOperations.acquire(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.controlLocked(ctx, accountID, action, actor, schedulable)
+}
+
+func (s *Service) controlLocked(ctx context.Context, accountID, action, actor string, schedulable bool) (map[string]any, error) {
 	mode, local, err := s.localAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -199,14 +208,36 @@ func (s *Service) EnqueueControl(ctx context.Context, accountID, action, actor s
 		if remoteAction {
 			return s.Control(run, accountID, action, actor)
 		}
-		if _, err := s.repository.SetAccountScopeControl(run, accountID, action, actor); err != nil {
-			return nil, err
-		}
-		return map[string]any{
-			"account_id": accountID, "action": action, "saved": true,
-			"remote_write": false, "readback_confirmed": false,
-		}, nil
+		return s.scopeControl(run, accountID, action, actor)
 	})
+}
+
+func (s *Service) scopeControl(ctx context.Context, accountID, action, actor string) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号必须使用有效的稳定 ID")
+	}
+	if action != "exclude" && action != "include" {
+		return nil, errors.New("账号受管范围只允许 exclude 或 include")
+	}
+	release, err := s.accountOperations.acquire(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	_, local, err := s.localAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if local.ManualPriority != nil {
+		return nil, errors.New("账号处于人工优先位，平台控制操作已禁用；请先取消人工优先位")
+	}
+	if _, err := s.repository.SetAccountScopeControl(ctx, accountID, action, actor); err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"account_id": accountID, "action": action, "saved": true,
+		"remote_write": false, "readback_confirmed": false,
+	}, nil
 }
 
 var accountControlActions = map[string]struct{}{
@@ -228,6 +259,15 @@ func (s *Service) syncFields(ctx context.Context, accountID string, patch FieldP
 	if !stableID(accountID) {
 		return nil, errors.New("账号必须使用有效的稳定 ID")
 	}
+	release, err := s.accountOperations.acquire(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.syncFieldsLocked(ctx, accountID, patch, actor, allowReservedPriority)
+}
+
+func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch FieldPatch, actor string, allowReservedPriority bool) (map[string]any, error) {
 	if !patch.NamePresent && !patch.PriorityPresent && !patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.MultiplierPresent && !patch.NotesPresent {
 		return nil, errors.New("至少提供一个需要同步的账号字段")
 	}
@@ -425,48 +465,71 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 		return taskstore.Task{}, errors.New("设置人工优先位需要完全模式")
 	}
 	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority", "人工优先位设置已排队", func(run context.Context) (map[string]any, error) {
-		before, err := s.repository.Account(run, accountID)
-		if err != nil {
-			return nil, err
-		}
-		previousManualPriority := cloneInt64(before.ManualPriority)
-		previousSyncBalanceMultiplier := before.ManualSyncBalanceMultiplier
-		rollbackLoadFactor := config.DefaultLoadFactor
-		if before.LoadFactor != nil {
-			if normalized, normalizeErr := decimalAtLeastOne(*before.LoadFactor); normalizeErr == nil {
-				rollbackLoadFactor = normalized
-			}
-		}
-		rollbackConcurrency := config.DefaultConcurrency
-		if before.Concurrency != nil && *before.Concurrency >= 1 && *before.Concurrency <= 10_000_000 {
-			rollbackConcurrency = *before.Concurrency
-		}
-		assignment, err := manualRepository.AssignManualPriority(run, accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
-		if err != nil {
-			return nil, err
-		}
-		loadFactor := assignment.LoadFactor
-		concurrency := assignment.Concurrency
-		patch := FieldPatch{
-			PriorityPresent: true, Priority: &assignment.Priority,
-			LoadFactorPresent: true, LoadFactor: &loadFactor,
-			ConcurrencyPresent: true, Concurrency: &concurrency,
-		}
-		result, err := s.syncFields(run, accountID, patch, actor, true)
-		if err != nil {
-			var operationError *OperationError
-			if !errors.As(err, &operationError) || !operationError.RemoteWritten {
-				rollbackErr := rollbackManualPriority(run, manualRepository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
-				if rollbackErr != nil {
-					return nil, fmt.Errorf("%w；人工优先位回滚失败：%v", err, rollbackErr)
-				}
-			}
-			return nil, err
-		}
-		result["manual_priority"] = assignment.Priority
-		result["sync_balance_multiplier"] = assignment.SyncBalanceMultiplier
-		return result, nil
+		return s.setManualPriority(run, manualRepository, config, accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
 	})
+}
+
+func (s *Service) setManualPriority(
+	ctx context.Context,
+	repository manualPriorityRepository,
+	config business.ManualPriorityConfig,
+	accountID string,
+	priority int64,
+	loadFactor string,
+	concurrency int64,
+	syncBalanceMultiplier bool,
+	actor string,
+) (map[string]any, error) {
+	if !stableID(accountID) {
+		return nil, errors.New("账号必须使用有效的稳定 ID")
+	}
+	release, err := s.accountOperations.acquire(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	before, err := s.repository.Account(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	previousManualPriority := cloneInt64(before.ManualPriority)
+	previousSyncBalanceMultiplier := before.ManualSyncBalanceMultiplier
+	rollbackLoadFactor := config.DefaultLoadFactor
+	if before.LoadFactor != nil {
+		if normalized, normalizeErr := decimalAtLeastOne(*before.LoadFactor); normalizeErr == nil {
+			rollbackLoadFactor = normalized
+		}
+	}
+	rollbackConcurrency := config.DefaultConcurrency
+	if before.Concurrency != nil && *before.Concurrency >= 1 && *before.Concurrency <= 10_000_000 {
+		rollbackConcurrency = *before.Concurrency
+	}
+	assignment, err := repository.AssignManualPriority(ctx, accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
+	if err != nil {
+		return nil, err
+	}
+	loadFactor = assignment.LoadFactor
+	concurrency = assignment.Concurrency
+	patch := FieldPatch{
+		PriorityPresent: true, Priority: &assignment.Priority,
+		LoadFactorPresent: true, LoadFactor: &loadFactor,
+		ConcurrencyPresent: true, Concurrency: &concurrency,
+	}
+	result, err := s.syncFieldsLocked(ctx, accountID, patch, actor, true)
+	if err != nil {
+		var operationError *OperationError
+		if !errors.As(err, &operationError) || !operationError.RemoteWritten {
+			rollbackErr := rollbackManualPriority(ctx, repository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
+			if rollbackErr != nil {
+				return nil, fmt.Errorf("%w；人工优先位回滚失败：%v", err, rollbackErr)
+			}
+		}
+		return nil, err
+	}
+	result["manual_priority"] = assignment.Priority
+	result["sync_balance_multiplier"] = assignment.SyncBalanceMultiplier
+	return result, nil
 }
 
 func (s *Service) EnqueueClearManualPriority(ctx context.Context, accountID, actor string) (taskstore.Task, error) {
@@ -489,7 +552,22 @@ func (s *Service) EnqueueClearManualPriority(ctx context.Context, accountID, act
 }
 
 func (s *Service) clearManualPriority(ctx context.Context, accountID, actor string) (map[string]any, error) {
-	repository := s.repository.(manualPriorityRepository)
+	if !stableID(accountID) {
+		return nil, errors.New("账号必须使用有效的稳定 ID")
+	}
+	release, err := s.accountOperations.acquire(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.clearManualPriorityLocked(ctx, accountID, actor)
+}
+
+func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, actor string) (map[string]any, error) {
+	repository, ok := s.repository.(manualPriorityRepository)
+	if !ok {
+		return nil, errors.New("人工优先位服务尚未就绪")
+	}
 	release, err := repository.ManualPriorityRelease(ctx, accountID)
 	if err != nil {
 		return nil, err

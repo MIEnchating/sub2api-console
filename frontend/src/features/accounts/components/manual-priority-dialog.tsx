@@ -188,16 +188,16 @@ export function ManualPriorityDialog(props: {
           </div>
           <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-2.5">
             <div className="min-w-0">
-              <p className="text-sm font-medium">同步余额与倍率</p>
+              <p className="text-sm font-medium">同步上游余额</p>
               <p className="text-muted-foreground mt-0.5 text-xs leading-5">
-                开启后仅同步这两项，不修改名称、分组或调度参数。
+                账号成本及其派生名称始终按充值比例自动换算；此开关只控制上游余额同步。
               </p>
             </div>
             <Switch
               checked={syncBalanceMultiplier}
               onCheckedChange={setSyncBalanceMultiplier}
               disabled={props.pending}
-              aria-label="允许人工控制账号同步余额与倍率"
+              aria-label="允许人工控制账号同步上游余额"
             />
           </div>
           <p className="text-muted-foreground text-xs leading-5">

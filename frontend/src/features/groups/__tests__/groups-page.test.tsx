@@ -75,5 +75,6 @@ describe("分组管理页面", () => {
     expect(markup).toContain('aria-label="编辑分组"');
     expect(markup).toContain('aria-label="回落到全局策略"');
     expect(markup).not.toContain("分组 ID 8 位于排除分组列表中");
+    expect(markup).toContain('data-table-panel=""');
   });
 });

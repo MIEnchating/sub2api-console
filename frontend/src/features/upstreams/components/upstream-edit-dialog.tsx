@@ -40,6 +40,7 @@ import {
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
+import { configurableUpstreamTypeOptions } from "@/lib/domain-dictionaries";
 import {
   defaultVaultEntryForHost,
   vaultEntriesForHost,
@@ -181,7 +182,13 @@ export function UpstreamEditDialog(props: Props) {
         headers: Object.keys(value.headers).length ? JSON.stringify(value.headers, null, 2) : "",
       });
       setShowHeadersEditor(value.header_names.length > 0);
-      toast.success("上游配置已保存");
+      if (value.rate_sync_error) {
+        toast.warning(`上游配置已保存，但账号成本同步排队失败：${value.rate_sync_error}`);
+      } else if (value.rate_sync_task_id) {
+        toast.success("上游配置已保存，相关账号成本与名称同步已排队");
+      } else {
+        toast.success("上游配置已保存");
+      }
       props.onSaved();
     },
     onError: (error) => notifyOperationError(error, "上游配置保存失败"),
@@ -329,10 +336,11 @@ export function UpstreamEditDialog(props: Props) {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="sub2api">Sub2API</SelectItem>
-                            <SelectItem value="newapi">New API</SelectItem>
-                            <SelectItem value="oneapi">One API</SelectItem>
-                            <SelectItem value="custom">其他平台</SelectItem>
+                            {configurableUpstreamTypeOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       )}
@@ -528,13 +536,13 @@ export function UpstreamEditDialog(props: Props) {
 
               <section className="grid min-w-0 gap-3 border-t pt-4">
                 <div>
-                  <h3 className="text-sm font-semibold">倍率</h3>
+                  <h3 className="text-sm font-semibold">充值换算</h3>
                   <p className="text-muted-foreground mt-1 text-xs">
                     {upstreamRateLabels.mappingFormula}
                   </p>
                 </div>
                 <div className="grid min-w-0 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-                  <Field label="倍率" error={form.formState.errors.recharge_rate?.message}>
+                  <Field label="充值比例" error={form.formState.errors.recharge_rate?.message}>
                     <Input inputMode="decimal" {...form.register("recharge_rate")} />
                   </Field>
                   <div className="grid min-w-0 grid-cols-2 divide-x overflow-hidden rounded-lg border text-sm">

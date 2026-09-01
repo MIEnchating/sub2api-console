@@ -378,7 +378,7 @@ func (s *Service) resolveAuthSeed(ctx context.Context, host string, entry config
 	for _, candidate := range candidates {
 		return candidate, false, nil
 	}
-	panic("unreachable")
+	return business.UpstreamAuthSeed{}, false, errors.New("鉴权恢复候选配置解析失败")
 }
 
 func hostWithoutPort(host string) string {

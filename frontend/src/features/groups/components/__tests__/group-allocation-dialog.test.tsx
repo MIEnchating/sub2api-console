@@ -32,6 +32,8 @@ const allocation: GroupAllocation = {
       account_name: "tokenshen-0.15",
       health: "healthy",
       health_score: 79,
+      short_score: 76,
+      long_score: 82,
       sample_count: 5,
       ttfb_p95_ms: 39760,
       rate: "1.00",
@@ -48,6 +50,8 @@ const allocation: GroupAllocation = {
       account_name: "backup-0.09",
       health: "degraded",
       health_score: 65,
+      short_score: 61,
+      long_score: 69,
       sample_count: 4,
       ttfb_p95_ms: 29630,
       rate: "1.00",
@@ -76,6 +80,9 @@ describe("group allocation detail", () => {
     expect(markup).toContain("1 / 2");
     expect(markup).toContain("最高分");
     expect(markup).toContain("79");
+    expect(markup).toContain('data-slot="account-health-score"');
+    expect(markup).toContain("短期 76");
+    expect(markup).toContain("长期 82");
     expect(markup).toContain("分配并发");
     expect(markup).toContain("48");
     expect(markup).toContain("tokenshen-0.15");
@@ -83,6 +90,7 @@ describe("group allocation detail", () => {
     expect(markup).toContain("39.8s");
     expect(markup).toContain("速度优先：质量分 = 健康门控 ×（80% 相对速度 + 20% 相对价格）");
     expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("keeps a long allocation table inside a stable scroll area", () => {

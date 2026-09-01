@@ -12,9 +12,8 @@ import (
 )
 
 // ValidateNewAPIQuotaUnit records the live unit and proves that the report
-// window has a known, unchanged baseline. The observation is committed even
-// when the older window cannot yet be validated, so later completed days can
-// be reconciled exactly.
+// window has no known unit change. A first observation establishes the unit
+// baseline; later conflicting observations still fail closed.
 func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit float64, start, end time.Time) error {
 	host = canonicalHost(host)
 	if host == "" || math.IsNaN(unit) || math.IsInf(unit, 0) || unit <= 0 || !end.After(start) {
@@ -41,7 +40,33 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit f
 		host, start.UTC().Format(time.RFC3339Nano)).Scan(&baselineText)
 	var validationErr error
 	if errors.Is(err, sql.ErrNoRows) {
-		validationErr = errors.New("NewAPI quota_per_unit 尚无报告日前历史基线，本次仅建立观察，无法精确核对")
+		rows, queryErr := tx.QueryContext(ctx, `SELECT DISTINCT quota_per_unit
+			FROM billing_quota_unit_observations WHERE host=?`, host)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			var observedText string
+			if scanErr := rows.Scan(&observedText); scanErr != nil {
+				rows.Close()
+				return scanErr
+			}
+			observed, parseErr := positiveQuotaUnit(observedText)
+			if parseErr != nil {
+				rows.Close()
+				return parseErr
+			}
+			if observed != unit {
+				validationErr = fmt.Errorf("NewAPI quota_per_unit 当前值 %s 与已知历史值 %s 不一致", unitText, observedText)
+				break
+			}
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return closeErr
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			return rowsErr
+		}
 	} else if err != nil {
 		return err
 	} else {
@@ -93,11 +118,14 @@ func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *sql.Tx, host str
 	var metadataRaw string
 	var checkedAt sql.NullString
 	err := tx.QueryRowContext(ctx, `SELECT metadata_json,checked_at FROM upstreams WHERE host=?`, host).Scan(&metadataRaw, &checkedAt)
-	if errors.Is(err, sql.ErrNoRows) || !checkedAt.Valid {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
+	}
+	if !checkedAt.Valid {
+		return nil
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(checkedAt.String))
 	if err != nil || observedAt.After(start) {

@@ -135,7 +135,7 @@ func (s *Store) InspectionHeartbeats(ctx context.Context, limit int) ([]Inspecti
 	}
 	var records []InspectionHeartbeat
 	if err := json.Unmarshal([]byte(raw), &records); err != nil {
-		return []InspectionHeartbeat{}, nil
+		return nil, errors.New("心跳历史损坏，无法读取")
 	}
 	if len(records) > limit {
 		records = records[:limit]

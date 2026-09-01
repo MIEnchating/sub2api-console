@@ -112,7 +112,8 @@ describe("模型检测响应式布局", () => {
     expect(markup).toContain('data-testid="model-check-account-mobile-list"');
     expect(markup).toContain('data-testid="model-check-account-desktop-table"');
     expect(markup).toContain("divide-y md:hidden");
-    expect(markup).toContain("hidden min-h-0 md:block");
+    expect(markup).toContain("hidden min-h-0 flex-1 overflow-auto md:block");
+    expect(markup).not.toContain("当前 1 个");
     expect(markup).not.toContain("健康");
     expect(markup).toContain("检测状态");
     expect(markup).toContain("上次检测");
@@ -164,6 +165,7 @@ describe("模型检测响应式布局", () => {
     const markup = selectionMarkup();
 
     expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain('data-slot="segmented-control"');
     expect(markup).toContain("账号");
     expect(markup).toContain("模型");
     expect(markup).toContain("组合");

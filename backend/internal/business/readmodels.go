@@ -457,43 +457,6 @@ func (s *Store) loadAccountKeyStatuses(ctx context.Context, accounts map[string]
 	return nil
 }
 
-func boundUpstreamKeyState(
-	keyID string,
-	groupID, groupName *string,
-	keyPresent bool,
-	keyStatus *string,
-	groupPresent bool,
-	groupStatus *string,
-) (string, string) {
-	groupReference := ""
-	if groupID != nil {
-		groupReference = strings.TrimSpace(*groupID)
-	}
-	if groupReference == "" && groupName != nil {
-		groupReference = strings.TrimSpace(*groupName)
-	}
-	keyState := normalizedCatalogStatus(keyStatus)
-	groupState := normalizedCatalogStatus(groupStatus)
-	keyMissing := !keyPresent || keyState == "missing" || keyState == "deleted"
-	groupMissing := groupReference != "" && (!groupPresent || groupState == "missing" || groupState == "deleted")
-	if keyMissing && groupMissing {
-		return "key_and_group_missing", fmt.Sprintf("上游 Key %s 和所属分组 %s 均已删除或不存在", keyID, groupReference)
-	}
-	if groupMissing {
-		return "group_missing", fmt.Sprintf("上游 Key %s 仍有绑定，但所属分组 %s 已删除或不存在", keyID, groupReference)
-	}
-	if keyMissing {
-		return "key_missing", fmt.Sprintf("绑定的上游 Key %s 已删除或不存在", keyID)
-	}
-	if groupState == "inactive" || groupState == "disabled" || groupState == "2" {
-		return "group_inactive", fmt.Sprintf("上游 Key %s 所属分组 %s 已停用", keyID, groupReference)
-	}
-	if keyState == "" {
-		return "unknown", fmt.Sprintf("上游 Key %s 存在，但未返回状态", keyID)
-	}
-	return keyState, fmt.Sprintf("上游 Key %s 状态为 %s，所属分组仍存在", keyID, keyState)
-}
-
 func normalizedCatalogStatus(value *string) string {
 	if value == nil {
 		return ""
@@ -645,7 +608,7 @@ func (s *Store) loadAccountGroups(ctx context.Context, accounts map[string]*acco
 		if item := accounts[accountID]; item != nil {
 			item.Groups = append(item.Groups, groupName)
 			item.groupIDs[groupName] = nullString(groupID)
-			item.groupRates[groupName] = nullString(groupRate)
+			item.groupRates[groupName] = item.Multiplier
 		}
 	}
 	return rows.Err()
@@ -754,7 +717,7 @@ func (s *Store) loadRecentEvidence(ctx context.Context, accounts map[string]*acc
 		clauses = append(clauses, `account_id=?`)
 		arguments = append(arguments, accountID)
 	}
-	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, 10, false, true)
+	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, 10, false)
 	if err != nil {
 		return err
 	}

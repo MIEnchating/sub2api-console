@@ -21,6 +21,7 @@ type UpstreamConfigurationWrite struct {
 type UpstreamConfigurationWriteResult struct {
 	UpstreamID        string
 	Host              string
+	PrimaryHost       string
 	Name              string
 	RechargeRate      string
 	RawBalance        *string
@@ -58,7 +59,7 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO upstreams(
 		host,base_url,upstream_type,auth_mode,enabled,auth_status,metadata_json,updated_at
-	) VALUES(?,?,?,?,1,'已鉴权',?,?)`, value.Host, baseURL, platform, authMode, string(metadata), now); err != nil {
+	) VALUES(?,?,?,?,1,?,?,?)`, value.Host, baseURL, platform, authMode, UpstreamAuthStatusAuthenticated, string(metadata), now); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return UpstreamConfigurationWriteResult{}, errors.New("上游 Host 已存在")
 		}
@@ -76,7 +77,9 @@ func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if err := tx.Commit(); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
-	return UpstreamConfigurationWriteResult{UpstreamID: upstreamID, Host: value.Host, Name: name, RechargeRate: recharge}, nil
+	return UpstreamConfigurationWriteResult{
+		UpstreamID: upstreamID, Host: value.Host, PrimaryHost: value.Host, Name: name, RechargeRate: recharge,
+	}, nil
 }
 
 func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamConfigurationWrite) (UpstreamConfigurationWriteResult, error) {
@@ -131,19 +134,21 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 		normalizedRaw = nil
 	}
 	mappedBalance := divideDecimalPointers(normalizedRaw, &recharge)
-	rows, err := tx.QueryContext(ctx, `SELECT group_id,raw_rate FROM upstream_groups WHERE host=?`, value.Host)
+	rows, err := tx.QueryContext(ctx, `SELECT g.host,g.group_id,g.raw_rate FROM upstream_groups g
+		JOIN upstream_identity_hosts h ON h.host=g.host WHERE h.upstream_id=?`, upstreamID)
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
 	defer rows.Close()
 	type groupRate struct {
-		id  string
-		raw sql.NullString
+		host string
+		id   string
+		raw  sql.NullString
 	}
 	groupRates := []groupRate{}
 	for rows.Next() {
 		var item groupRate
-		if err := rows.Scan(&item.id, &item.raw); err != nil {
+		if err := rows.Scan(&item.host, &item.id, &item.raw); err != nil {
 			return UpstreamConfigurationWriteResult{}, err
 		}
 		groupRates = append(groupRates, item)
@@ -154,8 +159,14 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if err := rows.Close(); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
+	var primaryHost string
+	if err := tx.QueryRowContext(ctx, `SELECT host FROM upstream_identity_hosts
+		WHERE upstream_id=? AND is_primary=1 ORDER BY host LIMIT 1`, upstreamID).Scan(&primaryHost); err != nil {
+		return UpstreamConfigurationWriteResult{}, err
+	}
 	result := UpstreamConfigurationWriteResult{
-		UpstreamID: upstreamID, Host: value.Host, Name: name, RechargeRate: recharge, RawBalance: normalizedRaw, Balance: mappedBalance,
+		UpstreamID: upstreamID, Host: value.Host, PrimaryHost: primaryHost, Name: name, RechargeRate: recharge,
+		RawBalance: normalizedRaw, Balance: mappedBalance,
 	}
 	for _, group := range groupRates {
 		var effective *string
@@ -168,18 +179,19 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 			result.ConvertedGroups++
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE upstream_groups SET effective_rate=?,rate_source='manual-mapping',updated_at=?
-			WHERE host=? AND group_id=?`, effective, now, value.Host, group.id); err != nil {
+			WHERE host=? AND group_id=?`, effective, now, group.host, group.id); err != nil {
 			return UpstreamConfigurationWriteResult{}, err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at) VALUES(?,?,?,?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+		SELECT host,?,?,? FROM upstream_identity_hosts WHERE upstream_id=?
 		ON CONFLICT(host) DO UPDATE SET recharge_rate=excluded.recharge_rate,note=excluded.note,updated_at=excluded.updated_at`,
-		value.Host, recharge, "console-upstream-edit", now); err != nil {
+		recharge, "console-upstream-edit", now, upstreamID); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET base_url=?,upstream_type=?,auth_mode=?,auth_status='已鉴权',
+	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET base_url=?,upstream_type=?,auth_mode=?,auth_status=?,
 		raw_balance=?,mapped_balance=?,metadata_json=?,updated_at=? WHERE host=?`,
-		baseURL, platform, authMode, normalizedRaw, mappedBalance, string(metadataEncoded), now, value.Host); err != nil {
+		baseURL, platform, authMode, UpstreamAuthStatusAuthenticated, normalizedRaw, mappedBalance, string(metadataEncoded), now, value.Host); err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -215,8 +227,8 @@ func (s *Store) UpdateUpstreamClassification(ctx context.Context, host, upstream
 	if err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE upstreams SET upstream_type=?,auth_mode=?,auth_status='已鉴权',metadata_json=?,updated_at=? WHERE host=?`,
-		upstreamType, authMode, string(metadataEncoded), now, host)
+	result, err := tx.ExecContext(ctx, `UPDATE upstreams SET upstream_type=?,auth_mode=?,auth_status=?,metadata_json=?,updated_at=? WHERE host=?`,
+		upstreamType, authMode, UpstreamAuthStatusAuthenticated, string(metadataEncoded), now, host)
 	if err != nil {
 		return err
 	}

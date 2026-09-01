@@ -8,7 +8,6 @@ describe("upstream identity", () => {
     const markup = renderToStaticMarkup(
       <UpstreamIdentity
         name="生产环境上游"
-        upstreamId="up_123456"
         host="api.example.test"
         hosts={["api.example.test", "10.0.0.1:8080"]}
         baseUrl="https://api.example.test/v1"
@@ -17,7 +16,8 @@ describe("upstream identity", () => {
 
     expect(markup).toContain("生产环境上游");
     expect(markup).toContain("api.example.test");
-    expect(markup).toContain("up_123456");
+    expect(markup).not.toContain("up_123456");
+    expect(markup).not.toContain("ID ");
     expect(markup).toContain('href="https://api.example.test/v1"');
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('rel="noreferrer"');
@@ -30,14 +30,12 @@ describe("upstream identity", () => {
     expect(upstreamIdentityLayout.name).toContain("truncate");
     expect(upstreamIdentityLayout.link).toContain("min-w-0");
     expect(upstreamIdentityLayout.host).toContain("truncate");
-    expect(upstreamIdentityLayout.id).toContain("truncate");
   });
 
   it("uses an HTTPS host URL when the upstream has no base URL", () => {
     const markup = renderToStaticMarkup(
       <UpstreamIdentity
         name="备用上游"
-        upstreamId="up_backup"
         host="backup.example.test"
         hosts={["backup.example.test"]}
         baseUrl=""

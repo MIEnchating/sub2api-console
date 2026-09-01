@@ -11,11 +11,13 @@ describe("OnboardingMaintenanceActions", () => {
         pending={false}
         onRevalidate={vi.fn()}
         onRepairNames={vi.fn()}
+        onCleanupKeys={vi.fn()}
       />,
     );
 
     expect(markup).toContain("复验绑定");
     expect(markup).toContain("名称修复");
+    expect(markup).toContain("清理无用 Key");
     expect(markup).not.toContain(' disabled=""');
     expect(markup).not.toContain('type="checkbox"');
   });
@@ -27,9 +29,11 @@ describe("OnboardingMaintenanceActions", () => {
         pending={false}
         onRevalidate={vi.fn()}
         onRepairNames={vi.fn()}
+        onCleanupKeys={vi.fn()}
       />,
     );
 
     expect(markup.match(/ disabled=""/g)).toHaveLength(2);
+    expect(markup).toContain("清理无用 Key");
   });
 });

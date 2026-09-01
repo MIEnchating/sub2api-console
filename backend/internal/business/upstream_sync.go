@@ -136,16 +136,22 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		return UpstreamSyncWriteResult{}, errors.New("上游 metadata 记录损坏")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	var rechargeRaw string
-	if err := tx.QueryRowContext(ctx, `SELECT recharge_rate FROM recharge_rates WHERE host=?`, host).Scan(&rechargeRaw); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+	rechargeRaw, rechargeSourceHost, rateErr := stableRechargeRate(ctx, tx, host)
+	if rateErr != nil {
+		if errors.Is(rateErr, sql.ErrNoRows) {
 			rechargeRaw = "1"
-			if _, insertErr := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
-				VALUES(?,?,?,?)`, host, rechargeRaw, "console-sync-default", now); insertErr != nil {
-				return UpstreamSyncWriteResult{}, insertErr
-			}
 		} else {
-			return UpstreamSyncWriteResult{}, err
+			return UpstreamSyncWriteResult{}, rateErr
+		}
+	}
+	if rechargeSourceHost != host {
+		note := "stable-upstream-inherited"
+		if rechargeSourceHost == "" {
+			note = "console-sync-default"
+		}
+		if _, insertErr := tx.ExecContext(ctx, `INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+			VALUES(?,?,?,?) ON CONFLICT(host) DO NOTHING`, host, rechargeRaw, note, now); insertErr != nil {
+			return UpstreamSyncWriteResult{}, insertErr
 		}
 	}
 	recharge := normalizePositiveDecimal(rechargeRaw)
@@ -166,13 +172,14 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	}
 
 	if value.Catalog != nil {
+		hasCatalogBaseline := strings.TrimSpace(stringValue(metadata["catalog_checked_at"])) != ""
 		result.AccountTotal, result.AccountRateSucceeded, result.AccountRateFailed, err = catalogAccountRateCounts(
 			ctx, tx, host, keys, partialCatalog,
 		)
 		if err != nil {
 			return UpstreamSyncWriteResult{}, err
 		}
-		if err := persistCatalogTx(ctx, tx, host, groups, keys, recharge, now, partialCatalog); err != nil {
+		if err := persistCatalogTx(ctx, tx, host, groups, keys, recharge, now, partialCatalog, hasCatalogBaseline); err != nil {
 			return UpstreamSyncWriteResult{}, err
 		}
 		result.GroupCount, result.KeyCount = len(groups), len(keys)
@@ -183,9 +190,11 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 			metadata["catalog_key_count"] = len(keys)
 			metadata["catalog_error"] = nil
 		}
-		metadata["rate_sync_status"] = "succeeded"
-		metadata["rate_sync_error"] = nil
-		metadata["rate_sync_at"] = now
+		if !partialCatalog {
+			metadata["rate_sync_status"] = "succeeded"
+			metadata["rate_sync_error"] = nil
+			metadata["rate_sync_at"] = now
+		}
 	}
 	if balance != nil {
 		result.RawBalance = balance.RawBalance
@@ -225,9 +234,9 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	}
 	authStatus := existingAuthStatus
 	if value.AuthenticationOK {
-		authStatus = "已鉴权"
+		authStatus = UpstreamAuthStatusAuthenticated
 		if value.AuthRecovered {
-			authStatus = "已恢复"
+			authStatus = UpstreamAuthStatusRecovered
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE upstreams SET auth_status=?,metadata_json=?,updated_at=? WHERE host=?`, authStatus, string(encoded), now, host); err != nil {
@@ -318,6 +327,10 @@ func (s *Store) RecordUpstreamSyncFailure(ctx context.Context, host, scope, reas
 	switch scope {
 	case "name":
 		metadata["name_status"], metadata["name_error"], metadata["name_checked_at"] = "读取失败", reason, now
+	case "key":
+		// A single-Key refresh is not evidence about the Host-wide catalog.
+	case "key_balance":
+		metadata["balance_status"], metadata["balance_error"], metadata["balance_checked_at"] = "读取失败", reason, now
 	case "catalog":
 		metadata["catalog_status"], metadata["catalog_error"], metadata["catalog_checked_at"] = "同步失败", reason, now
 		metadata["rate_sync_status"], metadata["rate_sync_error"], metadata["rate_sync_at"] = "failed", reason, now
@@ -328,12 +341,9 @@ func (s *Store) RecordUpstreamSyncFailure(ctx context.Context, host, scope, reas
 		metadata["balance_status"], metadata["balance_error"], metadata["balance_checked_at"] = "读取失败", reason, now
 		metadata["rate_sync_status"], metadata["rate_sync_error"], metadata["rate_sync_at"] = "failed", reason, now
 	}
-	authStatus := "未确认"
-	if scope == "name" {
-		authStatus = existingAuthStatus
-	}
+	authStatus := existingAuthStatus
 	if authenticationFailure {
-		authStatus = "鉴权失效"
+		authStatus = UpstreamAuthStatusInvalid
 		metadata["auth_checked_at"], metadata["auth_error"] = now, reason
 	}
 	encoded, err := json.Marshal(metadata)
@@ -413,7 +423,7 @@ func normalizeUpstreamBalance(value *UpstreamBalanceObservation) (*UpstreamBalan
 	return &result, nil
 }
 
-func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, recharge *string, now string, partial bool) error {
+func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []UpstreamCatalogGroup, keys []UpstreamCatalogKey, recharge *string, now string, partial, hasCatalogBaseline bool) error {
 	upstreamID, identityHosts, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
 	if err != nil {
 		return err
@@ -455,7 +465,7 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 			return err
 		}
 	}
-	if err := upsertLiveCatalogEntitiesTx(ctx, tx, upstreamID, groups, keys, now); err != nil {
+	if err := upsertLiveCatalogEntitiesTx(ctx, tx, upstreamID, groups, keys, now, hasCatalogBaseline); err != nil {
 		return err
 	}
 	if partial {
@@ -505,67 +515,6 @@ func repairBindingCatalogReferences(ctx context.Context, tx *sql.Tx, hosts []str
 			WHERE upstream_host IN (`+placeholders+`) AND upstream_key_id=? AND (
 				upstream_key_name<>? OR COALESCE(upstream_group,'')<>? OR COALESCE(upstream_group_id,'')<>?
 			) AND NOT EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=bindings.local_account_id)`, arguments...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func stringSetFromQueryer(ctx context.Context, queryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, query string, arguments ...any) (map[string]struct{}, error) {
-	rows, err := queryer.QueryContext(ctx, query, arguments...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]struct{}{}
-	for rows.Next() {
-		var value sql.NullString
-		if err := rows.Scan(&value); err != nil {
-			return nil, err
-		}
-		if value.Valid && strings.TrimSpace(value.String) != "" {
-			result[value.String] = struct{}{}
-		}
-	}
-	return result, rows.Err()
-}
-
-func reconcileCatalogRows(ctx context.Context, tx *sql.Tx, table, idColumn, host string, live map[string]struct{}, bound map[string]struct{}, now string) error {
-	rows, err := tx.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM %s WHERE host=?", idColumn, table), host)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		if _, present := live[id]; present {
-			continue
-		}
-		if _, retained := bound[id]; retained {
-			if table == "upstream_groups" {
-				_, err = tx.ExecContext(ctx, `UPDATE upstream_groups SET status='missing',rate_source='catalog-missing',updated_at=? WHERE host=? AND group_id=?`, now, host, id)
-			} else {
-				_, err = tx.ExecContext(ctx, `UPDATE upstream_keys SET status='missing',metadata_json='{}',updated_at=? WHERE host=? AND key_id=?`, now, host, id)
-			}
-		} else {
-			_, err = tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE host=? AND %s=?", table, idColumn), host, id)
-		}
-		if err != nil {
 			return err
 		}
 	}

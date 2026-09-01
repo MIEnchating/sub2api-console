@@ -60,6 +60,65 @@ func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
 	}
 }
 
+func TestOpenEnforcesSingleAccountCostAcrossMemberships(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
+		VALUES('41','account-0.15','0.15','{}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		VALUES('41','codex','7','1.5');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,local_rate,metadata_json,updated_at)
+		VALUES('41','api.example','91','key','codex','1.5','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	var groupRate, localRate string
+	if err := store.db.QueryRowContext(ctx, `SELECT ag.group_rate,b.local_rate FROM account_groups ag
+		JOIN bindings b ON b.local_account_id=ag.account_id WHERE ag.account_id='41'`).Scan(&groupRate, &localRate); err != nil {
+		t.Fatal(err)
+	}
+	if groupRate != "0.15" || localRate != "0.15" {
+		t.Fatalf("inserted costs: membership=%q binding=%q", groupRate, localRate)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET multiplier='0.2' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT ag.group_rate,b.local_rate FROM account_groups ag
+		JOIN bindings b ON b.local_account_id=ag.account_id WHERE ag.account_id='41'`).Scan(&groupRate, &localRate); err != nil {
+		t.Fatal(err)
+	}
+	if groupRate != "0.2" || localRate != "0.2" {
+		t.Fatalf("updated costs: membership=%q binding=%q", groupRate, localRate)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER trg_account_groups_use_account_cost_after_update;
+		DROP TRIGGER trg_bindings_use_account_cost_after_update;
+		UPDATE account_groups SET group_rate='9.9' WHERE account_id='41';
+		UPDATE bindings SET local_rate='8.8' WHERE local_account_id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if err := reopened.db.QueryRowContext(ctx, `SELECT ag.group_rate,b.local_rate FROM account_groups ag
+		JOIN bindings b ON b.local_account_id=ag.account_id WHERE ag.account_id='41'`).Scan(&groupRate, &localRate); err != nil {
+		t.Fatal(err)
+	}
+	if groupRate != "0.2" || localRate != "0.2" {
+		t.Fatalf("reopened costs: membership=%q binding=%q", groupRate, localRate)
+	}
+}
+
 func TestOpenAddsManualPriorityBalanceSyncColumnToExistingDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "business.sqlite3")
 	store, err := Open(path)

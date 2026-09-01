@@ -33,10 +33,6 @@ const settingsSchema = z.object({
       "负载因子必须大于或等于 1",
     ),
   concurrency: positiveInteger,
-  multiplier: z
-    .string()
-    .trim()
-    .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0, "倍率必须大于 0"),
   testModel: z.string().trim().max(256, "探测模型不能超过 256 个字符"),
   paused: z.boolean(),
   excluded: z.boolean(),
@@ -65,7 +61,6 @@ export function AccountSettingsPanel(props: {
       priority: "",
       loadFactor: "",
       concurrency: "",
-      multiplier: "",
       testModel: "",
       paused: false,
       excluded: false,
@@ -78,7 +73,6 @@ export function AccountSettingsPanel(props: {
       priority: detail.priority == null ? "" : String(detail.priority),
       loadFactor: detail.load_factor ?? "",
       concurrency: detail.concurrency == null ? "" : String(detail.concurrency),
-      multiplier: detail.multiplier ?? "",
       testModel: detail.test_model ?? "",
       paused: detail.paused === true,
       excluded: accountPoolState(detail).value === "excluded",
@@ -106,7 +100,6 @@ export function AccountSettingsPanel(props: {
       if (values.concurrency !== String(detail.concurrency ?? "")) {
         fields.concurrency = Number(values.concurrency);
       }
-      if (values.multiplier !== (detail.multiplier ?? "")) fields.multiplier = values.multiplier;
       if (Object.keys(fields).length > 0) {
         tasks.push(await api.syncAccount(props.accountId, fields));
       }
@@ -183,11 +176,17 @@ export function AccountSettingsPanel(props: {
                   <Input type="number" min={1} {...form.register("concurrency")} />
                 </SettingsField>
                 <SettingsField
-                  label="倍率"
-                  error={form.formState.errors.multiplier?.message}
-                  hint="上游同步失败时保留最近成功值"
+                  label="账号成本"
+                  hint="由上游原始倍率除以充值比例自动计算；请使用“同步倍率”更新"
                 >
-                  <Input type="number" min="0.000001" step="any" {...form.register("multiplier")} />
+                  <Input
+                    type="number"
+                    min="0.000001"
+                    step="any"
+                    readOnly
+                    aria-readonly="true"
+                    value={detail.multiplier ?? ""}
+                  />
                 </SettingsField>
               </div>
             </section>

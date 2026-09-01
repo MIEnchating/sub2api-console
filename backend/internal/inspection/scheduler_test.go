@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,6 +67,29 @@ func (e *cancellableExecutor) Execute(ctx context.Context, _ business.AutoInspec
 	close(e.started)
 	<-ctx.Done()
 	return ExecutionResult{}, ctx.Err()
+}
+
+type leaseAwareExecutor struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (e *leaseAwareExecutor) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
+	close(e.started)
+	<-ctx.Done()
+	close(e.stopped)
+	return ExecutionResult{Status: "succeeded"}, nil
+}
+
+type leaseLosingRepository struct {
+	*business.Store
+	renewed chan struct{}
+	once    sync.Once
+}
+
+func (r *leaseLosingRepository) RenewInspectionLease(context.Context, string, time.Time, time.Duration) (bool, error) {
+	r.once.Do(func() { close(r.renewed) })
+	return false, nil
 }
 
 type blockingAcquireRepository struct {
@@ -233,6 +258,94 @@ func TestDatabaseLeasePreventsOverlappingSchedulers(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].Status != "succeeded" || history[0].TaskID == nil || *history[0].TaskID != "first" {
 		t.Fatalf("unexpected heartbeat history: %#v", history)
+	}
+}
+
+func TestLeaseLossCancelsExecutionAndRecordsFailure(t *testing.T) {
+	repository := &leaseLosingRepository{Store: openInspectionRepository(t), renewed: make(chan struct{})}
+	executor := &leaseAwareExecutor{started: make(chan struct{}), stopped: make(chan struct{})}
+	scheduler, err := NewScheduler(repository, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.leaseRenewInterval = time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := scheduler.RunDue(context.Background(), time.Now().UTC(), true)
+		done <- runErr
+	}()
+	select {
+	case <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	select {
+	case <-repository.renewed:
+	case <-time.After(time.Second):
+		t.Fatal("lease renewal was not attempted")
+	}
+	select {
+	case <-executor.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("executor continued after its lease was lost")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	history, err := repository.InspectionHeartbeats(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Status != "failed" || history[0].Error == nil ||
+		!strings.Contains(*history[0].Error, "租约") {
+		t.Fatalf("lease loss was not persisted as a failed inspection: %#v", history)
+	}
+}
+
+func TestRunCompletionUsesConfigurationUpdatedDuringExecution(t *testing.T) {
+	repository := openInspectionRepository(t)
+	ctx := context.Background()
+	if _, err := repository.UpdateAutoInspectionConfig(ctx, business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), name: "configured"}
+	scheduler, err := NewScheduler(repository, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Date(2026, 8, 31, 1, 0, 0, 0, time.UTC)
+	var clock atomic.Int64
+	clock.Store(startedAt.UnixNano())
+	scheduler.now = func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := scheduler.RunDue(ctx, startedAt, true)
+		done <- runErr
+	}()
+	select {
+	case <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("executor did not start")
+	}
+	clock.Store(startedAt.Add(2 * time.Second).UnixNano())
+	if _, err := scheduler.UpdateConfig(ctx, business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 60}); err != nil {
+		t.Fatal(err)
+	}
+	completedAt := startedAt.Add(5 * time.Second)
+	clock.Store(completedAt.UnixNano())
+	close(executor.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	scheduler.mu.Lock()
+	nextRunAt := cloneString(scheduler.nextRunAt)
+	scheduler.mu.Unlock()
+	expected := completedAt.Add(60 * time.Second).Format(time.RFC3339Nano)
+	if nextRunAt == nil || *nextRunAt != expected {
+		t.Fatalf("completion restored stale scheduling interval: next=%v want=%s", nextRunAt, expected)
 	}
 }
 

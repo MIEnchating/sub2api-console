@@ -60,12 +60,13 @@ describe("NotificationQueueStatus", () => {
     }
     for (const count of ["12", "3", "4", "2"]) expect(markup).toContain(count);
     expect(markup.match(/>查看</g)).toHaveLength(2);
+    expect(markup).toContain('data-testid="notification-queue-overview"');
+    expect(markup).toContain("sm:grid-cols-2 sm:divide-x");
+    expect(markup).toContain("grid-cols-[minmax(0,1fr)_auto]");
   });
 
   it("adds search and pagination to long queue details", () => {
-    const items = Array.from({ length: 25 }, (_, index) =>
-      queueItem(index + 1),
-    );
+    const items = Array.from({ length: 25 }, (_, index) => queueItem(index + 1));
     const markup = renderToStaticMarkup(
       <NotificationQueueDetailsList
         kind="consumer"
@@ -83,5 +84,6 @@ describe("NotificationQueueStatus", () => {
     expect(markup).toContain("测试账号-20");
     expect(markup).not.toContain("测试账号-21");
     expect(markup).toContain("转到第 2 页");
+    expect(markup).toContain('data-table-panel=""');
   });
 });

@@ -49,6 +49,7 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain("Sub2API 状态");
     expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
     expect(markup).toContain("min-w-[1500px]");
+    expect(markup).toContain('data-table-panel=""');
   });
 
   it("shows balance sync, batch revalidation, and name repair as page-level actions", () => {

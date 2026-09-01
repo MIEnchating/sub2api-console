@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -11,6 +11,7 @@ import {
   type ModelCheckAccountStatus,
   type ModelCheckCapabilities,
   type ModelCheckRequest,
+  type Task,
 } from "@/api";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
@@ -20,9 +21,10 @@ import {
   Dialog,
   DialogBody,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
+  operationDialogHeight,
+  operationDialogWidth,
 } from "@/components/ui/dialog";
 import { taskPollInterval } from "@/lib/task-state";
 
@@ -74,9 +76,20 @@ function commonDetectableModels(
     .sort((left, right) => left.localeCompare(right));
 }
 
+export function modelCheckDialogLayout(task?: Task) {
+  const resultsReady = task?.status === "succeeded";
+  return {
+    width: operationDialogWidth(true, "table"),
+    height: operationDialogHeight(true, "tall"),
+    resultsReady,
+  } as const;
+}
+
 export function ModelCheckPage() {
+  const queryClient = useQueryClient();
   const [taskID, setTaskID] = useState<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
+  const [taskStreamConnected, setTaskStreamConnected] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
   const form = useForm<ModelCheckForm>({
     resolver: zodResolver(modelCheckSchema),
@@ -127,15 +140,41 @@ export function ModelCheckPage() {
     queryKey: ["model-check-task", taskID],
     queryFn: () => api.task(taskID!),
     enabled: taskID !== null,
-    refetchInterval: taskPollInterval,
+    refetchInterval: (query) => (taskStreamConnected ? false : taskPollInterval(query)),
   });
+  useEffect(() => {
+    if (taskID === null || typeof EventSource === "undefined") {
+      setTaskStreamConnected(false);
+      return;
+    }
+    const source = new EventSource(api.taskEventsURL(taskID), { withCredentials: true });
+    source.onopen = () => setTaskStreamConnected(true);
+    source.onerror = () => setTaskStreamConnected(false);
+    source.onmessage = (event) => {
+      try {
+        const next = JSON.parse(event.data) as Task;
+        queryClient.setQueryData(["model-check-task", taskID], next);
+        setTaskStreamConnected(true);
+        if (["succeeded", "failed", "cancelled", "waiting_input"].includes(next.status)) {
+          source.close();
+          setTaskStreamConnected(false);
+        }
+      } catch {
+        setTaskStreamConnected(false);
+      }
+    };
+    return () => {
+      source.close();
+      setTaskStreamConnected(false);
+    };
+  }, [queryClient, taskID]);
   const run = useMutation({
     mutationFn: api.runModelCheck,
     onMutate: () => setTaskID(null),
     onSuccess: (created) => {
       setTaskID(created.id);
+      queryClient.setQueryData(["model-check-task", created.id], created);
       setResultOpen(true);
-      toast.success("账号模型检测已开始");
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "模型检测启动失败"),
   });
@@ -192,6 +231,7 @@ export function ModelCheckPage() {
     ],
   );
   const combinationCount = selectedAccountIDs.length * selectedModels.length;
+  const dialogLayout = modelCheckDialogLayout(task.data);
 
   function toggleAccount(accountID: string, checked: boolean) {
     const account = accounts.data?.find((candidate) => candidate.id === accountID);
@@ -299,8 +339,8 @@ export function ModelCheckPage() {
       </div>
       <Dialog open={resultOpen && taskID !== null} onOpenChange={setResultOpen}>
         <DialogContent
-          width="table"
-          height="tall"
+          width={dialogLayout.width}
+          height={dialogLayout.height}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -311,9 +351,8 @@ export function ModelCheckPage() {
                   ? "模型检测失败"
                   : "正在检测模型"}
             </DialogTitle>
-            <DialogDescription>{task.data?.message ?? "正在读取检测任务"}</DialogDescription>
           </DialogHeader>
-          <DialogBody className="overflow-hidden pr-0">
+          <DialogBody className={dialogLayout.resultsReady ? "overflow-hidden pr-0" : undefined}>
             {task.error ? (
               <p className="text-destructive text-sm" role="alert">
                 任务状态读取失败

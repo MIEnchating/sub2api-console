@@ -106,6 +106,23 @@ func TestDirectRequestErrorRedactsAccountKey(t *testing.T) {
 	}
 }
 
+func TestDirectRequestRejectsTrailingJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"model":"gpt-5.6-sol","output_text":"answer"}{"extra":true}`))
+	}))
+	defer server.Close()
+
+	sender := directBundleSender{
+		client:     server.Client(),
+		credential: directCredential{BaseURL: server.URL, Secret: "key", Platform: "openai"},
+	}
+	_, _, err := sender.Send(context.Background(), "41", "gpt-5.6-sol", "probe", 5)
+	if err == nil || err.Error() != "上游直连接口响应包含尾随数据" {
+		t.Fatalf("trailing JSON was accepted: %v", err)
+	}
+}
+
 func TestDirectRequestErrorSummarizesCloudflareHTML(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "text/html")

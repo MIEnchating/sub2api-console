@@ -20,9 +20,46 @@ type syncRepository struct {
 	mu             sync.Mutex
 	applied        []business.UpstreamSyncWrite
 	failures       []string
+	failureScopes  []string
+	failureAuth    []bool
 	hosts          []business.UpstreamHost
 	failureErr     error
 	balanceAllowed *bool
+}
+
+type captureAccountRateScheduler struct {
+	hosts    []string
+	allCalls int
+	taskID   string
+	err      error
+}
+
+func (scheduler *captureAccountRateScheduler) EnqueueHostAccountRateSync(_ context.Context, host, _ string) (string, error) {
+	scheduler.hosts = append(scheduler.hosts, host)
+	return scheduler.taskID, scheduler.err
+}
+
+func (scheduler *captureAccountRateScheduler) EnqueueAllAccountRateSync(context.Context, string) (string, error) {
+	scheduler.allCalls++
+	return scheduler.taskID, scheduler.err
+}
+
+func TestCatalogSyncQueuesConvertedAccountRateRefreshAtMatchingScope(t *testing.T) {
+	scheduler := &captureAccountRateScheduler{taskID: "rate-task"}
+	service := &Service{rateSync: scheduler}
+
+	taskID, err := service.enqueueAccountRateSync(context.Background(), []string{"HTTPS://API.EXAMPLE/"}, Scope{Catalog: true}, "tester", BatchResult{Succeeded: 1})
+	if err != nil || taskID != "rate-task" || len(scheduler.hosts) != 1 || scheduler.hosts[0] != "api.example" || scheduler.allCalls != 0 {
+		t.Fatalf("single host scheduling: task=%q hosts=%#v all=%d err=%v", taskID, scheduler.hosts, scheduler.allCalls, err)
+	}
+	taskID, err = service.enqueueAccountRateSync(context.Background(), []string{"a.example", "b.example"}, Scope{Catalog: true}, "tester", BatchResult{Succeeded: 2})
+	if err != nil || taskID != "rate-task" || scheduler.allCalls != 1 {
+		t.Fatalf("batch scheduling: task=%q all=%d err=%v", taskID, scheduler.allCalls, err)
+	}
+	taskID, err = service.enqueueAccountRateSync(context.Background(), []string{"api.example"}, Scope{Balance: true}, "tester", BatchResult{Succeeded: 1})
+	if err != nil || taskID != "" || len(scheduler.hosts) != 1 || scheduler.allCalls != 1 {
+		t.Fatalf("balance-only sync unexpectedly scheduled rates: task=%q hosts=%#v all=%d err=%v", taskID, scheduler.hosts, scheduler.allCalls, err)
+	}
 }
 
 func (r *syncRepository) HostBalanceSyncAllowed(context.Context, string) (bool, error) {
@@ -89,7 +126,7 @@ func TestSyncAllNowKeepsUpstreamAndAccountRateCountsSeparate(t *testing.T) {
 	}
 }
 
-func TestBalanceSyncSkipsHostsBoundOnlyToFullyManualAccounts(t *testing.T) {
+func TestBalanceSyncSkipsHostsWhoseManualAccountsDisableBalanceSync(t *testing.T) {
 	allowed := false
 	repository := &syncRepository{balanceAllowed: &allowed}
 	readerCalls := 0
@@ -108,14 +145,16 @@ func TestBalanceSyncSkipsHostsBoundOnlyToFullyManualAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Status != "succeeded" || readerCalls != 0 || len(repository.applied) != 0 ||
-		!strings.Contains(result.BalanceStatus, "已跳过") {
+		!strings.Contains(result.BalanceStatus, "关闭了上游余额同步") {
 		t.Fatalf("result=%#v readerCalls=%d applied=%#v", result, readerCalls, repository.applied)
 	}
 }
-func (r *syncRepository) RecordUpstreamSyncFailure(_ context.Context, host, _, reason string, _ bool) error {
+func (r *syncRepository) RecordUpstreamSyncFailure(_ context.Context, host, scope, reason string, authenticationFailure bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.failures = append(r.failures, host+":"+reason)
+	r.failureScopes = append(r.failureScopes, scope)
+	r.failureAuth = append(r.failureAuth, authenticationFailure)
 	return r.failureErr
 }
 func (r *syncRepository) RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error) {
@@ -332,8 +371,51 @@ func TestSyncHostDoesNotPersistPartialNetworkResult(t *testing.T) {
 		return configstore.AuthRecord{}, errors.New("must not refresh")
 	}}, &memoryTasks{done: make(chan taskstore.Task, 1)})
 	result := service.syncHost(context.Background(), "api.example", Scope{Catalog: true, Balance: true}, "tester")
-	if result.Status != "failed" || len(repository.applied) != 0 || len(repository.failures) != 1 {
+	if result.Status != "failed" || result.AuthStatus != "未变更" || len(repository.applied) != 0 || len(repository.failures) != 1 ||
+		len(repository.failureScopes) != 1 || repository.failureScopes[0] != "balance" || repository.failureAuth[0] {
 		t.Fatalf("partial network result persisted: result=%#v applied=%d failures=%#v", result, len(repository.applied), repository.failures)
+	}
+}
+
+func TestCombinedSyncRecordsCatalogFailureAtCatalogScope(t *testing.T) {
+	token := "token"
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{"api.example": {
+		Host: "api.example", BaseURL: "https://api.example", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}}}
+	repository := &syncRepository{}
+	reader := &syncReader{
+		catalog: func(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+			return business.UpstreamCatalogSnapshot{}, errors.New("catalog timeout")
+		},
+		balance: func(context.Context, configstore.AuthRecord) (business.UpstreamBalanceObservation, error) {
+			return business.UpstreamBalanceObservation{Status: "已读取"}, nil
+		},
+	}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{done: make(chan taskstore.Task, 1)})
+	result := service.syncHost(context.Background(), "api.example", Scope{Catalog: true, Balance: true}, "tester")
+	if result.Status != "failed" || len(repository.failureScopes) != 1 || repository.failureScopes[0] != "catalog" || repository.failureAuth[0] {
+		t.Fatalf("catalog failure scope: result=%#v scopes=%#v auth=%#v", result, repository.failureScopes, repository.failureAuth)
+	}
+}
+
+func TestSingleKeyCombinedFailureDoesNotUseHostCatalogScope(t *testing.T) {
+	token, keyID := "token", "key-1"
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{"api.example": {
+		Host: "api.example", BaseURL: "https://api.example", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}}}
+	repository := &syncRepository{}
+	reader := &syncReader{
+		catalog: func(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+			return business.UpstreamCatalogSnapshot{}, errors.New("key timeout")
+		},
+		balance: func(context.Context, configstore.AuthRecord) (business.UpstreamBalanceObservation, error) {
+			return business.UpstreamBalanceObservation{}, errors.New("balance timeout")
+		},
+	}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{done: make(chan taskstore.Task, 1)})
+	result := service.syncHost(context.Background(), "api.example", Scope{Catalog: true, Balance: true, KeyID: &keyID}, "tester")
+	if result.Status != "failed" || len(repository.failureScopes) != 1 || repository.failureScopes[0] != "key_balance" || repository.failureAuth[0] {
+		t.Fatalf("single-Key combined failure scope: result=%#v scopes=%#v auth=%#v", result, repository.failureScopes, repository.failureAuth)
 	}
 }
 

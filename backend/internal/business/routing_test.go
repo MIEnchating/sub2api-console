@@ -112,6 +112,45 @@ func TestRoutingSamplesForSecondaryGroupUsesAccountEvidence(t *testing.T) {
 	}
 }
 
+func TestRoutingSamplesSelectNewestPerAccountWithoutDependingOnImplicitIndexOrder(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO health_samples(
+		account_id,group_name,result,observed_at,source,evidence_key,payload_json
+	) VALUES
+		('41','codex','通过','2026-08-31T10:00:00Z','traffic','41-old','{}'),
+		('41','codex','通过','2026-08-31T11:00:00Z','traffic','41-mid','{}'),
+		('41','codex','通过','2026-08-31T12:00:00Z','traffic','41-new','{}'),
+		('42','codex','通过','2026-08-31T10:00:00Z','traffic','42-old','{}'),
+		('42','codex','通过','2026-08-31T11:00:00Z','traffic','42-mid','{}'),
+		('42','codex','通过','2026-08-31T12:00:00Z','traffic','42-new','{}')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `PRAGMA reverse_unordered_selects=ON`); err != nil {
+		t.Fatal(err)
+	}
+
+	samples, err := store.RoutingSamples(ctx, nil, nil, "traffic", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 4 {
+		t.Fatalf("samples=%#v", samples)
+	}
+	want := []struct{ accountID, observedAt string }{
+		{"41", "2026-08-31T12:00:00Z"},
+		{"41", "2026-08-31T11:00:00Z"},
+		{"42", "2026-08-31T12:00:00Z"},
+		{"42", "2026-08-31T11:00:00Z"},
+	}
+	for index := range want {
+		if samples[index].AccountID != want[index].accountID || samples[index].ObservedAt != want[index].observedAt {
+			t.Fatalf("sample %d = (%s,%s), want (%s,%s)", index, samples[index].AccountID,
+				samples[index].ObservedAt, want[index].accountID, want[index].observedAt)
+		}
+	}
+}
+
 func TestPreviousRoutingDecisionUsesAnySuccessfulWriteForSharedCooldown(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

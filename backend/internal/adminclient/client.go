@@ -19,6 +19,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 )
 
+const maximumResponseBytes = 4 << 20
+
 type Error struct{ Message string }
 
 func (e *Error) Error() string { return e.Message }
@@ -877,8 +879,12 @@ func (c *Client) request(ctx context.Context, method, path string, body map[stri
 			return nil, err
 		}
 	}
+	attempts := c.attempts
+	if method == http.MethodPost || method == http.MethodPatch {
+		attempts = 1
+	}
 	var last error
-	for attempt := 0; attempt < c.attempts; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		endpoint, err := url.Parse(c.baseURL + "/api/v1" + path)
 		if err != nil {
 			return nil, err
@@ -909,7 +915,7 @@ func (c *Client) request(ctx context.Context, method, path string, body map[stri
 				return nil, responseErr
 			}
 		}
-		if attempt+1 < c.attempts {
+		if attempt+1 < attempts {
 			timer := time.NewTimer(time.Duration(1<<attempt) * time.Second)
 			select {
 			case <-ctx.Done():
@@ -934,15 +940,18 @@ func (c *Client) headers(request *http.Request) {
 
 func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
 		return nil, err, true
+	}
+	if len(raw) > maximumResponseBytes {
+		return nil, &Error{"管理 API 响应超过 4 MiB 安全上限"}, false
 	}
 	detail := errorDetail(raw)
 	if (response.StatusCode == 404 || response.StatusCode == 503) && containsMonitoringDisabled(detail) {
 		return nil, &MonitoringDisabled{}, false
 	}
-	if response.StatusCode >= 400 {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		httpError := &HTTPError{response.StatusCode, detail}
 		retry := response.StatusCode == 408 || response.StatusCode == 425 || response.StatusCode == 429 || response.StatusCode >= 500
 		return nil, httpError, retry
@@ -952,6 +961,10 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 	var payload map[string]any
 	if err := decoder.Decode(&payload); err != nil {
 		return nil, &Error{"管理 API 返回不是 JSON"}, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, &Error{"管理 API 返回包含 JSON 尾随数据"}, false
 	}
 	if payload == nil {
 		return nil, &Error{"管理 API 返回格式不可读"}, false

@@ -85,12 +85,18 @@ describe("account operation buttons", () => {
     expect(result).toMatch(/disabled=""[^>]*aria-label="查看并编辑账号"/);
   });
 
-  it("only enables multiplier sync for a manual account when explicitly allowed", () => {
-    const disabled = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
-    const allowed = markup({ manual_priority: 3, manual_sync_balance_multiplier: true });
+  it("always enables cost sync for a manual account", () => {
+    const withoutBalanceSync = markup({
+      manual_priority: 3,
+      manual_sync_balance_multiplier: false,
+    });
+    const withBalanceSync = markup({
+      manual_priority: 3,
+      manual_sync_balance_multiplier: true,
+    });
 
-    expect(disabled).toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
-    expect(allowed).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
+    expect(withoutBalanceSync).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
+    expect(withBalanceSync).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
   });
 
   it("shows an immediate loading state while an active probe is running", () => {

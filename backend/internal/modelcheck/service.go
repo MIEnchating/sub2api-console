@@ -164,7 +164,11 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 	task := taskstore.Task{
 		ID: id, Skill: "sub2api-model-check", Operation: "account-model-behavior-check",
 		Status: "queued", Progress: 0, Message: "账号模型检测已排队",
-		Result: map[string]any{"account_ids": request.AccountIDs, "credentials_persisted": false}, CreatedAt: now, UpdatedAt: now,
+		Result: map[string]any{
+			"account_ids": request.AccountIDs, "phase": "queued", "completed": 0,
+			"total": len(request.AccountIDs) * len(request.Models), "tests": []map[string]any{},
+			"credentials_persisted": false,
+		}, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
@@ -248,7 +252,12 @@ func (s *Service) checkerForModel(model string) string {
 func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
 	defer cancel()
-	task.Status, task.Progress, task.Message = "running", 3, "正在读取账号 Base URL 与绑定 Key"
+	task.Status, task.Progress, task.Message = "running", 3, "正在准备账号凭据"
+	task.Result = map[string]any{
+		"account_ids": prepared.request.AccountIDs, "phase": "credentials", "completed": 0,
+		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+		"credentials_persisted": false,
+	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.PersistProgress(s.tasks, task)
 	credentials := s.resolveCredentials(ctx, prepared.accounts)
@@ -257,7 +266,12 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		Timeout:       time.Duration(prepared.request.TimeoutSeconds) * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	task.Progress, task.Message = 5, "正在直连账号上游执行模型检测矩阵"
+	task.Progress, task.Message = 5, "正在并行检测账号与模型组合"
+	task.Result = map[string]any{
+		"account_ids": prepared.request.AccountIDs, "phase": "testing", "completed": 0,
+		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+		"credentials_persisted": credentialsPersisted,
+	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.PersistProgress(s.tasks, task)
 
@@ -326,14 +340,17 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		close(outcomes)
 	}()
 	results := make([]map[string]any, len(combinations))
+	completedResults := make([]map[string]any, 0, len(combinations))
 	completed := 0
 	for outcome := range outcomes {
 		results[outcome.index] = outcome.result
+		completedResults = append(completedResults, outcome.result)
 		completed++
 		task.Progress = 5 + completed*90/len(combinations)
 		task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
 		task.Result = map[string]any{
 			"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
+			"phase": "testing", "tests": completedResults,
 			"credentials_persisted": credentialsPersisted,
 		}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -354,6 +371,7 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		"account_ids": prepared.request.AccountIDs,
 		"accounts":    len(prepared.accounts), "models": len(prepared.request.Models),
 		"combinations": len(combinations), "summary": summary, "tests": results,
+		"phase": "completed", "completed": len(combinations), "total": len(combinations),
 		"remote_write": false, "credentials_persisted": credentialsPersisted,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

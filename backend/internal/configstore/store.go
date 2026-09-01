@@ -354,7 +354,6 @@ func MaskUsername(username *string) *string {
 
 func (s *Store) Initialize(ctx context.Context, username string, password string, baseURL string, adminKey string) error {
 	username = strings.TrimSpace(username)
-	password = strings.TrimSpace(password)
 	adminKey = strings.TrimSpace(adminKey)
 	if len(username) < 2 || len(username) > 80 {
 		return errors.New("控制台账号长度必须为 2 到 80 个字符")
@@ -744,7 +743,8 @@ func settingsFrom(ctx context.Context, queryer interface {
 func ValidateBaseURL(raw string) (string, error) {
 	normalized := strings.TrimRight(strings.TrimSpace(raw), "/")
 	parsed, err := url.Parse(normalized)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(normalized, "#") {
 		return "", errors.New("管理地址必须是完整的 http 或 https URL")
 	}
 	return normalized, nil
