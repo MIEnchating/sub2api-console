@@ -105,7 +105,7 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 	}
 }
 
-func TestManagementSnapshotNormalizesCompositeGroupPlatform(t *testing.T) {
+func TestManagementSnapshotPreservesCompositeGroupPlatform(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "management-composite-group.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestManagementSnapshotNormalizesCompositeGroupPlatform(t *testing.T) {
 	}
 
 	if _, err := store.SyncManagementSnapshot(ctx, nil, []map[string]any{{
-		"id": json.Number("7"), "name": "复合分组", "platform": " Composite ",
+		"id": json.Number("7"), "name": "复合分组", "platform": "Composite",
 	}}, "tester"); err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +126,8 @@ func TestManagementSnapshotNormalizesCompositeGroupPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(groups) != 1 || groups[0].Platform == nil || *groups[0].Platform != "composite" {
-		t.Fatalf("composite group platform was not normalized: %#v", groups)
+	if len(groups) != 1 || groups[0].Platform == nil || *groups[0].Platform != "Composite" {
+		t.Fatalf("composite group platform was not preserved: %#v", groups)
 	}
 }
 

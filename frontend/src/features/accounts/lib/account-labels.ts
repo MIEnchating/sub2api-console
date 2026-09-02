@@ -4,12 +4,16 @@ import { accountTypeLabel, accountTypeOptions, accountTypeValue } from "@/lib/do
 export { accountTypeLabel, accountTypeOptions, accountTypeValue };
 
 const platformLabels: Record<string, string> = {
-  openai: "OpenAI",
-  claude: "Claude",
   anthropic: "Anthropic",
-  composite: "Composite",
-  grok: "Grok",
+  openai: "OpenAI",
   gemini: "Gemini",
+  antigravity: "Antigravity",
+  grok: "Grok",
+  kimi: "Kimi",
+  zhipu: "Zhipu GLM",
+  deepseek: "DeepSeek",
+  composite: "Composite",
+  claude: "Claude",
 };
 
 function mappedLabel(

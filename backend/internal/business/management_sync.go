@@ -229,10 +229,6 @@ func (s *Store) SyncManagementSnapshot(
 		if err != nil {
 			return ManagementSyncResult{}, fmt.Errorf("分组 %s 的平台无效：%w", name, err)
 		}
-		if platform != nil {
-			normalizedPlatform := strings.ToLower(strings.TrimSpace(*platform))
-			platform = stringPointer(normalizedPlatform)
-		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(
 			name,remote_id,strategy,strategy_source,platform,rate_multiplier,updated_at
 		) VALUES(?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET

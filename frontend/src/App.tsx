@@ -4880,7 +4880,7 @@ export function GroupsPage() {
                 <TableHead className="w-[7%]">账号数</TableHead>
                 <TableHead className="w-[10%]">调度开启</TableHead>
                 <TableHead className="w-[10%]">调度关闭</TableHead>
-                <TableHead className="w-[8%]">状态未知</TableHead>
+                <TableHead className="w-[8%]">调度未知</TableHead>
                 <TableHead className="w-[12%]">策略</TableHead>
                 <TableHead className="w-[14%]">状态</TableHead>
                 <TableHead className="w-[13%] text-right">操作</TableHead>
