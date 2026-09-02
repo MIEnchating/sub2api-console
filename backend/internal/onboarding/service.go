@@ -93,6 +93,8 @@ type Service struct {
 	timeout    time.Duration
 }
 
+const schedulableWriteTimeout = 2 * time.Second
+
 type validatedRequest struct {
 	request        Request
 	accountBaseURL string
@@ -153,6 +155,10 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 	if len(requests) > 50 {
 		return taskstore.Task{}, errors.New("单次最多添加 50 个账号")
 	}
+	requests = expandBatchRequests(requests)
+	if len(requests) > 50 {
+		return taskstore.Task{}, errors.New("单次最多添加或更新 50 个账号")
+	}
 	items := make([]batchItem, 0, len(requests))
 	seen := map[string]struct{}{}
 	for _, request := range requests {
@@ -160,9 +166,15 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 		if err != nil {
 			return taskstore.Task{}, err
 		}
-		key := strings.ToLower(strings.TrimSpace(validated.auth.Host)) + "\x00" + validated.candidateID()
+		keyParts := []string{
+			strings.ToLower(strings.TrimSpace(validated.auth.Host)), validated.candidateID(),
+		}
+		if len(validated.request.AccountIDs) == 0 {
+			keyParts = append(keyParts, strings.Join(onboardingLocalIDs(validated.locals), ","))
+		}
+		key := strings.Join(keyParts, "\x00")
 		if _, found := seen[key]; found {
-			return taskstore.Task{}, errors.New("同一个上游分组不能在一个批次中重复提交")
+			return taskstore.Task{}, errors.New("同一个账号绑定目标不能在一个批次中重复提交")
 		}
 		seen[key] = struct{}{}
 		items = append(items, batchItem{
@@ -188,6 +200,27 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 		return taskstore.Task{}, err
 	}
 	return task, nil
+}
+
+func expandBatchRequests(requests []Request) []Request {
+	result := make([]Request, 0, len(requests))
+	for _, request := range requests {
+		localGroupIDs := request.LocalGroupIDs
+		if len(localGroupIDs) == 0 && strings.TrimSpace(request.LocalGroupID) != "" {
+			localGroupIDs = []string{request.LocalGroupID}
+		}
+		if len(request.AccountIDs) > 0 || len(localGroupIDs) <= 1 {
+			result = append(result, request)
+			continue
+		}
+		for _, localGroupID := range localGroupIDs {
+			expanded := request
+			expanded.LocalGroupID = localGroupID
+			expanded.LocalGroupIDs = []string{localGroupID}
+			result = append(result, expanded)
+		}
+	}
+	return result
 }
 
 func (s *Service) newQueuedTask(operation, message string) (taskstore.Task, error) {
@@ -298,15 +331,8 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	lockedHost := configstore.CanonicalHost(validated.auth.Host)
 	lockedUpstreamID := strings.TrimSpace(validated.candidate.UpstreamID)
 	lockedAccountIDs := append([]string{}, validated.request.AccountIDs...)
-	resources := []string{mutationguard.Upstream(lockedHost)}
-	if len(lockedAccountIDs) == 0 {
-		resources = append(resources, mutationguard.AccountCatalog())
-	} else {
-		for _, accountID := range lockedAccountIDs {
-			resources = append(resources, mutationguard.Account(accountID))
-		}
-	}
-	guardedCtx, releaseMutation, err := targetguard.Acquire(ctx, s.repository, resources...)
+	resources := onboardingMutationResources(lockedHost, lockedAccountIDs)
+	guardedCtx, releaseMutation, err := mutationguard.Acquire(ctx, s.repository, resources...)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -325,7 +351,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		strings.Join(lockedAccountIDs, "\x00") != strings.Join(validated.request.AccountIDs, "\x00") {
 		return map[string]any{"remote_write": false}, errors.New("获取变更租约后开户目标身份已变化，请重试")
 	}
-	ctx, err = targetguard.Bind(ctx, s.private)
+	ctx, err = targetguard.Pin(ctx, s.private)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -334,7 +360,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	}
 	primaryLocal := validated.locals[0]
 	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier)
-	platform, err := accountPlatform(validated.request, validated.candidate, primaryLocal)
+	platform, err := accountPlatform(validated.request, validated.candidate)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -452,7 +478,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	remark := creationRemark(validated.candidate, validated.request.Notes, accountMarker, pending.CreatedAt)
 	client, err := adminclient.New(adminclient.Config{
 		BaseURL: target.BaseURL, AdminKey: target.AdminKey,
-		Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 3,
+		Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 1,
 	}, nil)
 	if err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
@@ -465,7 +491,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
 		"credentials": map[string]any{"api_key": key.Secret, "base_url": validated.accountBaseURL}, "extra": validated.request.Extra,
 		"rate_multiplier": json.Number(validated.multiplier), "group_ids": localGroupNumericIDs,
-		"concurrency": concurrency, "priority": priority,
+		"concurrency": concurrency, "priority": priority, "schedulable": validated.request.Schedulable,
 		"auto_pause_on_expired": true,
 	}
 	var created map[string]any
@@ -506,47 +532,68 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
 		return result, fmt.Errorf("管理账号 %s 已确认但待续状态保存失败：%w", accountID, err)
 	}
-	// The account-catalog lease stays held until this unpublished ID is committed.
-	created, err = client.Account(ctx, accountID)
-	if err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("管理账号 %s 创建后完整读回失败：%w", accountID, err))
+	readbackConfirmed := false
+	if completeCreatedAccountResponse(created) {
+		if err := verifyCreatedAccount(created, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); err != nil {
+			return s.pendingFailure(ctx, validated, pending, result, err)
+		}
+		if value, ok := created["schedulable"].(bool); ok && value == validated.request.Schedulable {
+			readbackConfirmed = true
+		}
 	}
-	if err := verifyCreatedAccount(created, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, err)
-	}
-	_, err = client.Mutate(ctx, "POST", "/admin/accounts/"+accountID+"/schedulable", map[string]any{"schedulable": validated.request.Schedulable})
-	if err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, redactSecret(err, key.Secret))
-	}
-	created, err = client.Account(ctx, accountID)
-	if err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("账号调度状态写入后完整读回失败：%w", err))
-	}
-	if err := verifyCreatedAccount(created, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, err)
-	}
-	verified, ok := created["schedulable"].(bool)
-	if !ok || verified != validated.request.Schedulable {
-		return s.pendingFailure(ctx, validated, pending, result, errors.New("账号调度状态写后完整读回不一致"))
+	// Current targets persist schedulable during creation. Older targets omit it,
+	// so retain one short compatibility write but never wait for a cache readback.
+	createdSchedulable, schedulablePresent := created["schedulable"].(bool)
+	if !schedulablePresent || createdSchedulable != validated.request.Schedulable {
+		writeCtx, cancelWrite := context.WithTimeout(ctx, schedulableWriteTimeout)
+		scheduleResponse, schedulableWriteErr := client.SetAccountSchedulable(writeCtx, accountID, validated.request.Schedulable)
+		cancelWrite()
+		if schedulableWriteErr != nil {
+			result["schedulable_warning"] = "账号已创建，调度状态兼容写未确认：" + safeError(redactSecret(schedulableWriteErr, key.Secret))
+		} else if completeCreatedAccountResponse(scheduleResponse) {
+			if verifyErr := verifyCreatedAccount(scheduleResponse, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); verifyErr == nil {
+				value, ok := scheduleResponse["schedulable"].(bool)
+				readbackConfirmed = ok && value == validated.request.Schedulable
+			}
+		}
 	}
 	projection := business.OnboardingProjection{
 		OperationID: operationID, AccountID: accountID, AccountName: accountName,
+		Platform:     platform,
 		UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType, BaseURL: validated.accountBaseURL,
 		UpstreamKeyID: key.KeyID, UpstreamKeyName: key.Name, UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
-		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: verified,
-		Priority: &priority, Concurrency: &concurrency, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: true,
+		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: validated.request.Schedulable,
+		Priority: &priority, Concurrency: &concurrency, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
 	}
-	return map[string]any{
-		"operation_id": operationID, "account_id": accountID, "account_name": accountName,
-		"local_group_ids": onboardingLocalIDs(validated.locals), "local_group_names": onboardingLocalNames(validated.locals),
-		"upstream_group_id": validated.candidateID(), "upstream_group_name": validated.candidate.GroupName,
-		"schedulable": verified, "credentials": "已保存到 Console 私有配置库", "upstream_key_created": keyCreatedNow,
-		"remote_write": true, "readback_confirmed": true, "concurrency": concurrency, "priority": priority,
-	}, nil
+	result["operation_id"] = operationID
+	result["account_id"] = accountID
+	result["account_name"] = accountName
+	result["local_group_ids"] = onboardingLocalIDs(validated.locals)
+	result["local_group_names"] = onboardingLocalNames(validated.locals)
+	result["upstream_group_id"] = validated.candidateID()
+	result["upstream_group_name"] = validated.candidate.GroupName
+	result["schedulable"] = validated.request.Schedulable
+	result["credentials"] = "已保存到 Console 私有配置库"
+	result["readback_confirmed"] = readbackConfirmed
+	result["concurrency"] = concurrency
+	result["priority"] = priority
+	return result, nil
+}
+
+func onboardingMutationResources(host string, accountIDs []string) []string {
+	resources := make([]string, 0, len(accountIDs)+2)
+	if len(accountIDs) == 0 {
+		return append(resources, mutationguard.UpstreamKeyCatalog(host))
+	} else {
+		for _, accountID := range accountIDs {
+			resources = append(resources, mutationguard.Account(accountID))
+		}
+	}
+	return resources
 }
 
 func accountCreationParameters(defaults configstore.AccountDefaultsSettings, request Request) (int64, int64) {
@@ -694,6 +741,9 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	if err != nil {
 		return validatedRequest{}, err
 	}
+	if len(accountIDs) == 0 && len(locals) != 1 {
+		return validatedRequest{}, errors.New("每个新增账号只能绑定一个本地分组，多选分组请使用批量添加")
+	}
 	if len(accountIDs) == 0 && !candidate.CanCreateKey {
 		if candidate.UnavailableReason != nil {
 			return validatedRequest{}, errors.New(*candidate.UnavailableReason)
@@ -707,10 +757,12 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 		request: request, accountBaseURL: accountBaseURL, multiplier: multiplier,
 		locals: locals, candidate: *candidate, auth: *auth,
 	}
-	if len(accountIDs) == 0 {
-		if _, err := accountPlatform(request, *candidate, locals[0]); err != nil {
-			return validatedRequest{}, err
-		}
+	platform, err := accountPlatform(request, *candidate)
+	if err != nil {
+		return validatedRequest{}, err
+	}
+	if err := validateLocalGroupPlatforms(platform, *candidate, locals); err != nil {
+		return validatedRequest{}, err
 	}
 	return validated, nil
 }
@@ -973,6 +1025,19 @@ func verifyCreatedAccount(value map[string]any, accountID, name, platform, accou
 	return nil
 }
 
+func completeCreatedAccountResponse(value map[string]any) bool {
+	for _, field := range []string{"id", "name", "platform", "type", "notes", "group_ids", "priority", "concurrency"} {
+		if _, present := value[field]; !present {
+			return false
+		}
+	}
+	_, multiplierPresent := value["rate_multiplier"]
+	if !multiplierPresent {
+		_, multiplierPresent = value["multiplier"]
+	}
+	return multiplierPresent
+}
+
 func markerLinePresent(notes, marker string) bool {
 	notes = strings.ReplaceAll(notes, "\r\n", "\n")
 	for _, line := range strings.Split(notes, "\n") {
@@ -1000,38 +1065,93 @@ func stableIDs(value any) ([]string, error) {
 	return result, nil
 }
 
-func accountPlatform(request Request, candidate business.OnboardingCandidate, local business.LocalOnboardingGroup) (string, error) {
+func accountPlatform(request Request, candidate business.OnboardingCandidate) (string, error) {
+	candidatePlatform := ""
+	if candidate.Platform != nil {
+		candidatePlatform = normalizePlatform(*candidate.Platform)
+	}
+	if candidatePlatform == "" {
+		candidatePlatform = inferCandidatePlatform(candidate)
+	}
 	if request.PlatformPresent {
 		if request.Platform == nil || strings.TrimSpace(*request.Platform) == "" {
 			return "", errors.New("平台不能为空")
 		}
-		return normalizePlatform(*request.Platform), nil
+		requestedPlatform := normalizePlatform(*request.Platform)
+		if candidatePlatform == "" {
+			return "", errors.New("上游分组目录缺少平台且无法安全识别，已拒绝使用请求值覆盖")
+		}
+		if requestedPlatform != candidatePlatform {
+			return "", fmt.Errorf(
+				"请求平台 %s 与上游分组平台 %s 不一致，已拒绝覆盖目录平台",
+				requestedPlatform,
+				candidatePlatform,
+			)
+		}
+		return requestedPlatform, nil
 	}
-	if candidate.Platform != nil && strings.TrimSpace(*candidate.Platform) != "" {
-		return normalizePlatform(*candidate.Platform), nil
+	if candidatePlatform != "" {
+		return candidatePlatform, nil
 	}
-	identity := strings.ToLower(candidate.GroupName + " " + local.Name)
+	return "", errors.New("上游分组目录缺少平台且无法从上游分组识别")
+}
+
+func inferCandidatePlatform(candidate business.OnboardingCandidate) string {
+	identity := candidate.GroupName
+	if candidate.Description != nil {
+		identity += " " + *candidate.Description
+	}
+	identity = strings.ToLower(identity)
 	for _, item := range []struct {
 		markers  []string
 		platform string
 	}{
 		{[]string{"gemini"}, "gemini"}, {[]string{"grok"}, "grok"}, {[]string{"deepseek"}, "deepseek"},
+		{[]string{"kimi", "moonshot"}, "kimi"},
 		{[]string{"glm", "zhipu"}, "zhipu"}, {[]string{"claude", "ccmax", "kiro", "anthropic"}, "anthropic"},
 		{[]string{"codex", "pro", "gpt", "openai"}, "openai"},
 	} {
 		for _, marker := range item.markers {
 			if strings.Contains(identity, marker) {
-				return item.platform, nil
+				return item.platform
 			}
 		}
 	}
-	return "", errors.New("上游分组目录缺少平台且无法从已选分组识别")
+	return ""
+}
+
+func validateLocalGroupPlatforms(platform string, candidate business.OnboardingCandidate, locals []business.LocalOnboardingGroup) error {
+	for _, local := range locals {
+		if local.Platform == nil || strings.TrimSpace(*local.Platform) == "" {
+			return fmt.Errorf("本地分组「%s」缺少平台，无法安全绑定账号", local.Name)
+		}
+		localPlatform := normalizePlatform(*local.Platform)
+		if localPlatform != platform {
+			return fmt.Errorf(
+				"平台不匹配：上游分组「%s」为 %s，本地分组「%s」为 %s",
+				candidate.GroupName,
+				platform,
+				local.Name,
+				localPlatform,
+			)
+		}
+	}
+	return nil
 }
 
 func normalizePlatform(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "sub2api" || value == "newapi" || value == "oneapi" {
+	switch value {
+	case "sub2api", "newapi", "oneapi":
 		return "openai"
+	case "glm", "zhipuai":
+		return "zhipu"
+	case "claude":
+		return "anthropic"
+	case "google":
+		return "gemini"
+	case "moonshot":
+		return "kimi"
 	}
 	return value
 }

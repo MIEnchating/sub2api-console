@@ -20,6 +20,10 @@ import { Combobox as ComboboxPrimitive } from "@base-ui/react";
 import { Check, ChevronDown, Search, X } from "lucide-react";
 import * as React from "react";
 
+import {
+  dropdownSearchInputClassName,
+  focusDropdownSearchOnMount,
+} from "@/components/ui/dropdown-search-focus";
 import { cn } from "@/lib/utils";
 
 function Combobox<Value, Multiple extends boolean | undefined = false>(
@@ -66,10 +70,12 @@ function ComboboxSearch({ className, ...props }: ComboboxPrimitive.Input.Props) 
         aria-hidden="true"
       />
       <ComboboxPrimitive.Input
+        ref={focusDropdownSearchOnMount}
         data-slot="combobox-search"
         className={cn(
-          "border-input/50 bg-input/30 placeholder:text-muted-foreground h-8 w-full rounded-lg border pr-2.5 pl-8 text-sm outline-none",
+          "border-input/50 bg-input/30 placeholder:text-muted-foreground h-8 w-full rounded-lg border pr-2.5 pl-8 text-sm",
           className,
+          dropdownSearchInputClassName,
         )}
         {...props}
       />

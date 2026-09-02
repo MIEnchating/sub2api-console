@@ -16,6 +16,11 @@ const capabilityOptions = [
   ["scaling_enabled", "智能扩容"],
 ] as const;
 
+export const groupPolicyDialogLayout = {
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+  body: "min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1",
+} as const;
+
 export function GroupPolicyEditorFields(props: {
   value: GroupPolicyOverrideUpdate;
   onChange: (value: GroupPolicyOverrideUpdate) => void;
@@ -26,10 +31,7 @@ export function GroupPolicyEditorFields(props: {
   ) => props.onChange({ ...props.value, [field]: value });
 
   return (
-    <div
-      className="min-h-0 min-w-0 space-y-5 overflow-x-hidden overflow-y-auto overscroll-contain pr-1"
-      data-testid="group-policy-editor-fields"
-    >
+    <div className="min-w-0 space-y-5" data-testid="group-policy-editor-fields">
       <div className="flex min-w-0 items-center justify-between gap-4 border-b pb-4">
         <label className="min-w-0 cursor-pointer" htmlFor="group-policy-enabled">
           <span className="block text-sm font-medium">参与守护</span>

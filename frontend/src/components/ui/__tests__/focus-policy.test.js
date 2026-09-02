@@ -16,7 +16,7 @@ function productionSourceFiles(directory = sourceRoot) {
 }
 
 describe("global focus policy", () => {
-  it("does not allow native or programmatic automatic focus", () => {
+  it("only allows programmatic automatic focus for dropdown searches", () => {
     const nativeFocusAttribute = ["auto", "Focus"].join("");
     const programmaticFocusCall = new RegExp(`\\.${["fo", "cus"].join("")}\\s*\\(`);
     const enabledInitialFocus = new RegExp(
@@ -24,10 +24,13 @@ describe("global focus policy", () => {
     );
     const offenders = productionSourceFiles().flatMap((path) => {
       const source = readFileSync(path, "utf8");
+      const relativePath = relative(sourceRoot, path);
+      const allowsDropdownSearchFocus = relativePath === "components/ui/dropdown-search-focus.ts";
+      if (allowsDropdownSearchFocus) return [];
       return source.includes(nativeFocusAttribute) ||
         programmaticFocusCall.test(source) ||
         enabledInitialFocus.test(source)
-        ? [relative(sourceRoot, path)]
+        ? [relativePath]
         : [];
     });
 
@@ -39,11 +42,36 @@ describe("global focus policy", () => {
       "components/ui/dialog.tsx",
       "components/ui/sheet.tsx",
       "components/ui/combobox.tsx",
-      "App.tsx",
+      "components/data-table/filter-menu.tsx",
     ];
 
     for (const path of surfaces) {
       expect(readFileSync(join(sourceRoot, path), "utf8"), path).toContain("initialFocus={false}");
     }
+  });
+
+  it("focuses every dropdown search without adding a focus appearance", () => {
+    const surfaces = [
+      "components/ui/select.tsx",
+      "components/ui/combobox.tsx",
+      "components/data-table/filter-menu.tsx",
+    ];
+
+    for (const path of surfaces) {
+      const source = readFileSync(join(sourceRoot, path), "utf8");
+      expect(source, path).toContain("ref={focusDropdownSearchOnMount}");
+      expect(source, path).toContain("dropdownSearchInputClassName");
+    }
+  });
+
+  it("uses the shared filter menu instead of faceted selects", () => {
+    const offenders = productionSourceFiles().flatMap((path) => {
+      const source = readFileSync(path, "utf8");
+      return /<Select(?:Trigger|Content|Item)\b[^>]*\bappearance=["']faceted["']/.test(source)
+        ? [relative(sourceRoot, path)]
+        : [];
+    });
+
+    expect(offenders).toEqual([]);
   });
 });

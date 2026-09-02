@@ -776,6 +776,9 @@ func TestUpstreamResourceCanonicalizesURLAliases(t *testing.T) {
 		if resource := Upstream(alias); resource != "upstream/api.example" {
 			t.Fatalf("Upstream(%q) = %q", alias, resource)
 		}
+		if resource := UpstreamKeyCatalog(alias); resource != "upstream-keys/api.example" {
+			t.Fatalf("UpstreamKeyCatalog(%q) = %q", alias, resource)
+		}
 	}
 }
 

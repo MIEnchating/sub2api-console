@@ -61,6 +61,13 @@ export type NewAPIWorkspace = {
   platforms: NewAPIPlatform[];
   local_groups: NewAPILocalGroup[];
   bindings: NewAPIGroupBinding[];
+  sub2api_base_url: string;
+};
+
+export type NewAPIChannelKey = {
+  key_id: string;
+  name: string;
+  group_id: string;
 };
 
 export type NewAPIRemoteGroup = {
@@ -415,7 +422,7 @@ export type AutoInspectionStatus = AutoInspectionConfig & {
   last_summary: InspectionRoundSummary;
   last_run_at: string | null;
   next_run_at: string | null;
-  last_status: "succeeded" | "failed" | "cancelled" | null;
+  last_status: "succeeded" | "partial" | "failed" | "cancelled" | null;
   last_error: string | null;
   last_task_id: string | null;
   queue: Array<{
@@ -436,7 +443,7 @@ export type AutoInspectionStatus = AutoInspectionConfig & {
   heartbeat_history: Array<{
     checked_at: string;
     completed_at: string | null;
-    status: "running" | "succeeded" | "failed" | "cancelled";
+    status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
     operations: string[];
     operation_timings: Array<{
       operation: string;
@@ -986,7 +993,7 @@ export type Task = {
   id: string;
   skill: string;
   operation: string;
-  status: "queued" | "running" | "waiting_input" | "succeeded" | "failed" | "cancelled";
+  status: "queued" | "running" | "waiting_input" | "succeeded" | "partial" | "failed" | "cancelled";
   progress: number;
   message: string;
   result: Record<string, unknown>;
@@ -1142,15 +1149,27 @@ export const api = {
   createNewAPIChannel: (
     platformId: string,
     payload: {
-      name: string;
       sub2api_group_id: string;
-      base_url: string;
-      service_key: string;
+      key_id: string;
       models: string[];
+      newapi_groups: string[];
     },
   ) =>
     request<Record<string, unknown>>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  createNewAPIChannelKey: (platformId: string, payload: { sub2api_group_id: string }) =>
+    request<NewAPIChannelKey>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-key`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  fetchNewAPIChannelModels: (
+    platformId: string,
+    payload: { sub2api_group_id: string; key_id: string },
+  ) =>
+    request<{ models: string[] }>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-models`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
   saveNewAPIModelPrices: (platformId: string, prices: NewAPIModelPrice[]) =>

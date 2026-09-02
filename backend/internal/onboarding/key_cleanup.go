@@ -114,7 +114,9 @@ func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task,
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
-	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
+	guardedCtx, release, err := mutationguard.Acquire(
+		ctx, s.repository, mutationguard.Upstream(host), mutationguard.UpstreamKeyCatalog(host),
+	)
 	if err != nil {
 		s.finishKeyCleanupFailure(ctx, task, err)
 		return

@@ -8,10 +8,11 @@ describe("UpstreamGroupBindingEditor", () => {
     const markup = renderToStaticMarkup(
       <UpstreamGroupBindingEditor
         upstreamGroupName="pro"
+        upstreamPlatform="openai"
         groups={[
-          { id: "6", name: "标准", rate_multiplier: "0.2" },
-          { id: "7", name: "低价" },
-          { id: "8", name: "新组" },
+          { id: "6", name: "标准", platform: "openai", rate_multiplier: "0.2" },
+          { id: "7", name: "低价", platform: "openai" },
+          { id: "8", name: "新组", platform: "openai" },
         ]}
         value={["7", "8"]}
         disabled={false}

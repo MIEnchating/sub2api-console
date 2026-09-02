@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -9,6 +10,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/config"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 func TestHTTPServerDoesNotTerminateLongLivedSSEWrites(t *testing.T) {
@@ -18,6 +22,65 @@ func TestHTTPServerDoesNotTerminateLongLivedSSEWrites(t *testing.T) {
 	}
 	if server.ReadHeaderTimeout != 10*time.Second || server.ReadTimeout != 30*time.Second || server.IdleTimeout != 60*time.Second {
 		t.Fatalf("unexpected HTTP timeout configuration: %#v", server)
+	}
+}
+
+func TestListenServiceEndpointsRejectsSecondInstanceAtStartupGate(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	listeners, err := listenServiceEndpoints(config.Config{ListenAddress: occupied.Addr().String()})
+	if err == nil {
+		_ = listeners.close()
+		t.Fatal("second instance acquired an occupied service endpoint")
+	}
+}
+
+func TestPortConflictDoesNotRecoverTasksOwnedByRunningInstance(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	directory := t.TempDir()
+	taskDB := filepath.Join(directory, "tasks.sqlite3")
+	store, err := taskstore.Open(taskDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.Save(context.Background(), taskstore.Task{
+		ID: "active-task", Skill: "test", Operation: "onboard-batch", Status: "running",
+		Progress: 10, Message: "正在运行", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("SUB2API_CONSOLE_DATA_DIR", directory)
+	t.Setenv("SUB2API_CONSOLE_LISTEN", occupied.Addr().String())
+	if err := run(); err == nil {
+		t.Fatal("second instance unexpectedly started on an occupied port")
+	}
+
+	store, err = taskstore.Open(taskDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	task, err := store.Get(context.Background(), "active-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "running" || task.Message != "正在运行" {
+		t.Fatalf("active task was changed by rejected instance: %#v", task)
 	}
 }
 

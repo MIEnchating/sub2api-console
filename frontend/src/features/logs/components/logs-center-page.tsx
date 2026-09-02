@@ -12,6 +12,7 @@ import {
   type UnifiedLogState,
 } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
 import { DataTablePanel } from "@/components/data-table/table-panel";
@@ -31,13 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -104,18 +98,13 @@ function LogStateFilter(props: {
   onChange: (value: UnifiedLogState) => void;
 }) {
   return (
-    <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger appearance="faceted" className="w-32" aria-label="执行结果">
-        <SelectValue>{logStateLabel(props.value)}</SelectValue>
-      </SelectTrigger>
-      <SelectContent appearance="faceted" align="start">
-        {states.map((option) => (
-          <SelectItem appearance="faceted" key={option} value={option}>
-            {logStateLabel(option)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterMenu
+      label="执行结果"
+      options={states.filter((option) => option !== "all")}
+      value={props.value === "all" ? null : props.value}
+      onValueChange={(value) => props.onChange(value ?? "all")}
+      optionLabel={logStateLabel}
+    />
   );
 }
 
@@ -124,18 +113,13 @@ function EventLevelFilter(props: {
   onChange: (value: UnifiedLogEventLevel) => void;
 }) {
   return (
-    <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger appearance="faceted" className="w-32" aria-label="事件级别">
-        <SelectValue>{logEventLevelLabel(props.value)}</SelectValue>
-      </SelectTrigger>
-      <SelectContent appearance="faceted" align="start">
-        {eventLevels.map((option) => (
-          <SelectItem appearance="faceted" key={option} value={option}>
-            {logEventLevelLabel(option)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterMenu
+      label="事件级别"
+      options={eventLevels.filter((option) => option !== "all")}
+      value={props.value === "all" ? null : props.value}
+      onValueChange={(value) => props.onChange(value ?? "all")}
+      optionLabel={logEventLevelLabel}
+    />
   );
 }
 
@@ -145,21 +129,12 @@ function EventGroupFilter(props: {
   onChange: (value: string) => void;
 }) {
   return (
-    <Select value={props.value} onValueChange={(value) => value && props.onChange(value)}>
-      <SelectTrigger appearance="faceted" className="w-40" aria-label="事件分组">
-        <SelectValue>{props.value === "all" ? "全部分组" : props.value}</SelectValue>
-      </SelectTrigger>
-      <SelectContent appearance="faceted" align="start">
-        <SelectItem appearance="faceted" value="all">
-          全部分组
-        </SelectItem>
-        {props.groups.map((group) => (
-          <SelectItem appearance="faceted" key={group.id ?? group.name} value={group.name}>
-            {group.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterMenu
+      label="事件分组"
+      options={props.groups.map((group) => group.name)}
+      value={props.value === "all" ? null : props.value}
+      onValueChange={(value) => props.onChange(value ?? "all")}
+    />
   );
 }
 

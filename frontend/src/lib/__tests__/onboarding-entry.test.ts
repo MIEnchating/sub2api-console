@@ -12,6 +12,7 @@ import {
   candidateHasExistingBinding,
   candidateHasOnboardingChange,
   candidateUsesAccountBaseURL,
+  compatibleOnboardingLocalGroups,
   composeOnboardingBaseUrl,
   localGroupSelectionLabel,
   localGroupMultiplierLabel,
@@ -28,6 +29,23 @@ import {
 } from "../onboarding-entry";
 
 describe("onboarding entry workflow", () => {
+  it("only offers local groups matching the upstream group platform", () => {
+    const candidate = { platform: "zhipu" };
+    const groups = [
+      { id: "27", name: "国模-平价", platform: "openai" },
+      { id: "28", name: "GLM 专用", platform: "zhipu" },
+      { id: "29", name: "未标注", platform: null },
+    ];
+
+    expect(compatibleOnboardingLocalGroups(candidate, groups)).toEqual([groups[1]]);
+  });
+
+  it("fails closed when the upstream group platform is missing", () => {
+    const groups = [{ id: "27", name: "国模-平价", platform: "openai" }];
+
+    expect(compatibleOnboardingLocalGroups({ platform: null }, groups)).toEqual([]);
+  });
+
   it("finds the previous and next upstream in management-list order", () => {
     const upstreams = [
       { host: "a.example", name: "A", upstream_type: "sub2api" },

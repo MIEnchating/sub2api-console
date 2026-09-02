@@ -2739,6 +2739,12 @@ func TestTaskEventStreamContinuesUntilTerminalState(t *testing.T) {
 	}
 }
 
+func TestPartialTaskStatusIsTerminal(t *testing.T) {
+	if !terminalTaskStatus("partial") {
+		t.Fatal("partial task status must stop task event streaming")
+	}
+}
+
 func TestRequestTraceAndAlertRoutesUseCurrentServicesAndBoundedLimits(t *testing.T) {
 	requestIDs := []string{}
 	trace := business.RequestTrace{RequestID: "req/42", Matched: true, Records: []business.UsageRecord{}, RecentErrors: []business.UsageRecord{}}

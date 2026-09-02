@@ -37,6 +37,10 @@ describe("SystemLogSearchPanel", () => {
     }
     expect(markup).toContain("查询 Sub2API 系统日志");
     expect(markup).toContain('type="datetime-local"');
+    expect(markup).toContain('aria-label="时间范围筛选"');
+    expect(markup).toContain('aria-label="级别筛选"');
+    expect(markup).not.toContain('data-slot="select-trigger"');
+    expect(markup).not.toContain("全部级别");
     expect(markup).not.toContain("组件");
     expect(markup).not.toContain("user_id");
   });

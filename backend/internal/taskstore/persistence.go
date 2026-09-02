@@ -88,7 +88,7 @@ func ContextFailureCause(ctx context.Context) error {
 }
 
 func MarkCancelled(ctx context.Context, task *Task, message string) bool {
-	if ctx == nil || task == nil || task.Status == "succeeded" || task.Status == "waiting_input" {
+	if ctx == nil || task == nil || task.Status == "succeeded" || task.Status == "partial" || task.Status == "waiting_input" {
 		return false
 	}
 	if cause := ContextFailureCause(ctx); cause != nil {

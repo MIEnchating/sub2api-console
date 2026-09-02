@@ -8,6 +8,7 @@ import {
   AutoInspectionQueueDetails,
   SchedulerHeaderControls,
   SchedulerSidebarStatus,
+  autoInspectionDetailDialogLayout,
   mergeAutoInspectionDraft,
   navItems,
   viewForPath,
@@ -463,6 +464,8 @@ describe("自动巡检页面", () => {
     expect(markup).toContain('class="grid gap-2.5"');
     expect(markup).toContain('data-testid="inspection-summary-grid"');
     expect(markup).toContain("grid grid-cols-2 gap-px border-b");
+    expect(markup).toContain("sm:grid-cols-4");
+    expect(markup).not.toContain("2xl:grid-cols-8");
     expect(markup).not.toContain("grid grid-cols-2 divide-x divide-y");
     expect(markup).toContain('data-testid="auto-inspection-workspace"');
     expect(markup).toContain("min-[1700px]:min-h-80 min-[1700px]:flex-1");
@@ -477,6 +480,14 @@ describe("自动巡检页面", () => {
     expect(markup).not.toContain("max-w-5xl");
     expect(markup).not.toContain("max-w-7xl");
     expect(markup).not.toContain("border-t pt-3 xl:col-span-3");
+  });
+
+  it("详情弹窗由受高度约束的内容区滚动到底部数据", () => {
+    expect(autoInspectionDetailDialogLayout.content).toContain("grid-rows-[auto_minmax(0,1fr)]");
+    expect(autoInspectionDetailDialogLayout.content).toContain("overflow-hidden");
+    expect(autoInspectionDetailDialogLayout.body).toContain("min-h-0");
+    expect(autoInspectionDetailDialogLayout.body).toContain("overflow-y-auto");
+    expect(autoInspectionDetailDialogLayout.body).not.toContain("overflow-hidden");
   });
 
   it("用顺序链和倒计时突出下次心跳任务", () => {
@@ -621,6 +632,31 @@ describe("自动巡检页面", () => {
     expect(details).toContain("relative flex items-center justify-center");
     expect(details).not.toContain("任务 ID");
     expect(details).not.toContain("耗时占比");
+  });
+
+  it("存在账号级失败时将整轮巡检显示为部分失败", () => {
+    const partial: AutoInspectionStatus = {
+      ...status,
+      last_status: "partial",
+      heartbeat_history: [
+        {
+          ...status.heartbeat_history[2],
+          status: "partial",
+          error: "账号倍率与名称同步部分失败：缺失 0，失败 23",
+        },
+      ],
+    };
+    const markup = renderPage(partial);
+    const details = renderToStaticMarkup(
+      <AutoInspectionHeartbeatDetails record={partial.heartbeat_history[0]} />,
+    );
+
+    expect(markup).toContain("执行部分失败");
+    expect(markup).toContain("异常信息");
+    expect(markup).toContain("text-warning");
+    expect(details).toContain("部分失败");
+    expect(details).toContain("部分失败详情");
+    expect(details).not.toContain("失败原因");
   });
 
   it("旧任务按涉及上游回填账号总数而不把 Key 数当账号总数", () => {

@@ -428,6 +428,9 @@ function pricingDecisionReason(
   config: PricingConfig,
 ) {
   if (decision.skipped) return plainPricingIssue(decision.reason);
+  if (decision.reason?.includes("没有满足盈利比例")) {
+    return `账号成本 ${decision.cost_multiplier} 已高于本互换组所有分组可接受的成本；本次保留当前分组。请降低目标盈利比例或提高候选分组售价。`;
+  }
   const basis = pricingDecisionBasis(decision, groups, config);
   if (!decision.changed) {
     return basis[0]?.startsWith("当前分组不属于")
@@ -513,6 +516,7 @@ export function pricingPreviewDecisions(
     });
     const desired = decision.current_group_ids.filter((groupID) => !setByGroup.has(groupID));
     const eligible: string[] = [];
+    let reason: string | null = null;
     for (const setIndex of [...activeSets].sort((left, right) => left - right)) {
       const compatible: Array<{ group: PricingGroup; rate: number }> = [];
       for (const groupID of config.exchange_group_sets[setIndex] ?? []) {
@@ -527,14 +531,16 @@ export function pricingPreviewDecisions(
         .sort(
           (left, right) => left.rate - right.rate || Number(left.group.id) - Number(right.group.id),
         )[0];
-      const chosenGroup =
-        chosen?.group ??
-        (compatible.length === 0
-          ? (currentBySet.get(setIndex) ?? [])
-              .map((groupID) => byID.get(groupID))
-              .filter((group): group is PricingGroup => Boolean(group))
-              .sort((left, right) => Number(left.id) - Number(right.id))[0]
-          : undefined);
+      let chosenGroup = chosen?.group;
+      if (!chosenGroup) {
+        chosenGroup = (currentBySet.get(setIndex) ?? [])
+          .map((groupID) => byID.get(groupID))
+          .filter((group): group is PricingGroup => Boolean(group))
+          .sort((left, right) => Number(left.id) - Number(right.id))[0];
+        if (compatible.length > 0) {
+          reason = "没有满足盈利比例的可用分组，保留当前分组";
+        }
+      }
       if (chosenGroup) {
         desired.push(chosenGroup.id);
         if (chosen) eligible.push(chosenGroup.name);
@@ -547,6 +553,7 @@ export function pricingPreviewDecisions(
       eligible_groups: eligible,
       changed: decision.current_group_ids.join(",") !== unique.join(","),
       skipped: false,
+      reason,
     };
   });
 }

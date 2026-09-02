@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type TrafficRankingSort } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
@@ -13,13 +14,6 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { SearchField } from "@/components/data-table/search-field";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -99,10 +93,6 @@ export function TrafficRankingPage() {
     [ranking.data?.accounts, search],
   );
   const pagination = useClientPagination(visibleAccounts);
-  const timeRangeLabel =
-    timeRanges.find((option) => option.value === timeRange)?.label ?? timeRange;
-  const sortByLabel = rankingSorts.find((option) => option.value === sortBy)?.label ?? sortBy;
-
   useEffect(
     () => pagination.setCurrentPage(1),
     [pagination.setCurrentPage, search, timeRange, group, sortBy],
@@ -139,45 +129,32 @@ export function TrafficRankingPage() {
       <div className="flex h-full min-h-0 flex-col gap-3">
         <TableFilterToolbar>
           <SearchField value={search} onChange={setSearch} placeholder="搜索账号" />
-          <Select value={timeRange} onValueChange={(value) => setTimeRange(value as TimeRange)}>
-            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="时间范围">
-              <SelectValue>{timeRangeLabel}</SelectValue>
-            </SelectTrigger>
-            <SelectContent appearance="faceted">
-              {timeRanges.map((option) => (
-                <SelectItem appearance="faceted" key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={group} onValueChange={(value) => setGroup(value ?? "all")}>
-            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="账号分组">
-              <SelectValue>{group === "all" ? "全部分组" : group}</SelectValue>
-            </SelectTrigger>
-            <SelectContent appearance="faceted">
-              <SelectItem appearance="faceted" value="all">
-                全部分组
-              </SelectItem>
-              {(groups.data ?? []).map((item) => (
-                <SelectItem appearance="faceted" key={item.name} value={item.name}>
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={sortBy} onValueChange={(value) => setSortBy(value as TrafficRankingSort)}>
-            <SelectTrigger appearance="faceted" size="sm" className="w-36" aria-label="排行维度">
-              <SelectValue>{sortByLabel}</SelectValue>
-            </SelectTrigger>
-            <SelectContent appearance="faceted">
-              {rankingSorts.map((option) => (
-                <SelectItem appearance="faceted" key={option.value} value={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <FilterMenu
+            label="时间范围"
+            options={timeRanges.map((option) => option.value)}
+            value={timeRange}
+            onValueChange={(value) => value && setTimeRange(value)}
+            optionLabel={(value) =>
+              timeRanges.find((option) => option.value === value)?.label ?? value
+            }
+            clearable={false}
+          />
+          <FilterMenu
+            label="账号分组"
+            options={(groups.data ?? []).map((item) => item.name)}
+            value={group === "all" ? null : group}
+            onValueChange={(value) => setGroup(value ?? "all")}
+          />
+          <FilterMenu
+            label="排行维度"
+            options={rankingSorts.map((option) => option.value)}
+            value={sortBy}
+            onValueChange={(value) => value && setSortBy(value)}
+            optionLabel={(value) =>
+              rankingSorts.find((option) => option.value === value)?.label ?? value
+            }
+            clearable={false}
+          />
         </TableFilterToolbar>
 
         <DataTablePanel className="flex-1">

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { GroupPolicyOverrideUpdate } from "../../../../api";
-import { GroupPolicyEditorFields } from "../group-policy-editor-fields";
+import { GroupPolicyEditorFields, groupPolicyDialogLayout } from "../group-policy-editor-fields";
 
 const value: GroupPolicyOverrideUpdate = {
   enabled: true,
@@ -72,12 +72,20 @@ describe("分组策略编辑布局", () => {
     expect(probe).toContain("测试模型");
   });
 
-  it("内容区限制最小宽度并隐藏横向溢出", () => {
+  it("字段限制最小宽度且弹窗正文隐藏横向溢出", () => {
     const markup = renderToStaticMarkup(
       <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
     );
 
     expect(markup).toContain("min-w-0");
-    expect(markup).toContain("overflow-x-hidden");
+    expect(groupPolicyDialogLayout.body).toContain("overflow-x-hidden");
+  });
+
+  it("弹窗正文独立纵向滚动并保留固定页脚", () => {
+    expect(groupPolicyDialogLayout.content).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
+    expect(groupPolicyDialogLayout.content).toContain("overflow-hidden");
+    expect(groupPolicyDialogLayout.body).toContain("min-h-0");
+    expect(groupPolicyDialogLayout.body).toContain("overflow-y-auto");
+    expect(groupPolicyDialogLayout.body).not.toContain("overflow-hidden");
   });
 });

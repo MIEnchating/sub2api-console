@@ -84,12 +84,13 @@ describe("流量排行页面", () => {
     expect(markup).toContain("22 / 24");
     expect(markup).toContain("待接入账号");
     expect(markup).toContain("无样本");
-    expect(markup).toContain('aria-label="时间范围"');
-    expect(markup).toContain('aria-label="账号分组"');
-    expect(markup).toContain('aria-label="排行维度"');
+    expect(markup).toContain('aria-label="时间范围筛选"');
+    expect(markup).toContain('aria-label="账号分组筛选"');
+    expect(markup).toContain('aria-label="排行维度筛选"');
     expect(markup).toContain("最近 24 小时");
-    expect(markup).toContain("全部分组");
+    expect(markup).not.toContain("全部分组");
     expect(markup).toContain("按流量");
+    expect(markup).not.toContain('data-appearance="faceted"');
     expect(markup).toContain("共</span><span");
     expect(markup).toContain("min-w-[980px]");
     expect(markup).toContain("overflow-auto");

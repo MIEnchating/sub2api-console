@@ -8,29 +8,94 @@ import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { newAPIManagementViews, type NewAPIManagementView } from "../constants";
+import type { NewAPIManagementView } from "../constants";
 import type { NewAPIPlatformValues } from "../lib/schemas";
 import { NewAPIChannelForm } from "./channel-form";
 import { NewAPIGroupBindings } from "./group-bindings";
 import { NewAPIModelPrices, NewAPIPriceDifferences } from "./model-prices";
 import { NewAPIPlatformDialog } from "./platform-dialog";
 
-export function NewAPIManagementPage() {
+type Props = {
+  view: "platform" | NewAPIManagementView;
+};
+
+const pageTitles: Record<Props["view"], string> = {
+  platform: "New API 主平台",
+  groups: "分组绑定",
+  channels: "渠道管理",
+  prices: "模型价格",
+  differences: "价格差异",
+};
+
+export function newAPIViewNeedsRemoteSnapshot(view: Props["view"]): boolean {
+  return view === "groups" || view === "channels" || view === "prices" || view === "differences";
+}
+
+export function NewAPIRemoteLoading(props: { label: string }) {
+  return (
+    <section
+      className="overflow-hidden rounded-md border bg-background"
+      role="status"
+      aria-label={props.label}
+    >
+      <div className="flex items-center justify-between border-b px-4 py-3">
+        <div className="grid gap-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-3 w-16" />
+        </div>
+        <Skeleton className="h-7 w-24" />
+      </div>
+      <div className="grid gap-px bg-border">
+        {Array.from({ length: 6 }, (_, index) => (
+          <div
+            key={index}
+            className="grid h-15 grid-cols-[minmax(8rem,1fr)_7rem_minmax(12rem,1fr)_5rem] items-center gap-4 bg-background px-4"
+          >
+            <Skeleton className="h-3 w-32 max-w-full" />
+            <Skeleton className="h-3 w-12" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-4 w-8 justify-self-center" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function NewAPIPlatformDetails(props: { platform: NewAPIPlatform }) {
+  return (
+    <section className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-2">
+      <div className="bg-background p-4">
+        <p className="text-muted-foreground text-xs">平台地址</p>
+        <p className="mt-1 truncate text-sm font-medium">{props.platform.base_url}</p>
+      </div>
+      <div className="bg-background p-4">
+        <p className="text-muted-foreground text-xs">User ID</p>
+        <p className="mt-1 font-mono text-sm font-medium">{props.platform.user_id}</p>
+      </div>
+      <div className="bg-background p-4">
+        <p className="text-muted-foreground text-xs">Admin Key</p>
+        <p className="mt-1 text-sm font-medium">
+          {props.platform.admin_key_configured ? "已配置" : "未配置"}
+        </p>
+      </div>
+      <div className="bg-background p-4">
+        <p className="text-muted-foreground text-xs">最后更新</p>
+        <p className="mt-1 text-sm font-medium">
+          {new Date(props.platform.updated_at).toLocaleString("zh-CN")}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+export function NewAPIManagementPage(props: Props) {
   const queryClient = useQueryClient();
   const [platformId, setPlatformId] = useState("");
-  const [view, setView] = useState<NewAPIManagementView>("groups");
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [editingPlatform, setEditingPlatform] = useState<NewAPIPlatform | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -49,20 +114,20 @@ export function NewAPIManagementPage() {
 
   const selectedPlatform =
     workspace.data?.platforms.find((platform) => platform.id === platformId) ?? null;
+  const needsRemoteSnapshot = newAPIViewNeedsRemoteSnapshot(props.view);
 
   const refresh = useMutation({
     mutationFn: () => api.refreshNewAPIPlatform(platformId),
     onSuccess: (value) => {
       setSnapshot(value);
-      toast.success("New API 数据已刷新");
     },
     onError: (error) => notifyOperationError(error, "New API 数据刷新失败"),
   });
 
   useEffect(() => {
     setSnapshot(null);
-    if (platformId) refresh.mutate();
-  }, [platformId]);
+    if (platformId && needsRemoteSnapshot) refresh.mutate();
+  }, [needsRemoteSnapshot, platformId]);
 
   const savePlatform = useMutation({
     mutationFn: (values: NewAPIPlatformValues) =>
@@ -114,6 +179,19 @@ export function NewAPIManagementPage() {
     onError: (error) => notifyOperationError(error, "New API 渠道创建失败"),
   });
 
+  const createChannelKey = useMutation({
+    mutationFn: (payload: Parameters<typeof api.createNewAPIChannelKey>[1]) =>
+      api.createNewAPIChannelKey(platformId, payload),
+    onError: (error) => notifyOperationError(error, "Sub2API 密钥创建失败"),
+  });
+
+  const fetchChannelModels = useMutation({
+    mutationFn: async (payload: Parameters<typeof api.fetchNewAPIChannelModels>[1]) => {
+      const result = await api.fetchNewAPIChannelModels(platformId, payload);
+      return result.models;
+    },
+  });
+
   const savePrices = useMutation({
     mutationFn: (prices: Parameters<typeof api.saveNewAPIModelPrices>[1]) =>
       api.saveNewAPIModelPrices(platformId, prices),
@@ -128,72 +206,76 @@ export function NewAPIManagementPage() {
     <PageLayout fixedContent>
       <PageHeading
         eyebrow="运营管理"
-        title="New API 管理"
+        title={pageTitles[props.view]}
         description=""
         action={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {workspace.data?.platforms.length ? (
-              <Select
-                value={platformId || null}
-                onValueChange={(value) => setPlatformId(value ?? "")}
-              >
-                <SelectTrigger className="w-52" aria-label="New API 平台">
-                  <SelectValue placeholder="选择平台" />
-                </SelectTrigger>
-                <SelectContent>
-                  {workspace.data.platforms.map((platform) => (
-                    <SelectItem key={platform.id} value={platform.id}>
-                      {platform.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : null}
-            <Tooltip>
-              <TooltipTrigger render={<span className="inline-flex" />}>
-                <Button
-                  size="icon-sm"
-                  variant="outline"
-                  aria-label="刷新 New API 数据"
-                  disabled={!platformId || refresh.isPending}
-                  onClick={() => refresh.mutate()}
-                >
-                  <RefreshCw
-                    className={refresh.isPending ? "animate-spin" : ""}
-                    aria-hidden="true"
-                  />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>刷新</TooltipContent>
-            </Tooltip>
             {selectedPlatform ? (
-              <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex" />}>
-                  <Button
-                    size="icon-sm"
-                    variant="outline"
-                    aria-label="编辑 New API 平台"
-                    onClick={() => {
-                      setEditingPlatform(selectedPlatform);
-                      setPlatformDialogOpen(true);
-                    }}
-                  >
-                    <Pencil aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>编辑平台</TooltipContent>
-              </Tooltip>
-            ) : null}
-            <Button
-              size="sm"
-              onClick={() => {
-                setEditingPlatform(null);
-                setPlatformDialogOpen(true);
-              }}
-            >
-              <CirclePlus aria-hidden="true" />
-              添加平台
-            </Button>
+              <>
+                {needsRemoteSnapshot ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="inline-flex" />}>
+                      <Button
+                        size="icon-sm"
+                        variant="outline"
+                        aria-label="刷新 New API 数据"
+                        disabled={refresh.isPending}
+                        onClick={() => refresh.mutate()}
+                      >
+                        <RefreshCw
+                          className={refresh.isPending ? "animate-spin" : ""}
+                          aria-hidden="true"
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>刷新</TooltipContent>
+                  </Tooltip>
+                ) : null}
+                <Tooltip>
+                  <TooltipTrigger render={<span className="inline-flex" />}>
+                    <Button
+                      size="icon-sm"
+                      variant="outline"
+                      aria-label="编辑 New API 主平台"
+                      onClick={() => {
+                        setEditingPlatform(selectedPlatform);
+                        setPlatformDialogOpen(true);
+                      }}
+                    >
+                      <Pencil aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>编辑主平台</TooltipContent>
+                </Tooltip>
+                {props.view === "platform" ? (
+                  <Tooltip>
+                    <TooltipTrigger render={<span className="inline-flex" />}>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="text-destructive"
+                        aria-label="删除 New API 主平台"
+                        onClick={() => setDeleteOpen(true)}
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>删除主平台</TooltipContent>
+                  </Tooltip>
+                ) : null}
+              </>
+            ) : (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditingPlatform(null);
+                  setPlatformDialogOpen(true);
+                }}
+              >
+                <CirclePlus aria-hidden="true" />
+                配置主平台
+              </Button>
+            )}
           </div>
         }
       />
@@ -203,56 +285,18 @@ export function NewAPIManagementPage() {
       ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {selectedPlatform ? (
+        {workspace.isLoading ? (
+          <NewAPIRemoteLoading label="正在加载 New API 主平台" />
+        ) : selectedPlatform ? (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background px-3 py-2.5">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-md">
-                  <ServerCog className="size-4" aria-hidden="true" />
-                </span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-semibold">{selectedPlatform.name}</span>
-                    <Badge variant="secondary">已配置</Badge>
-                  </div>
-                  <p className="text-muted-foreground truncate text-xs">
-                    {selectedPlatform.base_url} · User ID {selectedPlatform.user_id}
-                  </p>
-                </div>
-              </div>
-              <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex" />}>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="text-destructive"
-                    aria-label="删除 New API 平台"
-                    onClick={() => setDeleteOpen(true)}
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>删除平台</TooltipContent>
-              </Tooltip>
-            </div>
-
-            <SegmentedControl className="w-full overflow-x-auto sm:w-fit">
-              {newAPIManagementViews.map((item) => (
-                <SegmentedControlItem
-                  key={item.value}
-                  selected={view === item.value}
-                  onClick={() => setView(item.value)}
-                >
-                  {item.label}
-                  {item.value === "differences" && snapshot?.differences.length ? (
-                    <Badge variant="destructive">{snapshot.differences.length}</Badge>
-                  ) : null}
-                </SegmentedControlItem>
-              ))}
-            </SegmentedControl>
-
             <div className="min-h-0 flex-1 overflow-auto">
-              {view === "groups" ? (
+              {needsRemoteSnapshot && refresh.isPending && snapshot === null ? (
+                <NewAPIRemoteLoading label={`正在加载${pageTitles[props.view]}`} />
+              ) : null}
+              {props.view === "platform" ? (
+                <NewAPIPlatformDetails platform={selectedPlatform} />
+              ) : null}
+              {props.view === "groups" && !(refresh.isPending && snapshot === null) ? (
                 <NewAPIGroupBindings
                   groups={snapshot?.groups ?? []}
                   localGroups={workspace.data?.local_groups ?? []}
@@ -261,21 +305,29 @@ export function NewAPIManagementPage() {
                   onSave={(bindings) => saveBindings.mutate(bindings)}
                 />
               ) : null}
-              {view === "channels" ? (
+              {props.view === "channels" && !(refresh.isPending && snapshot === null) ? (
                 <NewAPIChannelForm
                   groups={workspace.data?.local_groups ?? []}
+                  newAPIGroups={snapshot?.groups ?? []}
+                  sub2APIBaseURL={workspace.data?.sub2api_base_url ?? ""}
                   pending={createChannel.isPending}
-                  onSubmit={(payload) => createChannel.mutate(payload)}
+                  creatingKey={createChannelKey.isPending}
+                  fetchingModels={fetchChannelModels.isPending}
+                  onCreateKey={(payload) => createChannelKey.mutateAsync(payload)}
+                  onFetchModels={(payload) => fetchChannelModels.mutateAsync(payload)}
+                  onSubmit={async (payload) => {
+                    await createChannel.mutateAsync(payload);
+                  }}
                 />
               ) : null}
-              {view === "prices" ? (
+              {props.view === "prices" && !(refresh.isPending && snapshot === null) ? (
                 <NewAPIModelPrices
                   models={snapshot?.models ?? []}
                   pending={savePrices.isPending}
                   onSave={(prices) => savePrices.mutate(prices)}
                 />
               ) : null}
-              {view === "differences" && snapshot ? (
+              {props.view === "differences" && snapshot ? (
                 <NewAPIPriceDifferences snapshot={snapshot} />
               ) : null}
             </div>
@@ -292,7 +344,7 @@ export function NewAPIManagementPage() {
               }}
             >
               <CirclePlus aria-hidden="true" />
-              添加平台
+              配置主平台
             </Button>
           </div>
         )}

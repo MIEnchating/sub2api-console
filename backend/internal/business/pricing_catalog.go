@@ -65,6 +65,10 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 	if err := groupRows.Err(); err != nil {
 		return PricingCatalog{}, err
 	}
+	groupPlatforms := make(map[string]string, len(catalog.Groups))
+	for _, group := range catalog.Groups {
+		groupPlatforms[group.ID] = group.Platform
+	}
 
 	accountRows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,a.metadata_json,
 		EXISTS(SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id) FROM accounts a
@@ -150,8 +154,29 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 		sort.Slice(catalog.Accounts[index].GroupIDs, func(left, right int) bool {
 			return stableNumericLess(catalog.Accounts[index].GroupIDs[left], catalog.Accounts[index].GroupIDs[right])
 		})
+		if catalog.Accounts[index].Platform == "" {
+			catalog.Accounts[index].Platform = pricingAccountPlatformFromGroups(catalog.Accounts[index], groupPlatforms)
+		}
 	}
 	return catalog, nil
+}
+
+func pricingAccountPlatformFromGroups(account PricingAccount, groupPlatforms map[string]string) string {
+	if !account.GroupsValid || len(account.GroupIDs) == 0 {
+		return ""
+	}
+	platform := ""
+	for _, groupID := range account.GroupIDs {
+		groupPlatform := strings.ToLower(strings.TrimSpace(groupPlatforms[groupID]))
+		if groupPlatform == "" || groupPlatform == "composite" {
+			return ""
+		}
+		if platform != "" && platform != groupPlatform {
+			return ""
+		}
+		platform = groupPlatform
+	}
+	return platform
 }
 
 func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string][]string, actor string) (PricingSyncResult, error) {

@@ -535,6 +535,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		"completed_operations": []string{},
 	}
 	failures := []string{}
+	partialFailures := []string{}
 	summary := InspectionSummary{}
 	var monitoringEnabled *bool
 	persistStage := func(progress int, message string, active []string) {
@@ -544,8 +545,8 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		task.UpdatedAt, task.Result = r.now().UTC().Format(time.RFC3339Nano), resultPayload
 		taskstore.PersistProgress(r.tasks, task)
 	}
-	finish := func(currentFailures []string) ExecutionResult {
-		result := r.finishTask(ctx, task, operations, timings, resultPayload, currentFailures)
+	finish := func(currentFailures, currentPartialFailures []string) ExecutionResult {
+		result := r.finishTask(ctx, task, operations, timings, resultPayload, currentFailures, currentPartialFailures)
 		result.MonitoringEnabled = monitoringEnabled
 		result.Summary = &summary
 		return result
@@ -625,7 +626,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		if outcome.err != nil {
 			failures = append(failures, "上游同步："+outcome.err.Error())
 		} else if outcome.batch.AuthFailed > 0 || outcome.batch.Failed > 0 {
-			failures = append(failures, fmt.Sprintf("上游同步部分失败：鉴权 %d，其他 %d", outcome.batch.AuthFailed, outcome.batch.Failed))
+			partialFailures = append(partialFailures, fmt.Sprintf("上游同步部分失败：鉴权 %d，其他 %d", outcome.batch.AuthFailed, outcome.batch.Failed))
 		}
 		if plan.accountRates && outcome.err == nil && (outcome.batch.Total == 0 || outcome.batch.Succeeded > 0) {
 			persistStage(48, "正在同步账号倍率与名称", []string{operationAccountRateSync})
@@ -647,7 +648,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 				outcome.batch.AccountRateFailed = missing + failed
 				resultPayload["upstream_sync"] = outcome.batch
 				if missing+failed > 0 {
-					failures = append(failures, fmt.Sprintf("账号倍率与名称同步部分失败：缺失 %d，失败 %d", missing, failed))
+					partialFailures = append(partialFailures, fmt.Sprintf("账号倍率与名称同步部分失败：缺失 %d，失败 %d", missing, failed))
 				}
 			}
 		}
@@ -688,7 +689,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 		timings = append(timings, operationTiming("evidence_collection", outcome.startedAt))
 		if err != nil {
-			return finish(append(failures, "请求记录与探针："+err.Error()))
+			return finish(append(failures, "请求记录与探针："+err.Error()), partialFailures)
 		}
 		resultPayload["evidence"] = evidenceResult
 	}
@@ -697,7 +698,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		routingStarted := time.Now()
 		capabilities, valid := runtimepolicy.For(plan.mode)
 		if !valid {
-			return finish(append(failures, "运行模式无效："+plan.mode))
+			return finish(append(failures, "运行模式无效："+plan.mode), partialFailures)
 		}
 		scopedDiagnostic := request.AccountID != nil || request.GroupName != nil
 		if scopedDiagnostic {
@@ -709,7 +710,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		timings = append(timings, operationTiming(operationRoutingCalculation, routingStarted))
 		operations = append(operations, operationRoutingCalculation)
 		if err != nil {
-			return finish(append(failures, "调度计算："+err.Error()))
+			return finish(append(failures, "调度计算："+err.Error()), partialFailures)
 		}
 		summary.Channels = routingResult.Accounts
 		resultPayload["routing"] = routingResult
@@ -726,7 +727,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			if writeErr != nil {
 				failures = append(failures, "自动执行："+writeErr.Error())
 			} else if writeResult.Failed > 0 {
-				failures = append(failures, fmt.Sprintf("自动执行失败 %d 项", writeResult.Failed))
+				partialFailures = append(partialFailures, fmt.Sprintf("自动执行部分失败：%d 项", writeResult.Failed))
 			}
 		}
 	}
@@ -744,7 +745,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			failures = append(failures, alertResult.Summary)
 		}
 	}
-	return finish(failures)
+	return finish(failures, partialFailures)
 }
 
 func integerResultValue(result map[string]any, key string) int {
@@ -818,6 +819,7 @@ func (r *Runner) finishTask(
 	timings []business.OperationTiming,
 	payload map[string]any,
 	failures []string,
+	partialFailures []string,
 ) ExecutionResult {
 	payload["operations"] = operations
 	payload["operation_timings"] = timings
@@ -841,7 +843,12 @@ func (r *Runner) finishTask(
 		if contextFailure != nil {
 			task.Message = "巡检因执行上下文失败而停止：" + contextFailure.Error()
 		}
-		value := strings.Join(failures, "；")
+		value := strings.Join(append(append([]string{}, failures...), partialFailures...), "；")
+		errorText = &value
+		task.Result["error"] = value
+	} else if len(partialFailures) > 0 {
+		status, task.Status, task.Message = "partial", "partial", "巡检完成，但存在部分失败"
+		value := strings.Join(partialFailures, "；")
 		errorText = &value
 		task.Result["error"] = value
 	} else {

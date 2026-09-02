@@ -30,6 +30,56 @@ func TestPricingCatalogReadsOnlyConsoleAccountAndGroupProjection(t *testing.T) {
 	}
 }
 
+func TestPricingCatalogDerivesMissingAccountPlatformFromCurrentGroups(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
+		VALUES('43','missing-platform','0.2','{}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		VALUES('43','标准','6','0.2'),('43','低价','7','0.2')`); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog, err := store.PricingCatalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range catalog.Accounts {
+		if account.ID == "43" {
+			if account.Platform != "openai" {
+				t.Fatalf("derived platform=%q account=%#v", account.Platform, account)
+			}
+			return
+		}
+	}
+	t.Fatal("derived-platform account was not returned")
+}
+
+func TestPricingCatalogDoesNotDerivePlatformFromMixedCurrentGroups(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,multiplier,metadata_json,updated_at)
+		VALUES('44','mixed-platform','0.2','{}','now');
+		INSERT INTO local_groups(name,remote_id,platform,rate_multiplier,updated_at)
+		VALUES('其他平台','8','anthropic','1','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		VALUES('44','标准','6','0.2'),('44','其他平台','8','0.2')`); err != nil {
+		t.Fatal(err)
+	}
+
+	catalog, err := store.PricingCatalog(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range catalog.Accounts {
+		if account.ID == "44" {
+			if account.Platform != "" {
+				t.Fatalf("mixed groups derived unsafe platform=%q account=%#v", account.Platform, account)
+			}
+			return
+		}
+	}
+	t.Fatal("mixed-platform account was not returned")
+}
+
 func TestSyncPricingAccountGroupsUpdatesOnlyConfirmedLocalMemberships(t *testing.T) {
 	store := openPricingCatalogStore(t)
 	ctx := context.Background()

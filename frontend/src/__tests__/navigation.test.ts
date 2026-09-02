@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BadgeDollarSign,
   ChartSpline,
   ChartNoAxesColumnIncreasing,
   ChartNoAxesCombined,
@@ -7,9 +8,12 @@ import {
   FileSearch,
   Fingerprint,
   HeartPulse,
+  GitCompareArrows,
   KeyRound,
   Layers3,
+  Link2,
   Network,
+  RadioTower,
   Route,
   ServerCog,
   ScrollText,
@@ -20,7 +24,7 @@ import {
   UsersRound,
 } from "lucide-react";
 
-import { navItems, navSections } from "../App";
+import { navItems, navSections, viewForPath } from "../App";
 
 describe("侧边菜单", () => {
   it("按运营工作流展示固定顺序和名称", () => {
@@ -28,7 +32,6 @@ describe("侧边菜单", () => {
       "运营总览",
       "上游管理",
       "分组管理",
-      "New API 管理",
       "价格管理",
       "收益分析",
       "账号管理",
@@ -37,6 +40,11 @@ describe("侧边菜单", () => {
       "流量排行",
       "请求查询",
       "告警通知",
+      "主平台",
+      "分组绑定",
+      "渠道管理",
+      "模型价格",
+      "价格差异",
       "价格配置",
       "调度策略",
       "告警策略",
@@ -51,7 +59,6 @@ describe("侧边菜单", () => {
       ChartSpline,
       Network,
       Layers3,
-      ServerCog,
       CircleDollarSign,
       ChartNoAxesCombined,
       UsersRound,
@@ -60,6 +67,11 @@ describe("侧边菜单", () => {
       ChartNoAxesColumnIncreasing,
       FileSearch,
       Siren,
+      ServerCog,
+      Link2,
+      RadioTower,
+      BadgeDollarSign,
+      GitCompareArrows,
       SlidersHorizontal,
       Route,
       ShieldAlert,
@@ -78,7 +90,6 @@ describe("侧边菜单", () => {
           "overview",
           "upstreams",
           "groups",
-          "newapi",
           "pricing",
           "revenue-analysis",
           "accounts",
@@ -89,11 +100,29 @@ describe("侧边菜单", () => {
           "alerts",
         ],
       },
+      {
+        label: "New API",
+        itemIDs: [
+          "newapi",
+          "newapi-groups",
+          "newapi-channels",
+          "newapi-prices",
+          "newapi-differences",
+        ],
+      },
       { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
       { label: "系统管理", itemIDs: ["vault", "logs", "config"] },
     ]);
     expect(navSections.flatMap((section) => section.itemIDs)).toEqual(
       navItems.map((item) => item.id),
     );
+  });
+
+  it("New API 各菜单使用独立路由", () => {
+    expect(viewForPath("/newapi")).toBe("newapi");
+    expect(viewForPath("/newapi/groups")).toBe("newapi-groups");
+    expect(viewForPath("/newapi/channels")).toBe("newapi-channels");
+    expect(viewForPath("/newapi/prices")).toBe("newapi-prices");
+    expect(viewForPath("/newapi/differences")).toBe("newapi-differences");
   });
 });

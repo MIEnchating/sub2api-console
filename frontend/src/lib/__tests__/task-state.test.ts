@@ -18,6 +18,9 @@ describe("task state helpers", () => {
     expect(taskIsPending("task-1", { isError: false, data: { status: "failed" } as never })).toBe(
       false,
     );
+    expect(taskIsPending("task-1", { isError: false, data: { status: "partial" } as never })).toBe(
+      false,
+    );
     expect(
       taskIsPending("task-1", { isError: false, data: { status: "cancelled" } as never }),
     ).toBe(false);
@@ -27,8 +30,9 @@ describe("task state helpers", () => {
     expect(taskIsPending("task-1", { isError: true })).toBe(true);
   });
 
-  it("recognizes completed, failed and cancelled tasks as terminal states", () => {
+  it("recognizes completed, partially failed, failed and cancelled tasks as terminal states", () => {
     expect(taskIsTerminal({ status: "succeeded" } as never)).toBe(true);
+    expect(taskIsTerminal({ status: "partial" } as never)).toBe(true);
     expect(taskIsTerminal({ status: "failed" } as never)).toBe(true);
     expect(taskIsTerminal({ status: "cancelled" } as never)).toBe(true);
     expect(taskIsTerminal({ status: "waiting_input" } as never)).toBe(false);
@@ -40,6 +44,9 @@ describe("task state helpers", () => {
     expect(taskPollInterval({ state: { status: "error" } })).toBe(2_000);
     expect(
       taskPollInterval({ state: { status: "success", data: { status: "failed" } as never } }),
+    ).toBe(false);
+    expect(
+      taskPollInterval({ state: { status: "success", data: { status: "partial" } as never } }),
     ).toBe(false);
     expect(
       taskPollInterval({

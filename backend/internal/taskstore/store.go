@@ -34,7 +34,7 @@ const (
 )
 
 var validStatuses = map[string]struct{}{
-	"queued": {}, "running": {}, "waiting_input": {}, "succeeded": {}, "failed": {}, "cancelled": {},
+	"queued": {}, "running": {}, "waiting_input": {}, "succeeded": {}, "partial": {}, "failed": {}, "cancelled": {},
 }
 
 type Task struct {

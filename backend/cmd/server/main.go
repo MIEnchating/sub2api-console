@@ -57,6 +57,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	listeners, err := listenServiceEndpoints(cfg)
+	if err != nil {
+		return err
+	}
+	defer listeners.close()
 	privateStore, err := configstore.Open(cfg.ConfigDB)
 	if err != nil {
 		return err
@@ -215,6 +220,7 @@ func run() error {
 		privateStore,
 		businessStore,
 		&http.Client{Timeout: 20 * time.Second},
+		upstreamReader,
 	)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
@@ -244,26 +250,16 @@ func run() error {
 		Pricing:            pricingTasks,
 		NewAPIManagement:   newAPIManagement,
 	})
-	tcpListener, err := net.Listen("tcp", cfg.ListenAddress)
-	if err != nil {
-		return err
-	}
-	defer tcpListener.Close()
 	servers := []httpServeTarget{{
 		name:     cfg.ListenAddress,
 		server:   newHTTPServer(cfg.ListenAddress, handler),
-		listener: tcpListener,
+		listener: listeners.tcp,
 	}}
-	if cfg.TrustedProxySocket != "" {
-		proxyListener, err := listenTrustedProxySocket(cfg.TrustedProxySocket)
-		if err != nil {
-			return err
-		}
-		defer proxyListener.Close()
+	if listeners.proxy != nil {
 		servers = append(servers, httpServeTarget{
 			name:     cfg.TrustedProxySocket,
 			server:   newHTTPServer("", api.TrustedProxyHandler(handler)),
-			listener: proxyListener,
+			listener: listeners.proxy,
 		})
 	}
 	stopped, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -319,6 +315,41 @@ func run() error {
 		closeStores = false
 	}
 	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
+}
+
+type serviceListeners struct {
+	tcp   net.Listener
+	proxy net.Listener
+}
+
+func listenServiceEndpoints(cfg config.Config) (serviceListeners, error) {
+	tcpListener, err := net.Listen("tcp", cfg.ListenAddress)
+	if err != nil {
+		return serviceListeners{}, err
+	}
+	listeners := serviceListeners{tcp: tcpListener}
+	if cfg.TrustedProxySocket == "" {
+		return listeners, nil
+	}
+	listeners.proxy, err = listenTrustedProxySocket(cfg.TrustedProxySocket)
+	if err != nil {
+		_ = listeners.close()
+		return serviceListeners{}, err
+	}
+	return listeners, nil
+}
+
+func (listeners *serviceListeners) close() error {
+	var err error
+	if listeners.proxy != nil {
+		err = errors.Join(err, listeners.proxy.Close())
+		listeners.proxy = nil
+	}
+	if listeners.tcp != nil {
+		err = errors.Join(err, listeners.tcp.Close())
+		listeners.tcp = nil
+	}
+	return err
 }
 
 type httpServeTarget struct {

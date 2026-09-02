@@ -59,6 +59,8 @@ export const upstreamEditDialogLayout = {
   form: "grid min-w-0 max-w-full gap-5",
 } as const;
 
+export const upstreamEditSectionOrder = ["connection", "recharge", "accounts"] as const;
+
 export const upstreamEditConnectionLabels = {
   upstreamHost: "上游 Host",
   accountBaseURL: "账号 Base URL",
@@ -121,6 +123,98 @@ export function upstreamEditPresentation(data: UpstreamConfiguration) {
     rawBalance: displayNumber(data.raw_balance),
     mappedBalance: displayNumber(data.balance),
   };
+}
+
+type CurrentUpstreamBinding = {
+  key: string;
+  accountId: string;
+  name: string | null;
+  exists: boolean;
+  group: string;
+  duplicate: boolean;
+};
+
+function currentUpstreamBindings(groups: UpstreamConfiguration["groups"]): {
+  bindings: CurrentUpstreamBinding[];
+  accountCount: number;
+} {
+  const accountCounts = new Map<string, number>();
+  for (const group of groups) {
+    for (const account of group.bound_accounts) {
+      accountCounts.set(account.account_id, (accountCounts.get(account.account_id) ?? 0) + 1);
+    }
+  }
+
+  const bindings: CurrentUpstreamBinding[] = [];
+  for (const group of groups) {
+    for (const account of group.bound_accounts) {
+      bindings.push({
+        key: `${group.group_id}:${account.binding_id}:${account.account_id}`,
+        accountId: account.account_id,
+        name: account.account_name,
+        exists: account.account_exists,
+        group: group.name,
+        duplicate: (accountCounts.get(account.account_id) ?? 0) > 1,
+      });
+    }
+  }
+
+  return { bindings, accountCount: accountCounts.size };
+}
+
+export function UpstreamAccounts(props: { groups: UpstreamConfiguration["groups"] }) {
+  const summary = currentUpstreamBindings(props.groups);
+  return (
+    <section className="grid min-w-0 gap-3 border-t pt-4" aria-labelledby="upstream-accounts">
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 id="upstream-accounts" className="text-sm font-semibold">
+            当前上游账号
+          </h3>
+          <p className="text-muted-foreground mt-1 text-xs">
+            逐条显示当前上游所有分组中的账号绑定，重复账号会保留并标记。
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Badge variant="secondary">{summary.bindings.length} 条绑定</Badge>
+          <Badge variant="outline">{summary.accountCount} 个账号</Badge>
+        </div>
+      </div>
+      {summary.bindings.length ? (
+        <div
+          className="divide-border/70 max-h-72 divide-y overflow-x-hidden overflow-y-auto rounded-lg border"
+          aria-label="当前上游全部账号"
+        >
+          {summary.bindings.map((binding) => (
+            <div
+              key={binding.key}
+              className="grid min-w-0 gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+            >
+              <div className="min-w-0">
+                <strong className="block truncate text-sm font-medium">
+                  {binding.name || `账号 ${binding.accountId}`}
+                </strong>
+                <span className="text-muted-foreground block truncate text-xs">
+                  稳定账号 ID {binding.accountId}
+                </span>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+                <span className="text-muted-foreground max-w-72 truncate text-xs">
+                  上游分组 {binding.group || "未记录"}
+                </span>
+                {binding.duplicate ? <Badge variant="warning">重复绑定</Badge> : null}
+                {!binding.exists ? <Badge variant="destructive">账号不存在</Badge> : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-muted-foreground rounded-lg border px-3 py-8 text-center text-sm">
+          当前上游暂无绑定账号
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function UpstreamEditDialog(props: Props) {
@@ -587,6 +681,8 @@ export function UpstreamEditDialog(props: Props) {
                   </div>
                 </div>
               </section>
+
+              <UpstreamAccounts groups={data?.groups ?? []} />
             </form>
           )}
         </DialogBody>

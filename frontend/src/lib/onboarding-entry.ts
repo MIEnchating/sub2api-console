@@ -13,6 +13,35 @@ export type OnboardingUpstreamTarget = {
   upstream_type: string;
 };
 
+type OnboardingLocalGroup = {
+  platform?: string | null;
+  platforms?: string[];
+};
+
+function normalizeOnboardingPlatform(value: string | null | undefined): string {
+  const platform = value?.trim().toLocaleLowerCase() ?? "";
+  if (["sub2api", "newapi", "oneapi"].includes(platform)) return "openai";
+  if (["glm", "zhipuai"].includes(platform)) return "zhipu";
+  if (platform === "claude") return "anthropic";
+  if (platform === "google") return "gemini";
+  if (platform === "moonshot") return "kimi";
+  return platform;
+}
+
+export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
+  candidate: Pick<OnboardingCandidate, "platform">,
+  groups: T[],
+): T[] {
+  const upstreamPlatform = normalizeOnboardingPlatform(candidate.platform);
+  if (!upstreamPlatform) return [];
+  return groups.filter((group) => {
+    const platforms = [group.platform, ...(group.platforms ?? [])]
+      .map(normalizeOnboardingPlatform)
+      .filter(Boolean);
+    return platforms.includes(upstreamPlatform);
+  });
+}
+
 export function adjacentOnboardingUpstreams(
   upstreams: OnboardingUpstreamTarget[],
   currentHost: string | null,

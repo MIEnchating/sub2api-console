@@ -7,6 +7,29 @@ import (
 	"testing"
 )
 
+func TestLocalOnboardingGroupIncludesManagementPlatform(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO local_groups(name,remote_id,platform,updated_at)
+		VALUES('国模-平价','27','openai','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	group, err := store.LocalOnboardingGroup(context.Background(), "27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Platform == nil || *group.Platform != "openai" {
+		t.Fatalf("local group platform=%v", group.Platform)
+	}
+}
+
 func TestPendingOnboardingUsesCanonicalLocalSelectionAndRejectsDuplicateIdentity(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
@@ -176,28 +199,49 @@ func TestUpstreamIdentityMergeFailsClosedOnConflictingPendingRows(t *testing.T) 
 	}
 }
 
-func TestCommitOnboardingProjectionRequiresReadbackConfirmation(t *testing.T) {
+func TestCommitOnboardingProjectionAcceptsStableCreateWithoutReadback(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.db.Exec(`INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at)
+		VALUES('upstream.test','https://upstream.test','sub2api','ready','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureUpstreamIdentities(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	err = store.CommitOnboardingProjection(context.Background(), OnboardingProjection{
-		OperationID: "operation-a", AccountID: "77", AccountName: "account",
+		OperationID: "operation-a", AccountID: "77", AccountName: "account", Platform: " OpenAI ",
 		UpstreamHost: "upstream.test", UpstreamType: "sub2api", UpstreamKeyID: "91", UpstreamKeyName: "key",
 		UpstreamGroupID: "6", UpstreamGroupName: "pro", LocalGroupID: "3", LocalGroupName: "codex",
 		Multiplier: "0.2", ReadbackConfirmed: false,
 	})
-	if err == nil || !strings.Contains(err.Error(), "完整读回确认") {
-		t.Fatalf("error=%v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	var accounts int
 	if err := store.db.QueryRow(`SELECT COUNT(*) FROM accounts`).Scan(&accounts); err != nil {
 		t.Fatal(err)
 	}
-	if accounts != 0 {
+	if accounts != 1 {
 		t.Fatalf("accounts=%d", accounts)
+	}
+	var metadataRaw string
+	if err := store.db.QueryRow(`SELECT metadata_json FROM accounts WHERE id='77'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metadataRaw, `"platform":"openai"`) {
+		t.Fatalf("confirmed platform was not projected: %s", metadataRaw)
+	}
+	var remoteConfirmed, readbackConfirmed int
+	if err := store.db.QueryRow(`SELECT remote_confirmed,readback_confirmed FROM operation_audit WHERE operation_id='operation-a'`).Scan(&remoteConfirmed, &readbackConfirmed); err != nil {
+		t.Fatal(err)
+	}
+	if remoteConfirmed != 1 || readbackConfirmed != 0 {
+		t.Fatalf("remote_confirmed=%d readback_confirmed=%d", remoteConfirmed, readbackConfirmed)
 	}
 }
 

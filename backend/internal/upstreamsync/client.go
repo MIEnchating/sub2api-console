@@ -255,15 +255,6 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 	if name == "" || groupID == "" {
 		return CreatedKey{}, errors.New("上游 Key 创建必须包含名称和稳定分组 ID")
 	}
-	if verification {
-		existing, found, err := r.ReconcileCreatedKey(ctx, record, name, groupID)
-		if err != nil {
-			return CreatedKey{}, err
-		}
-		if found {
-			return existing, nil
-		}
-	}
 	paths := []string{"/api/v1/keys"}
 	body := map[string]any{"name": name}
 	if isNewAPI(record.UpstreamType) {
@@ -302,46 +293,18 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 		}
 		verifiedName = returnedName
 	}
-	lookupMissingID := keyID == ""
-	if lookupMissingID && !verification {
+	if keyID == "" && !verification {
 		return CreatedKey{}, &CommitUnknownError{Cause: errors.New("上游 Key 已创建但响应未返回稳定 ID，且创建前未建立目录基线")}
 	}
-	if verification || lookupMissingID {
-		after, err := r.readKeys(ctx, record)
-		if err != nil {
-			return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: fmt.Errorf("上游 Key 已创建但目录补读失败：%w", err)}
+	if keyID == "" {
+		reconciled, found, reconcileErr := r.ReconcileCreatedKey(ctx, record, name, groupID)
+		if reconcileErr != nil {
+			return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: fmt.Errorf("上游 Key 已创建但 marker 对账失败：%w", reconcileErr)}
 		}
-		if lookupMissingID {
-			matches := make([]business.UpstreamCatalogKey, 0, 1)
-			for _, key := range after {
-				if key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
-					matches = append(matches, key)
-				}
-			}
-			if len(matches) != 1 {
-				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 已创建但响应未返回稳定 ID，目录补读无法唯一定位新 Key")}
-			}
-			keyID = matches[0].KeyID
-			if strings.TrimSpace(matches[0].Name) != "" {
-				verifiedName = strings.TrimSpace(matches[0].Name)
-			}
+		if !found {
+			return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 已创建但响应未返回稳定 ID，marker 对账未找到结果")}
 		}
-		if verification {
-			var verified *business.UpstreamCatalogKey
-			for index := range after {
-				if after[index].KeyID == keyID {
-					verified = &after[index]
-					break
-				}
-			}
-			if verified == nil || verified.UpstreamGroup == nil || *verified.UpstreamGroup != groupID {
-				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 创建后稳定 ID 或分组读回不一致")}
-			}
-			if strings.TrimSpace(verified.Name) != name {
-				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 创建后 marker 名称读回不一致")}
-			}
-			verifiedName = name
-		}
+		return reconciled, nil
 	}
 	secret := textValue(firstPresent(created, "key", "api_key", "token"))
 	if isNewAPI(record.UpstreamType) {

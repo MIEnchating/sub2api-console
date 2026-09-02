@@ -1,9 +1,12 @@
 import { MultiSelect } from "@/components/multi-select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { compatibleOnboardingLocalGroups } from "@/lib/onboarding-entry";
 
 type BindingGroupOption = {
   id: string | null;
   name: string;
+  platform?: string | null;
+  platforms?: string[];
   rate_multiplier?: string | null;
 };
 
@@ -20,18 +23,23 @@ export function OnboardingGroupBindingOption(props: { group: BindingGroupOption 
 
 export function OnboardingGroupBindingSelect(props: {
   upstreamGroupName: string;
+  upstreamPlatform: string | null;
   groups: BindingGroupOption[];
   value: string[];
   disabled: boolean;
   disabledReason: string | null;
   onValueChange: (value: string[]) => void;
 }) {
+  const compatibleGroups = compatibleOnboardingLocalGroups(
+    { platform: props.upstreamPlatform },
+    props.groups,
+  );
   const groupsByID = new Map(
-    props.groups.flatMap((group) => (group.id ? [[group.id, group]] : [])),
+    compatibleGroups.flatMap((group) => (group.id ? [[group.id, group]] : [])),
   );
   const control = (
     <MultiSelect
-      options={props.groups.flatMap((group) =>
+      options={compatibleGroups.flatMap((group) =>
         group.id ? [{ value: group.id, label: group.name }] : [],
       )}
       selected={props.value}

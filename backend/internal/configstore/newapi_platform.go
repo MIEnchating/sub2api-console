@@ -2,9 +2,7 @@ package configstore
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -29,7 +27,7 @@ type NewAPIPlatformSummary struct {
 }
 
 func (s *Store) NewAPIPlatforms(ctx context.Context) ([]NewAPIPlatformSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,base_url,user_id,admin_key,updated_at FROM newapi_platforms ORDER BY name,id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,base_url,user_id,admin_key,updated_at FROM newapi_platforms ORDER BY updated_at,id LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
@@ -79,10 +77,7 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 		return NewAPIPlatformSummary{}, errors.New("New API User ID 不能为空")
 	}
 	if item.ID == "" {
-		item.ID, err = newNewAPIPlatformID()
-		if err != nil {
-			return NewAPIPlatformSummary{}, err
-		}
+		item.ID = "primary"
 	}
 	current, err := s.NewAPIPlatform(ctx, item.ID)
 	if err != nil {
@@ -95,11 +90,22 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 		return NewAPIPlatformSummary{}, errors.New("New API Admin Key 不能为空")
 	}
 	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return NewAPIPlatformSummary{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
 		VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,
 		admin_key=excluded.admin_key,user_id=excluded.user_id,updated_at=excluded.updated_at`,
 		item.ID, item.Name, item.BaseURL, item.AdminKey, item.UserID, item.UpdatedAt)
 	if err != nil {
+		return NewAPIPlatformSummary{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM newapi_platforms WHERE id<>?`, item.ID); err != nil {
+		return NewAPIPlatformSummary{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return NewAPIPlatformSummary{}, err
 	}
 	return NewAPIPlatformSummary{ID: item.ID, Name: item.Name, BaseURL: item.BaseURL, UserID: item.UserID, AdminKeyConfigured: true, UpdatedAt: item.UpdatedAt}, nil
@@ -112,12 +118,4 @@ func (s *Store) DeleteNewAPIPlatform(ctx context.Context, id string) (bool, erro
 	}
 	count, err := result.RowsAffected()
 	return count > 0, err
-}
-
-func newNewAPIPlatformID() (string, error) {
-	raw := make([]byte, 12)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	return "newapi_" + hex.EncodeToString(raw), nil
 }

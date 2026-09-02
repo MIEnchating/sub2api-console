@@ -79,6 +79,9 @@ describe("account operation buttons", () => {
     expect(result).not.toContain("lucide-scan-search");
     expect(result).not.toContain("排除账号");
     expect(result).not.toContain("倍率超阈值");
+    expect(result.match(/border-destructive\/40/g)).toHaveLength(2);
+    expect(result).toContain("bg-destructive/10");
+    expect(result).toContain("hover:bg-destructive/20");
   });
 
   it("shows an adjustment action for an assigned manual priority account", () => {
@@ -117,9 +120,9 @@ describe("account operation buttons", () => {
     expect(markup({ health: "paused", routing_state: "paused", paused: true })).toContain(
       "恢复调度",
     );
-    expect(markup({ health: "fused", routing_state: "fused", schedulable: false })).toContain(
-      "解除熔断",
-    );
+    const fused = markup({ health: "fused", routing_state: "fused", schedulable: false });
+    expect(fused).toContain("解除熔断");
+    expect(fused.match(/border-destructive\/40/g)).toHaveLength(1);
   });
 
   it("does not offer pause again when a policy already stopped scheduling", () => {

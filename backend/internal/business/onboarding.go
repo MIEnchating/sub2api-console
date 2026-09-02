@@ -37,8 +37,9 @@ type OnboardingCandidate struct {
 }
 
 type LocalOnboardingGroup struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Platform *string `json:"platform"`
 }
 
 type PendingOnboarding struct {
@@ -67,6 +68,7 @@ type OnboardingProjection struct {
 	OperationID       string
 	AccountID         string
 	AccountName       string
+	Platform          string
 	UpstreamHost      string
 	UpstreamType      string
 	BaseURL           string
@@ -140,7 +142,8 @@ func (s *Store) LocalOnboardingGroup(ctx context.Context, groupID string) (Local
 		return LocalOnboardingGroup{}, errors.New("本地分组必须使用有效稳定 ID")
 	}
 	var result LocalOnboardingGroup
-	err := s.db.QueryRowContext(ctx, `SELECT remote_id,name FROM local_groups WHERE remote_id=?`, groupID).Scan(&result.ID, &result.Name)
+	err := s.db.QueryRowContext(ctx, `SELECT remote_id,name,platform FROM local_groups WHERE remote_id=?`, groupID).
+		Scan(&result.ID, &result.Name, &result.Platform)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LocalOnboardingGroup{}, errors.New("目标本地分组不存在")
 	}
@@ -294,9 +297,6 @@ func canonicalPendingLocalGroupIDs(values []string) ([]string, string, error) {
 }
 
 func (s *Store) CommitOnboardingProjection(ctx context.Context, value OnboardingProjection) error {
-	if !value.ReadbackConfirmed {
-		return errors.New("账号添加必须完成远端完整读回确认")
-	}
 	if !positiveNumericID(value.AccountID) || !positiveNumericID(value.LocalGroupID) ||
 		strings.TrimSpace(value.OperationID) == "" || strings.TrimSpace(value.AccountName) == "" ||
 		canonicalHost(value.UpstreamHost) == "" || strings.TrimSpace(value.UpstreamKeyID) == "" ||
@@ -307,6 +307,9 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		"onboarding": true, "onboarding_operation_id": value.OperationID,
 		"onboarding_upstream_group_id": value.UpstreamGroupID, "onboarding_upstream_group": value.UpstreamGroupName,
 		"onboarding_local_group_id": value.LocalGroupID, "onboarding_actor": actorOrDefault(value.Actor), "notes": value.Notes,
+	}
+	if platform := strings.ToLower(strings.TrimSpace(value.Platform)); platform != "" {
+		metadataValues["platform"] = platform
 	}
 	if baseURL := strings.TrimSpace(value.BaseURL); baseURL != "" {
 		metadataValues["base_url"] = baseURL
@@ -351,7 +354,7 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		status=excluded.status,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
 		value.AccountID, canonicalHost(value.UpstreamHost), value.UpstreamKeyID, value.UpstreamKeyName,
 		value.UpstreamGroupName, value.UpstreamGroupID, value.LocalGroupName, value.Multiplier,
-		"账号添加后远程读回确认", fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {
+		onboardingBindingDescription(value.ReadbackConfirmed), fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {
 		return err
 	}
 	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, value.UpstreamHost)
@@ -370,9 +373,13 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	}
 	field := "created"
 	name := value.AccountName
+	phase := "remote-write"
+	if value.ReadbackConfirmed {
+		phase = "readback"
+	}
 	operation := AccountOperation{
-		OperationID: value.OperationID, OperationType: "account.onboarding", State: "succeeded", Phase: "readback",
-		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: value.AccountID,
+		OperationID: value.OperationID, OperationType: "account.onboarding", State: "succeeded", Phase: phase,
+		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: value.ReadbackConfirmed, ObjectID: value.AccountID,
 		ObjectName: &name, GroupNames: onboardingLocalGroupNames(localGroups), FieldName: &field,
 		After: map[string]any{"name": value.AccountName, "group_ids": onboardingLocalGroupIDs(localGroups), "schedulable": value.Schedulable,
 			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority}, Writeback: true,
@@ -384,6 +391,13 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		return err
 	}
 	return tx.Commit()
+}
+
+func onboardingBindingDescription(readbackConfirmed bool) string {
+	if readbackConfirmed {
+		return "账号添加后远程读回确认"
+	}
+	return "账号添加响应已接受，未启用写后确认"
 }
 
 func onboardingLocalGroupIDs(groups []LocalOnboardingGroup) []string {

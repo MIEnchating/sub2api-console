@@ -386,8 +386,32 @@ func TestCreateAccountWithMarkerKeepsSuccessfulMissingIDCommitUnknownWhenMarkerI
 		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
 	}, marker)
 	var unknown *CommitUnknownError
-	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 2 || posts != 1 {
+	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 1 || posts != 1 {
 		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets, posts)
+	}
+}
+
+func TestCreateAccountWithMarkerSkipsDirectoryWhenCreateReturnsStableIdentity(t *testing.T) {
+	var gets, posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			gets++
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		posts++
+		writeJSON(writer, `{"success":true,"data":{"id":42,"name":"alpha"}}`)
+	})
+	defer server.Close()
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	created, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || gets != 0 || posts != 1 {
+		t.Fatalf("created=%#v gets=%d posts=%d", created, gets, posts)
 	}
 }
 
@@ -396,12 +420,8 @@ func TestCreateAccountWithMarkerDoesNotAdoptDirectoryDifferenceWithoutExactMarke
 	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodGet {
 			gets++
-			items := `[]`
-			total := 0
-			if gets == 2 {
-				items = `[{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}]`
-				total = 1
-			}
+			items := `[{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}]`
+			total := 1
 			writeJSON(writer, `{"data":{"items":`+items+`,"total":`+strconv.Itoa(total)+`}}`)
 			return
 		}
@@ -414,7 +434,7 @@ func TestCreateAccountWithMarkerDoesNotAdoptDirectoryDifferenceWithoutExactMarke
 		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
 	}, marker)
 	var unknown *CommitUnknownError
-	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 2 || posts != 1 {
+	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 1 || posts != 1 {
 		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets, posts)
 	}
 }
@@ -506,7 +526,7 @@ func TestCreateAccountWithMarkerKeepsCancellationAfterSendCommitUnknown(t *testi
 	}
 }
 
-func TestCreateAccountWithMarkerFailsClosedWhenPreflightCannotReadDirectory(t *testing.T) {
+func TestCreateAccountWithMarkerReconcilesOnlyAfterUncertainCreate(t *testing.T) {
 	var posts int
 	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodPost {
@@ -519,8 +539,8 @@ func TestCreateAccountWithMarkerFailsClosedWhenPreflightCannotReadDirectory(t *t
 	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
 		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
 	}, marker)
-	var reconciliation *ReconciliationError
-	if !errors.As(err, &reconciliation) || posts != 0 {
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != marker || posts != 1 {
 		t.Fatalf("err=%v posts=%d", err, posts)
 	}
 }

@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { FilterMenu } from "../../App";
+import { FilterMenu, filterMenuSearchInputClassName } from "../data-table/filter-menu";
 import { SearchField } from "../data-table/search-field";
+import { Input } from "../ui/input";
 
 describe("shared toolbar controls", () => {
   it("keeps search and filter controls at the same height", () => {
@@ -43,5 +44,16 @@ describe("shared toolbar controls", () => {
     expect(markup).toContain(">codex<");
     expect(markup).toContain('data-slot="badge"');
     expect(markup).not.toContain(">12<");
+  });
+
+  it("keeps a focused dropdown search visually consistent with its resting state", () => {
+    const markup = renderToStaticMarkup(
+      <Input aria-label="搜索类型" className={filterMenuSearchInputClassName} />,
+    );
+
+    expect(markup).toContain("focus-visible:border-input/30");
+    expect(markup).toContain("focus-visible:ring-0");
+    expect(markup).not.toContain("focus-visible:border-ring");
+    expect(markup).not.toContain("focus-visible:ring-3");
   });
 });

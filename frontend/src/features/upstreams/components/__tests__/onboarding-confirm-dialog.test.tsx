@@ -27,6 +27,7 @@ describe("OnboardingConfirmContent", () => {
     );
 
     expect(markup).toContain("确认账号绑定变更");
+    expect(markup).toContain("新增项按每个本地分组分别创建账号");
     expect(markup).toContain("codex-special");
     expect(markup).not.toContain("示例上游");
     expect(markup).not.toContain("账号 Base URL");

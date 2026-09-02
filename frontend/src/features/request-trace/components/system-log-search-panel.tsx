@@ -3,19 +3,13 @@ import { Clock3, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type SystemLogSearchQuery, type UsageRecord } from "@/api";
+import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 const timeRanges: Array<{ value: SystemLogSearchQuery["timeRange"]; label: string }> = [
   { value: "5m", label: "最近 5 分钟" },
@@ -28,7 +22,6 @@ const timeRanges: Array<{ value: SystemLogSearchQuery["timeRange"]; label: strin
 ];
 
 const levels = [
-  { value: "all", label: "全部级别" },
   { value: "debug", label: "调试" },
   { value: "info", label: "信息" },
   { value: "warn", label: "警告" },
@@ -292,7 +285,6 @@ export function SystemLogSearchPanel() {
       ...form,
       startTime: optionalISODate(form.startTime),
       endTime: optionalISODate(form.endTime),
-      level: form.level === "all" ? "" : form.level,
       page: 1,
     };
     setSubmitted((current) => nextSystemLogSubmission(current, query));
@@ -328,23 +320,17 @@ export function SystemLogSearchPanel() {
           <form className="grid gap-3" onSubmit={submit}>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
               <Field label="时间范围">
-                <Select
+                <FilterMenu
+                  label="时间范围"
+                  options={timeRanges.map((option) => option.value)}
                   value={form.timeRange}
                   onValueChange={(value) => value && update("timeRange", value)}
-                >
-                  <SelectTrigger appearance="faceted" aria-label="时间范围">
-                    <SelectValue>
-                      {timeRanges.find((option) => option.value === form.timeRange)?.label}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent appearance="faceted" align="start">
-                    {timeRanges.map((option) => (
-                      <SelectItem appearance="faceted" key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  optionLabel={(value) =>
+                    timeRanges.find((option) => option.value === value)?.label ?? value
+                  }
+                  clearable={false}
+                  className="w-full max-w-full"
+                />
               </Field>
               <Field label="开始时间（可选）">
                 <Input
@@ -361,23 +347,16 @@ export function SystemLogSearchPanel() {
                 />
               </Field>
               <Field label="级别">
-                <Select
-                  value={form.level || "all"}
-                  onValueChange={(value) => value && update("level", value)}
-                >
-                  <SelectTrigger appearance="faceted" aria-label="级别">
-                    <SelectValue>
-                      {levels.find((option) => option.value === (form.level || "all"))?.label}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent appearance="faceted" align="start">
-                    {levels.map((option) => (
-                      <SelectItem appearance="faceted" key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <FilterMenu
+                  label="级别"
+                  options={levels.map((option) => option.value)}
+                  value={form.level || null}
+                  onValueChange={(value) => update("level", value ?? "")}
+                  optionLabel={(value) =>
+                    levels.find((option) => option.value === value)?.label ?? value
+                  }
+                  className="w-full max-w-full"
+                />
               </Field>
               <Field label="Host">
                 <Input value={form.host} onChange={(event) => update("host", event.target.value)} />

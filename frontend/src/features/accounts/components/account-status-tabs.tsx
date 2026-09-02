@@ -1,30 +1,26 @@
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { FilterMenu } from "@/components/data-table/filter-menu";
 import { accountPoolFilters, type AccountPoolFilter } from "@/features/accounts/lib/account-pool";
+
+type SelectableAccountPoolFilter = Exclude<AccountPoolFilter, "all">;
+
+export const accountStatusFilterOptions = accountPoolFilters.filter(
+  (filter): filter is { value: SelectableAccountPoolFilter; label: string } =>
+    filter.value !== "all",
+);
 
 export function AccountStatusFilter(props: {
   value: AccountPoolFilter;
   onValueChange: (value: AccountPoolFilter) => void;
 }) {
-  const selected =
-    accountPoolFilters.find((filter) => filter.value === props.value) ?? accountPoolFilters[0];
   return (
-    <Select value={props.value} onValueChange={(value) => value && props.onValueChange(value)}>
-      <SelectTrigger appearance="faceted" className="w-32" aria-label="账号状态">
-        <SelectValue>{selected.label}</SelectValue>
-      </SelectTrigger>
-      <SelectContent appearance="faceted" align="start">
-        {accountPoolFilters.map((filter) => (
-          <SelectItem appearance="faceted" key={filter.value} value={filter.value}>
-            {filter.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <FilterMenu
+      label="状态"
+      options={accountStatusFilterOptions.map((filter) => filter.value)}
+      value={props.value === "all" ? null : props.value}
+      onValueChange={(value) => props.onValueChange(value ?? "all")}
+      optionLabel={(value) =>
+        accountStatusFilterOptions.find((filter) => filter.value === value)?.label ?? value
+      }
+    />
   );
 }

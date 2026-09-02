@@ -127,9 +127,9 @@ describe("log center contracts", () => {
     expect(markup).toContain('aria-label="日志筛选"');
     expect(markup).toContain('aria-label="搜索任务、对象或原因"');
     expect(markup).toContain('aria-label="记录类型"');
-    expect(markup).toContain('aria-label="执行结果"');
+    expect(markup).toContain('aria-label="执行结果筛选"');
     expect(markup).toContain('aria-label="刷新日志"');
-    expect(markup.match(/data-slot="select-trigger"/g)).toHaveLength(1);
+    expect(markup).not.toContain('data-slot="select-trigger"');
     expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
       markup.indexOf('aria-label="搜索任务、对象或原因"'),
     );
@@ -156,11 +156,11 @@ describe("log center contracts", () => {
       }),
     );
 
-    expect(markup).toContain('aria-label="事件级别"');
-    expect(markup).toContain('aria-label="事件分组"');
+    expect(markup).toContain('aria-label="事件级别筛选"');
+    expect(markup).toContain('aria-label="事件分组筛选"');
     expect(markup).toContain("警告");
     expect(markup).toContain("codex");
-    expect(markup).not.toContain('aria-label="执行结果"');
+    expect(markup).not.toContain('aria-label="执行结果筛选"');
   });
 
   it("uses readable names and states instead of internal identifiers", () => {

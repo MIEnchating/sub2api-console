@@ -3,20 +3,35 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import { AccountsPage } from "../../../../App";
-import { AccountStatusFilter } from "../account-status-tabs";
+import { AccountStatusFilter, accountStatusFilterOptions } from "../account-status-tabs";
 
 describe("AccountStatusFilter", () => {
-  it("renders only the selected account state without duplicate counts", () => {
+  it("shows the filter name and selected state using the shared faceted style", () => {
     const markup = renderToStaticMarkup(
       <AccountStatusFilter value="degraded" onValueChange={() => {}} />,
     );
 
-    expect(markup).toContain('aria-label="账号状态"');
+    expect(markup).toContain('aria-label="状态筛选"');
+    expect(markup).toContain(">状态<");
     expect(markup).toContain("降级");
+    expect(markup).toContain('data-slot="badge"');
+    expect(markup).toContain("max-w-64");
+    expect(markup).not.toContain("w-32");
     expect(markup).not.toContain("21");
     expect(markup).not.toContain(" · ");
-    expect(markup).toContain('data-slot="select-trigger"');
-    expect(markup).not.toContain('role="tablist"');
+    expect(markup).toContain('data-slot="button"');
+    expect(markup).not.toContain('data-slot="select-trigger"');
+  });
+
+  it("maps the internal all state to an empty filter without offering an all option", () => {
+    const markup = renderToStaticMarkup(
+      <AccountStatusFilter value="all" onValueChange={() => {}} />,
+    );
+
+    expect(markup).toContain(">状态<");
+    expect(markup).not.toContain(">全部<");
+    expect(markup).not.toContain('data-slot="badge"');
+    expect(accountStatusFilterOptions.map((filter) => filter.value)).not.toContain("all");
   });
 
   it("places the account filter toolbar above the table card", () => {
@@ -37,8 +52,7 @@ describe("AccountStatusFilter", () => {
     expect(cardStart).toBeLessThan(tableStart);
     expect(markup).toContain('data-slot="table-filter-toolbar"');
     expect(toolbar).toContain("搜索账号、ID、Host 或分组");
-    expect(toolbar).toContain('aria-label="账号状态"');
-    expect(toolbar).toContain('data-slot="select-trigger"');
+    expect(toolbar).toContain('aria-label="状态筛选"');
     expect(toolbar).toContain("分组");
     expect(toolbar).toContain("类型");
     expect(toolbar).not.toContain("个账号");

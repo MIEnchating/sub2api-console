@@ -374,6 +374,32 @@ func TestCreateKeySkipsInventoryReadbackWhenVerificationDisabled(t *testing.T) {
 	}
 }
 
+func TestCreateKeyWithMarkerSkipsInventoryWhenCreateReturnsStableIdentity(t *testing.T) {
+	var gets, posts int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			gets++
+			writer.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		posts++
+		_, _ = writer.Write([]byte(`{"code":0,"data":{"id":17,"name":"account-onboarding-01234567","group_id":6,"key":"sk-once"}}`))
+	}))
+	defer server.Close()
+	token := "token"
+	key, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.KeyID != "17" || key.Secret != "sk-once" || gets != 0 || posts != 1 {
+		t.Fatalf("key=%#v gets=%d posts=%d", key, gets, posts)
+	}
+}
+
 func TestCreateKeyWithoutBaselineKeepsMissingResponseIDCommitUnknown(t *testing.T) {
 	var gets, posts int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -561,12 +587,12 @@ func TestCreateKeyTreatsUnreadableServerErrorAsCommitUnknown(t *testing.T) {
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "account-onboarding-01234567", "6", true)
 	var unknown *CommitUnknownError
-	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || transport.calls != 4 {
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || transport.calls != 3 {
 		t.Fatalf("err=%v unknown=%#v calls=%d", err, unknown, transport.calls)
 	}
 }
 
-func TestCreateKeyFailsClosedWhenMarkerPreflightCannotReadInventory(t *testing.T) {
+func TestCreateKeyReconcilesOnlyAfterUncertainCreate(t *testing.T) {
 	var posts int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodPost {
@@ -580,7 +606,8 @@ func TestCreateKeyFailsClosedWhenMarkerPreflightCannotReadInventory(t *testing.T
 		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "account-onboarding-01234567", "6", true)
-	if err == nil || posts != 0 {
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || posts != 1 {
 		t.Fatalf("err=%v posts=%d", err, posts)
 	}
 }

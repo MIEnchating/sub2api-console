@@ -123,6 +123,8 @@ type NewAPIManagementService interface {
 	DeletePlatform(context.Context, string) (bool, error)
 	Refresh(context.Context, string) (newapimanagement.RemoteSnapshot, error)
 	SaveBindings(context.Context, string, []newapimanagement.GroupBindingInput) ([]business.NewAPIGroupBinding, error)
+	CreateChannelKey(context.Context, string, newapimanagement.ChannelKeyInput) (newapimanagement.ChannelKey, error)
+	FetchChannelModels(context.Context, string, newapimanagement.ChannelModelsInput) ([]string, error)
 	CreateChannel(context.Context, string, newapimanagement.ChannelInput) (map[string]any, error)
 	SaveModelPrices(context.Context, string, []newapimanagement.ModelPriceInput) (newapimanagement.RemoteSnapshot, error)
 }
@@ -399,11 +401,19 @@ type newAPIGroupBindingsRequest struct {
 }
 
 type newAPIChannelRequest struct {
-	Name           string   `json:"name" binding:"required,min=1,max=120"`
 	Sub2APIGroupID string   `json:"sub2api_group_id" binding:"required,min=1,max=128"`
-	BaseURL        string   `json:"base_url" binding:"required,min=1,max=2048"`
-	ServiceKey     string   `json:"service_key" binding:"required,min=1,max=4096"`
+	KeyID          string   `json:"key_id" binding:"required,min=1,max=128"`
 	Models         []string `json:"models" binding:"required,min=1,max=500,dive,required,max=256"`
+	NewAPIGroups   []string `json:"newapi_groups" binding:"required,min=1,max=500,dive,required,max=128"`
+}
+
+type newAPIChannelModelsRequest struct {
+	Sub2APIGroupID string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
+	KeyID          string `json:"key_id" binding:"required,min=1,max=128"`
+}
+
+type newAPIChannelKeyRequest struct {
+	Sub2APIGroupID string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
 }
 
 type newAPIModelPricesRequest struct {
@@ -573,6 +583,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
 	authorized.POST("/newapi/platforms/:platform_id/refresh", server.refreshNewAPIPlatform)
 	authorized.PUT("/newapi/platforms/:platform_id/group-bindings", server.saveNewAPIGroupBindings)
+	authorized.POST("/newapi/platforms/:platform_id/channel-key", server.createNewAPIChannelKey)
+	authorized.POST("/newapi/platforms/:platform_id/channel-models", server.fetchNewAPIChannelModels)
 	authorized.POST("/newapi/platforms/:platform_id/channels", server.createNewAPIChannel)
 	authorized.PUT("/newapi/platforms/:platform_id/model-prices", server.saveNewAPIModelPrices)
 	authorized.GET("/upstreams", server.upstreams)
@@ -4002,14 +4014,54 @@ func (s *Server) createNewAPIChannel(c *gin.Context) {
 		return
 	}
 	result, err := s.newAPIManagement.CreateChannel(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelInput{
-		Name: request.Name, Sub2APIGroupID: request.Sub2APIGroupID, BaseURL: request.BaseURL,
-		ServiceKey: request.ServiceKey, Models: request.Models,
+		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID, Models: request.Models,
+		NewAPIGroups: request.NewAPIGroups,
 	})
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())
 		return
 	}
 	c.JSON(http.StatusCreated, result)
+}
+
+func (s *Server) createNewAPIChannelKey(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIChannelKeyRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "Sub2API 密钥创建参数无效")
+		return
+	}
+	result, err := s.newAPIManagement.CreateChannelKey(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelKeyInput{
+		Sub2APIGroupID: request.Sub2APIGroupID,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, result)
+}
+
+func (s *Server) fetchNewAPIChannelModels(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIChannelModelsRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "Sub2API 模型获取参数无效")
+		return
+	}
+	models, err := s.newAPIManagement.FetchChannelModels(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelModelsInput{
+		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
 func (s *Server) saveNewAPIModelPrices(c *gin.Context) {
@@ -4126,7 +4178,7 @@ func writeSSEError(writer io.Writer, detail string) error {
 
 func terminalTaskStatus(status string) bool {
 	switch status {
-	case "waiting_input", "succeeded", "failed", "cancelled":
+	case "waiting_input", "succeeded", "partial", "failed", "cancelled":
 		return true
 	default:
 		return false

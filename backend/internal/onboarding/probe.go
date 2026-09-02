@@ -52,7 +52,9 @@ type probeCredential struct {
 }
 
 func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]string, error) {
-	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
+	guardedCtx, release, err := mutationguard.Acquire(
+		ctx, s.repository, mutationguard.Upstream(host), mutationguard.UpstreamKeyCatalog(host),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +85,9 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string) (Probe
 	if model == "" || len(model) > 255 {
 		return ProbeResult{}, errors.New("请选择有效的测试模型")
 	}
-	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
+	guardedCtx, release, err := mutationguard.Acquire(
+		ctx, s.repository, mutationguard.Upstream(host), mutationguard.UpstreamKeyCatalog(host),
+	)
 	if err != nil {
 		return ProbeResult{}, err
 	}

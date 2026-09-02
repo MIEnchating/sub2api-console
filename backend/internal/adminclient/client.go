@@ -45,13 +45,6 @@ func (e *CommitUnknownError) Error() string {
 
 func (e *CommitUnknownError) Unwrap() error { return e.Cause }
 
-type ReconciliationError struct{ Cause error }
-
-func (e *ReconciliationError) Error() string {
-	return "账号创建前 marker 对账失败：" + e.Cause.Error()
-}
-func (e *ReconciliationError) Unwrap() error { return e.Cause }
-
 type responseOutcomeUnknown struct{ cause error }
 
 func (e *responseOutcomeUnknown) Error() string { return e.cause.Error() }
@@ -682,18 +675,13 @@ func (c *Client) CreateAccountWithMarker(ctx context.Context, body map[string]an
 }
 
 func (c *Client) createAccount(ctx context.Context, body map[string]any, marker string) (map[string]any, error) {
-	before, baselineErr := c.Accounts(ctx)
-	beforeIDs, identityErr := accountIDSet(before)
-	if baselineErr == nil && identityErr != nil {
-		baselineErr = identityErr
-	}
-	if marker != "" {
-		if baselineErr != nil {
-			return nil, &ReconciliationError{Cause: baselineErr}
-		}
-		matched, err := accountByMarker(before, marker)
-		if err != nil || matched != nil {
-			return matched, err
+	var beforeIDs map[string]struct{}
+	var baselineErr error
+	if marker == "" {
+		before, err := c.Accounts(ctx)
+		beforeIDs, baselineErr = accountIDSet(before)
+		if err != nil {
+			baselineErr = err
 		}
 	}
 	payload, err := c.requestWithSemantics(ctx, http.MethodPost, "/admin/accounts", body, nil, true)

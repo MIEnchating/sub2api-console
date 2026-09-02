@@ -56,6 +56,13 @@ func Acquire(ctx context.Context, repository any, resources ...string) (context.
 // Bind verifies a queued target expectation while its mutation lease is held,
 // then pins the verified settings so every client in the operation uses one target.
 func Bind(ctx context.Context, store Store) (context.Context, error) {
+	return Pin(ctx, store)
+}
+
+// Pin validates the queued target identity and keeps that immutable snapshot
+// without acquiring the global target mutation lease. Long-running workflows
+// use it when they must not block unrelated manual operations.
+func Pin(ctx context.Context, store Store) (context.Context, error) {
 	current, err := store.TargetSettings(ctx)
 	if err != nil {
 		return nil, err

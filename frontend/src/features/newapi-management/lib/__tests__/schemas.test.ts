@@ -18,13 +18,23 @@ describe("New API 管理表单", () => {
     expect(parseModelList("gpt-5, claude-sonnet-4\ngpt-5")).toEqual(["claude-sonnet-4", "gpt-5"]);
   });
 
-  it("拒绝缺少服务密钥的渠道", () => {
+  it("拒绝缺少密钥 ID 的渠道", () => {
     const result = newAPIChannelSchema.safeParse({
-      name: "Sub2API 标准组",
       sub2api_group_id: "6",
-      base_url: "https://sub2api.example/v1",
-      service_key: "",
-      models: "gpt-5",
+      key_id: "",
+      models: ["gpt-5"],
+      newapi_groups: ["default"],
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("拒绝未选择上游模型或 New API 分组的渠道", () => {
+    const result = newAPIChannelSchema.safeParse({
+      sub2api_group_id: "6",
+      key_id: "key-7",
+      models: [],
+      newapi_groups: [],
     });
 
     expect(result.success).toBe(false);

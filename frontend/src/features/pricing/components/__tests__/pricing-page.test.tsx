@@ -436,4 +436,52 @@ describe("PricingPage", () => {
     expect(decisions[0].eligible_groups).toEqual(["低价"]);
     expect(decisions[0].changed).toBe(true);
   });
+
+  it("keeps the current group when no compatible group can meet the profit target", () => {
+    const decisions = pricingPreviewDecisions(
+      [
+        {
+          account_id: "22",
+          account_name: "high-cost-account",
+          platform: "openai",
+          cost_multiplier: "0.198",
+          current_group_ids: ["8"],
+          desired_group_ids: ["8"],
+          eligible_groups: [],
+          changed: false,
+          skipped: false,
+          reason: null,
+        },
+      ],
+      [
+        {
+          ...snapshot.groups[0],
+          id: "8",
+          name: "codex-pro-平价",
+          rate_multiplier: "0.2",
+        },
+        {
+          ...snapshot.groups[0],
+          id: "9",
+          name: "codex-pro-特价",
+          rate_multiplier: "0.15",
+        },
+        {
+          ...snapshot.groups[0],
+          id: "10",
+          name: "codex-pro-旗舰",
+          rate_multiplier: "0.25",
+        },
+      ],
+      {
+        ...snapshot.config,
+        profit_margin: 0.25,
+        exchange_group_sets: [["8", "9", "10"]],
+      },
+    );
+
+    expect(decisions[0].desired_group_ids).toEqual(["8"]);
+    expect(decisions[0].changed).toBe(false);
+    expect(decisions[0].reason).toContain("保留当前分组");
+  });
 });

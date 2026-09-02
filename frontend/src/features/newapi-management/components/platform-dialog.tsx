@@ -65,7 +65,9 @@ export function NewAPIPlatformDialog(props: Props) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{props.platform ? "编辑 New API 平台" : "添加 New API 平台"}</DialogTitle>
+          <DialogTitle>
+            {props.platform ? "编辑 New API 主平台" : "配置 New API 主平台"}
+          </DialogTitle>
         </DialogHeader>
         <DialogBody>
           <form

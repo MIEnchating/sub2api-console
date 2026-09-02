@@ -1275,21 +1275,59 @@ describe("New API management request contracts", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.createNewAPIChannel("platform-1", {
-      name: "标准组",
       sub2api_group_id: "6",
-      base_url: "https://sub2api.example/v1",
-      service_key: "service-secret",
+      key_id: "key-7",
       models: ["gpt-5"],
+      newapi_groups: ["default", "vip"],
     });
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(request.method).toBe("POST");
     expect(JSON.parse(String(request.body))).toEqual({
-      name: "标准组",
       sub2api_group_id: "6",
-      base_url: "https://sub2api.example/v1",
-      service_key: "service-secret",
+      key_id: "key-7",
       models: ["gpt-5"],
+      newapi_groups: ["default", "vip"],
+    });
+  });
+
+  it("creates and references a Sub2API key without exposing its secret", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ key_id: "key-7", name: "标准", group_id: "6" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createNewAPIChannelKey("platform-1", { sub2api_group_id: "6" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/platform-1/channel-key");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      sub2api_group_id: "6",
+    });
+    expect(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).not.toContain("secret");
+  });
+
+  it("sends only the Sub2API key ID in the model preview body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ models: ["gpt-5"] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.fetchNewAPIChannelModels("platform-1", {
+      sub2api_group_id: "6",
+      key_id: "key-7",
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/platform-1/channel-models");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({
+      sub2api_group_id: "6",
+      key_id: "key-7",
     });
   });
 });

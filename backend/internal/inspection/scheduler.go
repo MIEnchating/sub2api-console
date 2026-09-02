@@ -821,7 +821,7 @@ func scheduledAfter(now time.Time, config business.AutoInspectionConfig) *string
 
 func latestCompleted(history []business.InspectionHeartbeat) *business.InspectionHeartbeat {
 	for index := range history {
-		if history[index].Status == "succeeded" || history[index].Status == "failed" || history[index].Status == "cancelled" {
+		if history[index].Status == "succeeded" || history[index].Status == "partial" || history[index].Status == "failed" || history[index].Status == "cancelled" {
 			return &history[index]
 		}
 	}

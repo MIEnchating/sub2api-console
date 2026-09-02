@@ -94,6 +94,15 @@ func UpstreamCatalog() string { return "upstream-catalog" }
 
 func Vault(entry string) string { return "vault/" + strings.TrimSpace(entry) }
 
+// UpstreamKeyCatalog serializes remote Key mutations without blocking read-only upstream synchronization.
+func UpstreamKeyCatalog(host string) string {
+	host = configstore.CanonicalHost(host)
+	if host == "" {
+		return ""
+	}
+	return "upstream-keys/" + host
+}
+
 func Upstream(host string) string {
 	host = configstore.CanonicalHost(host)
 	if host == "" {

@@ -2,7 +2,14 @@ import { OnboardingGroupBindingSelect } from "./onboarding-group-binding-select"
 
 export function UpstreamGroupBindingEditor(props: {
   upstreamGroupName: string;
-  groups: Array<{ id: string | null; name: string; rate_multiplier?: string | null }>;
+  upstreamPlatform: string | null;
+  groups: Array<{
+    id: string | null;
+    name: string;
+    platform?: string | null;
+    platforms?: string[];
+    rate_multiplier?: string | null;
+  }>;
   value: string[];
   disabled: boolean;
   disabledReason: string | null;
@@ -11,6 +18,7 @@ export function UpstreamGroupBindingEditor(props: {
   return (
     <OnboardingGroupBindingSelect
       upstreamGroupName={props.upstreamGroupName}
+      upstreamPlatform={props.upstreamPlatform}
       groups={props.groups}
       value={props.value}
       disabled={props.disabled}

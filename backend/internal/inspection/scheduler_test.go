@@ -49,13 +49,18 @@ type immediateExecutor struct {
 	monitoring *bool
 	summary    *InspectionSummary
 	skipped    bool
+	status     string
 }
 
 func (e *immediateExecutor) Execute(context.Context, business.AutoInspectionConfig) (ExecutionResult, error) {
 	e.calls++
 	taskID := "second"
+	status := e.status
+	if status == "" {
+		status = "succeeded"
+	}
 	return ExecutionResult{
-		TaskID: &taskID, Status: "succeeded", MonitoringEnabled: e.monitoring,
+		TaskID: &taskID, Status: status, MonitoringEnabled: e.monitoring,
 		Summary: e.summary, Skipped: e.skipped,
 	}, nil
 }
@@ -678,6 +683,25 @@ func TestStatusPublishesConfirmedMonitoringAvailability(t *testing.T) {
 	}
 	if !status.MonitoringEnabled || status.MonitoringCheckedAt == nil {
 		t.Fatalf("monitoring availability was not published: %#v", status)
+	}
+}
+
+func TestSchedulerPersistsPartialHeartbeatAsLastCompletedRun(t *testing.T) {
+	repository := openInspectionRepository(t)
+	scheduler, err := NewScheduler(repository, &immediateExecutor{status: "partial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.RunDue(context.Background(), time.Now().UTC(), true); err != nil {
+		t.Fatal(err)
+	}
+	status, err := scheduler.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.LastStatus == nil || *status.LastStatus != "partial" ||
+		len(status.HeartbeatHistory) != 1 || status.HeartbeatHistory[0].Status != "partial" {
+		t.Fatalf("partial heartbeat was not published: %#v", status)
 	}
 }
 

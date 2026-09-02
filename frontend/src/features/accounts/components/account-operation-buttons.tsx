@@ -15,6 +15,9 @@ import { TableActionButton } from "@/components/data-table/table-action-button";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 import { cn } from "@/lib/utils";
 
+const prominentDangerActionClassName =
+  "border-destructive/40 bg-destructive/10 hover:border-destructive/60 hover:bg-destructive/20 focus-visible:border-destructive focus-visible:ring-destructive/30";
+
 export function AccountOperationButtons(props: {
   account: AccountStatus;
   pending: boolean;
@@ -77,6 +80,7 @@ export function AccountOperationButtons(props: {
           <TableActionButton
             label={fused ? "解除熔断" : "手动熔断"}
             tone={fused ? "primary" : "danger"}
+            className={cn(!fused && prominentDangerActionClassName)}
             disabled={props.pending || paused || manualControlled}
             onClick={() =>
               props.onControl(
@@ -112,6 +116,7 @@ export function AccountOperationButtons(props: {
       <TableActionButton
         label="删除账号及上游 Key"
         tone="danger"
+        className={prominentDangerActionClassName}
         disabled={props.pending}
         onClick={props.onDelete}
       >

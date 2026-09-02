@@ -11,7 +11,8 @@ describe("OnboardingGroupBindingSelect", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect
         upstreamGroupName="kiro-power"
-        groups={[{ id: "8", name: "A-kiro逆向" }]}
+        upstreamPlatform="anthropic"
+        groups={[{ id: "8", name: "A-kiro逆向", platform: "anthropic" }]}
         value={[]}
         disabled={false}
         disabledReason={null}
@@ -29,9 +30,10 @@ describe("OnboardingGroupBindingSelect", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect
         upstreamGroupName="pro"
+        upstreamPlatform="openai"
         groups={[
-          { id: "8", name: "codex" },
-          { id: "9", name: "pro" },
+          { id: "8", name: "codex", platform: "openai" },
+          { id: "9", name: "pro", platform: "openai" },
         ]}
         value={["8", "9"]}
         disabled={false}
@@ -53,7 +55,8 @@ describe("OnboardingGroupBindingSelect", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect
         upstreamGroupName="kiro-power"
-        groups={[{ id: "8", name: "A-kiro逆向" }]}
+        upstreamPlatform="anthropic"
+        groups={[{ id: "8", name: "A-kiro逆向", platform: "anthropic" }]}
         value={["8"]}
         disabled={false}
         disabledReason={null}
@@ -69,6 +72,7 @@ describe("OnboardingGroupBindingSelect", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect
         upstreamGroupName="pro"
+        upstreamPlatform="openai"
         groups={[]}
         value={[]}
         disabled
@@ -91,5 +95,26 @@ describe("OnboardingGroupBindingSelect", () => {
     expect(markup).toContain(">0.15<");
     expect(markup).not.toContain("倍率");
     expect(markup).toContain("justify-between");
+  });
+
+  it("does not expose local groups from another platform", () => {
+    const markup = renderToStaticMarkup(
+      <OnboardingGroupBindingSelect
+        upstreamGroupName="glm-4.5"
+        upstreamPlatform="zhipu"
+        groups={[
+          { id: "27", name: "国模-平价", platform: "openai" },
+          { id: "28", name: "GLM 专用", platform: "zhipu" },
+        ]}
+        value={["27", "28"]}
+        disabled={false}
+        disabledReason={null}
+        onValueChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("GLM 专用");
+    expect(markup).toContain("所选分组不可用");
+    expect(markup).not.toContain("国模-平价");
   });
 });

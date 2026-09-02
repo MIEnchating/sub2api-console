@@ -47,6 +47,37 @@ func TestInspectionHeartbeatsNormalizesMissingLegacyArrays(t *testing.T) {
 	}
 }
 
+func TestInspectionHeartbeatsNormalizesLegacyBatchFailuresAsPartial(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-partial.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Bootstrap(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `[` +
+		`{"checked_at":"2026-08-27T00:00:02Z","status":"failed","error":"账号倍率与名称同步部分失败：缺失 0，失败 23；调度计算：数据库不可用"},` +
+		`{"checked_at":"2026-08-27T00:00:01Z","status":"failed","error":"账号倍率与名称同步部分失败：缺失 0，失败 23"}` +
+		`]`
+	if _, err := store.db.Exec(
+		`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)`,
+		inspectionHistoryKey,
+		legacy,
+		"2026-08-27T00:00:02Z",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.InspectionHeartbeats(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 || records[0].Status != "failed" || records[1].Status != "partial" {
+		t.Fatalf("legacy failure statuses were normalized incorrectly: %#v", records)
+	}
+}
+
 func TestClearInspectionHeartbeatsKeepsSchedulingState(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "inspection.sqlite3"))
 	if err != nil {

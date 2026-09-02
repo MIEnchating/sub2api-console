@@ -67,19 +67,23 @@ const allocation: GroupAllocation = {
 };
 
 describe("group allocation detail", () => {
-  it("shows group summary and per-account routing allocation", () => {
+  it("prioritizes actionable allocation status and removes secondary summary details", () => {
     const markup = renderToStaticMarkup(<GroupAllocationContent allocation={allocation} />);
 
-    expect(markup).toContain("健康 / 可用");
-    expect(markup).toContain("codex");
+    expect(markup).toContain("当前状态");
     expect(markup).toContain("部分异常");
+    expect(markup).toContain("巡检策略");
+    expect(markup).toContain("速度优先策略");
+    expect(markup).toContain("测试周期");
     expect(markup).toContain("每 5 分钟测试");
-    expect(markup).toContain(
-      "#6 · openai · 分组计费倍率 0.15 · 渠道 2 · 最终权重合计 175 · 分组预算 400",
-    );
-    expect(markup).toContain("1 / 2");
-    expect(markup).toContain("最高分");
-    expect(markup).toContain("79");
+    expect(markup).toContain("可用账号");
+    expect(markup).toContain("2 / 2");
+    expect(markup).toContain("其中健康 1");
+    expect(markup).toContain("需关注");
+    expect(markup).toContain("限流 1");
+    expect(markup).toContain("权重分配");
+    expect(markup).toContain("175 / 400");
+    expect(markup).toContain("已生成最终权重");
     expect(markup).toContain('data-slot="account-health-score"');
     expect(markup).toContain("短期 76");
     expect(markup).toContain("长期 82");
@@ -88,9 +92,37 @@ describe("group allocation detail", () => {
     expect(markup).toContain("tokenshen-0.15");
     expect(markup).toContain("最终权重 117");
     expect(markup).toContain("39.8s");
-    expect(markup).toContain("速度优先：质量分 = 健康门控 ×（80% 相对速度 + 20% 相对价格）");
-    expect(markup).toContain("最终权重 = 组内预算 × 质量分 ÷ 质量分总和");
     expect(markup).toContain('data-table-panel=""');
+    expect(markup).not.toContain("#6");
+    expect(markup).not.toContain("分组计费倍率");
+    expect(markup).not.toContain("最高分");
+    expect(markup).not.toContain("平均分");
+    expect(markup).not.toContain("质量分 =");
+  });
+
+  it("collapses an all-zero exception breakdown into a healthy summary", () => {
+    const markup = renderToStaticMarkup(
+      <GroupAllocationContent
+        allocation={{
+          ...allocation,
+          status: "healthy",
+          healthy_accounts: 2,
+          available_accounts: 2,
+          fused_accounts: 0,
+          paused_accounts: 0,
+          unavailable_accounts: 0,
+          rate_limited_accounts: 0,
+          pending_accounts: 0,
+        }}
+      />,
+    );
+
+    expect(markup).toContain("当前无异常");
+    expect(markup).not.toContain("熔断 0");
+    expect(markup).not.toContain("暂停 0");
+    expect(markup).not.toContain("不可用 0");
+    expect(markup).not.toContain("限流 0");
+    expect(markup).not.toContain("待探测 0");
   });
 
   it("keeps a long allocation table inside a stable scroll area", () => {
@@ -99,6 +131,11 @@ describe("group allocation detail", () => {
     expect(groupAllocationLayout.height).toBe("tall");
     expect(groupAllocationLayout.loading).toContain("h-full");
     expect(groupAllocationLayout.content).toContain("min-h-0");
+    expect(groupAllocationLayout.policy).toContain("bg-muted");
+    expect(groupAllocationLayout.policy).toContain("grid-cols-3");
+    expect(groupAllocationLayout.metrics).toContain("lg:grid-cols-4");
+    expect(groupAllocationLayout.metric).toContain("bg-popover");
+    expect(groupAllocationLayout.metric).not.toContain("bg-background");
     expect(groupAllocationLayout.table).toContain("min-w-[1060px]");
   });
 
@@ -123,7 +160,9 @@ describe("group allocation detail", () => {
       />,
     );
 
-    expect(markup).toContain("分组权重预算 400");
+    expect(markup).toContain("权重分配");
+    expect(markup).toContain("未生成");
+    expect(markup).toContain("预算 400");
     expect(markup).toContain("尚未生成账号最终调度状态");
     expect(markup).not.toContain("权重 0.5");
   });

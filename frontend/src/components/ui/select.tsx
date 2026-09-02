@@ -3,6 +3,10 @@
 import { Select as SelectPrimitive } from "@base-ui/react/select";
 import { Check, ChevronDown, CirclePlus, Search } from "lucide-react";
 import * as React from "react";
+import {
+  dropdownSearchInputClassName,
+  focusDropdownSearchOnMount,
+} from "@/components/ui/dropdown-search-focus";
 import { knownUpstreamTypeLabel } from "@/lib/domain-dictionaries";
 import { cn } from "@/lib/utils";
 
@@ -232,6 +236,7 @@ function SelectContent({
               aria-hidden="true"
             />
             <input
+              ref={focusDropdownSearchOnMount}
               type="text"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -243,7 +248,10 @@ function SelectContent({
               placeholder="搜索选项"
               aria-label="搜索选项"
               data-slot="select-search"
-              className="border-input/50 bg-input/30 placeholder:text-muted-foreground h-8 w-full rounded-lg border pr-2.5 pl-8 text-sm outline-none"
+              className={cn(
+                "border-input/50 bg-input/30 placeholder:text-muted-foreground h-8 w-full rounded-lg border pr-2.5 pl-8 text-sm",
+                dropdownSearchInputClassName,
+              )}
             />
           </div>
         ) : null}

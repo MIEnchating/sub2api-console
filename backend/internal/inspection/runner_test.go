@@ -209,6 +209,14 @@ func (s *accountRateSyncStub) SyncAllAccountRates(context.Context, string) (map[
 	return map[string]any{"requested": 2, "updated": 1, "unchanged": 1, "missing": 0, "failed": 0}, nil
 }
 
+type partialAccountRateSyncStub struct{}
+
+func (partialAccountRateSyncStub) SyncAllAccountRates(context.Context, string) (map[string]any, error) {
+	return map[string]any{
+		"requested": 287, "updated": 0, "unchanged": 264, "missing": 0, "failed": 23,
+	}, nil
+}
+
 type rateAwareRouterStub struct {
 	rateSync *accountRateSyncStub
 	calls    int
@@ -439,6 +447,30 @@ func TestFullInspectionSyncsAccountRatesBeforeRouting(t *testing.T) {
 		if result.Operations[index] != want[index] {
 			t.Fatalf("operations=%#v want=%#v", result.Operations, want)
 		}
+	}
+}
+
+func TestInspectionReportsAccountRateItemFailuresAsPartial(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
+	tasks := openRunnerTaskStore(t)
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil, &parallelUpstreamStub{
+		started: make(chan struct{}), evidenceStarted: closedChannel(),
+	}, tasks, partialAccountRateSyncStub{})
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto-inspection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "partial" || result.Error == nil ||
+		*result.Error != "账号倍率与名称同步部分失败：缺失 0，失败 23" {
+		t.Fatalf("partial item failures were promoted to a full failure: %#v", result)
+	}
+	stored, err := tasks.Get(context.Background(), *result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "partial" || stored.Message != "巡检完成，但存在部分失败" {
+		t.Fatalf("partial task status was not persisted: %#v", stored)
 	}
 }
 

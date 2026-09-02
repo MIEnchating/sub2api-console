@@ -5,6 +5,7 @@ import {
   Activity,
   BellRing,
   BadgeCheck,
+  BadgeDollarSign,
   ChartSpline,
   ChartNoAxesColumnIncreasing,
   ChartNoAxesCombined,
@@ -12,16 +13,17 @@ import {
   CircleAlert,
   CircleDollarSign,
   CircleHelp,
-  CirclePlus,
   Eye,
   ExternalLink,
   FileSearch,
   Fingerprint,
   FolderOpen,
   Gauge,
+  GitCompareArrows,
   HeartPulse,
   KeyRound,
   Layers3,
+  Link2,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -29,6 +31,7 @@ import {
   Pause,
   Pencil,
   Play,
+  RadioTower,
   RefreshCw,
   Route,
   Save,
@@ -53,7 +56,6 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Popover } from "@base-ui/react/popover";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -184,7 +186,10 @@ import {
 import { AlertListActions } from "./features/alerts/components/alert-list-actions";
 import { NotificationQueueStatus } from "./features/alerts/components/notification-queue-status";
 import { LogsCenterPage } from "./features/logs/components/logs-center-page";
-import { GroupPolicyEditorFields } from "./features/groups/components/group-policy-editor-fields";
+import {
+  GroupPolicyEditorFields,
+  groupPolicyDialogLayout,
+} from "./features/groups/components/group-policy-editor-fields";
 import { captchaChallengeFromTask } from "./lib/captcha-challenge";
 import { groupStatusMeta } from "./lib/group-policy-display";
 import { schedulingMetric } from "./lib/scheduling-display";
@@ -199,6 +204,7 @@ import { sessionExpiredEvent, sessionExpiredMessage } from "./lib/session-auth";
 import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
 import { TableFilterToolbar } from "./components/data-table/filter-toolbar";
+import { FilterMenu } from "./components/data-table/filter-menu";
 import { DataTablePagination } from "./components/data-table/pagination";
 import { DataTablePanel } from "./components/data-table/table-panel";
 import { TableActionButton } from "./components/data-table/table-action-button";
@@ -223,6 +229,7 @@ import {
   OnboardingConfirmDialog,
   type OnboardingBindingPreview,
 } from "./features/upstreams/components/onboarding-confirm-dialog";
+import { expandOnboardingCreationRequests } from "./features/upstreams/lib/onboarding-requests";
 import {
   OnboardingProbeAction,
   type OnboardingProbeTarget,
@@ -278,6 +285,7 @@ import {
   candidateCreationUnavailableReason,
   candidateHasExistingBinding,
   candidateHasOnboardingChange,
+  compatibleOnboardingLocalGroups,
   composeOnboardingBaseUrl,
   normalizeOnboardingHost,
   onboardingCandidateStats,
@@ -297,6 +305,10 @@ type View =
   | "upstreams"
   | "groups"
   | "newapi"
+  | "newapi-groups"
+  | "newapi-channels"
+  | "newapi-prices"
+  | "newapi-differences"
   | "pricing"
   | "revenue-analysis"
   | "pricing-config"
@@ -323,6 +335,10 @@ export const navItems: Array<{
     | "/upstreams"
     | "/groups"
     | "/newapi"
+    | "/newapi/groups"
+    | "/newapi/channels"
+    | "/newapi/prices"
+    | "/newapi/differences"
     | "/pricing"
     | "/revenue-analysis"
     | "/pricing-config"
@@ -342,7 +358,6 @@ export const navItems: Array<{
   { id: "overview", label: "运营总览", icon: ChartSpline, to: "/" },
   { id: "upstreams", label: "上游管理", icon: Network, to: "/upstreams" },
   { id: "groups", label: "分组管理", icon: Layers3, to: "/groups" },
-  { id: "newapi", label: "New API 管理", icon: ServerCog, to: "/newapi" },
   { id: "pricing", label: "价格管理", icon: CircleDollarSign, to: "/pricing" },
   {
     id: "revenue-analysis",
@@ -371,6 +386,16 @@ export const navItems: Array<{
   },
   { id: "trace", label: "请求查询", icon: FileSearch, to: "/trace" },
   { id: "alerts", label: "告警通知", icon: Siren, to: "/alerts" },
+  { id: "newapi", label: "主平台", icon: ServerCog, to: "/newapi" },
+  { id: "newapi-groups", label: "分组绑定", icon: Link2, to: "/newapi/groups" },
+  { id: "newapi-channels", label: "渠道管理", icon: RadioTower, to: "/newapi/channels" },
+  { id: "newapi-prices", label: "模型价格", icon: BadgeDollarSign, to: "/newapi/prices" },
+  {
+    id: "newapi-differences",
+    label: "价格差异",
+    icon: GitCompareArrows,
+    to: "/newapi/differences",
+  },
   {
     id: "pricing-config",
     label: "价格配置",
@@ -401,7 +426,6 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
       "overview",
       "upstreams",
       "groups",
-      "newapi",
       "pricing",
       "revenue-analysis",
       "accounts",
@@ -411,6 +435,10 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
       "trace",
       "alerts",
     ],
+  },
+  {
+    label: "New API",
+    itemIDs: ["newapi", "newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
   },
   { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
   { label: "系统管理", itemIDs: ["vault", "logs", "config"] },
@@ -422,6 +450,10 @@ const viewByPath: Record<string, View> = {
   "/upstreams": "upstreams",
   "/groups": "groups",
   "/newapi": "newapi",
+  "/newapi/groups": "newapi-groups",
+  "/newapi/channels": "newapi-channels",
+  "/newapi/prices": "newapi-prices",
+  "/newapi/differences": "newapi-differences",
   "/pricing": "pricing",
   "/revenue-analysis": "revenue-analysis",
   "/pricing-config": "pricing-config",
@@ -651,7 +683,11 @@ function App() {
               {activeView === "accounts" && <AccountsPage />}
               {activeView === "upstreams" && <UpstreamsPage />}
               {activeView === "groups" && <GroupsPage />}
-              {activeView === "newapi" && <NewAPIManagementPage />}
+              {activeView === "newapi" && <NewAPIManagementPage view="platform" />}
+              {activeView === "newapi-groups" && <NewAPIManagementPage view="groups" />}
+              {activeView === "newapi-channels" && <NewAPIManagementPage view="channels" />}
+              {activeView === "newapi-prices" && <NewAPIManagementPage view="prices" />}
+              {activeView === "newapi-differences" && <NewAPIManagementPage view="differences" />}
               {activeView === "pricing" && <PricingPage />}
               {activeView === "revenue-analysis" && <RevenueAnalysisPage />}
               {activeView === "pricing-config" && <PricingConfigPage />}
@@ -802,7 +838,10 @@ export function SchedulerHeaderControls() {
     for (const key of terminalRefreshKeys("inspection", runTask.data)) {
       void queryClient.invalidateQueries({ queryKey: key });
     }
-    if (runTask.data && ["succeeded", "failed", "cancelled"].includes(runTask.data.status)) {
+    if (
+      runTask.data &&
+      ["succeeded", "partial", "failed", "cancelled"].includes(runTask.data.status)
+    ) {
       void queryClient.invalidateQueries({ queryKey: ["auto-inspection"] });
     }
   }, [queryClient, runTask.data]);
@@ -1738,165 +1777,7 @@ function policyNumberInput(value: string): number | null {
   const parsed = Number(value);
   return Number.isFinite(parsed) && Number.isInteger(parsed) ? parsed : null;
 }
-export function FilterMenu(props: {
-  label: string;
-  options: string[];
-  value: string | null;
-  onValueChange: (value: string | null) => void;
-  optionLabel?: (value: string) => string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
-  const options = props.options.filter((option) =>
-    searchable([option, props.optionLabel ? props.optionLabel(option) : option], query),
-  );
-  const selectedLabel = props.value
-    ? props.optionLabel
-      ? props.optionLabel(props.value)
-      : props.value
-    : null;
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen);
-    if (!nextOpen) {
-      setQuery("");
-      setActiveIndex(0);
-    }
-  }
-  function toggleOption(option: string) {
-    props.onValueChange(props.value === option ? null : option);
-  }
-  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (!options.length) return;
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setActiveIndex((current) => (current + 1) % options.length);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActiveIndex((current) => (current - 1 + options.length) % options.length);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      setActiveIndex(0);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      setActiveIndex(options.length - 1);
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      toggleOption(options[Math.min(activeIndex, options.length - 1)]);
-    }
-  }
-  return (
-    <Popover.Root open={open} onOpenChange={handleOpenChange}>
-      <Popover.Trigger
-        render={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            data-press-animation="none"
-            className="h-8 max-w-64 bg-transparent"
-            aria-label={`${props.label}筛选`}
-          />
-        }
-      >
-        <CirclePlus size={16} />
-        <span className="min-w-0 truncate">{props.label}</span>
-        {selectedLabel ? (
-          <>
-            <span className="bg-border mx-1 h-4 w-px shrink-0" aria-hidden="true" />
-            <Badge variant="secondary" className="max-w-36 truncate rounded-sm px-1 font-normal">
-              {selectedLabel}
-            </Badge>
-          </>
-        ) : null}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          side="bottom"
-          sideOffset={4}
-          align="start"
-          collisionPadding={8}
-          className="z-50"
-        >
-          <Popover.Popup
-            data-slot="faceted-filter-content"
-            initialFocus={false}
-            className="bg-popover text-popover-foreground w-[min(22rem,calc(100vw-1rem))] min-w-52 rounded-lg border p-1 shadow-lg outline-none"
-          >
-            <div className="relative p-1 pb-0">
-              <Search
-                size={16}
-                className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 opacity-60"
-              />
-              <Input
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setActiveIndex(0);
-                }}
-                onKeyDown={handleSearchKeyDown}
-                placeholder={props.label}
-                aria-label={`搜索${props.label}`}
-                className="border-input/30 bg-input/30 h-8 rounded-lg pl-8 shadow-none"
-              />
-            </div>
-            <div
-              className="max-h-72 overflow-x-hidden overflow-y-auto p-1"
-              role="listbox"
-              aria-label={props.label}
-            >
-              {!options.length && (
-                <div className="text-muted-foreground py-6 text-center text-sm">没有匹配项</div>
-              )}
-              {options.map((option, index) => (
-                <button
-                  type="button"
-                  data-press-animation="none"
-                  role="option"
-                  aria-selected={props.value === option}
-                  data-active={activeIndex === index || undefined}
-                  className="hover:bg-muted data-[active]:bg-muted flex min-h-8 w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none"
-                  key={option}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => {
-                    toggleOption(option);
-                  }}
-                >
-                  <span
-                    className={cn(
-                      "border-primary flex size-4 shrink-0 items-center justify-center rounded-sm border",
-                      props.value === option && "bg-primary text-primary-foreground border-primary",
-                      props.value !== option && "opacity-50 [&_svg]:invisible",
-                    )}
-                    aria-hidden="true"
-                  >
-                    <Check size={14} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">
-                    {props.optionLabel ? props.optionLabel(option) : option}
-                  </span>
-                </button>
-              ))}
-            </div>
-            {props.value ? (
-              <div className="border-t p-1">
-                <button
-                  type="button"
-                  data-press-animation="none"
-                  className="hover:bg-muted flex h-8 w-full items-center justify-center rounded-sm px-2 text-sm"
-                  onClick={() => props.onValueChange(null)}
-                >
-                  清除筛选
-                </button>
-              </div>
-            ) : null}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-function UpstreamsPage() {
+export function UpstreamsPage() {
   const navigate = useNavigate();
   const upstreams = useQuery({
     queryKey: ["upstreams"],
@@ -2072,6 +1953,8 @@ function UpstreamsPage() {
           {
             id: group.id,
             name: group.name,
+            platform: group.platform,
+            platforms: group.platforms,
             rate_multiplier: group.rate_multiplier,
           },
         ]
@@ -2092,7 +1975,12 @@ function UpstreamsPage() {
   const invalidGroupBindings = changedGroupBindings.filter((group) => {
     if (!group.group_id) return true;
     const selected = groupBindings[group.group_id] ?? [];
-    return selected.length === 0 || !group.effective_rate;
+    const compatibleGroups = compatibleOnboardingLocalGroups(group, localGroupOptions);
+    return (
+      selected.length === 0 ||
+      !group.effective_rate ||
+      selected.some((id) => !compatibleGroups.some((localGroup) => localGroup.id === id))
+    );
   });
   const groupBindingRequests = changedGroupBindings.flatMap((group) => {
     if (!selectedHost || !group.group_id || !group.effective_rate) return [];
@@ -2103,25 +1991,25 @@ function UpstreamsPage() {
     const accountIDs = group.bound_accounts
       .filter((account) => account.account_exists && account.binding_status !== "missing")
       .map((account) => account.account_id);
-    return [
-      {
-        host: selectedHost,
-        upstream_type: upstream.upstream_type,
-        platform: group.platform ?? undefined,
-        local_group_ids: localGroupIDs.map(Number),
-        upstream_group_id: group.group_id,
-        account_ids: accountIDs.length > 0 ? accountIDs : undefined,
-        concurrency: config.data?.account_default_concurrency,
-        priority: config.data?.account_default_priority,
-        schedulable: false,
-      } satisfies OnboardingRequest,
-    ];
+    const request = {
+      host: selectedHost,
+      upstream_type: upstream.upstream_type,
+      local_group_ids: localGroupIDs.map(Number),
+      upstream_group_id: group.group_id,
+      account_ids: accountIDs.length > 0 ? accountIDs : undefined,
+      concurrency: config.data?.account_default_concurrency,
+      priority: config.data?.account_default_priority,
+      schedulable: false,
+    } satisfies OnboardingRequest;
+    return expandOnboardingCreationRequests(request);
   });
   let groupBindingSummary = "当前没有待保存的分组变更";
   if (invalidGroupBindings.length > 0) {
-    groupBindingSummary = "每个变更项至少需要一个有效的本地分组和账号成本";
+    groupBindingSummary = "每个变更项都必须选择同平台的有效本地分组，并具有账号成本";
+  } else if (groupBindingRequests.length > 50) {
+    groupBindingSummary = "单次最多添加或更新 50 个账号";
   } else if (changedGroupBindings.length > 0) {
-    groupBindingSummary = `待保存 ${changedGroupBindings.length} 个分组变更`;
+    groupBindingSummary = `待保存 ${groupBindingRequests.length} 个账号变更`;
   }
   const groupPagination = useClientPagination(groupRows);
   const groupPageRows = groupPagination.visibleItems;
@@ -2352,58 +2240,30 @@ function UpstreamsPage() {
             onChange={(keyword) => setFilterDraft((current) => ({ ...current, keyword }))}
             placeholder="搜索 Host 或名称"
           />
-          <Select
-            value={filterDraft.upstreamType}
-            itemToStringLabel={(value) =>
-              value === "all" ? "全部类型" : displayUpstreamType(value)
-            }
+          <FilterMenu
+            label="类型"
+            options={upstreamTypeOptions.map((option) => option.value)}
+            value={filterDraft.upstreamType === "all" ? null : filterDraft.upstreamType}
             onValueChange={(upstreamType) =>
               setFilterDraft((current) => ({
                 ...current,
                 upstreamType: upstreamType ?? "all",
               }))
             }
-          >
-            <SelectTrigger appearance="faceted" className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent appearance="faceted">
-              <SelectItem appearance="faceted" value="all">
-                全部类型
-              </SelectItem>
-              {upstreamTypeOptions.map((option) => (
-                <SelectItem appearance="faceted" value={option.value} key={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={filterDraft.authStatus}
-            itemToStringLabel={(value) =>
-              value === "all" ? "全部状态" : upstreamAuthStatusMeta(value).label
-            }
+            optionLabel={displayUpstreamType}
+          />
+          <FilterMenu
+            label="状态"
+            options={upstreamAuthStatusOptions.map((option) => option.value)}
+            value={filterDraft.authStatus === "all" ? null : filterDraft.authStatus}
             onValueChange={(authStatus) =>
               setFilterDraft((current) => ({
                 ...current,
                 authStatus: authStatus ?? "all",
               }))
             }
-          >
-            <SelectTrigger appearance="faceted" className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent appearance="faceted">
-              <SelectItem appearance="faceted" value="all">
-                全部状态
-              </SelectItem>
-              {upstreamAuthStatusOptions.map((option) => (
-                <SelectItem appearance="faceted" value={option.value} key={option.value}>
-                  {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            optionLabel={(value) => upstreamAuthStatusMeta(value).label}
+          />
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground shrink-0 text-sm">余额</span>
             <Input
@@ -2966,6 +2826,7 @@ function UpstreamsPage() {
                             <TableCell overflowTooltip={false}>
                               <UpstreamGroupBindingEditor
                                 upstreamGroupName={group.name}
+                                upstreamPlatform={group.platform}
                                 groups={localGroupOptions}
                                 value={
                                   group.group_id
@@ -2976,11 +2837,18 @@ function UpstreamsPage() {
                                 disabled={
                                   !group.group_id ||
                                   (!group.bound && !group.bindable) ||
+                                  compatibleOnboardingLocalGroups(group, localGroupOptions)
+                                    .length === 0 ||
                                   saveGroupBindings.isPending ||
                                   Boolean(groupBindingTaskId)
                                 }
                                 disabledReason={
-                                  group.bound ? null : (group.unavailable_reason ?? null)
+                                  compatibleOnboardingLocalGroups(group, localGroupOptions)
+                                    .length === 0
+                                    ? "没有与上游平台一致的本地分组"
+                                    : group.bound
+                                      ? null
+                                      : (group.unavailable_reason ?? null)
                                 }
                                 onValueChange={(value) => {
                                   if (!group.group_id) return;
@@ -3020,13 +2888,14 @@ function UpstreamsPage() {
           {groupDialogView === "catalog" ? (
             <DialogFooter className="grid items-center gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
               <div className="grid min-w-0 gap-1">
-                {invalidGroupBindings.length > 0 ? (
+                {invalidGroupBindings.length > 0 || groupBindingRequests.length > 50 ? (
                   <span className="text-destructive text-xs">{groupBindingSummary}</span>
                 ) : null}
               </div>
               <Button
                 disabled={
                   groupBindingRequests.length === 0 ||
+                  groupBindingRequests.length > 50 ||
                   invalidGroupBindings.length > 0 ||
                   saveGroupBindings.isPending ||
                   Boolean(groupBindingTaskId)
@@ -5140,16 +5009,12 @@ export function GroupsPage() {
           }
         }}
       >
-        <DialogContent
-          width="wide"
-          height="large"
-          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
-        >
+        <DialogContent width="wide" height="large" className={groupPolicyDialogLayout.content}>
           <DialogHeader>
             <DialogTitle>编辑分组策略</DialogTitle>
             <DialogDescription>{editingGroup?.name}</DialogDescription>
           </DialogHeader>
-          <DialogBody className="overflow-hidden pr-0">
+          <DialogBody className={groupPolicyDialogLayout.body}>
             {editor && <GroupPolicyEditorFields value={editor} onChange={setEditor} />}
           </DialogBody>
           <DialogFooter>
@@ -5815,18 +5680,20 @@ function OnboardingPage() {
       toast.error("所选上游分组当前不可用于添加账号");
       return;
     }
+    const multiplier = candidate.multiplier;
     const settingsValid = await form.trigger(["concurrency", "priority", "local_group_id"]);
     if (!settingsValid) return;
     const localGroupIDs =
       batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
+    const compatibleLocalGroups = compatibleOnboardingLocalGroups(candidate, localGroups);
     const selectedLocalGroups = localGroupIDs.flatMap((groupID) => {
-      const group = localGroups.find((item) => item.id === groupID);
+      const group = compatibleLocalGroups.find((item) => item.id === groupID);
       return group ? [group] : [];
     });
     if (selectedLocalGroups.length !== localGroupIDs.length || selectedLocalGroups.length === 0) {
       form.setError("local_group_id", {
         type: "manual",
-        message: "请至少选择一个有效的本地分组",
+        message: "请选择与上游分组平台一致的本地分组",
       });
       return;
     }
@@ -5847,19 +5714,30 @@ function OnboardingPage() {
       account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
       schedulable: false,
     };
-    setOnboardingConfirmation({
-      mode: "single",
-      requests: [request],
-      previews: [
-        {
+    const requests = expandOnboardingCreationRequests(request);
+    const previews = existingBinding
+      ? [
+          {
+            upstreamGroup: candidate.group_name,
+            multiplier: candidate.multiplier,
+            localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
+            concurrency: request.concurrency ?? 0,
+            priority: request.priority ?? 0,
+            status: "待更新" as const,
+          },
+        ]
+      : selectedLocalGroups.map((group) => ({
           upstreamGroup: candidate.group_name,
-          multiplier: candidate.multiplier,
-          localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
+          multiplier,
+          localGroup: group.name,
           concurrency: request.concurrency ?? 0,
           priority: request.priority ?? 0,
-          status: existingBinding ? "待更新" : "待添加",
-        },
-      ],
+          status: "待添加" as const,
+        }));
+    setOnboardingConfirmation({
+      mode: requests.length === 1 ? "single" : "batch",
+      requests,
+      previews,
     });
   }
   async function executeBatch() {
@@ -5868,13 +5746,15 @@ function OnboardingPage() {
     const values = form.getValues();
     const selections = visibleCandidates.flatMap((candidate) => {
       if (!candidate.group_id || !candidate.multiplier) return [];
+      const multiplier = candidate.multiplier;
       const existingBinding = candidateHasExistingBinding(candidate);
       if (!candidateCanCreateKey(candidate) && !existingBinding) return [];
       const localGroupIDs =
         batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
       if (localGroupIDs.length === 0) return [];
+      const compatibleLocalGroups = compatibleOnboardingLocalGroups(candidate, localGroups);
       const selectedLocalGroups = localGroupIDs.flatMap((groupID) => {
-        const group = localGroups.find((item) => item.id === groupID);
+        const group = compatibleLocalGroups.find((item) => item.id === groupID);
         return group ? [group] : [];
       });
       if (selectedLocalGroups.length !== localGroupIDs.length) return [];
@@ -5884,30 +5764,32 @@ function OnboardingPage() {
       ) {
         return [];
       }
-      return [
-        {
-          request: {
-            host: onboardingRequestHost(verifiedUpstream, values.host),
-            upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
-            base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
-            notes: values.notes,
-            concurrency: Number(values.concurrency),
-            priority: Number(values.priority),
-            local_group_ids: localGroupIDs.map(Number),
-            upstream_group_id: candidate.group_id,
-            account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
-            schedulable: false,
-          } satisfies OnboardingRequest,
-          preview: {
-            upstreamGroup: candidate.group_name,
-            multiplier: candidate.multiplier,
-            localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
-            concurrency: Number(values.concurrency),
-            priority: Number(values.priority),
-            status: existingBinding ? "待更新" : "待添加",
-          } satisfies OnboardingBindingPreview,
-        },
-      ];
+      const request = {
+        host: onboardingRequestHost(verifiedUpstream, values.host),
+        upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
+        base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
+        notes: values.notes,
+        concurrency: Number(values.concurrency),
+        priority: Number(values.priority),
+        local_group_ids: localGroupIDs.map(Number),
+        upstream_group_id: candidate.group_id,
+        account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
+        schedulable: false,
+      } satisfies OnboardingRequest;
+      const requests = expandOnboardingCreationRequests(request);
+      return requests.map((expandedRequest, index) => ({
+        request: expandedRequest,
+        preview: {
+          upstreamGroup: candidate.group_name,
+          multiplier,
+          localGroup: existingBinding
+            ? selectedLocalGroups.map((group) => group.name).join("、")
+            : (selectedLocalGroups[index]?.name ?? "本地分组"),
+          concurrency: Number(values.concurrency),
+          priority: Number(values.priority),
+          status: existingBinding ? "待更新" : "待添加",
+        } satisfies OnboardingBindingPreview,
+      }));
     });
     if (selections.length === 0) {
       toast.error("请至少为一个上游分组选择本地分组");
@@ -5990,6 +5872,9 @@ function OnboardingPage() {
   const entryCandidate = entryGroupId
     ? visibleCandidates.find((candidate) => candidate.group_id === entryGroupId)
     : undefined;
+  const entryCompatibleLocalGroups = entryCandidate
+    ? compatibleOnboardingLocalGroups(entryCandidate, localGroups)
+    : [];
   const displayedCandidates = entryGroupId
     ? entryCandidate
       ? [entryCandidate]
@@ -6004,24 +5889,26 @@ function OnboardingPage() {
   );
   const boundAccountIDs = displayedBoundAccounts.map((account) => account.account_id);
   const entryCandidateSelectable = entryCandidate
-    ? candidateCanCreateKey(entryCandidate) || candidateHasExistingBinding(entryCandidate)
+    ? (candidateCanCreateKey(entryCandidate) || candidateHasExistingBinding(entryCandidate)) &&
+      entryCompatibleLocalGroups.length > 0
     : false;
   const entryProbeTarget = onboardingProbeTarget(entryCandidate);
   const candidateStats = onboardingCandidateStats(visibleCandidates);
-  const batchBindingCount = visibleCandidates.filter((candidate) => {
-    if (!candidate.group_id) return false;
+  const batchBindingCount = visibleCandidates.reduce((count, candidate) => {
+    if (!candidate.group_id) return count;
     const selected = batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
+    const compatibleLocalGroups = compatibleOnboardingLocalGroups(candidate, localGroups);
     if (
       selected.length === 0 ||
-      selected.some((id) => !localGroups.some((group) => group.id === id))
+      selected.some((id) => !compatibleLocalGroups.some((group) => group.id === id))
     ) {
-      return false;
+      return count;
     }
     if (candidateHasExistingBinding(candidate)) {
-      return candidateHasOnboardingChange(candidate, selected, "", false);
+      return candidateHasOnboardingChange(candidate, selected, "", false) ? count + 1 : count;
     }
-    return candidateCanCreateKey(candidate);
-  }).length;
+    return candidateCanCreateKey(candidate) ? count + selected.length : count;
+  }, 0);
   let entrySubmitLabel = "预览添加账号";
   if (onboardingSubmitting || taskIsPending(taskId, task)) {
     entrySubmitLabel = "正在提交";
@@ -6643,9 +6530,13 @@ function OnboardingPage() {
                         onProbe={() => setProbeTarget(entryProbeTarget)}
                       />
                     </div>
-                    {!entryCandidateSelectable && !candidateHasExistingBinding(entryCandidate) ? (
+                    {!entryCandidateSelectable ? (
                       <QueryError
-                        error={candidateCreationUnavailableReason(entryCandidate)}
+                        error={
+                          entryCompatibleLocalGroups.length === 0
+                            ? "没有与该上游分组平台一致的本地分组"
+                            : candidateCreationUnavailableReason(entryCandidate)
+                        }
                         fallback="指定的上游分组不可用"
                         embedded
                       />
@@ -6687,10 +6578,17 @@ function OnboardingPage() {
                       {visibleCandidates.map((candidate) => {
                         const alreadyBound = candidateHasExistingBinding(candidate);
                         const canSelect = candidateCanCreateKey(candidate);
-                        const canEdit = canSelect || alreadyBound;
+                        const compatibleLocalGroups = compatibleOnboardingLocalGroups(
+                          candidate,
+                          localGroups,
+                        );
+                        const canEdit =
+                          (canSelect || alreadyBound) && compatibleLocalGroups.length > 0;
                         const unavailableReason = canEdit
                           ? null
-                          : candidateCreationUnavailableReason(candidate);
+                          : compatibleLocalGroups.length === 0
+                            ? "没有与上游平台一致的本地分组"
+                            : candidateCreationUnavailableReason(candidate);
                         const selectedLocalGroupIDs = candidate.group_id
                           ? (batchBindings[candidate.group_id] ??
                             candidateBoundLocalGroupIDs(candidate))
@@ -6715,6 +6613,7 @@ function OnboardingPage() {
                             <TableCell overflowTooltip={false}>
                               <OnboardingGroupBindingSelect
                                 upstreamGroupName={candidate.group_name}
+                                upstreamPlatform={candidate.platform}
                                 groups={localGroups}
                                 value={selectedLocalGroupIDs}
                                 disabled={!canEdit || onboardingPending}
@@ -6759,6 +6658,7 @@ function OnboardingPage() {
                       >
                         <OnboardingGroupBindingSelect
                           upstreamGroupName={entryCandidate?.group_name ?? "当前上游分组"}
+                          upstreamPlatform={entryCandidate?.platform ?? null}
                           groups={localGroups}
                           value={
                             entryGroupId
@@ -9039,6 +8939,7 @@ function formatInspectionRunDuration(durationMs: number): string {
 
 function autoInspectionLastRunState(status: AutoInspectionStatus["last_status"]) {
   if (status === "succeeded") return { label: "执行成功", tone: "success" as const };
+  if (status === "partial") return { label: "执行部分失败", tone: "warning" as const };
   if (status === "failed") return { label: "执行失败", tone: "danger" as const };
   if (status === "cancelled") return { label: "已取消", tone: "neutral" as const };
   return { label: "尚未执行", tone: "neutral" as const };
@@ -9078,6 +8979,7 @@ function AutoInspectionTaskIcon() {
 function autoInspectionHeartbeatState(record: AutoInspectionStatus["heartbeat_history"][number]) {
   if (record.status === "running") return { label: "执行中", tone: "info" as const };
   if (record.status === "succeeded") return { label: "正常", tone: "success" as const };
+  if (record.status === "partial") return { label: "部分失败", tone: "warning" as const };
   return { label: "失败", tone: "danger" as const };
 }
 
@@ -9571,8 +9473,9 @@ export function AutoInspectionHeartbeatDetails(props: {
 }) {
   const state = autoInspectionHeartbeatState(props.record);
   const upstreamSync = inspectionUpstreamSyncSummary(props.task, props.upstreams);
+  const partiallyFailed = props.record.status === "partial";
   return (
-    <div className="min-h-0 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
+    <div className="min-w-0 space-y-4">
       <section aria-labelledby="heartbeat-summary-title" className="grid gap-2">
         <h3 id="heartbeat-summary-title" className="text-sm font-medium">
           巡检概况
@@ -9629,9 +9532,16 @@ export function AutoInspectionHeartbeatDetails(props: {
       {props.record.error ? (
         <section aria-labelledby="heartbeat-error-title" className="grid gap-2">
           <h3 id="heartbeat-error-title" className="text-sm font-medium">
-            失败原因
+            {partiallyFailed ? "部分失败详情" : "失败原因"}
           </h3>
-          <div className="border-destructive/25 bg-destructive/5 text-destructive rounded-lg border p-3 text-sm leading-6 whitespace-pre-wrap break-words">
+          <div
+            className={cn(
+              "rounded-lg border p-3 text-sm leading-6 whitespace-pre-wrap break-words",
+              partiallyFailed
+                ? "border-warning/40 bg-warning/10 text-warning"
+                : "border-destructive/25 bg-destructive/5 text-destructive",
+            )}
+          >
             {props.record.error}
           </div>
         </section>
@@ -9644,7 +9554,7 @@ export function AutoInspectionQueueDetails(props: { item: AutoInspectionStatus["
   const state = autoInspectionQueueState(props.item);
   const operations = props.item.operations ?? [];
   return (
-    <div className="min-h-0 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
+    <div className="min-w-0 space-y-4">
       <section aria-labelledby="queue-detail-summary-title" className="grid gap-2">
         <h3 id="queue-detail-summary-title" className="text-sm font-medium">
           任务概况
@@ -9754,6 +9664,11 @@ export function AutoInspectionQueueDetails(props: { item: AutoInspectionStatus["
     </div>
   );
 }
+
+export const autoInspectionDetailDialogLayout = {
+  content: "grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
+  body: "min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1",
+} as const;
 
 function AutoInspectionCard() {
   const status = useQuery({
@@ -9947,7 +9862,7 @@ function AutoInspectionCard() {
             {!status.isLoading && status.data?.last_run_at ? (
               <CardContent className="p-0 group-data-[size=sm]/card:p-0">
                 <div
-                  className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4 2xl:grid-cols-8"
+                  className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4"
                   data-testid="inspection-summary-grid"
                 >
                   <InspectionSummaryCount
@@ -10159,7 +10074,7 @@ function AutoInspectionCard() {
                     <TableHead className="w-[10%]">结果</TableHead>
                     <TableHead className="w-[10%]">总耗时</TableHead>
                     <TableHead className="w-[32%]">执行概况</TableHead>
-                    <TableHead className="w-[24%]">错误</TableHead>
+                    <TableHead className="w-[24%]">异常信息</TableHead>
                     <TableHead className="w-[6%] text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -10192,7 +10107,10 @@ function AutoInspectionCard() {
                         {autoInspectionOperationSummary(record)}
                       </TableCell>
                       <TableCell
-                        className={record.error ? "text-destructive" : undefined}
+                        className={cn(
+                          record.error && record.status === "partial" && "text-warning",
+                          record.error && record.status !== "partial" && "text-destructive",
+                        )}
                         tooltipContent={record.error ?? "—"}
                       >
                         {record.error ?? "—"}
@@ -10260,7 +10178,7 @@ function AutoInspectionCard() {
         <DialogContent
           width="wide"
           height="tall"
-          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          className={autoInspectionDetailDialogLayout.content}
         >
           <DialogHeader>
             <DialogTitle>巡检任务详情</DialogTitle>
@@ -10270,7 +10188,7 @@ function AutoInspectionCard() {
                 : "查看下一轮巡检计划"}
             </DialogDescription>
           </DialogHeader>
-          <DialogBody className="overflow-hidden pr-0">
+          <DialogBody className={autoInspectionDetailDialogLayout.body}>
             {selectedQueueItem ? <AutoInspectionQueueDetails item={selectedQueueItem} /> : null}
           </DialogBody>
         </DialogContent>
@@ -10284,7 +10202,7 @@ function AutoInspectionCard() {
         <DialogContent
           width="wide"
           height="tall"
-          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+          className={autoInspectionDetailDialogLayout.content}
         >
           <DialogHeader>
             <DialogTitle>巡检心跳详情</DialogTitle>
@@ -10294,7 +10212,7 @@ function AutoInspectionCard() {
                 : "查看本轮巡检执行信息"}
             </DialogDescription>
           </DialogHeader>
-          <DialogBody className="overflow-hidden pr-0">
+          <DialogBody className={autoInspectionDetailDialogLayout.body}>
             {selectedHeartbeat ? (
               <AutoInspectionHeartbeatDetails
                 record={selectedHeartbeat}

@@ -10,11 +10,10 @@ export const newAPIPlatformSchema = z.object({
 export type NewAPIPlatformValues = z.infer<typeof newAPIPlatformSchema>;
 
 export const newAPIChannelSchema = z.object({
-  name: z.string().trim().min(1, "请输入渠道名称").max(120),
   sub2api_group_id: z.string().trim().min(1, "请选择 Sub2API 分组"),
-  base_url: z.string().trim().url("请输入有效的 Sub2API 服务地址").max(2048),
-  service_key: z.string().trim().min(1, "请输入 Sub2API 服务密钥").max(4096),
-  models: z.string().trim().min(1, "请输入至少一个模型"),
+  key_id: z.string().trim().min(1, "请先创建 Sub2API 密钥").max(128),
+  models: z.array(z.string()).min(1, "请从上游获取并选择至少一个模型").max(500),
+  newapi_groups: z.array(z.string()).min(1, "请选择至少一个 New API 分组").max(500),
 });
 
 export type NewAPIChannelValues = z.infer<typeof newAPIChannelSchema>;

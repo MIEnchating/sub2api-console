@@ -5,7 +5,12 @@ export function taskIsPending(taskId: string | null, task: { data?: Task; isErro
 }
 
 export function taskIsTerminal(task?: Task) {
-  return task?.status === "succeeded" || task?.status === "failed" || task?.status === "cancelled";
+  return (
+    task?.status === "succeeded" ||
+    task?.status === "partial" ||
+    task?.status === "failed" ||
+    task?.status === "cancelled"
+  );
 }
 
 export function taskStopsPolling(task?: Task) {

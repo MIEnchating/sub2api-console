@@ -22,11 +22,8 @@ import {
 } from "@/components/ui/table";
 import { groupStatusMeta } from "@/lib/group-policy-display";
 import { schedulingMetric } from "@/lib/scheduling-display";
-import {
-  schedulingStrategyDescription,
-  schedulingStrategyLabel,
-  schedulingWeightFormula,
-} from "@/lib/scheduling-strategy";
+import { schedulingStrategyLabel } from "@/lib/scheduling-strategy";
+import { cn } from "@/lib/utils";
 
 type Props = {
   group: GroupStatus | null;
@@ -40,9 +37,13 @@ export const groupAllocationLayout = {
   dialog: "grid min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
   width: "table",
   height: "tall",
-  content: "flex min-h-0 flex-col gap-4 overflow-hidden",
+  content: "flex min-h-0 flex-col gap-3 overflow-hidden",
   loading: "grid h-full min-h-0 grid-rows-[4rem_minmax(0,1fr)] gap-4",
-  metrics: "grid grid-cols-2 divide-x divide-y rounded-lg border sm:grid-cols-3 xl:grid-cols-6",
+  policy:
+    "bg-muted/40 grid min-w-0 grid-cols-1 divide-y overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x sm:divide-y-0",
+  policyItem: "grid min-w-0 content-center gap-1.5 px-3 py-2.5",
+  metrics: "bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border lg:grid-cols-4",
+  metric: "bg-popover grid min-w-0 content-start gap-1 px-3 py-3",
   table: "min-w-[1060px] table-fixed",
 } as const;
 
@@ -79,30 +80,24 @@ function interval(value: number): string {
 
 function GroupHeader(props: { allocation: GroupAllocation }) {
   const status = groupStatusMeta(props.allocation.status);
-  const weightSummary = props.allocation.has_allocation
-    ? `最终权重合计 ${schedulingMetric(props.allocation.total_weight)} · 分组预算 ${integer(props.allocation.weight_budget)}`
-    : `分组权重预算 ${integer(props.allocation.weight_budget)}`;
-  const metadata = [
-    `#${props.allocation.group_id}`,
-    props.allocation.platform ?? "平台未记录",
-    `分组计费倍率 ${props.allocation.rate_multiplier ?? "—"}`,
-    `渠道 ${integer(props.allocation.account_count)}`,
-    weightSummary,
-  ];
   return (
-    <div className="grid min-w-0 gap-1.5">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <strong className="min-w-0 truncate text-lg font-semibold">
-          {props.allocation.group_name}
-        </strong>
-        <StatusBadge label={status.label} variant={status.tone} />
-        <StatusBadge label={interval(props.allocation.probe_interval_seconds)} variant="info" />
+    <div className={groupAllocationLayout.policy} data-slot="inspection-policy-summary">
+      <div className={groupAllocationLayout.policyItem}>
+        <span className="text-muted-foreground text-xs">当前状态</span>
+        <StatusBadge label={status.label} variant={status.tone} size="lg" />
       </div>
-      <p className="text-muted-foreground min-w-0 text-sm leading-5">{metadata.join(" · ")}</p>
-      <p className="text-muted-foreground min-w-0 text-xs leading-5">
-        {schedulingStrategyLabel(props.allocation.strategy)}：
-        {schedulingStrategyDescription(props.allocation.strategy)}；{schedulingWeightFormula}
-      </p>
+      <div className={groupAllocationLayout.policyItem}>
+        <span className="text-muted-foreground text-xs">巡检策略</span>
+        <strong className="text-base font-semibold">
+          {schedulingStrategyLabel(props.allocation.strategy)}策略
+        </strong>
+      </div>
+      <div className={groupAllocationLayout.policyItem}>
+        <span className="text-muted-foreground text-xs">测试周期</span>
+        <strong className="text-base font-semibold">
+          {interval(props.allocation.probe_interval_seconds)}
+        </strong>
+      </div>
     </div>
   );
 }
@@ -114,13 +109,64 @@ function stateVariant(state: string): StatusVariant {
   return "neutral";
 }
 
-function SummaryMetric(props: { label: string; value: string }) {
+const metricToneClasses: Record<StatusVariant, string> = {
+  success: "text-success",
+  warning: "text-warning",
+  danger: "text-destructive",
+  info: "text-info",
+  purple: "text-purple-600 dark:text-purple-400",
+  neutral: "text-foreground",
+};
+
+function SummaryMetric(props: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: StatusVariant;
+}) {
   return (
-    <div className="grid min-w-0 gap-1 px-3 py-2.5">
+    <div className={groupAllocationLayout.metric}>
       <span className="text-muted-foreground truncate text-xs">{props.label}</span>
-      <strong className="truncate text-base font-semibold tabular-nums">{props.value}</strong>
+      <strong
+        className={cn(
+          "truncate text-lg font-semibold tabular-nums",
+          metricToneClasses[props.tone ?? "neutral"],
+        )}
+      >
+        {props.value}
+      </strong>
+      <span className="text-muted-foreground min-h-4 text-xs leading-4">{props.detail}</span>
     </div>
   );
+}
+
+function availabilityTone(allocation: GroupAllocation): StatusVariant {
+  if (allocation.account_count > 0 && allocation.available_accounts === allocation.account_count) {
+    return "success";
+  }
+  if (allocation.available_accounts === 0) return "danger";
+  return "warning";
+}
+
+function attentionSummary(allocation: GroupAllocation): {
+  statusCount: number;
+  detail: string;
+  tone: StatusVariant;
+} {
+  const items = [
+    { label: "熔断", count: allocation.fused_accounts },
+    { label: "暂停", count: allocation.paused_accounts },
+    { label: "不可用", count: allocation.unavailable_accounts },
+    { label: "限流", count: allocation.rate_limited_accounts },
+    { label: "待探测", count: allocation.pending_accounts },
+  ].filter((item) => item.count > 0);
+  if (items.length === 0) return { statusCount: 0, detail: "当前无异常", tone: "success" };
+  const hasUnavailable = allocation.fused_accounts > 0 || allocation.unavailable_accounts > 0;
+  return {
+    statusCount: items.length,
+    detail: items.map((item) => `${item.label} ${integer(item.count)}`).join(" · "),
+    tone: hasUnavailable ? "danger" : "warning",
+  };
 }
 
 function WeightCell(props: { channel: GroupAllocationChannel; maximum: number }) {
@@ -144,6 +190,13 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
     0,
     ...props.allocation.channels.map((channel) => channel.weight ?? 0),
   );
+  const attention = attentionSummary(props.allocation);
+  const weightValue = props.allocation.has_allocation
+    ? `${schedulingMetric(props.allocation.total_weight)} / ${integer(props.allocation.weight_budget)}`
+    : "未生成";
+  const weightDetail = props.allocation.has_allocation
+    ? "已生成最终权重"
+    : `预算 ${integer(props.allocation.weight_budget)}`;
   return (
     <div className={groupAllocationLayout.content}>
       <GroupHeader allocation={props.allocation} />
@@ -155,26 +208,28 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
       )}
       <div className={groupAllocationLayout.metrics}>
         <SummaryMetric
-          label="健康 / 可用"
-          value={`${integer(props.allocation.healthy_accounts)} / ${integer(props.allocation.available_accounts)}`}
+          label="可用账号"
+          value={`${integer(props.allocation.available_accounts)} / ${integer(props.allocation.account_count)}`}
+          detail={`其中健康 ${integer(props.allocation.healthy_accounts)}`}
+          tone={availabilityTone(props.allocation)}
         />
         <SummaryMetric
-          label="最高分"
-          value={schedulingMetric(props.allocation.highest_health_score)}
+          label="需关注"
+          value={`${integer(attention.statusCount)} 项`}
+          detail={attention.detail}
+          tone={attention.tone}
         />
         <SummaryMetric
-          label="平均分"
-          value={schedulingMetric(props.allocation.average_health_score)}
+          label="权重分配"
+          value={weightValue}
+          detail={weightDetail}
+          tone={props.allocation.has_allocation ? "info" : "neutral"}
         />
         <SummaryMetric
-          label="熔断 / 暂停 / 不可用"
-          value={`${integer(props.allocation.fused_accounts)} / ${integer(props.allocation.paused_accounts)} / ${integer(props.allocation.unavailable_accounts)}`}
+          label="分配并发"
+          value={integer(props.allocation.assigned_concurrency)}
+          detail="当前分配总计"
         />
-        <SummaryMetric
-          label="限流 / 待探测"
-          value={`${integer(props.allocation.rate_limited_accounts)} / ${integer(props.allocation.pending_accounts)}`}
-        />
-        <SummaryMetric label="分配并发" value={integer(props.allocation.assigned_concurrency)} />
       </div>
       {props.allocation.channels.length ? (
         <DataTablePanel className="flex-1">
@@ -253,11 +308,13 @@ export function GroupAllocationDialog(props: Props) {
         className={groupAllocationLayout.dialog}
       >
         <DialogHeader>
-          <DialogTitle>分组账号调度状态</DialogTitle>
+          <DialogTitle>
+            {props.group ? `${props.group.name} 调度状态` : "分组账号调度状态"}
+          </DialogTitle>
           <DialogDescription>
             {props.group
-              ? `${props.group.name} · 共 ${props.group.account_count} 个账号`
-              : "查看分组内账号的唯一最终调度状态"}
+              ? `${props.group.account_count} 个账号 · 权重与并发分配`
+              : "账号权重与并发分配"}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="overflow-hidden pr-0">

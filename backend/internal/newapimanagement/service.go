@@ -3,6 +3,8 @@ package newapimanagement
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +19,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
 const maximumResponseBytes = 4 << 20
@@ -26,6 +29,7 @@ type PrivateStore interface {
 	NewAPIPlatform(context.Context, string) (*configstore.NewAPIPlatform, error)
 	SaveNewAPIPlatform(context.Context, configstore.NewAPIPlatform) (configstore.NewAPIPlatformSummary, error)
 	DeleteNewAPIPlatform(context.Context, string) (bool, error)
+	TargetSettings(context.Context) (configstore.TargetSettings, error)
 }
 
 type Repository interface {
@@ -35,16 +39,23 @@ type Repository interface {
 	DeleteNewAPIGroupBindings(context.Context, string) error
 }
 
+type KeyManager interface {
+	CreateKeyWithVerification(context.Context, configstore.AuthRecord, string, string, bool) (upstreamsync.CreatedKey, error)
+	RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error)
+}
+
 type Service struct {
 	private    PrivateStore
 	repository Repository
 	client     *http.Client
+	keys       KeyManager
 }
 
 type Workspace struct {
-	Platforms   []configstore.NewAPIPlatformSummary `json:"platforms"`
-	LocalGroups []business.NewAPILocalGroup         `json:"local_groups"`
-	Bindings    []business.NewAPIGroupBinding       `json:"bindings"`
+	Platforms      []configstore.NewAPIPlatformSummary `json:"platforms"`
+	LocalGroups    []business.NewAPILocalGroup         `json:"local_groups"`
+	Bindings       []business.NewAPIGroupBinding       `json:"bindings"`
+	Sub2APIBaseURL string                              `json:"sub2api_base_url"`
 }
 
 type PlatformInput struct {
@@ -90,11 +101,25 @@ type GroupBindingInput struct {
 }
 
 type ChannelInput struct {
-	Name           string   `json:"name"`
 	Sub2APIGroupID string   `json:"sub2api_group_id"`
-	BaseURL        string   `json:"base_url"`
-	ServiceKey     string   `json:"service_key"`
+	KeyID          string   `json:"key_id"`
 	Models         []string `json:"models"`
+	NewAPIGroups   []string `json:"newapi_groups"`
+}
+
+type ChannelModelsInput struct {
+	Sub2APIGroupID string `json:"sub2api_group_id"`
+	KeyID          string `json:"key_id"`
+}
+
+type ChannelKeyInput struct {
+	Sub2APIGroupID string `json:"sub2api_group_id"`
+}
+
+type ChannelKey struct {
+	KeyID   string `json:"key_id"`
+	Name    string `json:"name"`
+	GroupID string `json:"group_id"`
 }
 
 type ModelPriceInput struct {
@@ -103,11 +128,11 @@ type ModelPriceInput struct {
 	CompletionRatio string `json:"completion_ratio"`
 }
 
-func New(private PrivateStore, repository Repository, client *http.Client) *Service {
+func New(private PrivateStore, repository Repository, client *http.Client, keys KeyManager) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Service{private: private, repository: repository, client: client}
+	return &Service{private: private, repository: repository, client: client, keys: keys}
 }
 
 func (s *Service) Workspace(ctx context.Context, platformID string) (Workspace, error) {
@@ -126,10 +151,25 @@ func (s *Service) Workspace(ctx context.Context, platformID string) (Workspace, 
 			return Workspace{}, err
 		}
 	}
-	return Workspace{Platforms: platforms, LocalGroups: groups, Bindings: bindings}, nil
+	target, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return Workspace{}, err
+	}
+	return Workspace{Platforms: platforms, LocalGroups: groups, Bindings: bindings, Sub2APIBaseURL: target.BaseURL}, nil
 }
 
 func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (configstore.NewAPIPlatformSummary, error) {
+	platforms, err := s.private.NewAPIPlatforms(ctx)
+	if err != nil {
+		return configstore.NewAPIPlatformSummary{}, err
+	}
+	if len(platforms) > 0 {
+		if strings.TrimSpace(input.ID) == "" {
+			input.ID = platforms[0].ID
+		} else if strings.TrimSpace(input.ID) != platforms[0].ID {
+			return configstore.NewAPIPlatformSummary{}, errors.New("New API 只允许配置一个主平台")
+		}
+	}
 	item := configstore.NewAPIPlatform{ID: input.ID, Name: input.Name, BaseURL: input.BaseURL, AdminKey: input.AdminKey, UserID: input.UserID}
 	if strings.TrimSpace(item.AdminKey) == "" && strings.TrimSpace(item.ID) != "" {
 		current, err := s.private.NewAPIPlatform(ctx, item.ID)
@@ -218,15 +258,10 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	if err != nil {
 		return nil, err
 	}
-	input.Name = strings.TrimSpace(input.Name)
-	input.ServiceKey = strings.TrimSpace(input.ServiceKey)
+	input.KeyID = strings.TrimSpace(input.KeyID)
 	input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
-	if input.Name == "" || len(input.Name) > 120 || input.ServiceKey == "" || input.Sub2APIGroupID == "" {
-		return nil, errors.New("渠道名称、Sub2API 分组和服务密钥不能为空")
-	}
-	baseURL, err := configstore.ValidateBaseURL(input.BaseURL)
-	if err != nil {
-		return nil, errors.New("Sub2API 服务地址无效")
+	if input.KeyID == "" || input.Sub2APIGroupID == "" {
+		return nil, errors.New("Sub2API 分组和密钥 ID 不能为空")
 	}
 	models := normalizeModels(input.Models)
 	if len(models) == 0 {
@@ -246,9 +281,28 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	if groupName == "" {
 		return nil, errors.New("渠道目标不是已登记的 Sub2API 分组")
 	}
+	newAPIGroups, err := s.validateNewAPIGroups(ctx, *platform, input.NewAPIGroups)
+	if err != nil {
+		return nil, err
+	}
+	target, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serviceKey, err := s.revealChannelKey(ctx, target, input.KeyID, input.Sub2APIGroupID)
+	if err != nil {
+		return nil, err
+	}
+	baseURL, err := configstore.ValidateBaseURL(target.BaseURL)
+	if err != nil {
+		return nil, errors.New("Sub2API 管理平台地址无效")
+	}
 	body := map[string]any{
-		"type": 1, "name": input.Name, "base_url": baseURL, "key": input.ServiceKey,
-		"models": strings.Join(models, ","), "group": groupName, "status": 1,
+		"mode": "single",
+		"channel": map[string]any{
+			"type": 59, "name": groupName, "base_url": baseURL, "key": serviceKey,
+			"models": strings.Join(models, ","), "group": strings.Join(newAPIGroups, ","), "status": 1,
+		},
 	}
 	payload, err := s.request(ctx, *platform, http.MethodPost, "/api/channel/", body)
 	if err != nil {
@@ -259,6 +313,216 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 		result = map[string]any{"created": true}
 	}
 	return result, nil
+}
+
+func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input ChannelKeyInput) (ChannelKey, error) {
+	if _, err := s.requirePlatform(ctx, platformID); err != nil {
+		return ChannelKey{}, err
+	}
+	input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
+	group, err := s.localGroup(ctx, input.Sub2APIGroupID)
+	if err != nil {
+		return ChannelKey{}, err
+	}
+	if s.keys == nil {
+		return ChannelKey{}, errors.New("Sub2API 密钥管理服务尚未就绪")
+	}
+	target, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return ChannelKey{}, err
+	}
+	created, err := s.keys.CreateKeyWithVerification(
+		ctx,
+		sub2APIAdminRecord(target),
+		newChannelKeyName(group.Name),
+		group.ID,
+		true,
+	)
+	if err != nil {
+		return ChannelKey{}, err
+	}
+	if strings.TrimSpace(created.KeyID) == "" || strings.TrimSpace(created.Secret) == "" || created.GroupID != group.ID {
+		return ChannelKey{}, errors.New("Sub2API 密钥创建结果不可读")
+	}
+	return ChannelKey{KeyID: created.KeyID, Name: created.Name, GroupID: created.GroupID}, nil
+}
+
+func (s *Service) FetchChannelModels(ctx context.Context, platformID string, input ChannelModelsInput) ([]string, error) {
+	if _, err := s.requirePlatform(ctx, platformID); err != nil {
+		return nil, err
+	}
+	input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
+	input.KeyID = strings.TrimSpace(input.KeyID)
+	if input.Sub2APIGroupID == "" || input.KeyID == "" {
+		return nil, errors.New("请先选择 Sub2API 分组并创建密钥")
+	}
+	groups, err := s.repository.NewAPILocalGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !localGroupExists(groups, input.Sub2APIGroupID) {
+		return nil, errors.New("模型获取目标不是已登记的 Sub2API 分组")
+	}
+	target, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serviceKey, err := s.revealChannelKey(ctx, target, input.KeyID, input.Sub2APIGroupID)
+	if err != nil {
+		return nil, err
+	}
+	return s.fetchSub2APIModels(ctx, target.BaseURL, serviceKey)
+}
+
+func (s *Service) localGroup(ctx context.Context, groupID string) (business.NewAPILocalGroup, error) {
+	if groupID == "" {
+		return business.NewAPILocalGroup{}, errors.New("请选择 Sub2API 分组")
+	}
+	groups, err := s.repository.NewAPILocalGroups(ctx)
+	if err != nil {
+		return business.NewAPILocalGroup{}, err
+	}
+	for _, group := range groups {
+		if group.ID == groupID {
+			return group, nil
+		}
+	}
+	return business.NewAPILocalGroup{}, errors.New("密钥目标不是已登记的 Sub2API 分组")
+}
+
+func (s *Service) revealChannelKey(ctx context.Context, target configstore.TargetSettings, keyID, groupID string) (string, error) {
+	if s.keys == nil {
+		return "", errors.New("Sub2API 密钥管理服务尚未就绪")
+	}
+	key, err := s.keys.RevealKey(ctx, sub2APIAdminRecord(target), keyID, groupID)
+	if err != nil {
+		return "", fmt.Errorf("Sub2API 密钥读取失败：%w", err)
+	}
+	if strings.TrimSpace(key.Secret) == "" || key.GroupID != groupID {
+		return "", errors.New("Sub2API 密钥与所选分组不匹配")
+	}
+	return strings.TrimSpace(key.Secret), nil
+}
+
+func sub2APIAdminRecord(target configstore.TargetSettings) configstore.AuthRecord {
+	return configstore.AuthRecord{
+		Host: configstore.CanonicalHost(target.BaseURL), BaseURL: target.BaseURL,
+		UpstreamType: "sub2api", AuthMode: "custom_headers",
+		Headers: map[string]string{"X-API-Key": strings.TrimSpace(target.AdminKey)}, Cookies: map[string]string{},
+	}
+}
+
+func newChannelKeyName(groupName string) string {
+	random := make([]byte, 4)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Sprintf("NewAPI-%s-%d", strings.TrimSpace(groupName), time.Now().UTC().UnixNano())
+	}
+	return fmt.Sprintf("NewAPI-%s-%s-%s", strings.TrimSpace(groupName), time.Now().UTC().Format("20060102150405"), hex.EncodeToString(random))
+}
+
+func (s *Service) validateNewAPIGroups(ctx context.Context, platform configstore.NewAPIPlatform, values []string) ([]string, error) {
+	groups := normalizeModels(values)
+	if len(groups) == 0 {
+		return nil, errors.New("渠道至少需要一个 New API 分组")
+	}
+	options, err := s.readOptions(ctx, platform)
+	if err != nil {
+		return nil, err
+	}
+	remoteGroups, err := decodeGroups(options["GroupRatio"])
+	if err != nil {
+		return nil, errors.New("New API 当前分组不可读")
+	}
+	available := make(map[string]struct{}, len(remoteGroups))
+	for _, group := range remoteGroups {
+		available[group.ID] = struct{}{}
+	}
+	for _, group := range groups {
+		if _, found := available[group]; !found {
+			return nil, fmt.Errorf("New API 分组 %s 不存在", group)
+		}
+	}
+	return groups, nil
+}
+
+func localGroupExists(groups []business.NewAPILocalGroup, groupID string) bool {
+	for _, group := range groups {
+		if group.ID == groupID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) fetchSub2APIModels(ctx context.Context, baseURL, serviceKey string) ([]string, error) {
+	normalized, err := configstore.ValidateBaseURL(baseURL)
+	if err != nil {
+		return nil, errors.New("Sub2API 管理平台地址无效")
+	}
+	endpoint, err := url.Parse(normalized)
+	if err != nil {
+		return nil, errors.New("Sub2API 管理平台地址无效")
+	}
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1/models"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+serviceKey)
+	request.Header.Set("Accept", "application/json")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("请求 Sub2API 模型失败：%w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maximumResponseBytes {
+		return nil, errors.New("Sub2API 模型响应超过大小限制")
+	}
+	var payload any
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil, fmt.Errorf("Sub2API 模型响应不可读（HTTP %d）", response.StatusCode)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("Sub2API 模型获取失败（HTTP %d%s）", response.StatusCode, remoteDetail(payload))
+	}
+	models := channelModelIDs(payload)
+	if len(models) == 0 {
+		return nil, errors.New("Sub2API 未返回可用模型")
+	}
+	return models, nil
+}
+
+func channelModelIDs(payload any) []string {
+	models := []string{}
+	var walk func(any)
+	walk = func(value any) {
+		switch item := value.(type) {
+		case map[string]any:
+			for _, key := range []string{"id", "model_id"} {
+				if model, ok := item[key].(string); ok {
+					models = append(models, model)
+					break
+				}
+			}
+			for _, key := range []string{"data", "models", "items"} {
+				if nested, found := item[key]; found {
+					walk(nested)
+				}
+			}
+		case []any:
+			for _, nested := range item {
+				walk(nested)
+			}
+		case string:
+			models = append(models, item)
+		}
+	}
+	walk(payload)
+	return normalizeModels(models)
 }
 
 func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs []ModelPriceInput) (RemoteSnapshot, error) {

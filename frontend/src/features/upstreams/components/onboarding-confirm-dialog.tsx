@@ -41,7 +41,8 @@ export function OnboardingConfirmContent(props: {
       <DialogHeader>
         <DialogTitle>确认账号绑定变更</DialogTitle>
         <DialogDescription>
-          请核对 {props.items.length} 条分组绑定；新增项将创建账号，更新项只修改现有账号分组。
+          请核对 {props.items.length}{" "}
+          条分组绑定；新增项按每个本地分组分别创建账号，更新项只修改现有账号分组。
         </DialogDescription>
       </DialogHeader>
       <DialogBody className="overflow-hidden pr-0">

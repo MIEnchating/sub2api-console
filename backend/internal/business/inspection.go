@@ -503,7 +503,7 @@ func normalizeInspectionHeartbeat(value InspectionHeartbeat) (InspectionHeartbea
 		}
 		value.CompletedAt = stringPointer(completedAt.UTC().Format(time.RFC3339Nano))
 	}
-	if value.Status != "running" && value.Status != "succeeded" && value.Status != "failed" && value.Status != "cancelled" {
+	if value.Status != "running" && value.Status != "succeeded" && value.Status != "partial" && value.Status != "failed" && value.Status != "cancelled" {
 		value.Status = "failed"
 	}
 	operations := make([]string, 0, len(value.Operations))
@@ -532,6 +532,9 @@ func normalizeInspectionHeartbeat(value InspectionHeartbeat) (InspectionHeartbea
 }
 
 func normalizeInspectionHeartbeatArrays(value InspectionHeartbeat) InspectionHeartbeat {
+	if value.Status == "failed" && inspectionHeartbeatHasOnlyPartialFailures(value.Error) {
+		value.Status = "partial"
+	}
 	if value.Operations == nil {
 		value.Operations = []string{}
 	}
@@ -539,6 +542,22 @@ func normalizeInspectionHeartbeatArrays(value InspectionHeartbeat) InspectionHea
 		value.OperationTiming = []OperationTiming{}
 	}
 	return value
+}
+
+func inspectionHeartbeatHasOnlyPartialFailures(errorText *string) bool {
+	if errorText == nil || strings.TrimSpace(*errorText) == "" {
+		return false
+	}
+	for _, part := range strings.Split(*errorText, "；") {
+		failure := strings.TrimSpace(part)
+		if !strings.HasPrefix(failure, "上游同步部分失败：") &&
+			!strings.HasPrefix(failure, "账号倍率与名称同步部分失败：") &&
+			!strings.HasPrefix(failure, "自动执行部分失败：") &&
+			!strings.HasPrefix(failure, "自动执行失败 ") {
+			return false
+		}
+	}
+	return true
 }
 
 func InspectionInterruptedText() string {
