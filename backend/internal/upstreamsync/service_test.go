@@ -312,6 +312,56 @@ func TestSyncHostLocksAssociatedAccountsBeforeReadingAndApplyingCatalog(t *testi
 		t.Fatalf("readerCalls=%d applied=%#v", readerCalls.Load(), repository.applied)
 	}
 }
+
+func TestManualUpstreamMutationPreemptsAutomaticSyncNetworkRead(t *testing.T) {
+	token := "token"
+	repository := &syncRepository{}
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{"api.example": {
+		Host: "api.example", BaseURL: "https://api.example", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}}}
+	readStarted := make(chan struct{})
+	reader := &syncReader{
+		catalog: func(ctx context.Context, _ configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+			close(readStarted)
+			<-ctx.Done()
+			return business.UpstreamCatalogSnapshot{}, ctx.Err()
+		},
+	}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{})
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	automaticCtx := mutationguard.WithAutomaticInspection(parent)
+	automaticDone := make(chan HostResult, 1)
+	go func() {
+		automaticDone <- service.syncHost(automaticCtx, "api.example", Scope{Catalog: true}, "automatic")
+	}()
+
+	select {
+	case <-readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("automatic upstream sync did not reach its network read")
+	}
+	manualCtx, cancelManual := context.WithTimeout(context.Background(), time.Second)
+	defer cancelManual()
+	_, releaseManual, err := mutationguard.Acquire(manualCtx, repository, mutationguard.Upstream("api.example"))
+	if err != nil {
+		t.Fatalf("manual upstream mutation remained blocked by automatic sync: %v", err)
+	}
+	defer func() { _ = releaseManual() }()
+	if !errors.Is(context.Cause(automaticCtx), mutationguard.ErrAutomaticInspectionPreempted) {
+		t.Fatalf("automatic inspection cancellation cause=%v", context.Cause(automaticCtx))
+	}
+	select {
+	case result := <-automaticDone:
+		if result.Status != "failed" || len(repository.applied) != 0 {
+			t.Fatalf("preempted automatic sync result=%#v applied=%#v", result, repository.applied)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic sync did not exit after manual preemption")
+	}
+}
+
 func (s *syncPrivate) SaveAuthRecord(_ context.Context, record configstore.AuthRecord, _ map[string]bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
