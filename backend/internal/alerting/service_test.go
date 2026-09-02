@@ -3,17 +3,54 @@ package alerting
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	_ "modernc.org/sqlite"
 )
 
 type fakeDeliverer struct{ result business.AlertDeliveryResult }
 
+type recordingTaskStore struct {
+	tasks []taskstore.Task
+}
+
+func (store *recordingTaskStore) Save(_ context.Context, task taskstore.Task) error {
+	store.tasks = append(store.tasks, task)
+	return nil
+}
+
 func (f fakeDeliverer) Deliver(context.Context, bool) (business.AlertDeliveryResult, error) {
 	return f.result, nil
+}
+
+func TestEnqueuePersistsTerminalTaskWhenRunnerIsStopping(t *testing.T) {
+	store := &recordingTaskStore{}
+	runner := taskrunner.New(context.Background())
+	runner.Cancel()
+	service := NewTaskService(nil, store)
+	service.UseTaskRunner(runner)
+
+	if _, err := service.Enqueue(context.Background()); !errors.Is(err, taskrunner.ErrStopped) {
+		t.Fatalf("Enqueue error = %v, want stopped runner", err)
+	}
+	if len(store.tasks) != 2 {
+		t.Fatalf("saved tasks = %d, want queued and terminal writes", len(store.tasks))
+	}
+	queued, terminal := store.tasks[0], store.tasks[1]
+	if queued.Status != "queued" {
+		t.Fatalf("initial task status = %q, want queued", queued.Status)
+	}
+	if terminal.ID != queued.ID || terminal.Status != "cancelled" || terminal.Progress != 100 {
+		t.Fatalf("terminal task = %#v", terminal)
+	}
+	if terminal.Result["cancelled"] != true || terminal.Result["error"] != taskrunner.ErrStopped.Error() {
+		t.Fatalf("terminal result = %#v", terminal.Result)
+	}
 }
 
 func TestEvaluationCreatesAndRecoversAuthIncident(t *testing.T) {

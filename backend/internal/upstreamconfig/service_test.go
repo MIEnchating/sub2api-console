@@ -7,9 +7,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 type observingVerifier struct {
@@ -19,13 +21,16 @@ type observingVerifier struct {
 }
 
 type captureRateSyncScheduler struct {
-	host        string
-	actor       string
-	taskID      string
-	err         error
-	contextErr  error
-	hasDeadline bool
-	calls       int
+	host          string
+	actor         string
+	taskID        string
+	err           error
+	contextErr    error
+	hasDeadline   bool
+	calls         int
+	baseURLCalls  int
+	baseURLTaskID string
+	baseURLError  error
 }
 
 type updateResultBusiness struct {
@@ -39,6 +44,45 @@ type updateResultBusiness struct {
 type concurrentCreateBusiness struct {
 	mu     sync.Mutex
 	public *business.UpstreamConfigurationWrite
+}
+
+type blockingLeaseBusiness struct {
+	*concurrentCreateBusiness
+	lease    chan struct{}
+	attempts chan []string
+}
+
+func newBlockingLeaseBusiness() *blockingLeaseBusiness {
+	return &blockingLeaseBusiness{
+		concurrentCreateBusiness: &concurrentCreateBusiness{},
+		lease:                    make(chan struct{}, 1),
+		attempts:                 make(chan []string, 4),
+	}
+}
+
+func (store *blockingLeaseBusiness) AcquireMutationLease(
+	ctx context.Context,
+	_ string,
+	resources []string,
+	_ time.Time,
+	_ time.Duration,
+) (bool, error) {
+	store.attempts <- append([]string{}, resources...)
+	select {
+	case store.lease <- struct{}{}:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (*blockingLeaseBusiness) RenewMutationLease(context.Context, string, []string, time.Time, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (store *blockingLeaseBusiness) ReleaseMutationLease(context.Context, string, []string) error {
+	<-store.lease
+	return nil
 }
 
 func (store *concurrentCreateBusiness) Upstreams(context.Context) (business.UpstreamSummary, error) {
@@ -133,9 +177,20 @@ type firstVerifyBlocker struct {
 	release chan struct{}
 }
 
+type firstLoginBlocker struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
 type cancelingAuthSaveStore struct {
-	cancel     context.CancelFunc
-	vaultSaved bool
+	cancel          context.CancelFunc
+	vaultSaved      bool
+	rollbackStarted chan struct{}
+	allowRollback   chan struct{}
+	rollbackErr     error
+	hasDeadline     bool
 }
 
 func (*cancelingAuthSaveStore) AuthRecord(context.Context, string) (*configstore.AuthRecord, error) {
@@ -161,8 +216,16 @@ func (store *cancelingAuthSaveStore) SaveVaultEntry(context.Context, configstore
 }
 
 func (store *cancelingAuthSaveStore) DeleteVaultEntry(ctx context.Context, _ string) (bool, error) {
+	store.rollbackErr = ctx.Err()
+	_, store.hasDeadline = ctx.Deadline()
 	if err := ctx.Err(); err != nil {
 		return false, err
+	}
+	if store.rollbackStarted != nil {
+		close(store.rollbackStarted)
+	}
+	if store.allowRollback != nil {
+		<-store.allowRollback
 	}
 	found := store.vaultSaved
 	store.vaultSaved = false
@@ -185,6 +248,20 @@ func (*firstVerifyBlocker) Login(_ context.Context, record configstore.AuthRecor
 	return record, nil
 }
 
+func (*firstLoginBlocker) Verify(context.Context, configstore.AuthRecord) error { return nil }
+
+func (verifier *firstLoginBlocker) Login(_ context.Context, record configstore.AuthRecord, _ configstore.VaultEntry) (configstore.AuthRecord, error) {
+	verifier.mu.Lock()
+	verifier.calls++
+	first := verifier.calls == 1
+	verifier.mu.Unlock()
+	if first {
+		close(verifier.started)
+		<-verifier.release
+	}
+	return record, nil
+}
+
 func (scheduler *captureRateSyncScheduler) EnqueueHostAccountRateSync(ctx context.Context, host, actor string) (string, error) {
 	scheduler.calls++
 	scheduler.host = host
@@ -192,6 +269,15 @@ func (scheduler *captureRateSyncScheduler) EnqueueHostAccountRateSync(ctx contex
 	scheduler.contextErr = ctx.Err()
 	_, scheduler.hasDeadline = ctx.Deadline()
 	return scheduler.taskID, scheduler.err
+}
+
+func (scheduler *captureRateSyncScheduler) EnqueueHostAccountBaseURLSync(ctx context.Context, host, actor string) (string, error) {
+	scheduler.baseURLCalls++
+	scheduler.host = host
+	scheduler.actor = actor
+	scheduler.contextErr = ctx.Err()
+	_, scheduler.hasDeadline = ctx.Deadline()
+	return scheduler.baseURLTaskID, scheduler.baseURLError
 }
 
 func (store *updateResultBusiness) UpdateUpstreamConfiguration(ctx context.Context, value business.UpstreamConfigurationWrite) (business.UpstreamConfigurationWriteResult, error) {
@@ -265,6 +351,217 @@ func TestConcurrentCreateDoesNotLetFailedRequestDeleteSuccessfulCredentials(t *t
 	}
 }
 
+func TestCreateSerializesUpstreamIdentityCatalogMutation(t *testing.T) {
+	businessStore := newBlockingLeaseBusiness()
+	private := &concurrentPrivateStore{}
+	service := New(businessStore, private, &passVerifier{})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_, catalogRelease, err := mutationguard.Acquire(ctx, businessStore, mutationguard.UpstreamCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalogRelease()
+	resources := <-businessStore.attempts
+	if len(resources) != 1 || resources[0] != "upstream-catalog" {
+		t.Fatalf("catalog lease resources = %#v", resources)
+	}
+	name, token := "Example", "token"
+	created := make(chan error, 1)
+	go func() {
+		_, err := service.Create(ctx, Input{
+			Host: "HTTPS://API.EXAMPLE/", Name: &name, BaseURL: "https://api.example", UpstreamType: "custom",
+			AuthMode: "custom_headers", RechargeRate: "1", AccessToken: &token,
+			Headers: map[string]string{"X-API-Key": token}, Present: map[string]bool{"access_token": true, "headers": true},
+		}, "operator")
+		created <- err
+	}()
+	resources = <-businessStore.attempts
+	if len(resources) != 2 || resources[0] != "upstream-catalog" || resources[1] != "upstream/api.example" {
+		t.Fatalf("create lease resources = %#v", resources)
+	}
+	select {
+	case err := <-created:
+		t.Fatalf("create bypassed upstream catalog lease: %v", err)
+	default:
+	}
+	if err := catalogRelease(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-created; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigureAuthRecordSerializesWithCanonicalUpstreamDelete(t *testing.T) {
+	name, oldToken, newToken := "Example", "old", "new"
+	businessStore := newBlockingLeaseBusiness()
+	businessStore.public = &business.UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers", RechargeRate: "1",
+	}
+	private := &concurrentPrivateStore{record: &configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers",
+		AccessToken: &oldToken, Headers: map[string]string{"X-API-Key": oldToken}, Cookies: map[string]string{},
+	}}
+	verifier := &firstVerifyBlocker{started: make(chan struct{}), release: make(chan struct{})}
+	service := New(businessStore, private, verifier)
+	configured := make(chan error, 1)
+	go func() {
+		_, err := service.ConfigureAuthRecord(context.Background(), Input{
+			Host: "HTTPS://API.EXAMPLE/", BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers",
+			AccessToken: &newToken, Headers: map[string]string{"X-API-Key": newToken},
+			Present: map[string]bool{"access_token": true, "headers": true},
+		})
+		configured <- err
+	}()
+	resources := <-businessStore.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("configuration lease resources = %#v", resources)
+	}
+	<-verifier.started
+
+	deleteAcquired := make(chan struct{})
+	deleteDone := make(chan error, 1)
+	go func() {
+		_, release, err := mutationguard.Acquire(context.Background(), businessStore, mutationguard.Upstream("https://API.EXAMPLE/"))
+		if err != nil {
+			deleteDone <- err
+			return
+		}
+		close(deleteAcquired)
+		businessStore.mu.Lock()
+		businessStore.public = nil
+		businessStore.mu.Unlock()
+		_, err = private.DeleteAuthRecord(context.Background(), "api.example")
+		if releaseErr := release(); err == nil {
+			err = releaseErr
+		}
+		deleteDone <- err
+	}()
+	resources = <-businessStore.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("delete lease resources = %#v", resources)
+	}
+	select {
+	case <-deleteAcquired:
+		t.Fatal("delete acquired the canonical upstream while configuration was verifying")
+	default:
+	}
+	close(verifier.release)
+	if err := <-configured; err != nil {
+		t.Fatalf("configuration failed: %v", err)
+	}
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("delete simulation failed: %v", err)
+	}
+	if record, err := private.AuthRecord(context.Background(), "api.example"); err != nil || record != nil {
+		t.Fatalf("delete did not win after waiting for configuration: record=%#v err=%v", record, err)
+	}
+}
+
+func TestConfigureAuthRecordRechecksExistenceAfterCanonicalDelete(t *testing.T) {
+	name, oldToken, newToken := "Example", "old", "new"
+	businessStore := newBlockingLeaseBusiness()
+	businessStore.public = &business.UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers", RechargeRate: "1",
+	}
+	private := &concurrentPrivateStore{record: &configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers",
+		AccessToken: &oldToken, Headers: map[string]string{"X-API-Key": oldToken}, Cookies: map[string]string{},
+	}}
+	_, deleteRelease, err := mutationguard.Acquire(context.Background(), businessStore, mutationguard.Upstream("HTTPS://API.EXAMPLE/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := <-businessStore.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("delete lease resources = %#v", resources)
+	}
+	businessStore.mu.Lock()
+	businessStore.public = nil
+	businessStore.mu.Unlock()
+	if _, err := private.DeleteAuthRecord(context.Background(), "api.example"); err != nil {
+		t.Fatal(err)
+	}
+
+	verifier := &firstVerifyBlocker{started: make(chan struct{}), release: make(chan struct{})}
+	service := New(businessStore, private, verifier)
+	configured := make(chan error, 1)
+	go func() {
+		_, err := service.ConfigureAuthRecord(context.Background(), Input{
+			Host: "api.example", BaseURL: "https://api.example", UpstreamType: "custom", AuthMode: "custom_headers",
+			AccessToken: &newToken, Headers: map[string]string{"X-API-Key": newToken},
+			Present: map[string]bool{"access_token": true, "headers": true},
+		})
+		configured <- err
+	}()
+	resources = <-businessStore.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("configuration lease resources = %#v", resources)
+	}
+	if err := deleteRelease(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-configured; !errors.Is(err, ErrNotFound) {
+		t.Fatalf("configuration error = %v, want ErrNotFound", err)
+	}
+	verifier.mu.Lock()
+	verifyCalls := verifier.calls
+	verifier.mu.Unlock()
+	if verifyCalls != 0 {
+		t.Fatalf("deleted upstream reached verification: calls=%d", verifyCalls)
+	}
+	if record, err := private.AuthRecord(context.Background(), "api.example"); err != nil || record != nil {
+		t.Fatalf("configuration resurrected deleted auth: record=%#v err=%v", record, err)
+	}
+}
+
+func TestConfigureAuthRecordSerializesSharedVaultEntryAcrossHosts(t *testing.T) {
+	private, _ := openStores(t)
+	name := "Example"
+	businessStore := &concurrentCreateBusiness{public: &business.UpstreamConfigurationWrite{
+		Host: "first.example", Name: &name, BaseURL: "https://first.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_manual_login", RechargeRate: "1",
+	}}
+	verifier := &firstLoginBlocker{started: make(chan struct{}), release: make(chan struct{})}
+	service := New(businessStore, private, verifier)
+	entry := "shared-login"
+	input := func(host, username, password string) Input {
+		return Input{
+			Host: host, BaseURL: "https://" + host, UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+			Username: &username, Password: &password, SaveToVault: true, Entry: &entry,
+			Headers: map[string]string{}, Cookies: map[string]string{},
+			Present: map[string]bool{"username": true, "password": true, "save_to_vault": true, "entry": true},
+		}
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.ConfigureAuthRecord(context.Background(), input("first.example", "first@example.test", "first-secret"))
+		firstDone <- err
+	}()
+	<-verifier.started
+
+	secondCtx, cancelSecond := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_, secondErr := service.ConfigureAuthRecord(secondCtx, input("second.example", "second@example.test", "second-secret"))
+	cancelSecond()
+	if !errors.Is(secondErr, context.DeadlineExceeded) {
+		t.Fatalf("second host changed the shared vault entry concurrently: %v", secondErr)
+	}
+
+	close(verifier.release)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first configuration failed: %v", err)
+	}
+	if _, err := service.ConfigureAuthRecord(context.Background(), input("second.example", "second@example.test", "second-secret")); err != nil {
+		t.Fatalf("second configuration failed after the shared vault lease was released: %v", err)
+	}
+	stored, err := private.VaultEntry(context.Background(), entry)
+	if err != nil || stored == nil || stored.Username == nil || *stored.Username != "second@example.test" || stored.Password == nil || *stored.Password != "second-secret" {
+		t.Fatalf("shared vault entry did not preserve serialized write order: entry=%#v err=%v", stored, err)
+	}
+}
+
 func TestPrivateCommitRollsBackVaultAfterRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	private := &cancelingAuthSaveStore{cancel: cancel}
@@ -276,6 +573,53 @@ func TestPrivateCommitRollsBackVaultAfterRequestCancellation(t *testing.T) {
 	}
 	if private.vaultSaved {
 		t.Fatal("vault entry remained after the public commit was aborted")
+	}
+	if private.rollbackErr != nil || !private.hasDeadline {
+		t.Fatalf("compensation context: err=%v has_deadline=%v", private.rollbackErr, private.hasDeadline)
+	}
+}
+
+func TestConfigureAuthRecordKeepsVaultLeaseThroughCompensation(t *testing.T) {
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	private := &cancelingAuthSaveStore{
+		cancel: cancelRequest, rollbackStarted: make(chan struct{}), allowRollback: make(chan struct{}),
+	}
+	name := "Example"
+	businessStore := &concurrentCreateBusiness{public: &business.UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_manual_login", RechargeRate: "1",
+	}}
+	service := New(businessStore, private, &passVerifier{})
+	username, password, entry := "operator@example.test", "secret", "shared-login"
+	configured := make(chan error, 1)
+	go func() {
+		_, err := service.ConfigureAuthRecord(requestCtx, Input{
+			Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+			Username: &username, Password: &password, SaveToVault: true, Entry: &entry,
+			Headers: map[string]string{}, Cookies: map[string]string{},
+			Present: map[string]bool{"username": true, "password": true, "save_to_vault": true, "entry": true},
+		})
+		configured <- err
+	}()
+	<-private.rollbackStarted
+
+	competingCtx, cancelCompeting := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_, competingRelease, competingErr := mutationguard.Acquire(competingCtx, businessStore, mutationguard.Vault(entry))
+	cancelCompeting()
+	if competingRelease != nil {
+		_ = competingRelease()
+	}
+	if !errors.Is(competingErr, context.DeadlineExceeded) {
+		close(private.allowRollback)
+		t.Fatalf("competing vault mutation acquired during compensation: %v", competingErr)
+	}
+
+	close(private.allowRollback)
+	if err := <-configured; err == nil || !strings.Contains(err.Error(), "auth save failed") {
+		t.Fatalf("configuration error = %v", err)
+	}
+	if private.vaultSaved {
+		t.Fatal("vault entry remained after compensation")
 	}
 }
 
@@ -470,6 +814,34 @@ func TestUpdateQueuesRateSyncForCommittedIdentityPrimaryHost(t *testing.T) {
 	}
 }
 
+func TestUpdateQueuesAllBoundAccountBaseURLsWhenUpstreamSettingChanges(t *testing.T) {
+	private, businessStore := openStores(t)
+	token, refresh, name := "access", "refresh", "Example"
+	service := New(businessStore, private, &passVerifier{})
+	_, err := service.Create(context.Background(), Input{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", AccountBaseURL: "https://old-account.example/v1",
+		UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RechargeRate: "1",
+		AccessToken: &token, RefreshToken: &refresh, Present: map[string]bool{"access_token": true, "refresh_token": true},
+	}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &captureRateSyncScheduler{baseURLTaskID: "task-base-url-sync"}
+	service = New(businessStore, private, &passVerifier{}, scheduler)
+	result, err := service.Update(context.Background(), "api.example", Input{
+		Name: &name, BaseURL: "https://api.example", AccountBaseURL: "https://new-account.example/v2",
+		UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RechargeRate: "1", RefreshToken: &refresh,
+		Present: map[string]bool{"refresh_token": true},
+	}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduler.calls != 0 || scheduler.baseURLCalls != 1 || scheduler.host != "api.example" ||
+		result.BaseURLSyncTaskID == nil || *result.BaseURLSyncTaskID != "task-base-url-sync" {
+		t.Fatalf("Base URL change did not queue account sync: result=%#v scheduler=%#v", result, scheduler)
+	}
+}
+
 func TestUpdateFinishesReadbackAndRateSyncAfterCommittedRequestIsCanceled(t *testing.T) {
 	private, businessStore := openStores(t)
 	token, refresh, name := "access", "refresh", "Example"
@@ -602,6 +974,13 @@ func stringPointer(value string) *string { return &value }
 func TestExplicitHeadersAreAppliedToSelectedVaultLoginCandidate(t *testing.T) {
 	private, businessStore := openStores(t)
 	username, password := "operator", "secret"
+	name := "Example"
+	if _, err := businessStore.CreateUpstreamConfiguration(context.Background(), business.UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "newapi",
+		AuthMode: "newapi_user_login", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{
 		Entry: "selected", Username: &username, Password: &password, Hosts: []string{"api.example"}, Headers: map[string]string{},
 	}, nil); err != nil {

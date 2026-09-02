@@ -15,6 +15,10 @@ const groupsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/groups",
 });
+const newAPIRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/newapi",
+});
 const pricingRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/pricing",
@@ -92,6 +96,7 @@ const routeTree = rootRoute.addChildren([
   accountsRoute,
   upstreamsRoute,
   groupsRoute,
+  newAPIRoute,
   pricingRoute,
   revenueAnalysisRoute,
   pricingConfigRoute,

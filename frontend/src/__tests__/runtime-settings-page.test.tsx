@@ -7,6 +7,7 @@ import {
   notificationFormFromStatus,
   notificationTargetResultFromTask,
   notificationTargetField,
+  saveTargetWithOptionalSync,
   targetFormFromConfig,
 } from "../App";
 import type { NotificationStatus, RuntimeConfig, Task } from "../api";
@@ -154,6 +155,108 @@ describe("系统设置页面职责", () => {
       admin_key: "",
       request_timeout_seconds: "60",
     });
+  });
+
+  it("commits a saved management target before a follow-up sync fails to start", async () => {
+    const queryClient = new QueryClient();
+    const saved: RuntimeConfig = {
+      database_path: "/data/sub2api-console.sqlite3",
+      data_database_path: "/data/sub2api-console.sqlite3",
+      database_available: true,
+      data_database_available: true,
+      mode: "完全模式",
+      config_keys: [],
+      secret_values_hidden: true,
+      probes_enabled: true,
+      account_default_concurrency: 10,
+      account_default_priority: 1,
+      admin_base_url: "https://saved.example.test",
+      request_timeout_seconds: 45,
+      initialized: true,
+      target_configured: true,
+      console_username: "admin",
+      configuration_errors: [],
+    };
+    const steps: string[] = [];
+    let formBaseline = targetFormFromConfig({
+      admin_base_url: "https://old.example.test",
+      request_timeout_seconds: 30,
+    });
+    const syncError = new Error("同步服务不可用");
+
+    const outcome = await saveTargetWithOptionalSync({
+      persist: async () => {
+        steps.push("persist");
+        return saved;
+      },
+      commit: (value) => {
+        steps.push("commit");
+        queryClient.setQueryData(["config"], value);
+        formBaseline = targetFormFromConfig(value);
+      },
+      startSync: async () => {
+        steps.push("sync");
+        throw syncError;
+      },
+      syncAfterSave: true,
+    });
+
+    expect(steps).toEqual(["persist", "commit", "sync"]);
+    expect(queryClient.getQueryData(["config"])).toBe(saved);
+    expect(formBaseline).toEqual({
+      admin_base_url: "https://saved.example.test",
+      admin_key: "",
+      request_timeout_seconds: "45",
+    });
+    expect(outcome).toEqual({ task: null, syncFailed: true, syncError });
+  });
+
+  it("keeps log cleanup controls disabled until its configuration is read successfully", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false, retry: false } },
+    });
+    queryClient.setQueryData<RuntimeConfig>(["config"], {
+      database_path: "/data/sub2api-console.sqlite3",
+      data_database_path: "/data/sub2api-console.sqlite3",
+      database_available: true,
+      data_database_available: true,
+      mode: "完全模式",
+      config_keys: [],
+      secret_values_hidden: true,
+      probes_enabled: true,
+      account_default_concurrency: 10,
+      account_default_priority: 1,
+      admin_base_url: "https://sub2api.example.test",
+      request_timeout_seconds: 60,
+      initialized: true,
+      target_configured: true,
+      console_username: "admin",
+      configuration_errors: [],
+    });
+    await queryClient.prefetchQuery({
+      queryKey: ["log-cleanup"],
+      queryFn: async () => {
+        throw new Error("读取失败");
+      },
+      retry: false,
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <ConfigPage />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("读取成功后才能修改设置或清理日志");
+    expect(markup).toContain("重试读取");
+    expect(markup).toMatch(
+      /<span(?=[^>]*role="switch")(?=[^>]*aria-label="定时清理")(?=[^>]*aria-disabled="true")[^>]*>/,
+    );
+    expect(markup).toMatch(/<input(?=[^>]*aria-label="日志保留天数")(?=[^>]*disabled)[^>]*>/);
+    expect(markup).toMatch(
+      /<button(?=[^>]*data-testid="log-cleanup-clear")(?=[^>]*disabled)[^>]*>/,
+    );
+    expect(markup).toMatch(/<button(?=[^>]*data-testid="log-cleanup-save")(?=[^>]*disabled)[^>]*>/);
   });
 
   it("maps public notification identifiers while keeping the secret input empty", () => {

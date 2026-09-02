@@ -20,18 +20,33 @@ func (s *Store) ensureStableUpstreamRelations(ctx context.Context) error {
 	if err := s.ensureMissingUpstreamIdentities(ctx); err != nil {
 		return err
 	}
+	return s.ensureStableUpstreamRelationsForID(ctx, "")
+}
+
+func (s *Store) ensureStableUpstreamRelationsForHost(ctx context.Context, host string) error {
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return err
+	}
+	var upstreamID string
+	if err := s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=?`, canonicalHost(host)).Scan(&upstreamID); err != nil {
+		return err
+	}
+	return s.ensureStableUpstreamRelationsForID(ctx, upstreamID)
+}
+
+func (s *Store) ensureStableUpstreamRelationsForID(ctx context.Context, upstreamID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := ensureBindingIdentitiesTx(ctx, tx, ""); err != nil {
+	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
 		return err
 	}
-	if err := ensureCatalogEntitiesFromRowsTx(ctx, tx); err != nil {
+	if err := ensureCatalogEntitiesFromRowsTx(ctx, tx, upstreamID); err != nil {
 		return err
 	}
-	if err := ensureCatalogEntitiesFromBindingsTx(ctx, tx, "", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if err := ensureCatalogEntitiesFromBindingsTx(ctx, tx, upstreamID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -53,27 +68,41 @@ func ensureBindingIdentitiesTx(ctx context.Context, tx *sql.Tx, upstreamID strin
 	if _, err := tx.ExecContext(ctx, query, arguments...); err != nil {
 		return err
 	}
-	_, err := tx.ExecContext(ctx, `DELETE FROM binding_identities WHERE NOT EXISTS(
+	deleteQuery := `DELETE FROM binding_identities WHERE NOT EXISTS(
 		SELECT 1 FROM bindings b WHERE b.id=binding_identities.binding_id
-	)`)
+	)`
+	deleteArguments := []any{}
+	if strings.TrimSpace(upstreamID) != "" {
+		deleteQuery += ` AND upstream_id=?`
+		deleteArguments = append(deleteArguments, strings.TrimSpace(upstreamID))
+	}
+	_, err := tx.ExecContext(ctx, deleteQuery, deleteArguments...)
 	return err
 }
 
-func ensureCatalogEntitiesFromRowsTx(ctx context.Context, tx *sql.Tx) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE upstream_catalog_entities SET
+func ensureCatalogEntitiesFromRowsTx(ctx context.Context, tx *sql.Tx, upstreamID string) error {
+	updateQuery := `UPDATE upstream_catalog_entities SET
 		lifecycle_state='suspected',missing_observations=1,confirmed_missing_at=NULL
 		WHERE lifecycle_state='missing' AND missing_observations=?
 		AND observed_status IN ('missing','deleted')
-		AND last_seen_at=missing_since AND missing_since=confirmed_missing_at AND confirmed_missing_at=updated_at`,
-		catalogMissingConfirmationCount); err != nil {
+		AND last_seen_at=missing_since AND missing_since=confirmed_missing_at AND confirmed_missing_at=updated_at`
+	updateArguments := []any{catalogMissingConfirmationCount}
+	filter, filterArguments := "", []any{}
+	if strings.TrimSpace(upstreamID) != "" {
+		updateQuery += ` AND upstream_id=?`
+		updateArguments = append(updateArguments, strings.TrimSpace(upstreamID))
+		filter = ` WHERE h.upstream_id=?`
+		filterArguments = append(filterArguments, strings.TrimSpace(upstreamID), strings.TrimSpace(upstreamID))
+	}
+	if _, err := tx.ExecContext(ctx, updateQuery, updateArguments...); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT h.upstream_id,'group',g.group_id,NULL,g.name,g.status,g.updated_at,h.is_primary
-		FROM upstream_groups g JOIN upstream_identity_hosts h ON h.host=g.host
+		FROM upstream_groups g JOIN upstream_identity_hosts h ON h.host=g.host`+filter+`
 		UNION ALL
 		SELECT h.upstream_id,'key',k.key_id,NULLIF(TRIM(k.upstream_group),''),k.name,k.status,k.updated_at,h.is_primary
-		FROM upstream_keys k JOIN upstream_identity_hosts h ON h.host=k.host
-		ORDER BY 1,2,3,8 DESC`)
+		FROM upstream_keys k JOIN upstream_identity_hosts h ON h.host=k.host`+filter+`
+		ORDER BY 1,2,3,8 DESC`, filterArguments...)
 	if err != nil {
 		return err
 	}

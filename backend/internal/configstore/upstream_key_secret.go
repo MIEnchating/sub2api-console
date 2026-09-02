@@ -56,3 +56,13 @@ func (s *Store) SaveUpstreamKeySecret(ctx context.Context, value UpstreamKeySecr
 	)
 	return err
 }
+
+func (s *Store) DeleteUpstreamKeySecrets(ctx context.Context, host, keyID string) error {
+	host = CanonicalHost(host)
+	keyID = strings.TrimSpace(keyID)
+	if host == "" || keyID == "" {
+		return errors.New("本地 Key 删除必须包含 Host 和 Key ID")
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM upstream_key_secrets WHERE host=? AND key_id=?`, host, keyID)
+	return err
+}

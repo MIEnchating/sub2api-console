@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -37,9 +38,10 @@ type TaskStore interface {
 }
 
 type Service struct {
-	listener Listener
-	tasks    TaskStore
-	timeout  time.Duration
+	listener   Listener
+	tasks      TaskStore
+	taskRunner taskrunner.Runner
+	timeout    time.Duration
 
 	mu           sync.Mutex
 	activeTaskID string
@@ -53,6 +55,8 @@ func New(listener Listener, tasks TaskStore) *Service {
 func newService(listener Listener, tasks TaskStore, timeout time.Duration) *Service {
 	return &Service{listener: listener, tasks: tasks, timeout: timeout}
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task, error) {
 	request.AppID = strings.TrimSpace(request.AppID)
@@ -91,7 +95,16 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 		cancel()
 		return taskstore.Task{}, err
 	}
-	go s.execute(discoveryContext, cancel, task, request)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		stop := context.AfterFunc(parent, cancel)
+		defer stop()
+		s.execute(discoveryContext, cancel, task, request)
+	}); err != nil {
+		s.clearActive(id)
+		cancel()
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -111,7 +124,9 @@ func (s *Service) execute(ctx context.Context, cancel context.CancelFunc, task t
 	defer s.clearActive(task.ID)
 	task.Status, task.Progress, task.Message = "running", 15, "正在连接 QQBot 事件服务"
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	taskstore.PersistProgress(s.tasks, task)
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
+		return
+	}
 	ready := false
 	target, err := s.listener.Listen(ctx, request, func() {
 		if ready {
@@ -141,6 +156,7 @@ func (s *Service) execute(ctx context.Context, cancel context.CancelFunc, task t
 		task.Status, task.Message = "failed", "QQBot 目标获取失败："+safeReason(err)
 		task.Result = map[string]any{"target_type": request.TargetType, "error": safeReason(err)}
 	}
+	s.clearActive(task.ID)
 	taskstore.PersistFinal(s.tasks, task)
 }
 

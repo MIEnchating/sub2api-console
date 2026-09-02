@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,6 +110,39 @@ func (settings fakeSettings) TargetSettings(context.Context) (configstore.Target
 	return settings.target, nil
 }
 
+type mutableSettings struct {
+	mu     sync.Mutex
+	target configstore.TargetSettings
+}
+
+func (settings *mutableSettings) TargetSettings(context.Context) (configstore.TargetSettings, error) {
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	return settings.target, nil
+}
+
+func (settings *mutableSettings) Set(target configstore.TargetSettings) {
+	settings.mu.Lock()
+	defer settings.mu.Unlock()
+	settings.target = target
+}
+
+type deferredProbeRunner struct {
+	run func(context.Context)
+}
+
+func (runner *deferredProbeRunner) Go(run func(context.Context)) error {
+	runner.run = run
+	return nil
+}
+
+func (runner *deferredProbeRunner) Run(ctx context.Context) {
+	if runner.run == nil {
+		panic("probe task was not scheduled")
+	}
+	runner.run(ctx)
+}
+
 type observingTasks struct {
 	terminal chan taskstore.Task
 }
@@ -121,6 +155,51 @@ func (tasks *observingTasks) Save(_ context.Context, task taskstore.Task) error 
 		}
 	}
 	return nil
+}
+
+func TestQueuedProbeRejectsManagementTargetChangeBeforeRemoteAccess(t *testing.T) {
+	var targetARequests, targetBRequests atomic.Int32
+	targetA := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		targetARequests.Add(1)
+		http.Error(response, "unexpected obsolete target access", http.StatusInternalServerError)
+	}))
+	defer targetA.Close()
+	targetB := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		targetBRequests.Add(1)
+		http.Error(response, "unexpected replacement target access", http.StatusInternalServerError)
+	}))
+	defer targetB.Close()
+
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{}},
+		candidates: []business.ProbeCandidate{{
+			AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{},
+		}},
+	}
+	settings := &mutableSettings{target: configstore.TargetSettings{BaseURL: targetA.URL, AdminKey: "target-a", TimeoutSeconds: 5}}
+	tasks := &observingTasks{terminal: make(chan taskstore.Task, 1)}
+	runner := &deferredProbeRunner{}
+	service := New(repository, settings, tasks)
+	service.UseTaskRunner(runner)
+
+	if _, err := service.Enqueue(context.Background(), Request{}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	settings.Set(configstore.TargetSettings{BaseURL: targetB.URL, AdminKey: "target-b", TimeoutSeconds: 5})
+	runner.Run(context.Background())
+
+	terminal := <-tasks.terminal
+	if terminal.Status != "failed" || !strings.Contains(terminal.Message, "管理目标") || terminal.Result["remote_write"] != false {
+		t.Fatalf("target-drift probe task=%#v", terminal)
+	}
+	if targetARequests.Load() != 0 || targetBRequests.Load() != 0 {
+		t.Fatalf("queued probe accessed remote targets: target-a=%d target-b=%d", targetARequests.Load(), targetBRequests.Load())
+	}
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if len(repository.samples) != 0 {
+		t.Fatalf("target-drift probe persisted samples: %#v", repository.samples)
+	}
 }
 
 func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {

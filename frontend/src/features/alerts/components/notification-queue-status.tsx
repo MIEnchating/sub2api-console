@@ -378,7 +378,7 @@ export function NotificationQueueStatus(props: {
       >
         <DialogContent
           width={operationDialogWidth(Boolean(details && !loading))}
-          height={operationDialogHeight(Boolean(details && !loading), "large")}
+          height={operationDialogHeight(Boolean(details && !loading))}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>

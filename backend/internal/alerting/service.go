@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -40,9 +41,10 @@ type TaskStore interface {
 }
 
 type TaskService struct {
-	evaluator *Service
-	tasks     TaskStore
-	timeout   time.Duration
+	evaluator  *Service
+	tasks      TaskStore
+	taskRunner taskrunner.Runner
+	timeout    time.Duration
 }
 
 func New(repository Repository, deliverer Deliverer) *Service {
@@ -52,6 +54,8 @@ func New(repository Repository, deliverer Deliverer) *Service {
 func NewTaskService(evaluator *Service, tasks TaskStore) *TaskService {
 	return &TaskService{evaluator: evaluator, tasks: tasks, timeout: 10 * time.Minute}
 }
+
+func (s *TaskService) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *TaskService) Enqueue(ctx context.Context) (taskstore.Task, error) {
 	id, err := randomTaskID()
@@ -66,15 +70,18 @@ func (s *TaskService) Enqueue(ctx context.Context) (taskstore.Task, error) {
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task) }); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *TaskService) execute(task taskstore.Task) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *TaskService) execute(parent context.Context, task taskstore.Task) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 10, "正在检测告警并发送通知", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result, err := s.evaluator.Evaluate(ctx)
@@ -96,6 +103,7 @@ func (s *TaskService) execute(task taskstore.Task) {
 			"remote_write": result.RemoteWrite, "evaluation_disabled": result.EvaluationDisabled,
 		}
 	}
+	taskstore.MarkCancelled(ctx, &task, "告警检测已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 

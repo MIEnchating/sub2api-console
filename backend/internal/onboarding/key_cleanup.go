@@ -4,16 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
-const maximumKeyCleanupItems = 500
+const (
+	maximumKeyCleanupItems = 500
+)
 
 type UnboundUpstreamKey struct {
 	KeyID   string  `json:"key_id"`
@@ -92,21 +97,37 @@ func (s *Service) EnqueueKeyCleanup(ctx context.Context, host string, keyIDs []s
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.executeKeyCleanup(task, preview.Host, requested, strings.TrimSpace(actor))
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeKeyCleanup(parent, task, preview.Host, requested, strings.TrimSpace(actor))
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) executeKeyCleanup(task taskstore.Task, host string, requested []string, actor string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task, host string, requested []string, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message = "running", 5, "正在重新复核上游 Key 与本地绑定关系"
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
+	if err != nil {
+		s.finishKeyCleanupFailure(ctx, task, err)
+		return
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("上游 Key 清理租约释放失败", "host", host, "error", err)
+		}
+	}()
+	ctx = guardedCtx
 	preview, err := s.PreviewUnboundKeys(ctx, host)
 	if err != nil {
-		s.finishKeyCleanupFailure(task, err)
+		s.finishKeyCleanupFailure(ctx, task, err)
 		return
 	}
 	available := make(map[string]UnboundUpstreamKey, len(preview.Keys))
@@ -115,18 +136,34 @@ func (s *Service) executeKeyCleanup(task taskstore.Task, host string, requested 
 	}
 	auth, client, err := s.keyCleanupContext(ctx, host)
 	if err != nil {
-		s.finishKeyCleanupFailure(task, err)
+		s.finishKeyCleanupFailure(ctx, task, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(requested))
-	deleted, skipped, failed := 0, 0, 0
+	deleted, skipped, failed, auditFailed := 0, 0, 0, 0
+	remoteWrite := false
+	appendAuditedResult := func(
+		key UnboundUpstreamKey,
+		status, reason string,
+		attempted, succeeded, readbackConfirmed bool,
+		cause error,
+	) {
+		item := cleanupResultItem(key.KeyID, key.Name, status, reason)
+		if auditErr := s.recordKeyCleanup(ctx, task.ID, actor, host, key, attempted, succeeded, readbackConfirmed, cause); auditErr != nil {
+			auditFailed++
+			item["audit_error"] = safeError(auditErr)
+			slog.Error("上游 Key 清理审计保存失败", "task_id", task.ID, "host", host, "key_id", key.KeyID, "error", auditErr)
+		}
+		items = append(items, item)
+	}
 	for index, keyID := range requested {
+		if ctx.Err() != nil {
+			break
+		}
 		task.Progress = 5 + index*90/len(requested)
 		task.Message = fmt.Sprintf("正在清理 %d/%d：Key %s", index+1, len(requested), keyID)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := s.tasks.Save(ctx, task); err != nil {
-			return
-		}
+		taskstore.PersistProgress(s.tasks, task)
 		key, found := available[keyID]
 		if !found {
 			skipped++
@@ -136,8 +173,7 @@ func (s *Service) executeKeyCleanup(task taskstore.Task, host string, requested 
 		protected, protectErr := s.repository.UpstreamKeyProtected(ctx, host, keyID)
 		if protectErr != nil {
 			failed++
-			items = append(items, cleanupResultItem(keyID, key.Name, "failed", protectErr.Error()))
-			s.recordKeyCleanup(ctx, task.ID, actor, host, key, false, protectErr)
+			appendAuditedResult(key, "failed", protectErr.Error(), false, false, false, protectErr)
 			continue
 		}
 		if protected {
@@ -145,37 +181,74 @@ func (s *Service) executeKeyCleanup(task taskstore.Task, host string, requested 
 			items = append(items, cleanupResultItem(keyID, key.Name, "skipped", "Key 已建立绑定或进入开户待续，已跳过"))
 			continue
 		}
-		if err := client.DeleteKey(ctx, auth, keyID); err != nil {
+		remoteWrite = true
+		deleteErr := client.DeleteKey(ctx, auth, keyID)
+		keysAfterDelete, readbackErr := client.ListKeys(ctx, auth)
+		if readbackErr != nil {
+			cause := fmt.Errorf("上游 Key 删除后读回失败，删除结果未知：%w", readbackErr)
+			if deleteErr != nil {
+				cause = fmt.Errorf("上游 Key 删除请求返回错误：%w；删除后读回失败，删除结果未知：%v", deleteErr, readbackErr)
+			}
 			failed++
-			items = append(items, cleanupResultItem(keyID, key.Name, "failed", safeError(err)))
-			s.recordKeyCleanup(ctx, task.ID, actor, host, key, false, err)
+			appendAuditedResult(key, "failed", safeError(cause), true, false, false, cause)
+			continue
+		}
+		if cleanupKeyPresent(keysAfterDelete, keyID) {
+			cause := fmt.Errorf("上游 Key %s 删除后仍可读", keyID)
+			if deleteErr != nil {
+				cause = fmt.Errorf("上游 Key 删除请求返回错误：%w；删除后仍可读", deleteErr)
+			}
+			failed++
+			appendAuditedResult(key, "failed", safeError(cause), true, false, true, cause)
 			continue
 		}
 		deleted++
-		items = append(items, cleanupResultItem(keyID, key.Name, "deleted", ""))
-		s.recordKeyCleanup(ctx, task.ID, actor, host, key, true, nil)
+		reason := ""
+		if deleteErr != nil {
+			reason = "删除响应返回错误，但读回确认 Key 已不存在：" + safeError(deleteErr)
+		}
+		appendAuditedResult(key, "deleted", reason, true, true, true, deleteErr)
 	}
 	task.Progress = 100
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = map[string]any{
 		"operation": "upstream-key-cleanup", "host": host, "total": len(requested),
 		"deleted": deleted, "skipped": skipped, "failed": failed, "items": items,
+		"remote_write": remoteWrite, "readback_confirmed": remoteWrite && failed == 0,
 	}
-	if failed > 0 {
+	if auditFailed > 0 {
+		task.Result["audit_failed"] = auditFailed
+	}
+	if failed > 0 || auditFailed > 0 {
 		task.Status = "failed"
 		task.Message = fmt.Sprintf("无绑定 Key 清理完成：删除 %d 个，跳过 %d 个，失败 %d 个", deleted, skipped, failed)
+		if auditFailed > 0 {
+			task.Message += fmt.Sprintf("，审计失败 %d 个", auditFailed)
+		}
 	} else {
 		task.Status = "succeeded"
 		task.Message = fmt.Sprintf("无绑定 Key 清理完成：删除 %d 个，跳过 %d 个", deleted, skipped)
 	}
+	if ctx.Err() != nil {
+		task.Status = "failed"
+	}
+	if cause := taskstore.ContextFailureCause(ctx); cause != nil {
+		task.Message = "无绑定 Key 清理失败：" + safeError(cause)
+		task.Result["error"] = safeError(cause)
+	}
+	taskstore.MarkCancelled(ctx, &task, "无绑定 Key 清理已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) finishKeyCleanupFailure(task taskstore.Task, cause error) {
+func (s *Service) finishKeyCleanupFailure(ctx context.Context, task taskstore.Task, cause error) {
+	if contextCause := taskstore.ContextFailureCause(ctx); contextCause != nil {
+		cause = contextCause
+	}
 	task.Status, task.Progress = "failed", 100
 	task.Message = "无绑定 Key 清理失败：" + safeError(cause)
 	task.Result = map[string]any{"operation": "upstream-key-cleanup", "error": safeError(cause)}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	taskstore.MarkCancelled(ctx, &task, "无绑定 Key 清理已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -245,22 +318,40 @@ func cleanupResultItem(keyID, name, status, reason string) map[string]any {
 	return item
 }
 
-func (s *Service) recordKeyCleanup(ctx context.Context, taskID, actor, host string, key UnboundUpstreamKey, succeeded bool, cause error) {
+func cleanupKeyPresent(keys []business.UpstreamCatalogKey, keyID string) bool {
+	keyID = strings.TrimSpace(keyID)
+	for _, key := range keys {
+		if strings.TrimSpace(key.KeyID) == keyID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) recordKeyCleanup(
+	ctx context.Context,
+	taskID, actor, host string,
+	key UnboundUpstreamKey,
+	attempted, succeeded, readbackConfirmed bool,
+	cause error,
+) error {
 	state := "succeeded"
-	var reason *string
+	summary := fmt.Sprintf("上游 Key 清理成功：%s / %s（%s）", host, key.Name, key.KeyID)
+	payload := map[string]any{
+		"task_id": taskID, "actor": actor, "host": host, "key_id": key.KeyID,
+		"key_name": key.Name, "group_id": key.GroupID, "remote_write": attempted,
+		"remote_confirmed": succeeded, "readback_confirmed": readbackConfirmed,
+	}
 	if !succeeded {
 		state = "failed"
-		message := safeError(cause)
-		reason = &message
+		reason := safeError(cause)
+		summary = fmt.Sprintf("上游 Key 清理失败：%s / %s（%s）", host, key.Name, key.KeyID)
+		payload["error"] = reason
+	} else if cause != nil {
+		payload["delete_response_error"] = safeError(cause)
 	}
-	name := key.Name
-	field := "deleted"
-	operation := business.AccountOperation{
-		OperationID: taskID + ":" + key.KeyID, OperationType: "upstream.key.cleanup", State: state,
-		Phase: "remote-write", Actor: actor, Error: reason, RemoteConfirmed: succeeded,
-		ReadbackConfirmed: false, ObjectID: key.KeyID, ObjectName: &name, FieldName: &field,
-		Before: map[string]any{"host": host, "key_id": key.KeyID, "name": key.Name, "group_id": key.GroupID},
-		After:  map[string]any{"deleted": succeeded}, Writeback: true,
-	}
-	_ = s.repository.RecordAccountOperation(ctx, operation)
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), onboardingAuditTimeout)
+	defer cancel()
+	_, err := s.repository.RecordRuntimeEvent(auditCtx, "upstream.key.cleanup", state, summary, payload)
+	return err
 }

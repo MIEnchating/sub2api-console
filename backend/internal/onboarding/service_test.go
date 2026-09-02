@@ -5,16 +5,19 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
@@ -27,21 +30,73 @@ type checkingKeys struct {
 	verification []bool
 }
 
+type uncertainKeys struct {
+	creates      int
+	reconciles   int
+	resolved     bool
+	reconcileErr error
+	name         string
+}
+
 type probeKeys struct {
-	creates   int
-	deletes   int
-	reveals   int
-	revealErr error
-	catalog   []business.UpstreamCatalogKey
-	deleteIDs []string
+	creates             int
+	deletes             int
+	reveals             int
+	revealErr           error
+	deleteErr           error
+	commitOnDeleteError bool
+	keepAfterDelete     bool
+	listErrors          []error
+	listCalls           int
+	catalog             []business.UpstreamCatalogKey
+	deleteIDs           []string
+}
+
+type blockingProbeKeys struct {
+	*probeKeys
+	deleteStarted chan struct{}
+	allowDelete   chan struct{}
+}
+
+type uncertainProbeKeys struct {
+	createStarted chan struct{}
+	marker        string
+	reconciled    int
+	deleted       int
 }
 
 type cleanupTaskStore struct {
 	final chan taskstore.Task
 }
 
+type auditFailingOnboardingRepository struct {
+	Repository
+}
+
+func (auditFailingOnboardingRepository) RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error) {
+	return 0, errors.New("audit unavailable")
+}
+
+type accountAuditFailingOnboardingRepository struct {
+	Repository
+}
+
+func (accountAuditFailingOnboardingRepository) RecordAccountOperation(context.Context, business.AccountOperation) error {
+	return errors.New("account audit unavailable")
+}
+
+type observingAccountAuditOnboardingRepository struct {
+	Repository
+	contextErr error
+}
+
+func (repository *observingAccountAuditOnboardingRepository) RecordAccountOperation(ctx context.Context, _ business.AccountOperation) error {
+	repository.contextErr = ctx.Err()
+	return errors.New("account audit unavailable")
+}
+
 func (store *cleanupTaskStore) Save(_ context.Context, task taskstore.Task) error {
-	if task.Status == "succeeded" || task.Status == "failed" {
+	if task.Status == "succeeded" || task.Status == "failed" || task.Status == "cancelled" {
 		store.final <- task
 	}
 	return nil
@@ -67,11 +122,69 @@ func (keys *probeKeys) RevealKey(context.Context, configstore.AuthRecord, string
 func (keys *probeKeys) DeleteKey(_ context.Context, _ configstore.AuthRecord, keyID string) error {
 	keys.deletes++
 	keys.deleteIDs = append(keys.deleteIDs, keyID)
-	return nil
+	if (keys.deleteErr == nil || keys.commitOnDeleteError) && !keys.keepAfterDelete {
+		filtered := keys.catalog[:0]
+		for _, key := range keys.catalog {
+			if key.KeyID != keyID {
+				filtered = append(filtered, key)
+			}
+		}
+		keys.catalog = filtered
+	}
+	return keys.deleteErr
 }
 
 func (keys *probeKeys) ListKeys(context.Context, configstore.AuthRecord) ([]business.UpstreamCatalogKey, error) {
+	index := keys.listCalls
+	keys.listCalls++
+	if index < len(keys.listErrors) && keys.listErrors[index] != nil {
+		return nil, keys.listErrors[index]
+	}
 	return append([]business.UpstreamCatalogKey{}, keys.catalog...), nil
+}
+
+func (keys *blockingProbeKeys) DeleteKey(ctx context.Context, record configstore.AuthRecord, keyID string) error {
+	close(keys.deleteStarted)
+	select {
+	case <-keys.allowDelete:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return keys.probeKeys.DeleteKey(ctx, record, keyID)
+}
+
+func (keys *uncertainProbeKeys) CreateKey(ctx context.Context, _ configstore.AuthRecord, name, _ string) (upstreamsync.CreatedKey, error) {
+	keys.marker = name
+	close(keys.createStarted)
+	<-ctx.Done()
+	return upstreamsync.CreatedKey{}, &upstreamsync.CommitUnknownError{Marker: name, Cause: ctx.Err()}
+}
+
+func (keys *uncertainProbeKeys) CreateKeyWithVerification(ctx context.Context, record configstore.AuthRecord, name, groupID string, _ bool) (upstreamsync.CreatedKey, error) {
+	return keys.CreateKey(ctx, record, name, groupID)
+}
+
+func (keys *uncertainProbeKeys) RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
+	return upstreamsync.CreatedKey{}, errors.New("unexpected reveal")
+}
+
+func (keys *uncertainProbeKeys) ReconcileCreatedKey(ctx context.Context, _ configstore.AuthRecord, name, groupID string) (upstreamsync.CreatedKey, bool, error) {
+	if ctx.Err() != nil {
+		return upstreamsync.CreatedKey{}, false, errors.New("reconciliation used cancelled request context")
+	}
+	keys.reconciled++
+	return upstreamsync.CreatedKey{KeyID: "91", Name: name, GroupID: groupID, Secret: "probe-secret"}, true, nil
+}
+
+func (keys *uncertainProbeKeys) DeleteKey(ctx context.Context, _ configstore.AuthRecord, keyID string) error {
+	if ctx.Err() != nil {
+		return errors.New("cleanup used cancelled request context")
+	}
+	if keyID != "91" {
+		return fmt.Errorf("unexpected key ID %s", keyID)
+	}
+	keys.deleted++
+	return nil
 }
 
 func (keys *checkingKeys) CreateKeyWithVerification(_ context.Context, _ configstore.AuthRecord, _, _ string, verification bool) (upstreamsync.CreatedKey, error) {
@@ -112,9 +225,36 @@ func (keys *checkingKeys) checkNoTransaction() error {
 	return err
 }
 
+func (keys *uncertainKeys) CreateKey(_ context.Context, _ configstore.AuthRecord, name, _ string) (upstreamsync.CreatedKey, error) {
+	keys.creates++
+	keys.name = name
+	return upstreamsync.CreatedKey{}, &upstreamsync.CommitUnknownError{Marker: name, Cause: errors.New("connection reset")}
+}
+
+func (keys *uncertainKeys) CreateKeyWithVerification(ctx context.Context, record configstore.AuthRecord, name, groupID string, _ bool) (upstreamsync.CreatedKey, error) {
+	return keys.CreateKey(ctx, record, name, groupID)
+}
+
+func (keys *uncertainKeys) ReconcileCreatedKey(_ context.Context, _ configstore.AuthRecord, name, groupID string) (upstreamsync.CreatedKey, bool, error) {
+	keys.reconciles++
+	if keys.reconcileErr != nil {
+		return upstreamsync.CreatedKey{}, false, keys.reconcileErr
+	}
+	if name != keys.name || !keys.resolved {
+		return upstreamsync.CreatedKey{}, false, nil
+	}
+	return upstreamsync.CreatedKey{KeyID: "91", Name: name, GroupID: groupID, Secret: "recovered-secret"}, true, nil
+}
+
+func (keys *uncertainKeys) RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
+	return upstreamsync.CreatedKey{}, errors.New("unexpected stable-ID reveal")
+}
+
 func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateStore(t *testing.T) {
 	reads := 0
+	var createdBody map[string]any
 	const upstreamBaseURL = "http://192.0.2.10:8443/accelerated"
+	accountBaseURL := "https://account-api.example/v1"
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if request.Header.Get("X-API-Key") != "admin-key" {
@@ -122,6 +262,8 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 			return
 		}
 		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			var body map[string]any
 			decoder := json.NewDecoder(request.Body)
@@ -133,8 +275,8 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 			if credentials["api_key"] != "never-store-this" {
 				t.Errorf("remote account did not receive the one-time secret: %#v", credentials)
 			}
-			if credentials["base_url"] != upstreamBaseURL {
-				t.Errorf("remote account base_url = %#v, want %q", credentials["base_url"], upstreamBaseURL)
+			if credentials["base_url"] != accountBaseURL {
+				t.Errorf("remote account base_url = %#v, want %q", credentials["base_url"], accountBaseURL)
 			}
 			if body["concurrency"] != json.Number("10") || body["priority"] != json.Number("1") {
 				t.Errorf("remote account defaults = concurrency %#v priority %#v", body["concurrency"], body["priority"])
@@ -142,12 +284,15 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 			if _, present := body["load_factor"]; present {
 				t.Errorf("remote account must leave load_factor unset: %#v", body["load_factor"])
 			}
+			createdBody = body
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			createdBody["schedulable"] = false
 			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"upstream-0.2","group_ids":[3],"schedulable":false,"rate_multiplier":0.2}}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
 			reads++
-			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"upstream-0.2","group_ids":[3],"schedulable":false,"rate_multiplier":0.2}}`))
+			createdBody["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": createdBody})
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -165,12 +310,12 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 	service := New(repository, private, keys, nil)
 	result, err := service.Onboard(context.Background(), Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
-		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		UpstreamGroupID: "6", BaseURL: &accountBaseURL, Schedulable: false, Actor: "operator",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["account_id"] != "77" || result["readback_confirmed"] != false || keys.createCalls != 1 || keys.revealCalls != 0 || reads != 0 || len(keys.verification) != 0 {
+	if result["account_id"] != "77" || result["readback_confirmed"] != true || keys.createCalls != 1 || keys.revealCalls != 0 || reads != 2 || len(keys.verification) != 1 || !keys.verification[0] {
 		t.Fatalf("result=%#v keys=%#v", result, keys)
 	}
 	database, err := sql.Open("sqlite", "file:"+databasePath)
@@ -210,10 +355,93 @@ func TestValidateUsesCatalogConvertedMultiplierWithoutClientInput(t *testing.T) 
 	}
 }
 
+func TestOnboardWaitsForCreationCatalogAndUpstreamLeases(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		resource func() string
+	}{
+		{name: "account catalog", resource: mutationguard.AccountCatalog},
+		{name: "stable upstream", resource: func() string { return mutationguard.Upstream("HTTPS://UPSTREAM.TEST/") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository, private, _ := onboardingFixture(t, "https://admin.example")
+			_, release, err := mutationguard.Acquire(context.Background(), repository, test.resource())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = release() }()
+			keys := &probeKeys{}
+			ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+			defer cancel()
+			result, err := New(repository, private, keys, nil).Onboard(ctx, Request{
+				Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+				UpstreamGroupID: "6", Actor: "operator",
+			})
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if keys.creates != 0 {
+				t.Fatalf("created %d keys before acquiring %s lease", keys.creates, test.name)
+			}
+		})
+	}
+}
+
+func TestOnboardWaitsForExistingAccountLeaseBeforeRemoteGroupWrite(t *testing.T) {
+	var adminCalls atomic.Int32
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		adminCalls.Add(1)
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','existing','upstream.test','sub2api','{}','now')`,
+		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','pro-key','pro','6','codex','active','now')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			_ = database.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Account("77"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = release() }()
+	keys := &probeKeys{}
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+	defer cancel()
+	result, err := New(repository, private, keys, nil).Onboard(ctx, Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"4"},
+		UpstreamGroupID: "6", AccountIDs: []string{"77"}, Actor: "operator",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if calls := adminCalls.Load(); calls != 0 {
+		t.Fatalf("remote account API called %d times before acquiring account lease", calls)
+	}
+	if keys.creates != 0 {
+		t.Fatalf("created %d keys while updating an existing account", keys.creates)
+	}
+}
+
 func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
+	var createdBody map[string]any
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			var body map[string]any
 			decoder := json.NewDecoder(request.Body)
@@ -225,8 +453,13 @@ func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
 			if len(groups) != 2 || groups[0] != json.Number("3") || groups[1] != json.Number("4") {
 				t.Errorf("group_ids=%#v", body["group_ids"])
 			}
+			createdBody = body
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			createdBody["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": createdBody})
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			createdBody["schedulable"] = false
 			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"upstream-0.2","group_ids":[3,4],"schedulable":false,"rate_multiplier":0.2}}`))
 		default:
 			writer.WriteHeader(http.StatusNotFound)
@@ -258,6 +491,7 @@ func TestOnboardCreatesOneAccountInEverySelectedLocalGroup(t *testing.T) {
 
 func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing.T) {
 	reads := 0
+	const accountBaseURL = "https://account-api.example/v1"
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
@@ -267,7 +501,11 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 			if reads > 1 {
 				groups = `[4]`
 			}
-			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"existing","group_ids":` + groups + `}}`))
+			credentials := `{"base_url":"https://old.example/v1"}`
+			if reads > 1 {
+				credentials = `{"base_url":"` + accountBaseURL + `"}`
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"existing","group_ids":` + groups + `,"credentials":` + credentials + `}}`))
 		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/77":
 			var body map[string]any
 			decoder := json.NewDecoder(request.Body)
@@ -278,6 +516,10 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 			groups, _ := body["group_ids"].([]any)
 			if len(groups) != 1 || groups[0] != json.Number("4") {
 				t.Errorf("group_ids=%#v", body["group_ids"])
+			}
+			credentials, _ := body["credentials"].(map[string]any)
+			if credentials["base_url"] != accountBaseURL {
+				t.Errorf("credentials=%#v", credentials)
 			}
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
 		default:
@@ -302,9 +544,10 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 	}
 	_ = database.Close()
 	keys := &checkingKeys{databasePath: databasePath}
+	baseURL := accountBaseURL
 	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"4"},
-		UpstreamGroupID: "6", AccountIDs: []string{"77"}, Actor: "operator",
+		UpstreamGroupID: "6", AccountIDs: []string{"77"}, BaseURL: &baseURL, Actor: "operator",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -317,15 +560,124 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 		t.Fatal(err)
 	}
 	defer database.Close()
-	var groupID, bindingGroup string
+	var groupID, bindingGroup, metadataRaw string
 	if err := database.QueryRow(`SELECT group_id FROM account_groups WHERE account_id='77'`).Scan(&groupID); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.QueryRow(`SELECT local_group FROM bindings WHERE local_account_id='77'`).Scan(&bindingGroup); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.QueryRow(`SELECT metadata_json FROM accounts WHERE id='77'`).Scan(&metadataRaw); err != nil {
+		t.Fatal(err)
+	}
 	if groupID != "4" || bindingGroup != "pro" {
 		t.Fatalf("groupID=%q bindingGroup=%q", groupID, bindingGroup)
+	}
+	if !strings.Contains(metadataRaw, `"base_url":"`+accountBaseURL+`"`) || !strings.Contains(metadataRaw, `"base_url_source":"explicit"`) {
+		t.Fatalf("metadata=%s", metadataRaw)
+	}
+}
+
+func TestExistingAccountGroupUpdateReportsEarlierWritesWhenLaterReadFails(t *testing.T) {
+	reads := 0
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			reads++
+			groups := `[3]`
+			if reads > 1 {
+				groups = `[4]`
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"first","group_ids":` + groups + `}}`))
+		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/77":
+			_, _ = writer.Write([]byte(`{"success":true}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/78":
+			http.Error(writer, `{"message":"account unavailable"}`, http.StatusServiceUnavailable)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','first','upstream.test','sub2api','{}','now')`,
+		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('78','second','upstream.test','sub2api','{}','now')`,
+		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
+		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('78','codex','3')`,
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','first-key','pro','6','codex','active','now')`,
+		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('78','upstream.test','92','second-key','pro','6','codex','active','now')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			_ = database.Close()
+			t.Fatal(err)
+		}
+	}
+	_ = database.Close()
+	groupID := "6"
+	result, err := New(repository, private, &probeKeys{}, nil).updateAccountGroups(context.Background(), validatedRequest{
+		request:   Request{AccountIDs: []string{"77", "78"}, Actor: "operator"},
+		locals:    []business.LocalOnboardingGroup{{ID: "4", Name: "pro"}},
+		candidate: business.OnboardingCandidate{GroupID: &groupID, GroupName: "pro"},
+	})
+	if err == nil {
+		t.Fatal("later account read failure was accepted")
+	}
+	accounts, ok := result["accounts"].([]map[string]any)
+	if result["remote_write"] != true || result["readback_confirmed"] != false || !ok || len(accounts) != 1 || accounts[0]["account_id"] != "77" {
+		t.Fatalf("partial update result=%#v err=%v", result, err)
+	}
+}
+
+func TestExistingAccountGroupUpdateReportsFailureAuditError(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"existing","group_ids":[3]}}`))
+		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/77":
+			http.Error(writer, `{"message":"remote update failed"}`, http.StatusInternalServerError)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, _ := onboardingFixture(t, admin.URL)
+	groupID := "6"
+	service := New(accountAuditFailingOnboardingRepository{Repository: repository}, private, &probeKeys{}, nil)
+	result, err := service.updateAccountGroups(context.Background(), validatedRequest{
+		request:   Request{AccountIDs: []string{"77"}, Actor: "operator"},
+		locals:    []business.LocalOnboardingGroup{{ID: "4", Name: "pro"}},
+		candidate: business.OnboardingCandidate{GroupID: &groupID, GroupName: "pro"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "account audit unavailable") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result["remote_write"] != true || result["readback_confirmed"] != false {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestOnboardingFailureAuditOutlivesCancelledWorkContext(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	observing := &observingAccountAuditOnboardingRepository{Repository: repository}
+	service := New(observing, private, &probeKeys{}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	groupID := "6"
+	service.recordFailure(ctx, "operation-1", validatedRequest{
+		request:        Request{Actor: "operator"},
+		locals:         []business.LocalOnboardingGroup{{ID: "4", Name: "pro"}},
+		candidate:      business.OnboardingCandidate{GroupID: &groupID, GroupName: "pro"},
+		auth:           configstore.AuthRecord{Host: "upstream.test"},
+		accountBaseURL: "https://account.example",
+	}, "remote-write", true, errors.New("remote failed"))
+	if observing.contextErr != nil {
+		t.Fatalf("failure audit inherited cancelled context: %v", observing.contextErr)
 	}
 }
 
@@ -383,6 +735,126 @@ func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 		t.Fatalf("accounts=%d err=%v", accounts, err)
 	}
 	assertSecretAbsent(t, databasePath, "probe-secret")
+}
+
+func TestProbeHoldsCanonicalUpstreamLeaseUntilTemporaryKeyCleanupFinishes(t *testing.T) {
+	requestStarted := make(chan struct{})
+	allowResponse := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		<-allowResponse
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"id":"gpt-5.2"}]}`))
+	}))
+	defer gateway.Close()
+	repository, private, _ := onboardingFixture(t, gateway.URL)
+	token := "upstream-token"
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "upstream.test", BaseURL: gateway.URL, UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	keys := &blockingProbeKeys{
+		probeKeys: &probeKeys{}, deleteStarted: make(chan struct{}), allowDelete: make(chan struct{}),
+	}
+	probeDone := make(chan error, 1)
+	go func() {
+		_, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "HTTPS://UPSTREAM.TEST/", "6")
+		probeDone <- err
+	}()
+	<-requestStarted
+	secondAcquired := make(chan func() error, 1)
+	go func() {
+		_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Upstream("upstream.test"))
+		if err != nil {
+			secondAcquired <- func() error { return err }
+			return
+		}
+		secondAcquired <- release
+	}()
+	select {
+	case <-secondAcquired:
+		t.Fatal("canonical upstream lease was released while the probe request was active")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(allowResponse)
+	<-keys.deleteStarted
+	select {
+	case <-secondAcquired:
+		t.Fatal("canonical upstream lease was released before temporary Key cleanup finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(keys.allowDelete)
+	if err := <-probeDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case release := <-secondAcquired:
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting upstream mutation did not resume after probe cleanup")
+	}
+}
+
+func TestProbeRequestCancellationStillCleansTemporaryKey(t *testing.T) {
+	requestStarted := make(chan struct{})
+	gateway := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	defer gateway.Close()
+	repository, private, _ := onboardingFixture(t, gateway.URL)
+	token := "upstream-token"
+	if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{
+		Host: "upstream.test", BaseURL: gateway.URL, UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	keys := &probeKeys{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(repository, private, keys, nil).ProbeModels(ctx, "upstream.test", "6")
+		done <- err
+	}()
+	<-requestStarted
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || keys.creates != 1 || keys.deletes != 1 {
+			t.Fatalf("err=%v creates=%d deletes=%d", err, keys.creates, keys.deletes)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled probe did not finish cleanup")
+	}
+}
+
+func TestProbeCommitUnknownUsesIndependentMarkerReconciliationAndCleanup(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://gateway.invalid")
+	keys := &uncertainProbeKeys{createStarted: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(repository, private, keys, nil).ProbeModels(ctx, "HTTPS://UPSTREAM.TEST/", "6")
+		done <- err
+	}()
+	<-keys.createStarted
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil || keys.reconciled != 1 || keys.deleted != 1 {
+			t.Fatalf("err=%v reconciled=%d deleted=%d", err, keys.reconciled, keys.deleted)
+		}
+		if keys.marker != probeKeyMarker("upstream.test", "6") || keys.marker != probeKeyMarker("HTTPS://UPSTREAM.TEST/", "6") {
+			t.Fatalf("marker=%q", keys.marker)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("commit-unknown probe did not reconcile and clean up")
+	}
 }
 
 func TestProbeIgnoresTemporaryKeyLeftInLocalCatalog(t *testing.T) {
@@ -511,18 +983,28 @@ func TestProbeCleansTemporaryKeyWhenGatewayFails(t *testing.T) {
 	}
 }
 
-func TestOnboardIgnoresAutomaticSchedulingWritebackVerification(t *testing.T) {
+func TestOnboardAlwaysVerifiesSchedulingWithFullReadback(t *testing.T) {
 	reads := 0
+	var createdBody map[string]any
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&createdBody); err != nil {
+				t.Fatal(err)
+			}
 			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			createdBody["schedulable"] = false
 			_, _ = writer.Write([]byte(`{"success":true}`))
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
 			reads++
-			_, _ = writer.Write([]byte(`{"data":{"id":77,"name":"upstream-0.2","group_ids":[3],"schedulable":false,"rate_multiplier":0.2}}`))
+			createdBody["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": createdBody})
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -542,7 +1024,7 @@ func TestOnboardIgnoresAutomaticSchedulingWritebackVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["readback_confirmed"] != false || reads != 0 || len(keys.verification) != 0 {
+	if result["remote_write"] != true || result["readback_confirmed"] != true || reads != 2 || len(keys.verification) != 1 || !keys.verification[0] {
 		t.Fatalf("result=%#v reads=%d verification=%v", result, reads, keys.verification)
 	}
 }
@@ -584,6 +1066,481 @@ func TestOnboardReusesPendingKeyAfterRemoteAccountFailure(t *testing.T) {
 	assertSecretAbsent(t, databasePath, "never-store-this")
 }
 
+func TestOnboardRejectsChangedRetryAgainstFrozenCreationIntent(t *testing.T) {
+	var accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts" {
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+			return
+		}
+		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts" {
+			accountPosts++
+			http.Error(writer, `{"message":"validation rejected"}`, http.StatusUnprocessableEntity)
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	if _, err := service.Onboard(context.Background(), request); err == nil {
+		t.Fatal("first explicit account failure must remain pending")
+	}
+	request.Schedulable = true
+	_, err := service.Onboard(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "首次冻结的开户意图不一致") {
+		t.Fatalf("err=%v", err)
+	}
+	if accountPosts != 1 || keys.createCalls != 1 || keys.revealCalls != 0 {
+		t.Fatalf("accountPosts=%d create=%d reveal=%d", accountPosts, keys.createCalls, keys.revealCalls)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var intentHash string
+	if err := database.QueryRow(`SELECT intent_hash FROM onboarding_pending`).Scan(&intentHash); err != nil || len(intentHash) != 64 {
+		t.Fatalf("intentHash=%q err=%v", intentHash, err)
+	}
+}
+
+func TestOnboardReusesPendingIdentityWhenLocalGroupOrderChanges(t *testing.T) {
+	var accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			http.Error(writer, `{"message":"validation rejected"}`, http.StatusUnprocessableEntity)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"4", "3"},
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	first, firstErr := service.Onboard(context.Background(), request)
+	if firstErr == nil {
+		t.Fatal("first explicit account failure must remain pending")
+	}
+	request.LocalGroupIDs = []string{"3", "4"}
+	second, secondErr := service.Onboard(context.Background(), request)
+	if secondErr == nil {
+		t.Fatal("second explicit account failure must remain pending")
+	}
+	firstPending, firstOK := first["pending"].(map[string]any)
+	secondPending, secondOK := second["pending"].(map[string]any)
+	if !firstOK || !secondOK || firstPending["operation_id"] != secondPending["operation_id"] {
+		t.Fatalf("first=%#v second=%#v", first, second)
+	}
+	if first["remote_write"] != true || second["remote_write"] != true || keys.createCalls != 1 || keys.revealCalls != 1 || accountPosts != 2 {
+		t.Fatalf("first=%#v second=%#v create=%d reveal=%d posts=%d", first, second, keys.createCalls, keys.revealCalls, accountPosts)
+	}
+	var selection string
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.QueryRow(`SELECT local_group_ids_json FROM onboarding_pending`).Scan(&selection); err != nil {
+		t.Fatal(err)
+	}
+	if selection != `["3","4"]` {
+		t.Fatalf("selection=%q", selection)
+	}
+}
+
+func TestOnboardMultiplierChangeFindsFrozenPendingBeforeAnyNewRemoteCall(t *testing.T) {
+	var accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			http.Error(writer, `{"message":"validation rejected"}`, http.StatusUnprocessableEntity)
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	if _, err := service.Onboard(context.Background(), request); err == nil {
+		t.Fatal("first explicit account failure must remain pending")
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE upstream_groups SET raw_rate='0.3',effective_rate='0.3' WHERE host='upstream.test' AND group_id='6'`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Onboard(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "首次冻结的开户意图不一致") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result["remote_write"] != true || keys.createCalls != 1 || keys.revealCalls != 0 || accountPosts != 1 {
+		t.Fatalf("result=%#v create=%d reveal=%d posts=%d", result, keys.createCalls, keys.revealCalls, accountPosts)
+	}
+}
+
+func TestOnboardRejectsPendingWithoutFrozenIntentBeforeRemoteCalls(t *testing.T) {
+	var adminCalls int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		adminCalls++
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`INSERT INTO onboarding_pending(
+		operation_id,upstream_host,upstream_type,upstream_key_id,upstream_key_name,upstream_group_id,upstream_group_name,
+		local_group_id,local_group_name,local_group_ids_json,multiplier,intent_hash,reason,created_at,updated_at
+	) VALUES('incomplete','upstream.test','sub2api','91','legacy-marker','6','pro','3','codex','["3"]','0.2','','incomplete','now','now')`)
+	if err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	keys := &checkingKeys{databasePath: databasePath}
+	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	})
+	if err == nil || !strings.Contains(err.Error(), "缺少首次冻结意图") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if keys.createCalls != 0 || keys.revealCalls != 0 || adminCalls != 0 {
+		t.Fatalf("create=%d reveal=%d adminCalls=%d", keys.createCalls, keys.revealCalls, adminCalls)
+	}
+}
+
+func TestOnboardPersistsUnknownKeyIntentAndNeverBlindlyCreatesAgain(t *testing.T) {
+	var createdBody map[string]any
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&createdBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			createdBody["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": createdBody})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			createdBody["schedulable"] = false
+			_, _ = writer.Write([]byte(`{"success":true}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &uncertainKeys{}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	first, err := service.Onboard(context.Background(), request)
+	if err == nil {
+		t.Fatal("unknown Key commit must remain pending")
+	}
+	if first["remote_write"] != true {
+		t.Fatalf("first result=%#v err=%v", first, err)
+	}
+	mismatched := request
+	mismatched.Schedulable = true
+	mismatchResult, err := service.Onboard(context.Background(), mismatched)
+	if err == nil || !strings.Contains(err.Error(), "首次冻结的开户意图不一致") {
+		t.Fatalf("mismatch result=%#v err=%v", mismatchResult, err)
+	}
+	if mismatchResult["remote_write"] != true || keys.reconciles != 0 {
+		t.Fatalf("mismatch result=%#v reconciles=%d", mismatchResult, keys.reconciles)
+	}
+	keys.reconcileErr = errors.New("inventory unavailable")
+	second, err := service.Onboard(context.Background(), request)
+	if err == nil {
+		t.Fatal("failed Key reconciliation must remain fail-closed")
+	}
+	if second["remote_write"] != true {
+		t.Fatalf("second result=%#v err=%v", second, err)
+	}
+	if keys.creates != 1 || keys.reconciles != 1 {
+		t.Fatalf("creates=%d reconciles=%d", keys.creates, keys.reconciles)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keyID string
+	var keyUnknown bool
+	if err := database.QueryRow(`SELECT upstream_key_id,key_commit_unknown FROM onboarding_pending`).Scan(&keyID, &keyUnknown); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if keyID != "" || !keyUnknown {
+		database.Close()
+		t.Fatalf("keyID=%q keyUnknown=%t", keyID, keyUnknown)
+	}
+	var remoteConfirmedFailures int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM operation_audit
+		WHERE operation_id=(SELECT operation_id FROM onboarding_pending LIMIT 1)
+		AND operation_type='account.onboarding' AND state='failed' AND remote_confirmed=1`).Scan(&remoteConfirmedFailures); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if remoteConfirmedFailures != 2 {
+		database.Close()
+		t.Fatalf("remote-confirmed failure audits=%d", remoteConfirmedFailures)
+	}
+	_ = database.Close()
+
+	keys.reconcileErr = nil
+	keys.resolved = true
+	result, err := service.Onboard(context.Background(), request)
+	if err != nil || result["account_id"] != "77" || keys.creates != 1 || keys.reconciles != 2 {
+		t.Fatalf("result=%#v err=%v creates=%d reconciles=%d", result, err, keys.creates, keys.reconciles)
+	}
+}
+
+func TestOnboardReconcilesUnknownAccountCommitBeforeAnySecondCreate(t *testing.T) {
+	var account map[string]any
+	var visible bool
+	var failCatalog bool
+	var posts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			if failCatalog {
+				http.Error(writer, `{"message":"catalog unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
+			items := []map[string]any{}
+			if visible && account != nil {
+				items = append(items, account)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": map[string]any{"items": items, "total": len(items)}})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			posts++
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&account); err != nil {
+				t.Fatal(err)
+			}
+			account["id"] = json.Number("77")
+			hijacker, ok := writer.(http.Hijacker)
+			if !ok {
+				t.Fatal("test server does not support hijacking")
+			}
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = connection.Close()
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			account["schedulable"] = false
+			_, _ = writer.Write([]byte(`{"success":true}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": account})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	if _, err := service.Onboard(context.Background(), request); err == nil {
+		t.Fatal("unknown account commit must remain pending")
+	}
+	failCatalog = true
+	if _, err := service.Onboard(context.Background(), request); err == nil {
+		t.Fatal("failed account reconciliation must remain fail-closed")
+	}
+	if posts != 1 {
+		t.Fatalf("account create posts=%d", posts)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accountUnknown bool
+	if err := database.QueryRow(`SELECT account_commit_unknown FROM onboarding_pending`).Scan(&accountUnknown); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	_ = database.Close()
+	if !accountUnknown {
+		t.Fatal("account commit-unknown state was not persisted")
+	}
+
+	failCatalog = false
+	visible = true
+	result, err := service.Onboard(context.Background(), request)
+	if err != nil || result["account_id"] != "77" || posts != 1 {
+		t.Fatalf("result=%#v err=%v posts=%d", result, err, posts)
+	}
+}
+
+func TestOnboardRequiresCompleteAccountReadbackAndReusesStoredAccountID(t *testing.T) {
+	var createdBody map[string]any
+	var accountPosts, schedulePosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&createdBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			readback := make(map[string]any, len(createdBody)+1)
+			for key, value := range createdBody {
+				readback[key] = value
+			}
+			readback["id"] = json.Number("77")
+			readback["concurrency"] = json.Number("999")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": readback})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			schedulePosts++
+			_, _ = writer.Write([]byte(`{"success":true}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := service.Onboard(context.Background(), request); err == nil || !strings.Contains(err.Error(), "并发不一致") {
+			t.Fatalf("attempt=%d err=%v", attempt+1, err)
+		}
+	}
+	if accountPosts != 1 || schedulePosts != 0 || keys.createCalls != 1 || keys.revealCalls != 1 {
+		t.Fatalf("accountPosts=%d schedulePosts=%d create=%d reveal=%d", accountPosts, schedulePosts, keys.createCalls, keys.revealCalls)
+	}
+}
+
+func TestOnboardRejectsFrozenFieldMismatchAfterSchedulingReadback(t *testing.T) {
+	var createdBody map[string]any
+	var accountPosts, schedulePosts, detailReads int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&createdBody); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = writer.Write([]byte(`{"data":{"id":77}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/77/schedulable":
+			schedulePosts++
+			createdBody["schedulable"] = false
+			_, _ = writer.Write([]byte(`{"success":true}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/77":
+			detailReads++
+			readback := make(map[string]any, len(createdBody)+1)
+			for key, value := range createdBody {
+				readback[key] = value
+			}
+			readback["id"] = json.Number("77")
+			if detailReads == 2 {
+				readback["priority"] = json.Number("999")
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": readback})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	})
+	if err == nil || !strings.Contains(err.Error(), "优先级不一致") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result["remote_write"] != true || accountPosts != 1 || schedulePosts != 1 || detailReads != 2 {
+		t.Fatalf("result=%#v accountPosts=%d schedulePosts=%d detailReads=%d", result, accountPosts, schedulePosts, detailReads)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var accountID string
+	if err := database.QueryRow(`SELECT upstream_account_id FROM onboarding_pending`).Scan(&accountID); err != nil {
+		t.Fatal(err)
+	}
+	if accountID != "77" {
+		t.Fatalf("pending account ID=%q", accountID)
+	}
+	var localAccounts int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM accounts WHERE id='77'`).Scan(&localAccounts); err != nil {
+		t.Fatal(err)
+	}
+	if localAccounts != 0 {
+		t.Fatalf("local accounts=%d", localAccounts)
+	}
+}
+
 func TestEnqueueBatchRejectsDuplicateUpstreamGroupsBeforeStarting(t *testing.T) {
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
@@ -607,6 +1564,16 @@ func TestEnqueueBatchRequiresABoundedSelection(t *testing.T) {
 	}
 	if _, err := service.EnqueueBatch(context.Background(), make([]Request, 51)); err == nil {
 		t.Fatal("oversized batch should fail")
+	}
+}
+
+func TestBatchItemResultPreservesRemoteWriteAndPendingDetails(t *testing.T) {
+	pending := map[string]any{"operation_id": "pending-1", "key_commit_unknown": true}
+	row := map[string]any{"status": "失败"}
+	mergeBatchItemResult(row, map[string]any{"remote_write": true, "pending": pending})
+	actualPending, ok := row["pending"].(map[string]any)
+	if row["remote_write"] != true || !ok || actualPending["operation_id"] != "pending-1" || actualPending["key_commit_unknown"] != true {
+		t.Fatalf("batch item result=%#v", row)
 	}
 }
 
@@ -642,6 +1609,24 @@ func TestAccountCreationParametersUseSharedDefaultsAndAllowPerAccountOverrides(t
 	}
 }
 
+func TestStableIDsUseNumericOrderAndRejectUnsupportedRange(t *testing.T) {
+	ids, err := stableIDs([]any{json.Number("10"), json.Number("2")})
+	if err != nil || strings.Join(ids, ",") != "2,10" {
+		t.Fatalf("ids=%#v err=%v", ids, err)
+	}
+	if !stableID("9223372036854775807") || stableID("9223372036854775808") {
+		t.Fatal("stable IDs must be positive signed int64 values")
+	}
+	for _, invalid := range []string{"0", "-1", "01"} {
+		if stableID(invalid) {
+			t.Fatalf("stableID(%q)=true", invalid)
+		}
+	}
+	if _, err := stableIDs([]any{json.Number("9223372036854775808")}); err == nil || !strings.Contains(err.Error(), "无效稳定 ID") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
 	database, err := sql.Open("sqlite", "file:"+databasePath)
@@ -652,8 +1637,8 @@ func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.
 		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,metadata_json,updated_at)
 			VALUES('41','upstream.test','bound-key','bound','codex','{}','now')`,
 		`INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,upstream_key_id,upstream_key_name,
-			upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,reason,created_at,updated_at)
-			VALUES('pending-1','upstream.test','sub2api','pending-key','pending','6','pro','3','codex','0.2','retry','now','now')`,
+			upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,intent_hash,reason,created_at,updated_at)
+			VALUES('pending-1','upstream.test','sub2api','pending-key','pending','6','pro','3','codex','0.2','test-intent','retry','now','now')`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
 			database.Close()
@@ -696,6 +1681,231 @@ func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.
 	}
 	if strings.Join(keys.deleteIDs, ",") != "unused-key" {
 		t.Fatalf("deleted=%#v", keys.deleteIDs)
+	}
+	database, err = sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var eventStatus, payloadRaw string
+	if err := database.QueryRow(`SELECT status,payload_json FROM runtime_events
+		WHERE event_type='upstream.key.cleanup' ORDER BY source_id LIMIT 1`).Scan(&eventStatus, &payloadRaw); err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadRaw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if eventStatus != "succeeded" || payload["key_id"] != "unused-key" || payload["remote_write"] != true ||
+		payload["remote_confirmed"] != true || payload["readback_confirmed"] != true {
+		t.Fatalf("event status=%q payload=%#v", eventStatus, payload)
+	}
+}
+
+func TestKeyCleanupReportsAuditFailureAfterConfirmedDelete(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	groupID, status := "6", "active"
+	keys := &probeKeys{catalog: []business.UpstreamCatalogKey{{
+		KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status,
+	}}}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(auditFailingOnboardingRepository{Repository: repository}, private, keys, tasks)
+	queued, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.ID != queued.ID || completed.Status != "failed" || completed.Result["deleted"] != 1 || completed.Result["audit_failed"] != 1 {
+			t.Fatalf("completed=%#v", completed)
+		}
+		items, ok := completed.Result["items"].([]map[string]any)
+		if !ok || len(items) != 1 || items[0]["status"] != "deleted" || !strings.Contains(fmt.Sprint(items[0]["audit_error"]), "audit unavailable") {
+			t.Fatalf("items=%#v", completed.Result["items"])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup task did not complete")
+	}
+	if strings.Join(keys.deleteIDs, ",") != "unused-key" {
+		t.Fatalf("remote delete fact was lost: %#v", keys.deleteIDs)
+	}
+}
+
+func TestKeyCleanupRequiresAbsentReadbackAfterDelete(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	groupID, status := "6", "active"
+	keys := &probeKeys{
+		catalog:         []business.UpstreamCatalogKey{{KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status}},
+		keepAfterDelete: true,
+	}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(repository, private, keys, tasks)
+	if _, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.Status != "failed" || completed.Result["deleted"] != 0 || completed.Result["failed"] != 1 {
+			t.Fatalf("completed=%#v", completed)
+		}
+		items := completed.Result["items"].([]map[string]any)
+		if !strings.Contains(fmt.Sprint(items[0]["reason"]), "仍可读") {
+			t.Fatalf("items=%#v", items)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup task did not complete")
+	}
+}
+
+func TestKeyCleanupUsesReadbackWhenDeleteReturnsError(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	groupID, status := "6", "active"
+	keys := &probeKeys{
+		catalog:   []business.UpstreamCatalogKey{{KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status}},
+		deleteErr: errors.New("connection reset after write"), commitOnDeleteError: true,
+	}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(repository, private, keys, tasks)
+	if _, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.Status != "succeeded" || completed.Result["deleted"] != 1 || completed.Result["failed"] != 0 {
+			t.Fatalf("completed=%#v", completed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup task did not complete")
+	}
+}
+
+func TestKeyCleanupReportsUnknownPostDeleteReadback(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	groupID, status := "6", "active"
+	keys := &probeKeys{
+		catalog:    []business.UpstreamCatalogKey{{KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status}},
+		listErrors: []error{nil, nil, errors.New("readback unavailable")},
+	}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(repository, private, keys, tasks)
+	if _, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.Status != "failed" || completed.Result["deleted"] != 0 || completed.Result["failed"] != 1 {
+			t.Fatalf("completed=%#v", completed)
+		}
+		items := completed.Result["items"].([]map[string]any)
+		if !strings.Contains(fmt.Sprint(items[0]["reason"]), "结果未知") {
+			t.Fatalf("items=%#v", items)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup task did not complete")
+	}
+}
+
+func TestKeyCleanupWaitsForCanonicalUpstreamLease(t *testing.T) {
+	repository, private, _ := onboardingFixture(t, "https://admin.example")
+	groupID, status := "6", "active"
+	keys := &probeKeys{catalog: []business.UpstreamCatalogKey{{
+		KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status,
+	}}}
+	tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+	service := New(repository, private, keys, tasks)
+	if _, err := repository.Upstreams(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Upstream("HTTPS://UPSTREAM.TEST/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := service.EnqueueKeyCleanup(context.Background(), "upstream.test", []string{"unused-key"}, "tester")
+	if err != nil {
+		_ = release()
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		_ = release()
+		t.Fatalf("cleanup bypassed canonical upstream lease: %#v", completed)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if len(keys.deleteIDs) != 0 {
+		_ = release()
+		t.Fatalf("deleted while upstream lease was held: %#v", keys.deleteIDs)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case completed := <-tasks.final:
+		if completed.ID != queued.ID || completed.Status != "succeeded" || completed.Result["deleted"] != 1 {
+			t.Fatalf("completed=%#v", completed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup did not resume after canonical upstream lease release")
+	}
+}
+
+func TestKeyCleanupDistinguishesCancellationFromLeaseFailure(t *testing.T) {
+	for _, testCase := range []struct {
+		name              string
+		cause             error
+		expectedStatus    string
+		expectedErrorText string
+	}{
+		{name: "ordinary cancellation", cause: context.Canceled, expectedStatus: "cancelled"},
+		{name: "lease failure", cause: errors.New("变更租约已失效"), expectedStatus: "failed", expectedErrorText: "变更租约已失效"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository, private, _ := onboardingFixture(t, "https://admin.example")
+			groupID, status := "6", "active"
+			keys := &blockingProbeKeys{
+				probeKeys: &probeKeys{catalog: []business.UpstreamCatalogKey{{
+					KeyID: "unused-key", Name: "unused", UpstreamGroup: &groupID, Status: &status,
+				}}},
+				deleteStarted: make(chan struct{}), allowDelete: make(chan struct{}),
+			}
+			tasks := &cleanupTaskStore{final: make(chan taskstore.Task, 1)}
+			service := New(repository, private, keys, tasks)
+			task, err := service.newQueuedTask("upstream-key-cleanup", "1 个无绑定上游 Key 清理已排队")
+			if err != nil {
+				t.Fatal(err)
+			}
+			parent, cancel := context.WithCancelCause(context.Background())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				service.executeKeyCleanup(parent, task, "upstream.test", []string{"unused-key"}, "tester")
+			}()
+			select {
+			case <-keys.deleteStarted:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cleanup did not reach the remote delete")
+			}
+			cancel(testCase.cause)
+			select {
+			case completed := <-tasks.final:
+				if completed.Status != testCase.expectedStatus {
+					t.Fatalf("completed=%#v", completed)
+				}
+				if testCase.expectedStatus == "cancelled" {
+					if completed.Result["cancelled"] != true || completed.Result["error"] != nil {
+						t.Fatalf("cancelled task=%#v", completed)
+					}
+				} else if errorText, _ := completed.Result["error"].(string); !strings.Contains(errorText, testCase.expectedErrorText) || completed.Result["cancelled"] == true {
+					t.Fatalf("failed task=%#v", completed)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("cleanup did not persist a terminal task")
+			}
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cleanup did not release its mutation lease")
+			}
+		})
 	}
 }
 

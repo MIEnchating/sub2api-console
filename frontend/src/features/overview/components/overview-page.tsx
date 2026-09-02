@@ -19,6 +19,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
 import { OverviewActivity } from "./overview-activity";
@@ -221,11 +222,11 @@ export function OverviewPage(props: OverviewPageProps) {
 
   useEffect(() => {
     if (!taskStopsPolling(syncTask.data)) return;
+    for (const queryKey of terminalRefreshKeys("management-sync", syncTask.data)) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
     if (syncTask.data?.status === "succeeded") {
       toast.success("运营数据已同步");
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      void queryClient.invalidateQueries({ queryKey: ["groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["overview"] });
     } else if (syncTask.data?.status === "failed") {
       toast.error(syncTask.data.message || "运营数据同步失败");
     }

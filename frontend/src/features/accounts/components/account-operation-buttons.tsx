@@ -1,4 +1,14 @@
-import { Activity, Ban, LoaderCircle, Pause, Pencil, Pin, Play, RefreshCw } from "lucide-react";
+import {
+  Activity,
+  Ban,
+  LoaderCircle,
+  Pause,
+  Pencil,
+  Pin,
+  Play,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 
 import type { AccountControlAction, AccountStatus } from "@/api";
 import { TableActionButton } from "@/components/data-table/table-action-button";
@@ -18,6 +28,7 @@ export function AccountOperationButtons(props: {
   onRateSync: () => void;
   onManualPriority: () => void;
   onEdit: () => void;
+  onDelete: () => void;
 }) {
   const state = accountPoolState(props.account).value;
   const paused = state === "paused";
@@ -27,12 +38,12 @@ export function AccountOperationButtons(props: {
   const excluded = state === "excluded";
   const manualControlled = props.account.manual_priority != null;
   return (
-    <div className="ml-auto grid w-[7rem] grid-cols-3 gap-1">
+    <div className="ml-auto grid w-[9.5rem] grid-cols-4 gap-1">
       {excluded ? (
         <TableActionButton
           label="恢复管控"
           tone="primary"
-          className="col-span-2 w-full"
+          className="col-span-3 w-full"
           disabled={props.pending || manualControlled}
           onClick={() => props.onControl("include", "恢复管控")}
         >
@@ -97,6 +108,14 @@ export function AccountOperationButtons(props: {
         onClick={props.onEdit}
       >
         <Pencil />
+      </TableActionButton>
+      <TableActionButton
+        label="删除账号及上游 Key"
+        tone="danger"
+        disabled={props.pending}
+        onClick={props.onDelete}
+      >
+        <Trash2 />
       </TableActionButton>
     </div>
   );

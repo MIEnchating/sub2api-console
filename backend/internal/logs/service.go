@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -70,6 +71,7 @@ type Query struct {
 type Service struct {
 	business BusinessReader
 	tasks    TaskReader
+	runner   taskrunner.Runner
 
 	mu      sync.Mutex
 	cache   map[Query]cachedPage
@@ -98,6 +100,8 @@ func New(businessReader BusinessReader, taskReader TaskReader) *Service {
 		loading:  map[Query]chan struct{}{},
 	}
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.runner = runner }
 
 func (s *Service) Query(ctx context.Context, query Query) (Page, error) {
 	if _, ok := map[string]struct{}{"all": {}, "task": {}, "event": {}, "change": {}}[query.Kind]; !ok {
@@ -193,11 +197,17 @@ func (s *Service) currentPage(ctx context.Context, query Query, allowStale bool)
 			return current.page, nil
 		}
 		if exists && allowStale {
+			launch := false
 			if s.loading[query] == nil {
 				s.loading[query] = make(chan struct{})
-				go s.refreshPage(query)
+				launch = true
 			}
 			s.mu.Unlock()
+			if launch {
+				if err := taskrunner.Go(s.runner, func(parent context.Context) { s.refreshPage(parent, query) }); err != nil {
+					s.finishRefresh(query, Page{}, err)
+				}
+			}
 			return current.page, nil
 		}
 		if loading := s.loading[query]; loading != nil {
@@ -221,8 +231,8 @@ func (s *Service) currentPage(ctx context.Context, query Query, allowStale bool)
 	}
 }
 
-func (s *Service) refreshPage(query Query) {
-	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+func (s *Service) refreshPage(parent context.Context, query Query) {
+	ctx, cancel := context.WithTimeout(parent, refreshTimeout)
 	defer cancel()
 	loaded, err := s.loadPage(ctx, query)
 	s.finishRefresh(query, loaded, err)
@@ -528,6 +538,9 @@ func auditActionSummary(changes []business.AuditEvent, objectCount, fieldCount i
 		return "远程读取复核", fmt.Sprintf("读取并复核 %d 个账号，远程状态已符合调度目标", max(objectCount, len(changes)))
 	}
 	if failure != nil {
+		if first.OperationType == "account.delete" {
+			return accountDeleteFailureSummary(first, *failure)
+		}
 		if remoteConfirmed && !readbackConfirmed || first.Phase == "remote-readback" {
 			return "写后复核", "远程写入已提交，写后读取不一致：" + *failure
 		}
@@ -537,6 +550,40 @@ func auditActionSummary(changes []business.AuditEvent, objectCount, fieldCount i
 		return "远程写入与复核", fmt.Sprintf("%d 个对象写入成功，写后复核一致，涉及 %d 个字段", max(objectCount, 1), fieldCount)
 	}
 	return first.OperationType, fmt.Sprintf("%d 条操作记录，涉及 %d 个字段", len(changes), fieldCount)
+}
+
+func accountDeleteFailureSummary(change business.AuditEvent, failure string) (string, string) {
+	switch change.Phase {
+	case "upstream-key-readback":
+		return "上游 Key 删除结果未确认", "上游 Key DELETE 已发出，但删除后读回未确认：" + failure
+	case "upstream-key-reconcile", "upstream-key-secret-reconcile":
+		return "上游 Key 本地对账失败", "上游 Key 已确认不存在，但本地对账未完成：" + failure
+	case "management-readback-still-readable":
+		return "管理账号仍存在", "管理 DELETE 已发出，读回确认账号仍存在：" + failure
+	case "management-readback":
+		return "管理账号删除结果未知", "管理 DELETE 已发出，但删除后读回失败：" + failure
+	case "local-commit":
+		return "本地账号清理失败", "远端删除均已确认，但本地账号记录清理失败：" + failure
+	}
+	if auditAfterBool(change.After, "upstream_key_deleted") {
+		if auditAfterBool(change.After, "upstream_key_delete_requested") {
+			return "部分删除已确认", "上游 Key 删除已确认，后续删除未完成：" + failure
+		}
+		return "远程删除未发出", "上游 Key 已确认不存在，未发出后续远程删除：" + failure
+	}
+	if !change.Writeback {
+		return "远程删除未发出", "未发出远程删除：" + failure
+	}
+	return "远程删除失败", "远程删除未完成：" + failure
+}
+
+func auditAfterBool(value any, key string) bool {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	result, _ := fields[key].(bool)
+	return result
 }
 
 func attach(parent *Entry, key string, related Entry) {

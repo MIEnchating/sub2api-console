@@ -60,6 +60,11 @@ type blockingTaskCleaner struct {
 	calls   atomic.Int32
 }
 
+type stubbornTaskCleaner struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 func (s *cancellableTaskCleaner) ClearLogs(ctx context.Context, _ *time.Time) (int64, int64, error) {
 	close(s.started)
 	<-ctx.Done()
@@ -76,6 +81,12 @@ func (s *blockingTaskCleaner) ClearLogs(ctx context.Context, _ *time.Time) (int6
 	case <-ctx.Done():
 		return 0, 0, ctx.Err()
 	}
+}
+
+func (s *stubbornTaskCleaner) ClearLogs(context.Context, *time.Time) (int64, int64, error) {
+	close(s.started)
+	<-s.release
+	return 0, 0, nil
 }
 
 func (s *taskCleanerStub) ClearLogs(_ context.Context, before *time.Time) (int64, int64, error) {
@@ -249,5 +260,54 @@ func TestStopWaitsForAutomaticCleanupLoopToExit(t *testing.T) {
 	maintenance.mu.Unlock()
 	if done != nil {
 		t.Fatal("maintenance loop remained registered after Stop")
+	}
+}
+
+func TestStopContextHonorsCancellationAndCanBeRetried(t *testing.T) {
+	settings := &cleanupSettingsStub{value: configstore.LogCleanupSettings{Enabled: true, RetentionDays: 30}}
+	taskCleaner := &stubbornTaskCleaner{started: make(chan struct{}), release: make(chan struct{})}
+	maintenance := NewMaintenance(settings, &businessCleanerStub{}, taskCleaner)
+	if err := maintenance.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-taskCleaner.release:
+		default:
+			close(taskCleaner.release)
+		}
+		maintenance.Stop()
+	})
+	select {
+	case <-taskCleaner.started:
+	case <-time.After(time.Second):
+		t.Fatal("automatic cleanup did not start")
+	}
+
+	stopContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := maintenance.StopContext(stopContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopContext error = %v, want context cancellation", err)
+	}
+
+	close(taskCleaner.release)
+	if err := maintenance.StopContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := maintenance.StopContext(context.Background()); err != nil {
+		t.Fatalf("repeated StopContext failed: %v", err)
+	}
+}
+
+func TestStopContextPrefersCompletedDrainOverCancelledWaitContext(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	maintenance := &Maintenance{done: done}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for iteration := 0; iteration < 100; iteration++ {
+		if err := maintenance.StopContext(ctx); err != nil {
+			t.Fatalf("iteration %d: drained maintenance returned %v", iteration, err)
+		}
 	}
 }

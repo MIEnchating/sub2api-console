@@ -35,12 +35,14 @@ func (s *Store) CommitAccountFieldsReadback(
 	loadFactor *string,
 	concurrency *int64,
 	multiplier *string,
+	upstreamHost *string,
+	baseURL *string,
 	notesPresent bool,
 	notes *string,
 	operation AccountOperation,
 ) error {
 	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
-		updates := make([]string, 0, 7)
+		updates := make([]string, 0, 8)
 		arguments := make([]any, 0, 9)
 		if name != nil {
 			updates = append(updates, "name=?")
@@ -62,7 +64,11 @@ func (s *Store) CommitAccountFieldsReadback(
 			updates = append(updates, "multiplier=?")
 			arguments = append(arguments, *multiplier)
 		}
-		if notesPresent {
+		if upstreamHost != nil {
+			updates = append(updates, "upstream_host=?")
+			arguments = append(arguments, canonicalHost(*upstreamHost))
+		}
+		if baseURL != nil || notesPresent {
 			var raw string
 			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&raw); err != nil {
 				return err
@@ -71,10 +77,17 @@ func (s *Store) CommitAccountFieldsReadback(
 			if err != nil {
 				return errors.New("账号元数据损坏，无法保存备注读回")
 			}
-			if notes == nil {
-				metadata["notes"] = nil
-			} else {
-				metadata["notes"] = *notes
+			if baseURL != nil {
+				metadata["base_url"] = strings.TrimRight(strings.TrimSpace(*baseURL), "/")
+				metadata["base_url_source"] = "explicit"
+				metadata["base_url_checked_at"] = now
+			}
+			if notesPresent {
+				if notes == nil {
+					metadata["notes"] = nil
+				} else {
+					metadata["notes"] = *notes
+				}
 			}
 			encoded, err := json.Marshal(metadata)
 			if err != nil {
@@ -107,6 +120,7 @@ func (s *Store) CommitAccountGroupsReadback(
 	ctx context.Context,
 	accountID string,
 	groups []LocalOnboardingGroup,
+	baseURL *string,
 	operation AccountOperation,
 ) error {
 	if len(groups) == 0 {
@@ -131,8 +145,29 @@ func (s *Store) CommitAccountGroupsReadback(
 			groups[0].Name, now, accountID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at=? WHERE id=?`, now, accountID); err != nil {
-			return err
+		if baseURL == nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE accounts SET updated_at=? WHERE id=?`, now, accountID); err != nil {
+				return err
+			}
+		} else {
+			var metadataRaw string
+			if err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM accounts WHERE id=?`, accountID).Scan(&metadataRaw); err != nil {
+				return err
+			}
+			metadata, err := decodeObject(metadataRaw)
+			if err != nil {
+				return errors.New("账号元数据记录损坏")
+			}
+			metadata["base_url"] = strings.TrimRight(strings.TrimSpace(*baseURL), "/")
+			metadata["base_url_source"] = "explicit"
+			metadata["base_url_checked_at"] = now
+			encoded, err := json.Marshal(metadata)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`, string(encoded), now, accountID); err != nil {
+				return err
+			}
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(SELECT COUNT(*) FROM account_groups
 			WHERE group_name=local_groups.name),updated_at=?`, now)

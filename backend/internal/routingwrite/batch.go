@@ -102,6 +102,7 @@ func (a *limitedAdmin) acquire(ctx context.Context) error {
 func (a *limitedAdmin) release() { <-a.gate }
 
 type coordinatedWriteRequest struct {
+	ctx       context.Context
 	accountID string
 	desired   map[string]any
 	current   values
@@ -138,17 +139,19 @@ func (c *batchWriteCoordinator) Skip() {
 }
 
 func (c *batchWriteCoordinator) Submit(ctx context.Context, accountID string, desired map[string]any, current values) coordinatedWriteOutcome {
-	request := &coordinatedWriteRequest{accountID: accountID, desired: copyMap(desired), current: current}
-	c.arrive(request)
-	select {
-	case <-c.done:
-		c.mu.Lock()
-		outcome := c.outcomes[accountID]
-		c.mu.Unlock()
-		return outcome
-	case <-ctx.Done():
-		return coordinatedWriteOutcome{err: ctx.Err()}
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	request := &coordinatedWriteRequest{ctx: ctx, accountID: accountID, desired: copyMap(desired), current: current}
+	c.arrive(request)
+	<-c.done
+	c.mu.Lock()
+	outcome := c.outcomes[accountID]
+	c.mu.Unlock()
+	if cause := contextCause(ctx); cause != nil {
+		outcome.err = errors.Join(outcome.err, cause)
+	}
+	return outcome
 }
 
 func (c *batchWriteCoordinator) arrive(request *coordinatedWriteRequest) {
@@ -225,8 +228,10 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	if len(validGroup) == 0 {
 		return
 	}
+	groupCtx, cancelGroup := combinedRequestContext(c.ctx, validGroup)
+	defer cancelGroup()
 	body["account_ids"] = accountIDs
-	payload, err := c.admin.Mutate(c.ctx, http.MethodPost, "/admin/accounts/bulk-update", body)
+	payload, err := c.admin.Mutate(groupCtx, http.MethodPost, "/admin/accounts/bulk-update", body)
 	if isMissingBatchRoute(err) {
 		var wait sync.WaitGroup
 		for _, request := range validGroup {
@@ -246,9 +251,22 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 		}
 		return
 	}
-	failures := batchUpdateFailures(payload)
+	requested := make(map[string]struct{}, len(validGroup))
 	for _, request := range validGroup {
-		if cause, failed := failures[request.accountID]; failed {
+		requested[request.accountID] = struct{}{}
+	}
+	acknowledgements, malformed := batchUpdateAcknowledgements(payload, requested)
+	for _, request := range validGroup {
+		if cause := contextCause(request.ctx); cause != nil {
+			c.setOutcome(request.accountID, coordinatedWriteOutcome{err: cause})
+			continue
+		}
+		accountAcknowledgements := acknowledgements[request.accountID]
+		if malformed || len(accountAcknowledgements) != 1 || !accountAcknowledgements[0].valid {
+			c.confirmAmbiguousBatchWrite(request, errors.New("批量更新响应未唯一确认账号 "+request.accountID))
+			continue
+		}
+		if cause := accountAcknowledgements[0].err; cause != nil {
 			c.setOutcome(request.accountID, coordinatedWriteOutcome{err: cause})
 			continue
 		}
@@ -259,11 +277,30 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	}
 }
 
+func (c *batchWriteCoordinator) confirmAmbiguousBatchWrite(request coordinatedWriteRequest, ambiguity error) {
+	payload, err := c.admin.Account(request.ctx, request.accountID)
+	if err != nil {
+		c.setOutcome(request.accountID, coordinatedWriteOutcome{err: errors.Join(ambiguity, fmt.Errorf("逐项读回失败：%w", err))})
+		return
+	}
+	after, err := remoteValues(payload)
+	if err == nil {
+		err = verifyReadback(request.desired, after)
+	}
+	if err != nil {
+		c.setOutcome(request.accountID, coordinatedWriteOutcome{after: after, err: errors.Join(ambiguity, fmt.Errorf("逐项读回未确认目标：%w", err))})
+		return
+	}
+	c.setOutcome(request.accountID, coordinatedWriteOutcome{
+		remoteConfirmed: true, readbackConfirmed: true, after: after,
+	})
+}
+
 func (c *batchWriteCoordinator) executeSingle(request coordinatedWriteRequest) {
-	write := writeRoutingValues(c.ctx, c.admin, request.accountID, request.desired)
+	write := writeRoutingValues(request.ctx, c.admin, request.accountID, request.desired)
 	outcome := coordinatedWriteOutcome{remoteConfirmed: write.remoteConfirmed, err: write.err}
 	if write.err != nil && write.remoteConfirmed {
-		payload, err := c.admin.Account(c.ctx, request.accountID)
+		payload, err := c.admin.Account(request.ctx, request.accountID)
 		if err != nil {
 			outcome.err = errors.Join(write.err, fmt.Errorf("部分写回后的读取失败：%w", err))
 			c.setOutcome(request.accountID, outcome)
@@ -297,11 +334,19 @@ func (c *batchWriteCoordinator) verifySuccessfulWrites() {
 	accounts, err := listAccountPayloads(c.ctx, c.admin)
 	if err != nil {
 		for _, request := range requests {
-			c.updateVerification(request.accountID, values{}, err)
+			cause := contextCause(request.ctx)
+			if cause == nil {
+				cause = err
+			}
+			c.updateVerification(request.accountID, values{}, cause)
 		}
 		return
 	}
 	for _, request := range requests {
+		if cause := contextCause(request.ctx); cause != nil {
+			c.updateVerification(request.accountID, values{}, cause)
+			continue
+		}
 		payload, present := accounts[request.accountID]
 		if !present {
 			c.updateVerification(request.accountID, values{}, errors.New("批量确认结果缺少账号 "+request.accountID))
@@ -313,6 +358,44 @@ func (c *batchWriteCoordinator) verifySuccessfulWrites() {
 		}
 		c.updateVerification(request.accountID, after, err)
 	}
+}
+
+func combinedRequestContext(parent context.Context, requests []coordinatedWriteRequest) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	var wait sync.WaitGroup
+	for _, request := range requests {
+		if request.ctx == nil {
+			continue
+		}
+		wait.Add(1)
+		go func(requestCtx context.Context) {
+			defer wait.Done()
+			select {
+			case <-requestCtx.Done():
+				cancel()
+			case <-done:
+			}
+		}(request.ctx)
+	}
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			close(done)
+			cancel()
+			wait.Wait()
+		})
+	}
+}
+
+func contextCause(ctx context.Context) error {
+	if ctx == nil || ctx.Err() == nil {
+		return nil
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return ctx.Err()
 }
 
 func (c *batchWriteCoordinator) successfulRequests() []coordinatedWriteRequest {
@@ -418,34 +501,80 @@ func mutationResponseValues(payload map[string]any, accountID string) (values, b
 	return values{}, false
 }
 
-func batchUpdateFailures(payload map[string]any) map[string]error {
-	result := map[string]error{}
+type batchUpdateAcknowledgement struct {
+	valid bool
+	err   error
+}
+
+func batchUpdateAcknowledgements(payload map[string]any, requested map[string]struct{}) (map[string][]batchUpdateAcknowledgement, bool) {
+	result := map[string][]batchUpdateAcknowledgement{}
+	malformed := false
+	appendAcknowledgement := func(accountID string, acknowledgement batchUpdateAcknowledgement) {
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			malformed = true
+			return
+		}
+		if _, expected := requested[accountID]; !expected {
+			malformed = true
+		}
+		result[accountID] = append(result[accountID], acknowledgement)
+	}
 	for _, data := range mutationResponseObjects(payload) {
-		failedIDs, _ := data["failed_ids"].([]any)
-		for _, rawID := range failedIDs {
-			accountID := strings.TrimSpace(fmt.Sprint(rawID))
-			if accountID != "" {
-				result[accountID] = errors.New("批量更新失败")
+		for _, list := range []struct {
+			key string
+			err error
+		}{
+			{key: "failed_ids", err: errors.New("批量更新失败")},
+			{key: "success_ids"},
+			{key: "successful_ids"},
+			{key: "updated_ids"},
+		} {
+			rawIDs, present := data[list.key]
+			if !present {
+				continue
+			}
+			ids, ok := rawIDs.([]any)
+			if !ok {
+				malformed = true
+				continue
+			}
+			for _, rawID := range ids {
+				appendAcknowledgement(fmt.Sprint(rawID), batchUpdateAcknowledgement{valid: true, err: list.err})
 			}
 		}
-		items, _ := data["results"].([]any)
+		rawItems, present := data["results"]
+		if !present {
+			continue
+		}
+		items, ok := rawItems.([]any)
+		if !ok {
+			malformed = true
+			continue
+		}
 		for _, raw := range items {
-			item, _ := raw.(map[string]any)
-			if item == nil || item["success"] == true {
+			item, ok := raw.(map[string]any)
+			if !ok || item == nil {
+				malformed = true
 				continue
 			}
 			accountID := strings.TrimSpace(fmt.Sprint(item["account_id"]))
 			if accountID == "" {
-				continue
+				accountID = strings.TrimSpace(fmt.Sprint(item["id"]))
 			}
-			detail := strings.TrimSpace(fmt.Sprint(item["error"]))
-			if detail == "" {
-				detail = "批量更新失败"
+			success, valid := item["success"].(bool)
+			acknowledgement := batchUpdateAcknowledgement{valid: valid}
+			if valid && !success {
+				detail := strings.TrimSpace(fmt.Sprint(item["error"]))
+				if detail == "" {
+					detail = "批量更新失败"
+				}
+				acknowledgement.err = errors.New(detail)
 			}
-			result[accountID] = errors.New(detail)
+			appendAcknowledgement(accountID, acknowledgement)
 		}
 	}
-	return result
+	return result, malformed
 }
 
 func mutationResponseObjects(payload map[string]any) []map[string]any {

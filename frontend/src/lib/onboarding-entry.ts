@@ -41,6 +41,17 @@ export function normalizeOnboardingHost(value: string): string {
   }
 }
 
+export function upstreamHostFromBaseUrl(value: string): string {
+  try {
+    const parsed = new URL(value.trim());
+    if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname) return "";
+    if (parsed.username || parsed.password) return "";
+    return parsed.host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 export function composeOnboardingBaseUrl(value: OnboardingBaseUrlFields): string {
   return `${value.baseUrlProtocol}://${value.baseUrl.trim().replace(/^\/+/, "")}`;
 }
@@ -58,6 +69,15 @@ export function onboardingRequestHost(
   draftHost: string,
 ): string {
   return normalizeOnboardingHost(upstream?.host ?? draftHost);
+}
+
+export function onboardingUpstreamRequest(
+  baseUrl: string,
+): { host: string; baseUrl: string } | null {
+  const normalizedBaseUrl = baseUrl.trim();
+  const host = upstreamHostFromBaseUrl(normalizedBaseUrl);
+  if (!host) return null;
+  return { host, baseUrl: normalizedBaseUrl };
 }
 
 export function onboardingEntryKind(
@@ -140,6 +160,41 @@ export function candidateBoundAccountIDs(
         .filter(Boolean),
     ),
   ].sort((left, right) => left.localeCompare(right));
+}
+
+export function candidateBoundBaseURLs(
+  candidate: Partial<Pick<OnboardingCandidate, "bound_accounts">>,
+): string[] {
+  return [
+    ...new Set(
+      (candidate.bound_accounts ?? [])
+        .filter((account) => account.account_exists && account.binding_status !== "missing")
+        .map((account) => account.base_url?.trim().replace(/\/+$/, "") ?? "")
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+export function candidateUsesAccountBaseURL(
+  candidate: Partial<Pick<OnboardingCandidate, "bound_accounts">>,
+  baseURL: string,
+): boolean {
+  const current = candidateBoundBaseURLs(candidate);
+  const desired = baseURL.trim().replace(/\/+$/, "");
+  return current.length === 1 && current[0] === desired;
+}
+
+export function candidateHasOnboardingChange(
+  candidate: Partial<Pick<OnboardingCandidate, "bound" | "bound_accounts">>,
+  selectedLocalGroupIDs: string[],
+  accountBaseURL: string,
+  accountBaseURLEdited: boolean,
+): boolean {
+  if (!candidateHasExistingBinding(candidate)) return selectedLocalGroupIDs.length > 0;
+  return (
+    !sameOnboardingGroupSelection(selectedLocalGroupIDs, candidateBoundLocalGroupIDs(candidate)) ||
+    (accountBaseURLEdited && !candidateUsesAccountBaseURL(candidate, accountBaseURL))
+  );
 }
 
 export function localGroupMultiplierLabel(

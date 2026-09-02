@@ -430,7 +430,8 @@ func TestUpstreamAndGroupCatalogsUseTypedRatesAndPolicyInheritance(t *testing.T)
 		t.Fatalf("unexpected upstream summary: %#v", upstreams)
 	}
 	host := upstreams.Hosts[0]
-	if host.Name != "Example API" || host.RawBalance == nil || *host.RawBalance != "10" || host.Balance == nil || *host.Balance != "5" {
+	if host.Name != "Example API" || host.RawBalance == nil || *host.RawBalance != "10" || host.Balance == nil || *host.Balance != "5" ||
+		host.DisplayBalance == nil || *host.DisplayBalance != "5" || host.BalanceUnit == nil || *host.BalanceUnit != "usd" {
 		t.Fatalf("unexpected decimal-safe upstream projection: %#v", host)
 	}
 	groups, err := store.UpstreamGroups(ctx, "https://API.EXAMPLE/", true)

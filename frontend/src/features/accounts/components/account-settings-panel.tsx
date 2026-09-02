@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
-import { api, type AccountDetail, type Task } from "@/api";
+import { api, type AccountControlAction, type AccountDetail, type Task } from "@/api";
 import { Button } from "@/components/ui/button";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { taskStopsPolling } from "@/lib/task-state";
 
 import { accountDetailDialogLayout } from "./account-detail-dialog";
 
@@ -39,6 +40,43 @@ const settingsSchema = z.object({
 });
 
 type AccountSettingsValues = z.infer<typeof settingsSchema>;
+
+type AccountSettingControlState = Pick<AccountSettingsValues, "excluded" | "paused">;
+
+export function accountSettingControlActions(
+  previous: AccountSettingControlState,
+  next: AccountSettingControlState,
+): AccountControlAction[] {
+  const actions: AccountControlAction[] = [];
+  if (next.excluded !== previous.excluded) actions.push(next.excluded ? "exclude" : "include");
+  if (next.paused !== previous.paused) actions.push(next.paused ? "pause" : "resume");
+  return actions;
+}
+
+function waitForNextTaskPoll(): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 500));
+}
+
+export async function waitForAccountSettingTasks(
+  initial: Task[],
+  load: (taskID: string) => Promise<Task>,
+  wait: () => Promise<void> = waitForNextTaskPoll,
+): Promise<Task[]> {
+  let current = initial;
+  while (!current.every(taskStopsPolling)) {
+    current = await Promise.all(
+      current.map((task) => (taskStopsPolling(task) ? task : load(task.id))),
+    );
+    if (!current.every(taskStopsPolling)) await wait();
+  }
+  const unsuccessful = current.filter((task) => task.status !== "succeeded");
+  if (unsuccessful.length > 0) {
+    throw new Error(
+      unsuccessful.map((task) => task.message || `任务 ${task.id} 未成功完成`).join("；"),
+    );
+  }
+  return current;
+}
 
 export function AccountSettingsPanel(props: {
   accountId: string;
@@ -84,10 +122,12 @@ export function AccountSettingsPanel(props: {
       if (!detail) throw new Error("账号详情尚未读取完成");
       const tasks: Task[] = [];
       const wasExcluded = accountPoolState(detail).value === "excluded";
-      if (values.excluded !== wasExcluded) {
-        tasks.push(
-          await api.setAccountControl(props.accountId, values.excluded ? "exclude" : "include"),
-        );
+      const controls = accountSettingControlActions(
+        { excluded: wasExcluded, paused: detail.paused === true },
+        values,
+      );
+      for (const action of controls.slice(0, values.excluded !== wasExcluded ? 1 : 0)) {
+        tasks.push(await api.setAccountControl(props.accountId, action));
       }
       const originalModel = detail.test_model ?? "";
       if (values.testModel !== originalModel) {
@@ -103,12 +143,10 @@ export function AccountSettingsPanel(props: {
       if (Object.keys(fields).length > 0) {
         tasks.push(await api.syncAccount(props.accountId, fields));
       }
-      if (values.paused !== (detail.paused === true) && values.excluded === wasExcluded) {
-        tasks.push(
-          await api.setAccountControl(props.accountId, values.paused ? "pause" : "resume"),
-        );
+      for (const action of controls.slice(values.excluded !== wasExcluded ? 1 : 0)) {
+        tasks.push(await api.setAccountControl(props.accountId, action));
       }
-      return tasks;
+      return waitForAccountSettingTasks(tasks, api.task);
     },
     onSuccess: async (tasks) => {
       await Promise.all([
@@ -117,10 +155,18 @@ export function AccountSettingsPanel(props: {
         queryClient.invalidateQueries({ queryKey: ["policy"] }),
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
       ]);
-      toast.success(tasks.length ? "账号设置已提交执行" : "账号设置已保存");
+      toast.success(tasks.length ? "账号设置已执行完成" : "账号设置已保存");
       props.onSaved();
     },
-    onError: (error) => notifyOperationError(error, "账号设置保存失败"),
+    onError: (error) => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["accounts"] }),
+        queryClient.invalidateQueries({ queryKey: ["account-detail", props.accountId] }),
+        queryClient.invalidateQueries({ queryKey: ["policy"] }),
+        queryClient.invalidateQueries({ queryKey: ["logs"] }),
+      ]);
+      notifyOperationError(error, "账号设置保存失败");
+    },
   });
 
   async function loadModels() {

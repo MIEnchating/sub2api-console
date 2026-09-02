@@ -23,7 +23,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  operationDialogHeight,
   operationDialogWidth,
 } from "@/components/ui/dialog";
 import { taskPollInterval } from "@/lib/task-state";
@@ -80,7 +79,7 @@ export function modelCheckDialogLayout(task?: Task) {
   const resultsReady = task?.status === "succeeded";
   return {
     width: operationDialogWidth(true, "table"),
-    height: operationDialogHeight(true, "tall"),
+    height: "tall",
     resultsReady,
   } as const;
 }

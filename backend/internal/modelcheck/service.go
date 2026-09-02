@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -87,6 +90,7 @@ type Service struct {
 	resolver       UpstreamAuthResolver
 	claudeProfiles map[string]claudeProfile
 	solProfile     solProfile
+	taskRunner     taskrunner.Runner
 	taskTimeout    time.Duration
 }
 
@@ -111,6 +115,8 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 func (s *Service) UseUpstreamAuthResolver(resolver UpstreamAuthResolver) {
 	s.resolver = resolver
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) Capabilities() Capabilities {
 	standards := make([]string, 0, len(s.claudeProfiles))
@@ -173,7 +179,10 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, prepared)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -249,8 +258,8 @@ func (s *Service) checkerForModel(model string) string {
 	return ""
 }
 
-func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, prepared preparedRun) {
+	ctx, cancel := context.WithTimeout(parent, s.taskTimeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message = "running", 3, "正在准备账号凭据"
 	task.Result = map[string]any{
@@ -259,7 +268,20 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		"credentials_persisted": false,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	taskstore.PersistProgress(s.tasks, task)
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
+		return
+	}
+	guarded, release, err := s.acquirePreparedAccounts(ctx, prepared.accounts)
+	if err != nil {
+		s.finishFailed(ctx, task, prepared.request.AccountIDs, err)
+		return
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("账号模型检测租约释放失败", "account_ids", prepared.request.AccountIDs, "error", err)
+		}
+	}()
+	ctx = guarded
 	credentials := s.resolveCredentials(ctx, prepared.accounts)
 	credentialsPersisted := credentialsResolved(credentials)
 	client := &http.Client{
@@ -357,7 +379,7 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		taskstore.PersistProgress(s.tasks, task)
 	}
 	if completed != len(combinations) {
-		s.finishFailed(task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
+		s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
 		return
 	}
 	summary := map[string]int{}
@@ -375,16 +397,54 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 		"remote_write": false, "credentials_persisted": credentialsPersisted,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	taskstore.MarkCancelled(ctx, &task, "账号模型检测已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) finishFailed(task taskstore.Task, accountIDs []string, err error) {
+func (s *Service) acquirePreparedAccounts(ctx context.Context, expected []selectedAccount) (context.Context, func() error, error) {
+	resources := make([]string, 0, len(expected)*2)
+	for _, account := range expected {
+		resources = append(resources, mutationguard.Account(account.ID))
+		if resource := mutationguard.Upstream(account.AuthHost); resource != "" {
+			resources = append(resources, resource)
+		}
+	}
+	guarded, release, err := mutationguard.Acquire(ctx, s.accounts, resources...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("账号模型检测租约获取失败：%w", err)
+	}
+	fail := func(err error) (context.Context, func() error, error) {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("账号模型检测租约释放失败：%w", releaseErr))
+		}
+		return nil, nil, err
+	}
+	for _, queued := range expected {
+		detail, readErr := s.accounts.Account(guarded, queued.ID)
+		if readErr != nil {
+			return fail(fmt.Errorf("获取模型检测租约后账号 %s 详情读取失败：%w", queued.ID, readErr))
+		}
+		if detail == nil {
+			return fail(fmt.Errorf("账号 %s 在模型检测排队后已被删除", queued.ID))
+		}
+		if detail.ManualPriority != nil {
+			return fail(fmt.Errorf("账号 %s 在模型检测排队后进入人工优先位，检测已取消", queued.ID))
+		}
+		if current := directAccountSelection(detail.AccountStatus, detail); current != queued {
+			return fail(fmt.Errorf("账号 %s 在模型检测排队后配置或 Key 绑定已变化，请重新提交", queued.ID))
+		}
+	}
+	return guarded, release, nil
+}
+
+func (s *Service) finishFailed(ctx context.Context, task taskstore.Task, accountIDs []string, err error) {
 	task.Status, task.Progress = "failed", 100
 	task.Message = "账号模型检测失败：" + err.Error()
 	task.Result = map[string]any{
 		"account_ids": accountIDs, "error": err.Error(), "credentials_persisted": false,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	taskstore.MarkCancelled(ctx, &task, "账号模型检测已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 

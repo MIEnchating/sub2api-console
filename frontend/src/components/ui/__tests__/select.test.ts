@@ -8,8 +8,8 @@ import {
   SelectTrigger,
   SelectValue,
   selectContentAppearanceLayouts,
-  selectContentSearchableByDefault,
   selectOptionMatches,
+  shouldShowSelectSearch,
   selectValueLabel,
 } from "../select";
 
@@ -131,8 +131,15 @@ describe("select value labels", () => {
     expect(markup).toContain('data-size="sm"');
   });
 
-  it("makes every ordinary single-select searchable with a fixed search field", () => {
-    expect(selectContentSearchableByDefault).toBe(true);
+  it("shows search only when a single-select has more than five data items", () => {
+    const fiveItems = Array.from({ length: 5 }, (_, index) =>
+      createElement(SelectItem, { value: String(index) }, `选项 ${index}`),
+    );
+    const sixItems = [...fiveItems, createElement(SelectItem, { value: "5" }, "选项 5")];
+
+    expect(shouldShowSelectSearch(fiveItems)).toBe(false);
+    expect(shouldShowSelectSearch(sixItems)).toBe(true);
+    expect(shouldShowSelectSearch(sixItems, false)).toBe(false);
     expect(selectContentAppearanceLayouts.classic).toContain("flex");
     expect(selectContentAppearanceLayouts.classic).toContain("overflow-hidden");
   });

@@ -20,6 +20,16 @@ func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 	}
 }
 
+func TestBoundAccountMaintenanceRejectsCorruptUpstreamMetadata(t *testing.T) {
+	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE upstreams SET metadata_json='not-json' WHERE host='api.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BoundAccountsForMaintenance(context.Background(), []string{"41"}); err == nil {
+		t.Fatal("corrupt upstream metadata must stop maintenance before it derives remote changes")
+	}
+}
+
 func TestBoundAccountMaintenanceIncludesManualSyncPolicy(t *testing.T) {
 	store := openReadModelFixture(t)
 	ctx := context.Background()

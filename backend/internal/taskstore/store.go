@@ -178,11 +178,9 @@ func (s *Store) ListBySkill(ctx context.Context, skill string) ([]Task, error) {
 }
 
 func (s *Store) ListLogSummaries(ctx context.Context, limit *int) ([]Task, error) {
-	query := `SELECT id,skill,operation,status,progress,message,
-		CASE WHEN json_valid(result_json) THEN json_extract(result_json,'$.run_key') END,
-		CASE WHEN json_valid(result_json) THEN COALESCE(
-			json_extract(result_json,'$.host'),json_extract(result_json,'$.account_name'),json_extract(result_json,'$.account_id')
-		) END,created_at,updated_at FROM tasks ORDER BY updated_at DESC`
+	query := `SELECT id,skill,operation,status,progress,message,` +
+		taskRunKeySQL + `,` + taskObjectSQL +
+		`,created_at,updated_at FROM tasks ORDER BY updated_at DESC`
 	arguments := []any{}
 	if limit != nil {
 		if *limit < 0 || *limit > 100000 {

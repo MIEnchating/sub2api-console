@@ -3,17 +3,20 @@ package inspection
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 type ManualService struct {
-	scheduler *Scheduler
-	runner    *Runner
-	tasks     InspectionTaskStore
-	timeout   time.Duration
+	scheduler  *Scheduler
+	runner     *Runner
+	tasks      InspectionTaskStore
+	taskRunner taskrunner.Runner
+	timeout    time.Duration
 }
 
 type manualExecutor struct {
@@ -26,6 +29,8 @@ func NewManualService(scheduler *Scheduler, runner *Runner, tasks InspectionTask
 	return &ManualService{scheduler: scheduler, runner: runner, tasks: tasks, timeout: 30 * time.Minute}
 }
 
+func (s *ManualService) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
 func (s *ManualService) Enqueue(ctx context.Context, request RunRequest) (taskstore.Task, error) {
 	if s.scheduler == nil || s.runner == nil || s.tasks == nil {
 		return taskstore.Task{}, errors.New("巡检服务尚未就绪")
@@ -35,15 +40,21 @@ func (s *ManualService) Enqueue(ctx context.Context, request RunRequest) (taskst
 	if err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, request)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, request) }); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *ManualService) execute(task taskstore.Task, request RunRequest) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *ManualService) execute(parent context.Context, task taskstore.Task, request RunRequest) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	started, err := s.scheduler.RunWithExecutor(ctx, time.Now().UTC(), &manualExecutor{runner: s.runner, task: task, request: request})
-	if err == nil && started {
+	if started {
+		if err != nil {
+			slog.Error("手动巡检调度收尾失败", "task_id", task.ID, "error", err)
+		}
 		return
 	}
 	task = manualTaskNotStarted(task, request, err, time.Now().UTC())

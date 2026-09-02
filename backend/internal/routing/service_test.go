@@ -917,6 +917,45 @@ func TestBlockedAccountDoesNotCountTowardMinimumPool(t *testing.T) {
 	}
 }
 
+func TestUnavailableFinalStatesDoNotCountTowardMinimumPool(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state string
+		build func(*candidate)
+	}{
+		{
+			name: "invalid binding", state: "binding_invalid",
+			build: func(item *candidate) {
+				item.schedulable = false
+				item.account.CatalogBindingState = "key_missing"
+			},
+		},
+		{
+			name: "unknown remote schedulability", state: "unknown",
+			build: func(item *candidate) {
+				item.schedulable = false
+				item.account.Schedulable = nil
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := engineConfig{minPool: 1, minPoolScore: 0, maxSwitch: 10, degradeEnabled: true}
+			trigger := fuseTestCandidate("1", "codex", "soft", 10)
+			unavailable := healthyTestCandidate("2", "codex", 100)
+			unavailable.state = test.state
+			test.build(unavailable)
+			groups := map[string][]*candidate{"codex": {trigger, unavailable}}
+			byAccount := map[string][]*candidate{"1": {trigger}, "2": {unavailable}}
+
+			applyFuseBudgets(groups, map[string]engineConfig{"codex": config}, byAccount, time.Time{})
+
+			if trigger.state != "survivor" || !trigger.schedulable {
+				t.Fatalf("unavailable account counted as minimum-pool capacity: trigger=%#v unavailable=%#v", trigger, unavailable)
+			}
+		})
+	}
+}
+
 func TestUnknownSchedulableAccountCountsTowardMinimumPool(t *testing.T) {
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	config := engineConfig{minPool: 1, minPoolScore: 3, maxSwitch: 10, degradeEnabled: true}

@@ -20,7 +20,7 @@ export function PageLayout(props: PageLayoutProps) {
   });
 
   return (
-    <main data-slot="page-layout" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div data-slot="page-layout" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {heading}
       <div
         data-slot="page-content"
@@ -32,6 +32,6 @@ export function PageLayout(props: PageLayoutProps) {
       >
         {content}
       </div>
-    </main>
+    </div>
   );
 }

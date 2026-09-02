@@ -3,6 +3,7 @@ package inspection
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -25,12 +26,27 @@ type runnerRepositoryStub struct {
 	alertEnabled bool
 	routingDue   bool
 	mode         string
+	controlErr   error
 	markErr      error
 	marked       []string
 	policy       map[string]any
 }
 
+type releaseFailRepository struct {
+	*business.Store
+}
+
+func (r *releaseFailRepository) ReleaseInspectionLease(ctx context.Context, ownerID string) error {
+	if err := r.Store.ReleaseInspectionLease(ctx, ownerID); err != nil {
+		return err
+	}
+	return errors.New("lease release failed")
+}
+
 func (r *runnerRepositoryStub) ControlPolicy(context.Context) (map[string]any, error) {
+	if r.controlErr != nil {
+		return nil, r.controlErr
+	}
 	if r.policy != nil {
 		return r.policy, nil
 	}
@@ -38,6 +54,60 @@ func (r *runnerRepositoryStub) ControlPolicy(context.Context) (map[string]any, e
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
 	}, nil
+}
+
+func TestRunTaskMarksQueuedTaskCancelledWhenPlanningIsCancelled(t *testing.T) {
+	tasks := openRunnerTaskStore(t)
+	runner := NewRunner(&runnerRepositoryStub{controlErr: context.Canceled}, nil, nil, nil, nil, nil, nil, tasks)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "manual-cancelled", Skill: "inspection", Operation: "manual-inspection", Status: "queued",
+		Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := runner.RunTask(ctx, task, RunRequest{Actor: "operator"})
+
+	stored, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "cancelled" || stored.Status != "cancelled" || stored.Result["cancelled"] != true {
+		t.Fatalf("result=%#v task=%#v", result, stored)
+	}
+}
+
+func openRunnerTaskStore(t *testing.T) *taskstore.Store {
+	t.Helper()
+	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func TestManualInspectionKeepsTaskResultWhenSchedulerFinalizationFails(t *testing.T) {
+	repository := &releaseFailRepository{Store: openInspectionRepository(t)}
+	tasks := &countingTaskStore{}
+	runner := NewRunner(&runnerRepositoryStub{}, nil, &evidencePlannerStub{}, nil, nil, nil, nil, tasks)
+	scheduler, err := NewScheduler(repository, &immediateExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewManualService(scheduler, runner, tasks)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "manual-finalized", Skill: "inspection", Operation: "manual-inspection", Status: "queued",
+		Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+
+	service.execute(context.Background(), task, RunRequest{Actor: "operator"})
+
+	if tasks.saves != 2 || tasks.last.Status != "succeeded" {
+		t.Fatalf("saves=%d task=%#v", tasks.saves, tasks.last)
+	}
 }
 
 func (r *runnerRepositoryStub) Mode(context.Context) (string, error) {

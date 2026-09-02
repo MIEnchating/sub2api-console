@@ -518,7 +518,8 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 	query += ` LEFT JOIN accounts a ON a.id=oa.object_id`
 	if writebackOnly {
 		query += ` WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
-			oa.writeback=1 OR (oa.operation_type IN ('account.scheduling','routing.writeback')
+			oa.writeback=1 OR (oa.operation_type='account.delete' AND oa.state='failed') OR
+			(oa.operation_type IN ('account.scheduling','routing.writeback')
 				AND oa.state='succeeded' AND oa.remote_confirmed=0 AND oa.readback_confirmed=1
 				AND oa.before_json IS NOT NULL AND oa.after_json IS NOT NULL)
 		)`
@@ -543,7 +544,8 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
 		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent LEFT JOIN accounts a ON a.id=oa.object_id
 		WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
-			oa.writeback=1 OR (oa.operation_type IN ('account.scheduling','routing.writeback')
+			oa.writeback=1 OR (oa.operation_type='account.delete' AND oa.state='failed') OR
+			(oa.operation_type IN ('account.scheduling','routing.writeback')
 				AND oa.state='succeeded' AND oa.remote_confirmed=0 AND oa.readback_confirmed=1
 				AND oa.before_json IS NOT NULL AND oa.after_json IS NOT NULL))
 		ORDER BY oa.created_at DESC,CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,

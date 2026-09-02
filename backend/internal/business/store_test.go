@@ -186,6 +186,191 @@ func TestOpenAddsManualPriorityBalanceSyncColumnToExistingDatabase(t *testing.T)
 	}
 }
 
+func TestOpenAddsRoutingBaselineColumnsToExistingDatabase(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		schema string
+	}{
+		{
+			name: "previous schema",
+			schema: `CREATE TABLE routing_baselines (
+				account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,
+				concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
+				ownership_version INTEGER NOT NULL DEFAULT 1,managed_schedulable INTEGER,
+				managed_priority INTEGER,managed_load_factor TEXT,managed_concurrency INTEGER,managed_status TEXT
+			)`,
+		},
+		{
+			name: "partially migrated schema",
+			schema: `CREATE TABLE routing_baselines (
+				account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,
+				concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
+				managed_priority INTEGER
+			)`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "business.sqlite3")
+			database, err := sql.Open("sqlite", "file:"+path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.ExecContext(context.Background(), testCase.schema+`;
+				INSERT INTO routing_baselines(account_id,schedulable,priority,load_factor,concurrency,status,captured_at)
+				VALUES('829',1,10,'1',2,'active','old')`); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			store, err := Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			columns := map[string]bool{}
+			rows, err := store.db.QueryContext(context.Background(), `PRAGMA table_info(routing_baselines)`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var id, notNull, primaryKey int
+				var name, dataType string
+				var defaultValue sql.NullString
+				if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+					t.Fatal(err)
+				}
+				columns[name] = true
+			}
+			if err := rows.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{
+				"target_fingerprint", "ownership_version", "managed_schedulable", "managed_priority",
+				"managed_load_factor", "managed_concurrency", "managed_status",
+			} {
+				if !columns[name] {
+					t.Fatalf("routing baseline column %s was not added", name)
+				}
+			}
+
+			fingerprint := strings.Repeat("ab", 32)
+			priority := int64(20)
+			if err := store.CaptureRoutingBaseline(context.Background(), RoutingBaseline{
+				AccountID: "829", TargetFingerprint: fingerprint, Priority: &priority,
+			}); err != nil {
+				t.Fatalf("routing baseline write still fails after migration: %v", err)
+			}
+			var storedFingerprint string
+			if err := store.db.QueryRowContext(context.Background(), `SELECT target_fingerprint
+				FROM routing_baselines WHERE account_id='829'`).Scan(&storedFingerprint); err != nil {
+				t.Fatal(err)
+			}
+			if storedFingerprint != fingerprint {
+				t.Fatalf("target fingerprint=%q, want %q", storedFingerprint, fingerprint)
+			}
+			if err := store.ensureSchema(context.Background()); err != nil {
+				t.Fatalf("routing baseline migration is not idempotent: %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenRecoversRoutingBaselineMissingColumnAlerts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const incidentKey = "console:routing:apply:829"
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO alert_incidents(
+		incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at
+	) VALUES(?, 'routing.apply_failure','account','829',
+		'APPLY_FAILED:SQL logic error: table routing_baselines has no column named target_fingerprint (1)',
+		'firing','old','old');
+		INSERT INTO alert_deliveries(incident_key,channel_key,status,updated_at)
+		VALUES(?,'qq','delivered','old')`, incidentKey, incidentKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `ALTER TABLE routing_baselines DROP COLUMN target_fingerprint`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	var incidentStatus, deliveryStatus, incidentUpdatedAt, deliveryUpdatedAt string
+	if err := reopened.db.QueryRowContext(ctx, `SELECT i.status,d.status,i.last_seen_at,d.updated_at
+		FROM alert_incidents i JOIN alert_deliveries d ON d.incident_key=i.incident_key
+		WHERE i.incident_key=?`, incidentKey).Scan(
+		&incidentStatus, &deliveryStatus, &incidentUpdatedAt, &deliveryUpdatedAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if incidentStatus != "recovered" || deliveryStatus != "transition" {
+		t.Fatalf("incident=%q delivery=%q", incidentStatus, deliveryStatus)
+	}
+	if incidentUpdatedAt == "old" || deliveryUpdatedAt == "old" {
+		t.Fatalf("recovery timestamps were not updated: incident=%q delivery=%q", incidentUpdatedAt, deliveryUpdatedAt)
+	}
+}
+
+func TestOpenAddsStableIdentityColumnsBeforeCreatingOnboardingIndex(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-onboarding.sqlite3")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE onboarding_pending (
+		operation_id TEXT PRIMARY KEY,upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,
+		upstream_key_id TEXT NOT NULL,upstream_key_name TEXT,upstream_group_id TEXT NOT NULL,
+		upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,local_group_name TEXT NOT NULL,
+		multiplier TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+	);
+	INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,upstream_key_id,
+		upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,reason,created_at,updated_at)
+	VALUES('legacy','api.example','sub2api','91','7','codex','11','codex','0.5','retry','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	var upstreamID, upstreamAccountID, localGroupIDs, intentHash string
+	var keyUnknown, accountUnknown bool
+	if err := store.db.QueryRow(`SELECT upstream_id,upstream_account_id,local_group_ids_json,
+		intent_hash,key_commit_unknown,account_commit_unknown FROM onboarding_pending
+		WHERE operation_id='legacy'`).Scan(
+		&upstreamID, &upstreamAccountID, &localGroupIDs, &intentHash, &keyUnknown, &accountUnknown,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if upstreamID != "" || upstreamAccountID != "" || localGroupIDs != "" || intentHash != "" || keyUnknown || accountUnknown {
+		t.Fatalf("legacy defaults changed: upstream=%q account=%q groups=%q intent=%q key=%v account_unknown=%v",
+			upstreamID, upstreamAccountID, localGroupIDs, intentHash, keyUnknown, accountUnknown)
+	}
+}
+
 func TestOpenReservesWriteLockWhenTransactionBegins(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {

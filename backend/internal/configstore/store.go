@@ -120,6 +120,10 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			secret TEXT NOT NULL, updated_at TEXT NOT NULL,
 			PRIMARY KEY(host,key_id,group_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS newapi_platforms (
+			id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL,
+			admin_key TEXT NOT NULL, user_id TEXT NOT NULL, updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS console_sessions (
 			token_hash TEXT PRIMARY KEY, username TEXT NOT NULL,
 			expires_at TEXT NOT NULL, created_at TEXT NOT NULL

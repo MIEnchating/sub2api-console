@@ -4,11 +4,14 @@ import {
   adjacentOnboardingUpstreams,
   canSubmitOnboarding,
   candidateBoundAccountIDs,
+  candidateBoundBaseURLs,
   candidateBoundLocalGroupIDs,
   candidateBoundLocalGroups,
   candidateCanCreateKey,
   candidateCreationUnavailableReason,
   candidateHasExistingBinding,
+  candidateHasOnboardingChange,
+  candidateUsesAccountBaseURL,
   composeOnboardingBaseUrl,
   localGroupSelectionLabel,
   localGroupMultiplierLabel,
@@ -17,9 +20,11 @@ import {
   onboardingEntryKind,
   onboardingRequestHost,
   onboardingSelectionTitle,
+  onboardingUpstreamRequest,
   parseOnboardingBaseUrl,
   rechargeRatioLabel,
   sameOnboardingGroupSelection,
+  upstreamHostFromBaseUrl,
 } from "../onboarding-entry";
 
 describe("onboarding entry workflow", () => {
@@ -46,20 +51,31 @@ describe("onboarding entry workflow", () => {
     expect(onboardingEntryKind(undefined, undefined)).toBe("full");
   });
 
-  it("keeps the authorization Host independent from the accelerated Base URL", () => {
+  it("derives the internal Host from the complete upstream address", () => {
+    expect(upstreamHostFromBaseUrl("https://Origin.Example.test:8443/api")).toBe(
+      "origin.example.test:8443",
+    );
+    expect(upstreamHostFromBaseUrl("origin.example.test/api")).toBe("");
+  });
+
+  it("derives the internal Host and request address from one protocol-aware field", () => {
+    const address = composeOnboardingBaseUrl({
+      baseUrlProtocol: "https",
+      baseUrl: "accelerated.example.test:8443/api",
+    });
+
     expect(normalizeOnboardingHost("192.0.2.44:8080")).toBe("192.0.2.44:8080");
-    expect(
-      composeOnboardingBaseUrl({
-        baseUrlProtocol: "https",
-        baseUrl: "accelerated.example.test:8443/api",
-      }),
-    ).toBe("https://accelerated.example.test:8443/api");
+    expect(address).toBe("https://accelerated.example.test:8443/api");
     expect(
       onboardingRequestHost(
         { host: "192.0.2.44:8080", base_url: "https://accelerated.example.test:8443" },
         "fallback.example.test",
       ),
     ).toBe("192.0.2.44:8080");
+    expect(onboardingUpstreamRequest(address)).toEqual({
+      host: "accelerated.example.test:8443",
+      baseUrl: "https://accelerated.example.test:8443/api",
+    });
   });
 
   it("preserves HTTP and ports when loading an existing Base URL", () => {
@@ -104,6 +120,7 @@ describe("onboarding entry workflow", () => {
           binding_id: 1,
           account_id: "41",
           account_name: "existing",
+          base_url: "https://account-api.example/v1/",
           account_exists: true,
           binding_status: "verified",
           local_group: "codex",
@@ -122,7 +139,37 @@ describe("onboarding entry workflow", () => {
     expect(candidateBoundLocalGroups(candidate)).toEqual(["codex", "pro"]);
     expect(candidateBoundLocalGroupIDs(candidate)).toEqual(["6", "7"]);
     expect(candidateBoundAccountIDs(candidate)).toEqual(["41"]);
+    expect(candidateBoundBaseURLs(candidate)).toEqual(["https://account-api.example/v1"]);
+    expect(candidateUsesAccountBaseURL(candidate, "https://account-api.example/v1/")).toBe(true);
+    expect(candidateUsesAccountBaseURL(candidate, "https://other.example/v1")).toBe(false);
     expect(sameOnboardingGroupSelection(["7", "6"], ["6", "7"])).toBe(true);
+  });
+
+  it("marks a bound row changed when only its edited account Base URL differs", () => {
+    const candidate = {
+      bound: true,
+      bound_accounts: [
+        {
+          binding_id: 1,
+          account_id: "41",
+          account_name: "existing",
+          base_url: "https://account-api.example/v1",
+          account_exists: true,
+          binding_status: "verified",
+          local_group: "codex",
+          local_groups: [{ id: "6", name: "codex" }],
+          upstream_key_id: "key-1",
+          upstream_key_name: "key-codex",
+        },
+      ],
+    };
+
+    expect(candidateHasOnboardingChange(candidate, ["6"], "https://other.example/v1", true)).toBe(
+      true,
+    );
+    expect(candidateHasOnboardingChange(candidate, ["6"], "https://other.example/v1", false)).toBe(
+      false,
+    );
   });
 
   it("shows selected local-group multipliers without confusing them with account rates", () => {

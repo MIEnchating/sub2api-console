@@ -44,6 +44,34 @@ describe("upstream synchronization status", () => {
     expect(markup).toContain('role="progressbar"');
   });
 
+  it("prefers the upstream CNY display balance over the normalized USD balance", () => {
+    const markup = renderToStaticMarkup(
+      <UpstreamSyncTaskStatus
+        scope="balance"
+        task={task("succeeded", {
+          succeeded: 1,
+          auth_failed: 0,
+          failed: 0,
+          hosts: [
+            {
+              host: "api.aiyxgaw.com",
+              status: "succeeded",
+              auth_status: "已鉴权",
+              balance_status: "已读取",
+              balance: "14.131496",
+              display_balance: "103.1599208",
+              balance_unit: "cny",
+              group_count: 1,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(markup).toContain("CN¥103.1599");
+    expect(markup).not.toContain("$14.1315");
+  });
+
   it("lists authentication failures separately from other failures", () => {
     const markup = renderToStaticMarkup(
       <UpstreamSyncTaskStatus

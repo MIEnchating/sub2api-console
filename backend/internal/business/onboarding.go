@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,20 +42,25 @@ type LocalOnboardingGroup struct {
 }
 
 type PendingOnboarding struct {
-	OperationID       string
-	UpstreamHost      string
-	UpstreamType      string
-	BaseURL           string
-	UpstreamKeyID     string
-	UpstreamKeyName   *string
-	UpstreamGroupID   string
-	UpstreamGroupName string
-	LocalGroupID      string
-	LocalGroupName    string
-	Multiplier        string
-	Reason            string
-	CreatedAt         string
-	UpdatedAt         string
+	OperationID          string
+	UpstreamID           string
+	UpstreamHost         string
+	UpstreamType         string
+	UpstreamKeyID        string
+	UpstreamKeyName      *string
+	UpstreamAccountID    string
+	UpstreamGroupID      string
+	UpstreamGroupName    string
+	LocalGroupID         string
+	LocalGroupName       string
+	LocalGroupIDs        []string
+	Multiplier           string
+	IntentHash           string
+	Reason               string
+	KeyCommitUnknown     bool
+	AccountCommitUnknown bool
+	CreatedAt            string
+	UpdatedAt            string
 }
 
 type OnboardingProjection struct {
@@ -140,48 +147,156 @@ func (s *Store) LocalOnboardingGroup(ctx context.Context, groupID string) (Local
 	return result, err
 }
 
-func (s *Store) PendingOnboarding(ctx context.Context, host, upstreamGroupID, localGroupID, multiplier string) (*PendingOnboarding, error) {
-	var value PendingOnboarding
-	var keyName sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT operation_id,upstream_host,upstream_type,upstream_key_id,upstream_key_name,
-		upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,reason,created_at,updated_at
-		FROM onboarding_pending WHERE upstream_host=? AND upstream_group_id=? AND local_group_id=? AND multiplier=?
-		ORDER BY updated_at DESC LIMIT 1`, canonicalHost(host), strings.TrimSpace(upstreamGroupID), strings.TrimSpace(localGroupID), strings.TrimSpace(multiplier)).Scan(
-		&value.OperationID, &value.UpstreamHost, &value.UpstreamType, &value.UpstreamKeyID, &keyName,
-		&value.UpstreamGroupID, &value.UpstreamGroupName, &value.LocalGroupID, &value.LocalGroupName,
-		&value.Multiplier, &value.Reason, &value.CreatedAt, &value.UpdatedAt,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+func (s *Store) PendingOnboarding(ctx context.Context, host, upstreamGroupID string, localGroupIDs []string) (*PendingOnboarding, error) {
+	_, selectionJSON, err := canonicalPendingLocalGroupIDs(localGroupIDs)
 	if err != nil {
 		return nil, err
 	}
-	value.UpstreamKeyName = nullString(keyName)
-	return &value, nil
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, s.db, host)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT p.operation_id,p.upstream_id,p.upstream_host,p.upstream_type,p.upstream_key_id,p.upstream_key_name,p.upstream_account_id,
+		p.upstream_group_id,p.upstream_group_name,p.local_group_id,p.local_group_name,p.local_group_ids_json,p.multiplier,p.intent_hash,p.reason,
+		p.key_commit_unknown,p.account_commit_unknown,p.created_at,p.updated_at
+		FROM onboarding_pending p LEFT JOIN upstream_identity_hosts h ON h.host=p.upstream_host
+		WHERE (p.upstream_id=? OR (p.upstream_id='' AND h.upstream_id=?)) AND p.upstream_group_id=?
+		ORDER BY p.updated_at DESC,p.operation_id`, upstreamID, upstreamID, strings.TrimSpace(upstreamGroupID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var matched *PendingOnboarding
+	for rows.Next() {
+		var value PendingOnboarding
+		var keyName sql.NullString
+		var storedSelection string
+		if err := rows.Scan(
+			&value.OperationID, &value.UpstreamID, &value.UpstreamHost, &value.UpstreamType, &value.UpstreamKeyID, &keyName, &value.UpstreamAccountID,
+			&value.UpstreamGroupID, &value.UpstreamGroupName, &value.LocalGroupID, &value.LocalGroupName, &storedSelection,
+			&value.Multiplier, &value.IntentHash, &value.Reason, &value.KeyCommitUnknown, &value.AccountCommitUnknown, &value.CreatedAt, &value.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		storedSelection = strings.TrimSpace(storedSelection)
+		if storedSelection == "" {
+			if strings.TrimSpace(value.IntentHash) == "" {
+				return nil, errors.New("待续开户记录缺少首次冻结意图，已拒绝远端写入")
+			}
+			return nil, errors.New("待续开户记录缺少规范化本地分组集合，已拒绝远端写入")
+		} else {
+			var storedIDs []string
+			if err := json.Unmarshal([]byte(storedSelection), &storedIDs); err != nil {
+				return nil, errors.New("待续开户记录的本地分组集合损坏")
+			}
+			storedIDs, canonicalStoredSelection, err := canonicalPendingLocalGroupIDs(storedIDs)
+			if err != nil {
+				return nil, errors.New("待续开户记录的本地分组集合损坏")
+			}
+			if canonicalStoredSelection != selectionJSON {
+				continue
+			}
+			value.LocalGroupIDs = storedIDs
+		}
+		value.UpstreamKeyName = nullString(keyName)
+		if matched != nil {
+			return nil, errors.New("同一开户身份存在多条待续记录，已拒绝远端写入")
+		}
+		matched = &value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if matched == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(matched.IntentHash) == "" {
+		return nil, errors.New("旧版待续开户记录缺少首次冻结意图，已拒绝远端写入")
+	}
+	return matched, nil
 }
 
 func (s *Store) SavePendingOnboarding(ctx context.Context, value PendingOnboarding) error {
+	localGroupIDs, selectionJSON, err := canonicalPendingLocalGroupIDs(value.LocalGroupIDs)
+	if err != nil {
+		return err
+	}
+	primaryPresent := false
+	for _, id := range localGroupIDs {
+		if id == strings.TrimSpace(value.LocalGroupID) {
+			primaryPresent = true
+			break
+		}
+	}
 	if strings.TrimSpace(value.OperationID) == "" || canonicalHost(value.UpstreamHost) == "" ||
-		strings.TrimSpace(value.UpstreamKeyID) == "" || strings.TrimSpace(value.UpstreamGroupID) == "" ||
-		!positiveNumericID(value.LocalGroupID) || normalizePositiveDecimal(value.Multiplier) == nil {
+		strings.TrimSpace(value.UpstreamGroupID) == "" ||
+		!positiveNumericID(value.LocalGroupID) || !primaryPresent || normalizePositiveDecimal(value.Multiplier) == nil ||
+		strings.TrimSpace(value.IntentHash) == "" {
 		return errors.New("待续开户记录字段不完整")
+	}
+	if strings.TrimSpace(value.UpstreamKeyID) == "" && (value.UpstreamKeyName == nil || strings.TrimSpace(*value.UpstreamKeyName) == "") {
+		return errors.New("待续开户记录缺少 Key ID 与 marker")
+	}
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, s.db, value.UpstreamHost)
+	if err != nil {
+		return fmt.Errorf("待续开户记录无法解析稳定上游身份: %w", err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if value.CreatedAt == "" {
 		value.CreatedAt = now
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,
-		upstream_key_id,upstream_key_name,upstream_group_id,upstream_group_name,local_group_id,local_group_name,
-		multiplier,reason,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(operation_id) DO UPDATE SET reason=excluded.reason,updated_at=excluded.updated_at`,
-		value.OperationID, canonicalHost(value.UpstreamHost), strings.TrimSpace(value.UpstreamType), value.UpstreamKeyID,
-		managementNullableString(value.UpstreamKeyName), value.UpstreamGroupID, value.UpstreamGroupName, value.LocalGroupID,
-		value.LocalGroupName, value.Multiplier, safeOnboardingReason(value.Reason), value.CreatedAt, now)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO onboarding_pending(operation_id,upstream_id,upstream_host,upstream_type,
+		upstream_key_id,upstream_key_name,upstream_account_id,upstream_group_id,upstream_group_name,local_group_id,local_group_name,
+		local_group_ids_json,multiplier,intent_hash,reason,key_commit_unknown,account_commit_unknown,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(operation_id) DO UPDATE SET upstream_key_id=excluded.upstream_key_id,
+		upstream_key_name=excluded.upstream_key_name,upstream_account_id=excluded.upstream_account_id,reason=excluded.reason,
+		local_group_ids_json=CASE WHEN onboarding_pending.local_group_ids_json='' THEN excluded.local_group_ids_json ELSE onboarding_pending.local_group_ids_json END,
+		key_commit_unknown=excluded.key_commit_unknown,account_commit_unknown=excluded.account_commit_unknown,
+		updated_at=excluded.updated_at`,
+		value.OperationID, upstreamID, canonicalHost(value.UpstreamHost), strings.TrimSpace(value.UpstreamType), value.UpstreamKeyID,
+		managementNullableString(value.UpstreamKeyName), value.UpstreamAccountID, value.UpstreamGroupID, value.UpstreamGroupName, value.LocalGroupID,
+		value.LocalGroupName, selectionJSON, value.Multiplier, value.IntentHash, safeOnboardingReason(value.Reason), value.KeyCommitUnknown,
+		value.AccountCommitUnknown, value.CreatedAt, now)
 	return err
 }
 
+func canonicalPendingLocalGroupIDs(values []string) ([]string, string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !positiveNumericID(value) {
+			return nil, "", errors.New("待续开户记录的本地分组集合无效")
+		}
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	if len(result) == 0 {
+		return nil, "", errors.New("待续开户记录缺少本地分组集合")
+	}
+	sort.Slice(result, func(left, right int) bool {
+		leftID, _ := strconv.ParseUint(result[left], 10, 64)
+		rightID, _ := strconv.ParseUint(result[right], 10, 64)
+		if leftID == rightID {
+			return result[left] < result[right]
+		}
+		return leftID < rightID
+	})
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return nil, "", err
+	}
+	return result, string(encoded), nil
+}
+
 func (s *Store) CommitOnboardingProjection(ctx context.Context, value OnboardingProjection) error {
+	if !value.ReadbackConfirmed {
+		return errors.New("账号添加必须完成远端完整读回确认")
+	}
 	if !positiveNumericID(value.AccountID) || !positiveNumericID(value.LocalGroupID) ||
 		strings.TrimSpace(value.OperationID) == "" || strings.TrimSpace(value.AccountName) == "" ||
 		canonicalHost(value.UpstreamHost) == "" || strings.TrimSpace(value.UpstreamKeyID) == "" ||
@@ -236,7 +351,7 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		status=excluded.status,metadata_json=excluded.metadata_json,updated_at=excluded.updated_at`,
 		value.AccountID, canonicalHost(value.UpstreamHost), value.UpstreamKeyID, value.UpstreamKeyName,
 		value.UpstreamGroupName, value.UpstreamGroupID, value.LocalGroupName, value.Multiplier,
-		onboardingBindingDescription(value.ReadbackConfirmed), fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {
+		"账号添加后远程读回确认", fmt.Sprintf(`{"operation_id":%q,"local_group_id":%q}`, value.OperationID, value.LocalGroupID), now); err != nil {
 		return err
 	}
 	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, value.UpstreamHost)
@@ -255,13 +370,9 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	}
 	field := "created"
 	name := value.AccountName
-	phase := "remote-write"
-	if value.ReadbackConfirmed {
-		phase = "readback"
-	}
 	operation := AccountOperation{
-		OperationID: value.OperationID, OperationType: "account.onboarding", State: "succeeded", Phase: phase,
-		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: value.ReadbackConfirmed, ObjectID: value.AccountID,
+		OperationID: value.OperationID, OperationType: "account.onboarding", State: "succeeded", Phase: "readback",
+		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: value.AccountID,
 		ObjectName: &name, GroupNames: onboardingLocalGroupNames(localGroups), FieldName: &field,
 		After: map[string]any{"name": value.AccountName, "group_ids": onboardingLocalGroupIDs(localGroups), "schedulable": value.Schedulable,
 			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority}, Writeback: true,
@@ -289,13 +400,6 @@ func onboardingLocalGroupNames(groups []LocalOnboardingGroup) []string {
 		result = append(result, group.Name)
 	}
 	return result
-}
-
-func onboardingBindingDescription(readbackConfirmed bool) string {
-	if readbackConfirmed {
-		return "账号添加后远程读回确认"
-	}
-	return "账号添加响应已接受，未启用写后确认"
 }
 
 type onboardingKey struct{ id, name string }

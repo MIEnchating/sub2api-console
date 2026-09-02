@@ -17,20 +17,23 @@ import (
 )
 
 type UpstreamHost struct {
-	UpstreamID    string   `json:"upstream_id"`
-	Host          string   `json:"host"`
-	Hosts         []string `json:"hosts"`
-	BaseURL       string   `json:"base_url"`
-	Name          string   `json:"name"`
-	UpstreamType  string   `json:"upstream_type"`
-	AccountCount  int64    `json:"account_count"`
-	GroupCount    int64    `json:"group_count"`
-	AuthStatus    string   `json:"auth_status"`
-	RawBalance    *string  `json:"raw_balance"`
-	Balance       *string  `json:"balance"`
-	RechargeRate  string   `json:"recharge_rate"`
-	BalanceStatus string   `json:"balance_status"`
-	CheckedAt     *string  `json:"checked_at"`
+	UpstreamID     string   `json:"upstream_id"`
+	Host           string   `json:"host"`
+	Hosts          []string `json:"hosts"`
+	BaseURL        string   `json:"base_url"`
+	AccountBaseURL string   `json:"account_base_url"`
+	Name           string   `json:"name"`
+	UpstreamType   string   `json:"upstream_type"`
+	AccountCount   int64    `json:"account_count"`
+	GroupCount     int64    `json:"group_count"`
+	AuthStatus     string   `json:"auth_status"`
+	RawBalance     *string  `json:"raw_balance"`
+	Balance        *string  `json:"balance"`
+	DisplayBalance *string  `json:"display_balance"`
+	BalanceUnit    *string  `json:"balance_unit"`
+	RechargeRate   string   `json:"recharge_rate"`
+	BalanceStatus  string   `json:"balance_status"`
+	CheckedAt      *string  `json:"checked_at"`
 }
 
 type UpstreamSummary struct {
@@ -63,6 +66,7 @@ type UpstreamBoundAccount struct {
 	BindingID       int64                  `json:"binding_id"`
 	AccountID       string                 `json:"account_id"`
 	AccountName     *string                `json:"account_name"`
+	BaseURL         *string                `json:"base_url"`
 	AccountExists   bool                   `json:"account_exists"`
 	BindingStatus   *string                `json:"binding_status"`
 	LocalGroup      string                 `json:"local_group"`
@@ -167,6 +171,10 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 			return UpstreamSummary{}, err
 		}
 		metadata, metadataErr := decodeObject(metadataRaw)
+		item.AccountBaseURL = strings.TrimRight(strings.TrimSpace(stringValue(metadata["account_base_url"])), "/")
+		if item.AccountBaseURL == "" {
+			item.AccountBaseURL = item.BaseURL
+		}
 		item.Name = upstreamDisplayName(metadata, item.BaseURL, derivedNames[item.Host])
 		item.Hosts = append([]string{}, identityHosts[item.UpstreamID]...)
 		item.RawBalance = nullString(rawBalance)
@@ -185,6 +193,15 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 		if item.Balance == nil {
 			item.Balance = divideDecimalPointers(item.RawBalance, normalizePositiveDecimal(item.RechargeRate))
 		}
+		item.DisplayBalance = normalizeDecimal(stringValue(metadata["display_balance"]))
+		if item.DisplayBalance == nil || *item.DisplayBalance == "" {
+			item.DisplayBalance = item.Balance
+		}
+		unit := strings.ToLower(strings.TrimSpace(stringValue(metadata["balance_unit"])))
+		if unit == "" {
+			unit = "usd"
+		}
+		item.BalanceUnit = &unit
 		item.CheckedAt = nullString(checkedAt)
 		item.AccountCount = accountCounts[item.UpstreamID]
 		item.GroupCount = groupCounts[item.Host]
@@ -327,7 +344,7 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT b.id,b.upstream_group_id,b.local_account_id,a.name,
+	rows, err := s.db.QueryContext(ctx, `SELECT b.id,b.upstream_group_id,b.local_account_id,a.name,a.metadata_json,
 		a.id IS NOT NULL AND COALESCE(b.status,'')<>'missing',b.status,b.local_group,b.upstream_key_id,b.upstream_key_name
 		FROM bindings b JOIN binding_identities bi ON bi.binding_id=b.id LEFT JOIN accounts a ON a.id=b.local_account_id
 		WHERE bi.upstream_id=? AND b.upstream_group_id IS NOT NULL
@@ -340,16 +357,19 @@ func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[str
 	accountIDs := map[string]struct{}{}
 	for rows.Next() {
 		var groupID string
-		var accountName, bindingStatus sql.NullString
+		var accountName, metadataRaw, bindingStatus sql.NullString
 		var accountExists int64
 		var item UpstreamBoundAccount
 		if err := rows.Scan(
-			&item.BindingID, &groupID, &item.AccountID, &accountName, &accountExists, &bindingStatus,
+			&item.BindingID, &groupID, &item.AccountID, &accountName, &metadataRaw, &accountExists, &bindingStatus,
 			&item.LocalGroup, &item.UpstreamKeyID, &item.UpstreamKeyName,
 		); err != nil {
 			return nil, err
 		}
 		item.AccountName = nullString(accountName)
+		if metadataRaw.Valid {
+			item.BaseURL = accountMetadataText(metadataRaw.String, "base_url")
+		}
 		item.AccountExists = accountExists == 1
 		item.BindingStatus = nullString(bindingStatus)
 		item.LocalGroups = []LocalOnboardingGroup{}

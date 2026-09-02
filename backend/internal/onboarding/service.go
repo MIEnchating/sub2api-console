@@ -3,6 +3,7 @@ package onboarding
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,21 +18,27 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/naming"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
+
+const onboardingAuditTimeout = 5 * time.Second
 
 type Repository interface {
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProtectedUpstreamKeyIDs(context.Context, string) ([]string, error)
 	UpstreamKeyProtected(context.Context, string, string) (bool, error)
 	LocalOnboardingGroup(context.Context, string) (business.LocalOnboardingGroup, error)
-	PendingOnboarding(context.Context, string, string, string, string) (*business.PendingOnboarding, error)
+	PendingOnboarding(context.Context, string, string, []string) (*business.PendingOnboarding, error)
 	SavePendingOnboarding(context.Context, business.PendingOnboarding) error
 	CommitOnboardingProjection(context.Context, business.OnboardingProjection) error
-	CommitAccountGroupsReadback(context.Context, string, []business.LocalOnboardingGroup, business.AccountOperation) error
+	CommitAccountGroupsReadback(context.Context, string, []business.LocalOnboardingGroup, *string, business.AccountOperation) error
 	RecordAccountOperation(context.Context, business.AccountOperation) error
+	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
 }
 
 type PrivateStore interface {
@@ -50,6 +57,10 @@ type configurableKeyClient interface {
 	CreateKeyWithVerification(context.Context, configstore.AuthRecord, string, string, bool) (upstreamsync.CreatedKey, error)
 }
 
+type reconcilingKeyClient interface {
+	ReconcileCreatedKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, bool, error)
+}
+
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -57,6 +68,7 @@ type TaskStore interface {
 type Request struct {
 	Host            string
 	UpstreamType    string
+	BaseURL         *string
 	PlatformPresent bool
 	Platform        *string
 	AccountType     *string
@@ -77,15 +89,17 @@ type Service struct {
 	private    PrivateStore
 	keys       KeyClient
 	tasks      TaskStore
+	taskRunner taskrunner.Runner
 	timeout    time.Duration
 }
 
 type validatedRequest struct {
-	request    Request
-	multiplier string
-	locals     []business.LocalOnboardingGroup
-	candidate  business.OnboardingCandidate
-	auth       configstore.AuthRecord
+	request        Request
+	accountBaseURL string
+	multiplier     string
+	locals         []business.LocalOnboardingGroup
+	candidate      business.OnboardingCandidate
+	auth           configstore.AuthRecord
 }
 
 type batchItem struct {
@@ -99,6 +113,8 @@ func New(repository Repository, private PrivateStore, keys KeyClient, tasks Task
 	return &Service{repository: repository, private: private, keys: keys, tasks: tasks, timeout: 10 * time.Minute}
 }
 
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
 func (s *Service) Candidates(ctx context.Context, host string) ([]business.OnboardingCandidate, error) {
 	if strings.TrimSpace(host) == "" {
 		return nil, errors.New("上游 Host 不能为空")
@@ -110,6 +126,10 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 	if _, err := s.validate(ctx, request); err != nil {
 		return taskstore.Task{}, err
 	}
+	expectedTarget, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	task, err := s.newQueuedTask("onboard", "账号绑定变更已排队")
 	if err != nil {
 		return taskstore.Task{}, err
@@ -117,7 +137,12 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, request)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.execute(targetguard.Expect(parent, expectedTarget), task, request)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -145,6 +170,10 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 			localGroupName: strings.Join(onboardingLocalNames(validated.locals), "、"), action: onboardingAction(validated),
 		})
 	}
+	expectedTarget, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	task, err := s.newQueuedTask("onboard-batch", fmt.Sprintf("%d 项账号绑定变更已排队", len(items)))
 	if err != nil {
 		return taskstore.Task{}, err
@@ -152,7 +181,12 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.executeBatch(task, items)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeBatch(targetguard.Expect(parent, expectedTarget), task, items)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -169,11 +203,11 @@ func (s *Service) newQueuedTask(operation, message string) (taskstore.Task, erro
 	return task, nil
 }
 
-func (s *Service) execute(task taskstore.Task, request Request) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, request Request) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 10, "正在校验稳定 ID 与上游分组", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result, err := s.Onboard(ctx, request)
@@ -184,33 +218,36 @@ func (s *Service) execute(task taskstore.Task, request Request) {
 	} else {
 		task.Status, task.Message, task.Result = "succeeded", "账号绑定变更已完成并写入 Console 业务库", result
 	}
+	taskstore.MarkCancelled(ctx, &task, "账号绑定变更已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) executeBatch(task taskstore.Task, items []batchItem) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout*time.Duration(len(items)))
+func (s *Service) executeBatch(parent context.Context, task taskstore.Task, items []batchItem) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout*time.Duration(len(items)))
 	defer cancel()
 	task.Status, task.Progress, task.Message = "running", 5, fmt.Sprintf("正在添加 1/%d 个账号", len(items))
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	results := make([]map[string]any, 0, len(items))
 	succeeded := 0
 	failed := 0
 	for index, item := range items {
+		if ctx.Err() != nil {
+			break
+		}
 		task.Progress = 5 + index*90/len(items)
 		task.Message = fmt.Sprintf("正在处理 %d/%d：%s，%s → %s", index+1, len(items), item.action, item.upstreamGroupName, item.localGroupName)
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		if err := s.tasks.Save(ctx, task); err != nil {
-			return
-		}
-		_, err := s.Onboard(ctx, item.request)
+		taskstore.PersistProgress(s.tasks, task)
+		itemResult, err := s.Onboard(ctx, item.request)
 		row := map[string]any{
 			"upstream_group": item.upstreamGroupName,
 			"local_group":    item.localGroupName,
 			"action":         item.action,
 		}
+		mergeBatchItemResult(row, itemResult)
 		if err != nil {
 			failed++
 			row["status"] = "失败"
@@ -233,113 +270,282 @@ func (s *Service) executeBatch(task taskstore.Task, items []batchItem) {
 		task.Status = "succeeded"
 		task.Message = fmt.Sprintf("批量绑定变更完成：成功 %d 项", succeeded)
 	}
+	if ctx.Err() != nil {
+		task.Status = "failed"
+	}
+	taskstore.MarkCancelled(ctx, &task, "批量账号绑定变更已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
+func mergeBatchItemResult(row, result map[string]any) {
+	if remoteWrite, present := result["remote_write"]; present {
+		row["remote_write"] = remoteWrite
+	}
+	if pending, present := result["pending"]; present && pending != nil {
+		row["pending"] = pending
+	}
+}
+
 func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any, error) {
+	ctx, err := targetguard.Capture(ctx, s.private)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
 	validated, err := s.validate(ctx, request)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	lockedHost := configstore.CanonicalHost(validated.auth.Host)
+	lockedUpstreamID := strings.TrimSpace(validated.candidate.UpstreamID)
+	lockedAccountIDs := append([]string{}, validated.request.AccountIDs...)
+	resources := []string{mutationguard.Upstream(lockedHost)}
+	if len(lockedAccountIDs) == 0 {
+		resources = append(resources, mutationguard.AccountCatalog())
+	} else {
+		for _, accountID := range lockedAccountIDs {
+			resources = append(resources, mutationguard.Account(accountID))
+		}
+	}
+	guardedCtx, releaseMutation, err := targetguard.Acquire(ctx, s.repository, resources...)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	defer func() {
+		if err := releaseMutation(); err != nil {
+			slog.Error("账号添加变更租约释放失败", "host", lockedHost, "error", err)
+		}
+	}()
+	ctx = guardedCtx
+	validated, err = s.validate(ctx, request)
+	if err != nil {
+		return map[string]any{"remote_write": false}, fmt.Errorf("获取变更租约后重新校验失败：%w", err)
+	}
+	if lockedHost != configstore.CanonicalHost(validated.auth.Host) ||
+		lockedUpstreamID != strings.TrimSpace(validated.candidate.UpstreamID) ||
+		strings.Join(lockedAccountIDs, "\x00") != strings.Join(validated.request.AccountIDs, "\x00") {
+		return map[string]any{"remote_write": false}, errors.New("获取变更租约后开户目标身份已变化，请重试")
+	}
+	ctx, err = targetguard.Bind(ctx, s.private)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
 	if len(validated.request.AccountIDs) > 0 {
 		return s.updateAccountGroups(ctx, validated)
 	}
-	operationID, err := operationID()
-	if err != nil {
-		return map[string]any{"remote_write": false}, err
-	}
 	primaryLocal := validated.locals[0]
-	pending, err := s.repository.PendingOnboarding(ctx, validated.auth.Host, validated.candidateID(), primaryLocal.ID, validated.multiplier)
-	if err != nil {
-		return map[string]any{"remote_write": false}, err
-	}
-	if pending != nil {
-		operationID = pending.OperationID
-	}
-	keyName := validated.candidate.GroupName + "-" + operationID[len(operationID)-8:]
-	var key upstreamsync.CreatedKey
-	if pending == nil {
-		key, err = s.keys.CreateKey(ctx, validated.auth, keyName, validated.candidateID())
-	} else {
-		key, err = s.keys.RevealKey(ctx, validated.auth, pending.UpstreamKeyID, validated.candidateID())
-	}
-	if err != nil {
-		s.recordFailure(ctx, operationID, validated, "remote-write", false, err)
-		return map[string]any{"remote_write": false}, err
-	}
-	result := map[string]any{"remote_write": "已创建上游 Key，等待续办", "upstream_key_created": pending == nil}
-	if err := s.private.SaveUpstreamKeySecret(ctx, configstore.UpstreamKeySecret{
-		Host: validated.auth.Host, KeyID: key.KeyID, GroupID: validated.candidateID(), Secret: key.Secret,
-	}); err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, fmt.Errorf("本地 Key 保存失败：%w", err))
-	}
-	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.auth.BaseURL, validated.multiplier)
-	remark := creationRemark(validated.candidate, validated.request.Notes)
-	target, err := s.private.TargetSettings(ctx)
-	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, err)
-	}
-	client, err := adminclient.New(adminclient.Config{
-		BaseURL: target.BaseURL, AdminKey: target.AdminKey,
-		Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 3,
-	}, nil)
-	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, err)
-	}
+	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier)
 	platform, err := accountPlatform(validated.request, validated.candidate, primaryLocal)
 	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, err)
+		return map[string]any{"remote_write": false}, err
 	}
 	accountType := "apikey"
 	if validated.request.AccountType != nil {
 		accountType = strings.ToLower(strings.TrimSpace(*validated.request.AccountType))
 		if accountType == "" {
-			return s.pendingFailure(ctx, operationID, validated, key, result, errors.New("账号类型不能为空"))
+			return map[string]any{"remote_write": false}, errors.New("账号类型不能为空")
 		}
 	}
 	defaults, err := s.private.AccountDefaults(ctx)
 	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, fmt.Errorf("账号默认参数读取失败：%w", err))
+		return map[string]any{"remote_write": false}, fmt.Errorf("账号默认参数读取失败：%w", err)
 	}
 	priority, concurrency := accountCreationParameters(defaults, validated.request)
-	localGroupIDs := onboardingLocalNumericIDs(validated.locals)
+	target, err := targetguard.Settings(ctx, s.private)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	intentHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, platform, accountType, priority, concurrency)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	operationID, err := operationID()
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	localGroupIDs := onboardingLocalIDs(validated.locals)
+	pending, err := s.repository.PendingOnboarding(ctx, validated.auth.Host, validated.candidateID(), localGroupIDs)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	if pending != nil {
+		remoteWritten := pendingRemoteWrite(*pending)
+		if strings.TrimSpace(pending.IntentHash) == "" {
+			return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("待续开户记录缺少首次冻结意图，已拒绝远端写入")
+		}
+		if pending.IntentHash != intentHash {
+			return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("续办参数与首次冻结的开户意图不一致，已拒绝远端写入")
+		}
+		operationID = pending.OperationID
+	}
+	keyMarker := operationID
+	if pending == nil {
+		pending = &business.PendingOnboarding{
+			OperationID: operationID, UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType,
+			UpstreamKeyName: &keyMarker, UpstreamGroupID: validated.candidateID(), UpstreamGroupName: validated.candidate.GroupName,
+			LocalGroupID: primaryLocal.ID, LocalGroupName: primaryLocal.Name, LocalGroupIDs: localGroupIDs, Multiplier: validated.multiplier,
+			IntentHash: intentHash, Reason: "开户创建意图已保存", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+			return map[string]any{"remote_write": false}, fmt.Errorf("开户创建意图保存失败：%w", err)
+		}
+	}
+	var key upstreamsync.CreatedKey
+	keyCreatedNow := false
+	keyWasUnknown := pending.KeyCommitUnknown
+	if pending.UpstreamKeyID != "" {
+		key, err = s.keys.RevealKey(ctx, validated.auth, pending.UpstreamKeyID, validated.candidateID())
+	} else if pending.KeyCommitUnknown {
+		reconciler, supported := s.keys.(reconcilingKeyClient)
+		if !supported {
+			err = &upstreamsync.CommitUnknownError{Marker: keyMarker, Cause: errors.New("当前 Key 客户端不支持只读 marker 对账")}
+		} else {
+			var found bool
+			key, found, err = reconciler.ReconcileCreatedKey(ctx, validated.auth, keyMarker, validated.candidateID())
+			if err == nil && !found {
+				err = &upstreamsync.CommitUnknownError{Marker: keyMarker, Cause: errors.New("Key marker 尚未在上游目录中可见")}
+			}
+		}
+	} else {
+		pending.KeyCommitUnknown = true
+		pending.Reason = "准备按不可变 marker 创建上游 Key"
+		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+			return map[string]any{"remote_write": false, "pending": pendingResult(*pending)}, fmt.Errorf("Key 创建前状态保存失败：%w", err)
+		}
+		key, err = createKey(ctx, s.keys, validated.auth, keyMarker, validated.candidateID(), true)
+		keyCreatedNow = err == nil
+	}
+	if err != nil {
+		if keyWasUnknown {
+			pending.KeyCommitUnknown = true
+		} else {
+			var unknown *upstreamsync.CommitUnknownError
+			pending.KeyCommitUnknown = errors.As(err, &unknown)
+		}
+		pending.Reason = safeError(err)
+		if saveErr := s.repository.SavePendingOnboarding(ctx, *pending); saveErr != nil {
+			err = fmt.Errorf("%w；待续状态保存失败：%v", err, saveErr)
+		}
+		remoteWritten := pendingRemoteWrite(*pending)
+		if auditErr := s.recordFailure(ctx, operationID, validated, "remote-write", remoteWritten, err); auditErr != nil {
+			err = fmt.Errorf("%w；账号添加失败审计保存失败：%v", err, auditErr)
+		}
+		result := map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}
+		if pending.KeyCommitUnknown {
+			return result, fmt.Errorf("%w；提交结果不确定，后续续办只会按 marker 对账，不会再次创建", err)
+		}
+		return result, fmt.Errorf("%w；开户创建意图已保存，可在明确失败后安全重试", err)
+	}
+	pending.UpstreamKeyID = key.KeyID
+	pending.UpstreamKeyName = &key.Name
+	pending.KeyCommitUnknown = false
+	pending.Reason = "上游 Key 已按稳定 ID 确认"
+	if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+		return map[string]any{"remote_write": true, "pending": pendingResult(*pending)}, fmt.Errorf("上游 Key 已确认但待续状态保存失败：%w", err)
+	}
+	result := map[string]any{"remote_write": true, "upstream_key_created": keyCreatedNow}
+	if err := s.private.SaveUpstreamKeySecret(ctx, configstore.UpstreamKeySecret{
+		Host: validated.auth.Host, KeyID: key.KeyID, GroupID: validated.candidateID(), Secret: key.Secret,
+	}); err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("本地 Key 保存失败：%w", err))
+	}
+	accountMarker := accountCreationMarker(operationID)
+	remark := creationRemark(validated.candidate, validated.request.Notes, accountMarker, pending.CreatedAt)
+	client, err := adminclient.New(adminclient.Config{
+		BaseURL: target.BaseURL, AdminKey: target.AdminKey,
+		Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 3,
+	}, nil)
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, err)
+	}
+	localGroupNumericIDs, err := onboardingLocalNumericIDs(validated.locals)
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, err)
+	}
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
-		"credentials": map[string]any{"api_key": key.Secret, "base_url": validated.auth.BaseURL}, "extra": validated.request.Extra,
-		"rate_multiplier": json.Number(validated.multiplier), "group_ids": localGroupIDs,
+		"credentials": map[string]any{"api_key": key.Secret, "base_url": validated.accountBaseURL}, "extra": validated.request.Extra,
+		"rate_multiplier": json.Number(validated.multiplier), "group_ids": localGroupNumericIDs,
 		"concurrency": concurrency, "priority": priority,
 		"auto_pause_on_expired": true,
 	}
-	created, err := client.CreateAccount(ctx, body)
+	var created map[string]any
+	accountWasUnknown := pending.AccountCommitUnknown
+	if pending.UpstreamAccountID != "" {
+		created = map[string]any{"id": pending.UpstreamAccountID}
+	} else if pending.AccountCommitUnknown {
+		var found bool
+		created, found, err = client.ReconcileAccountWithMarker(ctx, accountMarker)
+		if err == nil && !found {
+			err = &adminclient.CommitUnknownError{Marker: accountMarker, Cause: errors.New("账号 marker 尚未在管理目录中可见")}
+		}
+	} else {
+		pending.AccountCommitUnknown = true
+		pending.Reason = "准备按不可变 marker 创建管理账号"
+		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+			return result, fmt.Errorf("账号创建前状态保存失败：%w", err)
+		}
+		created, err = client.CreateAccountWithMarker(ctx, body, accountMarker)
+	}
 	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(err, key.Secret))
+		if accountWasUnknown {
+			pending.AccountCommitUnknown = true
+		} else {
+			var unknown *adminclient.CommitUnknownError
+			pending.AccountCommitUnknown = errors.As(err, &unknown)
+		}
+		return s.pendingFailure(ctx, validated, pending, result, redactSecret(err, key.Secret))
 	}
 	accountID := textValue(firstPresent(created, "id", "account_id"))
-	scheduleResponse, err := client.Mutate(ctx, "POST", "/admin/accounts/"+accountID+"/schedulable", map[string]any{"schedulable": validated.request.Schedulable})
-	if err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, redactSecret(err, key.Secret))
+	if !stableID(accountID) {
+		pending.AccountCommitUnknown = true
+		return s.pendingFailure(ctx, validated, pending, result, errors.New("账号创建结果缺少稳定 ID，已停止后续写入"))
 	}
-	verified := validated.request.Schedulable
-	if response, trusted := matchingOnboardingResponse(scheduleResponse, accountID, accountName, onboardingLocalIDs(validated.locals), validated.multiplier, validated.request.Schedulable); trusted {
-		verified = response
+	pending.UpstreamAccountID = accountID
+	pending.AccountCommitUnknown = false
+	pending.Reason = "管理账号已按稳定 ID 确认"
+	if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+		return result, fmt.Errorf("管理账号 %s 已确认但待续状态保存失败：%w", accountID, err)
+	}
+	// The account-catalog lease stays held until this unpublished ID is committed.
+	created, err = client.Account(ctx, accountID)
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("管理账号 %s 创建后完整读回失败：%w", accountID, err))
+	}
+	if err := verifyCreatedAccount(created, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, err)
+	}
+	_, err = client.Mutate(ctx, "POST", "/admin/accounts/"+accountID+"/schedulable", map[string]any{"schedulable": validated.request.Schedulable})
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, redactSecret(err, key.Secret))
+	}
+	created, err = client.Account(ctx, accountID)
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("账号调度状态写入后完整读回失败：%w", err))
+	}
+	if err := verifyCreatedAccount(created, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, err)
+	}
+	verified, ok := created["schedulable"].(bool)
+	if !ok || verified != validated.request.Schedulable {
+		return s.pendingFailure(ctx, validated, pending, result, errors.New("账号调度状态写后完整读回不一致"))
 	}
 	projection := business.OnboardingProjection{
 		OperationID: operationID, AccountID: accountID, AccountName: accountName,
-		UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType, BaseURL: validated.auth.BaseURL,
+		UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType, BaseURL: validated.accountBaseURL,
 		UpstreamKeyID: key.KeyID, UpstreamKeyName: key.Name, UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
 		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: verified,
-		Priority: &priority, Concurrency: &concurrency, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: false,
+		Priority: &priority, Concurrency: &concurrency, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: true,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
-		return s.pendingFailure(ctx, operationID, validated, key, result, err)
+		return s.pendingFailure(ctx, validated, pending, result, err)
 	}
 	return map[string]any{
 		"operation_id": operationID, "account_id": accountID, "account_name": accountName,
 		"local_group_ids": onboardingLocalIDs(validated.locals), "local_group_names": onboardingLocalNames(validated.locals),
 		"upstream_group_id": validated.candidateID(), "upstream_group_name": validated.candidate.GroupName,
-		"schedulable": verified, "credentials": "已保存到 Console 私有配置库", "upstream_key_created": pending == nil,
-		"readback_confirmed": false, "concurrency": concurrency, "priority": priority,
+		"schedulable": verified, "credentials": "已保存到 Console 私有配置库", "upstream_key_created": keyCreatedNow,
+		"remote_write": true, "readback_confirmed": true, "concurrency": concurrency, "priority": priority,
 	}, nil
 }
 
@@ -354,23 +560,67 @@ func accountCreationParameters(defaults configstore.AccountDefaultsSettings, req
 	return priority, concurrency
 }
 
+type frozenLocalGroup struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type frozenOnboardingIntent struct {
+	UpstreamHost        string             `json:"upstream_host"`
+	UpstreamType        string             `json:"upstream_type"`
+	UpstreamBaseURL     string             `json:"upstream_base_url"`
+	AccountBaseURL      string             `json:"account_base_url"`
+	UpstreamGroupID     string             `json:"upstream_group_id"`
+	UpstreamGroupName   string             `json:"upstream_group_name"`
+	UpstreamDescription string             `json:"upstream_description"`
+	TargetBaseURL       string             `json:"target_base_url"`
+	AccountName         string             `json:"account_name"`
+	AccountType         string             `json:"account_type"`
+	Platform            string             `json:"platform"`
+	Notes               string             `json:"notes"`
+	Extra               map[string]any     `json:"extra"`
+	LocalGroups         []frozenLocalGroup `json:"local_groups"`
+	Multiplier          string             `json:"multiplier"`
+	Priority            int64              `json:"priority"`
+	Concurrency         int64              `json:"concurrency"`
+	Schedulable         bool               `json:"schedulable"`
+}
+
+func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64) (string, error) {
+	locals := make([]frozenLocalGroup, 0, len(validated.locals))
+	for _, local := range validated.locals {
+		locals = append(locals, frozenLocalGroup{ID: local.ID, Name: local.Name})
+	}
+	sort.Slice(locals, func(left, right int) bool { return numericIDLess(locals[left].ID, locals[right].ID) })
+	notes := ""
+	if validated.request.Notes != nil {
+		notes = strings.TrimSpace(*validated.request.Notes)
+	}
+	description := ""
+	if validated.candidate.Description != nil {
+		description = strings.Join(strings.Fields(*validated.candidate.Description), " ")
+	}
+	intent := frozenOnboardingIntent{
+		UpstreamHost: strings.ToLower(strings.TrimSpace(validated.auth.Host)), UpstreamType: strings.ToLower(strings.TrimSpace(validated.request.UpstreamType)),
+		UpstreamBaseURL: strings.TrimRight(strings.TrimSpace(validated.auth.BaseURL), "/"), UpstreamGroupID: validated.candidateID(),
+		UpstreamGroupName: validated.candidate.GroupName, UpstreamDescription: description, AccountBaseURL: validated.accountBaseURL,
+		TargetBaseURL: strings.TrimRight(strings.TrimSpace(targetBaseURL), "/"),
+		AccountName:   accountName, AccountType: accountType, Platform: platform, Notes: notes, Extra: validated.request.Extra,
+		LocalGroups: locals, Multiplier: validated.multiplier, Priority: priority, Concurrency: concurrency, Schedulable: validated.request.Schedulable,
+	}
+	encoded, err := json.Marshal(intent)
+	if err != nil {
+		return "", errors.New("开户意图编码失败")
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 func createKey(ctx context.Context, client KeyClient, record configstore.AuthRecord, name, groupID string, verification bool) (upstreamsync.CreatedKey, error) {
 	if configurable, ok := client.(configurableKeyClient); ok {
 		return configurable.CreateKeyWithVerification(ctx, record, name, groupID, verification)
 	}
 	return client.CreateKey(ctx, record, name, groupID)
-}
-
-func matchingOnboardingResponse(payload map[string]any, accountID, name string, groupIDs []string, multiplier string, schedulable bool) (bool, bool) {
-	if raw, present := payload["data"]; present {
-		var ok bool
-		payload, ok = raw.(map[string]any)
-		if !ok {
-			return false, false
-		}
-	}
-	value, err := verifyReadback(payload, accountID, name, groupIDs, multiplier, schedulable)
-	return value, err == nil
 }
 
 func (s *Service) validate(ctx context.Context, request Request) (validatedRequest, error) {
@@ -398,18 +648,26 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 		if err != nil {
 			return validatedRequest{}, err
 		}
-		if _, err := strconv.ParseInt(local.ID, 10, 64); err != nil {
+		if !stableID(local.ID) {
 			return validatedRequest{}, errors.New("本地分组稳定 ID 超出支持范围")
 		}
 		seenLocalGroups[localGroupID] = struct{}{}
 		locals = append(locals, local)
 	}
+	sort.Slice(locals, func(left, right int) bool { return numericIDLess(locals[left].ID, locals[right].ID) })
 	auth, err := s.private.AuthRecord(ctx, request.Host)
 	if err != nil {
 		return validatedRequest{}, err
 	}
 	if auth == nil {
 		return validatedRequest{}, errors.New("账号添加前必须先配置该 Host 的鉴权记录")
+	}
+	accountBaseURL := auth.BaseURL
+	if request.BaseURL != nil {
+		accountBaseURL, err = configstore.ValidateBaseURL(*request.BaseURL)
+		if err != nil {
+			return validatedRequest{}, fmt.Errorf("账号 Base URL 无效：%w", err)
+		}
 	}
 	candidates, err := s.repository.OnboardingCandidates(ctx, auth.Host)
 	if err != nil {
@@ -445,7 +703,10 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	request.LocalGroupID = locals[0].ID
 	request.LocalGroupIDs = onboardingLocalIDs(locals)
 	request.AccountIDs = accountIDs
-	validated := validatedRequest{request: request, multiplier: multiplier, locals: locals, candidate: *candidate, auth: *auth}
+	validated := validatedRequest{
+		request: request, accountBaseURL: accountBaseURL, multiplier: multiplier,
+		locals: locals, candidate: *candidate, auth: *auth,
+	}
 	if len(accountIDs) == 0 {
 		if _, err := accountPlatform(request, *candidate, locals[0]); err != nil {
 			return validatedRequest{}, err
@@ -498,17 +759,30 @@ func onboardingLocalIDs(groups []business.LocalOnboardingGroup) []string {
 	for _, group := range groups {
 		result = append(result, group.ID)
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(left, right int) bool { return numericIDLess(result[left], result[right]) })
 	return result
 }
 
-func onboardingLocalNumericIDs(groups []business.LocalOnboardingGroup) []int64 {
+func numericIDLess(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if len(left) == len(right) {
+		return left < right
+	}
+	return len(left) < len(right)
+}
+
+func onboardingLocalNumericIDs(groups []business.LocalOnboardingGroup) ([]int64, error) {
 	ids := onboardingLocalIDs(groups)
 	result := make([]int64, 0, len(ids))
 	for _, id := range ids {
-		result = append(result, mustInt64(id))
+		parsed, err := strconv.ParseInt(id, 10, 64)
+		if err != nil || parsed <= 0 {
+			return nil, errors.New("本地分组稳定 ID 超出支持范围")
+		}
+		result = append(result, parsed)
 	}
-	return result
+	return result, nil
 }
 
 func onboardingLocalNames(groups []business.LocalOnboardingGroup) []string {
@@ -521,7 +795,7 @@ func onboardingLocalNames(groups []business.LocalOnboardingGroup) []string {
 }
 
 func (s *Service) updateAccountGroups(ctx context.Context, validated validatedRequest) (map[string]any, error) {
-	target, err := s.private.TargetSettings(ctx)
+	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -533,112 +807,180 @@ func (s *Service) updateAccountGroups(ctx context.Context, validated validatedRe
 		return map[string]any{"remote_write": false}, err
 	}
 	desiredIDs := onboardingLocalIDs(validated.locals)
-	desiredNumericIDs := onboardingLocalNumericIDs(validated.locals)
+	desiredNumericIDs, err := onboardingLocalNumericIDs(validated.locals)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
 	results := make([]map[string]any, 0, len(validated.request.AccountIDs))
+	remoteWritten := false
+	result := func(readbackConfirmed bool) map[string]any {
+		return map[string]any{
+			"operation": "account.groups", "remote_write": remoteWritten, "readback_confirmed": readbackConfirmed,
+			"upstream_group_id": validated.candidateID(), "upstream_group_name": validated.candidate.GroupName,
+			"local_group_ids": desiredIDs, "local_group_names": onboardingLocalNames(validated.locals),
+			"base_url": validated.request.BaseURL, "accounts": results,
+		}
+	}
 	for _, accountID := range validated.request.AccountIDs {
 		before, err := client.Account(ctx, accountID)
 		if err != nil {
-			return map[string]any{"remote_write": false}, err
+			return result(false), err
 		}
 		beforeIDs, err := stableIDs(before["group_ids"])
 		if err != nil {
-			return map[string]any{"remote_write": false}, errors.New("管理平台账号当前分组不可读")
+			return result(false), errors.New("管理平台账号当前分组不可读")
 		}
 		operationID, err := operationID()
 		if err != nil {
-			return map[string]any{"remote_write": false}, err
+			return result(false), err
 		}
 		accountName := textValue(before["name"])
 		field := "group_ids"
-		after, err := client.UpdateAccountGroups(ctx, accountID, desiredNumericIDs)
+		beforeValue, afterValue := any(beforeIDs), any(desiredIDs)
+		if validated.request.BaseURL != nil {
+			field = "group_ids,credentials.base_url"
+			beforeValue = map[string]any{"group_ids": beforeIDs, "base_url": onboardingAccountBaseURL(before)}
+			afterValue = map[string]any{"group_ids": desiredIDs, "base_url": validated.accountBaseURL}
+		}
+		after, err := client.UpdateAccountGroupsAndBaseURL(ctx, accountID, desiredNumericIDs, validated.request.BaseURL)
+		remoteWritten = true
 		if err != nil {
 			detail := safeError(err)
 			operation := business.AccountOperation{
 				OperationID: operationID, OperationType: "account.groups", State: "failed", Phase: "remote-readback",
 				Actor: validated.request.Actor, Error: &detail, RemoteConfirmed: true, ReadbackConfirmed: false,
 				ObjectID: accountID, ObjectName: &accountName, GroupNames: onboardingLocalNames(validated.locals),
-				FieldName: &field, Before: beforeIDs, After: desiredIDs, Writeback: true,
+				FieldName: &field, Before: beforeValue, After: afterValue, Writeback: true,
 			}
-			_ = s.repository.RecordAccountOperation(ctx, operation)
-			return map[string]any{"remote_write": true}, err
+			auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(ctx), onboardingAuditTimeout)
+			auditErr := s.repository.RecordAccountOperation(auditCtx, operation)
+			cancelAudit()
+			if auditErr != nil {
+				return result(false), fmt.Errorf("%w；账号分组失败审计保存失败：%v", err, auditErr)
+			}
+			return result(false), err
 		}
 		confirmedIDs, err := stableIDs(after["group_ids"])
 		if err != nil || strings.Join(confirmedIDs, ",") != strings.Join(desiredIDs, ",") {
-			return map[string]any{"remote_write": true}, errors.New("管理平台账号分组写后确认不一致")
+			return result(false), errors.New("管理平台账号分组写后确认不一致")
 		}
 		operation := business.AccountOperation{
 			OperationID: operationID, OperationType: "account.groups", State: "succeeded", Phase: "readback",
 			Actor: validated.request.Actor, RemoteConfirmed: true, ReadbackConfirmed: true,
 			ObjectID: accountID, ObjectName: &accountName, GroupNames: onboardingLocalNames(validated.locals),
-			FieldName: &field, Before: beforeIDs, After: confirmedIDs, Writeback: true,
+			FieldName: &field, Before: beforeValue, After: afterValue, Writeback: true,
 		}
-		if err := s.repository.CommitAccountGroupsReadback(ctx, accountID, validated.locals, operation); err != nil {
-			return map[string]any{"remote_write": true}, errors.New("管理平台分组已更新，但本地绑定提交失败：" + err.Error())
+		if err := s.repository.CommitAccountGroupsReadback(ctx, accountID, validated.locals, validated.request.BaseURL, operation); err != nil {
+			return result(false), errors.New("管理平台分组已更新，但本地绑定提交失败：" + err.Error())
 		}
 		results = append(results, map[string]any{"account_id": accountID, "before": beforeIDs, "after": confirmedIDs})
 	}
-	return map[string]any{
-		"operation": "account.groups", "remote_write": true, "readback_confirmed": true,
-		"upstream_group_id": validated.candidateID(), "upstream_group_name": validated.candidate.GroupName,
-		"local_group_ids": desiredIDs, "local_group_names": onboardingLocalNames(validated.locals), "accounts": results,
-	}, nil
+	return result(true), nil
 }
 
-func (s *Service) pendingFailure(ctx context.Context, operationID string, validated validatedRequest, key upstreamsync.CreatedKey, result map[string]any, cause error) (map[string]any, error) {
-	reason := safeError(cause)
-	primaryLocal := validated.locals[0]
-	pending := business.PendingOnboarding{
-		OperationID: operationID, UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType,
-		UpstreamKeyID: key.KeyID, UpstreamKeyName: &key.Name, UpstreamGroupID: validated.candidateID(),
-		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
-		LocalGroupName: primaryLocal.Name, Multiplier: validated.multiplier, Reason: reason,
+func onboardingAccountBaseURL(account map[string]any) string {
+	raw := account["base_url"]
+	if credentials, ok := account["credentials"].(map[string]any); ok {
+		if value, present := credentials["base_url"]; present {
+			raw = value
+		}
 	}
-	if err := s.repository.SavePendingOnboarding(ctx, pending); err != nil {
+	if raw == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(fmt.Sprint(raw)), "/")
+}
+
+func (s *Service) pendingFailure(ctx context.Context, validated validatedRequest, pending *business.PendingOnboarding, result map[string]any, cause error) (map[string]any, error) {
+	reason := safeError(cause)
+	pending.Reason = reason
+	if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
 		reason += "；待续记录保存失败：" + safeError(err)
 	}
-	s.recordFailure(ctx, operationID, validated, "remote-readback", true, errors.New(reason))
-	result["pending"] = map[string]any{
-		"operation_id": operationID, "upstream_host": validated.auth.Host, "upstream_key_id": key.KeyID,
-		"upstream_group_id": validated.candidateID(), "local_group_id": primaryLocal.ID,
+	remoteWritten := pendingRemoteWrite(*pending)
+	if auditErr := s.recordFailure(ctx, pending.OperationID, validated, "remote-readback", remoteWritten, errors.New(reason)); auditErr != nil {
+		reason += "；账号添加失败审计保存失败：" + safeError(auditErr)
 	}
+	result["remote_write"] = remoteWritten
+	result["pending"] = pendingResult(*pending)
 	return result, errors.New(reason + "；上游 Key 已创建，已保存待续记录并禁止重复创建")
 }
 
-func (s *Service) recordFailure(ctx context.Context, operationID string, validated validatedRequest, phase string, remote bool, cause error) {
-	field, name, reason := "created", naming.AccountName(validated.candidate.UpstreamName, validated.auth.BaseURL, validated.multiplier), safeError(cause)
+func pendingRemoteWrite(pending business.PendingOnboarding) bool {
+	return strings.TrimSpace(pending.UpstreamKeyID) != "" ||
+		strings.TrimSpace(pending.UpstreamAccountID) != "" ||
+		pending.KeyCommitUnknown || pending.AccountCommitUnknown
+}
+
+func pendingResult(pending business.PendingOnboarding) map[string]any {
+	return map[string]any{
+		"operation_id": pending.OperationID, "upstream_host": pending.UpstreamHost,
+		"upstream_key_id": pending.UpstreamKeyID, "upstream_account_id": pending.UpstreamAccountID,
+		"upstream_group_id": pending.UpstreamGroupID, "local_group_id": pending.LocalGroupID, "local_group_ids": pending.LocalGroupIDs,
+		"key_commit_unknown": pending.KeyCommitUnknown, "account_commit_unknown": pending.AccountCommitUnknown,
+	}
+}
+
+func (s *Service) recordFailure(ctx context.Context, operationID string, validated validatedRequest, phase string, remote bool, cause error) error {
+	field, name, reason := "created", naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier), safeError(cause)
 	operation := business.AccountOperation{
 		OperationID: operationID, OperationType: "account.onboarding", State: "failed", Phase: phase,
 		Actor: validated.request.Actor, Error: &reason, RemoteConfirmed: remote, ReadbackConfirmed: false,
 		ObjectID: "", ObjectName: &name, GroupNames: onboardingLocalNames(validated.locals), FieldName: &field,
 		After: map[string]any{"name": name, "group_ids": onboardingLocalIDs(validated.locals), "rate_multiplier": validated.multiplier}, Writeback: true,
 	}
-	if err := s.repository.RecordAccountOperation(ctx, operation); err != nil {
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), onboardingAuditTimeout)
+	defer cancel()
+	if err := s.repository.RecordAccountOperation(auditCtx, operation); err != nil {
 		slog.Error("账号添加失败记录保存失败", "operation_id", operationID, "host", validated.auth.Host, "error", err)
+		return err
 	}
+	return nil
 }
 
 func (v validatedRequest) candidateID() string { return pointerValue(v.candidate.GroupID) }
 
-func verifyReadback(value map[string]any, accountID, name string, groupIDs []string, multiplier string, schedulable bool) (bool, error) {
+func verifyCreatedAccount(value map[string]any, accountID, name, platform, accountType, marker string, groupIDs []string, multiplier string, priority, concurrency int64) error {
 	if textValue(firstPresent(value, "id", "account_id")) != accountID {
-		return false, errors.New("远程账号 ID 读回不一致")
+		return errors.New("管理账号完整读回的稳定 ID 不一致")
 	}
 	if textValue(value["name"]) != name {
-		return false, errors.New("远程账号名称读回不一致")
+		return errors.New("管理账号完整读回的名称不一致")
 	}
-	effective, ok := value["schedulable"].(bool)
-	if !ok || effective != schedulable {
-		return false, errors.New("远程账号调度状态读回不一致")
+	if strings.ToLower(textValue(value["platform"])) != platform {
+		return errors.New("管理账号完整读回的平台不一致")
+	}
+	if strings.ToLower(textValue(value["type"])) != accountType {
+		return errors.New("管理账号完整读回的类型不一致")
+	}
+	if !markerLinePresent(textValue(value["notes"]), marker) {
+		return errors.New("管理账号完整读回缺少开户 marker")
 	}
 	groups, err := stableIDs(value["group_ids"])
 	if err != nil || strings.Join(groups, ",") != strings.Join(groupIDs, ",") {
-		return false, errors.New("远程账号分组读回不一致")
+		return errors.New("管理账号完整读回的分组不一致")
 	}
-	actual, err := positiveDecimal(textValue(firstPresent(value, "rate_multiplier", "multiplier")))
-	if err != nil || actual != multiplier {
-		return false, errors.New("远程账号倍率读回不一致")
+	actualMultiplier, err := positiveDecimal(textValue(firstPresent(value, "rate_multiplier", "multiplier")))
+	if err != nil || actualMultiplier != multiplier {
+		return errors.New("管理账号完整读回的倍率不一致")
 	}
-	return effective, nil
+	if textValue(value["priority"]) != strconv.FormatInt(priority, 10) {
+		return errors.New("管理账号完整读回的优先级不一致")
+	}
+	if textValue(value["concurrency"]) != strconv.FormatInt(concurrency, 10) {
+		return errors.New("管理账号完整读回的并发不一致")
+	}
+	return nil
+}
+
+func markerLinePresent(notes, marker string) bool {
+	notes = strings.ReplaceAll(notes, "\r\n", "\n")
+	for _, line := range strings.Split(notes, "\n") {
+		if strings.TrimSpace(line) == marker {
+			return true
+		}
+	}
+	return false
 }
 
 func stableIDs(value any) ([]string, error) {
@@ -654,7 +996,7 @@ func stableIDs(value any) ([]string, error) {
 		}
 		result = append(result, id)
 	}
-	sort.Strings(result)
+	sort.Slice(result, func(left, right int) bool { return numericIDLess(result[left], result[right]) })
 	return result, nil
 }
 
@@ -694,12 +1036,20 @@ func normalizePlatform(value string) string {
 	return value
 }
 
-func creationRemark(candidate business.OnboardingCandidate, supplied *string) string {
+func accountCreationMarker(operationID string) string {
+	return "[sub2api-console:onboarding:" + operationID + "]"
+}
+
+func creationRemark(candidate business.OnboardingCandidate, supplied *string, marker, createdAt string) string {
 	description := "未提供"
 	if candidate.Description != nil && strings.TrimSpace(*candidate.Description) != "" {
 		description = strings.ReplaceAll(strings.Join(strings.Fields(*candidate.Description), " "), "|", "/")
 	}
-	value := fmt.Sprintf("【添加账号】：%s，分组：%s | 介绍：%s", time.Now().UTC().Truncate(time.Second).Format(time.RFC3339), candidate.GroupName, description)
+	timestamp := strings.TrimSpace(createdAt)
+	if parsed, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
+		timestamp = parsed.UTC().Truncate(time.Second).Format(time.RFC3339)
+	}
+	value := fmt.Sprintf("【添加账号】：%s，分组：%s | 介绍：%s\n%s", timestamp, candidate.GroupName, description, marker)
 	if supplied != nil && strings.TrimSpace(*supplied) != "" {
 		value += "\n" + strings.TrimSpace(*supplied)
 	}
@@ -727,20 +1077,8 @@ func stableID(value string) bool {
 	if value == "" || value[0] == '0' {
 		return false
 	}
-	for _, character := range value {
-		if character < '0' || character > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func mustInt64(value string) int64 {
-	result := int64(0)
-	for _, character := range value {
-		result = result*10 + int64(character-'0')
-	}
-	return result
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	return err == nil && parsed > 0
 }
 
 func operationID() (string, error) {

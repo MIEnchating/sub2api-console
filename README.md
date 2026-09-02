@@ -54,9 +54,20 @@ bun run dev
 
 默认数据库均位于当前目录的 `data/`：`sub2api-console.sqlite3`、`tasks.sqlite3` 和 `console-config.sqlite3`。Console 启动和运行不需要任何外部运行库路径，也不会挂载或读取 `sub2api-skills` 的数据。
 
-首次打开会进入初始化页，需要设置控制台账号密码、Sub2API Admin Base URL 和 Admin Key。初始化完成后，控制台使用 HttpOnly 会话 Cookie 登录；Admin Key 只保存在后端 `data/console-config.sqlite3`，不会返回到浏览器。业务账号、分组、绑定、运行记录和告警只从 Console 自有业务库读取。
+首次打开会进入初始化页，需要设置控制台账号密码、Sub2API Admin Base URL 和 Admin Key。直接运行 API、请求确实来自本机回环地址且使用 `localhost` 或回环 IP 访问时可以直接初始化；其他连接必须在服务端配置至少 32 个字符的 `SUB2API_CONSOLE_SETUP_TOKEN`，并在初始化页输入相同令牌。Docker Compose 的浏览器请求会经过前端容器代理，API 侧不会把它识别为回环连接，因此首次使用 Compose 时也必须配置令牌，即使浏览器打开的是宿主机 `localhost`。令牌只通过 `X-Setup-Token` 请求头发送，不写入配置数据库，初始化完成后即不能再次使用该接口覆盖配置。
 
-Docker 版前端通过同源 `/api` 反向代理到 API，远程访问时只需开放 `3004`（API 的 `8080` 可仅保留内网访问）。生产环境应在反向代理层启用 HTTPS，并设置 `SUB2API_CONSOLE_COOKIE_SECURE=true`。
+首次使用 Docker Compose 前生成一次性令牌：
+
+```bash
+export SUB2API_CONSOLE_SETUP_TOKEN="$(openssl rand -hex 32)"
+docker compose up -d
+```
+
+初始化完成后可在下次重建 API 容器时从部署环境中移除该变量。控制台随后使用 HttpOnly 会话 Cookie 登录；Admin Key 只保存在后端 `data/console-config.sqlite3`，不会返回到浏览器。业务账号、分组、绑定、运行记录和告警只从 Console 自有业务库读取。
+
+Docker 版前端通过同源 `/api` 反向代理到 API，远程访问时只需开放 `3004`（Compose 默认把 API 的 `8080` 仅绑定到宿主机回环地址）。生产环境应在反向代理层启用 HTTPS，并设置 `SUB2API_CONSOLE_COOKIE_SECURE=true`。若 TLS 在外层反向代理终止，还必须把该代理连接前端容器时使用的源地址或专用网段配置到 `SUB2API_CONSOLE_FRONTEND_TRUSTED_PROXY_CIDRS`，例如 `192.0.2.10/32`；默认空值不会采信客户端发送的 `X-Forwarded-For` 或 `X-Forwarded-Proto`。外层代理必须覆盖 `X-Forwarded-Proto` 为单个 `http` 或 `https` 值，并正确覆盖或追加经过验证的客户端地址。不要配置普通客户端网段、共享的不可信容器网段或 `0.0.0.0/0`；非法 CIDR 会使前端容器拒绝启动。
+
+`SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS` 是独立的 API 侧信任列表。Compose 默认不信任任何 TCP 来源；前端与 API 通过当前 Compose 项目专属卷中的 `/run/sub2api-console/api.sock` 通信，只有这个 Unix socket listener 会把请求标记为来自受信代理。同一 Docker 网络中的其他容器既不能通过重复 IP 冒充前端，也不能访问未挂载的 socket 卷。该方案不占用固定子网，多套 Compose 项目可以并行使用；宿主机端口可分别通过 `SUB2API_CONSOLE_API_PORT` 和 `SUB2API_CONSOLE_FRONTEND_PORT` 调整。显式配置 API 的 TCP 信任列表时，只能填写会规范化 `X-Forwarded-For`、`X-Real-IP` 和 `X-Forwarded-Proto` 的直接反向代理地址，优先使用单地址 `/32` 或 `/128`。若前端与 API 不同源，还需通过 `SUB2API_CONSOLE_FRONTEND_ORIGINS` 明确列出允许携带凭据的前端 Origin；不要使用通配符。
 
 使用 Docker Compose 部署：
 
@@ -68,7 +79,7 @@ docker compose ps
 
 默认使用本仓库发布的 `ghcr.io/mienchating/sub2api-console-api:latest` 和 `ghcr.io/mienchating/sub2api-console-frontend:latest` 多架构镜像。生产环境建议通过 `SUB2API_CONSOLE_API_IMAGE`、`SUB2API_CONSOLE_FRONTEND_IMAGE` 固定到同一个版本标签，避免两个服务版本不一致。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
 
-Compose 会等待 API 健康后再启动前端，并为两个服务配置自动重启和健康检查。API 容器启动时只调整挂载的 `./data` 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。SSE 反向代理读写超时为一小时，长时间巡检不会被 Nginx 的默认超时截断。
+Compose 会等待 API 健康后再启动前端，并为两个服务配置自动重启和健康检查。API 容器启动时会调整挂载的 `./data` 和项目专属 socket 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。SSE 反向代理读写超时为一小时，长时间巡检不会被 Nginx 的默认超时截断。
 
 ## 发布
 

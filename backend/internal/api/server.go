@@ -9,7 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +23,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -27,6 +32,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/inspection"
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/newapimanagement"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
@@ -110,6 +117,16 @@ type SystemLogReader interface {
 	SearchSystemLogs(context.Context, opstraffic.SystemLogQuery) (business.SystemLogPage, error)
 }
 
+type NewAPIManagementService interface {
+	Workspace(context.Context, string) (newapimanagement.Workspace, error)
+	SavePlatform(context.Context, newapimanagement.PlatformInput) (configstore.NewAPIPlatformSummary, error)
+	DeletePlatform(context.Context, string) (bool, error)
+	Refresh(context.Context, string) (newapimanagement.RemoteSnapshot, error)
+	SaveBindings(context.Context, string, []newapimanagement.GroupBindingInput) ([]business.NewAPIGroupBinding, error)
+	CreateChannel(context.Context, string, newapimanagement.ChannelInput) (map[string]any, error)
+	SaveModelPrices(context.Context, string, []newapimanagement.ModelPriceInput) (newapimanagement.RemoteSnapshot, error)
+}
+
 type InspectionController interface {
 	Status(context.Context) (inspection.Status, error)
 	UpdateConfig(context.Context, business.AutoInspectionConfig) (inspection.Status, error)
@@ -168,6 +185,11 @@ type AccountTaskEnqueuer interface {
 	EnqueueManualPriority(context.Context, string, int64, string, int64, bool, string) (taskstore.Task, error)
 	EnqueueClearManualPriority(context.Context, string, string) (taskstore.Task, error)
 	Models(context.Context, string) ([]string, error)
+}
+
+type AccountDeleteService interface {
+	Preview(context.Context, string) (accountdelete.Preview, error)
+	Enqueue(context.Context, string, *accountdelete.Binding, string, string) (taskstore.Task, error)
 }
 
 type ProbeTaskEnqueuer interface {
@@ -241,6 +263,7 @@ type Dependencies struct {
 	ManagementTasks    ManagementTaskEnqueuer
 	AccountMaintenance AccountMaintenanceTaskEnqueuer
 	AccountTasks       AccountTaskEnqueuer
+	AccountDelete      AccountDeleteService
 	ProbeTasks         ProbeTaskEnqueuer
 	ModelChecks        ModelCheckService
 	UpstreamDetect     UpstreamDetector
@@ -252,6 +275,7 @@ type Dependencies struct {
 	RequestTrace       RequestTraceReader
 	SystemLogs         SystemLogReader
 	Pricing            PricingService
+	NewAPIManagement   NewAPIManagementService
 }
 
 type Server struct {
@@ -270,6 +294,7 @@ type Server struct {
 	managementTasks    ManagementTaskEnqueuer
 	accountMaintenance AccountMaintenanceTaskEnqueuer
 	accountTasks       AccountTaskEnqueuer
+	accountDelete      AccountDeleteService
 	probeTasks         ProbeTaskEnqueuer
 	modelChecks        ModelCheckService
 	upstreamDetect     UpstreamDetector
@@ -281,6 +306,7 @@ type Server struct {
 	traceReader        RequestTraceReader
 	systemLogReader    SystemLogReader
 	pricing            PricingService
+	newAPIManagement   NewAPIManagementService
 	loginThrottle      *loginThrottle
 	now                func() time.Time
 }
@@ -311,6 +337,7 @@ type sessionStatus struct {
 type setupStatusResponse struct {
 	Initialized         bool     `json:"initialized"`
 	TargetConfigured    bool     `json:"target_configured"`
+	SetupTokenRequired  bool     `json:"setup_token_required"`
 	ConfigurationErrors []string `json:"configuration_errors"`
 }
 
@@ -357,6 +384,30 @@ type probeSettingsRequest struct {
 type accountDefaultsRequest struct {
 	Concurrency int64 `json:"concurrency" binding:"required,min=1,max=10000000"`
 	Priority    int64 `json:"priority" binding:"required,min=1,max=10000000"`
+}
+
+type newAPIPlatformRequest struct {
+	ID       string `json:"id" binding:"max=64"`
+	Name     string `json:"name" binding:"required,min=1,max=120"`
+	BaseURL  string `json:"base_url" binding:"required,min=1,max=2048"`
+	AdminKey string `json:"admin_key" binding:"max=4096"`
+	UserID   string `json:"user_id" binding:"required,min=1,max=128"`
+}
+
+type newAPIGroupBindingsRequest struct {
+	Bindings []newapimanagement.GroupBindingInput `json:"bindings" binding:"required,max=500,dive"`
+}
+
+type newAPIChannelRequest struct {
+	Name           string   `json:"name" binding:"required,min=1,max=120"`
+	Sub2APIGroupID string   `json:"sub2api_group_id" binding:"required,min=1,max=128"`
+	BaseURL        string   `json:"base_url" binding:"required,min=1,max=2048"`
+	ServiceKey     string   `json:"service_key" binding:"required,min=1,max=4096"`
+	Models         []string `json:"models" binding:"required,min=1,max=500,dive,required,max=256"`
+}
+
+type newAPIModelPricesRequest struct {
+	Prices []newapimanagement.ModelPriceInput `json:"prices" binding:"required,min=1,max=1000,dive"`
 }
 
 type notificationTestRequest struct {
@@ -432,6 +483,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		managementTasks:    services.ManagementTasks,
 		accountMaintenance: services.AccountMaintenance,
 		accountTasks:       services.AccountTasks,
+		accountDelete:      services.AccountDelete,
 		probeTasks:         services.ProbeTasks,
 		modelChecks:        services.ModelChecks,
 		upstreamDetect:     services.UpstreamDetect,
@@ -443,7 +495,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		traceReader:        services.RequestTrace,
 		systemLogReader:    services.SystemLogs,
 		pricing:            services.Pricing,
-		loginThrottle:      newLoginThrottle(),
+		newAPIManagement:   services.NewAPIManagement,
+		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
 		now:                time.Now,
 	}
 	gin.SetMode(gin.ReleaseMode)
@@ -473,6 +526,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.DELETE("/notifications/target-discovery/:task_id", server.cancelNotificationTargetDiscovery)
 	authorized.GET("/accounts", server.accounts)
 	authorized.GET("/accounts/:account_id", server.account)
+	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
+	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
 	authorized.GET("/traffic/ranking", server.trafficRanking)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
@@ -513,6 +568,13 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/pricing/backups", server.pricingBackups)
 	authorized.POST("/pricing/backups", server.createPricingBackup)
 	authorized.POST("/pricing/backups/:backup_id/restore", server.restorePricingBackup)
+	authorized.GET("/newapi", server.newAPIWorkspace)
+	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
+	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
+	authorized.POST("/newapi/platforms/:platform_id/refresh", server.refreshNewAPIPlatform)
+	authorized.PUT("/newapi/platforms/:platform_id/group-bindings", server.saveNewAPIGroupBindings)
+	authorized.POST("/newapi/platforms/:platform_id/channels", server.createNewAPIChannel)
+	authorized.PUT("/newapi/platforms/:platform_id/model-prices", server.saveNewAPIModelPrices)
 	authorized.GET("/upstreams", server.upstreams)
 	authorized.POST("/upstreams", server.createUpstream)
 	authorized.POST("/upstreams/detect", server.detectUpstream)
@@ -588,11 +650,16 @@ func (s *Server) setupStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, setupStatusResponse{
 		Initialized:         status.Initialized,
 		TargetConfigured:    status.TargetConfigured,
+		SetupTokenRequired:  s.setupTokenRequired(c.Request),
 		ConfigurationErrors: status.ConfigurationErrors,
 	})
 }
 
 func (s *Server) initialize(c *gin.Context) {
+	if s.setupTokenRequired(c.Request) && !s.validSetupCredential(c.Request) {
+		writeError(c, http.StatusForbidden, "远程初始化需要有效的初始化令牌")
+		return
+	}
 	var payload initializeRequest
 	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, http.StatusUnprocessableEntity, "初始化参数无效")
@@ -631,6 +698,7 @@ func (s *Server) initialize(c *gin.Context) {
 	c.JSON(http.StatusOK, setupStatusResponse{
 		Initialized:         status.Initialized,
 		TargetConfigured:    status.TargetConfigured,
+		SetupTokenRequired:  s.setupTokenRequired(c.Request),
 		ConfigurationErrors: status.ConfigurationErrors,
 	})
 }
@@ -857,8 +925,18 @@ func (s *Server) updateAdminTarget(c *gin.Context) {
 		writeError(c, http.StatusConflict, "请先完成控制台初始化")
 		return
 	}
+	guarded, release, err := mutationguard.Acquire(c.Request.Context(), s.business, mutationguard.ManagementTarget())
+	if err != nil {
+		writeError(c, http.StatusConflict, "管理目标正在被远端操作使用，请稍后重试")
+		return
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("管理目标配置租约释放失败", "error", err)
+		}
+	}()
 	if err := s.private.ConfigureTarget(
-		c.Request.Context(),
+		guarded,
 		payload.AdminBaseURL,
 		payload.AdminKey,
 		payload.RequestTimeoutSeconds,
@@ -1119,6 +1197,87 @@ func (s *Server) account(c *gin.Context) {
 		row.RecentResults = enriched[0].RecentResults
 	}
 	c.JSON(http.StatusOK, row)
+}
+
+func (s *Server) accountDeletePreview(c *gin.Context) {
+	if s.accountDelete == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号删除服务尚未就绪")
+		return
+	}
+	preview, err := s.accountDelete.Preview(c.Request.Context(), c.Param("account_id"))
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+		}
+		writeError(c, status, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Server) deleteAccount(c *gin.Context) {
+	if s.accountDelete == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号删除服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || (len(payload) != 2 && len(payload) != 7) {
+		writeError(c, http.StatusUnprocessableEntity, "账号删除参数必须包含确认账号 ID、管理目标以及预览返回的可选绑定范围")
+		return
+	}
+	confirmation, err := requiredText(payload, "confirmation_account_id", 1, 64)
+	if err != nil || confirmation != strings.TrimSpace(c.Param("account_id")) || !positiveNumericID(confirmation) {
+		writeError(c, http.StatusUnprocessableEntity, "确认账号 ID 与删除目标不一致")
+		return
+	}
+	managementBaseURL, err := requiredText(payload, "expected_management_base_url", 1, 2048)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "预期管理目标地址无效")
+		return
+	}
+	var expectedBinding *accountdelete.Binding
+	if len(payload) == 7 {
+		bindingID, bindingErr := positiveJSONInteger(payload["expected_binding_id"], "expected_binding_id", 1, 1<<62)
+		if bindingErr != nil {
+			writeError(c, http.StatusUnprocessableEntity, "预期 Binding ID 必须是稳定正整数")
+			return
+		}
+		upstreamID, upstreamErr := requiredText(payload, "expected_upstream_id", 1, 255)
+		if upstreamErr != nil {
+			writeError(c, http.StatusUnprocessableEntity, "预期稳定上游身份 ID 无效")
+			return
+		}
+		keyID, keyErr := requiredText(payload, "expected_upstream_key_id", 1, 255)
+		if keyErr != nil {
+			writeError(c, http.StatusUnprocessableEntity, "预期上游 Key ID 无效")
+			return
+		}
+		upstreamHost, upstreamHostErr := requiredText(payload, "expected_upstream_host", 1, 2048)
+		if upstreamHostErr != nil {
+			writeError(c, http.StatusUnprocessableEntity, "预期上游地址无效")
+			return
+		}
+		authHost, authHostErr := requiredText(payload, "expected_auth_host", 1, 2048)
+		if authHostErr != nil {
+			writeError(c, http.StatusUnprocessableEntity, "预期鉴权 Host 无效")
+			return
+		}
+		expectedBinding = &accountdelete.Binding{
+			ID: bindingID, UpstreamID: upstreamID, UpstreamHost: upstreamHost, AuthHost: authHost, UpstreamKeyID: keyID,
+		}
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountDelete.Enqueue(c.Request.Context(), confirmation, expectedBinding, managementBaseURL, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
 }
 
 func (s *Server) enrichRecentResults(ctx context.Context, accounts []business.AccountStatus) {
@@ -1386,7 +1545,7 @@ func (s *Server) clearAccountManualPriority(c *gin.Context) {
 
 func accountFieldPatch(payload map[string]any) (accountops.FieldPatch, error) {
 	allowed := map[string]struct{}{
-		"name": {}, "priority": {}, "load_factor": {}, "concurrency": {}, "notes": {},
+		"name": {}, "priority": {}, "load_factor": {}, "concurrency": {}, "upstream_host": {}, "base_url": {}, "notes": {},
 	}
 	for key := range payload {
 		if _, present := allowed[key]; !present {
@@ -1421,6 +1580,29 @@ func accountFieldPatch(payload map[string]any) (accountops.FieldPatch, error) {
 			return accountops.FieldPatch{}, err
 		}
 		result.ConcurrencyPresent, result.Concurrency = true, &value
+	}
+	if raw, present := payload["upstream_host"]; present {
+		value, err := nullableTextField(raw, "upstream_host", 1, 2048)
+		if err != nil || value == nil {
+			return accountops.FieldPatch{}, errors.New("upstream_host 必须是有效的上游 Host")
+		}
+		normalized := configstore.CanonicalHost(*value)
+		if normalized == "" || strings.ContainsAny(normalized, "/\\?#") {
+			return accountops.FieldPatch{}, errors.New("upstream_host 必须是有效的上游 Host")
+		}
+		result.UpstreamHostPresent, result.UpstreamHost = true, &normalized
+	}
+	if raw, present := payload["base_url"]; present {
+		value, err := nullableTextField(raw, "base_url", 1, 2048)
+		if err != nil || value == nil {
+			return accountops.FieldPatch{}, errors.New("base_url 必须是完整的 HTTP/HTTPS 地址")
+		}
+		normalized := strings.TrimRight(strings.TrimSpace(*value), "/")
+		parsed, parseErr := url.Parse(normalized)
+		if parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return accountops.FieldPatch{}, errors.New("base_url 必须是完整的 HTTP/HTTPS 地址")
+		}
+		result.BaseURLPresent, result.BaseURL = true, &normalized
 	}
 	if raw, present := payload["notes"]; present {
 		value, err := nullableTextField(raw, "notes", 0, 65536)
@@ -1863,7 +2045,7 @@ func parseOnboardingBatchRequests(payload map[string]any) ([]onboarding.Request,
 
 func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) {
 	allowed := map[string]struct{}{
-		"host": {}, "upstream_type": {}, "platform": {}, "account_type": {}, "notes": {},
+		"host": {}, "upstream_type": {}, "base_url": {}, "platform": {}, "account_type": {}, "notes": {},
 		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
 		"priority": {}, "concurrency": {}, "schedulable": {},
 	}
@@ -1908,7 +2090,9 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
 		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
 	}
-	for field, target := range map[string]**string{"platform": &result.Platform, "account_type": &result.AccountType, "notes": &result.Notes} {
+	for field, target := range map[string]**string{
+		"base_url": &result.BaseURL, "platform": &result.Platform, "account_type": &result.AccountType, "notes": &result.Notes,
+	} {
 		if raw, found := payload[field]; found {
 			if field == "platform" {
 				result.PlatformPresent = true
@@ -2515,6 +2699,9 @@ func (s *Server) setGroupExcluded(c *gin.Context) {
 }
 
 func bindRequestJSON(c *gin.Context, target any) error {
+	if err := requireJSONContentType(c.Request); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
@@ -2531,6 +2718,9 @@ func bindRequestJSON(c *gin.Context, target any) error {
 }
 
 func decodeRequestObject(c *gin.Context) (map[string]any, error) {
+	if err := requireJSONContentType(c.Request); err != nil {
+		return nil, err
+	}
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.UseNumber()
 	var value map[string]any
@@ -2542,6 +2732,14 @@ func decodeRequestObject(c *gin.Context) (map[string]any, error) {
 		return nil, errors.New("request body contains trailing JSON")
 	}
 	return value, nil
+}
+
+func requireJSONContentType(request *http.Request) error {
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
+		return errors.New("Content-Type must be application/json")
+	}
+	return nil
 }
 
 func (s *Server) requestActor(c *gin.Context) (string, error) {
@@ -2670,7 +2868,7 @@ func writeUpstreamMutation(c *gin.Context, result upstreamconfig.Configuration, 
 
 func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.Input, error) {
 	allowed := map[string]struct{}{
-		"host": {}, "name": {}, "base_url": {}, "upstream_type": {}, "auth_mode": {}, "recharge_rate": {},
+		"host": {}, "name": {}, "base_url": {}, "account_base_url": {}, "upstream_type": {}, "auth_mode": {}, "recharge_rate": {},
 		"access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {}, "headers": {}, "cookies": {},
 		"username": {}, "password": {}, "save_to_vault": {}, "entry": {},
 	}
@@ -2682,6 +2880,14 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 	baseURL, err := requiredText(payload, "base_url", 3, 2048)
 	if err != nil {
 		return upstreamconfig.Input{}, err
+	}
+	accountBaseURL := baseURL
+	if raw, present := payload["account_base_url"]; present {
+		value, valueErr := nullableTextField(raw, "account_base_url", 3, 2048)
+		if valueErr != nil || value == nil {
+			return upstreamconfig.Input{}, errors.New("account_base_url 必须是完整的 HTTP/HTTPS 地址")
+		}
+		accountBaseURL = *value
 	}
 	platform, err := requiredText(payload, "upstream_type", 2, 40)
 	if err != nil {
@@ -2696,7 +2902,7 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 		return upstreamconfig.Input{}, err
 	}
 	result := upstreamconfig.Input{
-		BaseURL: baseURL, UpstreamType: platform, AuthMode: authMode, RechargeRate: recharge,
+		BaseURL: baseURL, AccountBaseURL: accountBaseURL, UpstreamType: platform, AuthMode: authMode, RechargeRate: recharge,
 		Headers: map[string]string{}, Cookies: map[string]string{}, Present: map[string]bool{},
 	}
 	if creating {
@@ -2917,7 +3123,13 @@ func (s *Server) configureVaultEntry(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if err := s.private.SaveVaultEntry(c.Request.Context(), entry, present); err != nil {
+	guarded, release, err := s.acquireVaultMutation(c.Request.Context(), entry.Entry)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	defer release()
+	if err := s.private.SaveVaultEntry(guarded, entry, present); err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
@@ -2930,12 +3142,35 @@ func (s *Server) deleteVaultEntry(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "凭据名称长度必须在 1 到 255 之间")
 		return
 	}
-	deleted, err := s.private.DeleteVaultEntry(c.Request.Context(), entry)
+	guarded, release, err := s.acquireVaultMutation(c.Request.Context(), entry)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	defer release()
+	deleted, err := s.private.DeleteVaultEntry(guarded, entry)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"entry": entry, "deleted": deleted})
+}
+
+func (s *Server) acquireVaultMutation(ctx context.Context, entry string) (context.Context, func(), error) {
+	guarded, release, err := mutationguard.Acquire(ctx, s.business, mutationguard.Vault(entry))
+	if err != nil {
+		return nil, nil, err
+	}
+	released := false
+	return guarded, func() {
+		if released {
+			return
+		}
+		released = true
+		if err := release(); err != nil {
+			slog.Error("密码箱变更租约释放失败", "entry", strings.TrimSpace(entry), "error", err)
+		}
+	}, nil
 }
 
 func (s *Server) verifyManualAuth(c *gin.Context) {
@@ -3670,6 +3905,131 @@ func writeRows(c *gin.Context, rows any, err error, detail string) {
 	c.JSON(http.StatusOK, rows)
 }
 
+func (s *Server) newAPIWorkspace(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	workspace, err := s.newAPIManagement.Workspace(c.Request.Context(), c.Query("platform_id"))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "New API 管理数据读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, workspace)
+}
+
+func (s *Server) saveNewAPIPlatform(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIPlatformRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "New API 平台配置参数无效")
+		return
+	}
+	result, err := s.newAPIManagement.SavePlatform(c.Request.Context(), newapimanagement.PlatformInput{
+		ID: request.ID, Name: request.Name, BaseURL: request.BaseURL, AdminKey: request.AdminKey, UserID: request.UserID,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) deleteNewAPIPlatform(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	platformID := strings.TrimSpace(c.Param("platform_id"))
+	if platformID == "" || len(platformID) > 64 {
+		writeError(c, http.StatusUnprocessableEntity, "New API 平台 ID 无效")
+		return
+	}
+	deleted, err := s.newAPIManagement.DeletePlatform(c.Request.Context(), platformID)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	if !deleted {
+		writeError(c, http.StatusNotFound, "New API 平台不存在")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+func (s *Server) refreshNewAPIPlatform(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	result, err := s.newAPIManagement.Refresh(c.Request.Context(), c.Param("platform_id"))
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) saveNewAPIGroupBindings(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIGroupBindingsRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "New API 分组绑定参数无效")
+		return
+	}
+	result, err := s.newAPIManagement.SaveBindings(c.Request.Context(), c.Param("platform_id"), request.Bindings)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) createNewAPIChannel(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIChannelRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "New API 渠道参数无效")
+		return
+	}
+	result, err := s.newAPIManagement.CreateChannel(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelInput{
+		Name: request.Name, Sub2APIGroupID: request.Sub2APIGroupID, BaseURL: request.BaseURL,
+		ServiceKey: request.ServiceKey, Models: request.Models,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, result)
+}
+
+func (s *Server) saveNewAPIModelPrices(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	var request newAPIModelPricesRequest
+	if err := bindRequestJSON(c, &request); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "New API 模型价格参数无效")
+		return
+	}
+	result, err := s.newAPIManagement.SaveModelPrices(c.Request.Context(), c.Param("platform_id"), request.Prices)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Server) taskDetail(c *gin.Context) {
 	if s.tasks == nil {
 		writeError(c, http.StatusServiceUnavailable, "任务服务尚未就绪")
@@ -3963,14 +4323,7 @@ func uniqueStrings(values []string) []string {
 
 func (s *Server) authorize() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if s.config.AdminToken != "" {
-			expected := "Bearer " + s.config.AdminToken
-			supplied := c.GetHeader("Authorization")
-			if len(expected) != len(supplied) || subtle.ConstantTimeCompare([]byte(expected), []byte(supplied)) != 1 {
-				writeError(c, http.StatusUnauthorized, "控制台认证失败")
-				c.Abort()
-				return
-			}
+		if s.validAdminBearer(c.Request) {
 			c.Next()
 			return
 		}
@@ -3981,7 +4334,11 @@ func (s *Server) authorize() gin.HandlerFunc {
 			return
 		}
 		if !initialized {
-			writeError(c, http.StatusPreconditionRequired, "请先完成首次初始化")
+			if s.config.AdminToken != "" {
+				writeError(c, http.StatusUnauthorized, "控制台认证失败")
+			} else {
+				writeError(c, http.StatusPreconditionRequired, "请先完成首次初始化")
+			}
 			c.Abort()
 			return
 		}
@@ -3999,6 +4356,60 @@ func (s *Server) authorize() gin.HandlerFunc {
 		c.Set("session_user", *username)
 		c.Next()
 	}
+}
+
+func (s *Server) validAdminBearer(request *http.Request) bool {
+	return constantTimeTokenEqual("Bearer "+s.config.AdminToken, request.Header.Get("Authorization"), s.config.AdminToken != "")
+}
+
+func (s *Server) validSetupCredential(request *http.Request) bool {
+	return s.validAdminBearer(request) || constantTimeTokenEqual(s.config.SetupToken, request.Header.Get("X-Setup-Token"), s.config.SetupToken != "")
+}
+
+func constantTimeTokenEqual(expected, supplied string, configured bool) bool {
+	return configured && len(expected) == len(supplied) && subtle.ConstantTimeCompare([]byte(expected), []byte(supplied)) == 1
+}
+
+func (s *Server) setupTokenRequired(request *http.Request) bool {
+	if s.config.SetupToken != "" {
+		return true
+	}
+	peer, ok := requestPeerAddress(request)
+	if !ok || !peer.IsLoopback() || s.loginThrottle.fromTrustedProxy(request) {
+		return true
+	}
+	requestOrigin, ok := s.requestOrigin(request)
+	if !ok {
+		return true
+	}
+	parsedRequestOrigin, err := url.Parse(requestOrigin)
+	if err != nil || !localBrowserHostname(parsedRequestOrigin.Hostname()) {
+		return true
+	}
+	for _, rawURL := range []string{request.Header.Get("Origin"), request.Header.Get("Referer")} {
+		rawURL = strings.TrimSpace(rawURL)
+		if rawURL == "" {
+			continue
+		}
+		origin, valid := normalizedURLOrigin(rawURL, false)
+		if !valid {
+			return true
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil || !localBrowserHostname(parsed.Hostname()) {
+			return true
+		}
+	}
+	return false
+}
+
+func localBrowserHostname(hostname string) bool {
+	hostname = strings.TrimSpace(strings.ToLower(hostname))
+	if hostname == "localhost" {
+		return true
+	}
+	address, err := netip.ParseAddr(hostname)
+	return err == nil && address.Unmap().IsLoopback()
 }
 
 func (s *Server) setSession(c *gin.Context, username string) error {
@@ -4034,24 +4445,102 @@ func (s *Server) recordRuntimeEventBestEffort(ctx context.Context, eventType, st
 
 func (s *Server) cors() gin.HandlerFunc {
 	allowed := make(map[string]struct{}, len(s.config.Origins))
-	for _, origin := range s.config.Origins {
-		allowed[origin] = struct{}{}
+	for _, rawOrigin := range s.config.Origins {
+		if origin, ok := normalizedURLOrigin(rawOrigin, true); ok {
+			allowed[origin] = struct{}{}
+		}
 	}
 	return func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-		if _, found := allowed[origin]; found {
-			c.Header("Access-Control-Allow-Origin", origin)
+		rawOrigin := strings.TrimSpace(c.GetHeader("Origin"))
+		origin, validOrigin := normalizedURLOrigin(rawOrigin, true)
+		originAllowed := rawOrigin != "" && validOrigin && s.originAllowed(c.Request, origin, allowed)
+		if originAllowed {
+			c.Header("Access-Control-Allow-Origin", rawOrigin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 			c.Header("Vary", "Origin")
 		}
 		if c.Request.Method == http.MethodOptions {
+			if rawOrigin != "" && !originAllowed {
+				writeError(c, http.StatusForbidden, "请求来源不可信")
+				c.Abort()
+				return
+			}
 			c.Header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Setup-Token")
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
+		if requestChangesState(c.Request.Method) && !s.validAdminBearer(c.Request) {
+			trusted := originAllowed
+			if rawOrigin == "" {
+				if referer := strings.TrimSpace(c.GetHeader("Referer")); referer != "" {
+					refererOrigin, ok := normalizedURLOrigin(referer, false)
+					trusted = ok && s.originAllowed(c.Request, refererOrigin, allowed)
+				} else if _, err := c.Request.Cookie(sessionCookie); err == nil {
+					trusted = false
+				} else {
+					trusted = true
+				}
+			}
+			if !trusted {
+				writeError(c, http.StatusForbidden, "请求来源不可信")
+				c.Abort()
+				return
+			}
+		}
 		c.Next()
 	}
+}
+
+func requestChangesState(method string) bool {
+	return method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions
+}
+
+func (s *Server) originAllowed(request *http.Request, origin string, configured map[string]struct{}) bool {
+	if _, ok := configured[origin]; ok {
+		return true
+	}
+	requestOrigin, ok := s.requestOrigin(request)
+	return ok && origin == requestOrigin
+}
+
+func (s *Server) requestOrigin(request *http.Request) (string, bool) {
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
+	}
+	if s.loginThrottle.fromTrustedProxy(request) {
+		forwarded := strings.TrimSpace(strings.Split(request.Header.Get("X-Forwarded-Proto"), ",")[0])
+		if forwarded == "http" || forwarded == "https" {
+			scheme = forwarded
+		}
+	}
+	return normalizedURLOrigin(scheme+"://"+request.Host, true)
+}
+
+func normalizedURLOrigin(raw string, originOnly bool) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return "", false
+	}
+	if originOnly && ((parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "") {
+		return "", false
+	}
+	hostname := strings.ToLower(parsed.Hostname())
+	if hostname == "" {
+		return "", false
+	}
+	port := parsed.Port()
+	if (parsed.Scheme == "http" && port == "80") || (parsed.Scheme == "https" && port == "443") {
+		port = ""
+	}
+	host := hostname
+	if port != "" {
+		host = net.JoinHostPort(hostname, port)
+	} else if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	return parsed.Scheme + "://" + host, true
 }
 
 func writeError(c *gin.Context, status int, detail string) {

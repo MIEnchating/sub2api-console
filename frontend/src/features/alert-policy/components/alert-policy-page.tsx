@@ -1,7 +1,16 @@
 import { useEffect, useId } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Plus, RotateCcw, Save, Settings2, ShieldAlert, Trash2 } from "lucide-react";
+import {
+  BellRing,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  Settings2,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -159,6 +168,32 @@ function LoadingPolicy() {
   );
 }
 
+function PolicyUnavailable(props: { isFetching: boolean; onRetry: () => void }) {
+  return (
+    <Card data-testid="alert-policy-load-error" role="alert">
+      <CardContent className="grid min-h-52 place-items-center p-6 text-center">
+        <div>
+          <ShieldAlert className="text-destructive mx-auto mb-3 size-6" />
+          <p className="text-sm font-medium">告警策略暂不可用</p>
+          <p className="text-muted-foreground mt-1 max-w-lg text-sm leading-6">
+            未能读取现有策略。为避免覆盖当前配置，读取成功前无法编辑或保存。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="mt-4"
+            disabled={props.isFetching}
+            onClick={props.onRetry}
+          >
+            <RefreshCw className={props.isFetching ? "animate-spin" : ""} />
+            {props.isFetching ? "重试中" : "重试读取"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function AlertPolicyPage(props: AlertPolicyPageProps) {
   const queryClient = useQueryClient();
   const policy = useQuery({ queryKey: ["alert-policy"], queryFn: api.alertPolicy });
@@ -189,8 +224,13 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
   const balanceEnabled = form.watch("balance_enabled");
   const probeEnabled = form.watch("probe_enabled");
   const deliveryEnabled = form.watch("delivery_enabled");
+  const policyReady = policy.data !== undefined && !policy.error;
 
   const submit = form.handleSubmit((values) => {
+    if (!policyReady) {
+      toast.error("告警策略尚未成功读取，请重试后再保存");
+      return;
+    }
     update.mutate({
       ...values,
       balance_thresholds: values.balance_thresholds.map((item) => item.value.trim()),
@@ -207,13 +247,18 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
         action={
           <PageActions>
             <Button
+              data-testid="alert-policy-reset"
               variant="outline"
               onClick={() => form.reset(defaultAlertPolicyForm)}
-              disabled={update.isPending}
+              disabled={update.isPending || !policyReady}
             >
               <RotateCcw /> 恢复默认
             </Button>
-            <Button onClick={() => void submit()} disabled={update.isPending || policy.isLoading}>
+            <Button
+              data-testid="alert-policy-save"
+              onClick={() => void submit()}
+              disabled={update.isPending || !policyReady}
+            >
               <Save /> {update.isPending ? "保存中" : "保存策略"}
             </Button>
           </PageActions>
@@ -223,6 +268,8 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
       {policy.error && <QueryErrorToast error={policy.error} fallback="告警策略读取失败" />}
       {policy.isLoading ? (
         <LoadingPolicy />
+      ) : !policyReady ? (
+        <PolicyUnavailable isFetching={policy.isFetching} onRetry={() => void policy.refetch()} />
       ) : (
         <form
           onSubmit={submit}

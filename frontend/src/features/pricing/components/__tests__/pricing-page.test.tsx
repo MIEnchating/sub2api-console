@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PricingSnapshot } from "@/api";
 import {
@@ -8,7 +8,9 @@ import {
   PricingConfigPage,
   PricingPage,
   PricingPreviewTable,
+  applyPricingWithDraft,
   pricingPreviewDecisions,
+  pricingRuleNameForInput,
 } from "../pricing-page";
 
 const snapshot: PricingSnapshot = {
@@ -16,6 +18,7 @@ const snapshot: PricingSnapshot = {
     enabled: false,
     profit_margin: 0.2,
     exchange_group_sets: [["6", "7"]],
+    exchange_group_set_names: ["常规价格"],
     interval_seconds: 120,
     write_concurrency: 4,
   },
@@ -60,6 +63,55 @@ const snapshot: PricingSnapshot = {
   skipped: 0,
   generated_at: "2026-08-30T12:00:00Z",
 };
+
+describe("价格配置执行顺序", () => {
+  it("规则名称输入框允许暂时清空", () => {
+    expect(pricingRuleNameForInput([""], 0)).toBe("");
+    expect(pricingRuleNameForInput([], 1)).toBe("互换组 2");
+  });
+
+  it("存在未保存草稿时先保存成功再启动调整", async () => {
+    const draft = { ...snapshot.config, enabled: true, profit_margin: 0.3 };
+    const calls: string[] = [];
+    const save = vi.fn(async () => {
+      calls.push("save");
+    });
+    const apply = vi.fn(async () => {
+      calls.push("apply");
+      return "queued";
+    });
+
+    await expect(applyPricingWithDraft(draft, snapshot.config, save, apply)).resolves.toBe(
+      "queued",
+    );
+    expect(save).toHaveBeenCalledWith(draft);
+    expect(calls).toEqual(["save", "apply"]);
+  });
+
+  it("保存草稿失败时不按旧配置启动调整", async () => {
+    const draft = { ...snapshot.config, enabled: true };
+    const save = vi.fn(async () => {
+      throw new Error("save failed");
+    });
+    const apply = vi.fn(async () => "queued");
+
+    await expect(applyPricingWithDraft(draft, snapshot.config, save, apply)).rejects.toThrow(
+      "save failed",
+    );
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it("规则名称变化时先保存再启动调整", async () => {
+    const draft = { ...snapshot.config, exchange_group_set_names: ["低价渠道"] };
+    const save = vi.fn(async () => undefined);
+    const apply = vi.fn(async () => "queued");
+
+    await expect(applyPricingWithDraft(draft, snapshot.config, save, apply)).resolves.toBe(
+      "queued",
+    );
+    expect(save).toHaveBeenCalledWith(draft);
+  });
+});
 
 describe("PricingPage", () => {
   it("keeps the account adjustment preview with price management", () => {
@@ -168,6 +220,8 @@ describe("PricingPage", () => {
     expect(markup).not.toContain("计算收入");
     expect(markup).toContain("账号互换范围");
     expect(markup).toContain("互换组 1");
+    expect(markup).toContain('aria-label="互换组 1 规则名称"');
+    expect(markup).toContain('value="常规价格"');
     expect(markup).toContain('data-testid="pricing-config-page"');
     expect(markup).toContain('data-testid="pricing-settings-panel"');
     const settingsGrid = markup.match(/<div[^>]*data-testid="pricing-settings-grid"[^>]*>/)?.[0];

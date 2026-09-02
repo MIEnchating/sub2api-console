@@ -88,6 +88,56 @@ function groupAccountCosts(groupID: string, decisions: PricingDecision[]) {
   return { accounts: accounts.length, values };
 }
 
+function pricingConfigWithRuleNames(config: PricingConfig): PricingConfig {
+  const currentNames = config.exchange_group_set_names ?? [];
+  if (
+    currentNames.length === config.exchange_group_sets.length &&
+    currentNames.every((name) => name.trim() !== "")
+  )
+    return config;
+  return {
+    ...config,
+    exchange_group_set_names: config.exchange_group_sets.map(
+      (_, setIndex) => currentNames[setIndex]?.trim() || `互换组 ${setIndex + 1}`,
+    ),
+  };
+}
+
+export function pricingRuleNameForInput(names: string[], setIndex: number) {
+  return names[setIndex] ?? `互换组 ${setIndex + 1}`;
+}
+
+function pricingConfigsEqual(left: PricingConfig, right: PricingConfig): boolean {
+  return (
+    left.enabled === right.enabled &&
+    left.profit_margin === right.profit_margin &&
+    left.interval_seconds === right.interval_seconds &&
+    left.write_concurrency === right.write_concurrency &&
+    left.exchange_group_sets.length === right.exchange_group_sets.length &&
+    left.exchange_group_set_names.length === right.exchange_group_set_names.length &&
+    left.exchange_group_set_names.every(
+      (name, setIndex) => name === right.exchange_group_set_names[setIndex],
+    ) &&
+    left.exchange_group_sets.every((groupSet, setIndex) => {
+      const other = right.exchange_group_sets[setIndex];
+      return (
+        groupSet.length === other.length &&
+        groupSet.every((groupID, index) => groupID === other[index])
+      );
+    })
+  );
+}
+
+export async function applyPricingWithDraft<Result>(
+  draft: PricingConfig,
+  persisted: PricingConfig,
+  save: (config: PricingConfig) => Promise<unknown>,
+  apply: () => Promise<Result>,
+): Promise<Result> {
+  if (!pricingConfigsEqual(draft, persisted)) await save(draft);
+  return apply();
+}
+
 function GroupAccountCostCell(props: {
   groupID: string;
   decisions: PricingDecision[];
@@ -133,7 +183,8 @@ function GroupAccountCostCell(props: {
         <TooltipContent className="max-w-sm whitespace-normal">{content}</TooltipContent>
       </Tooltip>
       <span className="text-muted-foreground text-xs">
-        {summary.accounts} 个账号{summary.values.length > 1 ? ` · ${summary.values.length} 档` : ""}
+        {summary.accounts} 个账号
+        {summary.values.length > 1 ? ` · ${summary.values.length} 档` : ""}
       </span>
     </div>
   );
@@ -408,6 +459,10 @@ function pricingConfigIsValid(config: PricingConfig, groups: PricingGroup[]) {
     config.interval_seconds > 86400 ||
     config.write_concurrency < 1 ||
     config.write_concurrency > 16 ||
+    config.exchange_group_set_names.length !== config.exchange_group_sets.length ||
+    config.exchange_group_set_names.some(
+      (name) => name.trim().length === 0 || [...name.trim()].length > 64,
+    ) ||
     (config.enabled && config.exchange_group_sets.length === 0)
   )
     return false;
@@ -827,10 +882,13 @@ export function PricingPreviewTable(props: {
 
 type ExchangeGroupSetEditorProps = {
   setIndex: number;
+  name: string;
   groupSet: string[];
   groups: PricingGroup[];
   exchangeSetByGroup: Map<string, number>;
+  exchangeSetNames: string[];
   onToggle: (setIndex: number, groupID: string, checked: boolean) => void;
+  onNameChange: (setIndex: number, name: string) => void;
   onRemove: (setIndex: number) => void;
 };
 
@@ -873,10 +931,21 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
       aria-labelledby={`exchange-set-title-${setNumber}`}
     >
       <div className="bg-muted/20 flex min-h-10 items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span id={`exchange-set-title-${setNumber}`} className="font-medium">
-            互换组 {setNumber}
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          <span
+            id={`exchange-set-title-${setNumber}`}
+            className="text-muted-foreground shrink-0 text-xs font-medium"
+          >
+            规则 {setNumber}
           </span>
+          <Input
+            className="h-8 min-w-36 max-w-64 flex-1 font-medium"
+            value={props.name}
+            maxLength={64}
+            aria-label={`互换组 ${setNumber} 规则名称`}
+            placeholder={`互换组 ${setNumber}`}
+            onChange={(event) => props.onNameChange(props.setIndex, event.target.value)}
+          />
           <Badge variant={complete ? "outline" : "warning"}>{statusLabel}</Badge>
           {selectedPlatform ? <Badge variant="secondary">{selectedPlatform}</Badge> : null}
           <span className="text-muted-foreground text-xs tabular-nums">
@@ -956,7 +1025,8 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                   ? `售价 ${group.rate_multiplier}`
                   : `#${group.id}`;
                 if (!group.available) detail = "不可用";
-                if (assignedElsewhere) detail = `互换组 ${assignedSet + 1}`;
+                if (assignedElsewhere)
+                  detail = props.exchangeSetNames[assignedSet] || `互换组 ${assignedSet + 1}`;
                 if (wrongPlatform) detail = "其他平台";
                 return (
                   <label
@@ -978,9 +1048,16 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                       aria-label={`互换组 ${props.setIndex + 1} 分组 ${group.name}`}
                     />
                     <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>
-                    <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                      {detail}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className="text-muted-foreground max-w-28 shrink-0 truncate text-xs tabular-nums" />
+                        }
+                      >
+                        {detail}
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-sm">{detail}</TooltipContent>
+                    </Tooltip>
                   </label>
                 );
               })}
@@ -1014,7 +1091,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   });
 
   useEffect(() => {
-    if (snapshot.data) setDraft(snapshot.data.config);
+    if (snapshot.data) setDraft(pricingConfigWithRuleNames(snapshot.data.config));
   }, [snapshot.data]);
 
   useEffect(() => {
@@ -1034,7 +1111,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     mutationFn: api.updatePricingConfig,
     onSuccess: (saved) => {
       queryClient.setQueryData(["pricing"], saved);
-      setDraft(saved.config);
+      setDraft(pricingConfigWithRuleNames(saved.config));
       toast.success(
         saved.config.enabled ? "价格配置已保存并开启" : "价格配置已保存，自动调整保持关闭",
       );
@@ -1042,7 +1119,19 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     onError: (error) => toast.error(error instanceof Error ? error.message : "价格配置保存失败"),
   });
   const apply = useMutation({
-    mutationFn: api.applyPricing,
+    mutationFn: () => {
+      if (!current || !snapshot.data) throw new Error("价格配置尚未加载完成");
+      return applyPricingWithDraft(
+        current,
+        pricingConfigWithRuleNames(snapshot.data.config),
+        async (config) => {
+          const saved = await api.updatePricingConfig(config);
+          queryClient.setQueryData(["pricing"], saved);
+          setDraft(pricingConfigWithRuleNames(saved.config));
+        },
+        api.applyPricing,
+      );
+    },
     onSuccess: (queued) => {
       setTaskID(queued.id);
       queryClient.setQueryData(["task", queued.id], queued);
@@ -1072,7 +1161,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "价格分组备份还原启动失败"),
   });
-  const current = draft ?? snapshot.data?.config ?? null;
+  const current =
+    draft ?? (snapshot.data ? pricingConfigWithRuleNames(snapshot.data.config) : null);
   const exchangeSetByGroup = useMemo(() => {
     const result = new Map<string, number>();
     current?.exchange_group_sets.forEach((groupSet, setIndex) => {
@@ -1105,7 +1195,19 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
 
   function addExchangeGroupSet() {
     if (!current) return;
-    setDraft({ ...current, exchange_group_sets: [...current.exchange_group_sets, []] });
+    const setNumber = current.exchange_group_sets.length + 1;
+    setDraft({
+      ...current,
+      exchange_group_sets: [...current.exchange_group_sets, []],
+      exchange_group_set_names: [...current.exchange_group_set_names, `互换组 ${setNumber}`],
+    });
+  }
+
+  function renameExchangeGroupSet(setIndex: number, name: string) {
+    if (!current) return;
+    const names = [...current.exchange_group_set_names];
+    names[setIndex] = name;
+    setDraft({ ...current, exchange_group_set_names: names });
   }
 
   function removeExchangeGroupSet(setIndex: number) {
@@ -1113,6 +1215,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     setDraft({
       ...current,
       exchange_group_sets: current.exchange_group_sets.filter((_, index) => index !== setIndex),
+      exchange_group_set_names: current.exchange_group_set_names.filter(
+        (_, index) => index !== setIndex,
+      ),
     });
   }
 
@@ -1177,7 +1282,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 </Button>
                 <Button
                   onClick={() => apply.mutate()}
-                  disabled={!current?.enabled || running || apply.isPending}
+                  disabled={!current?.enabled || !valid || running || apply.isPending}
                 >
                   <Play /> {running ? "执行中" : "立即调整"}
                 </Button>
@@ -1243,7 +1348,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                     step="0.1"
                     value={Number((current.profit_margin * 100).toFixed(4))}
                     onChange={(event) =>
-                      setDraft({ ...current, profit_margin: Number(event.target.value) / 100 })
+                      setDraft({
+                        ...current,
+                        profit_margin: Number(event.target.value) / 100,
+                      })
                     }
                   />
                   <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs">
@@ -1267,7 +1375,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                     max={86400}
                     value={current.interval_seconds}
                     onChange={(event) =>
-                      setDraft({ ...current, interval_seconds: Number(event.target.value) })
+                      setDraft({
+                        ...current,
+                        interval_seconds: Number(event.target.value),
+                      })
                     }
                   />
                   <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs">
@@ -1287,7 +1398,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   max={16}
                   value={current.write_concurrency}
                   onChange={(event) =>
-                    setDraft({ ...current, write_concurrency: Number(event.target.value) })
+                    setDraft({
+                      ...current,
+                      write_concurrency: Number(event.target.value),
+                    })
                   }
                 />
               </label>
@@ -1338,10 +1452,13 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   <ExchangeGroupSetEditor
                     key={`exchange-set-${setIndex}`}
                     setIndex={setIndex}
+                    name={pricingRuleNameForInput(current.exchange_group_set_names, setIndex)}
                     groupSet={groupSet}
                     groups={snapshot.data.groups}
                     exchangeSetByGroup={exchangeSetByGroup}
+                    exchangeSetNames={current.exchange_group_set_names}
                     onToggle={toggleExchangeGroup}
+                    onNameChange={renameExchangeGroupSet}
                     onRemove={removeExchangeGroupSet}
                   />
                 ))
@@ -1444,7 +1561,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   <span className="min-w-0">
                     <span className="block truncate font-medium">{backup.name}</span>
                     <span className="text-muted-foreground block text-xs">
-                      {new Date(backup.created_at).toLocaleString("zh-CN", { hour12: false })}
+                      {new Date(backup.created_at).toLocaleString("zh-CN", {
+                        hour12: false,
+                      })}
                     </span>
                   </span>
                   <Badge variant="secondary">{backup.account_count} 个账号</Badge>

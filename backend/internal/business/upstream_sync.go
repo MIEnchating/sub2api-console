@@ -35,6 +35,7 @@ type UpstreamCatalogSnapshot struct {
 
 type UpstreamBalanceObservation struct {
 	RawBalance        *string
+	DisplayBalance    *string
 	Status            string
 	HardClosed        *bool
 	HardClosedPresent bool
@@ -62,6 +63,8 @@ type UpstreamSyncWriteResult struct {
 	AccountRateFailed    int     `json:"account_rate_failed"`
 	RawBalance           *string `json:"raw_balance"`
 	Balance              *string `json:"balance"`
+	DisplayBalance       *string `json:"display_balance"`
+	BalanceUnit          *string `json:"balance_unit"`
 	BalanceStatus        string  `json:"balance_status"`
 	CheckedAt            string  `json:"checked_at"`
 }
@@ -165,6 +168,13 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	if existingMapped.Valid {
 		result.Balance = normalizeDecimal(existingMapped.String)
 	}
+	result.DisplayBalance = normalizeDecimal(stringValue(metadata["display_balance"]))
+	if result.DisplayBalance != nil && *result.DisplayBalance == "" {
+		result.DisplayBalance = nil
+	}
+	if unit := strings.TrimSpace(stringValue(metadata["balance_unit"])); unit != "" {
+		result.BalanceUnit = &unit
+	}
 	if value.NameOnly {
 		setOptionalMetadata(metadata, "site_name", value.Balance.SiteName)
 		metadata["name_status"], metadata["name_error"], metadata["name_checked_at"] = "已读取", nil, now
@@ -199,12 +209,15 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 	if balance != nil {
 		result.RawBalance = balance.RawBalance
 		result.Balance = divideDecimalPointers(balance.RawBalance, recharge)
+		result.DisplayBalance = balance.DisplayBalance
+		result.BalanceUnit = balance.BalanceUnit
 		result.BalanceStatus = balance.Status
 		metadata["balance_status"] = balance.Status
 		metadata["balance_error"] = nil
 		metadata["balance_checked_at"] = now
 		setOptionalMetadata(metadata, "site_name", balance.SiteName)
 		setOptionalMetadata(metadata, "quota_per_unit", balance.QuotaPerUnit)
+		setOptionalMetadata(metadata, "display_balance", balance.DisplayBalance)
 		setOptionalMetadata(metadata, "balance_unit", balance.BalanceUnit)
 		if balance.HardClosedPresent {
 			if balance.HardClosed == nil {
@@ -420,6 +433,20 @@ func normalizeUpstreamBalance(value *UpstreamBalanceObservation) (*UpstreamBalan
 			return nil, errors.New("上游原始余额必须是有限数值")
 		}
 	}
+	if result.DisplayBalance != nil {
+		result.DisplayBalance = normalizeDecimal(*result.DisplayBalance)
+		if result.DisplayBalance == nil || *result.DisplayBalance == "" {
+			return nil, errors.New("上游显示余额必须是有限数值")
+		}
+	}
+	if result.BalanceUnit != nil {
+		unit := strings.ToLower(strings.TrimSpace(*result.BalanceUnit))
+		if unit == "" {
+			result.BalanceUnit = nil
+		} else {
+			result.BalanceUnit = &unit
+		}
+	}
 	return &result, nil
 }
 
@@ -431,7 +458,7 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
 		return err
 	}
-	if err := ensureCatalogEntitiesFromRowsTx(ctx, tx); err != nil {
+	if err := ensureCatalogEntitiesFromRowsTx(ctx, tx, upstreamID); err != nil {
 		return err
 	}
 	if err := repairBindingCatalogReferences(ctx, tx, identityHosts, groups, keys, now); err != nil {

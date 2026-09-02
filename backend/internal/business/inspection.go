@@ -173,22 +173,13 @@ func (s *Store) RecordInspectionHeartbeat(ctx context.Context, heartbeat Inspect
 	if err != nil {
 		return err
 	}
-	connection, err := s.db.Conn(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return preferContextError(ctx, err)
 	}
-	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
-		}
-	}()
+	defer tx.Rollback()
 	var raw string
-	err = connection.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
 	records := []InspectionHeartbeat{}
 	if err == nil {
 		if err := json.Unmarshal([]byte(raw), &records); err != nil {
@@ -215,15 +206,14 @@ func (s *Store) RecordInspectionHeartbeat(ctx context.Context, heartbeat Inspect
 	if normalized.CompletedAt != nil {
 		updatedAt = *normalized.CompletedAt
 	}
-	if _, err := connection.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
 		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
 		inspectionHistoryKey, string(encoded), updatedAt); err != nil {
 		return err
 	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	committed = true
 	return nil
 }
 
@@ -239,21 +229,12 @@ func (s *Store) AcquireInspectionLease(
 	if strings.TrimSpace(ownerID) == "" || ownerPID <= 0 || strings.TrimSpace(ownerHost) == "" || ttl < time.Second {
 		return false, errors.New("巡检租约参数无效")
 	}
-	connection, err := s.db.Conn(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, err
+		return false, preferContextError(ctx, err)
 	}
-	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return false, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
-		}
-	}()
-	lease, err := readInspectionLease(ctx, connection)
+	defer tx.Rollback()
+	lease, err := readInspectionLease(ctx, tx)
 	if err != nil {
 		return false, err
 	}
@@ -261,20 +242,19 @@ func (s *Store) AcquireInspectionLease(
 	if lease != nil && inspectionLeaseActive(*lease, current) && lease.OwnerID != ownerID {
 		return false, nil
 	}
-	if _, err := connection.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=?`, inspectionLeaseName); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=?`, inspectionLeaseName); err != nil {
 		return false, err
 	}
 	formattedNow := current.Format(time.RFC3339Nano)
-	if _, err := connection.ExecContext(ctx, `INSERT INTO scheduler_leases(
+	if _, err := tx.ExecContext(ctx, `INSERT INTO scheduler_leases(
 		lease_name,owner_id,owner_pid,owner_host,checked_at,acquired_at,renewed_at,expires_at
 	) VALUES(?,?,?,?,?,?,?,?)`, inspectionLeaseName, ownerID, ownerPID, ownerHost,
 		checkedAt.UTC().Format(time.RFC3339Nano), formattedNow, formattedNow, current.Add(ttl).Format(time.RFC3339Nano)); err != nil {
 		return false, err
 	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := tx.Commit(); err != nil {
 		return false, err
 	}
-	committed = true
 	return true, nil
 }
 
@@ -310,21 +290,12 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 	if err != nil || !needed {
 		return 0, err
 	}
-	connection, err := s.db.Conn(ctx)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, err
+		return 0, preferContextError(ctx, err)
 	}
-	defer connection.Close()
-	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return 0, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
-		}
-	}()
-	lease, err := readInspectionLease(ctx, connection)
+	defer tx.Rollback()
+	lease, err := readInspectionLease(ctx, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -332,17 +303,16 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 	if lease != nil && inspectionLeaseActive(*lease, now.UTC()) {
 		activeCheckedAt = lease.CheckedAt
 	} else if lease != nil {
-		if _, err := connection.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=?`, inspectionLeaseName); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM scheduler_leases WHERE lease_name=?`, inspectionLeaseName); err != nil {
 			return 0, err
 		}
 	}
 	var raw string
-	err = connection.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
+	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key=?`, inspectionHistoryKey).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		if err := tx.Commit(); err != nil {
 			return 0, err
 		}
-		committed = true
 		return 0, nil
 	}
 	if err != nil {
@@ -350,7 +320,7 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 	}
 	records := []InspectionHeartbeat{}
 	if err := json.Unmarshal([]byte(raw), &records); err != nil {
-		records = []InspectionHeartbeat{}
+		return 0, errors.New("心跳历史损坏，无法安全对账")
 	}
 	completedAt := now.UTC().Format(time.RFC3339Nano)
 	interrupted := 0
@@ -367,15 +337,14 @@ func (s *Store) ReconcileInterruptedInspections(ctx context.Context, now time.Ti
 		if err != nil {
 			return 0, err
 		}
-		if _, err := connection.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE key=?`,
+		if _, err := tx.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE key=?`,
 			string(encoded), completedAt, inspectionHistoryKey); err != nil {
 			return 0, err
 		}
 	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
-	committed = true
 	return interrupted, nil
 }
 
@@ -401,7 +370,7 @@ func (s *Store) inspectionReconciliationNeeded(ctx context.Context, now time.Tim
 	}
 	records := []InspectionHeartbeat{}
 	if json.Unmarshal([]byte(raw), &records) != nil {
-		return false, nil
+		return false, errors.New("心跳历史损坏，无法安全对账")
 	}
 	for _, record := range records {
 		if record.Status == "running" && record.CheckedAt != activeCheckedAt {

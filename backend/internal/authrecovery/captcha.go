@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 const (
@@ -44,6 +46,10 @@ type CaptchaPrivateStore interface {
 	SaveAuthRecord(context.Context, configstore.AuthRecord, map[string]bool) error
 	VaultEntry(context.Context, string) (*configstore.VaultEntry, error)
 	SaveVaultEntry(context.Context, configstore.VaultEntry, map[string]bool) error
+}
+
+type captchaUpstreamStore interface {
+	UpstreamExists(context.Context, string) (bool, error)
 }
 
 type CaptchaChallenge struct {
@@ -86,14 +92,19 @@ type storedChallenge struct {
 }
 
 type CaptchaManager struct {
-	private  CaptchaPrivateStore
-	verifier CaptchaVerifier
-	catalog  CaptchaCatalogReader
-	http     *http.Client
-	now      func() time.Time
-	mu       sync.Mutex
-	items    map[string]storedChallenge
-	inflight map[string]struct{}
+	private            CaptchaPrivateStore
+	verifier           CaptchaVerifier
+	catalog            CaptchaCatalogReader
+	http               *http.Client
+	now                func() time.Time
+	mutationRepository any
+	mu                 sync.Mutex
+	items              map[string]storedChallenge
+	inflight           map[string]struct{}
+}
+
+func (m *CaptchaManager) UseMutationRepository(repository any) {
+	m.mutationRepository = repository
 }
 
 func NewCaptchaManager(private CaptchaPrivateStore, verifier CaptchaVerifier, catalog CaptchaCatalogReader, client *http.Client) *CaptchaManager {
@@ -281,13 +292,8 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 	if err != nil {
 		return CaptchaResult{}, fmt.Errorf("验证码登录成功但分组目录复核失败：%w", err)
 	}
-	if err := m.private.SaveAuthRecord(ctx, verified, allAuthFields()); err != nil {
-		return CaptchaResult{}, errors.New("验证码登录已复核但鉴权信息保存失败")
-	}
-	if challenge.saveToVault {
-		if err := m.private.SaveVaultEntry(ctx, credential, allVaultFields()); err != nil {
-			return CaptchaResult{}, errors.New("验证码登录已复核且鉴权已保存，但密码箱保存失败")
-		}
+	if err := m.commitVerified(ctx, challenge, verified, credential); err != nil {
+		return CaptchaResult{}, err
 	}
 	m.mu.Lock()
 	delete(m.items, challengeID)
@@ -297,6 +303,50 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 		Concurrency: nil, Keys: len(catalog.Keys), Groups: len(catalog.Groups), Stored: true,
 		InteractionKind: "image_captcha_ocr", ParentTaskID: challenge.parentTaskID,
 	}, nil
+}
+
+func (m *CaptchaManager) commitVerified(
+	ctx context.Context,
+	challenge storedChallenge,
+	verified configstore.AuthRecord,
+	credential configstore.VaultEntry,
+) error {
+	host := configstore.CanonicalHost(verified.Host)
+	resources := []string{mutationguard.Upstream(host)}
+	if challenge.saveToVault {
+		resources = append(resources, mutationguard.Vault(credential.Entry))
+	}
+	guarded, release, err := mutationguard.Acquire(ctx, m.mutationRepository, resources...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("验证码鉴权租约释放失败", "host", host, "error", err)
+		}
+	}()
+	if store, ok := m.mutationRepository.(captchaUpstreamStore); ok {
+		exists, err := store.UpstreamExists(guarded, host)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return errors.New("验证码登录已复核，但上游已被删除")
+		}
+	}
+	if _, err := m.private.AuthRecord(guarded, host); err != nil {
+		return err
+	}
+	verified.Host = host
+	if err := m.private.SaveAuthRecord(guarded, verified, allAuthFields()); err != nil {
+		return errors.New("验证码登录已复核但鉴权信息保存失败")
+	}
+	if challenge.saveToVault {
+		if err := m.private.SaveVaultEntry(guarded, credential, allVaultFields()); err != nil {
+			return errors.New("验证码登录已复核且鉴权已保存，但密码箱保存失败")
+		}
+	}
+	return nil
 }
 
 func cloneVaultEntry(value configstore.VaultEntry) configstore.VaultEntry {

@@ -7,6 +7,7 @@ import {
   MultiSelectClearAction,
   nextMultiSelectValues,
   shouldCloseMultiSelectFromTriggerPress,
+  shouldShowMultiSelectSearch,
 } from "../multi-select";
 
 describe("MultiSelect", () => {
@@ -85,6 +86,16 @@ describe("MultiSelect", () => {
     expect(markup).not.toContain(">本地分组<");
   });
 
+  it("exposes its disabled state to assistive technology and removes keyboard focus", () => {
+    const markup = renderToStaticMarkup(
+      <MultiSelect options={[]} selected={[]} onChange={() => undefined} disabled />,
+    );
+
+    expect(markup).toContain('aria-disabled="true"');
+    expect(markup).toContain('tabindex="-1"');
+    expect(markup).toContain('data-disabled=""');
+  });
+
   it("can limit visible chips without discarding selected values", () => {
     const markup = renderToStaticMarkup(
       <MultiSelect
@@ -129,5 +140,17 @@ describe("MultiSelect", () => {
     expect(matchesMultiSelectOption(option, "KIRO")).toBe(true);
     expect(matchesMultiSelectOption(option, "group-8")).toBe(true);
     expect(matchesMultiSelectOption(option, "codex")).toBe(false);
+  });
+
+  it("shows search only when a multi-select has more than five data items", () => {
+    const fiveOptions = Array.from({ length: 5 }, (_, index) => ({
+      value: String(index),
+      label: `选项 ${index}`,
+    }));
+
+    expect(shouldShowMultiSelectSearch(fiveOptions)).toBe(false);
+    expect(shouldShowMultiSelectSearch([...fiveOptions, { value: "5", label: "选项 5" }])).toBe(
+      true,
+    );
   });
 });

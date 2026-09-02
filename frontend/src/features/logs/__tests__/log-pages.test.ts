@@ -214,6 +214,9 @@ describe("log center contracts", () => {
       { key: "source", label: "数据来源", value: "控制台" },
       { key: "event_type", label: "事件类型", value: "上游同步" },
     ]);
+    expect(logDetailRows({ operation_type: "account.delete" })).toEqual([
+      { key: "operation_type", label: "操作类型", value: "手动删除账号" },
+    ]);
   });
 
   it("renders remote audits with the complete comparison columns", () => {

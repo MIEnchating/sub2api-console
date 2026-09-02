@@ -8,10 +8,16 @@ import {
   AutoInspectionQueueDetails,
   SchedulerHeaderControls,
   SchedulerSidebarStatus,
+  mergeAutoInspectionDraft,
   navItems,
   viewForPath,
 } from "../../../App";
-import type { AutoInspectionStatus, Task, UpstreamSummary } from "../../../api";
+import type {
+  AutoInspectionConfig,
+  AutoInspectionStatus,
+  Task,
+  UpstreamSummary,
+} from "../../../api";
 
 const status: AutoInspectionStatus = {
   enabled: true,
@@ -146,6 +152,26 @@ const status: AutoInspectionStatus = {
     },
   ],
 };
+
+describe("自动巡检草稿同步", () => {
+  const previous: AutoInspectionConfig = { enabled: true, interval_seconds: 15 };
+
+  it("外部状态变化时更新尚未编辑的草稿字段", () => {
+    const incoming: AutoInspectionConfig = { enabled: false, interval_seconds: 30 };
+
+    expect(mergeAutoInspectionDraft(previous, previous, incoming)).toEqual(incoming);
+  });
+
+  it("外部状态变化时只保留用户已经编辑的字段", () => {
+    const draft: AutoInspectionConfig = { enabled: true, interval_seconds: 60 };
+    const incoming: AutoInspectionConfig = { enabled: false, interval_seconds: 30 };
+
+    expect(mergeAutoInspectionDraft(draft, previous, incoming)).toEqual({
+      enabled: false,
+      interval_seconds: 60,
+    });
+  });
+});
 
 const inspectionTask: Task = {
   id: "inspection-1",

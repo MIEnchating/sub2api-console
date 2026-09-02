@@ -19,6 +19,8 @@ LABEL org.opencontainers.image.title="Sub2API Console Frontend" \
       org.opencontainers.image.source="https://github.com/MIEnchating/sub2api-console" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$VCS_REF"
+RUN addgroup -g 10001 -S console && addgroup nginx console
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker-entrypoint.d/40-configure-trusted-proxies.sh /docker-entrypoint.d/40-configure-trusted-proxies.sh
 EXPOSE 80

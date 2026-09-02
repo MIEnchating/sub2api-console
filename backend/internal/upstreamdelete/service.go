@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -14,7 +15,10 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -32,6 +36,10 @@ type PrivateStore interface {
 	DeleteAuthRecord(context.Context, string) (bool, error)
 }
 
+type mutationProtectionRepository interface {
+	AccountMutationProtections(context.Context, []string) (map[string]business.AccountMutationProtection, error)
+}
+
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -40,6 +48,7 @@ type Service struct {
 	repository Repository
 	private    PrivateStore
 	tasks      TaskStore
+	taskRunner taskrunner.Runner
 	timeout    time.Duration
 }
 
@@ -55,6 +64,8 @@ type Result struct {
 func New(repository Repository, private PrivateStore, tasks TaskStore) *Service {
 	return &Service{repository: repository, private: private, tasks: tasks, timeout: 30 * time.Minute}
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) Preview(ctx context.Context, host string) (business.UpstreamDeletePreview, error) {
 	return s.repository.UpstreamDeletePreview(ctx, host)
@@ -78,6 +89,10 @@ func (s *Service) Enqueue(ctx context.Context, host string, expected []string, a
 	if err := s.rejectManualPriorityAccounts(ctx, preview.AccountIDs); err != nil {
 		return taskstore.Task{}, err
 	}
+	expectedTarget, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	id, err := taskID()
 	if err != nil {
 		return taskstore.Task{}, err
@@ -90,15 +105,20 @@ func (s *Service) Enqueue(ctx context.Context, host string, expected []string, a
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, preview.Host, append([]string{}, expected...), actor)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.execute(targetguard.Expect(parent, expectedTarget), task, preview.Host, append([]string{}, expected...), actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) execute(task taskstore.Task, host string, expected []string, actor string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, host string, expected []string, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 10, "正在删除 Sub2API 账号", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result, err := s.Delete(ctx, host, expected, actor)
@@ -118,6 +138,7 @@ func (s *Service) execute(task taskstore.Task, host string, expected []string, a
 			"readback_confirmed": result.ReadbackConfirmed,
 		}
 	}
+	taskstore.MarkCancelled(ctx, &task, "上游删除已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -129,10 +150,42 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 	if !sameIDs(preview.AccountIDs, expected) {
 		return Result{}, errors.New("删除预览后的账号范围已变化，请重新确认")
 	}
-	if err := s.rejectManualPriorityAccounts(ctx, preview.AccountIDs); err != nil {
+	identityHosts := deleteIdentityHosts(preview)
+	resources := []string{mutationguard.AccountCatalog(), mutationguard.UpstreamCatalog()}
+	for _, identityHost := range identityHosts {
+		resources = append(resources, mutationguard.Upstream(identityHost))
+	}
+	for _, accountID := range preview.AccountIDs {
+		resources = append(resources, mutationguard.Account(accountID))
+	}
+	guardedCtx, release, err := targetguard.Acquire(ctx, s.repository, resources...)
+	if err != nil {
 		return Result{}, err
 	}
-	target, err := s.private.TargetSettings(ctx)
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("上游删除租约释放失败", "host", preview.Host, "error", err)
+		}
+	}()
+	ctx = guardedCtx
+	preview, err = s.repository.UpstreamDeletePreview(ctx, preview.Host)
+	if err != nil {
+		return Result{}, err
+	}
+	if !sameIDs(preview.AccountIDs, expected) {
+		return Result{}, errors.New("获取删除锁后账号范围已变化，请重新确认")
+	}
+	if !sameHosts(identityHosts, deleteIdentityHosts(preview)) {
+		return Result{}, errors.New("获取删除锁后稳定上游别名集合已变化，请重新确认")
+	}
+	if err := s.rejectMutationProtectedAccounts(ctx, preview.AccountIDs); err != nil {
+		return Result{}, err
+	}
+	ctx, err = targetguard.Bind(ctx, s.private)
+	if err != nil {
+		return Result{}, err
+	}
+	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
 		return Result{}, err
 	}
@@ -158,10 +211,14 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 	if firstError != nil {
 		return Result{RemoteDeletedAccounts: remoteDeleted, RemoteWrite: remoteDeleted > 0}, firstError
 	}
-	privateDeleted, err := s.private.DeleteAuthRecord(ctx, preview.Host)
-	if err != nil {
-		return Result{RemoteDeletedAccounts: remoteDeleted, RemoteWrite: remoteDeleted > 0},
-			fmt.Errorf("远端账号已删除，但私有鉴权记录删除失败：%w", err)
+	privateDeleted := false
+	for _, identityHost := range deleteIdentityHosts(preview) {
+		deleted, err := s.private.DeleteAuthRecord(ctx, identityHost)
+		if err != nil {
+			return Result{RemoteDeletedAccounts: remoteDeleted, PrivateAuthDeleted: privateDeleted, RemoteWrite: remoteDeleted > 0},
+				fmt.Errorf("远端账号已删除，但 Host %s 的私有鉴权记录删除失败：%w", identityHost, err)
+		}
+		privateDeleted = privateDeleted || deleted
 	}
 	projection, err := s.repository.DeleteUpstreamProjection(ctx, preview.Host, preview.AccountIDs, business.UpstreamDeleteAudit{
 		Actor: actor, RemoteDeletedAccounts: remoteDeleted, PrivateAuthDeleted: privateDeleted, ReadbackConfirmed: true,
@@ -174,6 +231,56 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 		UpstreamDeleteProjection: projection, RemoteDeletedAccounts: remoteDeleted,
 		PrivateAuthDeleted: privateDeleted, EventID: projection.EventID, RemoteWrite: true, ReadbackConfirmed: true,
 	}, nil
+}
+
+func deleteIdentityHosts(preview business.UpstreamDeletePreview) []string {
+	hosts := append([]string{}, preview.IdentityHosts...)
+	if len(hosts) == 0 {
+		hosts = append(hosts, preview.Host)
+	}
+	seen := make(map[string]struct{}, len(hosts))
+	result := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		host = configstore.CanonicalHost(host)
+		if host == "" {
+			continue
+		}
+		if _, duplicate := seen[host]; duplicate {
+			continue
+		}
+		seen[host] = struct{}{}
+		result = append(result, host)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func sameHosts(left, right []string) bool {
+	left = deleteIdentityHosts(business.UpstreamDeletePreview{IdentityHosts: left})
+	right = deleteIdentityHosts(business.UpstreamDeletePreview{IdentityHosts: right})
+	return strings.Join(left, "\x00") == strings.Join(right, "\x00")
+}
+
+func (s *Service) rejectMutationProtectedAccounts(ctx context.Context, accountIDs []string) error {
+	repository, ok := s.repository.(mutationProtectionRepository)
+	if !ok {
+		return s.rejectManualPriorityAccounts(ctx, accountIDs)
+	}
+	protections, err := repository.AccountMutationProtections(ctx, accountIDs)
+	if err != nil {
+		return fmt.Errorf("人工保护状态读取失败：%w", err)
+	}
+	protected := make([]string, 0, len(protections))
+	for accountID, protection := range protections {
+		if protection.Protected() {
+			protected = append(protected, accountID+"（"+strings.Join(protection.Reasons(), "、")+"）")
+		}
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+	sort.Strings(protected)
+	return fmt.Errorf("上游包含人工保护账号 %s，请先解除保护再删除", strings.Join(protected, "、"))
 }
 
 func (s *Service) rejectManualPriorityAccounts(ctx context.Context, accountIDs []string) error {

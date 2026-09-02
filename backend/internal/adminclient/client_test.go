@@ -39,6 +39,44 @@ func TestAccountsFollowsExplicitTotalWhenServerCapsPageSize(t *testing.T) {
 	}
 }
 
+func TestAccountsRejectsEmptyPageBeforeExplicitTotal(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Get("page") == "1" {
+			writeJSON(w, `{"data":{"items":[{"id":1},{"id":2}],"total":3}}`)
+			return
+		}
+		writeJSON(w, `{"data":{"items":[],"total":3}}`)
+	})
+	defer server.Close()
+
+	items, err := client.Accounts(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "分页未完整") || items != nil {
+		t.Fatalf("items=%#v err=%v", items, err)
+	}
+}
+
+func TestAccountsContinuesPagedBareDataArraysUntilEmptyPage(t *testing.T) {
+	var pages []string
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		page := request.URL.Query().Get("page")
+		pages = append(pages, page)
+		switch page {
+		case "1":
+			writeJSON(w, `{"data":[{"id":1},{"id":2}]}`)
+		case "2":
+			writeJSON(w, `{"data":[{"id":3}]}`)
+		default:
+			writeJSON(w, `{"data":[]}`)
+		}
+	})
+	defer server.Close()
+
+	items, err := client.Accounts(context.Background())
+	if err != nil || len(items) != 3 || strings.Join(pages, ",") != "1,2,3" {
+		t.Fatalf("items=%#v pages=%#v err=%v", items, pages, err)
+	}
+}
+
 func TestAccountUsageTotalsUsesExactClosedDateAndKeepsAUSemantics(t *testing.T) {
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/api/v1/admin/usage/stats" || request.URL.Query().Get("account_id") != "41" || request.URL.Query().Get("start_date") != "2026-08-29" || request.URL.Query().Get("end_date") != "2026-08-29" || request.URL.Query().Get("timezone") != "Asia/Shanghai" {
@@ -176,18 +214,18 @@ func TestTransportFailureIsRetriedAndHeadersAreStable(t *testing.T) {
 	}
 }
 
-func TestNonIdempotentTransportFailureIsNotRetried(t *testing.T) {
+func TestOrdinaryMutationsRetryTransientTransportFailure(t *testing.T) {
 	for _, method := range []string{http.MethodPost, http.MethodPatch} {
 		transport := &retryTransport{}
-		client, err := New(Config{BaseURL: "https://admin.example", AdminKey: "secret", Timeout: time.Second, Attempts: 3}, transport)
+		client, err := New(Config{BaseURL: "https://admin.example", AdminKey: "secret", Timeout: time.Second, Attempts: 2}, transport)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := client.Mutate(context.Background(), method, "/admin/accounts", map[string]any{"name": "account"}); err == nil {
-			t.Fatalf("%s transport failure must be returned", method)
+		if _, err := client.Mutate(context.Background(), method, "/admin/accounts/42/schedulable", map[string]any{"schedulable": false}); err != nil {
+			t.Fatalf("%s transient failure was not retried: %v", method, err)
 		}
-		if calls := transport.calls.Load(); calls != 1 {
-			t.Fatalf("%s was retried %d times; non-idempotent writes must not be replayed", method, calls)
+		if calls := transport.calls.Load(); calls != 2 {
+			t.Fatalf("%s calls=%d", method, calls)
 		}
 	}
 }
@@ -331,6 +369,219 @@ func TestCreateAccountRejectsAmbiguousDirectoryDifferenceWhenResponseIDIsMissing
 	}
 }
 
+func TestCreateAccountWithMarkerKeepsSuccessfulMissingIDCommitUnknownWhenMarkerIsNotVisible(t *testing.T) {
+	var gets, posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			gets++
+			writeJSON(writer, `{"data":{"items":[],"total":0}}`)
+			return
+		}
+		posts++
+		writeJSON(writer, `{"success":true}`)
+	})
+	defer server.Close()
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 2 || posts != 1 {
+		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets, posts)
+	}
+}
+
+func TestCreateAccountWithMarkerDoesNotAdoptDirectoryDifferenceWithoutExactMarker(t *testing.T) {
+	var gets, posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			gets++
+			items := `[]`
+			total := 0
+			if gets == 2 {
+				items = `[{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}]`
+				total = 1
+			}
+			writeJSON(writer, `{"data":{"items":`+items+`,"total":`+strconv.Itoa(total)+`}}`)
+			return
+		}
+		posts++
+		writeJSON(writer, `{"success":true}`)
+	})
+	defer server.Close()
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != marker || gets != 2 || posts != 1 {
+		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets, posts)
+	}
+}
+
+func TestCreateAccountWithMarkerRecoversCommittedTransportFailureWithoutReplayingPost(t *testing.T) {
+	var account map[string]any
+	var posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			items := []map[string]any{}
+			if account != nil {
+				items = append(items, account)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": map[string]any{"items": items, "total": len(items)}})
+			return
+		}
+		posts++
+		if err := json.NewDecoder(request.Body).Decode(&account); err != nil {
+			t.Fatal(err)
+		}
+		account["id"] = 42
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	})
+	defer server.Close()
+
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	created, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": "created by Console\n" + marker, "platform": "openai",
+		"type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	if err != nil || strings.TrimSpace(fmt.Sprint(created["id"])) != "42" || posts != 1 {
+		t.Fatalf("created=%#v err=%v posts=%d", created, err, posts)
+	}
+}
+
+func TestCreateAccountWithMarkerReturnsTypedCommitUnknownWhenReconciliationIsEmpty(t *testing.T) {
+	var posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			writeJSON(writer, `{"data":{"items":[],"total":0}}`)
+			return
+		}
+		posts++
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	})
+	defer server.Close()
+
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != marker || posts != 1 {
+		t.Fatalf("err=%v unknown=%#v posts=%d", err, unknown, posts)
+	}
+}
+
+func TestCreateAccountWithMarkerKeepsCancellationAfterSendCommitUnknown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := &cancelAfterCreateTransport{cancel: cancel}
+	client, err := New(Config{BaseURL: "https://admin.example", AdminKey: "test-key", Timeout: time.Second, Attempts: 1}, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err = client.CreateAccountWithMarker(ctx, map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != marker || !errors.Is(err, context.Canceled) || transport.posts != 1 {
+		t.Fatalf("err=%v unknown=%#v posts=%d", err, unknown, transport.posts)
+	}
+}
+
+func TestCreateAccountWithMarkerFailsClosedWhenPreflightCannotReadDirectory(t *testing.T) {
+	var posts int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			posts++
+		}
+		http.Error(writer, `{"message":"catalog unavailable"}`, http.StatusServiceUnavailable)
+	})
+	defer server.Close()
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker, "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	var reconciliation *ReconciliationError
+	if !errors.As(err, &reconciliation) || posts != 0 {
+		t.Fatalf("err=%v posts=%d", err, posts)
+	}
+}
+
+func TestCreateAccountWithoutMarkerCannotRecoverUnknownCommitWithoutBaseline(t *testing.T) {
+	var gets, posts atomic.Int32
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			if gets.Add(1) == 1 {
+				http.Error(writer, `{"message":"catalog unavailable"}`, http.StatusServiceUnavailable)
+				return
+			}
+			writeJSON(writer, `{"data":{"items":[{"id":42,"name":"alpha","platform":"openai","type":"apikey","group_ids":[3]}],"total":1}}`)
+			return
+		}
+		posts.Add(1)
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	})
+	defer server.Close()
+	_, err := client.CreateAccount(context.Background(), map[string]any{
+		"name": "alpha", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	})
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || gets.Load() != 1 || posts.Load() != 1 {
+		t.Fatalf("err=%v gets=%d posts=%d", err, gets.Load(), posts.Load())
+	}
+}
+
+func TestAccountMarkerRequiresAnExactNotesLine(t *testing.T) {
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	account := map[string]any{"id": json.Number("42"), "notes": marker + "-suffix"}
+	matched, err := accountByMarker([]map[string]any{account}, marker)
+	if err != nil || matched != nil {
+		t.Fatalf("matched=%#v err=%v", matched, err)
+	}
+}
+
+func TestCreateAccountRejectsMarkerThatIsOnlyANotesSubstring(t *testing.T) {
+	var requests int
+	client, server := testClient(t, 1, func(writer http.ResponseWriter, _ *http.Request) {
+		requests++
+		writeJSON(writer, `{"data":{"items":[],"total":0}}`)
+	})
+	defer server.Close()
+	marker := "[sub2api-console:onboarding:account-onboarding-0123456789abcdef]"
+	_, err := client.CreateAccountWithMarker(context.Background(), map[string]any{
+		"name": "alpha", "notes": marker + "-suffix", "platform": "openai", "type": "apikey", "group_ids": []int64{3},
+	}, marker)
+	if err == nil || requests != 0 {
+		t.Fatalf("err=%v requests=%d", err, requests)
+	}
+}
+
 func TestDeleteAccountRequiresAbsentReadback(t *testing.T) {
 	t.Run("confirmed absent", func(t *testing.T) {
 		var calls int
@@ -359,8 +610,81 @@ func TestDeleteAccountRequiresAbsentReadback(t *testing.T) {
 		})
 		defer server.Close()
 		_, err := client.DeleteAccount(context.Background(), "42")
-		if err == nil || !strings.Contains(err.Error(), "删除后仍可读") {
+		var stillReadable *AccountStillReadableError
+		if !errors.As(err, &stillReadable) || stillReadable.AccountID != "42" || stillReadable.DeleteErr != nil ||
+			!strings.Contains(err.Error(), "删除后仍可读") {
 			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("delete route 404 still requires absent readback", func(t *testing.T) {
+		var calls int
+		client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+			calls++
+			if request.Method == http.MethodDelete {
+				http.Error(w, `{"message":"route not found"}`, http.StatusNotFound)
+				return
+			}
+			writeJSON(w, `{"data":{"id":42}}`)
+		})
+		defer server.Close()
+		_, err := client.DeleteAccount(context.Background(), "42")
+		var stillReadable *AccountStillReadableError
+		if !errors.As(err, &stillReadable) || stillReadable.AccountID != "42" || stillReadable.DeleteErr == nil ||
+			!strings.Contains(err.Error(), "route not found") || !strings.Contains(err.Error(), "删除后仍可读") || calls != 2 {
+			t.Fatalf("err=%v calls=%d", err, calls)
+		}
+	})
+
+	t.Run("delete error is reconciled when exact readback is absent", func(t *testing.T) {
+		var calls int
+		client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+			calls++
+			if request.Method == http.MethodDelete {
+				http.Error(w, `{"message":"response failed after commit"}`, http.StatusInternalServerError)
+				return
+			}
+			http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+		})
+		defer server.Close()
+		result, err := client.DeleteAccount(context.Background(), "42")
+		if err != nil || result["confirmed_absent"] != true || calls != 2 {
+			t.Fatalf("result=%#v err=%v calls=%d", result, err, calls)
+		}
+	})
+
+	t.Run("delete and readback errors preserve both contexts", func(t *testing.T) {
+		client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodDelete {
+				http.Error(w, `{"message":"delete uncertain"}`, http.StatusInternalServerError)
+				return
+			}
+			http.Error(w, `{"message":"readback unavailable"}`, http.StatusBadGateway)
+		})
+		defer server.Close()
+		_, err := client.DeleteAccount(context.Background(), "42")
+		var unknown *AccountReadbackUnknownError
+		if !errors.As(err, &unknown) || unknown.AccountID != "42" || unknown.DeleteErr == nil || unknown.ReadbackErr == nil ||
+			!strings.Contains(err.Error(), "delete uncertain") || !strings.Contains(err.Error(), "readback unavailable") ||
+			!strings.Contains(err.Error(), "删除结果未知") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("successful delete response with failed readback is typed unknown", func(t *testing.T) {
+		client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodDelete {
+				writeJSON(w, `{"success":true}`)
+				return
+			}
+			http.Error(w, `{"message":"readback unavailable"}`, http.StatusBadGateway)
+		})
+		defer server.Close()
+		_, err := client.DeleteAccount(context.Background(), "42")
+		var unknown *AccountReadbackUnknownError
+		if !errors.As(err, &unknown) || unknown.AccountID != "42" || unknown.DeleteErr != nil || unknown.ReadbackErr == nil ||
+			!strings.Contains(err.Error(), "删除后读回失败") || !strings.Contains(err.Error(), "删除结果未知") {
+			t.Fatalf("err=%v unknown=%#v", err, unknown)
 		}
 	})
 }
@@ -509,6 +833,38 @@ func TestUpdateAccountGroupsConfirmsNumericIDsIndependentOfResponseOrder(t *test
 	}
 }
 
+func TestUpdateAccountGroupsAndBaseURLWritesAndConfirmsBothFields(t *testing.T) {
+	requests := 0
+	baseURL := "https://account-api.example/v1/"
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		switch {
+		case request.Method == http.MethodPut && request.URL.Path == "/api/v1/admin/accounts/41":
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			credentials, _ := body["credentials"].(map[string]any)
+			if credentials["base_url"] != "https://account-api.example/v1" {
+				t.Fatalf("credentials=%#v", credentials)
+			}
+			writeJSON(w, `{"data":{"id":41}}`)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41":
+			writeJSON(w, `{"data":{"id":41,"group_ids":[10,2],"credentials":{"api_key":"retained","base_url":"https://account-api.example/v1"}}}`)
+		default:
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+	})
+	defer server.Close()
+
+	account, err := client.UpdateAccountGroupsAndBaseURL(context.Background(), "41", []int64{2, 10}, &baseURL)
+	if err != nil || requests != 2 || accountBaseURL(account) != "https://account-api.example/v1" {
+		t.Fatalf("requests=%d account=%#v err=%v", requests, account, err)
+	}
+}
+
 func TestAccountUpstreamMultiplierRejectsFailedOrInvalidProbe(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -577,6 +933,20 @@ type retryTransport struct {
 	calls  atomic.Int32
 	apiKey string
 	accept string
+}
+
+type cancelAfterCreateTransport struct {
+	cancel context.CancelFunc
+	posts  int
+}
+
+func (transport *cancelAfterCreateTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Method == http.MethodGet {
+		return response(http.StatusOK, `{"data":{"items":[],"total":0}}`), nil
+	}
+	transport.posts++
+	transport.cancel()
+	return nil, context.Canceled
 }
 
 func (transport *retryTransport) RoundTrip(request *http.Request) (*http.Response, error) {

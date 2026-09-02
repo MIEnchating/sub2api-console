@@ -27,14 +27,18 @@ func TestApplyUpstreamSyncAtomicallyReplacesCatalogAndMapsDecimalBalance(t *test
 			Groups: []UpstreamCatalogGroup{{GroupID: "7", Name: "pro", Status: &active, RawRate: &old}},
 			Keys:   []UpstreamCatalogKey{{KeyID: "17", Name: "pro-key", UpstreamGroup: stringPointer("7"), Status: &active, Rate: &old}},
 		},
-		Balance: &UpstreamBalanceObservation{RawBalance: stringPointer("1"), Status: "已读取", SiteName: stringPointer("Example")},
+		Balance: &UpstreamBalanceObservation{
+			RawBalance: stringPointer("1"), DisplayBalance: stringPointer("7.3"), BalanceUnit: stringPointer("cny"),
+			Status: "已读取", SiteName: stringPointer("Example"),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.GroupCount != 1 || result.KeyCount != 1 || result.AccountTotal != 2 ||
 		result.AccountRateSucceeded != 1 || result.AccountRateFailed != 1 ||
-		result.Balance == nil || *result.Balance != "3.3333333333333333333333333333" {
+		result.Balance == nil || *result.Balance != "3.3333333333333333333333333333" ||
+		result.DisplayBalance == nil || *result.DisplayBalance != "7.3" || result.BalanceUnit == nil || *result.BalanceUnit != "cny" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	var effective, authStatus string
@@ -230,7 +234,7 @@ func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testi
 	}
 	name := "Example-0.2"
 	multiplier := "0.2"
-	if err := store.CommitAccountFieldsReadback(context.Background(), "11", &name, nil, nil, nil, &multiplier, false, nil, AccountOperation{
+	if err := store.CommitAccountFieldsReadback(context.Background(), "11", &name, nil, nil, nil, &multiplier, nil, nil, false, nil, AccountOperation{
 		OperationID: "rate-sync-11", OperationType: "account.sync", State: "succeeded", Phase: "readback", Actor: "auto-inspection",
 		RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: "11", ObjectName: &name, Before: map[string]any{}, After: map[string]any{}, Writeback: true,
 	}); err != nil {

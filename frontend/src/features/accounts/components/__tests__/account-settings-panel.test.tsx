@@ -1,10 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { AccountDetail } from "@/api";
+import type { AccountDetail, Task } from "@/api";
 import { accountDetailDialogLayout } from "../account-detail-dialog";
-import { AccountSettingsPanel } from "../account-settings-panel";
+import {
+  AccountSettingsPanel,
+  accountSettingControlActions,
+  waitForAccountSettingTasks,
+} from "../account-settings-panel";
 
 const detail: AccountDetail = {
   id: "41",
@@ -13,6 +17,8 @@ const detail: AccountDetail = {
   upstream_id: "up_test",
   upstream_host: "api.example.test",
   upstream_type: "apikey",
+  base_url: "https://account-api.example.test/v1",
+  upstream_base_url: "https://api.example.test",
   schedulable: true,
   priority: 753,
   load_factor: "1",
@@ -85,6 +91,8 @@ describe("账号设置面板", () => {
     expect(markup).not.toContain("备注");
     expect(markup).toContain('aria-readonly="true"');
     expect(markup).toContain("请使用“同步倍率”更新");
+    expect(markup).not.toContain("上游 Host");
+    expect(markup).not.toContain("账号 Base URL");
   });
 
   it("makes the complete pause and exclude rows operable buttons", () => {
@@ -105,5 +113,39 @@ describe("账号设置面板", () => {
     expect(markup).toContain('data-testid="account-control-group"');
     expect(markup).not.toContain("border-primary/25");
     expect(markup).not.toContain("bg-primary/5");
+  });
+});
+
+describe("账号设置保存流程", () => {
+  it("同时修改排除和暂停时保留两个控制动作", () => {
+    expect(
+      accountSettingControlActions(
+        { excluded: false, paused: false },
+        { excluded: true, paused: true },
+      ),
+    ).toEqual(["exclude", "pause"]);
+  });
+
+  it("等待排队任务完成后才返回", async () => {
+    const queued = { id: "task-1", status: "queued" } as Task;
+    const succeeded = { ...queued, status: "succeeded", message: "完成" } as Task;
+    const load = vi.fn(async () => succeeded);
+    const wait = vi.fn(async () => undefined);
+
+    await expect(waitForAccountSettingTasks([queued], load, wait)).resolves.toEqual([succeeded]);
+    expect(load).toHaveBeenCalledWith("task-1");
+  });
+
+  it("任务失败时保留后端失败原因", async () => {
+    const queued = { id: "task-1", status: "queued" } as Task;
+    const failed = { ...queued, status: "failed", message: "远端读回失败" } as Task;
+
+    await expect(
+      waitForAccountSettingTasks(
+        [queued],
+        async () => failed,
+        async () => undefined,
+      ),
+    ).rejects.toThrow("远端读回失败");
   });
 });

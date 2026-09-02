@@ -127,6 +127,27 @@ func TestInspectionHeartbeatsReportsCorruptHistoryInsteadOfReturningEmpty(t *tes
 	}
 }
 
+func TestReconcileInterruptedInspectionsReportsCorruptHistory(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-corrupt-reconcile.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)`,
+		inspectionHistoryKey, `{not-json}`, "now"); err != nil {
+		t.Fatal(err)
+	}
+
+	interrupted, err := store.ReconcileInterruptedInspections(ctx, time.Now().UTC())
+	if err == nil || !strings.Contains(err.Error(), "心跳历史损坏") {
+		t.Fatalf("interrupted=%d err=%v", interrupted, err)
+	}
+}
+
 func TestReconcileWithoutStaleStateDoesNotWaitForWriterLock(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "inspection-readonly-reconcile.sqlite3"))
 	if err != nil {
@@ -152,6 +173,97 @@ func TestReconcileWithoutStaleStateDoesNotWaitForWriterLock(t *testing.T) {
 	interrupted, err := store.ReconcileInterruptedInspections(checkContext, time.Now().UTC())
 	if err != nil || interrupted != 0 {
 		t.Fatalf("read-only reconciliation waited for writer lock: interrupted=%d err=%v", interrupted, err)
+	}
+}
+
+func TestInspectionTransactionsReturnContextCancellationAndLeaveConnectionReusable(t *testing.T) {
+	testCases := map[string]func(context.Context, *Store, time.Time) error{
+		"record heartbeat": func(ctx context.Context, store *Store, now time.Time) error {
+			return store.RecordInspectionHeartbeat(ctx, InspectionHeartbeat{
+				CheckedAt: now.Add(time.Minute).Format(time.RFC3339Nano),
+				Status:    "running",
+			})
+		},
+		"acquire lease": func(ctx context.Context, store *Store, now time.Time) error {
+			_, err := store.AcquireInspectionLease(ctx, "cancelled-owner", 10001, "remote.example", now, now, time.Minute)
+			return err
+		},
+		"reconcile interrupted": func(ctx context.Context, store *Store, now time.Time) error {
+			_, err := store.ReconcileInterruptedInspections(ctx, now)
+			return err
+		},
+	}
+	for name, operation := range testCases {
+		t.Run(name, func(t *testing.T) {
+			store, err := Open(filepath.Join(t.TempDir(), "inspection-cancelled-transaction.sqlite3"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			background := context.Background()
+			if err := store.Bootstrap(background); err != nil {
+				t.Fatal(err)
+			}
+			store.db.SetMaxOpenConns(2)
+			store.db.SetMaxIdleConns(2)
+			now := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+			if err := store.RecordInspectionHeartbeat(background, InspectionHeartbeat{
+				CheckedAt: now.Add(-time.Minute).Format(time.RFC3339Nano),
+				Status:    "running",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			writer, err := store.db.Conn(background)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer writer.Close()
+			if _, err := writer.ExecContext(background, "BEGIN IMMEDIATE"); err != nil {
+				t.Fatal(err)
+			}
+			defer writer.ExecContext(context.Background(), "ROLLBACK")
+
+			operationContext, cancel := context.WithCancel(background)
+			result := make(chan error, 1)
+			go func() { result <- operation(operationContext, store, now) }()
+			deadline := time.Now().Add(time.Second)
+			blockedSince := time.Time{}
+			for time.Now().Before(deadline) {
+				if store.db.Stats().InUse < 2 {
+					blockedSince = time.Time{}
+				} else if blockedSince.IsZero() {
+					blockedSince = time.Now()
+				} else if time.Since(blockedSince) >= 10*time.Millisecond {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if blockedSince.IsZero() || time.Since(blockedSince) < 10*time.Millisecond {
+				cancel()
+				t.Fatal("inspection operation did not reach the blocked transaction")
+			}
+			cancel()
+			if _, err := writer.ExecContext(background, "ROLLBACK"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-result:
+				if err != context.Canceled {
+					t.Fatalf("cancelled transaction returned %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled transaction did not return")
+			}
+			reuseContext, cancelReuse := context.WithTimeout(background, time.Second)
+			defer cancelReuse()
+			tx, err := store.db.BeginTx(reuseContext, nil)
+			if err != nil {
+				t.Fatalf("connection was not reusable after cancellation: %v", err)
+			}
+			if err := tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

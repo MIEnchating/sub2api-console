@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,6 +131,52 @@ type fakeAccounts struct {
 	details map[string]*business.AccountDetail
 }
 
+type mutableAccounts struct {
+	mu      sync.Mutex
+	rows    []business.AccountStatus
+	details map[string]*business.AccountDetail
+}
+
+func (accounts *mutableAccounts) Accounts(context.Context) ([]business.AccountStatus, error) {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	return append([]business.AccountStatus{}, accounts.rows...), nil
+}
+
+func (accounts *mutableAccounts) Account(_ context.Context, accountID string) (*business.AccountDetail, error) {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	detail := accounts.details[accountID]
+	if detail == nil {
+		return nil, nil
+	}
+	copy := *detail
+	copy.Bindings = append([]business.AccountBinding{}, detail.Bindings...)
+	return &copy, nil
+}
+
+func (accounts *mutableAccounts) SetDetail(accountID string, detail *business.AccountDetail) {
+	accounts.mu.Lock()
+	defer accounts.mu.Unlock()
+	accounts.details[accountID] = detail
+}
+
+type deferredModelRunner struct {
+	run func(context.Context)
+}
+
+func (runner *deferredModelRunner) Go(run func(context.Context)) error {
+	runner.run = run
+	return nil
+}
+
+func (runner *deferredModelRunner) Run(ctx context.Context) {
+	if runner.run == nil {
+		panic("model check task was not scheduled")
+	}
+	runner.run(ctx)
+}
+
 func (accounts fakeAccounts) Accounts(context.Context) ([]business.AccountStatus, error) {
 	return accounts.rows, nil
 }
@@ -180,6 +227,51 @@ func (revealer *fakeKeyRevealer) RevealKey(_ context.Context, _ configstore.Auth
 		return upstreamsync.CreatedKey{}, fmt.Errorf("group ID=%q want=%q", groupID, revealer.expectedGroupID)
 	}
 	return upstreamsync.CreatedKey{KeyID: keyID, GroupID: groupID, Secret: revealer.secret}, nil
+}
+
+func TestQueuedModelCheckRejectsChangedKeyBindingBeforeCredentialOrRemoteAccess(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(response, "unexpected stale model check", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	platform, groupID := "openai", "7"
+	baseURL := server.URL + "/v1"
+	row := business.AccountStatus{ID: "41", Name: "primary", Platform: &platform, BaseURL: &baseURL}
+	detail := func(keyID string) *business.AccountDetail {
+		return &business.AccountDetail{
+			AccountStatus: row,
+			Bindings: []business.AccountBinding{{
+				LocalAccountID: "41", UpstreamHost: "api.example", UpstreamKeyID: keyID, UpstreamGroupID: &groupID,
+			}},
+		}
+	}
+	accounts := &mutableAccounts{rows: []business.AccountStatus{row}, details: map[string]*business.AccountDetail{"41": detail("91")}}
+	credentials := &fakeCredentials{cached: &configstore.UpstreamKeySecret{
+		Host: "api.example", KeyID: "91", GroupID: groupID, Secret: "stale-secret",
+	}}
+	tasks := &recordingTasks{terminal: make(chan taskstore.Task, 1)}
+	runner := &deferredModelRunner{}
+	service, err := New(tasks, credentials, accounts, &fakeKeyRevealer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UseTaskRunner(runner)
+	if _, err := service.Enqueue(context.Background(), Request{AccountIDs: []string{"41"}, Models: []string{"gpt-5.6-sol"}}); err != nil {
+		t.Fatal(err)
+	}
+	accounts.SetDetail("41", detail("92"))
+	runner.Run(context.Background())
+
+	terminal := <-tasks.terminal
+	if terminal.Status != "failed" || !strings.Contains(terminal.Message, "Key 绑定已变化") {
+		t.Fatalf("changed-binding model check task=%#v", terminal)
+	}
+	if credentials.cacheReads != 0 || credentials.authCalls != 0 || credentials.cacheWrites != 0 || requests.Load() != 0 {
+		t.Fatalf("changed binding reached credentials or remote: cache reads=%d auth=%d writes=%d requests=%d", credentials.cacheReads, credentials.authCalls, credentials.cacheWrites, requests.Load())
+	}
 }
 
 func TestAccountMatrixRevealsBoundKeyAndCallsAccountBaseURLDirectly(t *testing.T) {

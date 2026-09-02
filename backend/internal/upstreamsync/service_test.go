@@ -10,11 +10,23 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
+
+func TestSafeReasonTruncatesAtValidUTF8Boundary(t *testing.T) {
+	reason := safeReason(strings.Repeat("a", 499) + "界tail")
+	if len(reason) > 500 || !utf8.ValidString(reason) {
+		t.Fatalf("safe reason is not valid UTF-8 within the byte limit: len=%d value=%q", len(reason), reason)
+	}
+	if reason != strings.Repeat("a", 499) {
+		t.Fatalf("safe reason split a multibyte rune: len=%d value=%q", len(reason), reason)
+	}
+}
 
 type syncRepository struct {
 	mu             sync.Mutex
@@ -25,6 +37,7 @@ type syncRepository struct {
 	hosts          []business.UpstreamHost
 	failureErr     error
 	balanceAllowed *bool
+	accountIDs     map[string][]string
 }
 
 type captureAccountRateScheduler struct {
@@ -71,6 +84,11 @@ func (r *syncRepository) HostBalanceSyncAllowed(context.Context, string) (bool, 
 
 func (r *syncRepository) Upstreams(context.Context) (business.UpstreamSummary, error) {
 	return business.UpstreamSummary{Hosts: r.hosts}, nil
+}
+func (r *syncRepository) UpstreamMutationAccountIDs(_ context.Context, host string) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string{}, r.accountIDs[configstore.CanonicalHost(host)]...), nil
 }
 func (r *syncRepository) ApplyUpstreamSync(_ context.Context, value business.UpstreamSyncWrite) (business.UpstreamSyncWriteResult, error) {
 	r.mu.Lock()
@@ -162,20 +180,137 @@ func (r *syncRepository) RecordRuntimeEvent(context.Context, string, string, str
 }
 
 type syncPrivate struct {
-	mu      sync.Mutex
-	records map[string]configstore.AuthRecord
-	saved   bool
+	mu        sync.Mutex
+	records   map[string]configstore.AuthRecord
+	saved     bool
+	authRead  chan struct{}
+	authReads int
 }
 
 func (s *syncPrivate) AuthRecord(_ context.Context, host string) (*configstore.AuthRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.authReads++
+	if s.authRead != nil {
+		select {
+		case s.authRead <- struct{}{}:
+		default:
+		}
+	}
 	record, found := s.records[host]
 	if !found {
 		return nil, nil
 	}
 	copy := record
 	return &copy, nil
+}
+
+func TestSyncHostRechecksAuthAfterCanonicalUpstreamLease(t *testing.T) {
+	token := "token"
+	repository := &syncRepository{}
+	private := &syncPrivate{
+		records: map[string]configstore.AuthRecord{"api.example": {
+			Host: "api.example", BaseURL: "https://api.example", AccessToken: &token,
+			Headers: map[string]string{}, Cookies: map[string]string{},
+		}},
+		authRead: make(chan struct{}, 2),
+	}
+	readerCalls := atomic.Int32{}
+	reader := &syncReader{
+		catalog: func(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+			readerCalls.Add(1)
+			return business.UpstreamCatalogSnapshot{}, nil
+		},
+		balance: func(context.Context, configstore.AuthRecord) (business.UpstreamBalanceObservation, error) {
+			return business.UpstreamBalanceObservation{}, nil
+		},
+	}
+	_, releaseDelete, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Upstream("HTTPS://API.EXAMPLE/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{})
+	done := make(chan HostResult, 1)
+	go func() {
+		done <- service.syncHost(context.Background(), "api.example", Scope{Catalog: true}, "tester")
+	}()
+	select {
+	case <-private.authRead:
+	case <-time.After(time.Second):
+		t.Fatal("sync did not perform its initial auth discovery")
+	}
+	private.mu.Lock()
+	delete(private.records, "api.example")
+	private.mu.Unlock()
+	if err := releaseDelete(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.Status != "auth_failed" || result.Reason == nil || !strings.Contains(*result.Reason, "已被删除") {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync did not resume after upstream deletion lease")
+	}
+	private.mu.Lock()
+	authReads := private.authReads
+	private.mu.Unlock()
+	if authReads != 2 || readerCalls.Load() != 0 || len(repository.applied) != 0 {
+		t.Fatalf("authReads=%d readerCalls=%d applied=%#v", authReads, readerCalls.Load(), repository.applied)
+	}
+}
+
+func TestSyncHostLocksAssociatedAccountsBeforeReadingAndApplyingCatalog(t *testing.T) {
+	token := "token"
+	repository := &syncRepository{accountIDs: map[string][]string{"api.example": {"41"}}}
+	private := &syncPrivate{records: map[string]configstore.AuthRecord{"api.example": {
+		Host: "api.example", BaseURL: "https://api.example", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}}}
+	readerCalls := atomic.Int32{}
+	reader := &syncReader{
+		catalog: func(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
+			readerCalls.Add(1)
+			return business.UpstreamCatalogSnapshot{Groups: []business.UpstreamCatalogGroup{{GroupID: "6", Name: "pro"}}}, nil
+		},
+		balance: func(context.Context, configstore.AuthRecord) (business.UpstreamBalanceObservation, error) {
+			return business.UpstreamBalanceObservation{}, nil
+		},
+	}
+	_, releaseAccount, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Account("41"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New(repository, private, reader, &syncRefresher{}, &memoryTasks{})
+	done := make(chan HostResult, 1)
+	go func() {
+		done <- service.syncHost(context.Background(), "api.example", Scope{Catalog: true}, "tester")
+	}()
+	select {
+	case result := <-done:
+		_ = releaseAccount()
+		t.Fatalf("sync bypassed associated account lease: %#v", result)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if readerCalls.Load() != 0 {
+		_ = releaseAccount()
+		t.Fatalf("catalog was read before account lease: calls=%d", readerCalls.Load())
+	}
+	if err := releaseAccount(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-done:
+		if result.Status != "succeeded" {
+			t.Fatalf("result=%#v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("sync did not resume after account lease release")
+	}
+	if readerCalls.Load() != 1 || len(repository.applied) != 1 {
+		t.Fatalf("readerCalls=%d applied=%#v", readerCalls.Load(), repository.applied)
+	}
 }
 func (s *syncPrivate) SaveAuthRecord(_ context.Context, record configstore.AuthRecord, _ map[string]bool) error {
 	s.mu.Lock()

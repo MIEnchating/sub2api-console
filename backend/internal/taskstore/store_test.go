@@ -80,6 +80,31 @@ func TestTaskLogSummaryAndSearchAvoidLoadingUnmatchedResults(t *testing.T) {
 	}
 }
 
+func TestTaskLogSummaryPreservesExplicitObjectLabel(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := store.Save(ctx, Task{
+		ID: "task-object", Skill: "console", Operation: "cleanup", Status: "succeeded",
+		Progress: 100, Message: "完成", Result: map[string]any{"object_label": "未绑定 Key"},
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, err := store.ListLogSummaries(ctx, nil)
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries=%#v err=%v", summaries, err)
+	}
+	if summaries[0].Result["object_label"] != "未绑定 Key" {
+		t.Fatalf("explicit object label missing: %#v", summaries[0].Result)
+	}
+}
+
 func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
 	if err != nil {

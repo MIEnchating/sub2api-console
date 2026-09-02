@@ -7,18 +7,86 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
 type ManagementSyncResult struct {
-	Accounts    int   `json:"accounts"`
-	GroupLinks  int   `json:"group_links"`
-	Groups      int   `json:"groups"`
-	EventID     int64 `json:"event_id"`
-	RemoteWrite bool  `json:"remote_write"`
-	ReadOnly    bool  `json:"read_only"`
+	Accounts      int   `json:"accounts"`
+	GroupLinks    int   `json:"group_links"`
+	Groups        int   `json:"groups"`
+	DeletedGroups int   `json:"deleted_groups"`
+	EventID       int64 `json:"event_id"`
+	RemoteWrite   bool  `json:"remote_write"`
+	ReadOnly      bool  `json:"read_only"`
+}
+
+func (s *Store) ManagementAccountIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM accounts ORDER BY
+		CASE WHEN id GLOB '[0-9]*' THEN CAST(id AS INTEGER) ELSE 0 END,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]string, 0)
+	for rows.Next() {
+		var accountID string
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			return nil, errors.New("本地账号记录缺少稳定 ID")
+		}
+		result = append(result, accountID)
+	}
+	return result, rows.Err()
+}
+
+func ManagementSnapshotAccountIDs(rows []map[string]any) ([]string, error) {
+	seen := make(map[string]struct{}, len(rows))
+	result := make([]string, 0, len(rows))
+	for _, row := range rows {
+		rawID, present := managementPresent(row, "id", "account_id")
+		if !present {
+			return nil, errors.New("管理快照中的账号缺少稳定 ID")
+		}
+		id, err := managementStableID(rawID)
+		if err != nil {
+			return nil, errors.New("管理快照中的账号缺少稳定 ID")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return nil, fmt.Errorf("管理快照返回重复账号 ID：%s", id)
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+type ManagementSnapshotGroupIdentity struct {
+	ID   string
+	Name string
+}
+
+func ManagementSnapshotGroupIdentities(rows []map[string]any) ([]ManagementSnapshotGroupIdentity, error) {
+	groupsByID, _, err := managementGroupCatalog(rows)
+	if err != nil {
+		return nil, err
+	}
+	groupIDs := make([]string, 0, len(groupsByID))
+	for groupID := range groupsByID {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Strings(groupIDs)
+	result := make([]ManagementSnapshotGroupIdentity, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		result = append(result, ManagementSnapshotGroupIdentity{ID: groupID, Name: groupsByID[groupID]})
+	}
+	return result, nil
 }
 
 type AccountBaseURLObservation struct {
@@ -124,6 +192,21 @@ func (s *Store) SyncManagementSnapshot(
 	if err != nil {
 		return ManagementSyncResult{}, err
 	}
+	separatedDeletedIDs := map[string]struct{}{}
+	if err := stageManagementGroupIdentityConflicts(ctx, tx, groupsByID, groupsByName, separatedDeletedIDs, now); err != nil {
+		return ManagementSyncResult{}, fmt.Errorf("分组名称冲突预处理失败：%w", err)
+	}
+	groupIDs := make([]string, 0, len(groupsByID))
+	for groupID := range groupsByID {
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Strings(groupIDs)
+	for _, groupID := range groupIDs {
+		name := groupsByID[groupID]
+		if err := reconcileManagementGroupIdentity(ctx, tx, groupID, name, now); err != nil {
+			return ManagementSyncResult{}, fmt.Errorf("分组 %s 改名同步失败：%w", groupID, err)
+		}
+	}
 	for _, row := range groupRows {
 		groupID, _ := managementStableID(row["id"])
 		if groupID == "" {
@@ -191,6 +274,20 @@ func (s *Store) SyncManagementSnapshot(
 			return ManagementSyncResult{}, err
 		}
 		if account.GroupsPresent {
+			changed, err := managementAccountGroupsChanged(ctx, tx, account.ID, account.Groups)
+			if err != nil {
+				return ManagementSyncResult{}, err
+			}
+			if changed {
+				for _, statement := range []string{
+					`DELETE FROM routing_decisions WHERE account_id=?`,
+					`DELETE FROM account_health_evaluations WHERE account_id=?`,
+				} {
+					if _, err := tx.ExecContext(ctx, statement, account.ID); err != nil {
+						return ManagementSyncResult{}, err
+					}
+				}
+			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, account.ID); err != nil {
 				return ManagementSyncResult{}, err
 			}
@@ -213,6 +310,10 @@ func (s *Store) SyncManagementSnapshot(
 		}
 		accountCount++
 	}
+	deletedGroups, err := pruneManagementDeletedGroups(ctx, s, tx, groupsByID, separatedDeletedIDs, now)
+	if err != nil {
+		return ManagementSyncResult{}, fmt.Errorf("已删除分组清理失败：%w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
 		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
 	),updated_at=?`, now); err != nil {
@@ -220,7 +321,7 @@ func (s *Store) SyncManagementSnapshot(
 	}
 	payload := map[string]any{
 		"actor": strings.TrimSpace(actor), "accounts": accountCount, "groups": len(allGroupNames),
-		"group_links": groupLinks, "remote_write": false,
+		"group_links": groupLinks, "deleted_groups": deletedGroups, "remote_write": false,
 	}
 	if err := insertRuntimeEventWithStatus(ctx, tx, "management.snapshot.synced", "succeeded",
 		fmt.Sprintf("管理快照同步完成：账号 %d，分组 %d", accountCount, len(allGroupNames)), payload, now); err != nil {
@@ -234,9 +335,566 @@ func (s *Store) SyncManagementSnapshot(
 		return ManagementSyncResult{}, err
 	}
 	return ManagementSyncResult{
-		Accounts: accountCount, GroupLinks: groupLinks, Groups: len(allGroupNames), EventID: eventID,
+		Accounts: accountCount, GroupLinks: groupLinks, Groups: len(allGroupNames), DeletedGroups: deletedGroups, EventID: eventID,
 		RemoteWrite: false, ReadOnly: true,
 	}, nil
+}
+
+func managementAccountGroupsChanged(
+	ctx context.Context,
+	tx *sql.Tx,
+	accountID string,
+	desired []managementMembership,
+) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT group_name,COALESCE(group_id,'') FROM account_groups
+		WHERE account_id=? ORDER BY group_name,COALESCE(group_id,'')`, accountID)
+	if err != nil {
+		return false, err
+	}
+	current := make([]string, 0)
+	for rows.Next() {
+		var name, id string
+		if err := rows.Scan(&name, &id); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		current = append(current, strings.TrimSpace(name)+"\x00"+strings.TrimSpace(id))
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, err
+	}
+	if err := rows.Close(); err != nil {
+		return false, err
+	}
+	wanted := make([]string, 0, len(desired))
+	for _, membership := range desired {
+		id := ""
+		if membership.ID != nil {
+			id = strings.TrimSpace(*membership.ID)
+		}
+		wanted = append(wanted, strings.TrimSpace(membership.Name)+"\x00"+id)
+	}
+	sort.Strings(wanted)
+	if len(current) != len(wanted) {
+		return true, nil
+	}
+	for index := range current {
+		if current[index] != wanted[index] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type managementDeletedGroup struct {
+	name string
+	id   string
+}
+
+func pruneManagementDeletedGroups(
+	ctx context.Context,
+	store *Store,
+	tx *sql.Tx,
+	remoteGroups map[string]string,
+	separatedDeletedIDs map[string]struct{},
+	now string,
+) (int, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT lg.name,lg.remote_id FROM local_groups lg
+		WHERE lg.remote_id IS NOT NULL AND TRIM(lg.remote_id)<>'' AND NOT EXISTS(
+			SELECT 1 FROM account_groups ag WHERE ag.group_id=lg.remote_id OR EXISTS(
+				SELECT 1 FROM local_groups sibling
+				WHERE sibling.remote_id=lg.remote_id AND sibling.name=ag.group_name
+			)
+		) ORDER BY lg.remote_id,lg.name`)
+	if err != nil {
+		return 0, err
+	}
+	deleted := make([]managementDeletedGroup, 0)
+	for rows.Next() {
+		var value managementDeletedGroup
+		if err := rows.Scan(&value.name, &value.id); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		value.name = strings.TrimSpace(value.name)
+		value.id = strings.TrimSpace(value.id)
+		if _, exists := remoteGroups[value.id]; !exists {
+			deleted = append(deleted, value)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(deleted) == 0 {
+		return 0, nil
+	}
+	deletedIDs := make(map[string]struct{}, len(deleted))
+	for _, group := range deleted {
+		projectionName := group.name
+		if _, separated := separatedDeletedIDs[group.id]; !separated {
+			// Historical and binding rows are name-keyed. Detach them before the
+			// deleted name becomes available to a future stable identity.
+			projectionName, err = archiveManagementDeletedGroupReferences(ctx, tx, group)
+			if err != nil {
+				return 0, err
+			}
+		}
+		for _, statement := range []string{
+			`DELETE FROM routing_decisions WHERE group_name=?`,
+			`DELETE FROM account_health_evaluations WHERE group_name=?`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, projectionName); err != nil {
+				return 0, err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM local_groups WHERE name=? AND remote_id=?`, group.name, group.id); err != nil {
+			return 0, err
+		}
+		deletedIDs[group.id] = struct{}{}
+	}
+	control, err := store.readPolicyDocument(ctx, tx, "control-plane")
+	if err != nil {
+		return 0, err
+	}
+	if control != nil && removeDeletedGroupPolicyReferences(control, deletedIDs) {
+		if err := store.writePolicyDocument(ctx, tx, "control-plane", control, now); err != nil {
+			return 0, err
+		}
+	}
+	return len(deletedIDs), nil
+}
+
+func archiveManagementDeletedGroupReferences(
+	ctx context.Context,
+	tx *sql.Tx,
+	group managementDeletedGroup,
+) (string, error) {
+	base := managementDeletedGroupArchiveBase(group.name, group.id)
+	archivedName := base
+	for suffix := 2; ; suffix++ {
+		occupied, err := managementGroupReferenceNameOccupied(ctx, tx, archivedName)
+		if err != nil {
+			return "", err
+		}
+		if !occupied {
+			break
+		}
+		archivedName = fmt.Sprintf("%s (%d)", base, suffix)
+	}
+	if err := migrateManagementGroupReferences(ctx, tx, group.id, archivedName, []string{group.name}); err != nil {
+		return "", fmt.Errorf("分组 %s 历史引用归档失败：%w", group.id, err)
+	}
+	return archivedName, nil
+}
+
+func managementGroupReferenceNameOccupied(ctx context.Context, tx *sql.Tx, name string) (bool, error) {
+	var occupied bool
+	err := tx.QueryRowContext(ctx, `SELECT
+		EXISTS(SELECT 1 FROM local_groups WHERE name=?) OR
+		EXISTS(SELECT 1 FROM account_groups WHERE group_name=?) OR
+		EXISTS(SELECT 1 FROM routing_decisions WHERE group_name=?) OR
+		EXISTS(SELECT 1 FROM account_health_evaluations WHERE group_name=?) OR
+		EXISTS(SELECT 1 FROM health_samples WHERE group_name=?) OR
+		EXISTS(SELECT 1 FROM bindings WHERE local_group=?) OR
+		EXISTS(SELECT 1 FROM onboarding_pending WHERE local_group_name=?) OR
+		EXISTS(SELECT 1 FROM usage_records WHERE group_name=?)`,
+		name, name, name, name, name, name, name, name,
+	).Scan(&occupied)
+	return occupied, err
+}
+
+func managementDeletedGroupArchiveBase(name, groupID string) string {
+	return fmt.Sprintf("%s（已删除 #%s）", name, groupID)
+}
+
+func removeDeletedGroupPolicyReferences(control map[string]any, deletedIDs map[string]struct{}) bool {
+	changed := false
+	if bindings, ok := control["group_policy_bindings"].(map[string]any); ok {
+		for groupID := range deletedIDs {
+			if _, found := bindings[groupID]; found {
+				delete(bindings, groupID)
+				changed = true
+			}
+		}
+	}
+	if scope, ok := control["scope"].(map[string]any); ok {
+		for _, field := range []string{"managed_group_ids", "excluded_group_ids"} {
+			if filtered, removed := removeDeletedGroupIDs(scope[field], deletedIDs); removed {
+				scope[field] = filtered
+				changed = true
+			}
+		}
+	}
+	if pricing, ok := control["price_management"].(map[string]any); ok {
+		if filtered, removed := removeDeletedGroupIDs(pricing["managed_group_ids"], deletedIDs); removed {
+			pricing["managed_group_ids"] = filtered
+			changed = true
+		}
+		if rawSets, ok := pricing["exchange_group_sets"].([]any); ok {
+			sets := make([]any, 0, len(rawSets))
+			rawNames, hasNames := pricing["exchange_group_set_names"].([]any)
+			names := make([]any, 0, len(rawNames))
+			removed := false
+			for setIndex, rawSet := range rawSets {
+				filtered, setRemoved := removeDeletedGroupIDs(rawSet, deletedIDs)
+				removed = removed || setRemoved
+				values, valid := filtered.([]any)
+				if !valid || len(values) >= 2 {
+					sets = append(sets, filtered)
+					if hasNames && setIndex < len(rawNames) {
+						names = append(names, rawNames[setIndex])
+					}
+				} else {
+					removed = true
+				}
+			}
+			if removed {
+				pricing["exchange_group_sets"] = sets
+				if hasNames {
+					pricing["exchange_group_set_names"] = names
+				}
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func removeDeletedGroupIDs(value any, deletedIDs map[string]struct{}) (any, bool) {
+	values, ok := value.([]any)
+	if !ok {
+		return value, false
+	}
+	filtered := make([]any, 0, len(values))
+	removed := false
+	for _, raw := range values {
+		groupID, text := raw.(string)
+		if text {
+			_, deleted := deletedIDs[strings.TrimSpace(groupID)]
+			if deleted {
+				removed = true
+				continue
+			}
+		}
+		filtered = append(filtered, raw)
+	}
+	return filtered, removed
+}
+
+type localGroupIdentityRow struct {
+	name               string
+	remoteID           sql.NullString
+	strategy           string
+	strategySource     string
+	platform           sql.NullString
+	rateMultiplier     sql.NullString
+	profitEnabled      sql.NullInt64
+	profitMinMargin    sql.NullString
+	profitSafetyBuffer sql.NullString
+	accountCount       int64
+}
+
+type managementLocalGroupIdentity struct {
+	name     string
+	remoteID string
+}
+
+// Move conflicting identities out of the final namespace before applying renames.
+// This makes swaps atomic and keeps historical references from a deleted ID distinct
+// when a new ID reuses its former name.
+func stageManagementGroupIdentityConflicts(
+	ctx context.Context,
+	tx *sql.Tx,
+	remoteGroupsByID map[string]string,
+	remoteGroupsByName map[string]string,
+	separatedDeletedIDs map[string]struct{},
+	now string,
+) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name,remote_id FROM local_groups ORDER BY COALESCE(remote_id,''),name`)
+	if err != nil {
+		return err
+	}
+	localGroups := make([]managementLocalGroupIdentity, 0)
+	occupiedNames := make(map[string]struct{}, len(remoteGroupsByName))
+	for name := range remoteGroupsByName {
+		occupiedNames[name] = struct{}{}
+	}
+	for rows.Next() {
+		var group managementLocalGroupIdentity
+		var remoteID sql.NullString
+		if err := rows.Scan(&group.name, &remoteID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		group.name = strings.TrimSpace(group.name)
+		occupiedNames[group.name] = struct{}{}
+		if remoteID.Valid {
+			group.remoteID = strings.TrimSpace(remoteID.String)
+			if group.remoteID != "" {
+				localGroups = append(localGroups, group)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	type stagedIdentity struct {
+		archivedName  string
+		preferredName string
+		transient     bool
+	}
+	stagedByID := make(map[string]stagedIdentity)
+	for _, group := range localGroups {
+		desiredName, remains := remoteGroupsByID[group.remoteID]
+		if remains {
+			if group.name != desiredName {
+				stagedByID[group.remoteID] = stagedIdentity{preferredName: desiredName, transient: true}
+			}
+			continue
+		}
+		if replacementID, reused := remoteGroupsByName[group.name]; reused && replacementID != group.remoteID {
+			if _, found := stagedByID[group.remoteID]; !found {
+				stagedByID[group.remoteID] = stagedIdentity{
+					archivedName:  managementDeletedGroupArchiveBase(group.name, group.remoteID),
+					preferredName: group.name,
+				}
+			}
+		}
+	}
+	stageIDs := make([]string, 0, len(stagedByID))
+	for groupID := range stagedByID {
+		stageIDs = append(stageIDs, groupID)
+	}
+	sort.Strings(stageIDs)
+	for _, groupID := range stageIDs {
+		staged := stagedByID[groupID]
+		base := staged.archivedName
+		if staged.transient {
+			base = fmt.Sprintf("__sub2api_management_sync_%s__", groupID)
+		}
+		stagedName := base
+		for suffix := 2; ; suffix++ {
+			_, occupied := occupiedNames[stagedName]
+			if !occupied {
+				var err error
+				occupied, err = managementGroupReferenceNameOccupied(ctx, tx, stagedName)
+				if err != nil {
+					return fmt.Errorf("分组 %s 暂存名称检查失败：%w", groupID, err)
+				}
+				if !occupied {
+					break
+				}
+			}
+			stagedName = fmt.Sprintf("%s (%d)", base, suffix)
+		}
+		occupiedNames[stagedName] = struct{}{}
+		if err := reconcileManagementGroupIdentityFrom(ctx, tx, groupID, stagedName, staged.preferredName, now); err != nil {
+			return fmt.Errorf("分组 %s 暂存失败：%w", groupID, err)
+		}
+		if !staged.transient {
+			separatedDeletedIDs[groupID] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func reconcileManagementGroupIdentity(ctx context.Context, tx *sql.Tx, groupID, currentName, now string) error {
+	return reconcileManagementGroupIdentityFrom(ctx, tx, groupID, currentName, currentName, now)
+}
+
+func reconcileManagementGroupIdentityFrom(
+	ctx context.Context,
+	tx *sql.Tx,
+	groupID string,
+	currentName string,
+	preferredName string,
+	now string,
+) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name,remote_id,strategy,strategy_source,platform,rate_multiplier,
+		profit_control_enabled,profit_min_margin,profit_safety_buffer,account_count
+		FROM local_groups WHERE remote_id=? OR name=? ORDER BY
+		CASE WHEN name=? THEN 0 WHEN name=? THEN 1 ELSE 2 END,name`,
+		groupID, currentName, preferredName, currentName)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	values := make([]localGroupIdentityRow, 0, 2)
+	for rows.Next() {
+		var value localGroupIdentityRow
+		if err := rows.Scan(
+			&value.name, &value.remoteID, &value.strategy, &value.strategySource, &value.platform,
+			&value.rateMultiplier, &value.profitEnabled, &value.profitMinMargin,
+			&value.profitSafetyBuffer, &value.accountCount,
+		); err != nil {
+			return err
+		}
+		if value.remoteID.Valid && strings.TrimSpace(value.remoteID.String) != groupID {
+			return fmt.Errorf("名称 %q 已属于分组 ID %s", currentName, value.remoteID.String)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	canonical := values[0]
+	canonical.name = currentName
+	canonical.remoteID = sql.NullString{String: groupID, Valid: true}
+	for _, value := range values[1:] {
+		if canonical.strategySource != "group_override" && value.strategySource == "group_override" {
+			canonical.strategy, canonical.strategySource = value.strategy, value.strategySource
+		}
+		mergeNullString(&canonical.platform, value.platform)
+		mergeNullString(&canonical.rateMultiplier, value.rateMultiplier)
+		mergeNullInt64(&canonical.profitEnabled, value.profitEnabled)
+		mergeNullString(&canonical.profitMinMargin, value.profitMinMargin)
+		mergeNullString(&canonical.profitSafetyBuffer, value.profitSafetyBuffer)
+		if value.accountCount > canonical.accountCount {
+			canonical.accountCount = value.accountCount
+		}
+	}
+	staleNames := make([]string, 0, len(values))
+	for _, value := range values {
+		if value.name != currentName {
+			staleNames = append(staleNames, value.name)
+		}
+	}
+	if len(staleNames) == 0 && len(values) == 1 && values[0].remoteID.Valid {
+		return nil
+	}
+	if err := migrateManagementGroupReferences(ctx, tx, groupID, currentName, staleNames); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO local_groups(
+		name,remote_id,strategy,strategy_source,platform,rate_multiplier,profit_control_enabled,
+		profit_min_margin,profit_safety_buffer,account_count,updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET
+		remote_id=excluded.remote_id,strategy=excluded.strategy,strategy_source=excluded.strategy_source,
+		platform=excluded.platform,rate_multiplier=excluded.rate_multiplier,
+		profit_control_enabled=excluded.profit_control_enabled,profit_min_margin=excluded.profit_min_margin,
+		profit_safety_buffer=excluded.profit_safety_buffer,account_count=excluded.account_count,updated_at=excluded.updated_at`,
+		canonical.name, groupID, canonical.strategy, canonical.strategySource,
+		managementSQLNullString(canonical.platform), managementSQLNullString(canonical.rateMultiplier), managementSQLNullInt64(canonical.profitEnabled),
+		managementSQLNullString(canonical.profitMinMargin), managementSQLNullString(canonical.profitSafetyBuffer), canonical.accountCount, now,
+	); err != nil {
+		return err
+	}
+	for _, staleName := range staleNames {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM local_groups WHERE name=? AND remote_id=?`, staleName, groupID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func migrateManagementGroupReferences(ctx context.Context, tx *sql.Tx, groupID, currentName string, staleNames []string) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+		SELECT account_id,?,?,group_rate FROM account_groups WHERE group_id=?
+		ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`,
+		currentName, groupID, groupID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE group_id=? AND group_name<>?`, groupID, currentName); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE account_groups SET group_id=? WHERE group_name=? AND group_id IS NULL`, groupID, currentName); err != nil {
+		return err
+	}
+	for _, staleName := range staleNames {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
+			SELECT account_id,?,?,group_rate FROM account_groups WHERE group_name=? AND group_id IS NULL
+			ON CONFLICT(account_id,group_name) DO UPDATE SET group_id=excluded.group_id,group_rate=excluded.group_rate`,
+			currentName, groupID, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE group_name=? AND group_id IS NULL`, staleName); err != nil {
+			return err
+		}
+		for _, statement := range []string{
+			`UPDATE routing_decisions SET group_name=? WHERE group_name=?`,
+			`UPDATE account_health_evaluations SET group_name=? WHERE group_name=?`,
+			`UPDATE bindings SET local_group=? WHERE local_group=?`,
+			`UPDATE onboarding_pending SET local_group_name=? WHERE local_group_name=?`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, currentName, staleName); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM health_samples
+			WHERE group_name=? AND evidence_key IS NOT NULL AND EXISTS(
+				SELECT 1 FROM health_samples AS stale
+				WHERE stale.group_name=? AND stale.account_id=health_samples.account_id
+				AND stale.source=health_samples.source AND stale.evidence_key=health_samples.evidence_key
+				AND (COALESCE(stale.observed_at,'')>COALESCE(health_samples.observed_at,'') OR
+					(COALESCE(stale.observed_at,'')=COALESCE(health_samples.observed_at,'') AND stale.id>health_samples.id))
+			)`, currentName, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE health_samples SET group_name=? WHERE group_name=?`, currentName, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM health_samples WHERE group_name=?`, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_records
+			WHERE group_name=? AND EXISTS(
+				SELECT 1 FROM usage_records AS stale
+				WHERE stale.group_name=? AND stale.request_id=usage_records.request_id
+				AND stale.account_id=usage_records.account_id
+				AND stale.observed_at=usage_records.observed_at AND stale.id>usage_records.id
+			)`, currentName, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE OR IGNORE usage_records SET group_name=? WHERE group_name=?`, currentName, staleName); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_records WHERE group_name=?`, staleName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mergeNullString(target *sql.NullString, candidate sql.NullString) {
+	if !target.Valid && candidate.Valid {
+		*target = candidate
+	}
+}
+
+func mergeNullInt64(target *sql.NullInt64, candidate sql.NullInt64) {
+	if !target.Valid && candidate.Valid {
+		*target = candidate
+	}
+}
+
+func managementSQLNullString(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.String
+}
+
+func managementSQLNullInt64(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
 }
 
 func managementGroupCatalog(rows []map[string]any) (map[string]string, map[string]string, error) {
@@ -475,16 +1133,30 @@ func managementMemberships(row map[string]any, byID, byName map[string]string) (
 				}
 				name = strings.TrimSpace(parsed)
 			}
-			if name == "" && id != nil {
-				name = byID[*id]
+			if id != nil {
+				catalogName, found := byID[*id]
+				if !found {
+					return nil, true, fmt.Errorf("分组列表引用目录外稳定 ID：%s", *id)
+				}
+				if name != "" && name != catalogName {
+					return nil, true, fmt.Errorf("分组列表中的稳定 ID 与名称不一致：%s 应为 %s", *id, catalogName)
+				}
+				name = catalogName
+			} else if name != "" {
+				if catalogID, found := byName[name]; found {
+					id = stringPointer(catalogID)
+				}
 			}
 		case string, json.Number, int, int64:
 			text := strings.TrimSpace(fmt.Sprint(item))
 			if parsed, err := managementStableID(item); err == nil {
+				catalogName, found := byID[parsed]
+				if !found {
+					return nil, true, fmt.Errorf("分组列表引用目录外稳定 ID：%s", parsed)
+				}
 				id = stringPointer(parsed)
-				name = byID[parsed]
-			}
-			if name == "" {
+				name = catalogName
+			} else {
 				name = text
 				if catalogID, found := byName[name]; found {
 					id = stringPointer(catalogID)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/big"
 	"net/http"
@@ -19,6 +20,9 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -33,6 +37,10 @@ type Repository interface {
 	CreatePricingBackup(context.Context, string, string) (business.PricingBackup, error)
 	PricingBackups(context.Context) ([]business.PricingBackup, error)
 	PricingBackup(context.Context, string) (business.PricingBackup, error)
+}
+
+type mutationProtectionRepository interface {
+	AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
 }
 
 type TargetStore interface {
@@ -57,11 +65,12 @@ type TaskStore interface {
 }
 
 type Config struct {
-	Enabled           bool       `json:"enabled"`
-	ProfitMargin      float64    `json:"profit_margin"`
-	ExchangeGroupSets [][]string `json:"exchange_group_sets"`
-	IntervalSeconds   int        `json:"interval_seconds"`
-	WriteConcurrency  int        `json:"write_concurrency"`
+	Enabled               bool       `json:"enabled"`
+	ProfitMargin          float64    `json:"profit_margin"`
+	ExchangeGroupSets     [][]string `json:"exchange_group_sets"`
+	ExchangeGroupSetNames []string   `json:"exchange_group_set_names"`
+	IntervalSeconds       int        `json:"interval_seconds"`
+	WriteConcurrency      int        `json:"write_concurrency"`
 }
 
 type Group struct {
@@ -103,6 +112,8 @@ type ItemResult struct {
 	Before    []string `json:"before"`
 	After     []string `json:"after"`
 	Changed   bool     `json:"changed"`
+	Skipped   bool     `json:"skipped,omitempty"`
+	Reason    *string  `json:"reason,omitempty"`
 	Error     *string  `json:"error"`
 }
 
@@ -121,6 +132,7 @@ type Service struct {
 	repository Repository
 	targets    TargetStore
 	tasks      TaskStore
+	taskRunner taskrunner.Runner
 	usage      UsageReader
 	resolver   AuthResolver
 	timeout    time.Duration
@@ -139,6 +151,8 @@ func New(repository Repository, targets TargetStore, tasks TaskStore) *Service {
 
 func (s *Service) UseAuthResolver(resolver AuthResolver) { s.resolver = resolver }
 
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
 func (s *Service) CreateBackup(ctx context.Context, name, actor string) (business.PricingBackup, error) {
 	return s.repository.CreatePricingBackup(ctx, name, actor)
 }
@@ -148,6 +162,10 @@ func (s *Service) Backups(ctx context.Context) ([]business.PricingBackup, error)
 }
 
 func (s *Service) RestoreBackupNow(ctx context.Context, backupID, actor string) (Result, error) {
+	ctx, err := targetguard.Capture(ctx, s.targets)
+	if err != nil {
+		return Result{}, err
+	}
 	backup, err := s.repository.PricingBackup(ctx, strings.TrimSpace(backupID))
 	if err != nil {
 		return Result{}, err
@@ -215,6 +233,10 @@ func (s *Service) EnqueueRestore(ctx context.Context, backupID, actor string) (t
 	if _, err := s.repository.PricingBackup(ctx, strings.TrimSpace(backupID)); err != nil {
 		return taskstore.Task{}, err
 	}
+	expectedTarget, err := s.targets.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	id, err := randomID()
 	if err != nil {
 		return taskstore.Task{}, err
@@ -225,15 +247,20 @@ func (s *Service) EnqueueRestore(ctx context.Context, backupID, actor string) (t
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.executeRestore(task, backupID, actor)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeRestore(targetguard.Expect(parent, expectedTarget), task, backupID, actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) executeRestore(task taskstore.Task, backupID, actor string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) executeRestore(parent context.Context, task taskstore.Task, backupID, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 20, "正在还原价格分组备份", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result, err := s.RestoreBackupNow(ctx, backupID, actor)
@@ -247,6 +274,7 @@ func (s *Service) executeRestore(task taskstore.Task, backupID, actor string) {
 		task.Status = "succeeded"
 		task.Message = fmt.Sprintf("价格分组备份还原完成：更新 %d，未变 %d，跳过 %d", result.Changed, result.Unchanged, result.Skipped)
 	}
+	taskstore.MarkCancelled(ctx, &task, "价格分组备份还原已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -283,7 +311,8 @@ func (s *Service) UpdateConfig(ctx context.Context, config Config, actor string)
 	_, err = s.repository.UpdatePolicy(ctx, map[string]any{"advanced_policy": map[string]any{
 		"price_management": map[string]any{
 			"enabled": config.Enabled, "profit_margin": config.ProfitMargin,
-			"exchange_group_sets": stringGroupsToAny(config.ExchangeGroupSets), "interval_seconds": config.IntervalSeconds,
+			"exchange_group_sets":      stringGroupsToAny(config.ExchangeGroupSets),
+			"exchange_group_set_names": stringsToAny(config.ExchangeGroupSetNames), "interval_seconds": config.IntervalSeconds,
 			"write_concurrency": config.WriteConcurrency,
 		},
 	}}, actor)
@@ -294,6 +323,10 @@ func (s *Service) UpdateConfig(ctx context.Context, config Config, actor string)
 }
 
 func (s *Service) ApplyNow(ctx context.Context, actor string) (Result, error) {
+	ctx, err := targetguard.Capture(ctx, s.targets)
+	if err != nil {
+		return Result{}, err
+	}
 	policy, err := s.repository.ControlPolicy(ctx)
 	if err != nil {
 		return Result{}, err
@@ -330,6 +363,10 @@ func (s *Service) Enqueue(ctx context.Context, actor string) (taskstore.Task, er
 	if !config.Enabled {
 		return taskstore.Task{}, errors.New("价格管理未开启，本次未调整账号分组")
 	}
+	expectedTarget, err := s.targets.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	id, err := randomID()
 	if err != nil {
 		return taskstore.Task{}, err
@@ -340,15 +377,20 @@ func (s *Service) Enqueue(ctx context.Context, actor string) (taskstore.Task, er
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, actor)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.execute(targetguard.Expect(parent, expectedTarget), task, actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) execute(task taskstore.Task, actor string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 20, "正在按盈利比例计算账号分组", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result, err := s.ApplyNow(ctx, actor)
@@ -363,6 +405,7 @@ func (s *Service) execute(task taskstore.Task, actor string) {
 	} else {
 		task.Status, task.Message = "succeeded", fmt.Sprintf("价格分组调整完成：更新 %d，未变 %d，跳过 %d", result.Changed, result.Unchanged, result.Skipped)
 	}
+	taskstore.MarkCancelled(ctx, &task, "价格分组调整已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -424,6 +467,20 @@ func ConfigFromPolicy(policy map[string]any) (Config, error) {
 	} else if _, legacy := section["managed_group_ids"]; legacy {
 		config.Enabled = false
 	}
+	if value, found := section["exchange_group_set_names"]; found {
+		items, valid := value.([]any)
+		if !valid {
+			return Config{}, errors.New("价格管理配置无效：price_management.exchange_group_set_names")
+		}
+		config.ExchangeGroupSetNames = make([]string, 0, len(items))
+		for _, item := range items {
+			name, ok := item.(string)
+			if !ok {
+				return Config{}, errors.New("价格管理配置无效：price_management.exchange_group_set_names")
+			}
+			config.ExchangeGroupSetNames = append(config.ExchangeGroupSetNames, name)
+		}
+	}
 	return normalizeConfig(config)
 }
 
@@ -437,9 +494,26 @@ func normalizeConfig(config Config) (Config, error) {
 	if config.WriteConcurrency < 1 || config.WriteConcurrency > 16 {
 		return Config{}, errors.New("分组写入并发必须在 1 到 16 之间")
 	}
+	if len(config.ExchangeGroupSetNames) == 0 && len(config.ExchangeGroupSets) > 0 {
+		config.ExchangeGroupSetNames = make([]string, len(config.ExchangeGroupSets))
+		for index := range config.ExchangeGroupSetNames {
+			config.ExchangeGroupSetNames[index] = fmt.Sprintf("互换组 %d", index+1)
+		}
+	}
+	if len(config.ExchangeGroupSetNames) != len(config.ExchangeGroupSets) {
+		return Config{}, errors.New("互换组规则名称数量必须与互换组数量一致")
+	}
+	type namedGroupSet struct {
+		name   string
+		groups []string
+	}
 	seen := map[string]struct{}{}
-	sets := make([][]string, 0, len(config.ExchangeGroupSets))
-	for _, values := range config.ExchangeGroupSets {
+	sets := make([]namedGroupSet, 0, len(config.ExchangeGroupSets))
+	for setIndex, values := range config.ExchangeGroupSets {
+		name := strings.TrimSpace(config.ExchangeGroupSetNames[setIndex])
+		if name == "" || len([]rune(name)) > 64 {
+			return Config{}, fmt.Errorf("互换组 %d 的规则名称不能为空且不能超过 64 个字符", setIndex+1)
+		}
 		groupSet := make([]string, 0, len(values))
 		localSeen := map[string]struct{}{}
 		for _, value := range values {
@@ -462,10 +536,15 @@ func normalizeConfig(config Config) (Config, error) {
 			return Config{}, errors.New("每个互换组至少需要两个分组")
 		}
 		sort.Slice(groupSet, func(left, right int) bool { return numericLess(groupSet[left], groupSet[right]) })
-		sets = append(sets, groupSet)
+		sets = append(sets, namedGroupSet{name: name, groups: groupSet})
 	}
-	sort.Slice(sets, func(left, right int) bool { return numericLess(sets[left][0], sets[right][0]) })
-	config.ExchangeGroupSets = sets
+	sort.Slice(sets, func(left, right int) bool { return numericLess(sets[left].groups[0], sets[right].groups[0]) })
+	config.ExchangeGroupSets = make([][]string, 0, len(sets))
+	config.ExchangeGroupSetNames = make([]string, 0, len(sets))
+	for _, set := range sets {
+		config.ExchangeGroupSets = append(config.ExchangeGroupSets, set.groups)
+		config.ExchangeGroupSetNames = append(config.ExchangeGroupSetNames, set.name)
+	}
 	if config.Enabled && len(sets) == 0 {
 		return Config{}, errors.New("开启价格管理前至少配置一个账号互换组")
 	}
@@ -618,10 +697,14 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 				}
 			}
 			profitableChosen := chosenID != ""
-			if chosenID == "" && compatible == 0 && len(currentBySet[setIndex]) > 0 {
+			if chosenID == "" && len(currentBySet[setIndex]) > 0 {
 				preserved := append([]string{}, currentBySet[setIndex]...)
 				sort.Slice(preserved, func(left, right int) bool { return numericLess(preserved[left], preserved[right]) })
 				chosenID = preserved[0]
+				if compatible > 0 {
+					reason := "没有满足盈利比例的可用分组，保留当前分组"
+					decision.Reason = &reason
+				}
 			}
 			if chosenID != "" {
 				desired = append(desired, chosenID)
@@ -678,7 +761,17 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	if err := validatePriceGroupUniqueness(value.snapshot.Decisions, config); err != nil {
 		return Result{}, err
 	}
-	settings, err := s.targets.TargetSettings(ctx)
+	guarded, release, err := s.acquirePlanMutation(ctx, value.snapshot.Decisions)
+	if err != nil {
+		return Result{}, err
+	}
+	defer release()
+	ctx = guarded
+	ctx, err = targetguard.Bind(ctx, s.targets)
+	if err != nil {
+		return Result{}, err
+	}
+	settings, err := targetguard.Settings(ctx, s.targets)
 	if err != nil {
 		return Result{}, err
 	}
@@ -695,6 +788,27 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		go func() {
 			defer workers.Done()
 			for decision := range jobs {
+				reason, protectionErr := s.pricingMutationProtection(ctx, decision.AccountID)
+				if protectionErr != nil {
+					message := protectionErr.Error()
+					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.DesiredGroupIDs, Error: &message}
+					continue
+				}
+				if reason != nil {
+					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.CurrentGroupIDs, Skipped: true, Reason: reason}
+					continue
+				}
+				currentGroupIDs, baselineErr := pricingAccountGroupIDs(ctx, client, decision.AccountID)
+				if baselineErr != nil {
+					message := baselineErr.Error()
+					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.DesiredGroupIDs, Error: &message}
+					continue
+				}
+				if !sameGroupIDs(currentGroupIDs, decision.CurrentGroupIDs) {
+					reason := "账号分组在价格计划生成后已变化，价格管理未调整分组"
+					items <- ItemResult{AccountID: decision.AccountID, Before: currentGroupIDs, After: currentGroupIDs, Skipped: true, Reason: &reason}
+					continue
+				}
 				ids := make([]int64, len(decision.DesiredGroupIDs))
 				for index, value := range decision.DesiredGroupIDs {
 					ids[index], _ = strconv.ParseInt(value, 10, 64)
@@ -721,7 +835,9 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	syncedGroups := map[string][]string{}
 	for item := range items {
 		result.Items = append(result.Items, item)
-		if item.Error != nil {
+		if item.Skipped {
+			result.Skipped++
+		} else if item.Error != nil {
 			result.Failed++
 		} else {
 			result.Changed++
@@ -729,22 +845,105 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 			syncedGroups[item.AccountID] = append([]string{}, item.After...)
 		}
 	}
-	result.Unchanged = result.Requested - result.Skipped - value.snapshot.Changes
+	result.Unchanged = result.Requested - result.Skipped - result.Changed - result.Failed
 	if result.Unchanged < 0 {
 		result.Unchanged = 0
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return numericLess(result.Items[i].AccountID, result.Items[j].AccountID) })
 	if result.Changed > 0 {
 		local, syncErr := s.repository.SyncPricingAccountGroups(ctx, syncedGroups, actor)
+		release()
 		if syncErr != nil {
 			return result, fmt.Errorf("远程分组已更新，但本地目录同步失败：%w", syncErr)
 		}
 		result.LocalSync = &local
+	} else {
+		release()
 	}
 	if result.Failed > 0 {
 		return result, fmt.Errorf("%d 个账号分组调整失败", result.Failed)
 	}
 	return result, nil
+}
+
+func (s *Service) acquirePlanMutation(ctx context.Context, decisions []Decision) (context.Context, func(), error) {
+	resources := make([]string, 0, len(decisions))
+	seen := make(map[string]struct{}, len(decisions))
+	for _, decision := range decisions {
+		if !decision.Changed || decision.Skipped {
+			continue
+		}
+		resource := mutationguard.Account(decision.AccountID)
+		if _, duplicate := seen[resource]; duplicate {
+			continue
+		}
+		seen[resource] = struct{}{}
+		resources = append(resources, resource)
+	}
+	guarded, release, err := targetguard.Acquire(ctx, s.repository, resources...)
+	if err != nil {
+		return nil, nil, err
+	}
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			if err := release(); err != nil {
+				slog.Error("价格管理账号租约释放失败", "resources", resources, "error", err)
+			}
+		})
+	}
+	return guarded, cleanup, nil
+}
+
+func (s *Service) pricingMutationProtection(ctx context.Context, accountID string) (*string, error) {
+	if repository, ok := s.repository.(mutationProtectionRepository); ok {
+		protection, err := repository.AccountMutationProtection(ctx, accountID)
+		if err != nil {
+			return nil, fmt.Errorf("人工保护状态复核失败：%w", err)
+		}
+		if protection.Protected() {
+			reason := "账号已启用" + strings.Join(protection.Reasons(), "、") + "，价格管理未调整分组"
+			return &reason, nil
+		}
+	}
+	return nil, nil
+}
+
+func pricingAccountGroupIDs(ctx context.Context, client *adminclient.Client, accountID string) ([]string, error) {
+	account, err := client.Account(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("账号分组基线复核失败：%w", err)
+	}
+	values, ok := account["group_ids"].([]any)
+	if !ok {
+		return nil, errors.New("账号分组基线复核失败：远程账号分组格式不可读")
+	}
+	groupIDs := make([]string, 0, len(values))
+	for _, value := range values {
+		groupID := strings.TrimSpace(fmt.Sprint(value))
+		if !stableID(groupID) {
+			return nil, errors.New("账号分组基线复核失败：远程账号分组包含无效稳定 ID")
+		}
+		groupIDs = append(groupIDs, groupID)
+	}
+	sort.Slice(groupIDs, func(left, right int) bool { return numericLess(groupIDs[left], groupIDs[right]) })
+	return groupIDs, nil
+}
+
+func sameGroupIDs(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	left = append([]string{}, left...)
+	right = append([]string{}, right...)
+	sort.Slice(left, func(i, j int) bool { return numericLess(left[i], left[j]) })
+	sort.Slice(right, func(i, j int) bool { return numericLess(right[i], right[j]) })
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func validatePriceGroupUniqueness(decisions []Decision, config Config) error {
@@ -757,6 +956,9 @@ func validatePriceGroupUniqueness(decisions []Decision, config Config) error {
 	for _, decision := range decisions {
 		if decision.Skipped || !decision.Changed {
 			continue
+		}
+		if len(decision.DesiredGroupIDs) == 0 {
+			return fmt.Errorf("账号 %s 的目标分组为空，已拒绝写入", decision.AccountID)
 		}
 		counts := make(map[int]int)
 		for _, groupID := range decision.DesiredGroupIDs {
@@ -824,6 +1026,14 @@ func stringGroupsToAny(groups [][]string) []any {
 			items[itemIndex] = value
 		}
 		result[index] = items
+	}
+	return result
+}
+
+func stringsToAny(values []string) []any {
+	result := make([]any, 0, len(values))
+	for _, value := range values {
+		result = append(result, value)
 	}
 	return result
 }

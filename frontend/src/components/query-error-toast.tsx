@@ -1,13 +1,10 @@
 import { useEffect } from "react";
-import { toast } from "sonner";
 
-import { operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 
 export type QueryErrorToastProps = {
   error: unknown;
   fallback: string;
-  embedded?: boolean;
-  className?: string;
 };
 
 export function queryErrorToastMessage(error: unknown, fallback: string): string {
@@ -15,8 +12,7 @@ export function queryErrorToastMessage(error: unknown, fallback: string): string
 }
 
 export function showQueryErrorToast(error: unknown, fallback: string): void {
-  const message = queryErrorToastMessage(error, fallback);
-  toast.error(message, { id: `operation-error:${message}` });
+  notifyOperationError(error, fallback);
 }
 
 export function QueryErrorToast(props: QueryErrorToastProps) {

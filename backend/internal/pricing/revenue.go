@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/big"
 	"sort"
@@ -16,6 +17,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -96,6 +99,10 @@ func (s *Service) EnqueueRevenue(ctx context.Context, request RevenueRequest, ac
 	if err != nil {
 		return taskstore.Task{}, err
 	}
+	expectedTarget, err := s.targets.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
 	id, err := randomID()
 	if err != nil {
 		return taskstore.Task{}, err
@@ -109,15 +116,20 @@ func (s *Service) EnqueueRevenue(ctx context.Context, request RevenueRequest, ac
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.executeRevenue(task, RevenueRequest{Date: date}, actor)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeRevenue(targetguard.Expect(parent, expectedTarget), task, RevenueRequest{Date: date}, actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) executeRevenue(task taskstore.Task, request RevenueRequest, actor string) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) executeRevenue(parent context.Context, task taskstore.Task, request RevenueRequest, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 5, "正在读取本地计费和上游消费", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	report, err := s.CalculateRevenue(ctx, request, actor)
@@ -131,6 +143,7 @@ func (s *Service) executeRevenue(task taskstore.Task, request RevenueRequest, ac
 		encoded, _ := json.Marshal(report)
 		_ = json.Unmarshal(encoded, &task.Result)
 	}
+	taskstore.MarkCancelled(ctx, &task, "收入核算已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -139,11 +152,28 @@ func (s *Service) CalculateRevenue(ctx context.Context, request RevenueRequest, 
 	if err != nil {
 		return RevenueReport{}, err
 	}
+	ctx, err = targetguard.Capture(ctx, s.targets)
+	if err != nil {
+		return RevenueReport{}, err
+	}
 	catalog, err := s.repository.RevenueCatalog(ctx)
 	if err != nil {
 		return RevenueReport{}, fmt.Errorf("Console 本地账号绑定读取失败：%w", err)
 	}
-	settings, err := s.targets.TargetSettings(ctx)
+	guarded, release, err := targetguard.Acquire(ctx, s.repository)
+	if err != nil {
+		return RevenueReport{}, err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("收入核算管理目标租约释放失败", "error", err)
+		}
+	}()
+	ctx, err = targetguard.Bind(guarded, s.targets)
+	if err != nil {
+		return RevenueReport{}, err
+	}
+	settings, err := targetguard.Settings(ctx, s.targets)
 	if err != nil {
 		return RevenueReport{}, err
 	}

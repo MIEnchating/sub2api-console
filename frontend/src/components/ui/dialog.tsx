@@ -31,6 +31,11 @@ export const dialogHeightLayouts = {
 
 type DialogContentHeight = keyof typeof dialogHeightLayouts;
 
+export const compactOperationDialogLayout = {
+  width: "medium",
+  height: "adaptive",
+} as const;
+
 export function operationDialogWidth(
   hasResults: boolean,
   resultWidth: "wide" | "table" = "wide",
@@ -38,11 +43,8 @@ export function operationDialogWidth(
   return hasResults ? resultWidth : "medium";
 }
 
-export function operationDialogHeight(
-  hasResults: boolean,
-  resultHeight: "medium" | "large" | "tall" = "large",
-): DialogContentHeight {
-  return hasResults ? resultHeight : "content";
+export function operationDialogHeight(hasResults: boolean): DialogContentHeight {
+  return hasResults ? "adaptive" : "content";
 }
 
 export function dialogContentClass(

@@ -605,7 +605,8 @@ var advancedRules = map[string]map[string]advancedRule{
 	},
 	"price_management": {
 		"enabled": {kind: "bool"}, "profit_margin": {kind: "number", minimum: 0, maximum: 0.99},
-		"exchange_group_sets": {kind: "string_groups"}, "interval_seconds": {kind: "int", minimum: 30, maximum: 86400},
+		"exchange_group_sets": {kind: "string_groups"}, "exchange_group_set_names": {kind: "strings"},
+		"interval_seconds":  {kind: "int", minimum: 30, maximum: 86400},
 		"write_concurrency": {kind: "int", minimum: 1, maximum: 16},
 	},
 	"writeback": {

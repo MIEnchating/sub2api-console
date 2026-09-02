@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -24,6 +27,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/inspection"
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
@@ -111,6 +115,37 @@ type fakeQueueBusiness struct {
 	fakeBusiness
 	details business.NotificationQueueDetails
 	keys    *[]string
+}
+
+type vaultLeaseBusiness struct {
+	fakeBusiness
+	lease    chan struct{}
+	attempts chan []string
+}
+
+func (business *vaultLeaseBusiness) AcquireMutationLease(
+	ctx context.Context,
+	_ string,
+	resources []string,
+	_ time.Time,
+	_ time.Duration,
+) (bool, error) {
+	business.attempts <- append([]string{}, resources...)
+	select {
+	case business.lease <- struct{}{}:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (*vaultLeaseBusiness) RenewMutationLease(context.Context, string, []string, time.Time, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (business *vaultLeaseBusiness) ReleaseMutationLease(context.Context, string, []string) error {
+	<-business.lease
+	return nil
 }
 
 func (f fakeQueueBusiness) NotificationQueueDetails(_ context.Context, channelKey string, _ bool) (business.NotificationQueueDetails, error) {
@@ -406,6 +441,39 @@ type fakeAccountTasks struct {
 	fieldsCalls  *[]fieldsCall
 	manualCalls  *[]string
 	clearCalls   *[]string
+}
+
+type accountDeleteCall struct {
+	accountID         string
+	binding           *accountdelete.Binding
+	managementBaseURL string
+	actor             string
+}
+
+type fakeAccountDelete struct {
+	preview accountdelete.Preview
+	task    taskstore.Task
+	err     error
+	calls   *[]accountDeleteCall
+}
+
+func (service fakeAccountDelete) Preview(context.Context, string) (accountdelete.Preview, error) {
+	return service.preview, service.err
+}
+
+func (service fakeAccountDelete) Enqueue(
+	_ context.Context,
+	accountID string,
+	binding *accountdelete.Binding,
+	managementBaseURL string,
+	actor string,
+) (taskstore.Task, error) {
+	if service.calls != nil {
+		*service.calls = append(*service.calls, accountDeleteCall{
+			accountID: accountID, binding: binding, managementBaseURL: managementBaseURL, actor: actor,
+		})
+	}
+	return service.task, service.err
 }
 
 func (tasks fakeAccountTasks) EnqueueControl(_ context.Context, accountID, action, actor string) (taskstore.Task, error) {
@@ -871,11 +939,257 @@ func TestCORSPreflightUsesExplicitCredentialCompatibleHeaders(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("preflight status = %d", response.Code)
 	}
-	if got := response.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
+	if got := response.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization, X-Setup-Token" {
 		t.Fatalf("allow headers = %q", got)
 	}
 	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "https://console.example" {
 		t.Fatalf("allow origin = %q", got)
+	}
+}
+
+func TestCORSRejectsPreflightFromUnknownOrigin(t *testing.T) {
+	router, _ := testRouter(t, config.Config{Origins: []string{"https://console.example"}}, fakeBusiness{mode: "完全模式"})
+	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
+	req.Header.Set("Origin", "https://attacker.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unknown preflight origin status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRemoteInitializationRequiresConfiguredSetupToken(t *testing.T) {
+	const setupToken = "0123456789abcdef0123456789abcdef"
+	for _, test := range []struct {
+		name       string
+		configured string
+		supplied   string
+		want       int
+	}{
+		{name: "missing configuration", want: http.StatusForbidden},
+		{name: "missing token", configured: setupToken, want: http.StatusForbidden},
+		{name: "wrong token", configured: setupToken, supplied: strings.Repeat("f", 32), want: http.StatusForbidden},
+		{name: "valid token", configured: setupToken, supplied: setupToken, want: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router, _ := testRouter(t, config.Config{SetupToken: test.configured}, fakeBusiness{mode: "完全模式"})
+			body := strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}`)
+			req := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", body)
+			req.RemoteAddr = "198.51.100.20:1234"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Origin", "http://example.com")
+			if test.supplied != "" {
+				req.Header.Set("X-Setup-Token", test.supplied)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d body=%s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestLoopbackInitializationWithExternalHostRequiresSetupToken(t *testing.T) {
+	const setupToken = "0123456789abcdef0123456789abcdef"
+	router, _ := testRouter(t, config.Config{SetupToken: setupToken}, fakeBusiness{mode: "完全模式"})
+	newRequest := func(method string, browserOrigin bool) *http.Request {
+		body := strings.NewReader("")
+		if method == http.MethodPost {
+			body = strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}`)
+		}
+		req := httptest.NewRequest(method, "/api/setup/status", body)
+		if method == http.MethodPost {
+			req.URL.Path = "/api/setup/initialize"
+			req.Header.Set("Content-Type", "application/json")
+		}
+		req.Host = "rebind.example"
+		req.RemoteAddr = "127.0.0.1:1234"
+		if browserOrigin {
+			req.Header.Set("Origin", "http://rebind.example")
+		}
+		return req
+	}
+	for _, browserOrigin := range []bool{false, true} {
+		status := httptest.NewRecorder()
+		router.ServeHTTP(status, newRequest(http.MethodGet, browserOrigin))
+		if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"setup_token_required":true`) {
+			t.Fatalf("rebound setup status with browser_origin=%t: %d %s", browserOrigin, status.Code, status.Body.String())
+		}
+	}
+	for _, test := range []struct {
+		name  string
+		token string
+		want  int
+	}{
+		{name: "missing token", want: http.StatusForbidden},
+		{name: "valid token", token: setupToken, want: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			req := newRequest(http.MethodPost, false)
+			if test.token != "" {
+				req.Header.Set("X-Setup-Token", test.token)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != test.want {
+				t.Fatalf("status = %d, want %d body=%s", response.Code, test.want, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestSetupStatusReportsWhetherRemoteTokenIsRequired(t *testing.T) {
+	router, _ := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+	local := request(t, router, http.MethodGet, "/api/setup/status", nil, "")
+	if !strings.Contains(local.Body.String(), `"setup_token_required":false`) {
+		t.Fatalf("local setup status = %s", local.Body.String())
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
+	req.RemoteAddr = "198.51.100.20:1234"
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if !strings.Contains(response.Body.String(), `"setup_token_required":true`) {
+		t.Fatalf("remote setup status = %s", response.Body.String())
+	}
+	conflicting := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
+	conflicting.RemoteAddr = "127.0.0.1:1234"
+	conflicting.Host = "localhost"
+	conflicting.Header.Set("Origin", "http://localhost")
+	conflicting.Header.Set("Referer", "http://rebind.example/setup")
+	conflictingResponse := httptest.NewRecorder()
+	router.ServeHTTP(conflictingResponse, conflicting)
+	if !strings.Contains(conflictingResponse.Body.String(), `"setup_token_required":true`) {
+		t.Fatalf("conflicting browser origins setup status = %s", conflictingResponse.Body.String())
+	}
+	securedRouter, _ := testRouter(t, config.Config{SetupToken: strings.Repeat("s", 32)}, fakeBusiness{mode: "完全模式"})
+	securedLocal := request(t, securedRouter, http.MethodGet, "/api/setup/status", nil, "")
+	if !strings.Contains(securedLocal.Body.String(), `"setup_token_required":true`) {
+		t.Fatalf("configured setup token was optional locally: %s", securedLocal.Body.String())
+	}
+}
+
+func TestTrustedProxyCannotForgeLoopbackInitialization(t *testing.T) {
+	router, _ := testRouter(t, config.Config{
+		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("172.16.0.0/12")},
+	}, fakeBusiness{mode: "完全模式"})
+	newRequest := func(method, path string, body io.Reader) *http.Request {
+		req := httptest.NewRequest(method, path, body)
+		req.RemoteAddr = "172.18.0.1:1234"
+		req.Host = "localhost:8080"
+		req.Header.Set("X-Forwarded-For", "127.0.0.1")
+		return req
+	}
+
+	req := newRequest(http.MethodGet, "/api/setup/status", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"setup_token_required":true`) {
+		t.Fatalf("forged forwarded loopback setup status = %d body=%s", response.Code, response.Body.String())
+	}
+
+	body := strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}`)
+	initialize := newRequest(http.MethodPost, "/api/setup/initialize", body)
+	initialize.Header.Set("Content-Type", "application/json")
+	initializeResponse := httptest.NewRecorder()
+	router.ServeHTTP(initializeResponse, initialize)
+	if initializeResponse.Code != http.StatusForbidden {
+		t.Fatalf("forged forwarded loopback initialize status = %d body=%s", initializeResponse.Code, initializeResponse.Body.String())
+	}
+}
+
+func TestCookieWritesRequireTrustedBrowserOrigin(t *testing.T) {
+	probeEnabled := false
+	router, store := testRouter(t, config.Config{Origins: []string{"https://console.example"}}, fakeBusiness{
+		mode: "完全模式", probeEnabled: &probeEnabled,
+	})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	write := func(origin, referer string) *httptest.ResponseRecorder {
+		body := strings.NewReader(`{"enabled":true}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/config/probes", body)
+		req.RemoteAddr = "198.51.100.20:1234"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Cookie", cookie.String())
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		return response
+	}
+
+	for _, response := range []*httptest.ResponseRecorder{
+		write("https://attacker.example", ""),
+		write("", ""),
+		write("", "https://attacker.example/form"),
+	} {
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("untrusted cookie write status = %d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if probeEnabled {
+		t.Fatal("rejected request changed probe settings")
+	}
+	for _, response := range []*httptest.ResponseRecorder{
+		write("https://console.example", ""),
+		write("", "http://example.com/settings"),
+	} {
+		if response.Code != http.StatusOK {
+			t.Fatalf("trusted cookie write status = %d body=%s", response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestCookieWriteRecognizesForwardedHTTPSOriginWithPort(t *testing.T) {
+	probeEnabled := false
+	router, store := testRouter(t, config.Config{
+		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("172.16.0.0/12")},
+	}, fakeBusiness{mode: "完全模式", probeEnabled: &probeEnabled})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	cookie := responseCookie(t, login, sessionCookie)
+
+	body := strings.NewReader(`{"enabled":true}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/config/probes", body)
+	req.RemoteAddr = "172.18.0.3:1234"
+	req.Host = "console.example:3004"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", cookie.String())
+	req.Header.Set("Origin", "https://console.example:3004")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusOK || !probeEnabled {
+		t.Fatalf("forwarded same-origin write status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestJSONBindingRejectsNonJSONContentType(t *testing.T) {
+	router, _ := testRouter(t, config.Config{}, fakeBusiness{mode: "完全模式"})
+	body := strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Host = "127.0.0.1"
+	req.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("non-JSON request status = %d body=%s", response.Code, response.Body.String())
 	}
 }
 
@@ -891,6 +1205,8 @@ func TestInitializationRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
 
 	trailingBody := strings.NewReader(`{"username":"admin","password":"a secure password","admin_base_url":"https://sub2api.example","admin_key":"admin-key"}{}`)
 	trailingRequest := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", trailingBody)
+	trailingRequest.RemoteAddr = "127.0.0.1:1234"
+	trailingRequest.Host = "127.0.0.1"
 	trailingRequest.Header.Set("Content-Type", "application/json")
 	trailingResponse := httptest.NewRecorder()
 	router.ServeHTTP(trailingResponse, trailingRequest)
@@ -900,6 +1216,8 @@ func TestInitializationRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
 
 	body := strings.NewReader(`{"username":"admin","password":"` + strings.Repeat("x", maximumRequestBytes) + `"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Host = "127.0.0.1"
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, req)
@@ -974,6 +1292,24 @@ func TestBearerAdminTokenBypassesSession(t *testing.T) {
 	}
 }
 
+func TestConfiguredAdminTokenDoesNotDisableBrowserSession(t *testing.T) {
+	router, store := testRouter(t, config.Config{AdminToken: "internal-token"}, fakeBusiness{mode: "监控模式"})
+	if err := store.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "key"); err != nil {
+		t.Fatal(err)
+	}
+	login := request(t, router, http.MethodPost, "/api/auth/login", map[string]any{
+		"username": "operator", "password": "correct password",
+	}, "")
+	if login.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	cookie := responseCookie(t, login, sessionCookie)
+	response := request(t, router, http.MethodGet, "/api/health", nil, cookie.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("session authentication was disabled by admin token: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestOverviewConfigAndModeContract(t *testing.T) {
 	cfg := config.Config{DataDB: "/data/sub2api-console.sqlite3"}
 	router, store := testRouter(t, cfg, fakeBusiness{mode: "监控模式"})
@@ -1021,12 +1357,16 @@ func TestParseOnboardingRequestAcceptsPerAccountConcurrencyAndPriority(t *testin
 		"host": "upstream.example", "upstream_type": "sub2api",
 		"local_group_id": json.Number("3"), "upstream_group_id": "6",
 		"concurrency": json.Number("24"), "priority": json.Number("7"),
+		"base_url": "https://account-api.example/v1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if request.Concurrency == nil || *request.Concurrency != 24 || request.Priority == nil || *request.Priority != 7 {
 		t.Fatalf("request=%#v", request)
+	}
+	if request.BaseURL == nil || *request.BaseURL != "https://account-api.example/v1" {
+		t.Fatalf("account base URL=%#v", request.BaseURL)
 	}
 	if _, err := parseOnboardingRequest(map[string]any{
 		"host": "upstream.example", "upstream_type": "sub2api", "multiplier": "9.9",
@@ -1409,7 +1749,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 
 	fields := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{
 		"priority": 120, "load_factor": "2.5", "concurrency": 3000,
-		"notes": nil,
+		"upstream_host": "https://new-upstream.example.test", "base_url": "https://account-api.example.test/v1", "notes": nil,
 	})
 	if fields.Code != http.StatusOK || len(fieldsCalls) != 1 {
 		t.Fatalf("unexpected fields response: %d %s calls=%#v", fields.Code, fields.Body.String(), fieldsCalls)
@@ -1418,8 +1758,17 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	if patch.NamePresent || !patch.PriorityPresent || patch.Priority == nil || *patch.Priority != 120 ||
 		!patch.LoadFactorPresent || patch.LoadFactor == nil || *patch.LoadFactor != "2.5" ||
 		!patch.ConcurrencyPresent || patch.Concurrency == nil || *patch.Concurrency != 3000 ||
+		!patch.UpstreamHostPresent || patch.UpstreamHost == nil || *patch.UpstreamHost != "new-upstream.example.test" ||
+		!patch.BaseURLPresent || patch.BaseURL == nil || *patch.BaseURL != "https://account-api.example.test/v1" ||
 		patch.MultiplierPresent || patch.Multiplier != nil || !patch.NotesPresent || patch.Notes != nil {
 		t.Fatalf("field presence/null semantics lost: %#v", patch)
+	}
+
+	invalidBaseURL := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/41/sync", map[string]any{
+		"base_url": "account-api.example.test/v1",
+	})
+	if invalidBaseURL.Code != http.StatusUnprocessableEntity || len(fieldsCalls) != 1 {
+		t.Fatalf("invalid Base URL accepted: %d %s", invalidBaseURL.Code, invalidBaseURL.Body.String())
 	}
 
 	models := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/41/models", nil)
@@ -1450,6 +1799,130 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("retired account route %s status=%d", path, response.Code)
 		}
+	}
+}
+
+func TestUpstreamInputKeepsHostAddressAndAccountBaseURLIndependent(t *testing.T) {
+	input, err := parseUpstreamInput(map[string]any{
+		"base_url":         "https://upstream.example/admin",
+		"account_base_url": "https://account-api.example/v1",
+		"upstream_type":    "sub2api",
+		"auth_mode":        "sub2api_user_login",
+		"recharge_rate":    "1",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.BaseURL != "https://upstream.example/admin" || input.AccountBaseURL != "https://account-api.example/v1" {
+		t.Fatalf("upstream connection fields were coupled: %#v", input)
+	}
+
+	legacy, err := parseUpstreamInput(map[string]any{
+		"base_url":      "https://legacy-upstream.example",
+		"upstream_type": "sub2api",
+		"auth_mode":     "sub2api_user_login",
+		"recharge_rate": "1",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.AccountBaseURL != legacy.BaseURL {
+		t.Fatalf("legacy account Base URL did not default to Host address: %#v", legacy)
+	}
+}
+
+func TestAccountDeleteUsesPreviewStableBindingAndKeyIDs(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	preview := accountdelete.Preview{
+		AccountID: "37", AccountName: "special-key", Groups: []string{"special"},
+		ManagementBaseURL: "https://management.example.test",
+		Binding: &accountdelete.Binding{
+			ID: 91, UpstreamID: "upstream-1", UpstreamHost: "https://upstream.example.test",
+			AuthHost: "upstream.example.test", UpstreamKeyID: "key-8", UpstreamKeyName: "special-key",
+		},
+	}
+	task := taskstore.Task{
+		ID: "account-delete-task", Skill: "sub2api-account-management", Operation: "account-delete",
+		Status: "queued", Progress: 0, Message: "账号双端删除已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	calls := []accountDeleteCall{}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		AccountDelete: fakeAccountDelete{preview: preview, task: task, calls: &calls},
+	})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/37/delete-preview", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"upstream_key_id":"key-8"`) {
+		t.Fatalf("unexpected preview response: %d %s", read.Code, read.Body.String())
+	}
+	deleted := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/37/delete", map[string]any{
+		"confirmation_account_id": "37", "expected_binding_id": 91,
+		"expected_upstream_id":   "upstream-1",
+		"expected_upstream_host": "https://upstream.example.test", "expected_auth_host": "upstream.example.test",
+		"expected_upstream_key_id": "key-8", "expected_management_base_url": "https://management.example.test",
+	})
+	if deleted.Code != http.StatusOK || len(calls) != 1 {
+		t.Fatalf("unexpected delete response: %d %s calls=%#v", deleted.Code, deleted.Body.String(), calls)
+	}
+	if calls[0].accountID != "37" || calls[0].binding.ID != 91 || calls[0].binding.UpstreamID != "upstream-1" ||
+		calls[0].binding.UpstreamHost != "https://upstream.example.test" ||
+		calls[0].binding.AuthHost != "upstream.example.test" || calls[0].binding.UpstreamKeyID != "key-8" ||
+		calls[0].managementBaseURL != "https://management.example.test" || calls[0].actor != "console" {
+		t.Fatalf("delete scope changed: %#v", calls[0])
+	}
+	mismatch := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/37/delete", map[string]any{
+		"confirmation_account_id": "38", "expected_binding_id": 91,
+		"expected_upstream_id":   "upstream-1",
+		"expected_upstream_host": "https://upstream.example.test", "expected_auth_host": "upstream.example.test",
+		"expected_upstream_key_id": "key-8", "expected_management_base_url": "https://management.example.test",
+	})
+	if mismatch.Code != http.StatusUnprocessableEntity || len(calls) != 1 {
+		t.Fatalf("mismatched confirmation was accepted: %d calls=%#v", mismatch.Code, calls)
+	}
+	missingIdentity := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/37/delete", map[string]any{
+		"confirmation_account_id": "37", "expected_binding_id": 91,
+		"expected_upstream_host": "https://upstream.example.test", "expected_auth_host": "upstream.example.test",
+		"expected_upstream_key_id": "key-8", "expected_management_base_url": "https://management.example.test",
+	})
+	if missingIdentity.Code != http.StatusUnprocessableEntity || len(calls) != 1 {
+		t.Fatalf("missing stable upstream identity was accepted: %d calls=%#v", missingIdentity.Code, calls)
+	}
+}
+
+func TestAccountDeleteAcceptsManagementOnlyScopeWhenPreviewHasNoBinding(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	preview := accountdelete.Preview{
+		AccountID: "174", AccountName: "星筱AI-0.125", Groups: []string{},
+		ManagementBaseURL: "https://management.example.test", Binding: nil,
+	}
+	task := taskstore.Task{
+		ID: "management-account-delete-task", Skill: "sub2api-account-management", Operation: "account-delete",
+		Status: "queued", Progress: 0, Message: "管理平台账号删除已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	calls := []accountDeleteCall{}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		AccountDelete: fakeAccountDelete{preview: preview, task: task, calls: &calls},
+	})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/174/delete-preview", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"binding":null`) {
+		t.Fatalf("unexpected preview response: %d %s", read.Code, read.Body.String())
+	}
+	deleted := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/174/delete", map[string]any{
+		"confirmation_account_id": "174", "expected_management_base_url": "https://management.example.test",
+	})
+	if deleted.Code != http.StatusOK || len(calls) != 1 || calls[0].binding != nil || calls[0].accountID != "174" {
+		t.Fatalf("unexpected management-only delete: %d %s calls=%#v", deleted.Code, deleted.Body.String(), calls)
+	}
+	partialBinding := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/174/delete", map[string]any{
+		"confirmation_account_id": "174", "expected_management_base_url": "https://management.example.test",
+		"expected_upstream_key_id": "key-unknown",
+	})
+	if partialBinding.Code != http.StatusUnprocessableEntity || len(calls) != 1 {
+		t.Fatalf("partial binding scope was accepted: %d calls=%#v", partialBinding.Code, calls)
 	}
 }
 
@@ -1766,9 +2239,11 @@ func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 		t.Fatalf("read=%d %s", read.Code, read.Body.String())
 	}
 	saved := authenticatedRequest(t, router, http.MethodPut, "/api/pricing/config", map[string]any{
-		"enabled": true, "profit_margin": 0.25, "exchange_group_sets": []any{[]any{"6", "7"}}, "interval_seconds": 300, "write_concurrency": 2,
+		"enabled": true, "profit_margin": 0.25, "exchange_group_sets": []any{[]any{"6", "7"}},
+		"exchange_group_set_names": []any{"Codex 规则"}, "interval_seconds": 300, "write_concurrency": 2,
 	})
-	if saved.Code != http.StatusOK || service.updated.ProfitMargin != 0.25 || !service.updated.Enabled {
+	if saved.Code != http.StatusOK || service.updated.ProfitMargin != 0.25 || !service.updated.Enabled ||
+		!reflect.DeepEqual(service.updated.ExchangeGroupSetNames, []string{"Codex 规则"}) {
 		t.Fatalf("saved=%d %s updated=%#v", saved.Code, saved.Body.String(), service.updated)
 	}
 	queued := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/apply", nil)
@@ -1811,6 +2286,90 @@ func TestVaultConfigurationReturnsOnlyRedactedIndex(t *testing.T) {
 		t.Fatalf("private values leaked: %d %s", index.Code, index.Body.String())
 	}
 	deleted := authenticatedRequest(t, router, http.MethodDelete, "/api/auth-recovery/vault-entry?entry=Primary", nil)
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
+		t.Fatalf("vault delete failed: %d %s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestVaultMutationsSerializePartialUpdatesAndDelete(t *testing.T) {
+	businessStore := &vaultLeaseBusiness{
+		fakeBusiness: fakeBusiness{mode: "完全模式"},
+		lease:        make(chan struct{}, 1),
+		attempts:     make(chan []string, 3),
+	}
+	router, private := testRouter(t, config.Config{AdminToken: "test-token"}, businessStore)
+	oldUsername, oldPassword := "old-user", "old-password"
+	if err := private.SaveVaultEntry(context.Background(), configstore.VaultEntry{
+		Entry: "Primary", Username: &oldUsername, Password: &oldPassword,
+		Hosts: []string{"api.example"}, Headers: map[string]string{"X-Site": "old"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	businessStore.lease <- struct{}{}
+
+	startRequest := func(method, path string, payload any) <-chan *httptest.ResponseRecorder {
+		var body *bytes.Reader
+		if payload == nil {
+			body = bytes.NewReader(nil)
+		} else {
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = bytes.NewReader(encoded)
+		}
+		request := httptest.NewRequest(method, path, body)
+		request.Header.Set("Authorization", "Bearer test-token")
+		if payload != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			done <- response
+		}()
+		return done
+	}
+	waitAttempt := func() {
+		select {
+		case resources := <-businessStore.attempts:
+			if len(resources) != 1 || resources[0] != mutationguard.Vault("Primary") {
+				t.Fatalf("vault lease resources = %#v", resources)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("vault mutation did not attempt to acquire its resource lease")
+		}
+	}
+
+	usernameDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"entry": "Primary", "username": "new-user"})
+	passwordDone := startRequest(http.MethodPost, "/api/auth-recovery/vault-entry", map[string]any{"entry": "Primary", "password": "new-password"})
+	waitAttempt()
+	waitAttempt()
+	stored, err := private.VaultEntry(context.Background(), "Primary")
+	if err != nil || stored == nil || stored.Username == nil || *stored.Username != oldUsername || stored.Password == nil || *stored.Password != oldPassword {
+		t.Fatalf("blocked partial updates changed the vault: entry=%#v err=%v", stored, err)
+	}
+	<-businessStore.lease
+	for _, done := range []<-chan *httptest.ResponseRecorder{usernameDone, passwordDone} {
+		response := <-done
+		if response.Code != http.StatusOK {
+			t.Fatalf("partial vault update failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+	stored, err = private.VaultEntry(context.Background(), "Primary")
+	if err != nil || stored == nil || stored.Username == nil || *stored.Username != "new-user" || stored.Password == nil || *stored.Password != "new-password" {
+		t.Fatalf("serialized partial updates lost a field: entry=%#v err=%v", stored, err)
+	}
+
+	businessStore.lease <- struct{}{}
+	deleteDone := startRequest(http.MethodDelete, "/api/auth-recovery/vault-entry?entry=Primary", nil)
+	waitAttempt()
+	if stored, err := private.VaultEntry(context.Background(), "Primary"); err != nil || stored == nil {
+		t.Fatalf("blocked delete changed the vault: entry=%#v err=%v", stored, err)
+	}
+	<-businessStore.lease
+	deleted := <-deleteDone
 	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) {
 		t.Fatalf("vault delete failed: %d %s", deleted.Code, deleted.Body.String())
 	}
@@ -2386,11 +2945,16 @@ func request(t *testing.T, handler http.Handler, method string, path string, pay
 		body = bytes.NewReader(encoded)
 	}
 	req := httptest.NewRequest(method, path, body)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Host = "127.0.0.1"
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
+		if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions {
+			req.Header.Set("Origin", "http://127.0.0.1")
+		}
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, req)

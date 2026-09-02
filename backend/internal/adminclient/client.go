@@ -25,6 +25,82 @@ type Error struct{ Message string }
 
 func (e *Error) Error() string { return e.Message }
 
+// CommitUnknownError means a non-idempotent request may have reached the
+// server, but its response was not trustworthy enough to determine the result.
+type CommitUnknownError struct {
+	Marker string
+	Cause  error
+}
+
+func (e *CommitUnknownError) Error() string {
+	message := "管理 API 写入的提交结果不确定"
+	if e.Marker != "" {
+		message += "（marker " + e.Marker + "）"
+	}
+	if e.Cause != nil {
+		message += "：" + e.Cause.Error()
+	}
+	return message
+}
+
+func (e *CommitUnknownError) Unwrap() error { return e.Cause }
+
+type ReconciliationError struct{ Cause error }
+
+func (e *ReconciliationError) Error() string {
+	return "账号创建前 marker 对账失败：" + e.Cause.Error()
+}
+func (e *ReconciliationError) Unwrap() error { return e.Cause }
+
+type responseOutcomeUnknown struct{ cause error }
+
+func (e *responseOutcomeUnknown) Error() string { return e.cause.Error() }
+func (e *responseOutcomeUnknown) Unwrap() error { return e.cause }
+
+type AccountStillReadableError struct {
+	AccountID string
+	DeleteErr error
+}
+
+func (e *AccountStillReadableError) Error() string {
+	message := fmt.Sprintf("账号 %s 删除后仍可读，已停止本地清理", e.AccountID)
+	if e.DeleteErr != nil {
+		return fmt.Sprintf("管理平台账号删除请求返回错误：%v；%s", e.DeleteErr, message)
+	}
+	return message
+}
+
+func (e *AccountStillReadableError) Unwrap() error { return e.DeleteErr }
+
+type AccountReadbackUnknownError struct {
+	AccountID   string
+	DeleteErr   error
+	ReadbackErr error
+}
+
+func (e *AccountReadbackUnknownError) Error() string {
+	if e.DeleteErr != nil {
+		return fmt.Sprintf(
+			"管理平台账号删除请求返回错误：%v；账号 %s 删除后读回失败，删除结果未知：%v",
+			e.DeleteErr,
+			e.AccountID,
+			e.ReadbackErr,
+		)
+	}
+	return fmt.Sprintf("账号 %s 删除后读回失败，删除结果未知：%v", e.AccountID, e.ReadbackErr)
+}
+
+func (e *AccountReadbackUnknownError) Unwrap() []error {
+	causes := make([]error, 0, 2)
+	if e.DeleteErr != nil {
+		causes = append(causes, e.DeleteErr)
+	}
+	if e.ReadbackErr != nil {
+		causes = append(causes, e.ReadbackErr)
+	}
+	return causes
+}
+
 type HTTPError struct {
 	StatusCode int
 	Detail     string
@@ -214,6 +290,10 @@ func (c *Client) SetAccountSchedulable(ctx context.Context, accountID string, sc
 }
 
 func (c *Client) UpdateAccountGroups(ctx context.Context, accountID string, groupIDs []int64) (map[string]any, error) {
+	return c.UpdateAccountGroupsAndBaseURL(ctx, accountID, groupIDs, nil)
+}
+
+func (c *Client) UpdateAccountGroupsAndBaseURL(ctx context.Context, accountID string, groupIDs []int64, baseURL *string) (map[string]any, error) {
 	if !stableID(accountID) {
 		return nil, errors.New("账号 ID 必须是稳定数字 ID")
 	}
@@ -222,6 +302,14 @@ func (c *Client) UpdateAccountGroups(ctx context.Context, accountID string, grou
 		return nil, errors.New("账号分组必须使用稳定数字 ID")
 	}
 	body := map[string]any{"group_ids": groupIDs}
+	if baseURL != nil {
+		normalized := strings.TrimRight(strings.TrimSpace(*baseURL), "/")
+		if normalized == "" {
+			return nil, errors.New("账号 Base URL 不能为空")
+		}
+		body["credentials"] = map[string]any{"base_url": normalized}
+		baseURL = &normalized
+	}
 	if _, err := c.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
 		return nil, err
 	}
@@ -233,7 +321,23 @@ func (c *Client) UpdateAccountGroups(ctx context.Context, accountID string, grou
 	if !ok || strings.Join(expected, ",") != strings.Join(actual, ",") {
 		return nil, errors.New("账号分组写后确认不一致")
 	}
+	if baseURL != nil && accountBaseURL(account) != *baseURL {
+		return nil, errors.New("账号 Base URL 写后确认不一致")
+	}
 	return account, nil
+}
+
+func accountBaseURL(account map[string]any) string {
+	raw := account["base_url"]
+	if credentials, ok := account["credentials"].(map[string]any); ok {
+		if value, present := credentials["base_url"]; present {
+			raw = value
+		}
+	}
+	if raw == nil {
+		return ""
+	}
+	return strings.TrimRight(strings.TrimSpace(fmt.Sprint(raw)), "/")
 }
 
 // AccountUpstreamMultiplier asks Sub2API to authenticate with the selected
@@ -563,24 +667,92 @@ func (c *Client) Mutate(ctx context.Context, method, path string, body map[strin
 }
 
 func (c *Client) CreateAccount(ctx context.Context, body map[string]any) (map[string]any, error) {
-	beforeIDs, baselineErr := c.accountIDs(ctx)
-	payload, err := c.Mutate(ctx, http.MethodPost, "/admin/accounts", body)
+	return c.createAccount(ctx, body, "")
+}
+
+func (c *Client) CreateAccountWithMarker(ctx context.Context, body map[string]any, marker string) (map[string]any, error) {
+	marker = strings.TrimSpace(marker)
+	if marker == "" || len(marker) > 256 || strings.ContainsAny(marker, "\r\n") {
+		return nil, errors.New("账号创建 marker 无效")
+	}
+	if !markerLinePresent(fmt.Sprint(body["notes"]), marker) {
+		return nil, errors.New("账号创建备注缺少不可变 marker")
+	}
+	return c.createAccount(ctx, body, marker)
+}
+
+func (c *Client) createAccount(ctx context.Context, body map[string]any, marker string) (map[string]any, error) {
+	before, baselineErr := c.Accounts(ctx)
+	beforeIDs, identityErr := accountIDSet(before)
+	if baselineErr == nil && identityErr != nil {
+		baselineErr = identityErr
+	}
+	if marker != "" {
+		if baselineErr != nil {
+			return nil, &ReconciliationError{Cause: baselineErr}
+		}
+		matched, err := accountByMarker(before, marker)
+		if err != nil || matched != nil {
+			return matched, err
+		}
+	}
+	payload, err := c.requestWithSemantics(ctx, http.MethodPost, "/admin/accounts", body, nil, true)
 	if err != nil {
-		return nil, err
+		var unknown *CommitUnknownError
+		if !errors.As(err, &unknown) {
+			return nil, err
+		}
+		if marker == "" && baselineErr != nil {
+			return nil, &CommitUnknownError{Cause: fmt.Errorf("%w；创建前目录基线不可用：%v", unknown.Cause, baselineErr)}
+		}
+		return c.reconcileCreatedAccount(ctx, beforeIDs, body, marker, &CommitUnknownError{Marker: marker, Cause: unknown.Cause})
 	}
 	data, present, err := createdAccountObject(payload)
-	if err != nil {
-		return nil, err
-	}
-	if present {
+	if err == nil && present {
 		return data, nil
 	}
-	if baselineErr != nil {
-		return nil, &Error{"账号创建成功但响应未返回稳定 ID，且创建前目录读取失败：" + baselineErr.Error()}
+	cause := err
+	if cause == nil {
+		cause = errors.New("账号创建成功但响应未返回稳定 ID")
 	}
+	if baselineErr != nil {
+		return nil, &CommitUnknownError{Marker: marker, Cause: fmt.Errorf("%w；创建前目录基线不可用：%v", cause, baselineErr)}
+	}
+	return c.reconcileCreatedAccount(ctx, beforeIDs, body, marker, &CommitUnknownError{Marker: marker, Cause: cause})
+}
+
+// ReconcileAccountWithMarker is deliberately read-only. Callers use it after
+// persisting an uncertain create result so a retry cannot issue a second POST.
+func (c *Client) ReconcileAccountWithMarker(ctx context.Context, marker string) (map[string]any, bool, error) {
+	marker = strings.TrimSpace(marker)
+	if marker == "" || len(marker) > 256 || strings.ContainsAny(marker, "\r\n") {
+		return nil, false, errors.New("账号创建 marker 无效")
+	}
+	accounts, err := c.Accounts(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	account, err := accountByMarker(accounts, marker)
+	return account, account != nil, err
+}
+
+func (c *Client) reconcileCreatedAccount(ctx context.Context, beforeIDs map[string]struct{}, body map[string]any, marker string, unknown *CommitUnknownError) (map[string]any, error) {
 	after, err := c.Accounts(ctx)
 	if err != nil {
-		return nil, &Error{"账号创建成功但响应未返回稳定 ID，目录补读失败：" + err.Error()}
+		unknown.Cause = fmt.Errorf("%w；marker 对账失败：%v", unknown.Cause, err)
+		return nil, unknown
+	}
+	if marker != "" {
+		account, markerErr := accountByMarker(after, marker)
+		if markerErr != nil {
+			unknown.Cause = fmt.Errorf("%w；%v", unknown.Cause, markerErr)
+			return nil, unknown
+		}
+		if account != nil {
+			return account, nil
+		}
+		unknown.Cause = fmt.Errorf("%w；账号 marker 尚未在管理目录中可见", unknown.Cause)
+		return nil, unknown
 	}
 	matches := make([]map[string]any, 0, 1)
 	for _, account := range after {
@@ -588,22 +760,22 @@ func (c *Client) CreateAccount(ctx context.Context, body map[string]any) (map[st
 		if !stableID(accountID) {
 			continue
 		}
-		if _, existed := beforeIDs[accountID]; existed || !matchesCreatedAccount(account, body) {
-			continue
+		if _, existed := beforeIDs[accountID]; !existed && matchesCreatedAccount(account, body) {
+			matches = append(matches, account)
 		}
-		matches = append(matches, account)
 	}
-	if len(matches) != 1 {
-		return nil, &Error{"账号创建结果缺少稳定 ID，目录补读无法唯一确认新账号"}
+	if len(matches) == 1 {
+		return matches[0], nil
 	}
-	return matches[0], nil
+	if len(matches) > 1 {
+		unknown.Cause = fmt.Errorf("%w；账号创建结果缺少稳定 ID，目录补读无法唯一确认新账号：返回多个候选账号", unknown.Cause)
+	} else {
+		unknown.Cause = fmt.Errorf("%w；账号创建结果缺少稳定 ID，目录补读无法唯一确认新账号", unknown.Cause)
+	}
+	return nil, unknown
 }
 
-func (c *Client) accountIDs(ctx context.Context) (map[string]struct{}, error) {
-	accounts, err := c.Accounts(ctx)
-	if err != nil {
-		return nil, err
-	}
+func accountIDSet(accounts []map[string]any) (map[string]struct{}, error) {
 	result := make(map[string]struct{}, len(accounts))
 	for _, account := range accounts {
 		accountID := strings.TrimSpace(fmt.Sprint(account["id"]))
@@ -613,6 +785,35 @@ func (c *Client) accountIDs(ctx context.Context) (map[string]struct{}, error) {
 		result[accountID] = struct{}{}
 	}
 	return result, nil
+}
+
+func accountByMarker(accounts []map[string]any, marker string) (map[string]any, error) {
+	matches := make([]map[string]any, 0, 1)
+	for _, account := range accounts {
+		if markerLinePresent(fmt.Sprint(account["notes"]), marker) {
+			if !stableID(strings.TrimSpace(fmt.Sprint(account["id"]))) {
+				return nil, errors.New("账号创建 marker 对账结果缺少稳定 ID")
+			}
+			matches = append(matches, account)
+		}
+	}
+	if len(matches) > 1 {
+		return nil, errors.New("账号创建 marker 对账返回多个账号")
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	return nil, nil
+}
+
+func markerLinePresent(notes, marker string) bool {
+	notes = strings.ReplaceAll(notes, "\r\n", "\n")
+	for _, line := range strings.Split(notes, "\n") {
+		if strings.TrimSpace(line) == marker {
+			return true
+		}
+	}
+	return false
 }
 
 func createdAccountObject(payload map[string]any) (map[string]any, bool, error) {
@@ -737,30 +938,35 @@ func (c *Client) DeleteAccountWithVerification(ctx context.Context, accountID st
 	if !stableID(accountID) {
 		return nil, errors.New("账号 ID 必须是稳定正整数")
 	}
-	payload, err := c.Mutate(ctx, http.MethodDelete, "/admin/accounts/"+accountID, nil)
-	var httpError *HTTPError
-	if err != nil && (!errors.As(err, &httpError) || httpError.StatusCode != http.StatusNotFound) {
-		return nil, err
-	}
+	payload, deleteErr := c.Mutate(ctx, http.MethodDelete, "/admin/accounts/"+accountID, nil)
 	if !verification {
+		var deleteHTTPError *HTTPError
+		if deleteErr != nil && (!errors.As(deleteErr, &deleteHTTPError) || deleteHTTPError.StatusCode != http.StatusNotFound) {
+			return nil, deleteErr
+		}
 		if payload == nil {
 			payload = map[string]any{}
 		}
 		payload["account_id"] = accountID
 		payload["deleted"] = true
 		payload["confirmed_absent"] = false
+		payload["delete_response_confirmed"] = deleteErr == nil
 		return payload, nil
 	}
-	if err == nil {
-		_, err = c.Account(ctx, accountID)
+	_, readbackErr := c.Account(ctx, accountID)
+	var readbackHTTPError *HTTPError
+	if errors.As(readbackErr, &readbackHTTPError) && readbackHTTPError.StatusCode == http.StatusNotFound {
+		return map[string]any{
+			"account_id": accountID, "deleted": true, "confirmed_absent": true,
+			"delete_response_confirmed": deleteErr == nil,
+		}, nil
 	}
-	if errors.As(err, &httpError) && httpError.StatusCode == http.StatusNotFound {
-		return map[string]any{"account_id": accountID, "deleted": true, "confirmed_absent": true}, nil
+	if readbackErr != nil {
+		return nil, &AccountReadbackUnknownError{
+			AccountID: accountID, DeleteErr: deleteErr, ReadbackErr: readbackErr,
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	return nil, &Error{fmt.Sprintf("账号 %s 删除后仍可读，已停止本地清理", accountID)}
+	return nil, &AccountStillReadableError{AccountID: accountID, DeleteErr: deleteErr}
 }
 
 func (c *Client) OpenAccountTest(ctx context.Context, accountID string, body map[string]any) (*http.Response, error) {
@@ -782,6 +988,7 @@ func (c *Client) OpenAccountTest(ctx context.Context, accountID string, body map
 func (c *Client) fetchPaged(ctx context.Context, path, label string) ([]map[string]any, error) {
 	result := []map[string]any{}
 	seen := map[string]struct{}{}
+	var declaredTotal *int
 	for page := 1; page <= 10000; page++ {
 		payload, err := c.request(ctx, http.MethodGet, path, nil, map[string]string{"page": strconv.Itoa(page), "page_size": "1000"})
 		if err != nil {
@@ -806,10 +1013,24 @@ func (c *Client) fetchPaged(ctx context.Context, path, label string) ([]map[stri
 		if err != nil {
 			return nil, err
 		}
-		if present && len(result) >= total {
-			return result, nil
+		if present {
+			if declaredTotal != nil && *declaredTotal != total {
+				return nil, &Error{fmt.Sprintf("%s 分页总数在读取期间发生变化", label)}
+			}
+			declaredTotal = &total
+		}
+		if declaredTotal != nil {
+			if len(result) == *declaredTotal {
+				return result, nil
+			}
+			if len(result) > *declaredTotal {
+				return nil, &Error{fmt.Sprintf("%s 分页返回项目数超过声明总数", label)}
+			}
 		}
 		if len(pageItems) == 0 {
+			if declaredTotal != nil {
+				return nil, &Error{fmt.Sprintf("%s 分页未完整：已读取 %d/%d 项", label, len(result), *declaredTotal)}
+			}
 			return result, nil
 		}
 	}
@@ -871,6 +1092,10 @@ func (c *Client) fetchEvidence(ctx context.Context, path, label string, params m
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body map[string]any, query map[string]string) (map[string]any, error) {
+	return c.requestWithSemantics(ctx, method, path, body, query, false)
+}
+
+func (c *Client) requestWithSemantics(ctx context.Context, method, path string, body map[string]any, query map[string]string, nonIdempotentCreate bool) (map[string]any, error) {
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -880,7 +1105,7 @@ func (c *Client) request(ctx context.Context, method, path string, body map[stri
 		}
 	}
 	attempts := c.attempts
-	if method == http.MethodPost || method == http.MethodPatch {
+	if nonIdempotentCreate {
 		attempts = 1
 	}
 	var last error
@@ -901,6 +1126,13 @@ func (c *Client) request(ctx context.Context, method, path string, body map[stri
 		c.headers(request)
 		response, err := c.http.Do(request)
 		if err != nil {
+			if nonIdempotentCreate {
+				cause := fmt.Errorf("管理 API 请求传输中断：%T", err)
+				if ctx.Err() != nil {
+					cause = fmt.Errorf("管理 API 请求发送后上下文结束：%w", ctx.Err())
+				}
+				return nil, &CommitUnknownError{Cause: cause}
+			}
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -909,6 +1141,14 @@ func (c *Client) request(ctx context.Context, method, path string, body map[stri
 			payload, responseErr, retry := decodeResponse(response)
 			if responseErr == nil {
 				return payload, nil
+			}
+			var unknown *responseOutcomeUnknown
+			if nonIdempotentCreate && errors.As(responseErr, &unknown) {
+				return nil, &CommitUnknownError{Cause: unknown.cause}
+			}
+			var httpError *HTTPError
+			if nonIdempotentCreate && errors.As(responseErr, &httpError) && (httpError.StatusCode == http.StatusRequestTimeout || httpError.StatusCode >= 500) {
+				return nil, &CommitUnknownError{Cause: responseErr}
 			}
 			last = responseErr
 			if !retry {
@@ -942,10 +1182,10 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
-		return nil, err, true
+		return nil, &responseOutcomeUnknown{cause: err}, true
 	}
 	if len(raw) > maximumResponseBytes {
-		return nil, &Error{"管理 API 响应超过 4 MiB 安全上限"}, false
+		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 响应超过 4 MiB 安全上限"}}, false
 	}
 	detail := errorDetail(raw)
 	if (response.StatusCode == 404 || response.StatusCode == 503) && containsMonitoringDisabled(detail) {
@@ -960,14 +1200,14 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 	decoder.UseNumber()
 	var payload map[string]any
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, &Error{"管理 API 返回不是 JSON"}, false
+		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 返回不是 JSON"}}, false
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, &Error{"管理 API 返回包含 JSON 尾随数据"}, false
+		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 返回包含 JSON 尾随数据"}}, false
 	}
 	if payload == nil {
-		return nil, &Error{"管理 API 返回格式不可读"}, false
+		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 返回格式不可读"}}, false
 	}
 	if !businessSuccess(payload) {
 		return nil, &Error{"管理 API 返回业务失败：" + payloadError(payload)}, false
@@ -988,7 +1228,7 @@ func items(payload map[string]any, label string) ([]map[string]any, map[string]a
 		metadata = data
 	} else if list, ok := rawData.([]any); ok {
 		rawItems = list
-		metadata = map[string]any{"items": list, "total": int64(len(list))}
+		metadata = map[string]any{"items": list}
 	} else if !present {
 		rawItems = payload["items"]
 		metadata = payload

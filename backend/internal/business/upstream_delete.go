@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 type UpstreamDeleteAccount struct {
@@ -17,13 +19,14 @@ type UpstreamDeleteAccount struct {
 }
 
 type UpstreamDeletePreview struct {
-	Host         string                  `json:"host"`
-	BaseURL      string                  `json:"base_url"`
-	UpstreamType string                  `json:"upstream_type"`
-	AccountCount int                     `json:"account_count"`
-	GroupCount   int                     `json:"group_count"`
-	AccountIDs   []string                `json:"account_ids"`
-	Accounts     []UpstreamDeleteAccount `json:"accounts"`
+	Host          string                  `json:"host"`
+	IdentityHosts []string                `json:"identity_hosts"`
+	BaseURL       string                  `json:"base_url"`
+	UpstreamType  string                  `json:"upstream_type"`
+	AccountCount  int                     `json:"account_count"`
+	GroupCount    int                     `json:"group_count"`
+	AccountIDs    []string                `json:"account_ids"`
+	Accounts      []UpstreamDeleteAccount `json:"accounts"`
 }
 
 type UpstreamDeleteProjection struct {
@@ -40,20 +43,86 @@ type UpstreamDeleteAudit struct {
 	ReadbackConfirmed     bool
 }
 
-func (s *Store) UpstreamDeletePreview(ctx context.Context, host string) (UpstreamDeletePreview, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+func (s *Store) UpstreamDeletePreview(ctx context.Context, host string) (result UpstreamDeletePreview, err error) {
+	host = canonicalHost(host)
+	if host == "" {
+		return UpstreamDeletePreview{}, errors.New("上游 Host 不能为空")
+	}
+	guarded, release, err := mutationguard.Acquire(
+		ctx, s, mutationguard.UpstreamCatalog(), mutationguard.Upstream(host),
+	)
+	if err != nil {
 		return UpstreamDeletePreview{}, err
 	}
-	return upstreamDeletePreview(ctx, s.db, canonicalHost(host))
+	defer func() { err = errors.Join(err, release()) }()
+	ctx = guarded
+	exists, err := s.UpstreamExists(ctx, host)
+	if err != nil {
+		return UpstreamDeletePreview{}, err
+	}
+	if !exists {
+		return UpstreamDeletePreview{}, errors.New("上游 Host 不存在")
+	}
+	if err := s.ensureStableUpstreamRelationsForHost(ctx, host); err != nil {
+		return UpstreamDeletePreview{}, err
+	}
+	return upstreamDeletePreview(ctx, s.db, host)
 }
 
-func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expectedAccountIDs []string, audit UpstreamDeleteAudit) (UpstreamDeleteProjection, error) {
+func (s *Store) UpstreamMutationAccountIDs(ctx context.Context, host string) ([]string, error) {
 	host = canonicalHost(host)
+	if host == "" {
+		return nil, errors.New("上游 Host 不能为空")
+	}
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return nil, err
+	}
+	upstreamID, hosts, err := upstreamIdentityHostsForQueryer(ctx, s.db, host)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.upstreamIdentityMutationAccountIDs(ctx, hosts, []string{upstreamID})
+	if err != nil {
+		return nil, err
+	}
+	for index, rawAccountID := range result {
+		accountID := strings.TrimSpace(rawAccountID)
+		if !positiveNumericID(accountID) {
+			return nil, errors.New("上游关联账号缺少稳定数字 ID")
+		}
+		result[index] = accountID
+	}
+	return result, nil
+}
+
+func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expectedAccountIDs []string, audit UpstreamDeleteAudit) (projection UpstreamDeleteProjection, err error) {
+	host = canonicalHost(host)
+	if host == "" {
+		return UpstreamDeleteProjection{}, errors.New("上游 Host 不能为空")
+	}
 	expected, err := normalizedStableIDs(expectedAccountIDs)
 	if err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
+	guarded, release, err := mutationguard.Acquire(
+		ctx, s, mutationguard.UpstreamCatalog(), mutationguard.Upstream(host),
+	)
+	if err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
+	defer func() { err = errors.Join(err, release()) }()
+	ctx = guarded
+	exists, err := s.UpstreamExists(ctx, host)
+	if err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
+	if !exists {
+		return UpstreamDeleteProjection{}, errors.New("上游 Host 不存在")
+	}
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
+	if err := s.ensureStableUpstreamRelationsForHost(ctx, host); err != nil {
 		return UpstreamDeleteProjection{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -152,10 +221,11 @@ func upstreamDeletePreview(ctx context.Context, queryer deletePreviewQueryer, ho
 		}
 		return UpstreamDeletePreview{}, err
 	}
-	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, queryer, host)
+	upstreamID, identityHosts, err := upstreamIdentityHostsForQueryer(ctx, queryer, host)
 	if err != nil {
 		return UpstreamDeletePreview{}, err
 	}
+	result.IdentityHosts = append([]string{}, identityHosts...)
 	accountRows, err := upstreamDeleteAccountRows(ctx, queryer, upstreamID)
 	if err != nil {
 		return UpstreamDeletePreview{}, err

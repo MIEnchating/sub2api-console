@@ -161,7 +161,22 @@ export const selectContentAppearanceLayouts = {
   faceted: "flex min-w-60 flex-col overflow-hidden",
 } as const;
 
-export const selectContentSearchableByDefault = true;
+const selectSearchItemThreshold = 5;
+
+function countSelectItems(node: React.ReactNode): number {
+  return React.Children.toArray(node).reduce<number>((count, child) => {
+    if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return count;
+    if (child.type === SelectItem) return count + 1;
+    if (child.type === SelectGroup || child.type === React.Fragment) {
+      return count + countSelectItems(child.props.children);
+    }
+    return count;
+  }, 0);
+}
+
+export function shouldShowSelectSearch(children: React.ReactNode, searchable = true): boolean {
+  return searchable && countSelectItems(children) > selectSearchItemThreshold;
+}
 
 function SelectContent({
   className,
@@ -173,7 +188,7 @@ function SelectContent({
   alignOffset = 0,
   alignItemWithTrigger = false,
   appearance = "classic",
-  searchable = selectContentSearchableByDefault,
+  searchable = true,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
@@ -185,7 +200,8 @@ function SelectContent({
     searchable?: boolean;
   }) {
   const [search, setSearch] = React.useState("");
-  const filteredChildren = filterSelectChildren(children, search);
+  const showSearch = shouldShowSelectSearch(children, searchable);
+  const filteredChildren = filterSelectChildren(children, showSearch ? search : "");
   const hasFilteredChildren = React.Children.toArray(filteredChildren).length > 0;
   const content = (
     <SelectPrimitive.Positioner
@@ -209,7 +225,7 @@ function SelectContent({
         )}
         {...props}
       >
-        {searchable ? (
+        {showSearch ? (
           <div className="relative m-2 mb-1">
             <Search
               className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"

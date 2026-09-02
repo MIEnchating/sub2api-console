@@ -3,10 +3,13 @@ package onboarding
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -16,11 +19,16 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
-const onboardingProbeResponseLimit = 4 << 20
+const (
+	onboardingProbeResponseLimit = 4 << 20
+	probeCleanupTimeout          = 20 * time.Second
+	probeReconcileInterval       = 250 * time.Millisecond
+)
 
 type ProbeResult struct {
 	Status       string `json:"status"`
@@ -44,11 +52,16 @@ type probeCredential struct {
 }
 
 func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]string, error) {
-	credential, err := s.acquireProbeCredential(ctx, host, groupID)
+	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
 	if err != nil {
 		return nil, err
 	}
-	models, requestErr := fetchProbeModels(ctx, credential.auth.BaseURL, credential.key.Secret)
+	defer s.releaseProbeMutation(release, host)
+	credential, err := s.acquireProbeCredential(guardedCtx, host, groupID)
+	if err != nil {
+		return nil, err
+	}
+	models, requestErr := fetchProbeModels(guardedCtx, credential.auth.BaseURL, credential.key.Secret)
 	cleanupErr := s.cleanupProbeCredential(credential)
 	if requestErr != nil {
 		if cleanupErr != nil {
@@ -70,11 +83,16 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string) (Probe
 	if model == "" || len(model) > 255 {
 		return ProbeResult{}, errors.New("请选择有效的测试模型")
 	}
-	credential, err := s.acquireProbeCredential(ctx, host, groupID)
+	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(host))
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	result, requestErr := runGatewayProbe(ctx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform)
+	defer s.releaseProbeMutation(release, host)
+	credential, err := s.acquireProbeCredential(guardedCtx, host, groupID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	result, requestErr := runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform)
 	result.TemporaryKey = credential.temporary
 	cleanupErr := s.cleanupProbeCredential(credential)
 	if requestErr != nil {
@@ -139,12 +157,15 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 	if _, ok := s.keys.(probeKeyDeleter); !ok {
 		return probeCredential{}, errors.New("当前上游客户端不支持安全清理临时测试 Key")
 	}
-	id, err := randomID(6)
+	marker := probeKeyMarker(auth.Host, groupID)
+	credential.key, err = createKey(ctx, s.keys, *auth, marker, groupID, true)
 	if err != nil {
-		return probeCredential{}, err
-	}
-	credential.key, err = createKey(ctx, s.keys, *auth, "console-probe-"+id, groupID, true)
-	if err != nil {
+		var unknown *upstreamsync.CommitUnknownError
+		if errors.As(err, &unknown) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			if cleanupErr := s.cleanupUnknownProbeCredential(*auth, marker, groupID); cleanupErr != nil {
+				return probeCredential{}, fmt.Errorf("临时测试 Key 创建结果不确定：%w；按 marker 清理失败：%v", err, cleanupErr)
+			}
+		}
 		return probeCredential{}, fmt.Errorf("临时测试 Key 创建失败：%w", err)
 	}
 	credential.temporary = true
@@ -159,9 +180,57 @@ func (s *Service) cleanupProbeCredential(credential probeCredential) error {
 	if !ok {
 		return errors.New("上游客户端不支持删除 Key")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), probeCleanupTimeout)
 	defer cancel()
 	return deleter.DeleteKey(ctx, credential.auth, credential.key.KeyID)
+}
+
+func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, marker, groupID string) error {
+	reconciler, reconcileSupported := s.keys.(reconcilingKeyClient)
+	deleter, deleteSupported := s.keys.(probeKeyDeleter)
+	if !reconcileSupported || !deleteSupported {
+		return fmt.Errorf("marker %s 的只读对账或删除能力不可用；后续探活将复用该 marker", marker)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), probeCleanupTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		key, found, err := reconciler.ReconcileCreatedKey(ctx, auth, marker, groupID)
+		if err == nil && found {
+			if strings.TrimSpace(key.KeyID) == "" {
+				return fmt.Errorf("marker %s 对账结果缺少稳定 Key ID", marker)
+			}
+			if err := deleter.DeleteKey(ctx, auth, key.KeyID); err != nil {
+				return fmt.Errorf("marker %s 已定位但删除失败：%w", marker, err)
+			}
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		}
+		timer := time.NewTimer(probeReconcileInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return fmt.Errorf("marker %s 在清理时限内无法完成对账：%w；后续探活将复用该 marker", marker, lastErr)
+			}
+			return fmt.Errorf("marker %s 在清理时限内尚未可见；后续探活将复用该 marker", marker)
+		case <-timer.C:
+		}
+	}
+}
+
+func probeKeyMarker(host, groupID string) string {
+	value := configstore.CanonicalHost(host) + "\x00" + strings.TrimSpace(groupID)
+	digest := sha256.Sum256([]byte(value))
+	return "console-probe-" + hex.EncodeToString(digest[:6])
+}
+
+func (s *Service) releaseProbeMutation(release func() error, host string) {
+	if err := release(); err != nil {
+		slog.Error("上游探活租约释放失败", "host", configstore.CanonicalHost(host), "error", err)
+	}
 }
 
 func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, error) {

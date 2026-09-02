@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Activity, CheckCircle2, LoaderCircle, RefreshCw, XCircle } from "lucide-react";
 
@@ -44,11 +44,10 @@ export function onboardingProbeModelOptions(models: string[]): string[] {
 
 export function shouldLoadProbeModels(
   open: boolean,
-  modelCount: number,
-  pending: boolean,
-  succeeded: boolean,
+  loadedTargetKey: string | null,
+  targetKey: string,
 ): boolean {
-  return open && modelCount === 0 && !pending && !succeeded;
+  return open && loadedTargetKey !== targetKey;
 }
 
 export function AccountProbeDialog(props: {
@@ -59,8 +58,11 @@ export function AccountProbeDialog(props: {
   onCompleted?: () => void;
 }) {
   const [models, setModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState(noModelSelected);
   const [result, setResult] = useState<ProbeResult | null>(null);
+  const loadedTargetKey = useRef<string | null>(null);
+  const modelLoadInFlight = useRef(false);
   const loadModels = useMutation({
     mutationFn: () => api.onboardingProbeModels(props.target.host, props.target.groupId),
     onSuccess: (response) => {
@@ -68,6 +70,10 @@ export function AccountProbeDialog(props: {
       if (selectedModel === noModelSelected && response.models.length > 0) {
         setSelectedModel(response.models[0]);
       }
+    },
+    onSettled: () => {
+      modelLoadInFlight.current = false;
+      setModelsLoading(false);
     },
   });
   const runProbe = useMutation({
@@ -81,20 +87,39 @@ export function AccountProbeDialog(props: {
       props.onCompleted?.();
     },
   });
+  function startModelLoad() {
+    if (modelLoadInFlight.current) return;
+    modelLoadInFlight.current = true;
+    setModelsLoading(true);
+    loadModels.mutate();
+  }
 
   useEffect(() => {
     if (!props.open) {
+      loadedTargetKey.current = null;
+      modelLoadInFlight.current = false;
       setModels([]);
+      setModelsLoading(false);
       setResult(null);
       setSelectedModel(noModelSelected);
       loadModels.reset();
       runProbe.reset();
+      return;
     }
-  }, [props.open]);
+    const targetKey = `${props.target.host}\u0000${props.target.groupId}`;
+    if (!shouldLoadProbeModels(props.open, loadedTargetKey.current, targetKey)) return;
+    loadedTargetKey.current = targetKey;
+    setModels([]);
+    setResult(null);
+    setSelectedModel(noModelSelected);
+    loadModels.reset();
+    runProbe.reset();
+    startModelLoad();
+  }, [props.open, props.target.host, props.target.groupId]);
 
   const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
   const selectDisabled = Boolean(props.pending) || runProbe.isPending;
-  const runDisabled = selectDisabled || loadModels.isPending || selectedModel === noModelSelected;
+  const runDisabled = selectDisabled || modelsLoading || selectedModel === noModelSelected;
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -118,18 +143,6 @@ export function AccountProbeDialog(props: {
                 value === noModelSelected ? "选择上游模型" : String(value)
               }
               disabled={selectDisabled}
-              onOpenChange={(open) => {
-                if (
-                  shouldLoadProbeModels(
-                    open,
-                    models.length,
-                    loadModels.isPending,
-                    loadModels.isSuccess,
-                  )
-                ) {
-                  loadModels.mutate();
-                }
-              }}
               onValueChange={(value) => {
                 if (!value) return;
                 setSelectedModel(value);
@@ -141,14 +154,14 @@ export function AccountProbeDialog(props: {
                 <SelectValue placeholder="选择上游模型" />
               </SelectTrigger>
               <SelectContent>
-                {loadModels.isPending ? (
+                {modelsLoading ? (
                   <SelectItem value={noModelSelected} disabled>
                     正在获取上游模型
                   </SelectItem>
                 ) : null}
-                {!loadModels.isPending && options.length === 0 ? (
+                {!modelsLoading && options.length === 0 ? (
                   <SelectItem value={noModelSelected} disabled>
-                    {loadModels.isError ? "获取失败，重新打开可重试" : "暂无可用模型"}
+                    {loadModels.isError ? "获取失败，可点击下方按钮重试" : "暂无可用模型"}
                   </SelectItem>
                 ) : null}
                 {options.map((model) => (
@@ -160,10 +173,10 @@ export function AccountProbeDialog(props: {
             </Select>
           </div>
           <ProbeModelLoadButton
-            pending={loadModels.isPending}
+            pending={modelsLoading}
             succeeded={loadModels.isSuccess}
             disabled={selectDisabled}
-            onLoad={() => loadModels.mutate()}
+            onLoad={startModelLoad}
           />
           {loadModels.isSuccess ? (
             <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>

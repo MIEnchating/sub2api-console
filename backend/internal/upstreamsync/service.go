@@ -11,15 +11,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 type Repository interface {
 	Upstreams(context.Context) (business.UpstreamSummary, error)
+	UpstreamMutationAccountIDs(context.Context, string) ([]string, error)
 	ApplyUpstreamSync(context.Context, business.UpstreamSyncWrite) (business.UpstreamSyncWriteResult, error)
 	RecordUpstreamSyncFailure(context.Context, string, string, string, bool) error
 	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
@@ -102,6 +106,8 @@ type HostResult struct {
 	AuthStatus           string  `json:"auth_status"`
 	BalanceStatus        string  `json:"balance_status"`
 	Balance              *string `json:"balance,omitempty"`
+	DisplayBalance       *string `json:"display_balance,omitempty"`
+	BalanceUnit          *string `json:"balance_unit,omitempty"`
 	GroupCount           int     `json:"group_count"`
 	KeyCount             int     `json:"key_count"`
 	AccountTotal         int     `json:"account_total"`
@@ -129,6 +135,7 @@ type Service struct {
 	refresher  Refresher
 	resolver   AuthResolver
 	tasks      TaskStore
+	taskRunner taskrunner.Runner
 	rateSync   AccountRateSyncScheduler
 	timeout    time.Duration
 	workers    int
@@ -145,6 +152,8 @@ func New(repository Repository, private PrivateStore, reader CatalogReader, refr
 func (s *Service) SetAuthResolver(resolver AuthResolver) {
 	s.resolver = resolver
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) EnqueueAll(ctx context.Context, scope Scope, actor, operation string) (taskstore.Task, error) {
 	var err error
@@ -248,15 +257,20 @@ func (s *Service) enqueue(
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, hosts, scope, actor, summary)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.execute(parent, task, hosts, scope, actor, summary)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
-func (s *Service) execute(task taskstore.Task, hosts []string, scope Scope, actor string, summary business.UpstreamSummary) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []string, scope Scope, actor string, summary business.UpstreamSummary) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 5, scopeMessage(scope), time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	result := s.syncHosts(ctx, hosts, scope, actor, func(completed, total int) {
@@ -295,6 +309,7 @@ func (s *Service) execute(task taskstore.Task, hosts []string, scope Scope, acto
 			task.Message += "；相关账号成本与名称同步已排队"
 		}
 	}
+	taskstore.MarkCancelled(ctx, &task, "上游同步已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -422,6 +437,39 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 	if record == nil {
 		return s.failed(ctx, host, scope, true, "未配置私有授权记录")
 	}
+	accountIDs, err := s.repository.UpstreamMutationAccountIDs(ctx, host)
+	if err != nil {
+		return s.failed(ctx, host, scope, false, "上游关联账号读取失败："+err.Error())
+	}
+	resources := make([]string, 0, len(accountIDs)+1)
+	resources = append(resources, mutationguard.Upstream(host))
+	for _, accountID := range accountIDs {
+		resources = append(resources, mutationguard.Account(accountID))
+	}
+	guardedCtx, release, err := mutationguard.Acquire(ctx, s.repository, resources...)
+	if err != nil {
+		return failedHost(host, "failed", business.UpstreamAuthStatusUnconfirmed, "上游同步租约获取失败："+err.Error())
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("上游同步租约释放失败", "host", host, "error", err)
+		}
+	}()
+	ctx = guardedCtx
+	record, err = s.private.AuthRecord(ctx, host)
+	if err != nil {
+		return s.failed(ctx, host, scope, true, "获取同步租约后私有授权复读失败："+err.Error())
+	}
+	if record == nil {
+		return s.failed(ctx, host, scope, true, "获取同步租约后私有授权已被删除")
+	}
+	confirmedAccountIDs, confirmErr := s.repository.UpstreamMutationAccountIDs(ctx, host)
+	if confirmErr != nil {
+		return s.failed(ctx, host, scope, false, "获取同步租约后关联账号复读失败："+confirmErr.Error())
+	}
+	if !stringIDsCover(accountIDs, confirmedAccountIDs) {
+		return s.failed(ctx, host, scope, false, "获取同步租约后关联账号集合已变化，请重试同步")
+	}
 	catalog, balance, err := s.read(ctx, *record, scope)
 	failureScope := readFailureScope(scope, err)
 	if err != nil && IsAuthenticationError(err) {
@@ -458,10 +506,24 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 	}
 	return HostResult{
 		Host: host, Status: "succeeded", AuthStatus: status, BalanceStatus: persisted.BalanceStatus,
-		Balance: persisted.Balance, GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
+		Balance: persisted.Balance, DisplayBalance: persisted.DisplayBalance, BalanceUnit: persisted.BalanceUnit,
+		GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,
 	}
+}
+
+func stringIDsCover(locked, current []string) bool {
+	values := make(map[string]struct{}, len(locked))
+	for _, value := range locked {
+		values[strings.TrimSpace(value)] = struct{}{}
+	}
+	for _, value := range current {
+		if _, found := values[strings.TrimSpace(value)]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) authRecord(ctx context.Context, host, actor string) (*configstore.AuthRecord, bool, error) {
@@ -638,11 +700,20 @@ func safeReason(value string) string {
 	if value == "" {
 		value = "上游同步失败"
 	}
-	value = redact.Secrets(value)
-	if len(value) > 500 {
-		value = value[:500]
+	return truncateUTF8Bytes(strings.ToValidUTF8(redact.Secrets(value), "\uFFFD"), 500)
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
 	}
-	return value
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
 }
 
 func allAuthFields() map[string]bool {

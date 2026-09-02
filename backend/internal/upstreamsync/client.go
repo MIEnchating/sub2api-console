@@ -29,6 +29,26 @@ const (
 
 var ErrKeyNotFound = errors.New("上游 Key 不存在")
 
+// CommitUnknownError means a create request may have committed remotely, but
+// the response could not establish a trustworthy result.
+type CommitUnknownError struct {
+	Marker string
+	Cause  error
+}
+
+func (e *CommitUnknownError) Error() string {
+	message := "上游 Key 创建的提交结果不确定"
+	if e.Marker != "" {
+		message += "（marker " + e.Marker + "）"
+	}
+	if e.Cause != nil {
+		message += "：" + e.Cause.Error()
+	}
+	return message
+}
+
+func (e *CommitUnknownError) Unwrap() error { return e.Cause }
+
 type StatusError struct {
 	StatusCode int
 	Path       string
@@ -145,13 +165,23 @@ func (r *Reader) ReadBalance(ctx context.Context, record configstore.AuthRecord)
 		}
 		balance = &value
 	}
-	var siteName, quotaPerUnit, balanceUnit *string
+	var siteName, quotaPerUnit, balanceUnit, displayBalance *string
+	var displayInCurrency bool
+	var quotaDisplayType string
+	var usdExchangeRate *string
 	if public, publicErr := r.getPublic(ctx, record.BaseURL, publicPath); publicErr == nil {
 		if publicData, objectErr := payloadObject(public, "上游公开配置"); objectErr == nil {
 			siteName = optionalText(firstPresent(publicData, "system_name", "site_name", "name"))
 			if isNewAPI(record.UpstreamType) {
 				if quota, quotaErr := optionalDecimal(publicData, "quota_per_unit"); quotaErr == nil {
 					quotaPerUnit = quota
+				}
+				if rawDisplay, present := presentValue(publicData, "display_in_currency"); present {
+					displayInCurrency, _ = strictBool(rawDisplay)
+				}
+				quotaDisplayType = strings.ToLower(strings.TrimSpace(textValue(firstPresent(publicData, "quota_display_type"))))
+				if rate, rateErr := optionalDecimal(publicData, "usd_exchange_rate", "price"); rateErr == nil && rate != nil && positiveDecimal(*rate) {
+					usdExchangeRate = rate
 				}
 			}
 		}
@@ -168,8 +198,18 @@ func (r *Reader) ReadBalance(ctx context.Context, record configstore.AuthRecord)
 			return business.UpstreamBalanceObservation{}, errors.New("New API 余额换算失败")
 		}
 		balance, quotaPerUnit = &converted, &divisor
+		displayBalance = balance
 		unit := "usd"
 		balanceUnit = &unit
+		if displayInCurrency && quotaDisplayType == "cny" && usdExchangeRate != nil {
+			convertedDisplay, multiplyErr := multiplyDecimal(*balance, *usdExchangeRate)
+			if multiplyErr != nil {
+				return business.UpstreamBalanceObservation{}, errors.New("New API 人民币余额换算失败")
+			}
+			displayBalance = &convertedDisplay
+			unit = "cny"
+			balanceUnit = &unit
+		}
 	}
 	hardRaw, hardPresent := presentValue(data, "balance_hard_closed", "hard_closed", "closed")
 	var hardClosed *bool
@@ -185,7 +225,7 @@ func (r *Reader) ReadBalance(ctx context.Context, record configstore.AuthRecord)
 		status = "已读取"
 	}
 	return business.UpstreamBalanceObservation{
-		RawBalance: balance, Status: status, HardClosed: hardClosed, HardClosedPresent: hardPresent,
+		RawBalance: balance, DisplayBalance: displayBalance, Status: status, HardClosed: hardClosed, HardClosedPresent: hardPresent,
 		SiteName: siteName, QuotaPerUnit: quotaPerUnit, BalanceUnit: balanceUnit,
 	}, nil
 }
@@ -215,15 +255,13 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 	if name == "" || groupID == "" {
 		return CreatedKey{}, errors.New("上游 Key 创建必须包含名称和稳定分组 ID")
 	}
-	beforeIDs := map[string]struct{}{}
 	if verification {
-		before, err := r.readKeys(ctx, record)
+		existing, found, err := r.ReconcileCreatedKey(ctx, record, name, groupID)
 		if err != nil {
 			return CreatedKey{}, err
 		}
-		beforeIDs = make(map[string]struct{}, len(before))
-		for _, key := range before {
-			beforeIDs[key.KeyID] = struct{}{}
+		if found {
+			return existing, nil
 		}
 	}
 	paths := []string{"/api/v1/keys"}
@@ -241,44 +279,47 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 		}
 		body["group_id"] = numericGroupID
 	}
-	payload, err := r.postFallback(ctx, record, paths, body)
+	payload, err := r.postCreate(ctx, record, paths, body)
 	if err != nil {
+		var unknown *CommitUnknownError
+		if errors.As(err, &unknown) {
+			return r.resolveUnknownKey(ctx, record, name, groupID, verification, unknown.Cause)
+		}
 		return CreatedKey{}, err
 	}
 	created, err := payloadObject(payload, "上游 Key 创建")
 	if err != nil {
-		return CreatedKey{}, err
+		return r.resolveUnknownKey(ctx, record, name, groupID, verification, err)
 	}
 	keyID := textValue(firstPresent(created, "id", "key_id", "token_id"))
 	verifiedName := name
 	if returnedGroup := textValue(firstPresent(created, "group_id", "groupId", "group")); returnedGroup != "" && returnedGroup != groupID {
-		return CreatedKey{}, errors.New("上游 Key 创建响应的分组与请求不一致")
+		return r.resolveUnknownKey(ctx, record, name, groupID, verification, errors.New("上游 Key 创建响应的分组与请求不一致"))
 	}
 	if returnedName := strings.TrimSpace(textValue(firstPresent(created, "name", "key_name"))); returnedName != "" {
+		if returnedName != name {
+			return r.resolveUnknownKey(ctx, record, name, groupID, verification, errors.New("上游 Key 创建响应的 marker 名称与请求不一致"))
+		}
 		verifiedName = returnedName
 	}
 	lookupMissingID := keyID == ""
+	if lookupMissingID && !verification {
+		return CreatedKey{}, &CommitUnknownError{Cause: errors.New("上游 Key 已创建但响应未返回稳定 ID，且创建前未建立目录基线")}
+	}
 	if verification || lookupMissingID {
 		after, err := r.readKeys(ctx, record)
 		if err != nil {
-			if lookupMissingID && !verification {
-				return CreatedKey{}, fmt.Errorf("上游 Key 已创建但响应未返回稳定 ID，目录补读失败：%w", err)
-			}
-			return CreatedKey{}, err
+			return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: fmt.Errorf("上游 Key 已创建但目录补读失败：%w", err)}
 		}
 		if lookupMissingID {
 			matches := make([]business.UpstreamCatalogKey, 0, 1)
 			for _, key := range after {
-				_, existedBeforeWrite := beforeIDs[key.KeyID]
-				if (!verification || !existedBeforeWrite) && key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
+				if key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
 					matches = append(matches, key)
 				}
 			}
 			if len(matches) != 1 {
-				if verification {
-					return CreatedKey{}, errors.New("上游 Key 创建结果缺少稳定 ID，读回无法唯一确认")
-				}
-				return CreatedKey{}, errors.New("上游 Key 已创建但响应未返回稳定 ID，目录补读无法唯一定位新 Key")
+				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 已创建但响应未返回稳定 ID，目录补读无法唯一定位新 Key")}
 			}
 			keyID = matches[0].KeyID
 			if strings.TrimSpace(matches[0].Name) != "" {
@@ -294,29 +335,90 @@ func (r *Reader) CreateKeyWithVerification(ctx context.Context, record configsto
 				}
 			}
 			if verified == nil || verified.UpstreamGroup == nil || *verified.UpstreamGroup != groupID {
-				return CreatedKey{}, errors.New("上游 Key 创建后稳定 ID 或分组读回不一致")
+				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 创建后稳定 ID 或分组读回不一致")}
 			}
-			if strings.TrimSpace(verified.Name) != "" {
-				verifiedName = strings.TrimSpace(verified.Name)
+			if strings.TrimSpace(verified.Name) != name {
+				return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: errors.New("上游 Key 创建后 marker 名称读回不一致")}
 			}
+			verifiedName = name
 		}
 	}
 	secret := textValue(firstPresent(created, "key", "api_key", "token"))
 	if isNewAPI(record.UpstreamType) {
 		revealed, revealErr := r.postFallback(ctx, record, []string{"/api/token/" + url.PathEscape(keyID) + "/key"}, map[string]any{})
 		if revealErr != nil {
-			return CreatedKey{}, revealErr
+			return CreatedKey{}, keyCommitUnknown(name, verification, fmt.Errorf("NewAPI Key 已创建但密钥读取失败：%w", revealErr))
 		}
 		data, dataErr := payloadObject(revealed, "NewAPI Key 密钥")
 		if dataErr != nil {
-			return CreatedKey{}, dataErr
+			return CreatedKey{}, keyCommitUnknown(name, verification, dataErr)
 		}
 		secret = textValue(firstPresent(data, "key", "token"))
 	}
 	if secret == "" {
-		return CreatedKey{}, errors.New("上游 Key 创建成功但一次性密钥读取为空")
+		cause := errors.New("上游 Key 创建成功但一次性密钥读取为空")
+		return r.resolveUnknownKey(ctx, record, name, groupID, verification, cause)
 	}
 	return CreatedKey{KeyID: keyID, Name: verifiedName, GroupID: groupID, Secret: secret}, nil
+}
+
+// ReconcileCreatedKey finds an existing create result by its immutable name and
+// stable group without issuing another create request.
+func (r *Reader) ReconcileCreatedKey(ctx context.Context, record configstore.AuthRecord, name, groupID string) (CreatedKey, bool, error) {
+	name, groupID = strings.TrimSpace(name), strings.TrimSpace(groupID)
+	if name == "" || groupID == "" {
+		return CreatedKey{}, false, errors.New("上游 Key 对账必须包含名称和稳定分组 ID")
+	}
+	keys, err := r.readKeys(ctx, record)
+	if err != nil {
+		return CreatedKey{}, false, err
+	}
+	matches := make([]business.UpstreamCatalogKey, 0, 1)
+	for _, key := range keys {
+		if key.Name == name && key.UpstreamGroup != nil && *key.UpstreamGroup == groupID {
+			matches = append(matches, key)
+		}
+	}
+	if len(matches) > 1 {
+		return CreatedKey{}, false, errors.New("上游 Key marker 对账返回多个结果")
+	}
+	if len(matches) == 0 {
+		return CreatedKey{}, false, nil
+	}
+	key, err := r.RevealKey(ctx, record, matches[0].KeyID, groupID)
+	if err != nil {
+		return CreatedKey{}, false, err
+	}
+	if key.Name != name {
+		return CreatedKey{}, false, errors.New("上游 Key marker 对账名称不一致")
+	}
+	return key, true, nil
+}
+
+func (r *Reader) reconcileUnknownKey(ctx context.Context, record configstore.AuthRecord, name, groupID string, cause error) (CreatedKey, error) {
+	key, found, err := r.ReconcileCreatedKey(ctx, record, name, groupID)
+	if err == nil && found {
+		return key, nil
+	}
+	if err != nil {
+		cause = fmt.Errorf("%w；marker 对账失败：%v", cause, err)
+	}
+	return CreatedKey{}, &CommitUnknownError{Marker: name, Cause: cause}
+}
+
+func (r *Reader) resolveUnknownKey(ctx context.Context, record configstore.AuthRecord, name, groupID string, verification bool, cause error) (CreatedKey, error) {
+	if !verification {
+		return CreatedKey{}, keyCommitUnknown(name, false, cause)
+	}
+	return r.reconcileUnknownKey(ctx, record, name, groupID, cause)
+}
+
+func keyCommitUnknown(name string, markerTrusted bool, cause error) *CommitUnknownError {
+	marker := ""
+	if markerTrusted {
+		marker = name
+	}
+	return &CommitUnknownError{Marker: marker, Cause: cause}
 }
 
 func (r *Reader) RevealKey(ctx context.Context, record configstore.AuthRecord, keyID, groupID string) (CreatedKey, error) {
@@ -540,6 +642,35 @@ func (r *Reader) postFallback(ctx context.Context, record configstore.AuthRecord
 	return nil, last
 }
 
+func (r *Reader) postCreate(ctx context.Context, record configstore.AuthRecord, paths []string, body map[string]any) (any, error) {
+	var last error
+	cacheKey := r.pathCacheKey(http.MethodPost, record, paths)
+	ordered := r.cachedPaths(cacheKey, paths)
+	for index, path := range ordered {
+		payload, status, err := r.requestJSONWithSemantics(ctx, record, http.MethodPost, path, nil, body, true, true)
+		if err == nil {
+			r.rememberPath(cacheKey, path)
+			return payload, nil
+		}
+		last = err
+		var unknown *CommitUnknownError
+		if errors.As(err, &unknown) {
+			return nil, err
+		}
+		if status == http.StatusNotFound {
+			r.forgetPath(cacheKey, path)
+		}
+		if status == http.StatusNotFound && index < len(ordered)-1 {
+			continue
+		}
+		return nil, err
+	}
+	if last == nil {
+		last = errors.New("没有可用的上游写入地址")
+	}
+	return nil, last
+}
+
 func (r *Reader) deleteFallback(ctx context.Context, record configstore.AuthRecord, paths []string) error {
 	var last error
 	cacheKey := r.pathCacheKey(http.MethodDelete, record, paths)
@@ -623,6 +754,10 @@ func (r *Reader) request(ctx context.Context, record configstore.AuthRecord, pat
 }
 
 func (r *Reader) requestJSON(ctx context.Context, record configstore.AuthRecord, method, path string, query url.Values, payloadBody map[string]any, authenticated bool) (any, int, error) {
+	return r.requestJSONWithSemantics(ctx, record, method, path, query, payloadBody, authenticated, false)
+}
+
+func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstore.AuthRecord, method, path string, query url.Values, payloadBody map[string]any, authenticated, nonIdempotentCreate bool) (any, int, error) {
 	baseURL, err := configstore.ValidateBaseURL(record.BaseURL)
 	if err != nil {
 		return nil, 0, err
@@ -650,36 +785,64 @@ func (r *Reader) requestJSON(ctx context.Context, record configstore.AuthRecord,
 	}
 	response, err := r.http.Do(request)
 	if err != nil {
-		return nil, 0, fmt.Errorf("上游网络请求失败：%T", err)
+		cause := fmt.Errorf("上游网络请求失败：%T", err)
+		if nonIdempotentCreate {
+			return nil, 0, &CommitUnknownError{Cause: cause}
+		}
+		return nil, 0, cause
 	}
 	defer response.Body.Close()
+	unknownCreateStatus := nonIdempotentCreate && (response.StatusCode == http.StatusRequestTimeout || response.StatusCode >= 500)
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil || len(body) > maximumResponseBytes {
-		return nil, response.StatusCode, errors.New("上游响应过大或读取失败")
+		cause := errors.New("上游响应过大或读取失败")
+		if unknownCreateStatus || (nonIdempotentCreate && response.StatusCode >= 200 && response.StatusCode < 300) {
+			return nil, response.StatusCode, &CommitUnknownError{Cause: cause}
+		}
+		return nil, response.StatusCode, cause
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, response.StatusCode, &StatusError{
+		statusErr := &StatusError{
 			StatusCode: response.StatusCode,
 			Path:       path,
 			Detail:     upstreamErrorDetail(body),
 		}
+		if unknownCreateStatus {
+			return nil, response.StatusCode, &CommitUnknownError{Cause: statusErr}
+		}
+		return nil, response.StatusCode, statusErr
+	}
+	if method == http.MethodDelete && response.StatusCode == http.StatusNoContent && len(bytes.TrimSpace(body)) == 0 {
+		return nil, response.StatusCode, nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var payload any
 	if err := decoder.Decode(&payload); err != nil {
-		return nil, response.StatusCode, errors.New("上游返回不是有效 JSON")
+		cause := errors.New("上游返回不是有效 JSON")
+		if nonIdempotentCreate {
+			return nil, response.StatusCode, &CommitUnknownError{Cause: cause}
+		}
+		return nil, response.StatusCode, cause
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, response.StatusCode, errors.New("上游响应包含尾随数据")
+		cause := errors.New("上游响应包含尾随数据")
+		if nonIdempotentCreate {
+			return nil, response.StatusCode, &CommitUnknownError{Cause: cause}
+		}
+		return nil, response.StatusCode, cause
 	}
 	if object, ok := payload.(map[string]any); ok && !businessSuccess(object) {
 		return nil, response.StatusCode, errors.New("上游业务读取失败")
 	}
 	if _, object := payload.(map[string]any); !object {
 		if _, array := payload.([]any); !array {
-			return nil, response.StatusCode, errors.New("上游返回格式不可读")
+			cause := errors.New("上游返回格式不可读")
+			if nonIdempotentCreate {
+				return nil, response.StatusCode, &CommitUnknownError{Cause: cause}
+			}
+			return nil, response.StatusCode, cause
 		}
 	}
 	return payload, response.StatusCode, nil
@@ -934,6 +1097,15 @@ func divideDecimal(numerator, denominator string) (string, error) {
 		return "", errors.New("十进制除法参数无效")
 	}
 	return ratText(new(big.Rat).Quo(left, right)), nil
+}
+
+func multiplyDecimal(leftText, rightText string) (string, error) {
+	left, leftOK := new(big.Rat).SetString(leftText)
+	right, rightOK := new(big.Rat).SetString(rightText)
+	if !leftOK || !rightOK || right.Sign() <= 0 {
+		return "", errors.New("十进制乘法参数无效")
+	}
+	return ratText(new(big.Rat).Mul(left, right)), nil
 }
 
 func ratText(value *big.Rat) string {

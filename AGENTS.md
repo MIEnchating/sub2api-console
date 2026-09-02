@@ -14,15 +14,13 @@
 | ---------- | ----------------------------------------------------------------- |
 | 包管理     | Bun                                                               |
 | 框架       | React 19、TypeScript                                              |
-| 数据与请求 | @tanstack/react-query、axios、Zustand                             |
+| 数据与请求 | @tanstack/react-query、原生 Fetch API                            |
 | 路由       | @tanstack/react-router                                            |
-| 表格与列表 | @tanstack/react-table、@tanstack/react-virtual                    |
 | 界面语言   | 中文（当前不引入国际化框架）                                      |
-| 日期       | Day.js                                                            |
-| UI 与样式  | Base UI、Lucide、Tailwind CSS、clsx / class-variance-authority    |
+| 日期       | @internationalized/date                                           |
+| UI 与样式  | Base UI、Lucide、Hugeicons、Tailwind CSS、clsx / class-variance-authority |
 | 表单       | React Hook Form、Zod                                              |
-| 图表       | @visactor/vchart、@visactor/react-vchart                          |
-| 工具       | qrcode.react、oxfmt、oxlint、vitest（可选）                       |
+| 工具       | oxfmt、ESLint、Knip、Vitest                                       |
 | 后端       | Go 1.26+、Gin、modernc SQLite、标准库 HTTP Client                 |
 | 实时任务   | Go 任务调度器、Server-Sent Events（SSE）                         |
 
@@ -84,19 +82,18 @@
 
 - **React**：合理使用 `useMemo`、`useCallback` 减少无效重渲染；避免在渲染路径中创建新对象/数组；必要时使用 `React.memo`。
 - **代码分割**：使用 `React.lazy` 与动态 `import` 做按需加载，控制首屏与路由体积。
-- **资源**：图片选用合适格式与尺寸，大列表考虑虚拟滚动（如 @tanstack/react-virtual），大量图片考虑懒加载。
+- **资源**：图片选用合适格式与尺寸，大列表按实际瓶颈考虑虚拟滚动，大量图片考虑懒加载。
 
 ### 3.5 状态管理
 
-- 使用 Zustand 的 `create` 定义 store，并为 state 与 actions 定义清晰类型。
-- 组件内优先用选择器订阅，避免整 store 订阅导致多余渲染，例如：`const user = useAuthStore((s) => s.auth.user)`。
-- 需持久化的状态在 store 内读写 localStorage，并在初始化时恢复。
-- Store 按功能放在 `src/stores/`，单文件职责清晰，命名表意明确。
+- 服务端状态统一由 React Query 管理，查询键、失效范围和刷新策略必须与后端资源边界一致。
+- 仅当前组件或页面使用的交互状态保留在组件或专用 Hook 中；确有跨页面共享需求时再引入集中状态层，不预先建立全局 store。
+- 只有非敏感 UI 偏好可以持久化到 localStorage；会话、凭据、任务结果和服务端业务状态不得写入浏览器持久存储。
 
 ### 3.6 API 请求
 
-- **React Query**：数据获取用 `useQuery`，变更用 `useMutation`；为每个查询配置唯一 `queryKey`（建议数组形式、层级一致）；在 `onSuccess` 中对相关 query 做 `invalidateQueries`，可配合乐观更新。服务端错误统一通过 `handleServerError` 处理（详见 [3.9 错误处理](#39-错误处理)）。
-- **Axios**：使用项目统一的 `api` 实例（含 `baseURL`、`headers`、`withCredentials: true`）；GET 默认请求去重，特殊请求可通过配置关闭；认证与通用错误在拦截器中处理。
+- **React Query**：数据获取用 `useQuery`，变更用 `useMutation`；为每个查询配置唯一、层级一致的数组 `queryKey`，在成功写入后精确失效相关查询；只有具备可靠回滚依据时才做乐观更新。
+- **Fetch**：所有 API 调用通过 `src/api.ts` 的统一 `request` 包装发送，保持 `credentials: "include"`、统一错误解析和会话失效通知；不得在组件中散落未经封装的请求。
 
 ### 3.7 表单
 
@@ -105,25 +102,25 @@
 
 ### 3.8 路由
 
-- 使用 TanStack Router，路由文件位于 `src/routes/`，通过 `createFileRoute` 定义；搜索参数用 Zod schema + `validateSearch` 校验。
-- 在 `beforeLoad` 中做认证与重定向，避免不必要的请求；嵌套结构用布局路由与 `_authenticated` 等前缀，子路由通过 `<Outlet />` 渲染。
+- 使用 TanStack Router，路由树集中在 `src/router.tsx`，通过 `createRootRoute`、`createRoute` 和 `createRouter` 显式定义；搜索参数必须在 `validateSearch` 中收窄到明确类型和允许值。
+- 初始化与会话鉴权由根应用统一处理；增加路由级数据加载或权限边界时，应保持单一鉴权入口，避免与根应用重复请求或产生相互冲突的重定向。
 - 导航使用 `useNavigate` 或 `Link`，保持类型安全，避免直接操作 `window.location`。
 
 ### 3.9 错误处理
 
-- **服务端错误**：统一使用 `handleServerError`，在 React Query 全局配置与拦截器中接入；按 HTTP 状态码给出合适提示，文案使用项目统一中文术语。
-- **展示**：使用 `toast.error` 等统一方式；路由级错误由 `errorComponent` 承接，提供友好错误页并记录便于排查的信息。
+- **服务端错误**：由 `src/api.ts` 统一解析响应并处理会话失效，React Query 的全局查询错误通过 `notifyOperationError` 展示；业务写入按操作提供具体失败文案。
+- **展示**：使用 `notifyOperationError` 或 `toast.error` 等统一方式；同一错误不得被全局和局部处理重复提示。
 - **表单**：校验与服务端错误映射到字段后，在字段下方展示；使用 `form.setError` 等与表单库一致的方式。
 
 ### 3.10 样式
 
 - 以 Tailwind 工具类为主，动态类名用 `cn()` 合并；非动态场景避免内联样式。
-- 响应式采用移动优先与 Tailwind 断点（`sm:`、`md:`、`lg:` 等）；主题与暗色用 CSS 变量与 `dark:`，自定义样式集中在 `src/styles/`，组件内尽量少写自定义 CSS。
+- 响应式采用移动优先与 Tailwind 断点（`sm:`、`md:`、`lg:` 等）；主题与暗色用 CSS 变量与 `dark:`，共享样式集中在 `src/` 下的主题和全局样式表，组件内尽量少写自定义 CSS。
 
 ### 3.11 文件组织
 
-- **功能模块**：置于 `src/features/<feature>/`，内含 `components/`、`lib/`、`hooks/`，以及按需的 `api.ts`、`types.ts`、`constants.ts`、入口组件等。
-- **通用**：通用组件放 `src/components/`，通用工具与类型放 `src/lib/`；组件文件 PascalCase，工具/类型文件 kebab-case 或 `types.ts`，类型使用 PascalCase 命名并 `export type`。
+- **功能模块**：置于 `src/features/<feature>/`，内含按需的 `components/`、`lib/`、`hooks/`、`types.ts`、`constants.ts` 和入口组件；共享 API 契约目前集中在 `src/api.ts`。
+- **通用**：通用组件放 `src/components/`，通用工具与类型放 `src/lib/`；文件名使用 kebab-case 或职责明确的固定名称（如 `types.ts`），类型使用 PascalCase 命名并优先 `export type`。
 
 ### 3.12 可访问性
 
@@ -135,7 +132,7 @@
 
 - 认证与权限在路由与接口层校验；敏感操作增加二次确认等。
 - 前后端均做数据校验（如 Zod），不信任仅前端校验；敏感信息不落前端存储，配置用环境变量，禁止硬编码密钥。
-- 依赖 React 默认转义，慎用 `dangerouslySetInnerHTML`；跨域与 Cookie 使用 `withCredentials` 并按后端要求处理 CSRF。
+- 依赖 React 默认转义，慎用 `dangerouslySetInnerHTML`；跨域与 Cookie 请求使用 Fetch 的 `credentials: "include"` 并按后端要求处理 CSRF。
 - 浏览器不得直接访问生产 SQLite、配置目录、运行日志或密码箱；所有敏感数据只在 Go 后端处理。
 - 后端 API 必须校验认证、权限、目标对象稳定 ID 和请求参数；账号绑定禁止通过名称模糊匹配。
 - 高风险批量操作必须先展示影响范围并二次确认；任务状态、运行日志和审计记录必须区分。

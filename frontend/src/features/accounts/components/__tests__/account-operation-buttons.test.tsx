@@ -54,6 +54,7 @@ function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
       onRateSync={vi.fn()}
       onManualPriority={vi.fn()}
       onEdit={vi.fn()}
+      onDelete={vi.fn()}
     />,
   );
 }
@@ -68,10 +69,12 @@ describe("account operation buttons", () => {
       "同步账号倍率",
       "设置人工优先位",
       "查看并编辑账号",
+      "删除账号及上游 Key",
     ]) {
       expect(result).toContain(label);
     }
-    expect(result).toContain("grid-cols-3");
+    expect(result).toContain("grid-cols-4");
+    expect(result).toContain("w-[9.5rem]");
     expect(result).toContain("lucide-activity");
     expect(result).not.toContain("lucide-scan-search");
     expect(result).not.toContain("排除账号");
@@ -81,8 +84,9 @@ describe("account operation buttons", () => {
   it("shows an adjustment action for an assigned manual priority account", () => {
     const result = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
     expect(result).toContain("调整人工优先位");
-    expect(result.match(/disabled/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(result.match(/disabled/g)?.length).toBeGreaterThanOrEqual(4);
     expect(result).toMatch(/disabled=""[^>]*aria-label="查看并编辑账号"/);
+    expect(result).not.toMatch(/disabled=""[^>]*aria-label="删除账号及上游 Key"/);
   });
 
   it("always enables cost sync for a manual account", () => {

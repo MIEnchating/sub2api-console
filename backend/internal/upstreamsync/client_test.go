@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -33,7 +35,7 @@ func TestReaderNormalizesNewAPINamedGroupsKeysAndBalanceWithoutFloat64(t *testin
 		case "/api/user/self":
 			_, _ = writer.Write([]byte(`{"success":true,"data":{"quota":1000000,"used_quota":999999999}}`))
 		case "/api/status":
-			_, _ = writer.Write([]byte(`{"success":true,"data":{"system_name":"Example","quota_per_unit":500000}}`))
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"system_name":"Example","quota_per_unit":500000,"display_in_currency":true,"quota_display_type":"CNY","usd_exchange_rate":7.3}}`))
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -59,7 +61,8 @@ func TestReaderNormalizesNewAPINamedGroupsKeysAndBalanceWithoutFloat64(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if balance.RawBalance == nil || *balance.RawBalance != "2" || balance.QuotaPerUnit == nil || *balance.QuotaPerUnit != "500000" || balance.BalanceUnit == nil || *balance.BalanceUnit != "usd" {
+	if balance.RawBalance == nil || *balance.RawBalance != "2" || balance.DisplayBalance == nil || *balance.DisplayBalance != "14.6" ||
+		balance.QuotaPerUnit == nil || *balance.QuotaPerUnit != "500000" || balance.BalanceUnit == nil || *balance.BalanceUnit != "cny" {
 		t.Fatalf("balance=%#v", balance)
 	}
 }
@@ -371,7 +374,7 @@ func TestCreateKeySkipsInventoryReadbackWhenVerificationDisabled(t *testing.T) {
 	}
 }
 
-func TestCreateKeyRecoversMissingResponseIDFromInventoryWhenVerificationDisabled(t *testing.T) {
+func TestCreateKeyWithoutBaselineKeepsMissingResponseIDCommitUnknown(t *testing.T) {
 	var gets, posts int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -388,25 +391,25 @@ func TestCreateKeyRecoversMissingResponseIDFromInventoryWhenVerificationDisabled
 	}))
 	defer server.Close()
 	token := "token"
-	key, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
 		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "codex-key", "6", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key.KeyID != "17" || key.Name != "codex-key" || key.GroupID != "6" || key.Secret != "sk-once" || gets != 1 || posts != 1 {
-		t.Fatalf("key=%#v gets=%d posts=%d", key, gets, posts)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "" || gets != 0 || posts != 1 {
+		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets, posts)
 	}
 }
 
-func TestCreateKeyRejectsAmbiguousInventoryFallbackWhenResponseIDMissing(t *testing.T) {
+func TestCreateKeyWithoutBaselineDoesNotConsultAmbiguousHistoricalInventory(t *testing.T) {
+	var gets int
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if request.Method == http.MethodPost {
 			_, _ = writer.Write([]byte(`{"code":0,"data":{"key":"sk-once"}}`))
 			return
 		}
+		gets++
 		_, _ = writer.Write([]byte(`{"code":0,"data":{"items":[
 			{"id":17,"name":"codex-key","group_id":6},
 			{"id":18,"name":"codex-key","group_id":6}
@@ -418,8 +421,196 @@ func TestCreateKeyRejectsAmbiguousInventoryFallbackWhenResponseIDMissing(t *test
 		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "codex-key", "6", false)
-	if err == nil || !strings.Contains(err.Error(), "目录补读无法唯一定位新 Key") {
-		t.Fatalf("err=%v", err)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "" || gets != 0 {
+		t.Fatalf("err=%v unknown=%#v gets=%d", err, unknown, gets)
+	}
+}
+
+func TestCreateKeyRecoversCommittedTransportFailureByStableNameWithoutSecondPost(t *testing.T) {
+	created := false
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			items := `[]`
+			if created {
+				items = `[{"id":17,"name":"account-onboarding-01234567","group_id":6,"key":"sk-recovered"}]`
+			}
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"items":` + items + `,"total":1}}`))
+			return
+		}
+		posts++
+		created = true
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+	token := "token"
+	key, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	if err != nil || key.KeyID != "17" || key.Secret != "sk-recovered" || posts != 1 {
+		t.Fatalf("key=%#v err=%v posts=%d", key, err, posts)
+	}
+}
+
+func TestCreateKeyReturnsTypedCommitUnknownWhenMarkerCannotBeReconciled(t *testing.T) {
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"items":[],"total":0}}`))
+			return
+		}
+		posts++
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || posts != 1 {
+		t.Fatalf("err=%v unknown=%#v posts=%d", err, unknown, posts)
+	}
+}
+
+func TestCreateKeyWithoutMarkerBaselineDoesNotAdoptHistoricalNameMatch(t *testing.T) {
+	var gets, posts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodGet {
+			gets.Add(1)
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"items":[{"id":9,"name":"shared-name","group_id":6,"key":"old-secret"}],"total":1}}`))
+			return
+		}
+		posts.Add(1)
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "shared-name", "6", false)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "" || gets.Load() != 0 || posts.Load() != 1 {
+		t.Fatalf("err=%v unknown=%#v gets=%d posts=%d", err, unknown, gets.Load(), posts.Load())
+	}
+}
+
+func TestCreateKeyRejectsResponseNameThatDoesNotPreserveMarker(t *testing.T) {
+	created := false
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			items := `[]`
+			if created {
+				items = `[{"id":17,"name":"normalized-name","group_id":6,"key":"sk-once"}]`
+			}
+			_, _ = writer.Write([]byte(`{"code":0,"data":{"items":` + items + `,"total":1}}`))
+			return
+		}
+		created = true
+		_, _ = writer.Write([]byte(`{"code":0,"data":{"id":17,"name":"normalized-name","group_id":6,"key":"sk-once"}}`))
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" {
+		t.Fatalf("err=%v unknown=%#v", err, unknown)
+	}
+}
+
+func TestCreateKeyTreatsUnreadableServerErrorAsCommitUnknown(t *testing.T) {
+	transport := &createStatusReadFailureTransport{}
+	reader := NewReader(&http.Client{Transport: transport})
+	token := "token"
+	_, err := reader.CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: "https://upstream.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	var unknown *CommitUnknownError
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || transport.calls != 4 {
+		t.Fatalf("err=%v unknown=%#v calls=%d", err, unknown, transport.calls)
+	}
+}
+
+func TestCreateKeyFailsClosedWhenMarkerPreflightCannotReadInventory(t *testing.T) {
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			posts++
+		}
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).CreateKeyWithVerification(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "account-onboarding-01234567", "6", true)
+	if err == nil || posts != 0 {
+		t.Fatalf("err=%v posts=%d", err, posts)
+	}
+}
+
+func TestRevealKeyTransportFailureIsNotClassifiedAsCreateCommitUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"items":[{"id":17,"name":"stable-key","group":"pro"}],"total":1}}`))
+			return
+		}
+		hijacker, ok := writer.(http.Hijacker)
+		if !ok {
+			t.Fatal("test server does not support hijacking")
+		}
+		connection, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.Close()
+	}))
+	defer server.Close()
+	token := "token"
+	_, err := NewReader(server.Client()).RevealKey(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "newapi", AuthMode: "newapi_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "17", "pro")
+	var unknown *CommitUnknownError
+	if err == nil || errors.As(err, &unknown) {
+		t.Fatalf("err=%v unknown=%#v", err, unknown)
 	}
 }
 
@@ -467,6 +658,42 @@ func TestDeleteKeyUsesPlatformEndpointAndAuthentication(t *testing.T) {
 		t.Fatalf("deleted path=%q", deletedPath)
 	}
 }
+
+func TestDeleteKeyAcceptsNoContentResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodDelete || request.URL.Path != "/api/v1/keys/17" || request.Header.Get("Authorization") != "Bearer token" {
+			t.Fatalf("unexpected delete request: %s %s auth=%q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	token := "token"
+	err := NewReader(server.Client()).DeleteKey(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token,
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "17")
+	if err != nil {
+		t.Fatalf("DELETE 204 was rejected: %v", err)
+	}
+}
+
+type createStatusReadFailureTransport struct{ calls int }
+
+func (transport *createStatusReadFailureTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	transport.calls++
+	if transport.calls == 1 {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"code":0,"data":{"items":[],"total":0}}`)),
+		}, nil
+	}
+	return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: &readFailureBody{}}, nil
+}
+
+type readFailureBody struct{}
+
+func (*readFailureBody) Read([]byte) (int, error) { return 0, errors.New("response stream reset") }
+func (*readFailureBody) Close() error             { return nil }
 
 func TestFallbackCachesVerifiedPathPerHost(t *testing.T) {
 	var primary, fallback int

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 type upstreamIdentityMapping struct {
@@ -22,33 +24,79 @@ type upstreamIdentityQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+type upstreamIdentityState struct {
+	graph            map[string]map[string]struct{}
+	storedHosts      map[string]struct{}
+	preferredPrimary map[string]struct{}
+	existing         map[string]upstreamIdentityMapping
+	identityHosts    map[string][]string
+}
+
 func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
+	state, err := loadUpstreamIdentityState(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	hosts := state.reconciliationHosts()
+	if len(hosts) == 0 {
+		return nil
+	}
+	resources := make([]string, 0, len(hosts)+1)
+	resources = append(resources, mutationguard.UpstreamCatalog())
+	for _, host := range hosts {
+		resources = append(resources, mutationguard.Upstream(host))
+	}
+	guarded, release, err := mutationguard.Acquire(ctx, s, resources...)
+	if err != nil {
+		return err
+	}
+	reconcileErr := s.reconcileUpstreamIdentities(guarded)
+	return errors.Join(reconcileErr, release())
+}
+
+func (s *Store) reconcileUpstreamIdentities(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-
-	graph := map[string]map[string]struct{}{}
-	storedHosts := map[string]struct{}{}
-	preferredPrimary := map[string]struct{}{}
-	rows, err := tx.QueryContext(ctx, `SELECT host,metadata_json FROM upstreams ORDER BY host`)
+	state, err := loadUpstreamIdentityState(ctx, tx)
 	if err != nil {
 		return err
+	}
+	for _, component := range state.reconciliationComponents() {
+		if err := reconcileUpstreamIdentityComponent(
+			ctx, tx, component, state.storedHosts, state.preferredPrimary, state.existing,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func loadUpstreamIdentityState(ctx context.Context, queryer upstreamIdentityQueryer) (upstreamIdentityState, error) {
+	state := upstreamIdentityState{
+		graph: map[string]map[string]struct{}{}, storedHosts: map[string]struct{}{},
+		preferredPrimary: map[string]struct{}{}, existing: map[string]upstreamIdentityMapping{},
+		identityHosts: map[string][]string{},
+	}
+	rows, err := queryer.QueryContext(ctx, `SELECT host,metadata_json FROM upstreams ORDER BY host`)
+	if err != nil {
+		return upstreamIdentityState{}, err
 	}
 	for rows.Next() {
 		var host, metadataRaw string
 		if err := rows.Scan(&host, &metadataRaw); err != nil {
 			rows.Close()
-			return err
+			return upstreamIdentityState{}, err
 		}
 		host = canonicalHost(host)
 		if host == "" {
 			continue
 		}
-		storedHosts[host] = struct{}{}
-		if graph[host] == nil {
-			graph[host] = map[string]struct{}{}
+		state.storedHosts[host] = struct{}{}
+		if state.graph[host] == nil {
+			state.graph[host] = map[string]struct{}{}
 		}
 		metadata, decodeErr := decodeObject(metadataRaw)
 		if decodeErr != nil {
@@ -58,7 +106,7 @@ func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
 		if !ok || len(aliases) == 0 {
 			continue
 		}
-		preferredPrimary[host] = struct{}{}
+		state.preferredPrimary[host] = struct{}{}
 		for _, rawAlias := range aliases {
 			alias, ok := rawAlias.(string)
 			if !ok {
@@ -68,25 +116,24 @@ func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
 			if alias == "" || alias == host {
 				continue
 			}
-			if graph[alias] == nil {
-				graph[alias] = map[string]struct{}{}
+			if state.graph[alias] == nil {
+				state.graph[alias] = map[string]struct{}{}
 			}
-			graph[host][alias] = struct{}{}
-			graph[alias][host] = struct{}{}
+			state.graph[host][alias] = struct{}{}
+			state.graph[alias][host] = struct{}{}
 		}
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return upstreamIdentityState{}, err
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return upstreamIdentityState{}, err
 	}
 
-	existing := map[string]upstreamIdentityMapping{}
-	rows, err = tx.QueryContext(ctx, `SELECT h.host,h.upstream_id,h.is_primary,i.created_at
+	rows, err = queryer.QueryContext(ctx, `SELECT h.host,h.upstream_id,h.is_primary,i.created_at
 		FROM upstream_identity_hosts h JOIN upstream_identities i ON i.upstream_id=h.upstream_id`)
 	if err != nil {
-		return err
+		return upstreamIdentityState{}, err
 	}
 	for rows.Next() {
 		var host string
@@ -94,20 +141,29 @@ func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
 		var mapping upstreamIdentityMapping
 		if err := rows.Scan(&host, &mapping.id, &primary, &mapping.createdAt); err != nil {
 			rows.Close()
-			return err
+			return upstreamIdentityState{}, err
 		}
 		mapping.primary = primary == 1
-		existing[canonicalHost(host)] = mapping
+		host = canonicalHost(host)
+		state.existing[host] = mapping
+		state.identityHosts[mapping.id] = append(state.identityHosts[mapping.id], host)
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return upstreamIdentityState{}, err
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return upstreamIdentityState{}, err
 	}
+	for upstreamID := range state.identityHosts {
+		sort.Strings(state.identityHosts[upstreamID])
+	}
+	return state, nil
+}
 
+func (state upstreamIdentityState) components() [][]string {
+	components := [][]string{}
 	seen := map[string]struct{}{}
-	for _, start := range sortedStringMapKeys(graph) {
+	for _, start := range sortedStringMapKeys(state.graph) {
 		if _, visited := seen[start]; visited {
 			continue
 		}
@@ -118,7 +174,7 @@ func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
 			current := queue[0]
 			queue = queue[1:]
 			component = append(component, current)
-			for neighbor := range graph[current] {
+			for neighbor := range state.graph[current] {
 				if _, visited := seen[neighbor]; visited {
 					continue
 				}
@@ -127,11 +183,54 @@ func (s *Store) ensureUpstreamIdentities(ctx context.Context) error {
 			}
 		}
 		sort.Strings(component)
-		if err := reconcileUpstreamIdentityComponent(ctx, tx, component, storedHosts, preferredPrimary, existing); err != nil {
-			return err
+		components = append(components, component)
+	}
+	return components
+}
+
+func (state upstreamIdentityState) componentIndex() ([][]string, map[string][]string) {
+	components := state.components()
+	byHost := make(map[string][]string, len(state.graph))
+	for _, component := range components {
+		for _, host := range component {
+			byHost[host] = component
 		}
 	}
-	return tx.Commit()
+	return components, byHost
+}
+
+func (state upstreamIdentityState) reconciliationComponents() [][]string {
+	result := [][]string{}
+	for _, component := range state.components() {
+		if state.componentNeedsReconciliation(component) {
+			result = append(result, component)
+		}
+	}
+	return result
+}
+
+func (state upstreamIdentityState) componentNeedsReconciliation(component []string) bool {
+	identities := map[string]struct{}{}
+	missing := false
+	for _, host := range component {
+		mapping, found := state.existing[host]
+		if !found || strings.TrimSpace(mapping.id) == "" {
+			missing = true
+			continue
+		}
+		identities[mapping.id] = struct{}{}
+	}
+	return missing || len(identities) != 1
+}
+
+func (state upstreamIdentityState) reconciliationHosts() []string {
+	hosts := map[string]struct{}{}
+	for _, component := range state.reconciliationComponents() {
+		for _, host := range component {
+			hosts[host] = struct{}{}
+		}
+	}
+	return sortedStringMapKeys(hosts)
 }
 
 func (s *Store) ensureMissingUpstreamIdentities(ctx context.Context) error {
@@ -208,6 +307,9 @@ func reconcileUpstreamIdentityComponent(
 		if _, err := tx.ExecContext(ctx, `UPDATE binding_identities SET upstream_id=?,updated_at=? WHERE upstream_id=?`, upstreamID, now, candidate); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `UPDATE onboarding_pending SET upstream_id=?,updated_at=? WHERE upstream_id=?`, upstreamID, now, candidate); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE upstream_identity_hosts SET upstream_id=?,updated_at=? WHERE upstream_id=?`, upstreamID, now, candidate); err != nil {
 			return err
 		}
@@ -261,14 +363,11 @@ func (s *Store) createUpstreamIdentityTx(ctx context.Context, tx *sql.Tx, host, 
 
 func (s *Store) upstreamIdentityID(ctx context.Context, host string) (string, error) {
 	host = canonicalHost(host)
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return "", err
+	}
 	var upstreamID string
 	err := s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=?`, host).Scan(&upstreamID)
-	if errors.Is(err, sql.ErrNoRows) {
-		if ensureErr := s.ensureUpstreamIdentities(ctx); ensureErr != nil {
-			return "", ensureErr
-		}
-		err = s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=?`, host).Scan(&upstreamID)
-	}
 	return upstreamID, err
 }
 

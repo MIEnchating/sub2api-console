@@ -7,15 +7,18 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 type UpstreamConfigurationWrite struct {
-	Host         string
-	Name         *string
-	BaseURL      string
-	UpstreamType string
-	AuthMode     string
-	RechargeRate string
+	Host           string
+	Name           *string
+	BaseURL        string
+	AccountBaseURL string
+	UpstreamType   string
+	AuthMode       string
+	RechargeRate   string
 }
 
 type UpstreamConfigurationWriteResult struct {
@@ -39,15 +42,23 @@ func (s *Store) UpstreamExists(ctx context.Context, host string) (bool, error) {
 	return err == nil, err
 }
 
-func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamConfigurationWrite) (UpstreamConfigurationWriteResult, error) {
+func (s *Store) CreateUpstreamConfiguration(ctx context.Context, value UpstreamConfigurationWrite) (result UpstreamConfigurationWriteResult, err error) {
 	value.Host = canonicalHost(value.Host)
-	name, baseURL, platform, authMode, recharge, err := normalizeUpstreamConfiguration(value)
+	name, baseURL, accountBaseURL, platform, authMode, recharge, err := normalizeUpstreamConfiguration(value)
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
+	guarded, release, err := mutationguard.Acquire(
+		ctx, s, mutationguard.UpstreamCatalog(), mutationguard.Upstream(value.Host),
+	)
+	if err != nil {
+		return UpstreamConfigurationWriteResult{}, err
+	}
+	defer func() { err = errors.Join(err, release()) }()
+	ctx = guarded
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata, err := json.Marshal(map[string]any{
-		"site_name": name, "auth_verified_at": now, "balance_status": "未读取", "catalog_status": "未同步",
+		"site_name": name, "account_base_url": accountBaseURL, "auth_verified_at": now, "balance_status": "未读取", "catalog_status": "未同步",
 	})
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
@@ -88,7 +99,7 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	if identityErr != nil {
 		return UpstreamConfigurationWriteResult{}, identityErr
 	}
-	name, baseURL, platform, authMode, recharge, err := normalizeUpstreamConfiguration(value)
+	name, baseURL, accountBaseURL, platform, authMode, recharge, err := normalizeUpstreamConfiguration(value)
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
 	}
@@ -119,6 +130,7 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata["auth_verified_at"] = now
+	metadata["account_base_url"] = accountBaseURL
 	delete(metadata, "auth_error")
 	metadataEncoded, err := json.Marshal(metadata)
 	if err != nil {
@@ -242,28 +254,32 @@ func (s *Store) UpdateUpstreamClassification(ctx context.Context, host, upstream
 	return tx.Commit()
 }
 
-func normalizeUpstreamConfiguration(value UpstreamConfigurationWrite) (string, string, string, string, string, error) {
+func normalizeUpstreamConfiguration(value UpstreamConfigurationWrite) (string, string, string, string, string, string, error) {
 	if value.Host == "" {
-		return "", "", "", "", "", errors.New("上游配置必须包含 Host")
+		return "", "", "", "", "", "", errors.New("上游配置必须包含 Host")
 	}
 	name := ""
 	if value.Name != nil {
 		name = strings.TrimSpace(*value.Name)
 		if name == "" || len([]rune(name)) > 100 {
-			return "", "", "", "", "", errors.New("上游名称长度必须在 1 到 100 之间")
+			return "", "", "", "", "", "", errors.New("上游名称长度必须在 1 到 100 之间")
 		}
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(value.BaseURL), "/")
+	accountBaseURL := strings.TrimRight(strings.TrimSpace(value.AccountBaseURL), "/")
+	if accountBaseURL == "" {
+		accountBaseURL = baseURL
+	}
 	platform := strings.ToLower(strings.TrimSpace(value.UpstreamType))
 	authMode := strings.TrimSpace(value.AuthMode)
 	if baseURL == "" || platform == "" || authMode == "" {
-		return "", "", "", "", "", errors.New("上游地址、平台和鉴权方式不能为空")
+		return "", "", "", "", "", "", errors.New("上游地址、平台和鉴权方式不能为空")
 	}
 	recharge := normalizePositiveDecimal(value.RechargeRate)
 	if recharge == nil {
-		return "", "", "", "", "", errors.New("倍率必须是有限正数")
+		return "", "", "", "", "", "", errors.New("倍率必须是有限正数")
 	}
-	return name, baseURL, platform, authMode, *recharge, nil
+	return name, baseURL, accountBaseURL, platform, authMode, *recharge, nil
 }
 
 func (s *Store) DeleteUpstreamConfiguration(ctx context.Context, host string) (bool, error) {

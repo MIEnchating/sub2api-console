@@ -22,6 +22,7 @@ describe("PageLayout", () => {
     const contentIndex = markup.indexOf('data-slot="page-content"');
 
     expect(markup).toContain('data-slot="page-layout"');
+    expect(markup).not.toContain("<main");
     expect(headingIndex).toBeGreaterThan(-1);
     expect(contentIndex).toBeGreaterThan(headingIndex);
     expect(markup).toContain("min-h-0 flex-1 overflow-auto");

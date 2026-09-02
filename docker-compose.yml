@@ -11,13 +11,19 @@ services:
       SUB2API_CONSOLE_DATA_DB: ${SUB2API_CONSOLE_DATA_DB:-/app/data/sub2api-console.sqlite3}
       SUB2API_CONSOLE_TASK_DB: ${SUB2API_CONSOLE_TASK_DB:-/app/data/tasks.sqlite3}
       SUB2API_CONSOLE_CONFIG_DB: ${SUB2API_CONSOLE_CONFIG_DB:-/app/data/console-config.sqlite3}
+      SUB2API_CONSOLE_COOKIE_SECURE: ${SUB2API_CONSOLE_COOKIE_SECURE:-false}
+      SUB2API_CONSOLE_FRONTEND_ORIGINS: ${SUB2API_CONSOLE_FRONTEND_ORIGINS:-http://localhost:3004,http://127.0.0.1:3004}
+      SUB2API_CONSOLE_SETUP_TOKEN: ${SUB2API_CONSOLE_SETUP_TOKEN:-}
+      SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS: ${SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS:-}
+      SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET: /run/sub2api-console/api.sock
     volumes:
       - ./data:/app/data
+      - proxy-socket:/run/sub2api-console
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${SUB2API_CONSOLE_API_PORT:-8080}:8080"
     command: sub2api-console
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/setup/status"]
+      test: ["CMD-SHELL", "test -S /run/sub2api-console/api.sock && wget -q -O /dev/null http://127.0.0.1:8080/api/setup/status"]
       interval: 10s
       timeout: 3s
       retries: 6
@@ -30,14 +36,22 @@ services:
       args:
         VERSION: ${SUB2API_CONSOLE_VERSION:-development}
     restart: unless-stopped
+    environment:
+      SUB2API_CONSOLE_API_UPSTREAM: unix:/run/sub2api-console/api.sock
+      SUB2API_CONSOLE_FRONTEND_TRUSTED_PROXY_CIDRS: ${SUB2API_CONSOLE_FRONTEND_TRUSTED_PROXY_CIDRS:-}
     depends_on:
       api:
         condition: service_healthy
+    volumes:
+      - proxy-socket:/run/sub2api-console:ro
     ports:
-      - "3004:80"
+      - "${SUB2API_CONSOLE_FRONTEND_PORT:-3004}:80"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/api/setup/status"]
       interval: 10s
       timeout: 3s
       retries: 3
       start_period: 5s
+
+volumes:
+  proxy-socket: {}

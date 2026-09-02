@@ -8,6 +8,7 @@ vi.mock("sonner", () => ({
 }));
 
 import { QueryErrorToast, queryErrorToastMessage, showQueryErrorToast } from "../query-error-toast";
+import { SessionExpiredError } from "../../lib/session-auth";
 
 describe("query error toast", () => {
   beforeEach(() => {
@@ -34,5 +35,11 @@ describe("query error toast", () => {
     expect(toastError).toHaveBeenCalledWith("请求失败 (502)", {
       id: "operation-error:请求失败 (502)",
     });
+  });
+
+  it("does not duplicate the login-expiry notification handled by the session boundary", () => {
+    showQueryErrorToast(new SessionExpiredError(), "上游数据读取失败");
+
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

@@ -37,7 +37,7 @@ export function validateReleaseNotesContent(content, sourcePath = "release notes
       `${sourcePath} must contain exactly these sections in order: ${requiredReleaseSections.join(", ")}`,
     );
   }
-  if (/<!--\s*请|TODO|待补充/i.test(content)) {
+  if (/<!--[\s\S]*?(?:请用\s*2-4\s*条说明|没有内容时填写)[\s\S]*?-->|TODO|待补充/i.test(content)) {
     throw new Error(`${sourcePath} still contains unfinished placeholders`);
   }
   const emptySections = headingMatches
@@ -65,8 +65,36 @@ export function validateReleaseTag(tag, options = {}) {
   requireValidCalendarDate(Number(yearText), Number(monthText), Number(dayText), tag);
   const baseTag = `v${yearText}.${monthText}.${dayText}`;
   const revision = revisionText === undefined ? undefined : Number(revisionText);
+  if (revision !== undefined && !Number.isSafeInteger(revision)) {
+    throw new Error(`Release tag revision is too large: ${tag}`);
+  }
   if (options.checkSequence !== false) requirePreviousTag(baseTag, revision);
   return { baseTag, revision };
+}
+
+export function validateReleaseOrder(
+  previousTag,
+  candidateTag,
+  previousRevision,
+  candidateRevision,
+) {
+  const previous = validateReleaseTag(previousTag, { checkSequence: false });
+  const candidate = validateReleaseTag(candidateTag, { checkSequence: false });
+  const previousSequence = previous.revision ?? 1;
+  const candidateSequence = candidate.revision ?? 1;
+  if (
+    candidate.baseTag < previous.baseTag ||
+    (candidate.baseTag === previous.baseTag && candidateSequence < previousSequence)
+  ) {
+    throw new Error(
+      `Refusing to promote ${candidateTag} because it is older than current latest ${previousTag}`,
+    );
+  }
+  if (candidateTag === previousTag && candidateRevision !== previousRevision) {
+    throw new Error(
+      `Refusing to reuse ${candidateTag}: latest already points to revision ${previousRevision}, not ${candidateRevision}`,
+    );
+  }
 }
 
 function requireReleaseNotes(tag) {

@@ -6,14 +6,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
@@ -77,6 +81,10 @@ type CaptchaFlow interface {
 	Cancel(string) (*CaptchaChallenge, *string)
 }
 
+type mutationRepositoryAware interface {
+	UseMutationRepository(any)
+}
+
 type ManualInput struct {
 	Host         string
 	AuthMode     *string
@@ -93,10 +101,12 @@ type ManualInput struct {
 }
 
 type BalanceResult struct {
-	Status        string  `json:"status"`
-	BalanceStatus string  `json:"balance_status"`
-	Balance       *string `json:"balance,omitempty"`
-	Reason        *string `json:"reason,omitempty"`
+	Status         string  `json:"status"`
+	BalanceStatus  string  `json:"balance_status"`
+	Balance        *string `json:"balance,omitempty"`
+	DisplayBalance *string `json:"display_balance,omitempty"`
+	BalanceUnit    *string `json:"balance_unit,omitempty"`
+	Reason         *string `json:"reason,omitempty"`
 }
 
 type ManualResult struct {
@@ -119,6 +129,7 @@ type Service struct {
 	configurator  Configurator
 	balances      BalanceSyncer
 	tasks         TaskStore
+	taskRunner    taskrunner.Runner
 	captcha       CaptchaFlow
 	detector      PlatformDetector
 	timeout       time.Duration
@@ -128,6 +139,8 @@ func (s *Service) UsePlatformDetector(detector PlatformDetector) {
 	s.detector = detector
 }
 
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
 func New(repository Repository, private PrivateStore, authenticator Authenticator, configurator Configurator, balances BalanceSyncer, tasks TaskStore, captcha ...CaptchaFlow) *Service {
 	service := &Service{
 		repository: repository, private: private, authenticator: authenticator, configurator: configurator,
@@ -135,6 +148,9 @@ func New(repository Repository, private PrivateStore, authenticator Authenticato
 	}
 	if len(captcha) > 0 {
 		service.captcha = captcha[0]
+		if aware, ok := service.captcha.(mutationRepositoryAware); ok {
+			aware.UseMutationRepository(repository)
+		}
 	}
 	return service
 }
@@ -238,7 +254,10 @@ func (s *Service) Enqueue(ctx context.Context, host, entry, actor string) (tasks
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, *record, entry, actor)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, *record, entry, actor) }); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -389,12 +408,12 @@ func hostWithoutPort(host string) string {
 	return configstore.CanonicalHost(parsed.Hostname())
 }
 
-func (s *Service) execute(task taskstore.Task, record configstore.AuthRecord, entry, actor string) {
+func (s *Service) execute(parent context.Context, task taskstore.Task, record configstore.AuthRecord, entry, actor string) {
 	host := record.Host
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 15, "正在尝试刷新鉴权", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	outcome := s.recover(ctx, record, entry)
@@ -440,6 +459,7 @@ func (s *Service) execute(task taskstore.Task, record configstore.AuthRecord, en
 	} else {
 		task.Status, task.Message = "failed", "鉴权恢复未通过："+pointerOr(outcome.Code, "已记录原因")
 	}
+	taskstore.MarkCancelled(ctx, &task, "鉴权恢复已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -598,13 +618,43 @@ func recoveryModeForPlatform(current, platform string) string {
 }
 
 func (s *Service) commitRecoveredAuth(ctx context.Context, record configstore.AuthRecord, classificationChanged bool) error {
+	record.Host = configstore.CanonicalHost(record.Host)
+	if record.Host == "" {
+		return errors.New("鉴权恢复结果缺少 Host")
+	}
 	if classificationChanged {
 		if committer, ok := s.configurator.(recoveredAuthCommitter); ok {
 			return committer.CommitRecoveredAuth(ctx, record)
 		}
 		return errors.New("鉴权已复核，但服务不支持提交平台类型修复")
 	}
-	return s.private.SaveAuthRecord(ctx, record, allAuthFields())
+	guarded, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(record.Host))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("鉴权恢复租约释放失败", "host", record.Host, "error", err)
+		}
+	}()
+	current, err := s.private.AuthRecord(guarded, record.Host)
+	if err != nil {
+		return err
+	}
+	if current == nil {
+		source, ok := s.repository.(HostMetadataSource)
+		if !ok {
+			return errors.New("鉴权已复核，但无法确认上游仍然存在")
+		}
+		seed, err := source.UpstreamAuthSeed(guarded, record.Host)
+		if err != nil {
+			return err
+		}
+		if seed == nil {
+			return errors.New("鉴权已复核，但上游已被删除")
+		}
+	}
+	return s.private.SaveAuthRecord(guarded, record, allAuthFields())
 }
 
 func (s *Service) recoveryRecord(ctx context.Context, host string) (*configstore.AuthRecord, error) {
@@ -667,7 +717,10 @@ func balanceResult(value upstreamsync.HostResult, err error) BalanceResult {
 		reason := safeReason(err.Error())
 		return BalanceResult{Status: "failed", BalanceStatus: "读取失败", Reason: &reason}
 	}
-	result := BalanceResult{Status: value.Status, BalanceStatus: value.BalanceStatus, Balance: value.Balance, Reason: value.Reason}
+	result := BalanceResult{
+		Status: value.Status, BalanceStatus: value.BalanceStatus, Balance: value.Balance,
+		DisplayBalance: value.DisplayBalance, BalanceUnit: value.BalanceUnit, Reason: value.Reason,
+	}
 	if value.Status != "succeeded" {
 		result.Status = "failed"
 	}
@@ -747,11 +800,20 @@ func safeReason(value string) string {
 	if value == "" {
 		value = "鉴权恢复失败"
 	}
-	value = redact.Secrets(value)
-	if len(value) > 500 {
-		value = value[:500]
+	return truncateUTF8Bytes(strings.ToValidUTF8(redact.Secrets(value), "\uFFFD"), 500)
+}
+
+func truncateUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
 	}
-	return value
+	if len(value) <= limit {
+		return value
+	}
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit]
 }
 
 func errorOr(err error, fallback string) string {

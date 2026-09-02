@@ -84,10 +84,11 @@ export function DatePicker(props: DatePickerProps) {
             <button
               type="button"
               aria-label="清除日期"
+              disabled={props.disabled}
               className="text-muted-foreground hover:text-foreground focus-visible:ring-ring flex size-7 shrink-0 items-center justify-center rounded-md outline-none focus-visible:ring-2"
               onClick={() => props.onSelect(undefined)}
             >
-              <X className="size-3.5" />
+              <X className="size-3.5" aria-hidden="true" />
             </button>
           ) : null}
           <Button

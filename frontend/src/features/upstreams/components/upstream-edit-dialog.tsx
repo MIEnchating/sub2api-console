@@ -31,9 +31,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   authModesForPlatform,
-  composeUpstreamBaseUrl,
   parseStringMap,
   parseUpstreamBaseUrl,
+  upstreamConnectionPayload,
   upstreamEditSchema,
   type UpstreamEditValues,
 } from "../lib/upstream-edit-schema";
@@ -59,12 +59,18 @@ export const upstreamEditDialogLayout = {
   form: "grid min-w-0 max-w-full gap-5",
 } as const;
 
+export const upstreamEditConnectionLabels = {
+  upstreamHost: "上游 Host",
+  accountBaseURL: "账号 Base URL",
+} as const;
+
 const upstreamEditFormID = "upstream-edit-form";
 
 const emptyValues: UpstreamEditValues = {
   name: "",
   base_url_protocol: "https",
   base_url: "",
+  account_base_url: "",
   upstream_type: "sub2api",
   auth_mode: "sub2api_user_token",
   recharge_rate: "1",
@@ -147,6 +153,7 @@ export function UpstreamEditDialog(props: Props) {
       ...emptyValues,
       name: configuration.data.name,
       ...parsedBaseUrl,
+      account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
       auth_mode: configuration.data.auth_mode,
       recharge_rate: configuration.data.recharge_rate || "1",
@@ -176,16 +183,19 @@ export function UpstreamEditDialog(props: Props) {
         ...emptyValues,
         name: value.name,
         ...parsedBaseUrl,
+        account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
         auth_mode: value.auth_mode,
         recharge_rate: value.recharge_rate,
         headers: Object.keys(value.headers).length ? JSON.stringify(value.headers, null, 2) : "",
       });
       setShowHeadersEditor(value.header_names.length > 0);
-      if (value.rate_sync_error) {
-        toast.warning(`上游配置已保存，但账号成本同步排队失败：${value.rate_sync_error}`);
-      } else if (value.rate_sync_task_id) {
-        toast.success("上游配置已保存，相关账号成本与名称同步已排队");
+      if (value.rate_sync_error || value.base_url_sync_error) {
+        toast.warning(
+          `上游配置已保存，但账号同步排队失败：${value.rate_sync_error ?? value.base_url_sync_error}`,
+        );
+      } else if (value.rate_sync_task_id || value.base_url_sync_task_id) {
+        toast.success("上游配置已保存，相关账号配置同步已排队");
       } else {
         toast.success("上游配置已保存");
       }
@@ -198,7 +208,7 @@ export function UpstreamEditDialog(props: Props) {
     form.clearErrors(["entry", "headers", "cookies"]);
     const payload: UpstreamConfigurationUpdate = {
       name: values.name.trim(),
-      base_url: composeUpstreamBaseUrl(values),
+      ...upstreamConnectionPayload(values),
       upstream_type: values.upstream_type,
       auth_mode: values.auth_mode,
       recharge_rate: values.recharge_rate,
@@ -303,7 +313,10 @@ export function UpstreamEditDialog(props: Props) {
                   <Field label="名称" error={form.formState.errors.name?.message}>
                     <Input {...form.register("name")} />
                   </Field>
-                  <Field label="Base URL" error={form.formState.errors.base_url?.message}>
+                  <Field
+                    label={upstreamEditConnectionLabels.upstreamHost}
+                    error={form.formState.errors.base_url?.message}
+                  >
                     <div className="flex min-w-0 gap-2">
                       <Controller
                         control={form.control}
@@ -322,6 +335,15 @@ export function UpstreamEditDialog(props: Props) {
                       />
                       <Input {...form.register("base_url")} placeholder="api.example.com" />
                     </div>
+                  </Field>
+                  <Field
+                    label={upstreamEditConnectionLabels.accountBaseURL}
+                    error={form.formState.errors.account_base_url?.message}
+                  >
+                    <Input
+                      {...form.register("account_base_url")}
+                      placeholder="https://api.example.com"
+                    />
                   </Field>
                   <Field label="平台" error={form.formState.errors.upstream_type?.message}>
                     <Controller

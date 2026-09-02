@@ -19,12 +19,11 @@ describe("账号探活弹窗", () => {
     ]);
   });
 
-  it("打开模型下拉时自动加载，失败后允许重新打开重试", () => {
-    expect(shouldLoadProbeModels(true, 0, false, false)).toBe(true);
-    expect(shouldLoadProbeModels(false, 0, false, false)).toBe(false);
-    expect(shouldLoadProbeModels(true, 0, true, false)).toBe(false);
-    expect(shouldLoadProbeModels(true, 0, false, true)).toBe(false);
-    expect(shouldLoadProbeModels(true, 2, false, false)).toBe(false);
+  it("点击探活打开弹窗时立即加载模型且同一目标只自动加载一次", () => {
+    expect(shouldLoadProbeModels(true, null, "api.example\u00006")).toBe(true);
+    expect(shouldLoadProbeModels(false, null, "api.example\u00006")).toBe(false);
+    expect(shouldLoadProbeModels(true, "api.example\u00006", "api.example\u00006")).toBe(false);
+    expect(shouldLoadProbeModels(true, "api.example\u00006", "api.example\u00007")).toBe(true);
   });
 
   it("保留独立的上游模型获取按钮", () => {
@@ -40,6 +39,16 @@ describe("账号探活弹窗", () => {
     expect(markup).toContain("获取上游模型");
     expect(markup).toContain('type="button"');
     expect(markup).not.toContain('disabled=""');
+  });
+
+  it("模型获取完成后按钮退出加载状态", () => {
+    const markup = renderToStaticMarkup(
+      <ProbeModelLoadButton pending={false} succeeded disabled={false} onLoad={() => undefined} />,
+    );
+
+    expect(markup).toContain("重新获取上游模型");
+    expect(markup).not.toContain("正在获取");
+    expect(markup).not.toContain("animate-spin");
   });
 
   it("使用稳定宽度并按内容自适应高度，仅在超出视口时滚动", () => {

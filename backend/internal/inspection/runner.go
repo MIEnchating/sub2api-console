@@ -18,6 +18,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -400,17 +401,23 @@ func (r *Runner) RunTask(ctx context.Context, task taskstore.Task, request RunRe
 	now := r.now().UTC()
 	plan, err := r.plan(ctx, request, now)
 	if err != nil {
-		result := failedExecution(&task.ID, nil, nil, err)
-		r.failQueuedTask(task, err)
-		return result
+		return r.failQueuedTask(ctx, task, err)
 	}
 	return r.executeTask(ctx, task, request, plan, now)
 }
 
-func (r *Runner) failQueuedTask(task taskstore.Task, err error) {
+func (r *Runner) failQueuedTask(ctx context.Context, task taskstore.Task, err error) ExecutionResult {
+	if cause := taskstore.ContextFailureCause(ctx); cause != nil {
+		err = cause
+	}
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "failed", 100, "巡检启动失败："+err.Error(), r.now().UTC().Format(time.RFC3339Nano)
 	task.Result = map[string]any{"error": err.Error(), "remote_write": false}
+	cancelled := taskstore.MarkCancelled(ctx, &task, "巡检已取消")
 	taskstore.PersistFinal(r.tasks, task)
+	if cancelled {
+		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: []string{}, OperationTiming: []business.OperationTiming{}}
+	}
+	return failedExecution(&task.ID, nil, nil, err)
 }
 
 func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (duePlan, error) {
@@ -509,12 +516,18 @@ func trafficSourceEnabled(policy map[string]any) (bool, error) {
 }
 
 func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request RunRequest, plan duePlan, started time.Time) ExecutionResult {
+	if r.targets != nil && (plan.traffic || plan.accountRates || plan.pricing || plan.routing) {
+		var err error
+		ctx, err = targetguard.Capture(ctx, r.targets)
+		if err != nil {
+			return r.failQueuedTask(ctx, task, err)
+		}
+	}
 	operations := []string{}
 	timings := []business.OperationTiming{}
 	plannedOperations, err := dueQueueOperations(plan)
 	if err != nil {
-		r.failQueuedTask(task, err)
-		return failedExecution(&task.ID, operations, timings, err)
+		return r.failQueuedTask(ctx, task, err)
 	}
 	resultPayload := map[string]any{
 		"planned_operations":   plannedOperations,
@@ -539,8 +552,14 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 	}
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 5, "正在准备本轮巡检任务", r.now().UTC().Format(time.RFC3339Nano)
 	task.Result = resultPayload
-	if err := r.tasks.Save(ctx, task); err != nil {
-		return failedExecution(&task.ID, operations, timings, err)
+	if !taskstore.SaveRunning(ctx, r.tasks, task) {
+		if cause := taskstore.ContextFailureCause(ctx); cause != nil {
+			return failedExecution(&task.ID, operations, timings, cause)
+		}
+		if ctx != nil && errors.Is(ctx.Err(), context.Canceled) {
+			return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
+		}
+		return failedExecution(&task.ID, operations, timings, errors.New("巡检任务启动状态保存失败"))
 	}
 	if plan.upstreams {
 		if err := r.repository.MarkInspectionTask(ctx, "upstream-sync", started); err != nil {
@@ -805,18 +824,23 @@ func (r *Runner) finishTask(
 	payload["active_operations"] = []string{}
 	payload["completed_operations"] = append([]string{}, operations...)
 	task.Progress, task.UpdatedAt, task.Result = 100, r.now().UTC().Format(time.RFC3339Nano), payload
-	if errors.Is(ctx.Err(), context.Canceled) {
-		task.Status, task.Message = "cancelled", "巡检已取消"
-		task.Result["cancelled"] = true
+	if taskstore.MarkCancelled(ctx, &task, "巡检已取消") {
 		if err := taskstore.SaveFinal(context.Background(), r.tasks, task); err != nil {
 			return failedExecution(&task.ID, operations, timings, err)
 		}
 		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
 	}
+	contextFailure := taskstore.ContextFailureCause(ctx)
+	if contextFailure != nil {
+		failures = append(failures, contextFailure.Error())
+	}
 	status := "succeeded"
 	var errorText *string
 	if len(failures) > 0 {
 		status, task.Status, task.Message = "failed", "failed", "巡检完成，但存在失败项"
+		if contextFailure != nil {
+			task.Message = "巡检因执行上下文失败而停止：" + contextFailure.Error()
+		}
 		value := strings.Join(failures, "；")
 		errorText = &value
 		task.Result["error"] = value
@@ -836,7 +860,7 @@ func (r *Runner) evidenceAdmin(ctx context.Context) evidence.Admin {
 	if r.targets == nil {
 		return nil
 	}
-	target, err := r.targets.TargetSettings(ctx)
+	target, err := targetguard.Settings(ctx, r.targets)
 	if err != nil {
 		return nil
 	}

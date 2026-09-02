@@ -77,6 +77,10 @@ export function matchesMultiSelectOption(option: MultiSelectOption, search: stri
   return `${option.value} ${option.label}`.toLocaleLowerCase().includes(query);
 }
 
+export function shouldShowMultiSelectSearch(options: MultiSelectOption[]): boolean {
+  return options.length > 5;
+}
+
 export function shouldCloseMultiSelectFromTriggerPress(
   open: boolean,
   button: number,
@@ -113,6 +117,7 @@ export function MultiSelect(props: MultiSelectProps) {
   const title = props.title ?? "选择选项";
   const showTitle = props.showTitle ?? true;
   const searchPlaceholder = props.searchPlaceholder ?? `搜索${title}`;
+  const showSearch = shouldShowMultiSelectSearch(props.options);
   const labelMap = React.useMemo(
     () => new Map(props.options.map((option) => [option.value, option.label])),
     [props.options],
@@ -160,6 +165,7 @@ export function MultiSelect(props: MultiSelectProps) {
         className={cn(props.disabled && "pointer-events-none opacity-50", props.className)}
         aria-label={props.ariaLabel ?? title}
         aria-expanded={open}
+        aria-disabled={props.disabled || undefined}
         aria-haspopup="dialog"
         role="combobox"
         tabIndex={props.disabled ? -1 : 0}
@@ -232,11 +238,13 @@ export function MultiSelect(props: MultiSelectProps) {
         </ComboboxChips>
       </ComboboxTrigger>
       <ComboboxContent anchor={triggerAnchorRef}>
-        <ComboboxSearch
-          placeholder={searchPlaceholder}
-          aria-label={searchPlaceholder}
-          disabled={props.disabled}
-        />
+        {showSearch ? (
+          <ComboboxSearch
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
+            disabled={props.disabled}
+          />
+        ) : null}
         <ComboboxList>
           <ComboboxCollection>
             {(value: string) => (

@@ -5,10 +5,7 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-  packages: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: release-publish
@@ -16,11 +13,12 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/mienchating/sub2api-console
 
 jobs:
   validate:
     name: Validate version and release notes
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -37,13 +35,142 @@ jobs:
           }
       - name: Validate scripts, tag, and notes
         run: |
-          node --test .github/scripts/validate-release-tag.test.mjs
+          node --test .github/scripts/*.test.mjs
           node .github/scripts/validate-release-tag.mjs "$GITHUB_REF_NAME"
           node .github/scripts/generate-release-notes.mjs "$GITHUB_REF_NAME" "$RUNNER_TEMP/release-notes.md"
 
+  registry_guard:
+    name: Guard registry release order
+    needs: validate
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Validate current latest pair
+        shell: bash
+        env:
+          API_IMAGE: ghcr.io/mienchating/sub2api-console-api
+          FRONTEND_IMAGE: ghcr.io/mienchating/sub2api-console-frontend
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          digest_of() {
+            local ref="$1"
+            local output
+            local digest
+
+            output="$(docker buildx imagetools inspect "$ref")"
+            digest="$(sed -n 's/^Digest:[[:space:]]*//p' <<<"$output" | head -n 1)"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not resolve a digest for ${ref}" >&2
+              return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+
+          snapshot_ref() {
+            local ref="$1"
+            local error_file="$2"
+            local digest
+
+            if digest="$(digest_of "$ref" 2>"$error_file")"; then
+              rm -f "$error_file"
+              printf '%s\n' "$digest"
+              return 0
+            fi
+            if grep -Eqi 'manifest unknown|not found' "$error_file"; then
+              rm -f "$error_file"
+              printf '\n'
+              return 0
+            fi
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            return 1
+          }
+
+          label_of() {
+            local ref="$1"
+            local label="$2"
+            local amd64_value
+            local arm64_value
+
+            amd64_value="$(docker buildx imagetools inspect "$ref" \
+              --format "{{index (index .Image \"linux/amd64\").Config.Labels \"org.opencontainers.image.${label}\"}}")"
+            arm64_value="$(docker buildx imagetools inspect "$ref" \
+              --format "{{index (index .Image \"linux/arm64\").Config.Labels \"org.opencontainers.image.${label}\"}}")"
+            if [[ -z "$amd64_value" || -z "$arm64_value" || "$amd64_value" != "$arm64_value" ]]; then
+              echo "::error::${ref} does not contain one consistent ${label} label across amd64 and arm64" >&2
+              return 1
+            fi
+            printf '%s\n' "$amd64_value"
+          }
+
+          validate_existing_release() {
+            local image="$1"
+            local error_file="$2"
+            local ref="${image}:${RELEASE_TAG}"
+            local digest
+            local version
+            local revision
+
+            digest="$(snapshot_ref "$ref" "$error_file")"
+            if [[ -z "$digest" ]]; then
+              return 0
+            fi
+            version="$(label_of "$ref" version)"
+            revision="$(label_of "$ref" revision)"
+            if [[ "$version" != "$RELEASE_TAG" || "$revision" != "$GITHUB_SHA" ]]; then
+              echo "::error::Refusing to overwrite ${ref}: it reports version ${version} at revision ${revision}" >&2
+              return 1
+            fi
+          }
+
+          validate_existing_release "$API_IMAGE" "$RUNNER_TEMP/api-release-guard.err"
+          validate_existing_release "$FRONTEND_IMAGE" "$RUNNER_TEMP/frontend-release-guard.err"
+
+          api_digest="$(snapshot_ref "${API_IMAGE}:latest" "$RUNNER_TEMP/api-latest-guard.err")"
+          frontend_digest="$(snapshot_ref "${FRONTEND_IMAGE}:latest" "$RUNNER_TEMP/frontend-latest-guard.err")"
+          if { [[ -z "$api_digest" ]] && [[ -n "$frontend_digest" ]]; } || \
+            { [[ -n "$api_digest" ]] && [[ -z "$frontend_digest" ]]; }; then
+            echo "::error::Refusing to publish from a partially initialized latest pair" >&2
+            exit 1
+          fi
+          if [[ -z "$api_digest" ]] && [[ -z "$frontend_digest" ]]; then
+            echo "::notice::No latest pair exists; version images may be published, but automatic latest promotion will require manual initialization"
+            exit 0
+          fi
+
+          api_version="$(label_of "${API_IMAGE}:latest" version)"
+          frontend_version="$(label_of "${FRONTEND_IMAGE}:latest" version)"
+          if [[ "$api_version" != "$frontend_version" ]]; then
+            echo "::error::Refusing to publish from a mismatched latest pair: API=${api_version}, frontend=${frontend_version}" >&2
+            exit 1
+          fi
+          api_revision="$(label_of "${API_IMAGE}:latest" revision)"
+          frontend_revision="$(label_of "${FRONTEND_IMAGE}:latest" revision)"
+          if [[ "$api_revision" != "$frontend_revision" ]]; then
+            echo "::error::Refusing to publish from latest tags at different revisions: API=${api_revision}, frontend=${frontend_revision}" >&2
+            exit 1
+          fi
+          node .github/scripts/validate-release-order.mjs \
+            "$api_version" "$RELEASE_TAG" "$api_revision" "$GITHUB_SHA"
+
   preflight:
     name: Mandatory release preflight
-    needs: validate
+    needs: registry_guard
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -81,10 +208,17 @@ jobs:
         run: docker build --build-arg VERSION="$GITHUB_REF_NAME" -t "sub2api-console-api-preflight:$GITHUB_REF_NAME" backend
       - name: Frontend Docker build preflight
         run: docker build --build-arg VERSION="$GITHUB_REF_NAME" -t "sub2api-console-frontend-preflight:$GITHUB_REF_NAME" frontend
+      - name: Frontend proxy trust preflight
+        env:
+          SUB2API_CONSOLE_FRONTEND_TEST_IMAGE: sub2api-console-frontend-preflight:${{ github.ref_name }}
+        run: ./frontend/test-nginx-proxy.sh
 
   images:
     name: Build ${{ matrix.service }} (${{ matrix.arch }})
     needs: preflight
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +268,6 @@ jobs:
           push: true
           tags: |
             ${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}
-            ${{ matrix.image }}:latest-${{ matrix.arch }}
           build-args: |
             VERSION=${{ github.ref_name }}
             VCS_REF=${{ github.sha }}
@@ -148,8 +281,10 @@ jobs:
           sbom: true
 
   manifests:
-    name: Publish ${{ matrix.service }} manifest
+    name: Publish and verify ${{ matrix.service }} version manifest
     needs: images
+    permissions:
+      packages: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -167,28 +302,240 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Require both architecture images
+      - name: Verify versioned architecture images
         run: |
           docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}-amd64"
           docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}-arm64"
       - name: Publish version manifest
+        shell: bash
         run: |
+          set -euo pipefail
           docker buildx imagetools create \
             -t "${{ matrix.image }}:${GITHUB_REF_NAME}" \
             "${{ matrix.image }}:${GITHUB_REF_NAME}-amd64" \
             "${{ matrix.image }}:${GITHUB_REF_NAME}-arm64"
           docker buildx imagetools inspect "${{ matrix.image }}:${GITHUB_REF_NAME}"
-      - name: Publish latest manifest
+          for platform in linux/amd64 linux/arm64; do
+            version="$(docker buildx imagetools inspect \
+              "${{ matrix.image }}:${GITHUB_REF_NAME}" \
+              --format "{{index (index .Image \"${platform}\").Config.Labels \"org.opencontainers.image.version\"}}")"
+            if [[ "$version" != "$GITHUB_REF_NAME" ]]; then
+              echo "::error::${{ matrix.image }}:${GITHUB_REF_NAME} ${platform} reports version ${version:-<missing>}" >&2
+              exit 1
+            fi
+            revision="$(docker buildx imagetools inspect \
+              "${{ matrix.image }}:${GITHUB_REF_NAME}" \
+              --format "{{index (index .Image \"${platform}\").Config.Labels \"org.opencontainers.image.revision\"}}")"
+            if [[ "$revision" != "$GITHUB_SHA" ]]; then
+              echo "::error::${{ matrix.image }}:${GITHUB_REF_NAME} ${platform} reports revision ${revision:-<missing>}, expected ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+          done
+
+  promote_latest:
+    name: Promote verified manifests to latest
+    needs: manifests
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      api_previous_digest: ${{ steps.promote.outputs.api_previous_digest }}
+      frontend_previous_digest: ${{ steps.promote.outputs.frontend_previous_digest }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote both service manifests
+        id: promote
+        shell: bash
+        env:
+          API_IMAGE: ghcr.io/mienchating/sub2api-console-api
+          FRONTEND_IMAGE: ghcr.io/mienchating/sub2api-console-frontend
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
+
+          digest_of() {
+            local ref="$1"
+            local output
+            local digest
+
+            output="$(docker buildx imagetools inspect "$ref")"
+            digest="$(sed -n 's/^Digest:[[:space:]]*//p' <<<"$output" | head -n 1)"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not resolve a digest for ${ref}" >&2
+              return 1
+            fi
+            printf '%s\n' "$digest"
+          }
+
+          snapshot_latest() {
+            local image="$1"
+            local error_file="$2"
+            local digest
+
+            if digest="$(digest_of "${image}:latest" 2>"$error_file")"; then
+              rm -f "$error_file"
+              printf '%s\n' "$digest"
+              return 0
+            fi
+            if grep -Eqi 'manifest unknown|not found' "$error_file"; then
+              echo "::notice::${image}:latest does not exist yet" >&2
+              rm -f "$error_file"
+              printf '\n'
+              return 0
+            fi
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            return 1
+          }
+
+          verify_digest() {
+            local ref="$1"
+            local expected="$2"
+            local actual
+
+            actual="$(digest_of "$ref")"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::Digest mismatch for ${ref}: expected ${expected}, got ${actual}" >&2
+              return 1
+            fi
+          }
+
+          label_of() {
+            local ref="$1"
+            local label="$2"
+            local amd64_value
+            local arm64_value
+
+            amd64_value="$(docker buildx imagetools inspect "$ref" \
+              --format "{{index (index .Image \"linux/amd64\").Config.Labels \"org.opencontainers.image.${label}\"}}")"
+            arm64_value="$(docker buildx imagetools inspect "$ref" \
+              --format "{{index (index .Image \"linux/arm64\").Config.Labels \"org.opencontainers.image.${label}\"}}")"
+            if [[ -z "$amd64_value" || -z "$arm64_value" || "$amd64_value" != "$arm64_value" ]]; then
+              echo "::error::${ref} does not contain one consistent ${label} label across amd64 and arm64" >&2
+              return 1
+            fi
+            printf '%s\n' "$amd64_value"
+          }
+
+          restore_latest() {
+            local image="$1"
+            local previous_digest="$2"
+            local attempt
+
+            for attempt in 1 2 3; do
+              if docker buildx imagetools create \
+                -t "${image}:latest" \
+                "${image}@${previous_digest}" && \
+                verify_digest "${image}:latest" "$previous_digest"; then
+                echo "::warning::Restored ${image}:latest to ${previous_digest}" >&2
+                return 0
+              fi
+              echo "::warning::Rollback attempt ${attempt} failed for ${image}:latest" >&2
+              sleep "$attempt"
+            done
+            return 1
+          }
+
+          api_previous_digest="$(snapshot_latest "$API_IMAGE" "$RUNNER_TEMP/api-latest-inspect.err")"
+          frontend_previous_digest="$(snapshot_latest "$FRONTEND_IMAGE" "$RUNNER_TEMP/frontend-latest-inspect.err")"
+          if { [[ -z "$api_previous_digest" ]] && [[ -n "$frontend_previous_digest" ]]; } || \
+            { [[ -n "$api_previous_digest" ]] && [[ -z "$frontend_previous_digest" ]]; }; then
+            echo "::error::Refusing to promote from a partially initialized latest pair" >&2
+            exit 1
+          fi
+          if [[ -z "$api_previous_digest" ]] && [[ -z "$frontend_previous_digest" ]]; then
+            echo "::error::Refusing to bootstrap latest tags automatically because an interrupted promotion cannot restore absent tags" >&2
+            echo "::error::Seed and verify both latest tags from the same version and revision, then retry this workflow" >&2
+            exit 1
+          fi
+
+          api_previous_version="$(label_of "${API_IMAGE}:latest" version)"
+          frontend_previous_version="$(label_of "${FRONTEND_IMAGE}:latest" version)"
+          if [[ "$api_previous_version" != "$frontend_previous_version" ]]; then
+            echo "::error::Refusing to promote a mismatched latest pair: API=${api_previous_version}, frontend=${frontend_previous_version}" >&2
+            exit 1
+          fi
+          api_previous_revision="$(label_of "${API_IMAGE}:latest" revision)"
+          frontend_previous_revision="$(label_of "${FRONTEND_IMAGE}:latest" revision)"
+          if [[ "$api_previous_revision" != "$frontend_previous_revision" ]]; then
+            echo "::error::Refusing to promote latest tags from different revisions: API=${api_previous_revision}, frontend=${frontend_previous_revision}" >&2
+            exit 1
+          fi
+          node .github/scripts/validate-release-order.mjs \
+            "$api_previous_version" "$RELEASE_TAG" "$api_previous_revision" "$GITHUB_SHA"
+
+          api_release_digest="$(digest_of "${API_IMAGE}:${RELEASE_TAG}")"
+          frontend_release_digest="$(digest_of "${FRONTEND_IMAGE}:${RELEASE_TAG}")"
+          api_release_version="$(label_of "${API_IMAGE}:${RELEASE_TAG}" version)"
+          frontend_release_version="$(label_of "${FRONTEND_IMAGE}:${RELEASE_TAG}" version)"
+          if [[ "$api_release_version" != "$RELEASE_TAG" || "$frontend_release_version" != "$RELEASE_TAG" ]]; then
+            echo "::error::Version manifests do not both report ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          api_release_revision="$(label_of "${API_IMAGE}:${RELEASE_TAG}" revision)"
+          frontend_release_revision="$(label_of "${FRONTEND_IMAGE}:${RELEASE_TAG}" revision)"
+          if [[ "$api_release_revision" != "$GITHUB_SHA" || "$frontend_release_revision" != "$GITHUB_SHA" ]]; then
+            echo "::error::Version manifests do not both report release revision ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          api_mutation_started=false
+          frontend_mutation_started=false
+
+          rollback_promotions() {
+            local failure_status="$?"
+            local rollback_failed=false
+
+            trap - EXIT
+            set +e
+            echo "::warning::Latest promotion failed; restoring the previous pair" >&2
+            if [[ "$frontend_mutation_started" == true ]] && \
+              ! restore_latest "$FRONTEND_IMAGE" "$frontend_previous_digest"; then
+              rollback_failed=true
+            fi
+            if [[ "$api_mutation_started" == true ]] && \
+              ! restore_latest "$API_IMAGE" "$api_previous_digest"; then
+              rollback_failed=true
+            fi
+            if [[ "$rollback_failed" == true ]]; then
+              echo "::error::Latest rollback was incomplete; inspect both registry tags before retrying" >&2
+            fi
+            exit "$failure_status"
+          }
+          trap rollback_promotions EXIT
+
+          api_mutation_started=true
           docker buildx imagetools create \
-            -t "${{ matrix.image }}:latest" \
-            "${{ matrix.image }}:latest-amd64" \
-            "${{ matrix.image }}:latest-arm64"
-          docker buildx imagetools inspect "${{ matrix.image }}:latest"
+            -t "${API_IMAGE}:latest" \
+            "${API_IMAGE}:${RELEASE_TAG}"
+          verify_digest "${API_IMAGE}:latest" "$api_release_digest"
+
+          frontend_mutation_started=true
+          docker buildx imagetools create \
+            -t "${FRONTEND_IMAGE}:latest" \
+            "${FRONTEND_IMAGE}:${RELEASE_TAG}"
+          verify_digest "${FRONTEND_IMAGE}:latest" "$frontend_release_digest"
+
+          {
+            echo "api_previous_digest=$api_previous_digest"
+            echo "frontend_previous_digest=$frontend_previous_digest"
+          } >>"$GITHUB_OUTPUT"
+          echo "Promoted API and frontend latest tags to ${RELEASE_TAG}"
+          trap - EXIT
 
   release:
     name: Publish GitHub Release
-    needs: [preflight, manifests]
+    needs: promote_latest
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -209,3 +556,62 @@ jobs:
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  rollback_latest:
+    name: Restore latest when GitHub Release fails
+    needs: [promote_latest, release]
+    if: ${{ always() && needs.promote_latest.result == 'success' && needs.release.result != 'success' }}
+    permissions:
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore previous service manifests
+        shell: bash
+        env:
+          API_IMAGE: ghcr.io/mienchating/sub2api-console-api
+          FRONTEND_IMAGE: ghcr.io/mienchating/sub2api-console-frontend
+          API_PREVIOUS_DIGEST: ${{ needs.promote_latest.outputs.api_previous_digest }}
+          FRONTEND_PREVIOUS_DIGEST: ${{ needs.promote_latest.outputs.frontend_previous_digest }}
+        run: |
+          set -euo pipefail
+
+          restore_latest() {
+            local image="$1"
+            local previous_digest="$2"
+            local attempt
+            local actual
+
+            if [[ ! "$previous_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Missing valid rollback digest for ${image}" >&2
+              return 1
+            fi
+            for attempt in 1 2 3; do
+              if docker buildx imagetools create \
+                -t "${image}:latest" \
+                "${image}@${previous_digest}"; then
+                actual="$(docker buildx imagetools inspect "${image}:latest" | sed -n 's/^Digest:[[:space:]]*//p' | head -n 1)"
+                if [[ "$actual" == "$previous_digest" ]]; then
+                  echo "::warning::Restored ${image}:latest to ${previous_digest}" >&2
+                  return 0
+                fi
+              fi
+              echo "::warning::Rollback attempt ${attempt} failed for ${image}:latest" >&2
+              sleep "$attempt"
+            done
+            return 1
+          }
+
+          rollback_failed=false
+          restore_latest "$FRONTEND_IMAGE" "$FRONTEND_PREVIOUS_DIGEST" || rollback_failed=true
+          restore_latest "$API_IMAGE" "$API_PREVIOUS_DIGEST" || rollback_failed=true
+          if [[ "$rollback_failed" == true ]]; then
+            echo "::error::Latest rollback was incomplete; inspect both registry tags immediately" >&2
+            exit 1
+          fi

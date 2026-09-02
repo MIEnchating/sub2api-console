@@ -7,11 +7,11 @@ import (
 	"log/slog"
 	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 )
 
@@ -52,20 +52,14 @@ type Verifier interface {
 
 type AccountRateSyncScheduler interface {
 	EnqueueHostAccountRateSync(context.Context, string, string) (string, error)
+	EnqueueHostAccountBaseURLSync(context.Context, string, string) (string, error)
 }
 
 type Service struct {
-	business      Business
-	private       PrivateStore
-	verifier      Verifier
-	scheduler     AccountRateSyncScheduler
-	mutationMu    sync.Mutex
-	mutationLocks map[string]*hostMutationLock
-}
-
-type hostMutationLock struct {
-	token chan struct{}
-	refs  int
+	business  Business
+	private   PrivateStore
+	verifier  Verifier
+	scheduler AccountRateSyncScheduler
 }
 
 type classificationStore interface {
@@ -73,45 +67,49 @@ type classificationStore interface {
 }
 
 type Input struct {
-	Host         string
-	Name         *string
-	BaseURL      string
-	UpstreamType string
-	AuthMode     string
-	RechargeRate string
-	AccessToken  *string
-	RefreshToken *string
-	AdminKey     *string
-	UserID       *string
-	Headers      map[string]string
-	Cookies      map[string]string
-	Username     *string
-	Password     *string
-	SaveToVault  bool
-	Entry        *string
-	Present      map[string]bool
+	Host           string
+	Name           *string
+	BaseURL        string
+	AccountBaseURL string
+	UpstreamType   string
+	AuthMode       string
+	RechargeRate   string
+	AccessToken    *string
+	RefreshToken   *string
+	AdminKey       *string
+	UserID         *string
+	Headers        map[string]string
+	Cookies        map[string]string
+	Username       *string
+	Password       *string
+	SaveToVault    bool
+	Entry          *string
+	Present        map[string]bool
 }
 
 type Configuration struct {
-	UpstreamID      string                   `json:"upstream_id"`
-	Host            string                   `json:"host"`
-	Name            string                   `json:"name"`
-	BaseURL         string                   `json:"base_url"`
-	UpstreamType    string                   `json:"upstream_type"`
-	AuthMode        string                   `json:"auth_mode"`
-	RechargeRate    string                   `json:"recharge_rate"`
-	RawBalance      *string                  `json:"raw_balance"`
-	Balance         *string                  `json:"balance"`
-	HasAccessToken  bool                     `json:"has_access_token"`
-	HasRefreshToken bool                     `json:"has_refresh_token"`
-	HasAdminKey     bool                     `json:"has_admin_key"`
-	HasUserID       bool                     `json:"has_user_id"`
-	Headers         map[string]string        `json:"headers"`
-	HeaderNames     []string                 `json:"header_names"`
-	CookieNames     []string                 `json:"cookie_names"`
-	Groups          []business.UpstreamGroup `json:"groups"`
-	RateSyncTaskID  *string                  `json:"rate_sync_task_id,omitempty"`
-	RateSyncError   *string                  `json:"rate_sync_error,omitempty"`
+	UpstreamID        string                   `json:"upstream_id"`
+	Host              string                   `json:"host"`
+	Name              string                   `json:"name"`
+	BaseURL           string                   `json:"base_url"`
+	AccountBaseURL    string                   `json:"account_base_url"`
+	UpstreamType      string                   `json:"upstream_type"`
+	AuthMode          string                   `json:"auth_mode"`
+	RechargeRate      string                   `json:"recharge_rate"`
+	RawBalance        *string                  `json:"raw_balance"`
+	Balance           *string                  `json:"balance"`
+	HasAccessToken    bool                     `json:"has_access_token"`
+	HasRefreshToken   bool                     `json:"has_refresh_token"`
+	HasAdminKey       bool                     `json:"has_admin_key"`
+	HasUserID         bool                     `json:"has_user_id"`
+	Headers           map[string]string        `json:"headers"`
+	HeaderNames       []string                 `json:"header_names"`
+	CookieNames       []string                 `json:"cookie_names"`
+	Groups            []business.UpstreamGroup `json:"groups"`
+	RateSyncTaskID    *string                  `json:"rate_sync_task_id,omitempty"`
+	RateSyncError     *string                  `json:"rate_sync_error,omitempty"`
+	BaseURLSyncTaskID *string                  `json:"base_url_sync_task_id,omitempty"`
+	BaseURLSyncError  *string                  `json:"base_url_sync_error,omitempty"`
 }
 
 func New(businessStore Business, privateStore PrivateStore, verifier Verifier, schedulers ...AccountRateSyncScheduler) *Service {
@@ -151,7 +149,7 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		return Configuration{}, err
 	}
 	result := Configuration{
-		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, BaseURL: public.BaseURL, UpstreamType: public.UpstreamType,
+		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, BaseURL: public.BaseURL, AccountBaseURL: public.AccountBaseURL, UpstreamType: public.UpstreamType,
 		AuthMode: "custom_headers", RechargeRate: public.RechargeRate, RawBalance: public.RawBalance,
 		Balance: public.Balance, Headers: map[string]string{}, HeaderNames: []string{}, CookieNames: []string{}, Groups: groups,
 	}
@@ -170,11 +168,16 @@ func (s *Service) Create(ctx context.Context, input Input, actor string) (Config
 	if host == "" || input.Name == nil || strings.TrimSpace(*input.Name) == "" {
 		return Configuration{}, inputError(errors.New("上游 Host 和名称不能为空"))
 	}
-	release, err := s.acquireHostMutation(ctx, host)
+	resources := []string{mutationguard.UpstreamCatalog()}
+	if vault := vaultMutationResource(host, input, true); vault != "" {
+		resources = append(resources, vault)
+	}
+	guarded, release, err := s.acquireHostMutation(ctx, host, resources...)
 	if err != nil {
 		return Configuration{}, err
 	}
 	defer release()
+	ctx = guarded
 	exists, err := s.business.UpstreamExists(ctx, host)
 	if err != nil {
 		return Configuration{}, err
@@ -193,28 +196,40 @@ func (s *Service) Create(ctx context.Context, input Input, actor string) (Config
 	if err != nil {
 		return Configuration{}, inputError(err)
 	}
+	if err := normalizeAccountBaseURL(&input, record.BaseURL); err != nil {
+		return Configuration{}, inputError(err)
+	}
 	if _, err := s.commitPrivateAndPublic(ctx, record, input, vaultChange, true); err != nil {
 		return Configuration{}, err
 	}
-	eventCtx, cancelEvent := postCommitContext(ctx)
+	release()
+	eventCtx, cancelEvent := detachedOperationContext(ctx)
 	if _, err := s.business.RecordRuntimeEvent(eventCtx, "upstream.created", "succeeded", "上游已添加并完成鉴权："+host, map[string]any{
 		"actor": actorOrConsole(actor), "host": host, "upstream_type": record.UpstreamType, "auth_mode": record.AuthMode,
 	}); err != nil {
 		slog.Error("上游创建事件保存失败", "host", host, "error", err)
 	}
 	cancelEvent()
-	readCtx, cancelRead := postCommitContext(ctx)
+	readCtx, cancelRead := detachedOperationContext(ctx)
 	defer cancelRead()
 	return s.Get(readCtx, host)
 }
 
 func (s *Service) Update(ctx context.Context, host string, input Input, actor string) (Configuration, error) {
 	host = configstore.CanonicalHost(host)
-	release, err := s.acquireHostMutation(ctx, host)
+	if host == "" {
+		return Configuration{}, inputError(errors.New("上游 Host 不能为空"))
+	}
+	resources := []string{}
+	if vault := vaultMutationResource(host, input, false); vault != "" {
+		resources = append(resources, vault)
+	}
+	guarded, release, err := s.acquireHostMutation(ctx, host, resources...)
 	if err != nil {
 		return Configuration{}, err
 	}
 	defer release()
+	ctx = guarded
 	previous, err := s.Get(ctx, host)
 	if err != nil {
 		return Configuration{}, err
@@ -234,27 +249,42 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if err != nil {
 		return Configuration{}, inputError(err)
 	}
+	if err := normalizeAccountBaseURL(&input, record.BaseURL); err != nil {
+		return Configuration{}, inputError(err)
+	}
 	writeResult, err := s.commitPrivateAndPublic(ctx, record, input, vaultChange, false)
 	if err != nil {
 		return Configuration{}, err
 	}
-	var rateSyncTaskID, rateSyncError *string
+	release()
+	var rateSyncTaskID, rateSyncError, baseURLSyncTaskID, baseURLSyncError *string
+	syncHost := configstore.CanonicalHost(writeResult.PrimaryHost)
+	if syncHost == "" {
+		syncHost = host
+	}
 	if s.scheduler != nil && decimalChanged(previous.RechargeRate, writeResult.RechargeRate) {
-		rateSyncHost := configstore.CanonicalHost(writeResult.PrimaryHost)
-		if rateSyncHost == "" {
-			rateSyncHost = host
-		}
-		scheduleCtx, cancelSchedule := postCommitContext(ctx)
-		taskID, scheduleErr := s.scheduler.EnqueueHostAccountRateSync(scheduleCtx, rateSyncHost, actorOrConsole(actor))
+		scheduleCtx, cancelSchedule := detachedOperationContext(ctx)
+		taskID, scheduleErr := s.scheduler.EnqueueHostAccountRateSync(scheduleCtx, syncHost, actorOrConsole(actor))
 		cancelSchedule()
 		if scheduleErr != nil {
-			message := fmt.Sprintf("稳定上游 %s 的账号成本同步排队失败：%v", rateSyncHost, scheduleErr)
+			message := fmt.Sprintf("稳定上游 %s 的账号成本同步排队失败：%v", syncHost, scheduleErr)
 			rateSyncError = &message
 		} else if taskID != "" {
 			rateSyncTaskID = &taskID
 		}
 	}
-	eventCtx, cancelEvent := postCommitContext(ctx)
+	if s.scheduler != nil && !sameBaseURL(previous.AccountBaseURL, input.AccountBaseURL) {
+		scheduleCtx, cancelSchedule := detachedOperationContext(ctx)
+		taskID, scheduleErr := s.scheduler.EnqueueHostAccountBaseURLSync(scheduleCtx, syncHost, actorOrConsole(actor))
+		cancelSchedule()
+		if scheduleErr != nil {
+			message := fmt.Sprintf("稳定上游 %s 的账号 Base URL 同步排队失败：%v", syncHost, scheduleErr)
+			baseURLSyncError = &message
+		} else if taskID != "" {
+			baseURLSyncTaskID = &taskID
+		}
+	}
+	eventCtx, cancelEvent := detachedOperationContext(ctx)
 	if _, err := s.business.RecordRuntimeEvent(eventCtx, "upstream.configuration.updated", "succeeded", "上游配置已更新："+host, map[string]any{
 		"actor": actorOrConsole(actor), "host": host, "upstream_type": record.UpstreamType,
 		"auth_mode": record.AuthMode, "recharge_rate": input.RechargeRate,
@@ -262,7 +292,7 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 		slog.Error("上游配置更新事件保存失败", "host", host, "error", err)
 	}
 	cancelEvent()
-	readCtx, cancelRead := postCommitContext(ctx)
+	readCtx, cancelRead := detachedOperationContext(ctx)
 	result, err := s.Get(readCtx, host)
 	cancelRead()
 	if err != nil {
@@ -270,10 +300,12 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	}
 	result.RateSyncTaskID = rateSyncTaskID
 	result.RateSyncError = rateSyncError
+	result.BaseURLSyncTaskID = baseURLSyncTaskID
+	result.BaseURLSyncError = baseURLSyncError
 	return result, nil
 }
 
-func postCommitContext(parent context.Context) (context.Context, context.CancelFunc) {
+func detachedOperationContext(parent context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(parent), postCommitOperationTimeout)
 }
 
@@ -286,16 +318,32 @@ func decimalChanged(before, after string) bool {
 	return strings.TrimSpace(before) != strings.TrimSpace(after)
 }
 
+func sameBaseURL(left, right string) bool {
+	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(left), "/"), strings.TrimRight(strings.TrimSpace(right), "/"))
+}
+
 func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string, error) {
 	host := configstore.CanonicalHost(input.Host)
 	if host == "" {
 		return "", inputError(errors.New("上游 Host 不能为空"))
 	}
-	release, err := s.acquireHostMutation(ctx, host)
+	resources := []string{}
+	if vault := vaultMutationResource(host, input, true); vault != "" {
+		resources = append(resources, vault)
+	}
+	guarded, release, err := s.acquireHostMutation(ctx, host, resources...)
 	if err != nil {
 		return "", err
 	}
 	defer release()
+	ctx = guarded
+	exists, err := s.business.UpstreamExists(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", ErrNotFound
+	}
 	existing, err := s.private.AuthRecord(ctx, host)
 	if err != nil {
 		return "", err
@@ -310,7 +358,9 @@ func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string,
 		}
 	}
 	if err := s.private.SaveAuthRecord(ctx, record, allAuthFields()); err != nil {
-		return "", errors.Join(err, rollbackFailure("密码箱", s.restoreVault(context.Background(), change)))
+		rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+		defer cancelRollback()
+		return "", errors.Join(err, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
 	}
 	return host, nil
 }
@@ -318,14 +368,26 @@ func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string,
 // CommitRecoveredAuth publishes a publicly fingerprinted platform correction
 // only after the recovered credentials have passed an authenticated readback.
 func (s *Service) CommitRecoveredAuth(ctx context.Context, record configstore.AuthRecord) error {
-	release, err := s.acquireHostMutation(ctx, configstore.CanonicalHost(record.Host))
+	record.Host = configstore.CanonicalHost(record.Host)
+	if record.Host == "" {
+		return inputError(errors.New("上游 Host 不能为空"))
+	}
+	guarded, release, err := s.acquireHostMutation(ctx, record.Host)
 	if err != nil {
 		return err
 	}
 	defer release()
+	ctx = guarded
 	classification, ok := s.business.(classificationStore)
 	if !ok {
 		return errors.New("业务存储不支持修复上游平台类型")
+	}
+	exists, err := s.business.UpstreamExists(ctx, record.Host)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
 	}
 	previous, err := s.private.AuthRecord(ctx, record.Host)
 	if err != nil {
@@ -335,54 +397,49 @@ func (s *Service) CommitRecoveredAuth(ctx context.Context, record configstore.Au
 		return err
 	}
 	if err := classification.UpdateUpstreamClassification(ctx, record.Host, record.UpstreamType, record.AuthMode); err != nil {
+		rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+		defer cancelRollback()
 		if previous == nil {
-			_, rollbackErr := s.private.DeleteAuthRecord(context.Background(), record.Host)
+			_, rollbackErr := s.private.DeleteAuthRecord(rollbackCtx, record.Host)
 			return errors.Join(err, rollbackFailure("鉴权记录", rollbackErr))
 		}
-		return errors.Join(err, rollbackFailure("鉴权记录", s.private.SaveAuthRecord(context.Background(), *previous, allAuthFields())))
+		return errors.Join(err, rollbackFailure("鉴权记录", s.private.SaveAuthRecord(rollbackCtx, *previous, allAuthFields())))
 	}
 	return nil
 }
 
-func (s *Service) acquireHostMutation(ctx context.Context, host string) (func(), error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func (s *Service) acquireHostMutation(ctx context.Context, host string, additionalResources ...string) (context.Context, func(), error) {
+	host = configstore.CanonicalHost(host)
+	resources := append([]string{}, additionalResources...)
+	resources = append(resources, mutationguard.Upstream(host))
+	guarded, release, err := mutationguard.Acquire(ctx, s.business, resources...)
+	if err != nil {
+		return nil, nil, err
 	}
-	s.mutationMu.Lock()
-	if s.mutationLocks == nil {
-		s.mutationLocks = map[string]*hostMutationLock{}
-	}
-	lock := s.mutationLocks[host]
-	if lock == nil {
-		lock = &hostMutationLock{token: make(chan struct{}, 1)}
-		s.mutationLocks[host] = lock
-	}
-	lock.refs++
-	s.mutationMu.Unlock()
+	released := false
+	return guarded, func() {
+		if released {
+			return
+		}
+		released = true
+		if err := release(); err != nil {
+			slog.Error("上游配置租约释放失败", "host", host, "error", err)
+		}
+	}, nil
+}
 
-	releaseRef := func() {
-		s.mutationMu.Lock()
-		lock.refs--
-		if lock.refs == 0 && s.mutationLocks[host] == lock {
-			delete(s.mutationLocks, host)
-		}
-		s.mutationMu.Unlock()
+func vaultMutationResource(host string, input Input, creating bool) string {
+	if !input.SaveToVault || !isManualLogin(strings.TrimSpace(input.AuthMode)) {
+		return ""
 	}
-	select {
-	case lock.token <- struct{}{}:
-		if err := ctx.Err(); err != nil {
-			<-lock.token
-			releaseRef()
-			return nil, err
-		}
-		return func() {
-			<-lock.token
-			releaseRef()
-		}, nil
-	case <-ctx.Done():
-		releaseRef()
-		return nil, ctx.Err()
+	if !creating && !input.Present["username"] && !input.Present["password"] {
+		return ""
 	}
+	entry := strings.TrimSpace(host)
+	if input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
+		entry = strings.TrimSpace(*input.Entry)
+	}
+	return mutationguard.Vault(entry)
 }
 
 type vaultChange struct {
@@ -475,10 +532,12 @@ func (s *Service) commitPrivateAndPublic(
 		}
 	}
 	if err := s.private.SaveAuthRecord(ctx, record, allAuthFields()); err != nil {
-		return business.UpstreamConfigurationWriteResult{}, errors.Join(err, rollbackFailure("密码箱", s.restoreVault(context.Background(), change)))
+		rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+		defer cancelRollback()
+		return business.UpstreamConfigurationWriteResult{}, errors.Join(err, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
 	}
 	write := business.UpstreamConfigurationWrite{
-		Host: record.Host, Name: input.Name, BaseURL: record.BaseURL, UpstreamType: record.UpstreamType,
+		Host: record.Host, Name: input.Name, BaseURL: record.BaseURL, AccountBaseURL: input.AccountBaseURL, UpstreamType: record.UpstreamType,
 		AuthMode: record.AuthMode, RechargeRate: input.RechargeRate,
 	}
 	var result business.UpstreamConfigurationWriteResult
@@ -491,15 +550,30 @@ func (s *Service) commitPrivateAndPublic(
 	if err == nil {
 		return result, nil
 	}
+	rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+	defer cancelRollback()
 	rollbackErrors := []error{err}
 	if oldAuth == nil {
-		_, rollbackErr := s.private.DeleteAuthRecord(context.Background(), record.Host)
+		_, rollbackErr := s.private.DeleteAuthRecord(rollbackCtx, record.Host)
 		rollbackErrors = append(rollbackErrors, rollbackFailure("新鉴权记录", rollbackErr))
 	} else {
-		rollbackErrors = append(rollbackErrors, rollbackFailure("原鉴权记录", s.private.SaveAuthRecord(context.Background(), *oldAuth, allAuthFields())))
+		rollbackErrors = append(rollbackErrors, rollbackFailure("原鉴权记录", s.private.SaveAuthRecord(rollbackCtx, *oldAuth, allAuthFields())))
 	}
-	rollbackErrors = append(rollbackErrors, rollbackFailure("密码箱", s.restoreVault(context.Background(), change)))
+	rollbackErrors = append(rollbackErrors, rollbackFailure("密码箱", s.restoreVault(rollbackCtx, change)))
 	return business.UpstreamConfigurationWriteResult{}, errors.Join(rollbackErrors...)
+}
+
+func normalizeAccountBaseURL(input *Input, fallback string) error {
+	value := strings.TrimSpace(input.AccountBaseURL)
+	if value == "" {
+		value = fallback
+	}
+	normalized, err := configstore.ValidateBaseURL(value)
+	if err != nil {
+		return fmt.Errorf("账号 Base URL 无效：%w", err)
+	}
+	input.AccountBaseURL = normalized
+	return nil
 }
 
 func (s *Service) restoreVault(ctx context.Context, change *vaultChange) error {

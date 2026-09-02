@@ -32,6 +32,62 @@ export type RuntimeConfig = {
 
 export type RuntimeMode = "监控模式" | "完全模式";
 
+export type NewAPIPlatform = {
+  id: string;
+  name: string;
+  base_url: string;
+  user_id: string;
+  admin_key_configured: boolean;
+  updated_at: string;
+};
+
+export type NewAPILocalGroup = {
+  id: string;
+  name: string;
+  ratio: string | null;
+};
+
+export type NewAPIGroupBinding = {
+  platform_id: string;
+  newapi_group_id: string;
+  newapi_group_name: string;
+  sub2api_group_id: string;
+  sync_ratio: boolean;
+};
+
+export type NewAPIGroupBindingUpdate = Omit<NewAPIGroupBinding, "platform_id">;
+
+export type NewAPIWorkspace = {
+  platforms: NewAPIPlatform[];
+  local_groups: NewAPILocalGroup[];
+  bindings: NewAPIGroupBinding[];
+};
+
+export type NewAPIRemoteGroup = {
+  id: string;
+  name: string;
+  ratio: string | null;
+};
+
+export type NewAPIModelPrice = {
+  model: string;
+  input_ratio: string;
+  completion_ratio: string;
+};
+
+export type NewAPIRemoteSnapshot = {
+  groups: NewAPIRemoteGroup[];
+  models: NewAPIModelPrice[];
+  references: NewAPIModelPrice[];
+  differences: Array<{
+    model: string;
+    kind: "missing_in_newapi" | "only_in_newapi" | "ratio_mismatch";
+    configured: NewAPIModelPrice | null;
+    reference: NewAPIModelPrice | null;
+  }>;
+  fetched_at: string;
+};
+
 export type NotificationStatus = {
   configured: boolean;
   app_id: string;
@@ -107,6 +163,7 @@ export type UpstreamBoundAccount = {
   binding_id: number;
   account_id: string;
   account_name: string | null;
+  base_url?: string | null;
   account_exists: boolean;
   binding_status: string | null;
   local_group: string;
@@ -118,6 +175,7 @@ export type UpstreamBoundAccount = {
 export type SetupStatus = {
   initialized: boolean;
   target_configured: boolean;
+  setup_token_required: boolean;
   configuration_errors?: string[];
 };
 
@@ -138,6 +196,8 @@ type UpstreamHost = {
   auth_status: string;
   raw_balance: string | null;
   balance: string | null;
+  display_balance?: string | null;
+  balance_unit?: string | null;
   recharge_rate: string;
   balance_status: string;
   checked_at: string | null;
@@ -193,6 +253,7 @@ export type UpstreamConfiguration = {
   host: string;
   name: string;
   base_url: string;
+  account_base_url: string;
   upstream_type: string;
   auth_mode: string;
   recharge_rate: string;
@@ -208,11 +269,14 @@ export type UpstreamConfiguration = {
   groups: UpstreamGroup[];
   rate_sync_task_id?: string;
   rate_sync_error?: string;
+  base_url_sync_task_id?: string;
+  base_url_sync_error?: string;
 };
 
 export type UpstreamConfigurationUpdate = {
   name?: string;
   base_url: string;
+  account_base_url: string;
   upstream_type: string;
   auth_mode: string;
   recharge_rate: string;
@@ -262,6 +326,7 @@ export type ProbeResult = {
 export type OnboardingRequest = {
   host: string;
   upstream_type: string;
+  base_url?: string;
   platform?: string;
   account_type?: string;
   notes?: string;
@@ -494,6 +559,7 @@ export type PricingConfig = {
   enabled: boolean;
   profit_margin: number;
   exchange_group_sets: string[][];
+  exchange_group_set_names: string[];
   interval_seconds: number;
   write_concurrency: number;
 };
@@ -716,6 +782,21 @@ export type AccountDetail = AccountStatus & {
   test_model: string | null;
 };
 
+export type AccountDeletePreview = {
+  account_id: string;
+  account_name: string;
+  groups: string[];
+  management_base_url: string;
+  binding: {
+    id: number;
+    upstream_id: string;
+    upstream_host: string;
+    auth_host: string;
+    upstream_key_id: string;
+    upstream_key_name: string;
+  } | null;
+};
+
 export type AccountControlAction = "pause" | "resume" | "exclude" | "include" | "fuse" | "recover";
 
 export type RunEvent = {
@@ -759,6 +840,8 @@ export type ManualAuthVerifyResult =
         status: "succeeded" | "failed";
         balance_status: string;
         balance?: string | number | null;
+        display_balance?: string | number | null;
+        balance_unit?: string | null;
         checked_at?: string | null;
         reason?: string | null;
       };
@@ -995,14 +1078,23 @@ export const api = {
   autoInspectionEventsURL: () => apiEndpoint("/api/inspection/automation/events"),
   taskEventsURL: (id: string) => apiEndpoint(`/api/tasks/${encodeURIComponent(id)}/events`),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
-  initialize: (payload: {
-    username: string;
-    password: string;
-    admin_base_url: string;
-    admin_key: string;
-  }) =>
+  initialize: (
+    payload: {
+      username: string;
+      password: string;
+      admin_base_url: string;
+      admin_key: string;
+    },
+    setupToken?: string,
+  ) =>
     request<SetupStatus>("/api/setup/initialize", {
       method: "POST",
+      headers:
+        setupToken === undefined
+          ? undefined
+          : {
+              "X-Setup-Token": setupToken,
+            },
       body: JSON.stringify(payload),
     }),
   session: () => request<SessionStatus>("/api/auth/session"),
@@ -1018,6 +1110,54 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   overview: () => request<Overview>("/api/overview"),
+  newAPIWorkspace: (platformId?: string) => {
+    const query = platformId ? `?platform_id=${encodeURIComponent(platformId)}` : "";
+    return request<NewAPIWorkspace>(`/api/newapi${query}`);
+  },
+  saveNewAPIPlatform: (payload: {
+    id?: string;
+    name: string;
+    base_url: string;
+    admin_key: string;
+    user_id: string;
+  }) =>
+    request<NewAPIPlatform>("/api/newapi/platforms", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteNewAPIPlatform: (platformId: string) =>
+    request<{ deleted: boolean }>(`/api/newapi/platforms/${encodeURIComponent(platformId)}`, {
+      method: "DELETE",
+    }),
+  refreshNewAPIPlatform: (platformId: string) =>
+    request<NewAPIRemoteSnapshot>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/refresh`,
+      { method: "POST" },
+    ),
+  saveNewAPIGroupBindings: (platformId: string, bindings: NewAPIGroupBindingUpdate[]) =>
+    request<NewAPIGroupBinding[]>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/group-bindings`,
+      { method: "PUT", body: JSON.stringify({ bindings }) },
+    ),
+  createNewAPIChannel: (
+    platformId: string,
+    payload: {
+      name: string;
+      sub2api_group_id: string;
+      base_url: string;
+      service_key: string;
+      models: string[];
+    },
+  ) =>
+    request<Record<string, unknown>>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  saveNewAPIModelPrices: (platformId: string, prices: NewAPIModelPrice[]) =>
+    request<NewAPIRemoteSnapshot>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/model-prices`,
+      { method: "PUT", body: JSON.stringify({ prices }) },
+    ),
   trafficRanking: (filters: {
     timeRange: "1h" | "6h" | "24h" | "7d" | "30d";
     group?: string;
@@ -1237,6 +1377,25 @@ export const api = {
   syncUpstreamGroups: () => request<Task>("/api/upstreams/groups/sync", { method: "POST" }),
   account: (accountId: string) =>
     request<AccountDetail>(`/api/accounts/${encodeURIComponent(accountId)}`),
+  accountDeletePreview: (accountId: string) =>
+    request<AccountDeletePreview>(`/api/accounts/${encodeURIComponent(accountId)}/delete-preview`),
+  deleteAccount: (preview: AccountDeletePreview) => {
+    const body: Record<string, unknown> = {
+      confirmation_account_id: preview.account_id,
+      expected_management_base_url: preview.management_base_url,
+    };
+    if (preview.binding !== null) {
+      body.expected_binding_id = preview.binding.id;
+      body.expected_upstream_id = preview.binding.upstream_id;
+      body.expected_upstream_host = preview.binding.upstream_host;
+      body.expected_auth_host = preview.binding.auth_host;
+      body.expected_upstream_key_id = preview.binding.upstream_key_id;
+    }
+    return request<Task>(`/api/accounts/${encodeURIComponent(preview.account_id)}/delete`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
   setAccountControl: (accountId: string, action: AccountControlAction) =>
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/control`, {
       method: "POST",
@@ -1256,6 +1415,8 @@ export const api = {
       priority?: number;
       load_factor?: string;
       concurrency?: number;
+      upstream_host?: string;
+      base_url?: string;
       notes?: string | null;
     },
   ) =>

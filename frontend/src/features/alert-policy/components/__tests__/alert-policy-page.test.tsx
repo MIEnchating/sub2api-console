@@ -110,4 +110,33 @@ describe("AlertPolicyPage", () => {
     expect(markup).toContain("xl:grid-cols-2");
     expect(markup).not.toContain("min-h-44");
   });
+
+  it("blocks policy editing and offers retry when the policy query fails", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false, retry: false } },
+    });
+    await queryClient.prefetchQuery({
+      queryKey: ["alert-policy"],
+      queryFn: async () => {
+        throw new Error("读取失败");
+      },
+      retry: false,
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AlertPolicyPage onOpenSettings={() => undefined} />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('data-testid="alert-policy-load-error"');
+    expect(markup).toContain("重试读取");
+    expect(markup).not.toContain('data-slot="alert-policy-columns"');
+    expect(markup).toMatch(
+      /<button(?=[^>]*data-testid="alert-policy-reset")(?=[^>]*disabled="")[^>]*>/,
+    );
+    expect(markup).toMatch(
+      /<button(?=[^>]*data-testid="alert-policy-save")(?=[^>]*disabled="")[^>]*>/,
+    );
+  });
 });

@@ -168,4 +168,47 @@ func TestUnifiedLogsGroupsConfirmedRemoteReadsAndExplainsWriteReadbackFailure(t 
 	}
 }
 
+func TestAuditActionSummaryDistinguishesAccountDeleteFailureStages(t *testing.T) {
+	failure := "delete failed"
+	falseValue := false
+	tests := []struct {
+		name      string
+		phase     string
+		writeback bool
+		after     map[string]any
+		title     string
+		summary   string
+	}{
+		{
+			name: "no remote write after already absent key", phase: "management-target-check", writeback: false,
+			after: map[string]any{"upstream_key_deleted": true, "upstream_key_delete_requested": false},
+			title: "远程删除未发出", summary: "上游 Key 已确认不存在，未发出后续远程删除：" + failure,
+		},
+		{
+			name: "confirmed upstream key write", phase: "management-target-check", writeback: true,
+			after: map[string]any{"upstream_key_deleted": true, "upstream_key_delete_requested": true},
+			title: "部分删除已确认", summary: "上游 Key 删除已确认，后续删除未完成：" + failure,
+		},
+		{
+			name: "management account remains readable", phase: "management-readback-still-readable", writeback: true,
+			title: "管理账号仍存在", summary: "管理 DELETE 已发出，读回确认账号仍存在：" + failure,
+		},
+		{
+			name: "management account readback failed", phase: "management-readback", writeback: true,
+			title: "管理账号删除结果未知", summary: "管理 DELETE 已发出，但删除后读回失败：" + failure,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			title, summary := auditActionSummary([]business.AuditEvent{{
+				OperationType: "account.delete", Phase: test.phase, State: "failed", Error: &failure,
+				RemoteConfirmed: &falseValue, ReadbackConfirmed: &falseValue, Writeback: test.writeback, After: test.after,
+			}}, 1, 1, &failure)
+			if title != test.title || summary != test.summary {
+				t.Fatalf("title=%q summary=%q", title, summary)
+			}
+		})
+	}
+}
+
 func textPointer(value string) *string { return &value }

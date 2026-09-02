@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/table";
 
 export type OnboardingBindingPreview = {
-  upstream: string;
   upstreamGroup: string;
   multiplier: string;
   localGroup: string;
@@ -47,25 +46,21 @@ export function OnboardingConfirmContent(props: {
       </DialogHeader>
       <DialogBody className="overflow-hidden pr-0">
         <DataTablePanel className="h-full">
-          <Table className="min-w-[840px] table-fixed" containerClassName="h-full overflow-auto">
+          <Table className="min-w-[760px] table-fixed" containerClassName="h-full overflow-auto">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
-                <TableHead className="w-[18%]">上游</TableHead>
                 <TableHead className="w-[20%]">上游分组</TableHead>
-                <TableHead className="w-[12%]">账号成本</TableHead>
-                <TableHead className="w-[22%]">本地分组</TableHead>
-                <TableHead className="w-[9%]">并发</TableHead>
-                <TableHead className="w-[9%]">优先级</TableHead>
-                <TableHead className="w-[10%]">状态</TableHead>
+                <TableHead className="w-[14%]">账号成本</TableHead>
+                <TableHead className="w-[26%]">本地分组</TableHead>
+                <TableHead className="w-[12%]">并发</TableHead>
+                <TableHead className="w-[12%]">优先级</TableHead>
+                <TableHead className="w-[16%]">状态</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {props.items.map((item, index) => (
-                <TableRow
-                  key={`${item.upstream}:${item.upstreamGroup}:${item.localGroup}:${index}`}
-                >
-                  <TableCell className="font-medium">{item.upstream}</TableCell>
-                  <TableCell>{item.upstreamGroup}</TableCell>
+                <TableRow key={`${item.upstreamGroup}:${item.localGroup}:${index}`}>
+                  <TableCell className="font-medium">{item.upstreamGroup}</TableCell>
                   <TableCell className="tabular-nums">{item.multiplier}</TableCell>
                   <TableCell>{item.localGroup}</TableCell>
                   <TableCell className="tabular-nums">{item.concurrency}</TableCell>

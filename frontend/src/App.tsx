@@ -36,6 +36,7 @@ import {
   Search,
   ScrollText,
   Server,
+  ServerCog,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -62,6 +63,7 @@ import { z } from "zod";
 import {
   api,
   type AccountControlAction,
+  type AccountDeletePreview,
   type AccountStatus,
   type AutoInspectionConfig,
   type AutoInspectionStatus,
@@ -133,6 +135,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  compactOperationDialogLayout,
   operationDialogHeight,
   operationDialogWidth,
 } from "./components/ui/dialog";
@@ -190,7 +193,7 @@ import {
   schedulingStrategyOptions,
   schedulingWeightFormula,
 } from "./lib/scheduling-strategy";
-import { notifyOperationError } from "./lib/operation-feedback";
+import { notifyOperationError, operationErrorMessage } from "./lib/operation-feedback";
 import { sensitiveFieldPlaceholder } from "./lib/sensitive-field";
 import { sessionExpiredEvent, sessionExpiredMessage } from "./lib/session-auth";
 import { cn } from "./lib/utils";
@@ -226,6 +229,7 @@ import {
 } from "./features/upstreams/components/onboarding-probe-action";
 import { VaultPage } from "./features/vault/components/vault-page";
 import { ProfilePage } from "./features/profile/components/profile-page";
+import { NewAPIManagementPage } from "./features/newapi-management/components/newapi-management-page";
 import { AccountStatusFilter } from "./features/accounts/components/account-status-tabs";
 import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
@@ -255,6 +259,7 @@ import {
 import { groupPlatformSummary } from "./features/accounts/lib/account-labels";
 import {
   authModesForPlatform,
+  defaultAuthModeForPlatform,
   parseStringMap,
 } from "./features/upstreams/lib/upstream-edit-schema";
 import { upstreamRateLabels } from "./features/upstreams/lib/upstream-rate-labels";
@@ -272,6 +277,7 @@ import {
   candidateCanCreateKey,
   candidateCreationUnavailableReason,
   candidateHasExistingBinding,
+  candidateHasOnboardingChange,
   composeOnboardingBaseUrl,
   normalizeOnboardingHost,
   onboardingCandidateStats,
@@ -279,6 +285,7 @@ import {
   onboardingEntryKind,
   onboardingRequestHost,
   onboardingSelectionTitle,
+  onboardingUpstreamRequest,
   parseOnboardingBaseUrl,
   rechargeRatioLabel,
   sameOnboardingGroupSelection,
@@ -289,6 +296,7 @@ type View =
   | "accounts"
   | "upstreams"
   | "groups"
+  | "newapi"
   | "pricing"
   | "revenue-analysis"
   | "pricing-config"
@@ -314,6 +322,7 @@ export const navItems: Array<{
     | "/accounts"
     | "/upstreams"
     | "/groups"
+    | "/newapi"
     | "/pricing"
     | "/revenue-analysis"
     | "/pricing-config"
@@ -333,6 +342,7 @@ export const navItems: Array<{
   { id: "overview", label: "运营总览", icon: ChartSpline, to: "/" },
   { id: "upstreams", label: "上游管理", icon: Network, to: "/upstreams" },
   { id: "groups", label: "分组管理", icon: Layers3, to: "/groups" },
+  { id: "newapi", label: "New API 管理", icon: ServerCog, to: "/newapi" },
   { id: "pricing", label: "价格管理", icon: CircleDollarSign, to: "/pricing" },
   {
     id: "revenue-analysis",
@@ -391,6 +401,7 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
       "overview",
       "upstreams",
       "groups",
+      "newapi",
       "pricing",
       "revenue-analysis",
       "accounts",
@@ -410,6 +421,7 @@ const viewByPath: Record<string, View> = {
   "/accounts": "accounts",
   "/upstreams": "upstreams",
   "/groups": "groups",
+  "/newapi": "newapi",
   "/pricing": "pricing",
   "/revenue-analysis": "revenue-analysis",
   "/pricing-config": "pricing-config",
@@ -639,6 +651,7 @@ function App() {
               {activeView === "accounts" && <AccountsPage />}
               {activeView === "upstreams" && <UpstreamsPage />}
               {activeView === "groups" && <GroupsPage />}
+              {activeView === "newapi" && <NewAPIManagementPage />}
               {activeView === "pricing" && <PricingPage />}
               {activeView === "revenue-analysis" && <RevenueAnalysisPage />}
               {activeView === "pricing-config" && <PricingConfigPage />}
@@ -1011,48 +1024,56 @@ function StartupState(props: { text: string; error?: boolean }) {
   );
 }
 
-const setupSchema = z
-  .object({
-    username: z.string().min(2, "账号至少 2 个字符"),
-    password: z.string().min(10, "密码至少 10 个字符"),
-    confirm_password: z.string().min(1, "请再次输入密码"),
-    admin_base_url: z.union([z.literal(""), z.string().url("请输入完整的 http/https 地址")]),
-    admin_key: z.string(),
-  })
-  .refine((value) => value.password === value.confirm_password, {
-    path: ["confirm_password"],
-    message: "两次输入的密码不一致",
-  })
-  .refine(
-    (value) =>
-      (value.admin_base_url === "" && value.admin_key === "") ||
-      (value.admin_base_url !== "" && value.admin_key !== ""),
-    {
-      path: ["admin_base_url"],
-      message: "Admin Base URL 和 Admin Key 必须同时填写",
-    },
-  );
-type SetupForm = z.infer<typeof setupSchema>;
+function createSetupSchema(setupTokenRequired: boolean) {
+  return z
+    .object({
+      username: z.string().min(2, "账号至少 2 个字符"),
+      password: z.string().min(10, "密码至少 10 个字符"),
+      confirm_password: z.string().min(1, "请再次输入密码"),
+      admin_base_url: z.union([z.literal(""), z.string().url("请输入完整的 http/https 地址")]),
+      admin_key: z.string(),
+      setup_token: setupTokenRequired ? z.string().min(1, "请输入初始化令牌") : z.string(),
+    })
+    .refine((value) => value.password === value.confirm_password, {
+      path: ["confirm_password"],
+      message: "两次输入的密码不一致",
+    })
+    .refine(
+      (value) =>
+        (value.admin_base_url === "" && value.admin_key === "") ||
+        (value.admin_base_url !== "" && value.admin_key !== ""),
+      {
+        path: ["admin_base_url"],
+        message: "Admin Base URL 和 Admin Key 必须同时填写",
+      },
+    );
+}
+type SetupForm = z.infer<ReturnType<typeof createSetupSchema>>;
 
-function SetupPage(props: { status?: SetupStatus; onComplete: () => void }) {
+export function SetupPage(props: { status?: SetupStatus; onComplete: () => void }) {
+  const setupTokenRequired = props.status?.setup_token_required === true;
   const form = useForm<SetupForm>({
-    resolver: zodResolver(setupSchema),
+    resolver: zodResolver(createSetupSchema(setupTokenRequired)),
     defaultValues: {
       username: "",
       password: "",
       confirm_password: "",
       admin_base_url: "",
       admin_key: "",
+      setup_token: "",
     },
   });
   const submit = form.handleSubmit(async (values) => {
     try {
-      await api.initialize({
-        username: values.username,
-        password: values.password,
-        admin_base_url: props.status?.target_configured ? "" : values.admin_base_url,
-        admin_key: props.status?.target_configured ? "" : values.admin_key,
-      });
+      await api.initialize(
+        {
+          username: values.username,
+          password: values.password,
+          admin_base_url: props.status?.target_configured ? "" : values.admin_base_url,
+          admin_key: props.status?.target_configured ? "" : values.admin_key,
+        },
+        setupTokenRequired ? values.setup_token : undefined,
+      );
       props.onComplete();
     } catch (reason) {
       notifyOperationError(reason, "初始化失败");
@@ -1109,6 +1130,18 @@ function SetupPage(props: { status?: SetupStatus; onComplete: () => void }) {
                 {...form.register("confirm_password")}
               />
             </FormField>
+            {setupTokenRequired ? (
+              <FormField label="初始化令牌" error={form.formState.errors.setup_token?.message}>
+                <Input
+                  type="password"
+                  autoComplete="off"
+                  required
+                  aria-label="初始化令牌"
+                  aria-invalid={Boolean(form.formState.errors.setup_token)}
+                  {...form.register("setup_token")}
+                />
+              </FormField>
+            ) : null}
             {!props.status?.target_configured && (
               <>
                 <FormField
@@ -1396,6 +1429,7 @@ const eventLabels: Record<string, string> = {
   "account.groups.sync": "账号分组同步",
   "account.rates.synced": "账号倍率同步",
   "account.onboarding": "账号添加",
+  "account.delete": "删除账号",
   "routing.writeback": "自动执行",
   "automatic-inspection": "自动巡检",
 };
@@ -1408,6 +1442,7 @@ const operationLabels: Record<string, string> = {
   "account.sync": "账号同步",
   "account.groups.sync": "账号分组同步",
   "account.onboarding": "账号添加",
+  "account.delete": "删除账号",
   "routing.writeback": "自动执行",
   "upstream.delete": "删除上游",
   "upstream.rate_sync": "上游倍率同步",
@@ -2032,7 +2067,15 @@ function UpstreamsPage() {
   });
   const groupRows = groups.data ?? [];
   const localGroupOptions = (localBindingGroups.data ?? []).flatMap((group) =>
-    group.id ? [{ id: group.id, name: group.name, rate_multiplier: group.rate_multiplier }] : [],
+    group.id
+      ? [
+          {
+            id: group.id,
+            name: group.name,
+            rate_multiplier: group.rate_multiplier,
+          },
+        ]
+      : [],
   );
   const currentGroupBindingIDs = (group: UpstreamGroup) => [
     ...new Set(
@@ -2107,7 +2150,9 @@ function UpstreamsPage() {
     if (groupBindingTask.data.status === "succeeded") {
       toast.success(groupBindingTask.data.message || "账号分组绑定变更已完成");
       void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["upstream-groups", selectedHost] }),
+        queryClient.invalidateQueries({
+          queryKey: ["upstream-groups", selectedHost],
+        }),
         queryClient.invalidateQueries({ queryKey: ["accounts"] }),
         queryClient.invalidateQueries({ queryKey: ["groups"] }),
       ]);
@@ -2452,9 +2497,12 @@ function UpstreamsPage() {
                     <TableCell>
                       <div className="grid gap-0.5">
                         <span>
-                          {host.balance === null
+                          {host.display_balance === null && host.balance === null
                             ? host.balance_status
-                            : formatBalance(host.balance)}
+                            : formatBalance(
+                                host.display_balance ?? host.balance!,
+                                host.balance_unit,
+                              )}
                         </span>
                         {host.checked_at && (
                           <span className="text-muted-foreground text-xs">
@@ -2590,7 +2638,7 @@ function UpstreamsPage() {
       >
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(managementTask.data))}
-          height={operationDialogHeight(taskStopsPolling(managementTask.data), "medium")}
+          height={operationDialogHeight(taskStopsPolling(managementTask.data))}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2661,7 +2709,7 @@ function UpstreamsPage() {
       >
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(syncTask.data))}
-          height={operationDialogHeight(taskStopsPolling(syncTask.data), "tall")}
+          height={operationDialogHeight(taskStopsPolling(syncTask.data))}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2694,8 +2742,7 @@ function UpstreamsPage() {
         }}
       >
         <DialogContent
-          width="medium"
-          height="large"
+          {...compactOperationDialogLayout}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2768,8 +2815,7 @@ function UpstreamsPage() {
         }}
       >
         <DialogContent
-          width="medium"
-          height="large"
+          {...compactOperationDialogLayout}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -3785,7 +3831,7 @@ export function AccountsPage() {
                 <TableHead className="w-24">调度权重</TableHead>
                 <TableHead className="w-48">调度参数</TableHead>
                 <TableHead className="w-36">状态</TableHead>
-                <TableHead className="w-32 text-right">操作</TableHead>
+                <TableHead className="w-40 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -3849,7 +3895,7 @@ export function AccountsPage() {
       >
         <DialogContent
           width={operationDialogWidth(baseURLCheckResultsReady, "table")}
-          height={operationDialogHeight(baseURLCheckResultsReady, "tall")}
+          height={operationDialogHeight(baseURLCheckResultsReady)}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -3954,7 +4000,7 @@ export function AccountsPage() {
       >
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(maintenanceTask.data))}
-          height={operationDialogHeight(taskStopsPolling(maintenanceTask.data), "large")}
+          height={operationDialogHeight(taskStopsPolling(maintenanceTask.data))}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -4503,6 +4549,55 @@ export function AccountMaintenanceTaskStatus(props: {
   );
 }
 
+export function AccountDeletePreviewDetails(props: { preview: AccountDeletePreview }) {
+  return (
+    <div className="grid gap-4">
+      <div className="rounded-md bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
+        {props.preview.binding
+          ? "将删除管理平台账号、该账号绑定的上游 Key，以及 Console 中对应的绑定和调度记录。"
+          : "该账号没有可确认的上游 Key 绑定；将删除管理平台账号、确认其不存在并清理 Console 本地记录；不会删除任何上游 Key。"}
+      </div>
+      <div className="divide-y rounded-md border text-sm">
+        <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+          <span className="text-muted-foreground">管理平台账号</span>
+          <strong className="min-w-0 break-words font-medium">
+            {props.preview.account_name}（ID {props.preview.account_id}）
+          </strong>
+        </div>
+        <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+          <span className="text-muted-foreground">管理目标</span>
+          <span className="min-w-0 break-all font-mono text-xs">
+            {props.preview.management_base_url}
+          </span>
+        </div>
+        {props.preview.binding && (
+          <>
+            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+              <span className="text-muted-foreground">上游地址</span>
+              <span className="min-w-0 break-all font-mono text-xs">
+                {props.preview.binding.upstream_host}
+              </span>
+            </div>
+            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+              <span className="text-muted-foreground">稳定上游身份</span>
+              <span className="min-w-0 break-all font-mono text-xs">
+                {props.preview.binding.upstream_id}
+              </span>
+            </div>
+            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
+              <span className="text-muted-foreground">上游 Key</span>
+              <span className="min-w-0 break-words">
+                {props.preview.binding.upstream_key_name || "未命名 Key"}（ID{" "}
+                <span className="font-mono text-xs">{props.preview.binding.upstream_key_id}</span>）
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AccountRow(props: {
   account: AccountStatus;
   accounts: AccountStatus[];
@@ -4520,10 +4615,17 @@ function AccountRow(props: {
   const [confirmPending, setConfirmPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [manualPriorityOpen, setManualPriorityOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const details = useQuery({
     queryKey: ["account-detail", account.id],
     queryFn: () => api.account(account.id),
     enabled: detailsOpen,
+    retry: false,
+  });
+  const deletePreview = useQuery({
+    queryKey: ["account-delete-preview", account.id],
+    queryFn: () => api.accountDeletePreview(account.id),
+    enabled: deleteOpen && activeAction !== "删除账号",
     retry: false,
   });
   const task = useQuery({
@@ -4553,6 +4655,7 @@ function AccountRow(props: {
     } else {
       toast.error(task.data?.message || `${account.name}：${activeAction}失败`);
     }
+    if (activeAction === "删除账号") setDeleteOpen(false);
     setTaskId(null);
     setActiveAction(null);
   }, [account.name, activeAction, task.data]);
@@ -4646,6 +4749,7 @@ function AccountRow(props: {
             }
             onManualPriority={() => setManualPriorityOpen(true)}
             onEdit={() => setDetailsOpen(true)}
+            onDelete={() => setDeleteOpen(true)}
           />
           {task.error && <QueryError error={task.error} fallback="调度任务状态读取失败" />}
         </TableCell>
@@ -4687,6 +4791,65 @@ function AccountRow(props: {
           );
         }}
       />
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          if (!pending && activeAction !== "删除账号") setDeleteOpen(open);
+        }}
+      >
+        <DialogContent width="medium">
+          <DialogHeader>
+            <DialogTitle>
+              {deletePreview.data?.binding === null ? "删除管理平台账号" : "删除账号及上游 Key"}
+            </DialogTitle>
+            <DialogDescription>
+              {deletePreview.data?.binding === null
+                ? "确认后会删除管理平台账号和 Console 本地记录，此操作不可撤销。"
+                : "确认后会按稳定 ID 同时删除两端数据，此操作不可撤销。"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            {deletePreview.isLoading && (
+              <div className="grid gap-3 py-2" aria-label="正在读取账号删除范围">
+                <Skeleton className="h-5 w-40" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            )}
+            {deletePreview.error && (
+              <QueryError error={deletePreview.error} fallback="账号删除范围读取失败" embedded />
+            )}
+            {deletePreview.data && activeAction !== "删除账号" && (
+              <div className="grid gap-4">
+                <AccountDeletePreviewDetails preview={deletePreview.data} />
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+                    取消
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    disabled={pending}
+                    onClick={() =>
+                      void startTask("删除账号", () => api.deleteAccount(deletePreview.data))
+                    }
+                  >
+                    <Trash2 size={16} />
+                    确认删除
+                  </Button>
+                </div>
+              </div>
+            )}
+            {activeAction === "删除账号" && task.data && !taskStopsPolling(task.data) && (
+              <TaskProgressState message={task.data.message} progress={task.data.progress} />
+            )}
+            {activeAction === "删除账号" && !task.data && !task.error && (
+              <TaskStartupState message="正在创建账号删除任务" />
+            )}
+            {activeAction === "删除账号" && task.error && (
+              <QueryError error={task.error} fallback="账号删除任务状态读取失败" embedded />
+            )}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
       <ConfirmActionDialog
         open={confirmAction !== null}
         title={`确认${confirmAction?.label ?? "操作"}`}
@@ -5201,13 +5364,7 @@ const onboardingSchema = z.object({
   host: z
     .string()
     .trim()
-    .min(1, "请输入上游 Host")
-    .refine((value) => normalizeOnboardingHost(value) !== "", "请输入有效的域名或 IP，可包含端口"),
-  base_url_protocol: z.enum(["https", "http"]),
-  base_url: z
-    .string()
-    .trim()
-    .min(1, "请输入请求 Base URL")
+    .min(1, "请输入上游地址")
     .refine((value) => !value.includes("://"), "协议请使用左侧下拉选择")
     .refine((value) => {
       try {
@@ -5216,7 +5373,13 @@ const onboardingSchema = z.object({
       } catch {
         return false;
       }
-    }, "请输入有效的域名或 IP，可包含端口和路径"),
+    }, "请输入有效的上游地址，可包含端口和路径"),
+  base_url_protocol: z.enum(["https", "http"]),
+  account_base_url: z
+    .string()
+    .trim()
+    .url("请输入完整的 HTTP/HTTPS 地址")
+    .refine((value) => /^https?:\/\//i.test(value), "账号 Base URL 仅支持 HTTP/HTTPS"),
   upstream_type: z.string().min(2, "请选择上游类型"),
   concurrency: z
     .string()
@@ -5242,10 +5405,10 @@ type OnboardingConfirmation = {
   requests: OnboardingRequest[];
   previews: OnboardingBindingPreview[];
 };
-function onboardingBaseUrl(values: Pick<OnboardingForm, "base_url_protocol" | "base_url">) {
+function onboardingBaseUrl(values: Pick<OnboardingForm, "base_url_protocol" | "host">) {
   return composeOnboardingBaseUrl({
     baseUrlProtocol: values.base_url_protocol,
-    baseUrl: values.base_url,
+    baseUrl: values.host,
   });
 }
 function onboardingProbeTarget(
@@ -5288,10 +5451,11 @@ function OnboardingPage() {
     useState<OnboardingConfirmation | null>(null);
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
   const [probeTarget, setProbeTarget] = useState<ProbeDialogTarget | null>(null);
-  const [detectionAction, setDetectionAction] = useState<"type" | "name" | null>(null);
+  const detectionSequence = React.useRef(0);
+  const autoDetectedName = React.useRef("");
   const [upstreamName, setUpstreamName] = useState("");
   const [rechargeRate, setRechargeRate] = useState("1");
-  const [authMode, setAuthMode] = useState("sub2api_user_token");
+  const [authMode, setAuthMode] = useState(defaultAuthModeForPlatform("sub2api"));
   const [showCustomHeaders, setShowCustomHeaders] = useState(false);
   const [credentials, setCredentials] = useState({
     accessToken: "",
@@ -5311,7 +5475,7 @@ function OnboardingPage() {
     defaultValues: {
       host: "",
       base_url_protocol: "https",
-      base_url: "",
+      account_base_url: "",
       upstream_type: "sub2api",
       concurrency: "10",
       priority: "1",
@@ -5337,7 +5501,10 @@ function OnboardingPage() {
     queryFn: api.groups,
     refetchOnMount: "always",
   });
-  const accountDefaults = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const accountDefaults = useQuery({
+    queryKey: ["config"],
+    queryFn: api.config,
+  });
   useEffect(() => {
     if (!accountDefaults.data) return;
     if (!form.getFieldState("concurrency").isDirty) {
@@ -5396,6 +5563,9 @@ function OnboardingPage() {
     mutationFn: api.createUpstream,
     onSuccess: (upstream) => {
       setVerifiedUpstream(upstream);
+      if (!form.getFieldState("account_base_url").isDirty) {
+        form.resetField("account_base_url", { defaultValue: upstream.account_base_url });
+      }
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({
         queryKey: ["auth-recovery-config"],
@@ -5450,9 +5620,16 @@ function OnboardingPage() {
     const configuration = entryConfiguration.data;
     if (!configuration) return;
     const parsedBaseUrl = parseOnboardingBaseUrl(configuration.base_url);
-    form.setValue("host", configuration.host, { shouldValidate: true });
+    form.setValue("host", parsedBaseUrl.baseUrl, { shouldValidate: true });
     form.setValue("base_url_protocol", parsedBaseUrl.baseUrlProtocol);
-    form.setValue("base_url", parsedBaseUrl.baseUrl, { shouldValidate: true });
+    if (
+      preparedEntryHost.current !== entryHost ||
+      !form.getFieldState("account_base_url").isDirty
+    ) {
+      form.resetField("account_base_url", {
+        defaultValue: configuration.account_base_url,
+      });
+    }
     form.setValue("upstream_type", configuration.upstream_type, {
       shouldValidate: true,
     });
@@ -5470,49 +5647,73 @@ function OnboardingPage() {
   const authModes = authModesForPlatform(upstreamType);
   useEffect(() => {
     if (authModes.some((item) => item.value === authMode)) return;
-    setAuthMode(authModes[0]?.value ?? "custom_headers");
+    setAuthMode(defaultAuthModeForPlatform(upstreamType));
   }, [authMode, authModes]);
 
-  async function runUpstreamDetection(action: "type" | "name") {
-    const valid = await form.trigger("base_url");
-    if (!valid) return;
-    setDetectionAction(action);
+  async function runUpstreamDetection(address = onboardingBaseUrl(form.getValues())) {
+    const requestSequence = ++detectionSequence.current;
     try {
-      const result = await detection.mutateAsync(onboardingBaseUrl(form.getValues()));
-      if (action === "type") {
-        if (!result.type_detected || !result.upstream_type) {
-          toast.error("未能识别上游类型，请手动选择");
-          return;
-        }
+      const result = await detection.mutateAsync(address);
+      if (
+        requestSequence !== detectionSequence.current ||
+        address !== onboardingBaseUrl(form.getValues())
+      ) {
+        return;
+      }
+      if (result.type_detected && result.upstream_type) {
         form.setValue("upstream_type", result.upstream_type, {
           shouldValidate: true,
         });
-        const defaultAuthMode =
-          result.auth_mode ?? authModesForPlatform(result.upstream_type)[0]?.value;
-        if (defaultAuthMode) setAuthMode(defaultAuthMode);
-        if (result.name && !upstreamName.trim()) setUpstreamName(result.name);
-        toast.success(`已识别为 ${displayUpstreamType(result.upstream_type)}`);
-        return;
+        setAuthMode(defaultAuthModeForPlatform(result.upstream_type));
       }
-      if (!result.name_detected || !result.name) {
-        toast.error("未读取到上游名称，请手动填写");
-        return;
+      if (result.name_detected && result.name) {
+        setUpstreamName((current) => {
+          if (current.trim() && current !== autoDetectedName.current) return current;
+          autoDetectedName.current = result.name!;
+          return result.name!;
+        });
       }
-      setUpstreamName(result.name);
-      toast.success("已获取上游名称");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "上游公开信息读取失败");
-    } finally {
-      setDetectionAction(null);
+    } catch {
+      // Automatic detection is advisory; validation and manual selection remain available.
     }
   }
 
+  const upstreamAddressProtocol = form.watch("base_url_protocol");
+  const upstreamAddressValue = form.watch("host");
+  useEffect(() => {
+    if (form.getFieldState("account_base_url").isDirty || !upstreamAddressValue.trim()) return;
+    const address = composeOnboardingBaseUrl({
+      baseUrlProtocol: upstreamAddressProtocol,
+      baseUrl: upstreamAddressValue,
+    });
+    if (!onboardingUpstreamRequest(address)) return;
+    form.resetField("account_base_url", { defaultValue: address });
+  }, [form, upstreamAddressProtocol, upstreamAddressValue]);
+  useEffect(() => {
+    if (entryHost || verifiedUpstream || !upstreamAddressValue.trim()) return;
+    const address = composeOnboardingBaseUrl({
+      baseUrlProtocol: upstreamAddressProtocol,
+      baseUrl: upstreamAddressValue,
+    });
+    if (!onboardingUpstreamRequest(address)) return;
+    const timeout = globalThis.setTimeout(() => void runUpstreamDetection(address), 500);
+    return () => globalThis.clearTimeout(timeout);
+  }, [entryHost, upstreamAddressProtocol, upstreamAddressValue, verifiedUpstream]);
+
   async function completeUpstreamStep() {
-    const valid = await form.trigger(["host", "base_url", "upstream_type"]);
+    const valid = await form.trigger(["host", "account_base_url", "upstream_type"]);
     if (!valid) return;
     const values = form.getValues();
-    const baseUrl = onboardingBaseUrl(values);
-    const normalizedHost = normalizeOnboardingHost(values.host);
+    const target = onboardingUpstreamRequest(onboardingBaseUrl(values));
+    if (!target) {
+      form.setError("host", {
+        type: "manual",
+        message: "请输入有效的上游地址，可包含端口和路径",
+      });
+      return;
+    }
+    const normalizedHost = target.host;
+    const baseUrl = target.baseUrl;
     const existing = upstreams.data?.hosts.find(
       (item) => item.host.toLowerCase() === normalizedHost,
     );
@@ -5528,6 +5729,11 @@ function OnboardingPage() {
           queryFn: () => api.upstreamConfiguration(existing.host),
         });
         setVerifiedUpstream(configuration);
+        if (!form.getFieldState("account_base_url").isDirty) {
+          form.resetField("account_base_url", {
+            defaultValue: configuration.account_base_url,
+          });
+        }
         setUpstreamName(configuration.name);
         setRechargeRate(configuration.recharge_rate || "1");
         setAuthMode(configuration.auth_mode);
@@ -5543,6 +5749,7 @@ function OnboardingPage() {
         host: normalizedHost,
         name: upstreamName.trim() || normalizedHost,
         base_url: baseUrl,
+        account_base_url: values.account_base_url.trim(),
         upstream_type: upstreamType,
         auth_mode: authMode,
         recharge_rate: rechargeRate,
@@ -5596,10 +5803,7 @@ function OnboardingPage() {
     }
   }
   async function execute() {
-    const valid = await form.trigger(["concurrency", "priority", "local_group_id"]);
-    if (!valid) return;
     const values = form.getValues();
-    form.clearErrors("host");
     const candidate = visibleCandidates.find((item) => item.group_id === selectedGroupId);
     const existingBinding = candidate ? candidateHasExistingBinding(candidate) : false;
     if (
@@ -5608,12 +5812,11 @@ function OnboardingPage() {
       !candidate.multiplier ||
       (!candidateCanCreateKey(candidate) && !existingBinding)
     ) {
-      form.setError("host", {
-        type: "manual",
-        message: "所选上游分组当前不可用于添加账号",
-      });
+      toast.error("所选上游分组当前不可用于添加账号");
       return;
     }
+    const settingsValid = await form.trigger(["concurrency", "priority", "local_group_id"]);
+    if (!settingsValid) return;
     const localGroupIDs =
       batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
     const selectedLocalGroups = localGroupIDs.flatMap((groupID) => {
@@ -5635,6 +5838,7 @@ function OnboardingPage() {
     const request: OnboardingRequest = {
       host: onboardingRequestHost(verifiedUpstream, values.host),
       upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
+      base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
       notes: values.notes,
       concurrency: Number(values.concurrency),
       priority: Number(values.priority),
@@ -5648,7 +5852,6 @@ function OnboardingPage() {
       requests: [request],
       previews: [
         {
-          upstream: preparedData?.upstream.name ?? verifiedUpstream?.name ?? request.host,
           upstreamGroup: candidate.group_name,
           multiplier: candidate.multiplier,
           localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
@@ -5686,6 +5889,7 @@ function OnboardingPage() {
           request: {
             host: onboardingRequestHost(verifiedUpstream, values.host),
             upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
+            base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
             notes: values.notes,
             concurrency: Number(values.concurrency),
             priority: Number(values.priority),
@@ -5695,7 +5899,6 @@ function OnboardingPage() {
             schedulable: false,
           } satisfies OnboardingRequest,
           preview: {
-            upstream: preparedData?.upstream.name ?? verifiedUpstream?.name ?? values.host.trim(),
             upstreamGroup: candidate.group_name,
             multiplier: candidate.multiplier,
             localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
@@ -5815,7 +6018,7 @@ function OnboardingPage() {
       return false;
     }
     if (candidateHasExistingBinding(candidate)) {
-      return !sameOnboardingGroupSelection(selected, candidateBoundLocalGroupIDs(candidate));
+      return candidateHasOnboardingChange(candidate, selected, "", false);
     }
     return candidateCanCreateKey(candidate);
   }).length;
@@ -5972,7 +6175,6 @@ function OnboardingPage() {
                     <Badge variant="outline">
                       {displayUpstreamType(verifiedUpstream.upstream_type)}
                     </Badge>
-                    <Badge variant="outline">Host {verifiedUpstream.host}</Badge>
                   </div>
                   <ExternalUpstreamLink
                     host={verifiedUpstream.host}
@@ -6001,17 +6203,8 @@ function OnboardingPage() {
                 }}
               >
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField
-                    label="上游 Host（账号归属）"
-                    error={form.formState.errors.host?.message}
-                  >
-                    <Input {...form.register("host")} placeholder="origin.example.com:8080" />
-                  </FormField>
-                  <FormField
-                    label="请求 Base URL（实际访问）"
-                    error={form.formState.errors.base_url?.message}
-                  >
-                    <div className="grid min-w-0 grid-cols-[6.75rem_minmax(0,1fr)] gap-2 sm:grid-cols-[6.75rem_minmax(0,1fr)_6.5rem]">
+                  <FormField label="上游地址" error={form.formState.errors.host?.message}>
+                    <div className="grid min-w-0 grid-cols-[6.75rem_minmax(0,1fr)] gap-2">
                       <Controller
                         control={form.control}
                         name="base_url_protocol"
@@ -6027,60 +6220,55 @@ function OnboardingPage() {
                           </Select>
                         )}
                       />
-                      <Input
-                        {...form.register("base_url")}
-                        placeholder="accelerated.example.com:8443/api"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="col-span-2 sm:col-span-1"
-                        disabled={detection.isPending}
-                        onClick={() => void runUpstreamDetection("type")}
-                      >
-                        <ScanSearch />
-                        {detectionAction === "type" ? "识别中" : "自动识别"}
-                      </Button>
+                      <Input {...form.register("host")} placeholder="sub2api.example.com" />
                     </div>
+                  </FormField>
+                  <FormField
+                    label="账号 Base URL"
+                    error={form.formState.errors.account_base_url?.message}
+                  >
+                    <Input
+                      {...form.register("account_base_url")}
+                      placeholder={onboardingBaseUrl(form.getValues())}
+                    />
                   </FormField>
                   <FormField label="名称">
-                    <div className="flex min-w-0 gap-2">
-                      <Input
-                        value={upstreamName}
-                        onChange={(event) => setUpstreamName(event.target.value)}
-                        placeholder="留空时使用 Host"
+                    <Input
+                      value={upstreamName}
+                      onChange={(event) => setUpstreamName(event.target.value)}
+                      placeholder="输入地址后自动获取"
+                    />
+                  </FormField>
+                  <FormField label="上游类型">
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+                      <Controller
+                        control={form.control}
+                        name="upstream_type"
+                        render={({ field }) => (
+                          <Select value={field.value} onValueChange={field.onChange}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {configurableUpstreamTypeOptions.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
                       />
                       <Button
                         type="button"
                         variant="outline"
-                        className="min-w-[6.5rem]"
-                        disabled={detection.isPending}
-                        onClick={() => void runUpstreamDetection("name")}
+                        disabled={detection.isPending || !upstreamAddressValue.trim()}
+                        onClick={() => void runUpstreamDetection()}
                       >
-                        <RefreshCw />
-                        {detectionAction === "name" ? "获取中" : "自动获取"}
+                        <ScanSearch className={detection.isPending ? "animate-pulse" : undefined} />
+                        {detection.isPending ? "识别中" : "自动识别"}
                       </Button>
                     </div>
-                  </FormField>
-                  <FormField label="上游类型">
-                    <Controller
-                      control={form.control}
-                      name="upstream_type"
-                      render={({ field }) => (
-                        <Select value={field.value} onValueChange={field.onChange}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {configurableUpstreamTypeOptions.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
                   </FormField>
                   <FormField label="鉴权方式">
                     <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>
@@ -6507,12 +6695,12 @@ function OnboardingPage() {
                           ? (batchBindings[candidate.group_id] ??
                             candidateBoundLocalGroupIDs(candidate))
                           : [];
-                        const pendingChange = alreadyBound
-                          ? !sameOnboardingGroupSelection(
-                              selectedLocalGroupIDs,
-                              candidateBoundLocalGroupIDs(candidate),
-                            )
-                          : selectedLocalGroupIDs.length > 0;
+                        const pendingChange = candidateHasOnboardingChange(
+                          candidate,
+                          selectedLocalGroupIDs,
+                          "",
+                          false,
+                        );
                         const candidateProbeTarget = onboardingProbeTarget(candidate);
                         return (
                           <TableRow
@@ -6534,7 +6722,10 @@ function OnboardingPage() {
                                 onValueChange={(value) => {
                                   if (!candidate.group_id) return;
                                   setBatchBindings((current) => {
-                                    return { ...current, [candidate.group_id!]: value };
+                                    return {
+                                      ...current,
+                                      [candidate.group_id!]: value,
+                                    };
                                   });
                                 }}
                               />
@@ -6561,7 +6752,7 @@ function OnboardingPage() {
                 ) : null}
                 {entryGroupId && entryCandidateSelectable ? (
                   <>
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <FormField
                         label="本地分组"
                         error={form.formState.errors.local_group_id?.message}
@@ -6579,7 +6770,10 @@ function OnboardingPage() {
                           disabledReason={null}
                           onValueChange={(value) => {
                             if (!entryGroupId) return;
-                            setBatchBindings((current) => ({ ...current, [entryGroupId]: value }));
+                            setBatchBindings((current) => ({
+                              ...current,
+                              [entryGroupId]: value,
+                            }));
                             form.setValue("local_group_id", value[0] ?? "", {
                               shouldValidate: true,
                             });
@@ -6654,7 +6848,7 @@ function OnboardingPage() {
                 ) : null}
                 {!entryGroupId ? (
                   <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="grid min-w-64 flex-1 gap-3 sm:grid-cols-3">
+                    <div className="grid min-w-64 flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                       <FormField label="批量备注（可选）">
                         <Input
                           {...form.register("notes")}
@@ -6815,7 +7009,7 @@ function OnboardingPage() {
       >
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(onboardingMaintenanceTask.data))}
-          height={operationDialogHeight(taskStopsPolling(onboardingMaintenanceTask.data), "large")}
+          height={operationDialogHeight(taskStopsPolling(onboardingMaintenanceTask.data))}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -6961,7 +7155,7 @@ function OnboardingPage() {
       >
         <DialogContent
           width={operationDialogWidth(Boolean(task.data && !onboardingPending))}
-          height={operationDialogHeight(Boolean(task.data && !onboardingPending), "medium")}
+          height={operationDialogHeight(Boolean(task.data && !onboardingPending))}
           className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
           <DialogHeader>
@@ -7332,8 +7526,11 @@ function AuthTaskProgress(props: { task: Task }) {
   const balanceSucceeded = balanceResult?.status === "succeeded";
   let balanceText: string | null = null;
   if (balanceSucceeded && balanceResult !== null) {
-    if (typeof balanceResult.balance === "string" || typeof balanceResult.balance === "number") {
-      balanceText = `余额 ${formatBalance(String(balanceResult.balance))}`;
+    const balance = balanceResult.display_balance ?? balanceResult.balance;
+    if (typeof balance === "string" || typeof balance === "number") {
+      const unit =
+        typeof balanceResult.balance_unit === "string" ? balanceResult.balance_unit : null;
+      balanceText = `余额 ${formatBalance(String(balance), unit)}`;
     } else {
       balanceText = "上游未返回余额";
     }
@@ -7431,7 +7628,7 @@ export function BalanceTaskProgress(props: { task: Task }) {
       : null);
   const balance =
     typeof rawBalance === "string" || typeof rawBalance === "number"
-      ? formatBalance(String(rawBalance))
+      ? formatBalance(String(rawBalance), hostResult?.balanceUnit)
       : null;
   const host = hostResult?.host ?? String(result.host ?? "未返回");
   const balanceStatus =
@@ -7498,6 +7695,7 @@ type UpstreamSyncRow = {
   authStatus: string;
   balanceStatus: string;
   balance: string | number | null;
+  balanceUnit: string | null;
   groupCount: number;
   reason: string | null;
 };
@@ -7514,8 +7712,9 @@ function upstreamSyncRows(task: Task): UpstreamSyncRow[] {
         ? row.status
         : "failed";
     const rawGroupCount = Number(row.group_count);
+    const balanceSource = row.display_balance ?? row.balance;
     const balance =
-      typeof row.balance === "string" || typeof row.balance === "number" ? row.balance : null;
+      typeof balanceSource === "string" || typeof balanceSource === "number" ? balanceSource : null;
     return [
       {
         host: row.host,
@@ -7524,6 +7723,7 @@ function upstreamSyncRows(task: Task): UpstreamSyncRow[] {
           typeof row.auth_status === "string" ? row.auth_status : upstreamAuthStatuses.unconfirmed,
         balanceStatus: typeof row.balance_status === "string" ? row.balance_status : "未读取",
         balance,
+        balanceUnit: typeof row.balance_unit === "string" ? row.balance_unit : null,
         groupCount:
           Number.isFinite(rawGroupCount) && rawGroupCount >= 0 ? Math.trunc(rawGroupCount) : 0,
         reason: typeof row.reason === "string" ? row.reason : null,
@@ -7635,7 +7835,9 @@ export function UpstreamSyncTaskStatus(props: {
                 </TableCell>
                 {scope !== "groups" && scope !== "names" && (
                   <TableCell>
-                    {row.balance === null ? row.balanceStatus : formatBalance(String(row.balance))}
+                    {row.balance === null
+                      ? row.balanceStatus
+                      : formatBalance(String(row.balance), row.balanceUnit)}
                   </TableCell>
                 )}
                 {scope !== "balance" && scope !== "names" && (
@@ -7737,6 +7939,26 @@ export function targetFormFromConfig(
     admin_key: "",
     request_timeout_seconds: String(value.request_timeout_seconds),
   };
+}
+
+export async function saveTargetWithOptionalSync(options: {
+  persist: () => Promise<RuntimeConfig>;
+  commit: (value: RuntimeConfig) => void;
+  startSync: () => Promise<Task>;
+  syncAfterSave: boolean;
+}): Promise<{ task: Task | null; syncFailed: boolean; syncError: unknown }> {
+  const value = await options.persist();
+  options.commit(value);
+  if (!options.syncAfterSave) return { task: null, syncFailed: false, syncError: null };
+  try {
+    return {
+      task: await options.startSync(),
+      syncFailed: false,
+      syncError: null,
+    };
+  } catch (syncError) {
+    return { task: null, syncFailed: true, syncError };
+  }
 }
 
 export function notificationFormFromStatus(value?: NotificationStatus): {
@@ -7857,6 +8079,7 @@ export function ConfigPage() {
     queryFn: api.logCleanupStatus,
     refetchInterval: 30_000,
   });
+  const logCleanupReady = logCleanup.data !== undefined && !logCleanup.error;
   const [notificationForm, setNotificationForm] = useState(() =>
     notificationFormFromStatus(notifications.data),
   );
@@ -7991,11 +8214,15 @@ export function ConfigPage() {
       toast.error(error instanceof Error ? error.message : "QQBot 目标获取取消失败"),
   });
   const saveLogCleanup = useMutation({
-    mutationFn: () =>
-      api.updateLogCleanup({
+    mutationFn: () => {
+      if (!logCleanupReady) {
+        throw new Error("日志清理配置尚未成功读取，请重试");
+      }
+      return api.updateLogCleanup({
         enabled: logCleanupForm.enabled,
         retention_days: Number(logCleanupForm.retention_days),
-      }),
+      });
+    },
     onSuccess: (value) => {
       queryClient.setQueryData(["log-cleanup"], value);
       setLogCleanupEdited(false);
@@ -8005,7 +8232,12 @@ export function ConfigPage() {
       toast.error(error instanceof Error ? error.message : "日志清理设置保存失败"),
   });
   const clearLogs = useMutation({
-    mutationFn: () => api.clearLogs(Number(logCleanupForm.retention_days)),
+    mutationFn: () => {
+      if (!logCleanupReady) {
+        throw new Error("日志清理配置尚未成功读取，请重试");
+      }
+      return api.clearLogs(Number(logCleanupForm.retention_days));
+    },
     onSuccess: async (result) => {
       setClearLogsOpen(false);
       await Promise.all([
@@ -8040,20 +8272,28 @@ export function ConfigPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "测试通知失败"),
   });
   const saveTarget = useMutation({
-    mutationFn: async (syncAfterSave: boolean) => {
-      const value = await api.setAdminTarget({
-        admin_base_url: targetForm.admin_base_url,
-        admin_key: targetForm.admin_key,
-        request_timeout_seconds: Number(targetForm.request_timeout_seconds),
-      });
-      const task = syncAfterSave ? await api.syncManagement() : null;
-      return { value, task };
-    },
-    onSuccess: ({ value, task }) => {
-      setTargetForm(targetFormFromConfig(value));
-      setTargetEdited(false);
-      queryClient.setQueryData(["config"], value);
-      void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    mutationFn: (syncAfterSave: boolean) =>
+      saveTargetWithOptionalSync({
+        persist: () =>
+          api.setAdminTarget({
+            admin_base_url: targetForm.admin_base_url,
+            admin_key: targetForm.admin_key,
+            request_timeout_seconds: Number(targetForm.request_timeout_seconds),
+          }),
+        commit: (value) => {
+          setTargetForm(targetFormFromConfig(value));
+          setTargetEdited(false);
+          queryClient.setQueryData(["config"], value);
+          void queryClient.invalidateQueries({ queryKey: ["overview"] });
+        },
+        startSync: api.syncManagement,
+        syncAfterSave,
+      }),
+    onSuccess: ({ task, syncFailed, syncError }) => {
+      if (syncFailed) {
+        toast.error(`目标已保存，但同步启动失败：${operationErrorMessage(syncError, "未知错误")}`);
+        return;
+      }
       if (task) {
         setManagementTaskId(task.id);
         toast.success("连接已保存，正在测试同步");
@@ -8411,7 +8651,8 @@ export function ConfigPage() {
                               </code>
                               {notificationTargetResult.sourceName ? (
                                 <span className="text-muted-foreground text-xs">
-                                  触发用户：{notificationTargetResult.sourceName}
+                                  触发用户：
+                                  {notificationTargetResult.sourceName}
                                 </span>
                               ) : null}
                             </div>
@@ -8571,6 +8812,24 @@ export function ConfigPage() {
                     <QueryError error={logCleanup.error} fallback="日志清理配置读取失败" embedded />
                   </div>
                 ) : null}
+                {!logCleanupReady && !logCleanup.isLoading ? (
+                  <div className="border-border/70 flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+                    <span className="text-muted-foreground text-sm">
+                      读取成功后才能修改设置或清理日志。
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      data-testid="log-cleanup-retry"
+                      disabled={logCleanup.isFetching}
+                      onClick={() => void logCleanup.refetch()}
+                    >
+                      <RefreshCw className={logCleanup.isFetching ? "animate-spin" : undefined} />
+                      {logCleanup.isFetching ? "读取中…" : "重试读取"}
+                    </Button>
+                  </div>
+                ) : null}
                 <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <label className="min-w-0 cursor-pointer" htmlFor="log-cleanup-enabled">
@@ -8583,7 +8842,7 @@ export function ConfigPage() {
                       id="log-cleanup-enabled"
                       className="shrink-0"
                       checked={logCleanupForm.enabled}
-                      disabled={saveLogCleanup.isPending || logCleanup.isLoading}
+                      disabled={saveLogCleanup.isPending || !logCleanupReady}
                       aria-label="定时清理"
                       onCheckedChange={(enabled) => {
                         setLogCleanupEdited(true);
@@ -8606,6 +8865,7 @@ export function ConfigPage() {
                         max={3650}
                         aria-label="日志保留天数"
                         value={logCleanupForm.retention_days}
+                        disabled={saveLogCleanup.isPending || !logCleanupReady}
                         onChange={(event) => {
                           setLogCleanupEdited(true);
                           setLogCleanupForm({
@@ -8633,20 +8893,26 @@ export function ConfigPage() {
                     <div className="flex flex-wrap justify-end gap-2">
                       <Button
                         variant="outline"
+                        data-testid="log-cleanup-clear"
                         disabled={
                           clearLogs.isPending ||
+                          !logCleanupReady ||
                           !Number.isInteger(Number(logCleanupForm.retention_days)) ||
                           Number(logCleanupForm.retention_days) < 1 ||
                           Number(logCleanupForm.retention_days) > 3650
                         }
-                        onClick={() => setClearLogsOpen(true)}
+                        onClick={() => {
+                          if (logCleanupReady) setClearLogsOpen(true);
+                        }}
                       >
                         <Trash2 size={16} />
                         立即按期限清理
                       </Button>
                       <Button
+                        data-testid="log-cleanup-save"
                         disabled={
                           saveLogCleanup.isPending ||
+                          !logCleanupReady ||
                           !Number.isInteger(Number(logCleanupForm.retention_days)) ||
                           Number(logCleanupForm.retention_days) < 1 ||
                           Number(logCleanupForm.retention_days) > 3650
@@ -8665,9 +8931,9 @@ export function ConfigPage() {
         </div>
       </div>
       <Dialog
-        open={clearLogsOpen}
+        open={clearLogsOpen && logCleanupReady}
         onOpenChange={(open) => {
-          if (!clearLogs.isPending) setClearLogsOpen(open);
+          if (!clearLogs.isPending && (!open || logCleanupReady)) setClearLogsOpen(open);
         }}
       >
         <DialogContent>
@@ -8688,7 +8954,7 @@ export function ConfigPage() {
             </Button>
             <Button
               variant="destructive"
-              disabled={clearLogs.isPending}
+              disabled={clearLogs.isPending || !logCleanupReady}
               onClick={() => clearLogs.mutate()}
             >
               <Trash2 size={15} />
@@ -8705,6 +8971,21 @@ function autoInspectionConfig(value: AutoInspectionStatus): AutoInspectionConfig
   return {
     enabled: value.enabled,
     interval_seconds: value.interval_seconds,
+  };
+}
+
+export function mergeAutoInspectionDraft(
+  draft: AutoInspectionConfig | null,
+  previous: AutoInspectionConfig | null,
+  incoming: AutoInspectionConfig,
+): AutoInspectionConfig {
+  if (!draft || !previous) return incoming;
+  return {
+    enabled: draft.enabled === previous.enabled ? incoming.enabled : draft.enabled,
+    interval_seconds:
+      draft.interval_seconds === previous.interval_seconds
+        ? incoming.interval_seconds
+        : draft.interval_seconds,
   };
 }
 
@@ -9481,6 +9762,7 @@ function AutoInspectionCard() {
     refetchInterval: 15_000,
   });
   const [draft, setDraft] = useState<AutoInspectionConfig | null>(null);
+  const syncedConfig = React.useRef<AutoInspectionConfig | null>(null);
   const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
   const [selectedHeartbeat, setSelectedHeartbeat] = useState<
     AutoInspectionStatus["heartbeat_history"][number] | null
@@ -9504,7 +9786,9 @@ function AutoInspectionCard() {
   const save = useMutation({
     mutationFn: api.updateAutoInspection,
     onSuccess: (value) => {
-      setDraft(autoInspectionConfig(value));
+      const saved = autoInspectionConfig(value);
+      syncedConfig.current = saved;
+      setDraft(saved);
       toast.success(value.enabled ? "自动巡检已开启" : "自动巡检已关闭");
       void status.refetch();
     },
@@ -9522,7 +9806,9 @@ function AutoInspectionCard() {
   });
   useEffect(() => {
     if (status.data) {
-      setDraft((current) => current ?? autoInspectionConfig(status.data!));
+      const incoming = autoInspectionConfig(status.data);
+      setDraft((current) => mergeAutoInspectionDraft(current, syncedConfig.current, incoming));
+      syncedConfig.current = incoming;
     }
   }, [status.data]);
   useEffect(() => {
@@ -12035,12 +12321,13 @@ function formatDate(value: string | null | undefined, includeSeconds = false) {
         second: includeSeconds ? "2-digit" : undefined,
       });
 }
-function formatBalance(value: string) {
+function formatBalance(value: string, unit?: string | null) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return value;
+  const currency = unit?.toLowerCase() === "cny" ? "CNY" : "USD";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(parsed);

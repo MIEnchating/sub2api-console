@@ -3,6 +3,7 @@ package upstreamdelete
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 type boundedDeleteClient struct {
@@ -19,6 +21,33 @@ type boundedDeleteClient struct {
 	maximum atomic.Int32
 	started chan struct{}
 	release chan struct{}
+}
+
+type deleteTaskObserver struct {
+	updates chan taskstore.Task
+}
+
+func (observer *deleteTaskObserver) Save(_ context.Context, task taskstore.Task) error {
+	if task.Status == "succeeded" || task.Status == "failed" {
+		observer.updates <- task
+	}
+	return nil
+}
+
+type deferredDeleteRunner struct {
+	run func(context.Context)
+}
+
+func (runner *deferredDeleteRunner) Go(run func(context.Context)) error {
+	runner.run = run
+	return nil
+}
+
+func (runner *deferredDeleteRunner) Run(ctx context.Context) {
+	if runner.run == nil {
+		panic("upstream delete task was not scheduled")
+	}
+	runner.run(ctx)
 }
 
 func (c *boundedDeleteClient) DeleteAccountWithVerification(ctx context.Context, _ string, _ bool) (map[string]any, error) {
@@ -65,6 +94,37 @@ func TestDeleteAccountsUsesBoundedConcurrency(t *testing.T) {
 	}
 }
 
+func TestQueuedDeleteRejectsManagementTargetChangeBeforeRemoteWrite(t *testing.T) {
+	serverA := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("queued delete accessed its obsolete management target")
+	}))
+	defer serverA.Close()
+	var targetBRequests atomic.Int32
+	serverB := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		targetBRequests.Add(1)
+		http.Error(response, "unexpected replacement target access", http.StatusInternalServerError)
+	}))
+	defer serverB.Close()
+	repository := &deleteRepository{preview: business.UpstreamDeletePreview{Host: "api.example", AccountIDs: []string{"41"}}}
+	private := &deletePrivateStore{target: configstore.TargetSettings{BaseURL: serverA.URL, AdminKey: "target-a", TimeoutSeconds: 2}}
+	tasks := &deleteTaskObserver{updates: make(chan taskstore.Task, 1)}
+	runner := &deferredDeleteRunner{}
+	service := New(repository, private, tasks)
+	service.UseTaskRunner(runner)
+	if _, err := service.Enqueue(context.Background(), "api.example", []string{"41"}, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	private.target = configstore.TargetSettings{BaseURL: serverB.URL, AdminKey: "target-b", TimeoutSeconds: 2}
+	runner.Run(context.Background())
+	finished := <-tasks.updates
+	if finished.Status != "failed" || !strings.Contains(fmt.Sprint(finished.Result["error"]), "管理目标") || finished.Result["remote_write"] != false {
+		t.Fatalf("target-drift delete task=%#v", finished)
+	}
+	if requests := targetBRequests.Load(); requests != 0 {
+		t.Fatalf("queued delete accessed replacement target %d times", requests)
+	}
+}
+
 type deleteRepository struct {
 	preview        business.UpstreamDeletePreview
 	projection     business.UpstreamDeleteProjection
@@ -73,9 +133,22 @@ type deleteRepository struct {
 	deleteCalls    int
 	audit          business.UpstreamDeleteAudit
 	manualControls map[string]business.ManualPriorityControl
+	protections    map[string]business.AccountMutationProtection
 }
 
-func (r *deleteRepository) Mode(context.Context) (string, error) { return "full", nil }
+func (r *deleteRepository) AccountMutationProtections(_ context.Context, accountIDs []string) (map[string]business.AccountMutationProtection, error) {
+	result := make(map[string]business.AccountMutationProtection, len(accountIDs))
+	for _, accountID := range accountIDs {
+		protection := r.protections[accountID]
+		if _, found := r.manualControls[accountID]; found {
+			protection.ManualPriority = true
+		}
+		result[accountID] = protection
+	}
+	return result, nil
+}
+
+func (r *deleteRepository) Mode(context.Context) (string, error) { return "完全模式", nil }
 
 func (r *deleteRepository) ManualPriorityControls(_ context.Context, accountIDs []string) (map[string]business.ManualPriorityControl, error) {
 	result := make(map[string]business.ManualPriorityControl)
@@ -98,19 +171,21 @@ func (r *deleteRepository) DeleteUpstreamProjection(_ context.Context, _ string,
 }
 
 type deletePrivateStore struct {
-	target      configstore.TargetSettings
-	targetErr   error
-	deleteValue bool
-	deleteErr   error
-	deleteCalls int
+	target       configstore.TargetSettings
+	targetErr    error
+	deleteValue  bool
+	deleteErr    error
+	deleteCalls  int
+	deletedHosts []string
 }
 
 func (s *deletePrivateStore) TargetSettings(context.Context) (configstore.TargetSettings, error) {
 	return s.target, s.targetErr
 }
 
-func (s *deletePrivateStore) DeleteAuthRecord(context.Context, string) (bool, error) {
+func (s *deletePrivateStore) DeleteAuthRecord(_ context.Context, host string) (bool, error) {
 	s.deleteCalls++
+	s.deletedHosts = append(s.deletedHosts, host)
 	return s.deleteValue, s.deleteErr
 }
 
@@ -135,6 +210,9 @@ func deletionServer(t *testing.T, deleteStatus int) *httptest.Server {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41" && deleted:
 			response.WriteHeader(http.StatusNotFound)
 			_, _ = response.Write([]byte(`{"message":"not found"}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41":
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"data":{"id":41}}`))
 		default:
 			http.NotFound(response, request)
 		}
@@ -171,6 +249,18 @@ func TestDeleteConfirmsRemoteAbsenceBeforeCommittingLocalProjection(t *testing.T
 	}
 	if result.EventID != -7 || result.RemoteDeletedAccounts != 1 || !result.RemoteWrite || !result.ReadbackConfirmed {
 		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestDeleteLocksAndRemovesEveryStableIdentityAuthAlias(t *testing.T) {
+	service, repository, private := newDeleteService(t, http.StatusOK)
+	repository.preview.IdentityHosts = []string{"HTTPS://API.EXAMPLE/", "relay.example"}
+	result, err := service.Delete(context.Background(), "api.example", []string{"41"}, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.PrivateAuthDeleted || private.deleteCalls != 2 || strings.Join(private.deletedHosts, ",") != "api.example,relay.example" {
+		t.Fatalf("result=%#v deleteCalls=%d hosts=%#v", result, private.deleteCalls, private.deletedHosts)
 	}
 }
 
@@ -234,6 +324,21 @@ func TestDeleteRejectsUpstreamContainingManualPriorityAccount(t *testing.T) {
 	}
 }
 
+func TestDeleteRechecksManualPauseAfterAcquiringReservations(t *testing.T) {
+	repository := &deleteRepository{
+		preview:     business.UpstreamDeletePreview{Host: "https://API.EXAMPLE/", AccountIDs: []string{"41"}},
+		protections: map[string]business.AccountMutationProtection{"41": {Paused: true}},
+	}
+	private := &deletePrivateStore{targetErr: errors.New("target must not be read")}
+	_, err := New(repository, private, nil).Delete(context.Background(), "api.example", []string{"41"}, "operator")
+	if err == nil || !strings.Contains(err.Error(), "人工暂停") {
+		t.Fatalf("manual pause delete error=%v", err)
+	}
+	if private.deleteCalls != 0 || repository.deleteCalls != 0 {
+		t.Fatalf("protected account deletion reached writes: private=%d projection=%d", private.deleteCalls, repository.deleteCalls)
+	}
+}
+
 func TestDeleteRemoteFailureLeavesPrivateAndLocalStateUntouched(t *testing.T) {
 	service, repository, private := newDeleteService(t, http.StatusBadRequest)
 	_, err := service.Delete(context.Background(), "api.example", []string{"41"}, "admin")
@@ -262,6 +367,10 @@ func TestDeleteReportsAccountsRemovedBeforeALaterRemoteFailure(t *testing.T) {
 		if request.Method == http.MethodGet && deleted[accountID] {
 			response.WriteHeader(http.StatusNotFound)
 			_, _ = response.Write([]byte(`{"message":"not found"}`))
+			return
+		}
+		if request.Method == http.MethodGet && accountID == "42" {
+			_, _ = response.Write([]byte(`{"data":{"id":42}}`))
 			return
 		}
 		http.NotFound(response, request)

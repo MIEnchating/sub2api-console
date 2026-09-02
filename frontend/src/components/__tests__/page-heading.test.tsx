@@ -10,6 +10,8 @@ describe("PageHeading", () => {
     );
 
     expect(markup).toContain('data-slot="page-heading"');
+    expect(markup).toContain("<h1");
+    expect(markup).not.toContain("<h2");
     expect(markup).toContain("shrink-0");
     expect(markup).not.toContain("sticky");
     expect(markup).not.toContain("overflow-auto");

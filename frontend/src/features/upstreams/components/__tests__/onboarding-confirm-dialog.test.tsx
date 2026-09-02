@@ -5,13 +5,12 @@ import { Dialog } from "@/components/ui/dialog";
 import { OnboardingConfirmContent } from "../onboarding-confirm-dialog";
 
 describe("OnboardingConfirmContent", () => {
-  it("previews every binding field before account creation", () => {
+  it("previews binding fields without repeating upstream addresses", () => {
     const markup = renderToStaticMarkup(
       <Dialog open>
         <OnboardingConfirmContent
           items={[
             {
-              upstream: "示例上游",
               upstreamGroup: "codex-special",
               multiplier: "0.15",
               localGroup: "codex",
@@ -28,8 +27,10 @@ describe("OnboardingConfirmContent", () => {
     );
 
     expect(markup).toContain("确认账号绑定变更");
-    expect(markup).toContain("示例上游");
     expect(markup).toContain("codex-special");
+    expect(markup).not.toContain("示例上游");
+    expect(markup).not.toContain("账号 Base URL");
+    expect(markup).not.toContain("https://account-api.example/v1");
     expect(markup).toContain("账号成本");
     expect(markup).toContain("0.15");
     expect(markup).not.toContain("本地分组售价");

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { parseJsonStringMap as parseStringMap } from "@/lib/json-string-map";
+
 export const upstreamEditSchema = z.object({
   name: z.string().trim().min(1, "请输入上游名称").max(100, "上游名称不能超过 100 个字符"),
   base_url_protocol: z.enum(["https", "http"]),
@@ -15,6 +17,11 @@ export const upstreamEditSchema = z.object({
         return false;
       }
     }, "请输入有效的 Base URL"),
+  account_base_url: z
+    .string()
+    .trim()
+    .url("请输入完整的 HTTP/HTTPS 地址")
+    .refine((value) => /^https?:\/\//i.test(value), "账号 Base URL 仅支持 HTTP/HTTPS"),
   upstream_type: z.string().min(2, "请选择平台类型"),
   auth_mode: z.string().min(2, "请选择鉴权方式"),
   recharge_rate: z
@@ -54,6 +61,15 @@ export function parseUpstreamBaseUrl(
   };
 }
 
+export function upstreamConnectionPayload(
+  values: Pick<UpstreamEditValues, "base_url_protocol" | "base_url" | "account_base_url">,
+): { base_url: string; account_base_url: string } {
+  return {
+    base_url: composeUpstreamBaseUrl(values),
+    account_base_url: values.account_base_url.trim(),
+  };
+}
+
 export type AuthModeOption = { value: string; label: string };
 
 export function authModesForPlatform(platform: string): AuthModeOption[] {
@@ -79,19 +95,11 @@ export function authModesForPlatform(platform: string): AuthModeOption[] {
   ];
 }
 
-export function parseStringMap(value: string, label: string): Record<string, string> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(`${label} 必须是有效的 JSON 对象`);
-  }
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new Error(`${label} 必须是 JSON 对象`);
-  }
-  const entries = Object.entries(parsed);
-  if (entries.some(([key, item]) => !key.trim() || typeof item !== "string")) {
-    throw new Error(`${label} 的名称不能为空，值必须是字符串`);
-  }
-  return Object.fromEntries(entries) as Record<string, string>;
+export function defaultAuthModeForPlatform(platform: string): string {
+  const modes = authModesForPlatform(platform);
+  return (
+    modes.find((mode) => mode.value.endsWith("_user_login"))?.value ??
+    modes[0]?.value ??
+    "custom_headers"
+  );
 }

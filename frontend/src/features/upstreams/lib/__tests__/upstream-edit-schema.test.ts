@@ -3,12 +3,20 @@ import { describe, expect, it } from "vitest";
 import {
   authModesForPlatform,
   composeUpstreamBaseUrl,
+  defaultAuthModeForPlatform,
   parseUpstreamBaseUrl,
   parseStringMap,
   upstreamEditSchema,
+  upstreamConnectionPayload,
 } from "../upstream-edit-schema";
 
 describe("upstream edit schema", () => {
+  it("defaults supported upstreams to password-vault login", () => {
+    expect(defaultAuthModeForPlatform("sub2api")).toBe("sub2api_user_login");
+    expect(defaultAuthModeForPlatform("newapi")).toBe("newapi_user_login");
+    expect(defaultAuthModeForPlatform("custom")).toBe("bearer_token");
+  });
+
   it("uses platform-specific authentication choices", () => {
     expect(authModesForPlatform("sub2api").map((item) => item.value)).toEqual([
       "sub2api_user_token",
@@ -28,6 +36,7 @@ describe("upstream edit schema", () => {
       name: "Example",
       base_url_protocol: "https",
       base_url: "upstream.test",
+      account_base_url: "https://account-api.test/v1",
       upstream_type: "sub2api",
       auth_mode: "sub2api_user_token",
       recharge_rate: rechargeRate,
@@ -66,11 +75,25 @@ describe("upstream edit schema", () => {
     ).toBe("https://upstream.test/api");
   });
 
+  it("keeps the upstream Host and account Base URL as separate saved values", () => {
+    expect(
+      upstreamConnectionPayload({
+        base_url_protocol: "https",
+        base_url: "upstream.test/admin",
+        account_base_url: "https://account-api.test/v1",
+      }),
+    ).toEqual({
+      base_url: "https://upstream.test/admin",
+      account_base_url: "https://account-api.test/v1",
+    });
+  });
+
   it("requires the protocol to be selected separately from the Base URL address", () => {
     const result = upstreamEditSchema.safeParse({
       name: "Example",
       base_url_protocol: "https",
       base_url: "https://upstream.test",
+      account_base_url: "https://account-api.test/v1",
       upstream_type: "sub2api",
       auth_mode: "sub2api_user_token",
       recharge_rate: "1",

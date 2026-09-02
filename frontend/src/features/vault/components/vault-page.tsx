@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
+import { parseJsonStringMap } from "@/lib/json-string-map";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 
 type VaultForm = {
@@ -67,16 +68,7 @@ function splitHosts(value: string): string[] {
 
 function parseHeaders(value: string): Record<string, string> {
   if (!value.trim()) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("Headers 必须是 JSON 对象");
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Headers 必须是 JSON 对象");
-  }
-  return Object.fromEntries(Object.entries(parsed).map(([key, item]) => [key, String(item)]));
+  return parseJsonStringMap(value, "Headers");
 }
 
 function vaultStatus(entry: VaultEntryIndex): {

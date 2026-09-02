@@ -23,6 +23,13 @@ type Store struct {
 	db   *sql.DB
 }
 
+func preferContextError(ctx context.Context, err error) error {
+	if contextErr := ctx.Err(); contextErr != nil {
+		return contextErr
+	}
+	return err
+}
+
 type RuntimeSnapshot struct {
 	Available           bool
 	Keys                any

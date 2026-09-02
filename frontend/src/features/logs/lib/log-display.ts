@@ -27,6 +27,7 @@ const titleLabels: Record<string, string> = {
   "balance-sync": "余额同步",
   "upstream-sync": "上游同步",
   "upstream-delete": "删除上游",
+  "account-delete": "删除账号及上游 Key",
   "alerts.evaluate": "告警检测",
   "auth-recovery": "鉴权恢复",
   "inspection-run": "巡检任务",
@@ -99,6 +100,7 @@ const operationTypeLabels: Record<string, string> = {
   "account.rate.sync": "账号倍率同步",
   "account.groups.sync": "账号分组同步",
   "account.onboarding": "添加账号",
+  "account.delete": "手动删除账号",
   "cleanup.delete": "自动删除账号",
   "upstream.delete": "删除上游",
   "upstream.rate_sync": "上游倍率同步",
@@ -483,7 +485,7 @@ function formatAuditChange(before: unknown, after: unknown, fields: string[]): s
 function auditOperation(value: Record<string, unknown>): string {
   const operationType = String(value.operation_type ?? "");
   const phase = String(value.phase ?? "");
-  if (operationType === "cleanup.delete") return "删除账号";
+  if (operationType === "cleanup.delete" || operationType === "account.delete") return "删除账号";
   if (operationType === "account.onboarding") return "添加账号";
   if (phase === "remote-readback") return "写后复核";
   if (value.writeback === true || value.remote_confirmed === true) {

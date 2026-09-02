@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compactOperationDialogLayout,
   dialogBodyLayout,
   dialogContentClass,
   dialogHeightLayouts,
@@ -38,8 +39,11 @@ describe("DialogContent layout", () => {
     expect(operationDialogWidth(false, "table")).toBe("medium");
     expect(operationDialogWidth(true, "table")).toBe("table");
     expect(operationDialogWidth(true)).toBe("wide");
-    expect(operationDialogHeight(false, "tall")).toBe("content");
-    expect(operationDialogHeight(true, "tall")).toBe("tall");
+    expect(operationDialogHeight(false)).toBe("content");
+    expect(operationDialogHeight(true)).toBe("adaptive");
+    expect(compactOperationDialogLayout).toEqual({ width: "medium", height: "adaptive" });
+    expect(dialogContentClass("medium", "adaptive")).toContain("max-h-[calc(100svh-2rem)]");
+    expect(dialogContentClass("medium", "adaptive")).not.toContain("h-[min(");
   });
 
   it("keeps complex dialog scrolling inside the shared body region", () => {

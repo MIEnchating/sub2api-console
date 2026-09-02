@@ -141,6 +141,13 @@ func (m *Maintenance) Start(ctx context.Context) error {
 }
 
 func (m *Maintenance) Stop() {
+	_ = m.StopContext(context.Background())
+}
+
+func (m *Maintenance) StopContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	m.mu.Lock()
 	cancel := m.cancel
 	done := m.done
@@ -148,8 +155,19 @@ func (m *Maintenance) Stop() {
 	if cancel != nil {
 		cancel()
 	}
-	if done != nil {
-		<-done
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		select {
+		case <-done:
+			return nil
+		default:
+			return ctx.Err()
+		}
 	}
 }
 

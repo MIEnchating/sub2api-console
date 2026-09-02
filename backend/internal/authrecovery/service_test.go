@@ -8,15 +8,27 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
+
+func TestSafeReasonTruncatesAtValidUTF8Boundary(t *testing.T) {
+	reason := safeReason(strings.Repeat("a", 499) + "界tail")
+	if len(reason) > 500 || !utf8.ValidString(reason) {
+		t.Fatalf("safe reason is not valid UTF-8 within the byte limit: len=%d value=%q", len(reason), reason)
+	}
+	if reason != strings.Repeat("a", 499) {
+		t.Fatalf("safe reason split a multibyte rune: len=%d value=%q", len(reason), reason)
+	}
+}
 
 type recoveryRepository struct {
 	outcomes []business.AuthRecoveryOutcome
@@ -172,6 +184,21 @@ func (b *recoveryBalance) SyncHost(_ context.Context, host string, _ upstreamsyn
 	return upstreamsync.HostResult{Host: host, Status: "succeeded", BalanceStatus: "已读取", Balance: &balance}, nil
 }
 
+func TestBalanceResultPreservesUpstreamDisplayCurrency(t *testing.T) {
+	balance, displayBalance, unit := "14.131496", "103.1599208", "cny"
+
+	result := balanceResult(upstreamsync.HostResult{
+		Status: "succeeded", BalanceStatus: "已读取", Balance: &balance,
+		DisplayBalance: &displayBalance, BalanceUnit: &unit,
+	}, nil)
+
+	if result.Balance == nil || *result.Balance != balance ||
+		result.DisplayBalance == nil || *result.DisplayBalance != displayBalance ||
+		result.BalanceUnit == nil || *result.BalanceUnit != unit {
+		t.Fatalf("display currency was not preserved: %#v", result)
+	}
+}
+
 type recoveryTasks struct {
 	done chan taskstore.Task
 }
@@ -263,7 +290,15 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 			return configstore.AuthRecord{}, errors.New("vault must not be used after refresh succeeds")
 		},
 	}
+	repository := &recoveryRepository{}
 	balance := &recoveryBalance{check: func() error {
+		guardCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, release, err := mutationguard.Acquire(guardCtx, repository, mutationguard.Upstream("HTTPS://API.EXAMPLE/"))
+		if err != nil {
+			return errors.New("balance sync started before the recovery lease was released")
+		}
+		defer release()
 		private.mu.Lock()
 		defer private.mu.Unlock()
 		if !private.saved || private.record.AccessToken == nil || *private.record.AccessToken != "rotated" {
@@ -271,7 +306,6 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 		}
 		return nil
 	}}
-	repository := &recoveryRepository{}
 	tasks := &recoveryTasks{done: make(chan taskstore.Task, 2)}
 	service := New(repository, private, auth, &recoveryConfigurator{}, balance, tasks)
 	if _, err := service.Enqueue(context.Background(), "api.example", "selected", "tester"); err != nil {
@@ -288,6 +322,64 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 	}
 	if len(private.vaultReads) != 1 { // enqueue validation only; execution never enumerates or rereads on refresh success.
 		t.Fatalf("vault reads=%#v", private.vaultReads)
+	}
+}
+
+func TestRecoveryDoesNotRestoreCredentialsAfterCanonicalUpstreamDelete(t *testing.T) {
+	access, refresh, rotated := "expired", "refresh", "rotated"
+	record := configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+		AccessToken: &access, RefreshToken: &refresh, Headers: map[string]string{}, Cookies: map[string]string{},
+	}
+	private := &recoveryPrivate{record: &record, vault: map[string]configstore.VaultEntry{}}
+	repository := &recoveryRepository{seeds: map[string]business.UpstreamAuthSeed{
+		"api.example": {Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api"},
+	}}
+	refreshStarted := make(chan struct{})
+	finishRefresh := make(chan struct{})
+	auth := &recoveryAuthenticator{
+		refresh: func(_ context.Context, candidate configstore.AuthRecord) (configstore.AuthRecord, error) {
+			close(refreshStarted)
+			<-finishRefresh
+			candidate.AccessToken = &rotated
+			return candidate, nil
+		},
+		login: func(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error) {
+			return configstore.AuthRecord{}, errors.New("vault login must not run")
+		},
+	}
+	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	outcomes := make(chan business.AuthRecoveryOutcome, 1)
+	go func() {
+		outcomes <- service.recover(context.Background(), record, "")
+	}()
+	<-refreshStarted
+
+	deleteCtx, cancelDelete := context.WithTimeout(context.Background(), time.Second)
+	_, releaseDelete, err := mutationguard.Acquire(deleteCtx, repository, mutationguard.Upstream("HTTPS://API.EXAMPLE/"))
+	cancelDelete()
+	if err != nil {
+		close(finishRefresh)
+		t.Fatalf("delete could not acquire while recovery was doing remote verification: %v", err)
+	}
+	private.mu.Lock()
+	private.record = nil
+	private.saved = false
+	private.mu.Unlock()
+	delete(repository.seeds, "api.example")
+	if err := releaseDelete(); err != nil {
+		close(finishRefresh)
+		t.Fatal(err)
+	}
+	close(finishRefresh)
+	outcome := <-outcomes
+	if outcome.Success || pointerOr(outcome.Code, "") != "credential_commit_failed" {
+		t.Fatalf("deleted upstream recovery outcome = %#v", outcome)
+	}
+	private.mu.Lock()
+	defer private.mu.Unlock()
+	if private.saved || private.record != nil {
+		t.Fatalf("recovery resurrected deleted credentials: record=%#v saved=%v", private.record, private.saved)
 	}
 }
 

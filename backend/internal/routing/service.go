@@ -1079,8 +1079,11 @@ func fuseAffectedGroupNames(items []*candidate, now time.Time) []string {
 }
 
 func availableForMinimumPool(item *candidate, now time.Time) bool {
+	if !item.schedulable {
+		return false
+	}
 	switch item.state {
-	case "excluded", "paused", "disabled", "fused", "cost_blocked":
+	case "excluded", "paused", "disabled", "fused", "binding_invalid", "cost_blocked":
 		return false
 	}
 	kind := accountUpstreamBlock(item.account, now)
@@ -1090,7 +1093,7 @@ func availableForMinimumPool(item *candidate, now time.Time) bool {
 	if item.state == "survivor" {
 		return true
 	}
-	return item.account.Schedulable == nil || *item.account.Schedulable
+	return item.account.Schedulable != nil && *item.account.Schedulable
 }
 
 func calculateGroupWeights(items []*candidate, config engineConfig) {

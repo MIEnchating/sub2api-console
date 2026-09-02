@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
 const (
@@ -136,6 +137,7 @@ type Scheduler struct {
 	previewItem         *QueueItem
 	previewedAt         time.Time
 	previewLoading      bool
+	taskRunner          taskrunner.Runner
 }
 
 func NewScheduler(repository Repository, executor Executor) (*Scheduler, error) {
@@ -158,6 +160,8 @@ func NewScheduler(repository Repository, executor Executor) (*Scheduler, error) 
 		subscribers:        make(map[chan struct{}]struct{}),
 	}, nil
 }
+
+func (s *Scheduler) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Scheduler) Status(ctx context.Context) (Status, error) {
 	config, err := s.repository.AutoInspectionConfig(ctx)
@@ -268,11 +272,20 @@ func (s *Scheduler) queuePreview(
 	s.previewMu.Lock()
 	item := cloneQueueItem(s.previewItem)
 	fresh := item != nil && now.Sub(s.previewedAt) < queuePreviewCacheTTL
+	launch := false
 	if !fresh && !s.previewLoading {
 		s.previewLoading = true
-		go s.refreshQueuePreview(previewer)
+		launch = true
 	}
 	s.previewMu.Unlock()
+	if launch {
+		if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.refreshQueuePreview(parent, previewer) }); err != nil {
+			s.previewMu.Lock()
+			s.previewLoading = false
+			s.previewMu.Unlock()
+			s.notify()
+		}
+	}
 
 	if item == nil {
 		return []QueueItem{{
@@ -284,8 +297,8 @@ func (s *Scheduler) queuePreview(
 	return []QueueItem{*item}
 }
 
-func (s *Scheduler) refreshQueuePreview(previewer QueuePreviewer) {
-	ctx, cancel := context.WithTimeout(context.Background(), queuePreviewTimeout)
+func (s *Scheduler) refreshQueuePreview(parent context.Context, previewer QueuePreviewer) {
+	ctx, cancel := context.WithTimeout(parent, queuePreviewTimeout)
 	defer cancel()
 	item, err := previewer.Preview(ctx, s.now().UTC())
 	if err != nil {
@@ -447,15 +460,40 @@ func (s *Scheduler) Start(ctx context.Context) error {
 }
 
 func (s *Scheduler) Stop() {
+	_ = s.StopContext(context.Background())
+}
+
+func (s *Scheduler) StopContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
 	cancel := s.loopCancel
+	cancelCurrent := s.currentCancel
 	done := s.loopDone
+	if s.running && cancelCurrent != nil {
+		s.cancelRequested = true
+	}
 	s.mu.Unlock()
+	if cancelCurrent != nil {
+		cancelCurrent()
+	}
 	if cancel != nil {
 		cancel()
 	}
-	if done != nil {
-		<-done
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		select {
+		case <-done:
+			return nil
+		default:
+			return ctx.Err()
+		}
 	}
 }
 
@@ -494,7 +532,8 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 		s.mu.Unlock()
 		return false, nil
 	}
-	executionContext, cancelExecution := context.WithCancel(ctx)
+	executionContext, cancelExecutionCause := context.WithCancelCause(ctx)
+	cancelExecution := func() { cancelExecutionCause(context.Canceled) }
 	runConfigVersion := s.configVersion
 	s.running = true
 	s.cancelRequested = false
@@ -557,8 +596,11 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 		})
 	})
 	renewalDone := make(chan error, 1)
-	go func() { renewalDone <- s.renewLease(executionContext, cancelExecution) }()
+	go func() { renewalDone <- s.renewLease(executionContext, cancelExecutionCause) }()
 	result, executionErr := executor.Execute(executorContext, config)
+	executionCause := context.Cause(executionContext)
+	executionContextFailed := executionCause != nil && executionCause != context.Canceled
+	plainExecutionCancellation := executionContext.Err() == context.Canceled && executionCause == context.Canceled
 	cancelExecution()
 	renewalErr := <-renewalDone
 	completed := s.now().UTC()
@@ -572,6 +614,11 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 		message := stringsOrType(executionErr)
 		errorText = &message
 	}
+	if executionContextFailed {
+		status = "failed"
+		message := stringsOrType(executionCause)
+		errorText = &message
+	}
 	if renewalErr != nil {
 		status = "failed"
 		message := stringsOrType(renewalErr)
@@ -580,7 +627,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	s.mu.Lock()
 	wasCanceled := s.cancelRequested
 	s.mu.Unlock()
-	if wasCanceled {
+	if renewalErr == nil && !executionContextFailed && (wasCanceled || plainExecutionCancellation) {
 		status = "cancelled"
 		errorText = nil
 	}
@@ -628,7 +675,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	return true, nil
 }
 
-func (s *Scheduler) renewLease(ctx context.Context, cancel context.CancelFunc) error {
+func (s *Scheduler) renewLease(ctx context.Context, cancel context.CancelCauseFunc) error {
 	interval := s.leaseRenewInterval
 	if interval <= 0 {
 		interval = renewEvery
@@ -646,12 +693,12 @@ func (s *Scheduler) renewLease(ctx context.Context, cancel context.CancelFunc) e
 			}
 			if err != nil {
 				cause := fmt.Errorf("巡检租约续期失败：%w", err)
-				cancel()
+				cancel(cause)
 				return cause
 			}
 			if !renewed {
 				cause := errors.New("巡检租约已丢失，已停止当前巡检")
-				cancel()
+				cancel(cause)
 				return cause
 			}
 		}

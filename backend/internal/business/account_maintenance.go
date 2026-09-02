@@ -267,14 +267,23 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 			}
 		}
 		metadata := map[string]any{}
-		_ = json.Unmarshal([]byte(metadataRaw), &metadata)
+		if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil || metadata == nil {
+			if err == nil {
+				err = errors.New("元数据必须是对象")
+			}
+			return nil, fmt.Errorf("上游 %s 的元数据记录损坏：%w", item.UpstreamHost, err)
+		}
 		siteName := strings.TrimSpace(stringValue(metadata["site_name"]))
 		if siteName == "" {
 			siteName = strings.TrimSpace(stringValue(metadata["system_name"]))
 		}
+		accountBaseURL := strings.TrimSpace(stringValue(metadata["account_base_url"]))
+		if accountBaseURL == "" {
+			accountBaseURL = baseURL
+		}
 		item.CurrentMultiplier = multiplier
-		item.NamingSiteName, item.NamingBaseURL = siteName, baseURL
-		item.ExpectedName = naming.AccountName(siteName, baseURL, multiplier)
+		item.NamingSiteName, item.NamingBaseURL = siteName, accountBaseURL
+		item.ExpectedName = naming.AccountName(siteName, accountBaseURL, multiplier)
 		result = append(result, item)
 	}
 	return result, rows.Err()

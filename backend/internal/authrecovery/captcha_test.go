@@ -14,11 +14,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
 
 type captchaStore struct {
@@ -69,6 +71,48 @@ func (v *captchaVerifier) Verify(_ context.Context, record configstore.AuthRecor
 type captchaCatalog struct {
 	read int
 	err  error
+}
+
+type captchaLeaseRepository struct {
+	mu       sync.Mutex
+	exists   bool
+	lease    chan struct{}
+	attempts chan []string
+}
+
+func newCaptchaLeaseRepository() *captchaLeaseRepository {
+	return &captchaLeaseRepository{exists: true, lease: make(chan struct{}, 1), attempts: make(chan []string, 3)}
+}
+
+func (repository *captchaLeaseRepository) UpstreamExists(context.Context, string) (bool, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	return repository.exists, nil
+}
+
+func (repository *captchaLeaseRepository) AcquireMutationLease(
+	ctx context.Context,
+	_ string,
+	resources []string,
+	_ time.Time,
+	_ time.Duration,
+) (bool, error) {
+	repository.attempts <- append([]string{}, resources...)
+	select {
+	case repository.lease <- struct{}{}:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (*captchaLeaseRepository) RenewMutationLease(context.Context, string, []string, time.Time, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (repository *captchaLeaseRepository) ReleaseMutationLease(context.Context, string, []string) error {
+	<-repository.lease
+	return nil
 }
 
 func (c *captchaCatalog) ReadCatalog(context.Context, configstore.AuthRecord) (business.UpstreamCatalogSnapshot, error) {
@@ -207,6 +251,51 @@ func TestCaptchaSubmitDoesNotCommitWhenCatalogReadbackFails(t *testing.T) {
 	}
 }
 
+func TestCaptchaCommitRechecksUpstreamAfterCanonicalDelete(t *testing.T) {
+	repository := newCaptchaLeaseRepository()
+	store := &captchaStore{record: &configstore.AuthRecord{Host: "api.example", Headers: map[string]string{}, Cookies: map[string]string{}}}
+	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, nil)
+	manager.UseMutationRepository(repository)
+	_, deleteRelease, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Upstream("HTTPS://API.EXAMPLE/"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := <-repository.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("delete lease resources = %#v", resources)
+	}
+	repository.mu.Lock()
+	repository.exists = false
+	repository.mu.Unlock()
+	store.record = nil
+
+	committed := make(chan error, 1)
+	go func() {
+		committed <- manager.commitVerified(context.Background(), storedChallenge{}, configstore.AuthRecord{
+			Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",
+			Headers: map[string]string{}, Cookies: map[string]string{},
+		}, configstore.VaultEntry{})
+	}()
+	resources = <-repository.attempts
+	if len(resources) != 1 || resources[0] != "upstream/api.example" {
+		t.Fatalf("captcha lease resources = %#v", resources)
+	}
+	select {
+	case err := <-committed:
+		t.Fatalf("captcha commit bypassed delete lease: %v", err)
+	default:
+	}
+	if err := deleteRelease(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-committed; err == nil || !strings.Contains(err.Error(), "上游已被删除") {
+		t.Fatalf("captcha commit error = %v", err)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("captcha commit resurrected credentials: %#v", store.saved)
+	}
+}
+
 func TestCaptchaCanCommitVerifiedCandidateWithoutPriorPrivateRecord(t *testing.T) {
 	publicKey := captchaPublicKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -258,7 +347,9 @@ func TestManualCaptchaCredentialStaysInMemoryUntilSuccessfulSubmit(t *testing.T)
 	defer server.Close()
 	username, password := "operator@example.test", "secret"
 	store := &captchaStore{}
+	repository := newCaptchaLeaseRepository()
 	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
+	manager.UseMutationRepository(repository)
 	record := configstore.AuthRecord{
 		Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
 		Headers: map[string]string{}, Cookies: map[string]string{},
@@ -276,6 +367,10 @@ func TestManualCaptchaCredentialStaysInMemoryUntilSuccessfulSubmit(t *testing.T)
 	}
 	if len(store.saved) != 1 || len(store.savedVault) != 1 || store.savedVault[0].Entry != "operator-entry" {
 		t.Fatalf("verified credentials were not committed: auth=%#v vault=%#v", store.saved, store.savedVault)
+	}
+	resources := <-repository.attempts
+	if len(resources) != 2 || resources[0] != "upstream/api.example.test" || resources[1] != "vault/operator-entry" {
+		t.Fatalf("captcha commit lease resources = %#v", resources)
 	}
 }
 

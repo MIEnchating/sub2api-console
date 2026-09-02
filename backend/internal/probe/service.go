@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -21,6 +22,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -113,12 +116,15 @@ type Service struct {
 	repository Repository
 	settings   SettingsStore
 	tasks      TaskStore
+	taskRunner taskrunner.Runner
 	timeout    time.Duration
 }
 
 func New(repository Repository, settings SettingsStore, tasks TaskStore) *Service {
 	return &Service{repository: repository, settings: settings, tasks: tasks, timeout: 10 * time.Minute}
 }
+
+func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (taskstore.Task, error) {
 	prepared, err := s.prepare(ctx, request)
@@ -137,7 +143,10 @@ func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (tasks
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	go s.execute(task, prepared)
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
 	return task, nil
 }
 
@@ -163,7 +172,7 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 			}
 		}
 	}
-	targetSettings, err := s.settings.TargetSettings(ctx)
+	targetSettings, err := targetguard.Expected(ctx, s.settings)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -238,11 +247,11 @@ func (s *Service) RunNow(ctx context.Context, request Request) (RunSummary, erro
 	return s.runPrepared(ctx, prepared)
 }
 
-func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+func (s *Service) execute(parent context.Context, task taskstore.Task, prepared preparedRun) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 15, "正在通过官方账号测试接口执行主动探测", time.Now().UTC().Format(time.RFC3339Nano)
-	if err := s.tasks.Save(ctx, task); err != nil {
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
 	summary, err := s.runPrepared(ctx, prepared)
@@ -260,10 +269,29 @@ func (s *Service) execute(task taskstore.Task, prepared preparedRun) {
 			"remote_write": false, "credentials_persisted": false,
 		}
 	}
+	taskstore.MarkCancelled(ctx, &task, "主动探测已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
 func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSummary, error) {
+	ctx = targetguard.Expect(ctx, prepared.target)
+	guarded, release, err := targetguard.Acquire(ctx, s.repository)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("主动探测管理目标租约释放失败", "error", err)
+		}
+	}()
+	ctx, err = targetguard.Bind(guarded, s.settings)
+	if err != nil {
+		return RunSummary{}, err
+	}
+	prepared.target, err = targetguard.Settings(ctx, s.settings)
+	if err != nil {
+		return RunSummary{}, err
+	}
 	results, err := run(ctx, prepared)
 	if err != nil {
 		return RunSummary{}, err

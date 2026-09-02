@@ -2,15 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import type { UpstreamConfiguration } from "@/api";
 import { dialogBodyLayout, dialogContentClass } from "@/components/ui/dialog";
-import { upstreamEditDialogLayout, upstreamEditPresentation } from "../upstream-edit-dialog";
+import {
+  upstreamEditConnectionLabels,
+  upstreamEditDialogLayout,
+  upstreamEditPresentation,
+} from "../upstream-edit-dialog";
 
 describe("upstream edit dialog", () => {
+  it("edits upstream Host and account Base URL in the upstream dialog", () => {
+    expect(upstreamEditConnectionLabels).toEqual({
+      upstreamHost: "上游 Host",
+      accountBaseURL: "账号 Base URL",
+    });
+  });
+
   it("shows redacted credential state and balance mapping summary without group details", () => {
     const configuration: UpstreamConfiguration = {
       upstream_id: "up_example",
       host: "api.example.test",
       name: "Example",
       base_url: "https://api.example.test",
+      account_base_url: "https://account-api.example.test/v1",
       upstream_type: "newapi",
       auth_mode: "newapi_admin_key",
       recharge_rate: "5",

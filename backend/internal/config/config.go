@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,14 +10,17 @@ import (
 )
 
 type Config struct {
-	DataDir       string
-	TaskDB        string
-	ConfigDB      string
-	DataDB        string
-	AdminToken    string
-	Origins       []string
-	CookieSecure  bool
-	ListenAddress string
+	DataDir            string
+	TaskDB             string
+	ConfigDB           string
+	DataDB             string
+	AdminToken         string
+	SetupToken         string
+	Origins            []string
+	CookieSecure       bool
+	TrustedProxyCIDRs  []netip.Prefix
+	TrustedProxySocket string
+	ListenAddress      string
 }
 
 func Load() (Config, error) {
@@ -52,16 +56,51 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	trustedProxyCIDRs, err := prefixListEnv("SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS")
+	if err != nil {
+		return Config{}, err
+	}
+	trustedProxySocket := strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET"))
+	if trustedProxySocket != "" {
+		if !filepath.IsAbs(trustedProxySocket) || filepath.Clean(trustedProxySocket) == string(filepath.Separator) {
+			return Config{}, errors.New("SUB2API_CONSOLE_TRUSTED_PROXY_SOCKET 必须是绝对文件路径")
+		}
+		trustedProxySocket = filepath.Clean(trustedProxySocket)
+	}
+	setupToken := strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_SETUP_TOKEN"))
+	if setupToken != "" && len(setupToken) < 32 {
+		return Config{}, errors.New("SUB2API_CONSOLE_SETUP_TOKEN 至少需要 32 个字符")
+	}
 	return Config{
-		DataDir:       dataDir,
-		TaskDB:        taskDB,
-		ConfigDB:      configDB,
-		DataDB:        dataDB,
-		AdminToken:    strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN")),
-		Origins:       origins,
-		CookieSecure:  cookieSecure,
-		ListenAddress: listenAddress,
+		DataDir:            dataDir,
+		TaskDB:             taskDB,
+		ConfigDB:           configDB,
+		DataDB:             dataDB,
+		AdminToken:         strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN")),
+		SetupToken:         setupToken,
+		Origins:            origins,
+		CookieSecure:       cookieSecure,
+		TrustedProxyCIDRs:  trustedProxyCIDRs,
+		TrustedProxySocket: trustedProxySocket,
+		ListenAddress:      listenAddress,
 	}, nil
+}
+
+func prefixListEnv(name string) ([]netip.Prefix, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil, nil
+	}
+	values := splitNonEmpty(raw)
+	result := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, errors.New(name + " 必须是以逗号分隔的有效 CIDR")
+		}
+		result = append(result, prefix.Masked())
+	}
+	return result, nil
 }
 
 func projectRoot() (string, error) {

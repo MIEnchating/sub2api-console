@@ -3,9 +3,44 @@ package business
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 )
+
+func TestCreateUpstreamConfigurationWaitsForIdentityCatalogLease(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "create-catalog-lease.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	_, release, err := mutationguard.Acquire(ctx, store, mutationguard.UpstreamCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	createCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	name := "Example"
+	_, err = store.CreateUpstreamConfiguration(createCtx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("create bypassed identity catalog lease: %v", err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstreams WHERE host='api.example'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("blocked create persisted %d upstream rows", count)
+	}
+}
 
 func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
@@ -49,6 +84,46 @@ func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testin
 	if groups[0].KeyPresent || !groups[0].Bindable {
 		t.Fatalf("active unbound group must allow onboarding to create its key: %#v", groups[0])
 	}
+}
+
+func TestUpstreamConfigurationPersistsIndependentAccountBaseURL(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := "Example"
+	if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://upstream.example/admin",
+		AccountBaseURL: "https://account-api.example/v1", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAccountBaseURL := func(want string) {
+		t.Helper()
+		summary, readErr := store.Upstreams(ctx)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(summary.Hosts) != 1 || summary.Hosts[0].BaseURL != "https://upstream.example/admin" || summary.Hosts[0].AccountBaseURL != want {
+			t.Fatalf("unexpected upstream connection settings: %#v", summary.Hosts)
+		}
+	}
+	assertAccountBaseURL("https://account-api.example/v1")
+
+	if _, err := store.UpdateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://upstream.example/admin",
+		AccountBaseURL: "https://custom-account.example/v2", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertAccountBaseURL("https://custom-account.example/v2")
 }
 
 func TestUpstreamConfigurationUpdateAppliesRechargeRateToEveryStableHost(t *testing.T) {

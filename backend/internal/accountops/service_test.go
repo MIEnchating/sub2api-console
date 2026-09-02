@@ -19,17 +19,43 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 type testTarget struct {
+	mu    sync.RWMutex
 	value configstore.TargetSettings
 	calls atomic.Int32
 }
 
 func (target *testTarget) TargetSettings(context.Context) (configstore.TargetSettings, error) {
 	target.calls.Add(1)
+	target.mu.RLock()
+	defer target.mu.RUnlock()
 	return target.value, nil
+}
+
+func (target *testTarget) Set(value configstore.TargetSettings) {
+	target.mu.Lock()
+	target.value = value
+	target.mu.Unlock()
+}
+
+type deferredAccountRunner struct {
+	run func(context.Context)
+}
+
+func (runner *deferredAccountRunner) Go(run func(context.Context)) error {
+	runner.run = run
+	return nil
+}
+
+func (runner *deferredAccountRunner) Run(ctx context.Context) {
+	if runner.run == nil {
+		panic("account task was not scheduled")
+	}
+	runner.run(ctx)
 }
 
 type accountTaskObserver struct {
@@ -189,6 +215,10 @@ func TestManualAccountFieldsIgnoreAutomaticSchedulingWritebackVerification(t *te
 				body["concurrency"] != json.Number("25") {
 				t.Fatalf("body=%#v err=%v", body, err)
 			}
+			credentials, ok := body["credentials"].(map[string]any)
+			if !ok || credentials["base_url"] != "https://account-api.example.test/v1" {
+				t.Fatalf("credentials=%#v", body["credentials"])
+			}
 			written.Store(true)
 			_, _ = io.WriteString(w, `{"success":true}`)
 			return
@@ -200,17 +230,24 @@ func TestManualAccountFieldsIgnoreAutomaticSchedulingWritebackVerification(t *te
 			name, multiplier, notes = "renamed", "0.2", "new"
 			priority, loadFactor, concurrency = 17, "3", 25
 		}
-		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"`+name+`","priority":`+strconv.Itoa(priority)+`,"load_factor":`+loadFactor+`,"concurrency":`+strconv.Itoa(concurrency)+`,"rate_multiplier":`+multiplier+`,"notes":"`+notes+`"}}`)
+		baseURL := "https://old-account-api.example.test/v1"
+		if written.Load() {
+			baseURL = "https://account-api.example.test/v1"
+		}
+		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"`+name+`","priority":`+strconv.Itoa(priority)+`,"load_factor":`+loadFactor+`,"concurrency":`+strconv.Itoa(concurrency)+`,"rate_multiplier":`+multiplier+`,"notes":"`+notes+`","credentials":{"base_url":"`+baseURL+`"}}}`)
 	}))
 	defer server.Close()
 	target := &testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}
 	service := New(target, repository, nil)
 	name, multiplier, notes := "renamed", "0.2", "new"
+	baseURL, upstreamHost := "https://account-api.example.test/v1", "new-upstream.example.test"
 	priority, loadFactor, concurrency := int64(17), "3", int64(25)
 	result, err := service.SyncFields(context.Background(), "41", FieldPatch{
 		NamePresent: true, Name: &name, PriorityPresent: true, Priority: &priority,
 		LoadFactorPresent: true, LoadFactor: &loadFactor, ConcurrencyPresent: true, Concurrency: &concurrency,
 		MultiplierPresent: true, Multiplier: &multiplier,
+		UpstreamHostPresent: true, UpstreamHost: &upstreamHost,
+		BaseURLPresent: true, BaseURL: &baseURL,
 		NotesPresent: true, Notes: &notes,
 	}, "operator")
 	if err != nil {
@@ -219,12 +256,12 @@ func TestManualAccountFieldsIgnoreAutomaticSchedulingWritebackVerification(t *te
 	if result["remote_write"] != true || result["readback_confirmed"] != true || reads.Load() != 2 {
 		t.Fatalf("result=%#v", result)
 	}
-	var storedName, storedLoadFactor, storedMultiplier, metadata string
+	var storedName, storedHost, storedLoadFactor, storedMultiplier, metadata string
 	var storedPriority, storedConcurrency int64
-	if err := db.QueryRow(`SELECT name,priority,load_factor,concurrency,multiplier,metadata_json FROM accounts WHERE id='41'`).Scan(&storedName, &storedPriority, &storedLoadFactor, &storedConcurrency, &storedMultiplier, &metadata); err != nil {
+	if err := db.QueryRow(`SELECT name,upstream_host,priority,load_factor,concurrency,multiplier,metadata_json FROM accounts WHERE id='41'`).Scan(&storedName, &storedHost, &storedPriority, &storedLoadFactor, &storedConcurrency, &storedMultiplier, &metadata); err != nil {
 		t.Fatal(err)
 	}
-	if storedName != "renamed" || storedPriority != 17 || storedLoadFactor != "3" || storedConcurrency != 25 || storedMultiplier != "0.2" || !strings.Contains(metadata, `"notes":"new"`) {
+	if storedName != "renamed" || storedHost != "new-upstream.example.test" || storedPriority != 17 || storedLoadFactor != "3" || storedConcurrency != 25 || storedMultiplier != "0.2" || !strings.Contains(metadata, `"notes":"new"`) || !strings.Contains(metadata, `"base_url":"https://account-api.example.test/v1"`) {
 		t.Fatalf("name=%q priority=%d load=%q concurrency=%d multiplier=%q metadata=%s", storedName, storedPriority, storedLoadFactor, storedConcurrency, storedMultiplier, metadata)
 	}
 }
@@ -290,6 +327,45 @@ func TestSyncAccountRateRequiresMatchingReadbackBeforeLocalCommit(t *testing.T) 
 	}
 	if multiplier != "0.1" {
 		t.Fatalf("unconfirmed multiplier committed locally: %s", multiplier)
+	}
+}
+
+func TestRateSyncPreconditionRunsUnderMutationResourcesBeforeRemoteAccess(t *testing.T) {
+	repository, _, _ := accountRepository(t)
+	target := &testTarget{}
+	service := New(target, repository, nil)
+	staleIntent := errors.New("stale rate intent")
+	checkCalled := false
+
+	_, err := service.SyncAccountRateIfCurrent(
+		context.Background(),
+		"41",
+		"alpha-0.15",
+		"0.15",
+		"operator",
+		"source.example",
+		func(context.Context) error {
+			checkCalled = true
+			for _, resource := range []string{mutationguard.Account("41"), mutationguard.Upstream("source.example")} {
+				waitCtx, cancel := context.WithTimeout(context.Background(), 75*time.Millisecond)
+				_, release, acquireErr := mutationguard.Acquire(waitCtx, repository, resource)
+				cancel()
+				if acquireErr == nil {
+					_ = release()
+					t.Fatalf("rate precondition ran without holding mutation resource %q", resource)
+				}
+				if !errors.Is(acquireErr, context.DeadlineExceeded) {
+					t.Fatalf("competing mutation resource %q returned %v", resource, acquireErr)
+				}
+			}
+			return staleIntent
+		},
+	)
+	if !checkCalled || !errors.Is(err, staleIntent) {
+		t.Fatalf("check_called=%v err=%v", checkCalled, err)
+	}
+	if target.calls.Load() != 0 {
+		t.Fatalf("rejected rate intent accessed the remote target %d times", target.calls.Load())
 	}
 }
 
@@ -418,6 +494,40 @@ func TestAccountControlTaskWritesSchedulableAndCommitsConfirmedPause(t *testing.
 	}
 	if operationType != "account.control" || !remoteConfirmed || !readbackConfirmed {
 		t.Fatalf("operation=%s remote=%v readback=%v", operationType, remoteConfirmed, readbackConfirmed)
+	}
+}
+
+func TestQueuedAccountControlRejectsManagementTargetChangeBeforeRemoteWrite(t *testing.T) {
+	repository, _, _ := accountRepository(t)
+	serverA := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("queued account control accessed its obsolete management target")
+	}))
+	defer serverA.Close()
+	var targetBRequests atomic.Int32
+	serverB := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		targetBRequests.Add(1)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(response, `{"data":{"id":41,"name":"other-target","schedulable":true}}`)
+	}))
+	defer serverB.Close()
+
+	target := &testTarget{value: configstore.TargetSettings{BaseURL: serverA.URL, AdminKey: "target-a", TimeoutSeconds: 2}}
+	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
+	runner := &deferredAccountRunner{}
+	service := New(target, repository, tasks)
+	service.UseTaskRunner(runner)
+	if _, err := service.EnqueueControl(context.Background(), "41", "pause", "operator"); err != nil {
+		t.Fatal(err)
+	}
+	target.Set(configstore.TargetSettings{BaseURL: serverB.URL, AdminKey: "target-b", TimeoutSeconds: 2})
+	runner.Run(context.Background())
+
+	finished := waitAccountTask(t, tasks.updates)
+	if finished.Status != "failed" || !strings.Contains(finished.Message, "管理目标") || finished.Result["remote_write"] != false {
+		t.Fatalf("target-drift task=%#v", finished)
+	}
+	if requests := targetBRequests.Load(); requests != 0 {
+		t.Fatalf("queued account control accessed replacement target %d times", requests)
 	}
 }
 

@@ -219,6 +219,34 @@ func TestAuditEventsIncludesConfirmedNoopRemoteReadback(t *testing.T) {
 	}
 }
 
+func TestAuditEventsIncludesFailedAccountDeleteWithoutRemoteWrite(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "history-account-delete.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO operation_audit(
+		source_id,operation_id,operation_type,state,phase,error,remote_confirmed,readback_confirmed,
+		group_names_json,before_json,after_json,writeback,created_at
+	) VALUES(
+		-1,'delete-no-write','account.delete','failed','management-target-check','target changed',0,0,
+		'[]','{}','{"upstream_key_deleted":true,"upstream_key_delete_requested":false}',0,'2026-08-28T10:00:00Z'
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.AuditEvents(ctx, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].OperationID != "delete-no-write" || rows[0].Writeback {
+		t.Fatalf("failed no-write account deletion was hidden or mislabeled: %#v", rows)
+	}
+}
+
 func TestClearAlertsKeepsFiringIncidentDeduplicationAndDeletesEndedAlerts(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "alerts.sqlite3"))
 	if err != nil {

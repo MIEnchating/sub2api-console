@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
 	_ "modernc.org/sqlite"
 )
 
@@ -63,15 +64,43 @@ type cancellableExecutor struct {
 	started chan struct{}
 }
 
+type contextExitExecutor struct {
+	started            chan struct{}
+	returnContextError bool
+}
+
 func (e *cancellableExecutor) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
 	close(e.started)
 	<-ctx.Done()
 	return ExecutionResult{}, ctx.Err()
 }
 
+func (e *contextExitExecutor) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
+	close(e.started)
+	<-ctx.Done()
+	if e.returnContextError {
+		return ExecutionResult{}, ctx.Err()
+	}
+	return ExecutionResult{Status: "succeeded"}, nil
+}
+
 type leaseAwareExecutor struct {
 	started chan struct{}
 	stopped chan struct{}
+}
+
+type leaseBlockingCollector struct {
+	started chan struct{}
+}
+
+func (c *leaseBlockingCollector) Plan(context.Context, map[string]any, *string, *string, time.Time) (evidence.Plan, error) {
+	return evidence.Plan{RequestedSource: "traffic"}, nil
+}
+
+func (c *leaseBlockingCollector) Collect(ctx context.Context, _ map[string]any, _ evidence.Admin, _ evidence.Options) (evidence.Result, error) {
+	close(c.started)
+	<-ctx.Done()
+	return evidence.Result{}, ctx.Err()
 }
 
 func (e *leaseAwareExecutor) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
@@ -87,9 +116,23 @@ type leaseLosingRepository struct {
 	once    sync.Once
 }
 
+type executionLeaseLosingRepository struct {
+	*business.Store
+	executionStarted <-chan struct{}
+}
+
 func (r *leaseLosingRepository) RenewInspectionLease(context.Context, string, time.Time, time.Duration) (bool, error) {
 	r.once.Do(func() { close(r.renewed) })
 	return false, nil
+}
+
+func (r *executionLeaseLosingRepository) RenewInspectionLease(ctx context.Context, _ string, _ time.Time, _ time.Duration) (bool, error) {
+	select {
+	case <-r.executionStarted:
+		return false, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 type blockingAcquireRepository struct {
@@ -215,6 +258,76 @@ func TestStopWaitsForTheRunningLoopToExit(t *testing.T) {
 	}
 }
 
+func TestStopContextHonorsCancellationAndCanBeRetried(t *testing.T) {
+	repository := openInspectionRepository(t)
+	if _, err := repository.UpdateAutoInspectionConfig(context.Background(), business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), name: "stubborn"}
+	scheduler, err := NewScheduler(repository, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-executor.release:
+		default:
+			close(executor.release)
+		}
+		scheduler.Stop()
+	})
+	past := time.Now().UTC().Add(-time.Second).Format(time.RFC3339Nano)
+	scheduler.mu.Lock()
+	scheduler.nextRunAt = &past
+	scheduler.mu.Unlock()
+	select {
+	case scheduler.reconfigure <- struct{}{}:
+	default:
+	}
+	select {
+	case <-executor.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("overdue inspection did not start")
+	}
+
+	stopContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := scheduler.StopContext(stopContext); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StopContext error = %v, want context cancellation", err)
+	}
+
+	close(executor.release)
+	if err := scheduler.StopContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.StopContext(context.Background()); err != nil {
+		t.Fatalf("repeated StopContext failed: %v", err)
+	}
+	history, err := repository.InspectionHeartbeats(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].Status != "cancelled" {
+		t.Fatalf("shutdown heartbeat = %#v", history)
+	}
+}
+
+func TestStopContextPrefersCompletedDrainOverCancelledWaitContext(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	scheduler := &Scheduler{loopDone: done}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for iteration := 0; iteration < 100; iteration++ {
+		if err := scheduler.StopContext(ctx); err != nil {
+			t.Fatalf("iteration %d: drained scheduler returned %v", iteration, err)
+		}
+	}
+}
+
 func TestDatabaseLeasePreventsOverlappingSchedulers(t *testing.T) {
 	repository := openInspectionRepository(t)
 	ctx := context.Background()
@@ -300,6 +413,89 @@ func TestLeaseLossCancelsExecutionAndRecordsFailure(t *testing.T) {
 	if len(history) != 1 || history[0].Status != "failed" || history[0].Error == nil ||
 		!strings.Contains(*history[0].Error, "租约") {
 		t.Fatalf("lease loss was not persisted as a failed inspection: %#v", history)
+	}
+}
+
+func TestLeaseLossPersistsFailureInRealRunnerAndTaskStore(t *testing.T) {
+	collector := &leaseBlockingCollector{started: make(chan struct{})}
+	repository := &executionLeaseLosingRepository{Store: openInspectionRepository(t), executionStarted: collector.started}
+	tasks := openRunnerTaskStore(t)
+	runner := NewRunner(&runnerRepositoryStub{trafficDue: true}, nil, collector, nil, nil, nil, nil, tasks)
+	scheduler, err := NewScheduler(repository, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.leaseRenewInterval = time.Millisecond
+
+	started, err := scheduler.RunDue(context.Background(), time.Now().UTC(), true)
+	if err != nil || !started {
+		t.Fatalf("started=%v err=%v", started, err)
+	}
+	history, err := repository.InspectionHeartbeats(context.Background(), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 1 || history[0].TaskID == nil || history[0].Status != "failed" || history[0].Error == nil ||
+		!strings.Contains(*history[0].Error, "租约") {
+		t.Fatalf("heartbeat=%#v", history)
+	}
+	stored, err := tasks.Get(context.Background(), *history[0].TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	errorText, _ := stored.Result["error"].(string)
+	if stored.Status != "failed" || !strings.Contains(errorText, "租约") || stored.Result["cancelled"] == true {
+		t.Fatalf("task=%#v", stored)
+	}
+}
+
+func TestCustomExecutionCancellationRecordsItsCause(t *testing.T) {
+	for _, testCase := range []struct {
+		name               string
+		returnContextError bool
+	}{
+		{name: "executor returns success"},
+		{name: "executor returns context error", returnContextError: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			repository := openInspectionRepository(t)
+			executor := &contextExitExecutor{
+				started:            make(chan struct{}),
+				returnContextError: testCase.returnContextError,
+			}
+			scheduler, err := NewScheduler(repository, executor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancelCause(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				_, runErr := scheduler.RunDue(ctx, time.Now().UTC(), true)
+				done <- runErr
+			}()
+			select {
+			case <-executor.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("inspection did not start")
+			}
+			cause := errors.New("inspection parent lease lost")
+			cancel(cause)
+			select {
+			case runErr := <-done:
+				if runErr != nil {
+					t.Fatal(runErr)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("inspection did not stop after context failure")
+			}
+			history, err := repository.InspectionHeartbeats(context.Background(), 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(history) != 1 || history[0].Status != "failed" || history[0].Error == nil || *history[0].Error != cause.Error() {
+				t.Fatalf("heartbeat=%#v", history)
+			}
+		})
 	}
 }
 

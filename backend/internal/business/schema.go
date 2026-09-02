@@ -150,6 +150,12 @@ CREATE TABLE IF NOT EXISTS local_groups (
  platform TEXT,rate_multiplier TEXT,profit_control_enabled INTEGER,profit_min_margin TEXT,profit_safety_buffer TEXT,
  account_count INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS newapi_group_bindings (
+ platform_id TEXT NOT NULL,newapi_group_id TEXT NOT NULL,newapi_group_name TEXT NOT NULL,
+ sub2api_group_id TEXT NOT NULL,sync_ratio INTEGER NOT NULL DEFAULT 0 CHECK(sync_ratio IN (0,1)),
+ updated_at TEXT NOT NULL,PRIMARY KEY(platform_id,newapi_group_id)
+);
+CREATE INDEX IF NOT EXISTS ix_newapi_group_bindings_local ON newapi_group_bindings(sub2api_group_id,platform_id);
 CREATE TABLE IF NOT EXISTS recharge_rates (host TEXT PRIMARY KEY,recharge_rate TEXT NOT NULL,note TEXT,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS billing_quota_unit_observations (
  host TEXT NOT NULL,observed_at TEXT NOT NULL,quota_per_unit TEXT NOT NULL,PRIMARY KEY(host,observed_at)
@@ -179,7 +185,7 @@ CREATE TABLE IF NOT EXISTS manual_priority_accounts (
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS routing_baselines (
- account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
+ account_id TEXT PRIMARY KEY,target_fingerprint TEXT NOT NULL DEFAULT '',schedulable INTEGER,priority INTEGER,load_factor TEXT,concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
  ownership_version INTEGER NOT NULL DEFAULT 1,managed_schedulable INTEGER,managed_priority INTEGER,
  managed_load_factor TEXT,managed_concurrency INTEGER,managed_status TEXT
 );
@@ -228,8 +234,9 @@ CREATE INDEX IF NOT EXISTS ix_operation_audit_apply_error_recent ON operation_au
  AND (state='failed' OR readback_confirmed=1);
 CREATE INDEX IF NOT EXISTS ix_operation_audit_recent ON operation_audit(created_at DESC,source_id);
 CREATE INDEX IF NOT EXISTS ix_operation_audit_log_recent ON operation_audit(created_at DESC,source_id)
- WHERE phase<>'calculation' AND operation_type<>'upstream.rate_sync' AND (
-  writeback=1 OR (operation_type IN ('account.scheduling','routing.writeback')
+	 WHERE phase<>'calculation' AND operation_type<>'upstream.rate_sync' AND (
+	  writeback=1 OR (operation_type='account.delete' AND state='failed') OR
+	  (operation_type IN ('account.scheduling','routing.writeback')
    AND state='succeeded' AND remote_confirmed=0 AND readback_confirmed=1
    AND before_json IS NOT NULL AND after_json IS NOT NULL)
  );
@@ -262,17 +269,26 @@ CREATE TABLE IF NOT EXISTS operational_snapshots (
 );
 CREATE INDEX IF NOT EXISTS ix_operational_snapshots_state_recent ON operational_snapshots(state_key,updated_at DESC);
 CREATE TABLE IF NOT EXISTS onboarding_pending (
- operation_id TEXT PRIMARY KEY,upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,upstream_key_id TEXT NOT NULL,
- upstream_key_name TEXT,upstream_group_id TEXT NOT NULL,upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,
- local_group_name TEXT NOT NULL,multiplier TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
+	 operation_id TEXT PRIMARY KEY,upstream_id TEXT NOT NULL DEFAULT '',upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,upstream_key_id TEXT NOT NULL,
+	 upstream_key_name TEXT,upstream_account_id TEXT NOT NULL DEFAULT '',upstream_group_id TEXT NOT NULL,
+	 upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,local_group_name TEXT NOT NULL,
+	 local_group_ids_json TEXT NOT NULL DEFAULT '',multiplier TEXT NOT NULL,intent_hash TEXT NOT NULL DEFAULT '',reason TEXT NOT NULL,
+	 key_commit_unknown INTEGER NOT NULL DEFAULT 0,account_commit_unknown INTEGER NOT NULL DEFAULT 0,
+	 created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS ix_onboarding_pending_selection ON onboarding_pending(
- upstream_host,upstream_group_id,local_group_id,multiplier
-);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_pending(
+ upstream_id,upstream_group_id,local_group_ids_json
+) WHERE upstream_id<>'' AND local_group_ids_json<>'';
 `
 
 func (s *Store) ensureSchema(ctx context.Context) error {
+	if err := s.ensureLegacyOnboardingPendingColumns(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, businessSchema); err != nil {
+		return err
+	}
+	if err := s.ensureRoutingBaselineColumns(ctx); err != nil {
 		return err
 	}
 	var accountMultiplierColumns int
@@ -308,6 +324,135 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	return s.ensureStableUpstreamRelations(ctx)
+}
+
+func (s *Store) ensureRoutingBaselineColumns(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(routing_baselines)`)
+	if err != nil {
+		return err
+	}
+	columns := map[string]struct{}{}
+	for rows.Next() {
+		var id, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	definitions := []struct {
+		name string
+		sql  string
+	}{
+		{"target_fingerprint", `ALTER TABLE routing_baselines ADD COLUMN target_fingerprint TEXT NOT NULL DEFAULT ''`},
+		{"ownership_version", `ALTER TABLE routing_baselines ADD COLUMN ownership_version INTEGER NOT NULL DEFAULT 1`},
+		{"managed_schedulable", `ALTER TABLE routing_baselines ADD COLUMN managed_schedulable INTEGER`},
+		{"managed_priority", `ALTER TABLE routing_baselines ADD COLUMN managed_priority INTEGER`},
+		{"managed_load_factor", `ALTER TABLE routing_baselines ADD COLUMN managed_load_factor TEXT`},
+		{"managed_concurrency", `ALTER TABLE routing_baselines ADD COLUMN managed_concurrency INTEGER`},
+		{"managed_status", `ALTER TABLE routing_baselines ADD COLUMN managed_status TEXT`},
+	}
+	for _, definition := range definitions {
+		if _, found := columns[definition.name]; found {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, definition.sql); err != nil {
+			return fmt.Errorf("补充调度基线字段 %s 失败: %w", definition.name, err)
+		}
+	}
+	var alertRecoveryColumns int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('alert_incidents')
+		WHERE name IN ('event_type','cause_code','last_seen_at','last_error')`).Scan(&alertRecoveryColumns); err != nil {
+		return err
+	}
+	if alertRecoveryColumns != 4 {
+		return tx.Commit()
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `UPDATE alert_deliveries SET status='transition',updated_at=?
+		WHERE incident_key IN (
+			SELECT incident_key FROM alert_incidents WHERE status='firing'
+			AND event_type='routing.apply_failure'
+			AND cause_code LIKE 'APPLY_FAILED:%table routing_baselines has no column named target_fingerprint%'
+		)`, now); err != nil {
+		return fmt.Errorf("更新调度基线迁移恢复通知失败: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='recovered',last_seen_at=?,last_error=NULL
+		WHERE status='firing' AND event_type='routing.apply_failure'
+		AND cause_code LIKE 'APPLY_FAILED:%table routing_baselines has no column named target_fingerprint%'`, now); err != nil {
+		return fmt.Errorf("恢复调度基线缺列告警失败: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ensureLegacyOnboardingPendingColumns(ctx context.Context) error {
+	var tableExists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_pending'
+	)`).Scan(&tableExists); err != nil {
+		return err
+	}
+	if !tableExists {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(onboarding_pending)`)
+	if err != nil {
+		return err
+	}
+	columns := map[string]struct{}{}
+	for rows.Next() {
+		var id, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		columns[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	definitions := []struct {
+		name string
+		sql  string
+	}{
+		{"upstream_id", `ALTER TABLE onboarding_pending ADD COLUMN upstream_id TEXT NOT NULL DEFAULT ''`},
+		{"upstream_account_id", `ALTER TABLE onboarding_pending ADD COLUMN upstream_account_id TEXT NOT NULL DEFAULT ''`},
+		{"local_group_ids_json", `ALTER TABLE onboarding_pending ADD COLUMN local_group_ids_json TEXT NOT NULL DEFAULT ''`},
+		{"intent_hash", `ALTER TABLE onboarding_pending ADD COLUMN intent_hash TEXT NOT NULL DEFAULT ''`},
+		{"key_commit_unknown", `ALTER TABLE onboarding_pending ADD COLUMN key_commit_unknown INTEGER NOT NULL DEFAULT 0`},
+		{"account_commit_unknown", `ALTER TABLE onboarding_pending ADD COLUMN account_commit_unknown INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, definition := range definitions {
+		if _, found := columns[definition.name]; found {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, definition.sql); err != nil {
+			return fmt.Errorf("补充待处理账号字段 %s 失败: %w", definition.name, err)
+		}
+	}
+	return nil
 }
 
 func (s *Store) ensureManualPriorityBalanceSyncColumn(ctx context.Context) error {
@@ -474,7 +619,7 @@ func initialControlPolicy() map[string]any {
 		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": false, "retry_source": "fixed", "retry_count": int64(0), "retry_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
-		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
+		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
 			"event_scores": map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},

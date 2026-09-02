@@ -3,6 +3,7 @@ package routingwrite
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"math"
 	"math/big"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,21 +21,27 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
 const restoreControlConcurrency = 4
+
+var (
+	ErrRoutingBaselineTargetChanged = errors.New("调度基线属于其他管理目标，请先同步并确认当前管理目标")
+	ErrRoutingBaselineChanged       = errors.New("调度基线在操作排队后已变化，请重新提交交还控制权")
+)
 
 type Repository interface {
 	Mode(context.Context) (string, error)
 	ControlPolicy(context.Context) (map[string]any, error)
 	RoutingBaselines(context.Context) ([]business.RoutingBaseline, error)
 	CaptureRoutingBaseline(context.Context, business.RoutingBaseline) error
-	UpdateRoutingManagedIntent(context.Context, string, business.RoutingManagedIntent) error
-	CommitRoutingReadback(context.Context, string, business.RoutingReadback, bool, business.AccountOperation) error
-	AbandonRoutingControl(context.Context, string, business.RoutingReadback, business.AccountOperation) error
+	CommitRoutingReadback(context.Context, string, string, business.RoutingReadback, *business.RoutingManagedIntent, bool, business.AccountOperation) error
+	AbandonRoutingControl(context.Context, string, string, business.RoutingReadback, business.AccountOperation) error
 	ClearRoutingRuntimeBlocks(context.Context, string) error
-	DeleteRoutingBaseline(context.Context, string) error
+	DeleteRoutingBaseline(context.Context, string, string) error
 	RecordAccountOperation(context.Context, business.AccountOperation) error
 	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
 	MarkCleanupPaused(context.Context, string, string) error
@@ -43,6 +51,10 @@ type Repository interface {
 
 type manualPriorityRepository interface {
 	ManualPriorityControls(context.Context, []string) (map[string]business.ManualPriorityControl, error)
+}
+
+type mutationProtectionRepository interface {
+	AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
 }
 
 type TargetStore interface {
@@ -100,7 +112,98 @@ func New(targets TargetStore, repository Repository) *Service {
 	return &Service{targets: targets, repository: repository, now: time.Now}
 }
 
+func (s *Service) managementTargetFingerprint(ctx context.Context) (string, error) {
+	if s.targets == nil {
+		return "", errors.New("未配置管理目标")
+	}
+	target, err := targetguard.Settings(ctx, s.targets)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(target.BaseURL) == "" || strings.TrimSpace(target.AdminKey) == "" {
+		return "", errors.New("管理目标配置不完整")
+	}
+	return routingTargetFingerprint(target), nil
+}
+
+func routingTargetFingerprint(target configstore.TargetSettings) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(target.BaseURL), "/")
+	adminKey := strings.TrimSpace(target.AdminKey)
+	identity := strconv.Itoa(len(baseURL)) + ":" + baseURL + strconv.Itoa(len(adminKey)) + ":" + adminKey
+	digest := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(digest[:])
+}
+
+func validateRoutingTargetIDs(targets map[string]business.AccountRoutingTarget) error {
+	keys := make([]string, 0, len(targets))
+	for accountID := range targets {
+		keys = append(keys, accountID)
+	}
+	sort.Strings(keys)
+	seen := make(map[string]struct{}, len(targets))
+	for _, accountID := range keys {
+		targetID := targets[accountID].AccountID
+		if !stableRoutingAccountID(accountID) || !stableRoutingAccountID(targetID) {
+			return errors.New("调度目标账号必须使用规范的稳定正整数 ID")
+		}
+		if _, duplicate := seen[targetID]; duplicate {
+			return fmt.Errorf("调度目标包含重复账号 ID：%s", targetID)
+		}
+		seen[targetID] = struct{}{}
+		if targetID != accountID {
+			return fmt.Errorf("调度目标映射键 %s 与账号 ID %s 不一致", accountID, targetID)
+		}
+	}
+	return nil
+}
+
+func stableRoutingAccountID(value string) bool {
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	return err == nil && parsed > 0 && strconv.FormatUint(parsed, 10) == value
+}
+
+func validateRoutingBaselineTargets(baselines []business.RoutingBaseline, targetFingerprint string) error {
+	for _, baseline := range baselines {
+		if baseline.TargetFingerprint != targetFingerprint {
+			return ErrRoutingBaselineTargetChanged
+		}
+	}
+	return nil
+}
+
+func revalidateRoutingBaselines(
+	initial []business.RoutingBaseline,
+	current []business.RoutingBaseline,
+	targetFingerprint string,
+) ([]business.RoutingBaseline, error) {
+	if len(initial) != len(current) {
+		return nil, ErrRoutingBaselineChanged
+	}
+	currentByID := make(map[string]business.RoutingBaseline, len(current))
+	for _, baseline := range current {
+		if _, duplicate := currentByID[baseline.AccountID]; duplicate {
+			return nil, ErrRoutingBaselineChanged
+		}
+		currentByID[baseline.AccountID] = baseline
+	}
+	confirmed := make([]business.RoutingBaseline, 0, len(initial))
+	for _, baseline := range initial {
+		locked, found := currentByID[baseline.AccountID]
+		if !found || !reflect.DeepEqual(baseline, locked) {
+			return nil, ErrRoutingBaselineChanged
+		}
+		if locked.TargetFingerprint != targetFingerprint {
+			return nil, ErrRoutingBaselineTargetChanged
+		}
+		confirmed = append(confirmed, locked)
+	}
+	return confirmed, nil
+}
+
 func (s *Service) Apply(ctx context.Context, targets map[string]business.AccountRoutingTarget, actor string) (Result, error) {
+	if err := validateRoutingTargetIDs(targets); err != nil {
+		return Result{}, err
+	}
 	mode, err := s.repository.Mode(ctx)
 	if err != nil {
 		return Result{}, err
@@ -152,17 +255,43 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		result.Reason = &reason
 		return result, nil
 	}
-	admin, err := s.adminClient(ctx)
+	orderedIDs := orderedTargetIDs(targets)
+	resources := routingMutationResources(orderedIDs, targets)
+	var guardedCtx context.Context
+	var release func() error
+	if s.admin == nil {
+		ctx, err = targetguard.Capture(ctx, s.targets)
+		if err != nil {
+			return Result{}, err
+		}
+		guardedCtx, release, err = targetguard.Acquire(ctx, s.repository, resources...)
+		if err != nil {
+			return Result{}, err
+		}
+		guardedCtx, err = targetguard.Bind(guardedCtx, s.targets)
+		if err != nil {
+			_ = release()
+			return Result{}, err
+		}
+	} else {
+		guardedCtx, release, err = mutationguard.Acquire(ctx, s.repository, resources...)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("调度写回变更租约释放失败", "resources", resources, "error", err)
+		}
+	}()
+	ctx = guardedCtx
+	targetFingerprint, err := s.managementTargetFingerprint(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	orderedIDs := orderedTargetIDs(targets)
-	currentPayloads := map[string]map[string]any{}
-	if _, supported := admin.(accountLister); supported {
-		currentPayloads, err = listAccountPayloads(ctx, admin)
-		if err != nil {
-			return Result{}, fmt.Errorf("批量读取账号失败：%w", err)
-		}
+	admin, err := s.adminClient(ctx)
+	if err != nil {
+		return Result{}, err
 	}
 	admin = limitAdmin(admin, policy.maxConcurrency)
 	items := make([]AccountResult, len(orderedIDs))
@@ -173,9 +302,9 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 			break
 		}
 	}
-	runBatch := func(start, end int) {
+	runBatch := func(start, end int) error {
 		if start >= end {
-			return
+			return nil
 		}
 		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite)
 		var wait sync.WaitGroup
@@ -184,13 +313,18 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 			wait.Add(1)
 			go func() {
 				defer wait.Done()
-				items[index] = s.applyAccountCoordinated(ctx, admin, targets[accountID], policy, actor, currentPayloads[accountID], coordinator)
+				items[index] = s.applyAccountCoordinated(ctx, admin, targets[accountID], policy, actor, targetFingerprint, coordinator)
 			}()
 		}
 		wait.Wait()
+		return nil
 	}
-	runBatch(0, regularCount)
-	runBatch(regularCount, len(orderedIDs))
+	if err := runBatch(0, regularCount); err != nil {
+		return Result{}, err
+	}
+	if err := runBatch(regularCount, len(orderedIDs)); err != nil {
+		return Result{}, err
+	}
 	for index, item := range items {
 		result.Results = append(result.Results, item)
 		result.RemoteWrite = result.RemoteWrite || item.RemoteWrite
@@ -245,6 +379,24 @@ func orderedTargetIDs(targets map[string]business.AccountRoutingTarget) []string
 	return append(sortedTargetIDs(regular), sortedTargetIDs(cleanup)...)
 }
 
+func routingMutationResources(
+	orderedIDs []string,
+	targets map[string]business.AccountRoutingTarget,
+) []string {
+	resources := make([]string, 0, len(orderedIDs)+1)
+	includeCatalog := false
+	for _, accountID := range orderedIDs {
+		resources = append(resources, mutationguard.Account(accountID))
+		if action := targets[accountID].CleanupAction; action != nil && *action == "delete" {
+			includeCatalog = true
+		}
+	}
+	if includeCatalog {
+		resources = append(resources, mutationguard.AccountCatalog())
+	}
+	return resources
+}
+
 func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, error) {
 	mode, err := s.repository.Mode(ctx)
 	if err != nil {
@@ -253,8 +405,28 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 	if mode != runtimepolicy.Full {
 		return Result{}, errors.New("交还控制权只能在完全模式执行")
 	}
+	var expectedTargetFingerprint string
+	if s.admin == nil {
+		ctx, err = targetguard.Capture(ctx, s.targets)
+		if err != nil {
+			return Result{}, err
+		}
+		expectedTarget, targetErr := targetguard.Expected(ctx, s.targets)
+		if targetErr != nil {
+			return Result{}, targetErr
+		}
+		expectedTargetFingerprint = routingTargetFingerprint(expectedTarget)
+	} else {
+		expectedTargetFingerprint, err = s.managementTargetFingerprint(ctx)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	baselines, err := s.repository.RoutingBaselines(ctx)
 	if err != nil {
+		return Result{}, err
+	}
+	if err := validateRoutingBaselineTargets(baselines, expectedTargetFingerprint); err != nil {
 		return Result{}, err
 	}
 	result := Result{Mode: mode, Results: []AccountResult{}}
@@ -263,16 +435,52 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		result.Reason = &reason
 		return result, nil
 	}
-	admin, err := s.adminClient(ctx)
+	resources := make([]string, 0, len(baselines))
+	for _, baseline := range baselines {
+		resources = append(resources, mutationguard.Account(baseline.AccountID))
+	}
+	var guardedCtx context.Context
+	var release func() error
+	if s.admin == nil {
+		guardedCtx, release, err = targetguard.Acquire(ctx, s.repository, resources...)
+		if err != nil {
+			return Result{}, err
+		}
+		guardedCtx, err = targetguard.Bind(guardedCtx, s.targets)
+		if err != nil {
+			_ = release()
+			return Result{}, err
+		}
+	} else {
+		guardedCtx, release, err = mutationguard.Acquire(ctx, s.repository, resources...)
+		if err != nil {
+			return Result{}, err
+		}
+	}
+	defer func() {
+		if err := release(); err != nil {
+			slog.Error("调度交还变更租约释放失败", "resources", resources, "error", err)
+		}
+	}()
+	ctx = guardedCtx
+	lockedTargetFingerprint, err := s.managementTargetFingerprint(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	currentPayloads := map[string]map[string]any{}
-	if _, supported := admin.(accountLister); supported {
-		currentPayloads, err = listAccountPayloads(ctx, admin)
-		if err != nil {
-			return Result{}, fmt.Errorf("批量读取账号失败：%w", err)
-		}
+	if lockedTargetFingerprint != expectedTargetFingerprint {
+		return Result{}, targetguard.ErrChanged
+	}
+	lockedBaselines, err := s.repository.RoutingBaselines(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	baselines, err = revalidateRoutingBaselines(baselines, lockedBaselines, lockedTargetFingerprint)
+	if err != nil {
+		return Result{}, err
+	}
+	admin, err := s.adminClient(ctx)
+	if err != nil {
+		return Result{}, err
 	}
 	admin = limitAdmin(admin, restoreControlConcurrency)
 	coordinator := newBatchWriteCoordinator(ctx, admin, len(baselines), true)
@@ -283,7 +491,7 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			items[index] = s.restoreAccount(ctx, admin, baseline, actor, currentPayloads[baseline.AccountID], coordinator)
+			items[index] = s.restoreAccount(ctx, admin, baseline, actor, lockedTargetFingerprint, coordinator)
 		}()
 	}
 	wait.Wait()
@@ -295,7 +503,9 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 			continue
 		}
 		result.Succeeded++
-		result.Restored++
+		if !item.Skipped {
+			result.Restored++
+		}
 		if item.Changed {
 			result.Changed++
 		}
@@ -309,7 +519,7 @@ func (s *Service) applyAccountCoordinated(
 	target business.AccountRoutingTarget,
 	policy writePolicy,
 	actor string,
-	currentPayload map[string]any,
+	targetFingerprint string,
 	coordinator *batchWriteCoordinator,
 ) AccountResult {
 	submitted := false
@@ -328,15 +538,21 @@ func (s *Service) applyAccountCoordinated(
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
+	if reason, protected, err := s.accountMutationProtection(ctx, target.AccountID); err != nil {
+		return failedResult(result, err)
+	} else if protected {
+		result.Skipped, result.Reason = true, &reason
+		return result
+	}
+	// The batch snapshot may predate a waiting human operation. Refresh only
+	// after the shared account reservation has been acquired.
+	currentPayload, err := admin.Account(ctx, target.AccountID)
+	if err != nil {
+		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
+		return failedResult(result, err)
+	}
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
 		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload)
-	}
-	if currentPayload == nil {
-		currentPayload, err = admin.Account(ctx, target.AccountID)
-		if err != nil {
-			s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
-			return failedResult(result, err)
-		}
 	}
 	current, err := remoteValues(currentPayload)
 	if err != nil {
@@ -346,7 +562,7 @@ func (s *Service) applyAccountCoordinated(
 	result.Before = current.asMap()
 	if target.AbandonControl {
 		op := operation(operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, nil)
-		if err := s.repository.AbandonRoutingControl(ctx, target.AccountID, current.readback(nil), op); err != nil {
+		if err := s.repository.AbandonRoutingControl(ctx, target.AccountID, targetFingerprint, current.readback(nil), op); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.release_external", target, actor, current.asMap(), current.asMap(), false, true, "local-release", err)
 			return failedResult(result, err)
 		}
@@ -361,12 +577,12 @@ func (s *Service) applyAccountCoordinated(
 		return failedResult(result, err)
 	}
 	if target.ReleaseControl {
-		baseline, found, loadErr := s.baseline(ctx, target.AccountID)
+		baseline, found, loadErr := s.baseline(ctx, target.AccountID, targetFingerprint)
 		if loadErr != nil {
 			return failedResult(result, loadErr)
 		}
 		if !found {
-			if err := s.repository.DeleteRoutingBaseline(ctx, target.AccountID); err != nil {
+			if err := s.repository.DeleteRoutingBaseline(ctx, target.AccountID, targetFingerprint); err != nil {
 				return failedResult(result, err)
 			}
 			reason := "接管前没有可恢复字段，已交还控制权"
@@ -415,13 +631,14 @@ func (s *Service) applyAccountCoordinated(
 		}
 		if state != nil {
 			if !target.ReleaseControl {
-				if err := s.captureManagedOwnership(ctx, target, policy, current); err != nil {
+				if err := s.captureRoutingBaseline(ctx, target, policy, current, targetFingerprint); err != nil {
 					return failedResult(result, err)
 				}
 			}
 			op := operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), current.asMap(), false, true, nil)
 			op.FieldName = nil
-			if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, current.readback(state), target.ReleaseControl, op); err != nil {
+			intent := confirmedManagedIntent(target, policy, current)
+			if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, current.readback(state), intentPointer(intent), target.ReleaseControl, op); err != nil {
 				s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), current.asMap(), false, true, "local-commit", err)
 				return failedResult(result, err)
 			}
@@ -445,7 +662,7 @@ func (s *Service) applyAccountCoordinated(
 		return result
 	}
 	if !target.ReleaseControl {
-		if err := s.captureManagedOwnership(ctx, target, policy, current); err != nil {
+		if err := s.captureRoutingBaseline(ctx, target, policy, current, targetFingerprint); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, "ownership-capture", err)
 			return failedResult(result, err)
 		}
@@ -453,6 +670,9 @@ func (s *Service) applyAccountCoordinated(
 	result.RemoteWrite = true
 	submitted = true
 	write := coordinator.Submit(ctx, target.AccountID, desired, current)
+	if cause := contextCause(ctx); cause != nil {
+		return failedResult(result, cause)
+	}
 	if write.err != nil && !write.remoteConfirmed {
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, write.err))
 		return failedResult(result, write.err)
@@ -468,7 +688,8 @@ func (s *Service) applyAccountCoordinated(
 	if write.err != nil {
 		op.Phase = "remote-partial"
 	}
-	if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, after.readback(state), target.ReleaseControl, op); err != nil {
+	intent := confirmedManagedIntent(target, policy, after)
+	if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, after.readback(state), intentPointer(intent), target.ReleaseControl, op); err != nil {
 		s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, write.readbackConfirmed, "local-commit", err)
 		return failedResult(result, err)
 	}
@@ -503,20 +724,18 @@ func (s *Service) applyAccountCoordinated(
 	return result
 }
 
-func (s *Service) captureManagedOwnership(
+func (s *Service) captureRoutingBaseline(
 	ctx context.Context,
 	target business.AccountRoutingTarget,
 	policy writePolicy,
 	current values,
+	targetFingerprint string,
 ) error {
 	intent := managedIntentForTarget(target, policy)
 	if intent.Schedulable == nil && intent.Priority == nil && intent.LoadFactor == nil && intent.Concurrency == nil {
 		return nil
 	}
-	if err := s.repository.CaptureRoutingBaseline(ctx, current.baseline(target.AccountID, s.now().UTC())); err != nil {
-		return err
-	}
-	return s.repository.UpdateRoutingManagedIntent(ctx, target.AccountID, intent)
+	return s.repository.CaptureRoutingBaseline(ctx, current.baseline(target.AccountID, targetFingerprint, s.now().UTC()))
 }
 
 func managedIntentForTarget(target business.AccountRoutingTarget, policy writePolicy) business.RoutingManagedIntent {
@@ -534,6 +753,35 @@ func managedIntentForTarget(target business.AccountRoutingTarget, policy writePo
 		result.Concurrency = cloneInt(target.Concurrency)
 	}
 	return result
+}
+
+func confirmedManagedIntent(target business.AccountRoutingTarget, policy writePolicy, actual values) business.RoutingManagedIntent {
+	result := business.RoutingManagedIntent{}
+	if policy.autoApply["schedulable"] && sameBool(target.Schedulable, actual.schedulable) {
+		result.Schedulable = cloneBool(actual.schedulable)
+	}
+	if policy.autoApply["priority"] && sameInt64(target.Priority, actual.priority) {
+		result.Priority = cloneInt(actual.priority)
+	}
+	if policy.autoApply["load_factor"] {
+		if target.LoadFactor != nil {
+			wanted, err := optionalNonnegativeIntegerText(*target.LoadFactor)
+			if err == nil && sameString(wanted, actual.loadFactor) {
+				result.LoadFactor = cloneString(actual.loadFactor)
+			}
+		}
+	}
+	if policy.autoApply["concurrency"] && sameInt64(target.Concurrency, actual.concurrency) {
+		result.Concurrency = cloneInt(actual.concurrency)
+	}
+	return result
+}
+
+func intentPointer(intent business.RoutingManagedIntent) *business.RoutingManagedIntent {
+	if intent.Schedulable == nil && intent.Priority == nil && intent.LoadFactor == nil && intent.Concurrency == nil && intent.Status == nil {
+		return nil
+	}
+	return &intent
 }
 
 func shouldRecoverRuntime(before, after values) bool {
@@ -688,7 +936,7 @@ func (s *Service) restoreAccount(
 	admin Admin,
 	baseline business.RoutingBaseline,
 	actor string,
-	beforePayload map[string]any,
+	targetFingerprint string,
 	coordinator *batchWriteCoordinator,
 ) AccountResult {
 	submitted := false
@@ -698,16 +946,20 @@ func (s *Service) restoreAccount(
 		}
 	}()
 	target := business.AccountRoutingTarget{AccountID: baseline.AccountID, GroupNames: []string{"交还控制权"}, ReleaseControl: true}
-	result := AccountResult{AccountID: baseline.AccountID, Restored: true}
+	result := AccountResult{AccountID: baseline.AccountID}
 	operationID, err := randomOperationID("routing-restore")
 	if err != nil {
 		return failedResult(result, err)
 	}
-	if beforePayload == nil {
-		beforePayload, err = admin.Account(ctx, baseline.AccountID)
-		if err != nil {
-			return failedResult(result, err)
-		}
+	if reason, protected, err := s.accountMutationProtection(ctx, baseline.AccountID); err != nil {
+		return failedResult(result, err)
+	} else if protected {
+		result.Skipped, result.Reason = true, &reason
+		return result
+	}
+	beforePayload, err := admin.Account(ctx, baseline.AccountID)
+	if err != nil {
+		return failedResult(result, err)
 	}
 	before, err := remoteValues(beforePayload)
 	if err != nil {
@@ -720,6 +972,9 @@ func (s *Service) restoreAccount(
 		submitted = true
 		write := coordinator.Submit(ctx, baseline.AccountID, changed, before)
 		result.RemoteWrite = write.remoteConfirmed
+		if cause := contextCause(ctx); cause != nil {
+			return failedResult(result, cause)
+		}
 		if write.err != nil {
 			s.recordOperation(ctx, operation(operationID, "routing.restore", target, actor, before.asMap(), changed, write.remoteConfirmed, write.readbackConfirmed, write.err))
 			return failedResult(result, write.err)
@@ -727,16 +982,31 @@ func (s *Service) restoreAccount(
 		after, readbackConfirmed = write.after, write.readbackConfirmed
 	}
 	op := operation(operationID, "routing.restore", target, actor, before.asMap(), after.asMap(), len(changed) > 0, readbackConfirmed, nil)
-	if err := s.repository.CommitRoutingReadback(ctx, baseline.AccountID, after.readback(nil), true, op); err != nil {
+	if err := s.repository.CommitRoutingReadback(ctx, baseline.AccountID, targetFingerprint, after.readback(nil), nil, true, op); err != nil {
 		return failedResult(result, err)
 	}
-	result.Changed, result.RemoteWrite, result.Effective = len(changed) > 0, len(changed) > 0, after.asMap()
+	result.Changed, result.RemoteWrite, result.Restored, result.Effective = len(changed) > 0, len(changed) > 0, true, after.asMap()
 	result.Before = before.asMap()
 	if len(conflicts) > 0 {
 		reason := "已交还控制权；保留外部修改字段：" + strings.Join(conflicts, ",")
 		result.Reason = &reason
 	}
 	return result
+}
+
+func (s *Service) accountMutationProtection(ctx context.Context, accountID string) (string, bool, error) {
+	repository, ok := s.repository.(mutationProtectionRepository)
+	if !ok {
+		return "", false, nil
+	}
+	protection, err := repository.AccountMutationProtection(ctx, accountID)
+	if err != nil {
+		return "", false, fmt.Errorf("人工保护状态复核失败：%w", err)
+	}
+	if !protection.Protected() {
+		return "", false, nil
+	}
+	return "账号已启用" + strings.Join(protection.Reasons(), "、") + "，自动远端变更已跳过", true, nil
 }
 
 type routingWriteOutcome struct {
@@ -949,13 +1219,16 @@ func parseWritePolicy(document map[string]any) (writePolicy, error) {
 	return result, nil
 }
 
-func (s *Service) baseline(ctx context.Context, accountID string) (business.RoutingBaseline, bool, error) {
+func (s *Service) baseline(ctx context.Context, accountID, targetFingerprint string) (business.RoutingBaseline, bool, error) {
 	rows, err := s.repository.RoutingBaselines(ctx)
 	if err != nil {
 		return business.RoutingBaseline{}, false, err
 	}
 	for _, item := range rows {
 		if item.AccountID == accountID {
+			if item.TargetFingerprint != targetFingerprint {
+				return business.RoutingBaseline{}, false, ErrRoutingBaselineTargetChanged
+			}
 			return item, true, nil
 		}
 	}
@@ -969,7 +1242,7 @@ func (s *Service) adminClient(ctx context.Context) (Admin, error) {
 	if s.targets == nil {
 		return nil, errors.New("未配置 Admin API 客户端")
 	}
-	target, err := s.targets.TargetSettings(ctx)
+	target, err := targetguard.Settings(ctx, s.targets)
 	if err != nil {
 		return nil, err
 	}
@@ -1111,9 +1384,10 @@ func restorableBaselineValues(value business.RoutingBaseline, current values) (m
 	return result, conflicts
 }
 
-func (v values) baseline(accountID string, now time.Time) business.RoutingBaseline {
+func (v values) baseline(accountID, targetFingerprint string, now time.Time) business.RoutingBaseline {
 	return business.RoutingBaseline{
-		AccountID: accountID, Schedulable: cloneBool(v.schedulable), Priority: cloneInt(v.priority),
+		AccountID: accountID, TargetFingerprint: targetFingerprint,
+		Schedulable: cloneBool(v.schedulable), Priority: cloneInt(v.priority),
 		LoadFactor: cloneString(v.loadFactor), Concurrency: cloneInt(v.concurrency), Status: cloneString(v.status),
 		CapturedAt: now.Format(time.RFC3339Nano), OwnershipVersion: 1,
 	}

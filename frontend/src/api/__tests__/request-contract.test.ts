@@ -76,6 +76,44 @@ describe("API error detail contract", () => {
   });
 });
 
+describe("setup initialization request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the setup token only through its dedicated header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          initialized: true,
+          target_configured: true,
+          setup_token_required: false,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      username: "operator",
+      password: "long-console-password",
+      admin_base_url: "https://sub2api.example.test",
+      admin_key: "admin-key",
+    };
+
+    await api.initialize(payload, "setup-token-secret");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/setup/initialize");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("POST");
+    expect(new Headers(request.headers).get("X-Setup-Token")).toBe("setup-token-secret");
+    expect(JSON.parse(String(request.body))).toEqual(payload);
+    expect(String(request.body)).not.toContain("setup-token-secret");
+  });
+});
+
 describe("alert request contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -162,6 +200,74 @@ describe("manual priority request contract", () => {
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/account%2F41/manual-priority");
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+});
+
+describe("account deletion request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("confirms the exact account binding and upstream key IDs", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "delete-task", status: "queued", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.deleteAccount({
+      account_id: "37",
+      account_name: "special-key",
+      groups: ["special"],
+      management_base_url: "https://management.example.test",
+      binding: {
+        id: 91,
+        upstream_id: "upstream-1",
+        upstream_host: "https://upstream.example.test",
+        auth_host: "upstream.example.test",
+        upstream_key_id: "key-8",
+        upstream_key_name: "special-key",
+      },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/37/delete");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(String(request.body))).toEqual({
+      confirmation_account_id: "37",
+      expected_management_base_url: "https://management.example.test",
+      expected_binding_id: 91,
+      expected_upstream_id: "upstream-1",
+      expected_upstream_host: "https://upstream.example.test",
+      expected_auth_host: "upstream.example.test",
+      expected_upstream_key_id: "key-8",
+    });
+  });
+
+  it("omits every upstream key field for a management-only deletion", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "delete-task", status: "queued", result: {} }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.deleteAccount({
+      account_id: "174",
+      account_name: "星筱AI-0.125",
+      groups: [],
+      management_base_url: "https://management.example.test",
+      binding: null,
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({
+      confirmation_account_id: "174",
+      expected_management_base_url: "https://management.example.test",
+    });
   });
 });
 
@@ -519,6 +625,7 @@ describe("onboarding request contract", () => {
       host: "origin.example.test:8080",
       name: "Upstream",
       base_url: "https://accelerated.example.test:8443/api",
+      account_base_url: "https://account-api.example.test/v1",
       upstream_type: "sub2api",
       auth_mode: "sub2api_user_token",
       recharge_rate: "1",
@@ -532,6 +639,7 @@ describe("onboarding request contract", () => {
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toMatchObject({
       host: "origin.example.test:8080",
       base_url: "https://accelerated.example.test:8443/api",
+      account_base_url: "https://account-api.example.test/v1",
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/onboarding/prepare");
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
@@ -667,6 +775,26 @@ describe("account field request contract", () => {
       priority: 120,
       load_factor: "2.5",
       concurrency: 3000,
+    });
+  });
+
+  it("keeps account Host and Base URL as independent editable fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "task-connection" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.syncAccount("42", {
+      upstream_host: "upstream.example.test",
+      base_url: "https://account-api.example.test/v1",
+    });
+
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      upstream_host: "upstream.example.test",
+      base_url: "https://account-api.example.test/v1",
     });
   });
 
@@ -987,6 +1115,7 @@ describe("upstream operator action contracts", () => {
 
     await api.updateUpstreamConfiguration("api.example.test", {
       base_url: "https://api.example.test",
+      account_base_url: "https://account-api.example.test/v1",
       upstream_type: "newapi",
       auth_mode: "newapi_admin_key",
       recharge_rate: "5",
@@ -999,6 +1128,7 @@ describe("upstream operator action contracts", () => {
     expect(request.method).toBe("PUT");
     expect(JSON.parse(String(request.body))).toEqual({
       base_url: "https://api.example.test",
+      account_base_url: "https://account-api.example.test/v1",
       upstream_type: "newapi",
       auth_mode: "newapi_admin_key",
       recharge_rate: "5",
@@ -1086,6 +1216,80 @@ describe("password vault request contracts", () => {
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       host: "api.example.test",
       entry: "operator",
+    });
+  });
+});
+
+describe("New API management request contracts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the stable platform ID for refresh and group binding writes", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ groups: [], models: [], references: [], differences: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.refreshNewAPIPlatform("production/main");
+    await api.saveNewAPIGroupBindings("production/main", [
+      {
+        newapi_group_id: "vip",
+        newapi_group_name: "VIP",
+        sub2api_group_id: "6",
+        sync_ratio: true,
+      },
+    ]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/production%2Fmain/refresh");
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/newapi/platforms/production%2Fmain/group-bindings",
+    );
+    const request = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(request.method).toBe("PUT");
+    expect(JSON.parse(String(request.body))).toEqual({
+      bindings: [
+        {
+          newapi_group_id: "vip",
+          newapi_group_name: "VIP",
+          sub2api_group_id: "6",
+          sync_ratio: true,
+        },
+      ],
+    });
+  });
+
+  it("keeps the Sub2API service key inside the channel creation request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 9 }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.createNewAPIChannel("platform-1", {
+      name: "标准组",
+      sub2api_group_id: "6",
+      base_url: "https://sub2api.example/v1",
+      service_key: "service-secret",
+      models: ["gpt-5"],
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(String(request.body))).toEqual({
+      name: "标准组",
+      sub2api_group_id: "6",
+      base_url: "https://sub2api.example/v1",
+      service_key: "service-secret",
+      models: ["gpt-5"],
     });
   });
 });
