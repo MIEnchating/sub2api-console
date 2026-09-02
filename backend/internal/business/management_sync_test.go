@@ -105,6 +105,32 @@ func TestManagementSnapshotUsesStableIDsAndPreservesLocalPolicyAndPartialFields(
 	}
 }
 
+func TestManagementSnapshotNormalizesCompositeGroupPlatform(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "management-composite-group.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.SyncManagementSnapshot(ctx, nil, []map[string]any{{
+		"id": json.Number("7"), "name": "复合分组", "platform": " Composite ",
+	}}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := store.Groups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 || groups[0].Platform == nil || *groups[0].Platform != "composite" {
+		t.Fatalf("composite group platform was not normalized: %#v", groups)
+	}
+}
+
 func TestManagementSnapshotClearsCurrentProjectionsWhenAccountBecomesUngrouped(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "management-account-ungrouped.sqlite3"))
 	if err != nil {

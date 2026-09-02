@@ -4868,7 +4868,7 @@ export function GroupsPage() {
               setSearch(value);
               pagination.setCurrentPage(1);
             }}
-            placeholder="搜索分组、类型或策略"
+            placeholder="搜索分组、平台或策略"
           />
         </div>
         <DataTablePanel className="flex-1">
@@ -4876,7 +4876,7 @@ export function GroupsPage() {
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
                 <TableHead className="w-[15%]">分组</TableHead>
-                <TableHead className="w-[11%]">类型</TableHead>
+                <TableHead className="w-[11%]">平台</TableHead>
                 <TableHead className="w-[7%]">账号数</TableHead>
                 <TableHead className="w-[10%]">调度开启</TableHead>
                 <TableHead className="w-[10%]">调度关闭</TableHead>

@@ -7,6 +7,7 @@ const platformLabels: Record<string, string> = {
   openai: "OpenAI",
   claude: "Claude",
   anthropic: "Anthropic",
+  composite: "Composite",
   grok: "Grok",
   gemini: "Gemini",
 };

@@ -39,6 +39,22 @@ const groups: GroupStatus[] = [
       strategy: "speed_first",
     },
   },
+  {
+    name: "all-models",
+    id: "10",
+    platform: "composite",
+    platforms: ["composite"],
+    account_count: 4,
+    scheduling_open: 4,
+    scheduling_closed: 0,
+    scheduling_unknown: 0,
+    strategy: "balanced",
+    strategy_source: "global_default",
+    participation_status: "participating",
+    participation_reason: null,
+    status: "healthy",
+    override: null,
+  },
 ];
 
 function renderGroupsPage() {
@@ -58,8 +74,10 @@ describe("分组管理页面", () => {
     expect(navItems.find((item) => item.id === "groups")?.label).toBe("分组管理");
     expect(markup).toContain("分组管理");
     expect(markup).toContain(">状态</");
-    expect(markup).toContain(">类型</");
+    expect(markup).toContain(">平台</");
+    expect(markup).not.toContain(">类型</th>");
     expect(markup).toContain("OpenAI");
+    expect(markup).toContain("Composite");
     expect(markup).toContain("部分异常");
     expect(markup).toContain("已排除");
     expect(markup).not.toContain(">原因</");
