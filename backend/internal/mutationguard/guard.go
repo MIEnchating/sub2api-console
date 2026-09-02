@@ -23,6 +23,14 @@ const (
 	leaseCallTimeout = 5 * time.Second
 )
 
+type automaticInspectionPreemptedError struct{}
+
+func (*automaticInspectionPreemptedError) Error() string {
+	return "自动巡检已让位于手工操作"
+}
+
+func (*automaticInspectionPreemptedError) Is(target error) bool { return target == context.Canceled }
+
 var (
 	// ErrPartialResourceOverlap means a nested acquisition overlaps an existing
 	// lease without being fully covered by it.
@@ -30,6 +38,9 @@ var (
 	// ErrResourceOrderViolation means a nested acquisition tried to lock a new
 	// resource before one already held by the current context.
 	ErrResourceOrderViolation = errors.New("嵌套变更资源违反全局词典序锁顺序，请按顺序获取资源")
+	// ErrAutomaticInspectionPreempted means a manual operation requested a
+	// resource currently held by an automatic inspection.
+	ErrAutomaticInspectionPreempted = &automaticInspectionPreemptedError{}
 )
 
 type leaseStore interface {
@@ -43,6 +54,12 @@ type resourceResolver interface {
 }
 
 type heldResourcesKey struct{}
+
+type automaticInspectionKey struct{}
+
+type automaticInspectionState struct {
+	cancel context.CancelCauseFunc
+}
 
 type heldResourceState struct {
 	parent    *heldResourceState
@@ -82,7 +99,16 @@ type renewalResult struct {
 	expiresAt   time.Time
 }
 
-var fallbackLocks localLockSet
+type automaticLeaseRegistry struct {
+	mu         sync.Mutex
+	nextID     uint64
+	byResource map[string]map[uint64]context.CancelCauseFunc
+}
+
+var (
+	fallbackLocks   localLockSet
+	automaticLeases automaticLeaseRegistry
+)
 
 func Account(accountID string) string { return "account/" + strings.TrimSpace(accountID) }
 
@@ -109,6 +135,30 @@ func Upstream(host string) string {
 		return ""
 	}
 	return "upstream/" + host
+}
+
+// WithAutomaticInspection marks only scheduler-initiated inspection work as
+// lower priority than interactive mutations.
+func WithAutomaticInspection(ctx context.Context) context.Context {
+	if automaticInspection(ctx) != nil {
+		return ctx
+	}
+	guarded, cancel := context.WithCancelCause(ctx)
+	return context.WithValue(guarded, automaticInspectionKey{}, &automaticInspectionState{cancel: cancel})
+}
+
+// IsAutomaticInspection reports whether the current operation belongs to an
+// automatic inspection execution chain.
+func IsAutomaticInspection(ctx context.Context) bool {
+	return automaticInspection(ctx) != nil
+}
+
+func automaticInspection(ctx context.Context) *automaticInspectionState {
+	if ctx == nil {
+		return nil
+	}
+	automatic, _ := ctx.Value(automaticInspectionKey{}).(*automaticInspectionState)
+	return automatic
 }
 
 // Acquire returns a context cancelled on lease loss and an idempotent release.
@@ -145,6 +195,9 @@ func acquire(
 			} else if held {
 				return ctx, func() error { return nil }, nil
 			}
+			if !IsAutomaticInspection(ctx) {
+				automaticLeases.preempt(resolved)
+			}
 			release, err := fallbackLocks.acquire(ctx, resolved)
 			if err != nil {
 				return nil, nil, err
@@ -158,9 +211,11 @@ func acquire(
 				release()
 				continue
 			}
+			unregisterAutomatic := registerAutomaticLease(ctx, resolved)
 			guarded, held := withHeldResources(ctx, requested, resolved, resolves)
 			return guarded, func() error {
 				held.active.Store(false)
+				unregisterAutomatic()
 				release()
 				return nil
 			}, nil
@@ -182,6 +237,9 @@ func acquire(
 		}
 		var expiresAt time.Time
 		for {
+			if !IsAutomaticInspection(ctx) {
+				automaticLeases.preempt(resolved)
+			}
 			attemptedAt := now().UTC()
 			acquired, acquireErr := store.AcquireMutationLease(ctx, ownerID, resolved, attemptedAt, leaseTTL)
 			if acquireErr != nil {
@@ -218,11 +276,71 @@ func acquire(
 			continue
 		}
 		guarded, release := maintainLease(ctx, store, ownerID, resolved, expiresAt, leaseTTL, renewalInterval)
+		unregisterAutomatic := registerAutomaticLease(guarded, resolved)
 		guarded, held := withHeldResources(guarded, requested, resolved, resolves)
 		return guarded, func() error {
 			held.active.Store(false)
+			unregisterAutomatic()
 			return release()
 		}, nil
+	}
+}
+
+func registerAutomaticLease(ctx context.Context, resources []string) func() {
+	automatic := automaticInspection(ctx)
+	if automatic == nil {
+		return func() {}
+	}
+	return automaticLeases.register(resources, automatic.cancel)
+}
+
+func (registry *automaticLeaseRegistry) register(
+	resources []string,
+	cancel context.CancelCauseFunc,
+) func() {
+	registry.mu.Lock()
+	registry.nextID++
+	id := registry.nextID
+	if registry.byResource == nil {
+		registry.byResource = make(map[string]map[uint64]context.CancelCauseFunc)
+	}
+	for _, resource := range resources {
+		leases := registry.byResource[resource]
+		if leases == nil {
+			leases = make(map[uint64]context.CancelCauseFunc)
+			registry.byResource[resource] = leases
+		}
+		leases[id] = cancel
+	}
+	registry.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			registry.mu.Lock()
+			defer registry.mu.Unlock()
+			for _, resource := range resources {
+				leases := registry.byResource[resource]
+				delete(leases, id)
+				if len(leases) == 0 {
+					delete(registry.byResource, resource)
+				}
+			}
+		})
+	}
+}
+
+func (registry *automaticLeaseRegistry) preempt(resources []string) {
+	registry.mu.Lock()
+	cancellations := make(map[uint64]context.CancelCauseFunc)
+	for _, resource := range resources {
+		for id, cancel := range registry.byResource[resource] {
+			cancellations[id] = cancel
+		}
+	}
+	registry.mu.Unlock()
+	for _, cancel := range cancellations {
+		cancel(ErrAutomaticInspectionPreempted)
 	}
 }
 
@@ -619,24 +737,33 @@ func (locks *localLockSet) acquireOne(ctx context.Context, resource string) (fun
 	}
 	entry.refs++
 	locks.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		locks.releaseReference(resource, entry)
-		return nil, ctx.Err()
-	case <-entry.ready:
-		if err := ctx.Err(); err != nil {
-			entry.ready <- struct{}{}
+	for {
+		if !IsAutomaticInspection(ctx) {
+			automaticLeases.preempt([]string{resource})
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			locks.releaseReference(resource, entry)
-			return nil, err
+			return nil, ctx.Err()
+		case <-entry.ready:
+			timer.Stop()
+			if err := ctx.Err(); err != nil {
+				entry.ready <- struct{}{}
+				locks.releaseReference(resource, entry)
+				return nil, err
+			}
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					entry.ready <- struct{}{}
+					locks.releaseReference(resource, entry)
+				})
+			}, nil
+		case <-timer.C:
 		}
 	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			entry.ready <- struct{}{}
-			locks.releaseReference(resource, entry)
-		})
-	}, nil
 }
 
 func (locks *localLockSet) releaseReference(resource string, entry *localLock) {

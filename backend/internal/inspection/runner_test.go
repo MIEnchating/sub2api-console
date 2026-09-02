@@ -5,12 +5,14 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
@@ -269,6 +271,131 @@ func (s *parallelEvidenceStub) Collect(ctx context.Context, _ map[string]any, _ 
 type parallelUpstreamStub struct {
 	started         chan struct{}
 	evidenceStarted <-chan struct{}
+}
+
+type inspectionContextRecorder struct {
+	mu     sync.Mutex
+	values map[string]bool
+}
+
+func (recorder *inspectionContextRecorder) record(name string, ctx context.Context) {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.values[name] = mutationguard.IsAutomaticInspection(ctx)
+}
+
+func (recorder *inspectionContextRecorder) snapshot() map[string]bool {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	result := make(map[string]bool, len(recorder.values))
+	for name, value := range recorder.values {
+		result[name] = value
+	}
+	return result
+}
+
+type contextRecordingEvidence struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingEvidence) Plan(context.Context, map[string]any, *string, *string, time.Time) (evidence.Plan, error) {
+	return evidence.Plan{RequestedSource: "traffic"}, nil
+}
+
+func (stub contextRecordingEvidence) Collect(ctx context.Context, _ map[string]any, _ evidence.Admin, _ evidence.Options) (evidence.Result, error) {
+	stub.recorder.record("evidence", ctx)
+	return evidence.Result{}, nil
+}
+
+type contextRecordingUpstreams struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingUpstreams) SyncAllNow(ctx context.Context, _ upstreamsync.Scope, _ string) (upstreamsync.BatchResult, error) {
+	stub.recorder.record("upstreams", ctx)
+	return upstreamsync.BatchResult{Total: 1, Succeeded: 1}, nil
+}
+
+type contextRecordingRates struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingRates) SyncAllAccountRates(ctx context.Context, _ string) (map[string]any, error) {
+	stub.recorder.record("rates", ctx)
+	return map[string]any{"requested": 1, "unchanged": 1}, nil
+}
+
+type contextRecordingPricing struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingPricing) ApplyNow(ctx context.Context, _ string) (pricing.Result, error) {
+	stub.recorder.record("pricing", ctx)
+	return pricing.Result{}, nil
+}
+
+type contextRecordingRouter struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingRouter) Calculate(ctx context.Context, _ routing.Scope, _ bool) (routing.Result, error) {
+	stub.recorder.record("routing", ctx)
+	return routing.Result{AccountTargets: map[string]business.AccountRoutingTarget{}}, nil
+}
+
+type contextRecordingWriter struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingWriter) Apply(ctx context.Context, _ map[string]business.AccountRoutingTarget, _ string) (routingwrite.Result, error) {
+	stub.recorder.record("writeback", ctx)
+	return routingwrite.Result{}, nil
+}
+
+type contextRecordingAlerts struct{ recorder *inspectionContextRecorder }
+
+func (stub contextRecordingAlerts) Evaluate(ctx context.Context) (alerting.Result, error) {
+	stub.recorder.record("alerts", ctx)
+	return alerting.Result{}, nil
+}
+
+func TestInspectionContextPriorityPropagatesToEveryExecutionStage(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		automatic bool
+	}{
+		{name: "automatic", automatic: true},
+		{name: "manual", automatic: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &inspectionContextRecorder{values: map[string]bool{}}
+			repository := &runnerRepositoryStub{
+				trafficDue: true, upstreamDue: true, pricingDue: true, alertEnabled: true, routingDue: true,
+				mode: runtimepolicy.Full,
+				policy: map[string]any{
+					"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60)},
+					"probe":               map[string]any{"enabled": false},
+					"recovery":            map[string]any{"enabled": false},
+					"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+					"price_management": map[string]any{
+						"enabled": true, "profit_margin": 0.2, "exchange_group_sets": []any{[]any{"6", "7"}},
+						"interval_seconds": int64(120), "write_concurrency": int64(1),
+					},
+				},
+			}
+			runner := NewRunner(
+				repository,
+				nil,
+				contextRecordingEvidence{recorder: recorder},
+				contextRecordingRouter{recorder: recorder},
+				contextRecordingWriter{recorder: recorder},
+				contextRecordingAlerts{recorder: recorder},
+				contextRecordingUpstreams{recorder: recorder},
+				&countingTaskStore{},
+				contextRecordingRates{recorder: recorder},
+				contextRecordingPricing{recorder: recorder},
+			)
+
+			result, err := runner.Run(context.Background(), RunRequest{Actor: test.name, Automatic: test.automatic})
+			if err != nil || result.Status != "succeeded" {
+				t.Fatalf("inspection result=%#v err=%v", result, err)
+			}
+			values := recorder.snapshot()
+			for _, stage := range []string{"evidence", "upstreams", "rates", "pricing", "routing", "writeback", "alerts"} {
+				if value, found := values[stage]; !found || value != test.automatic {
+					t.Errorf("stage %s automatic=%t found=%t, want %t", stage, value, found, test.automatic)
+				}
+			}
+		})
+	}
 }
 
 func (s *parallelUpstreamStub) SyncAllNow(ctx context.Context, _ upstreamsync.Scope, _ string) (upstreamsync.BatchResult, error) {

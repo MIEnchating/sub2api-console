@@ -14,6 +14,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
@@ -516,6 +517,9 @@ func trafficSourceEnabled(policy map[string]any) (bool, error) {
 }
 
 func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request RunRequest, plan duePlan, started time.Time) ExecutionResult {
+	if request.Automatic {
+		ctx = mutationguard.WithAutomaticInspection(ctx)
+	}
 	if r.targets != nil && (plan.traffic || plan.accountRates || plan.pricing || plan.routing) {
 		var err error
 		ctx, err = targetguard.Capture(ctx, r.targets)

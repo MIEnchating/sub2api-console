@@ -398,6 +398,157 @@ func TestFallbackGuardSerializesSharedResourcesAcrossRepositories(t *testing.T) 
 	}
 }
 
+func TestManualAcquisitionPreemptsAutomaticInspectionLease(t *testing.T) {
+	resources := []struct {
+		name     string
+		resource string
+	}{
+		{name: "account", resource: Account("automatic-preemption")},
+		{name: "account catalog", resource: AccountCatalog()},
+		{name: "management target", resource: ManagementTarget()},
+		{name: "upstream", resource: Upstream("automatic-preemption.example")},
+	}
+	for _, test := range resources {
+		t.Run(test.name, func(t *testing.T) {
+			automaticCtx := WithAutomaticInspection(context.Background())
+			guarded, releaseAutomatic, err := Acquire(automaticCtx, struct{}{}, test.resource)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = releaseAutomatic() }()
+
+			type acquisition struct {
+				release func() error
+				err     error
+			}
+			manualResult := make(chan acquisition, 1)
+			go func() {
+				_, release, acquireErr := Acquire(context.Background(), struct{}{}, test.resource)
+				manualResult <- acquisition{release: release, err: acquireErr}
+			}()
+
+			select {
+			case <-automaticCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("manual acquisition did not cancel the automatic inspection run")
+			}
+			if cause := context.Cause(automaticCtx); cause == nil || !strings.Contains(cause.Error(), "让位") {
+				t.Fatalf("automatic lease cancellation cause=%v", cause)
+			}
+			if guarded.Err() == nil {
+				t.Fatal("automatic guarded operation remained active after its inspection was preempted")
+			}
+			if err := releaseAutomatic(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case result := <-manualResult:
+				if result.err != nil {
+					t.Fatal(result.err)
+				}
+				if err := result.release(); err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("manual acquisition did not proceed after automatic lease release")
+			}
+		})
+	}
+}
+
+func TestManualAcquisitionPreemptsAutomaticInspectionDatabaseLease(t *testing.T) {
+	resource := Account("automatic-database-preemption")
+	store := &mappedLeaseStoreStub{resolved: map[string]string{resource: resource}}
+	automaticCtx := WithAutomaticInspection(context.Background())
+	guarded, releaseAutomatic, err := Acquire(automaticCtx, store, resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = releaseAutomatic() }()
+
+	manualRelease := make(chan func() error, 1)
+	manualError := make(chan error, 1)
+	go func() {
+		_, release, acquireErr := Acquire(context.Background(), store, resource)
+		if acquireErr != nil {
+			manualError <- acquireErr
+			return
+		}
+		manualRelease <- release
+	}()
+
+	select {
+	case <-automaticCtx.Done():
+	case err := <-manualError:
+		t.Fatalf("manual acquisition failed before preemption: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("manual acquisition did not cancel the automatic inspection run")
+	}
+	if !errors.Is(context.Cause(automaticCtx), ErrAutomaticInspectionPreempted) {
+		t.Fatalf("automatic database lease cancellation cause=%v", context.Cause(automaticCtx))
+	}
+	if !errors.Is(context.Cause(automaticCtx), context.Canceled) {
+		t.Fatalf("automatic preemption was not classified as cancellation: %v", context.Cause(automaticCtx))
+	}
+	if guarded.Err() == nil {
+		t.Fatal("automatic database operation remained active after its inspection was preempted")
+	}
+	if err := releaseAutomatic(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case release := <-manualRelease:
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+	case err := <-manualError:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("manual acquisition did not proceed after automatic database lease release")
+	}
+}
+
+func TestAutomaticAcquisitionDoesNotPreemptManualLease(t *testing.T) {
+	resource := Account("manual-priority")
+	manualParent, cancelManual := context.WithCancelCause(context.Background())
+	defer cancelManual(errors.New("test cleanup"))
+	_, releaseManual, err := Acquire(manualParent, struct{}{}, resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = releaseManual() }()
+
+	automaticParent, cancelAutomatic := context.WithTimeout(WithAutomaticInspection(context.Background()), 100*time.Millisecond)
+	defer cancelAutomatic()
+	_, _, err = Acquire(automaticParent, struct{}{}, resource)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("automatic acquisition error=%v", err)
+	}
+	if err := manualParent.Err(); err != nil {
+		t.Fatalf("automatic acquisition cancelled manual lease: %v", err)
+	}
+}
+
+func TestManualAcquisitionDoesNotPreemptUnrelatedAutomaticLease(t *testing.T) {
+	automaticCtx := WithAutomaticInspection(context.Background())
+	guarded, releaseAutomatic, err := Acquire(automaticCtx, struct{}{}, Account("automatic-unrelated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = releaseAutomatic() }()
+
+	_, releaseManual, err := Acquire(context.Background(), struct{}{}, Account("manual-unrelated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseManual(); err != nil {
+		t.Fatal(err)
+	}
+	if err := guarded.Err(); err != nil {
+		t.Fatalf("unrelated manual acquisition cancelled automatic lease: %v", err)
+	}
+}
+
 func TestFallbackGuardCancellationDoesNotLeakEarlierResources(t *testing.T) {
 	_, releaseHeld, err := Acquire(context.Background(), struct{}{}, Account("42"))
 	if err != nil {
