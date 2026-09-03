@@ -7,15 +7,16 @@ script_directory="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 test_suffix="$$"
 network="sub2api-console-proxy-test-${test_suffix}"
 api_container="${network}-api"
-api_address_holder_container="${network}-api-address-holder"
+old_api_container="${network}-old-api"
 client_container="${network}-client"
 frontend_container="${network}-frontend"
 socket_volume="${network}-socket"
+old_api_socket_volume="${network}-old-api-socket"
 
 cleanup() {
-  docker rm -f "$frontend_container" "$client_container" "$api_container" "$api_address_holder_container" >/dev/null 2>&1 || true
+  docker rm -f "$frontend_container" "$client_container" "$api_container" "$old_api_container" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
-  docker volume rm "$socket_volume" >/dev/null 2>&1 || true
+  docker volume rm "$socket_volume" "$old_api_socket_volume" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -87,13 +88,14 @@ stop_frontend() {
 }
 
 start_api() {
+  api_socket_volume="${1:-$socket_volume}"
   docker run -d \
     --name "$api_container" \
     --network "$network" \
     --network-alias api \
     --network-alias 1234 \
     --entrypoint nginx \
-    -v "$socket_volume:/run/sub2api-console" \
+    -v "$api_socket_volume:/run/sub2api-console" \
     -v "${script_directory}/testdata/echo-api.nginx.conf:/etc/nginx/nginx.conf:ro" \
     "$helper_image" -g 'daemon off;' >/dev/null
 
@@ -103,37 +105,6 @@ start_api() {
     if [ "$attempts" -ge 20 ]; then
       docker logs "$api_container" >&2 || true
       fail "API did not become ready"
-    fi
-    sleep 1
-  done
-}
-
-stop_api() {
-  docker rm -f "$api_container" >/dev/null
-}
-
-remove_stale_test_socket() {
-  docker run --rm \
-    --entrypoint rm \
-    -v "$socket_volume:/run/sub2api-console" \
-    "$helper_image" -f /run/sub2api-console/echo-api.sock
-}
-
-reserve_old_api_address() {
-  attempts=0
-  while :; do
-    docker rm -f "$api_address_holder_container" >/dev/null 2>&1 || true
-    if docker run -d \
-      --name "$api_address_holder_container" \
-      --network "$network" \
-      --ip "$old_api_ip" \
-      --entrypoint sh \
-      "$helper_image" -c 'sleep 300' >/dev/null; then
-      return
-    fi
-    attempts=$((attempts + 1))
-    if [ "$attempts" -ge 10 ]; then
-      fail "could not reserve the original API address after container removal"
     fi
     sleep 1
   done
@@ -168,6 +139,7 @@ wait_for_proxy() {
 
 docker network create "$network" >/dev/null
 docker volume create "$socket_volume" >/dev/null
+docker volume create "$old_api_socket_volume" >/dev/null
 trusted_subnet="$(docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$network")"
 [ -n "$trusted_subnet" ] || fail "test network has no IPv4 subnet"
 
@@ -183,7 +155,7 @@ client_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$
 # A hostname upstream must not prevent Nginx from starting while the API is
 # absent, and it must become usable without restarting the frontend.
 start_frontend ""
-start_api
+start_api "$old_api_socket_volume"
 untrusted_response="$(wait_for_proxy '203.0.113.9' 'https')"
 assert_header "$untrusted_response" X-Test-Forwarded-For "$client_ip"
 assert_header "$untrusted_response" X-Test-Real-IP "$client_ip"
@@ -191,13 +163,12 @@ assert_header "$untrusted_response" X-Test-Forwarded-Proto http
 
 old_api_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.IPAddress}}{{end}}" "$api_container")"
 [ -n "$old_api_ip" ] || fail "could not resolve the original API address"
-stop_api
-remove_stale_test_socket
-reserve_old_api_address
+docker rename "$api_container" "$old_api_container"
 start_api
 new_api_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.IPAddress}}{{end}}" "$api_container")"
 [ -n "$new_api_ip" ] || fail "could not resolve the recreated API address"
 [ "$new_api_ip" != "$old_api_ip" ] || fail "recreated API unexpectedly reused its old address"
+docker rm -f "$old_api_container" >/dev/null
 recreated_api_response="$(wait_for_proxy '203.0.113.9' 'https')"
 assert_header "$recreated_api_response" X-Test-Forwarded-For "$client_ip"
 assert_header "$recreated_api_response" X-Test-Forwarded-Proto http
