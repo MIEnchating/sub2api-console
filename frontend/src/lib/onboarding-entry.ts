@@ -18,6 +18,17 @@ type OnboardingLocalGroup = {
   platforms?: string[];
 };
 
+const compositeAccountPlatforms = new Set([
+  "anthropic",
+  "openai",
+  "gemini",
+  "antigravity",
+  "grok",
+  "kimi",
+  "zhipu",
+  "deepseek",
+]);
+
 function normalizeOnboardingPlatform(value: string | null | undefined): string {
   const platform = value?.trim().toLocaleLowerCase() ?? "";
   if (["sub2api", "newapi", "oneapi"].includes(platform)) return "openai";
@@ -26,6 +37,11 @@ function normalizeOnboardingPlatform(value: string | null | undefined): string {
   if (platform === "google") return "gemini";
   if (platform === "moonshot") return "kimi";
   return platform;
+}
+
+function accountPlatformCanJoinGroup(accountPlatform: string, groupPlatform: string): boolean {
+  if (accountPlatform === groupPlatform) return true;
+  return groupPlatform === "composite" && compositeAccountPlatforms.has(accountPlatform);
 }
 
 export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
@@ -38,7 +54,7 @@ export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
       .map(normalizeOnboardingPlatform)
       .filter(Boolean);
     if (!upstreamPlatform) return platforms.length > 0;
-    return platforms.includes(upstreamPlatform);
+    return platforms.some((platform) => accountPlatformCanJoinGroup(upstreamPlatform, platform));
   });
 }
 

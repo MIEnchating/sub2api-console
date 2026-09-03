@@ -13,3 +13,18 @@ func TestNormalizePlatformAliasesMatchOnboardingCatalogNames(t *testing.T) {
 		}
 	}
 }
+
+func TestAccountPlatformCanJoinCompositeGroup(t *testing.T) {
+	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"}
+	for _, platform := range platforms {
+		if !AccountPlatformCanJoinGroup(platform, platform) {
+			t.Fatalf("%s account should join its own platform group", platform)
+		}
+		if !AccountPlatformCanJoinGroup(platform, "composite") {
+			t.Fatalf("%s account should join a composite group", platform)
+		}
+	}
+	if AccountPlatformCanJoinGroup("openai", "anthropic") {
+		t.Fatal("openai account should not join an anthropic group")
+	}
+}

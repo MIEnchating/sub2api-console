@@ -660,6 +660,28 @@ func TestValidateRejectsBindingZhipuUpstreamGroupToOpenAILocalGroup(t *testing.T
 	}
 }
 
+func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
+	composite := "composite"
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"} {
+		t.Run(platform, func(t *testing.T) {
+			candidatePlatform := platform
+			candidate := business.OnboardingCandidate{GroupName: platform, Platform: &candidatePlatform}
+			locals := []business.LocalOnboardingGroup{{Name: "Composite", Platform: &composite}}
+
+			resolved, err := accountPlatform(Request{}, candidate, locals)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved != platform {
+				t.Fatalf("resolved platform = %q, want %q", resolved, platform)
+			}
+			if err := validateLocalGroupPlatforms(resolved, candidate, locals); err != nil {
+				t.Fatalf("composite binding rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateRejectsExplicitPlatformOverrideOfUpstreamCatalog(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
 	database, err := sql.Open("sqlite", "file:"+databasePath)

@@ -1120,7 +1120,7 @@ func validateLocalGroupPlatforms(platform string, candidate business.OnboardingC
 			return fmt.Errorf("本地分组「%s」缺少平台，无法安全绑定账号", local.Name)
 		}
 		localPlatform := normalizePlatform(*local.Platform)
-		if localPlatform != platform {
+		if !business.AccountPlatformCanJoinGroup(platform, localPlatform) {
 			return fmt.Errorf(
 				"平台不匹配：上游分组「%s」为 %s，本地分组「%s」为 %s",
 				candidate.GroupName,

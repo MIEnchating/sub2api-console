@@ -40,6 +40,19 @@ describe("onboarding entry workflow", () => {
     expect(compatibleOnboardingLocalGroups(candidate, groups)).toEqual([groups[1]]);
   });
 
+  it.each(["anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"])(
+    "offers Composite as a target for %s accounts",
+    (platform) => {
+      const groups = [
+        { id: "10", name: "同平台", platform },
+        { id: "11", name: "Composite", platform: "composite" },
+        { id: "12", name: "其他平台", platform: platform === "openai" ? "anthropic" : "openai" },
+      ];
+
+      expect(compatibleOnboardingLocalGroups({ platform }, groups)).toEqual(groups.slice(0, 2));
+    },
+  );
+
   it("offers typed local groups when the upstream catalog omits its platform", () => {
     const groups = [
       { id: "6", name: "codex-平价", platform: "openai" },

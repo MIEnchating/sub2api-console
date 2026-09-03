@@ -75,7 +75,7 @@ describe("分组管理页面", () => {
     expect(markup).toContain("分组管理");
     expect(markup).toContain(">状态</");
     expect(markup).toContain(">平台</");
-    expect(markup).toContain(">调度未知</th>");
+    expect(markup).not.toContain(">调度未知</th>");
     expect(markup).not.toContain(">状态未知</th>");
     expect(markup).not.toContain(">类型</th>");
     expect(markup).toContain(">OpenAI</span>");

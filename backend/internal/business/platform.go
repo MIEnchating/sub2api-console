@@ -2,6 +2,17 @@ package business
 
 import "strings"
 
+var compositeAccountPlatforms = map[string]struct{}{
+	"anthropic":   {},
+	"openai":      {},
+	"gemini":      {},
+	"antigravity": {},
+	"grok":        {},
+	"kimi":        {},
+	"zhipu":       {},
+	"deepseek":    {},
+}
+
 func NormalizePlatform(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	compact := strings.NewReplacer(" ", "", "-", "", "_", "").Replace(value)
@@ -18,4 +29,20 @@ func NormalizePlatform(value string) string {
 		return "kimi"
 	}
 	return value
+}
+
+func AccountPlatformCanJoinGroup(accountPlatform, groupPlatform string) bool {
+	accountPlatform = NormalizePlatform(accountPlatform)
+	groupPlatform = NormalizePlatform(groupPlatform)
+	if accountPlatform == "" || groupPlatform == "" {
+		return false
+	}
+	if accountPlatform == groupPlatform {
+		return true
+	}
+	if groupPlatform != "composite" {
+		return false
+	}
+	_, supported := compositeAccountPlatforms[accountPlatform]
+	return supported
 }

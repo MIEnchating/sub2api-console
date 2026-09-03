@@ -5313,24 +5313,23 @@ export function GroupsPage() {
           />
         </div>
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1240px]">
+          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1160px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
-                <TableHead className="w-[15%]">分组</TableHead>
-                <TableHead className="w-[11%]">平台</TableHead>
-                <TableHead className="w-[7%]">账号数</TableHead>
-                <TableHead className="w-[10%]">调度开启</TableHead>
-                <TableHead className="w-[10%]">调度关闭</TableHead>
-                <TableHead className="w-[8%]">调度未知</TableHead>
-                <TableHead className="w-[12%]">策略</TableHead>
-                <TableHead className="w-[14%]">状态</TableHead>
-                <TableHead className="w-[13%] text-right">操作</TableHead>
+                <TableHead className="w-[16%]">分组</TableHead>
+                <TableHead className="w-[12%]">平台</TableHead>
+                <TableHead className="w-[8%]">账号数</TableHead>
+                <TableHead className="w-[11%]">调度开启</TableHead>
+                <TableHead className="w-[11%]">调度关闭</TableHead>
+                <TableHead className="w-[13%]">策略</TableHead>
+                <TableHead className="w-[15%]">状态</TableHead>
+                <TableHead className="w-[14%] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {groups.isLoading && <TableLoadingRows columns={9} />}
+              {groups.isLoading && <TableLoadingRows columns={8} />}
               {!groups.isLoading && !filteredRows.length && (
-                <TableMessageRow columns={9}>
+                <TableMessageRow columns={8}>
                   <EmptyRow text={search ? "没有匹配的分组" : "当前没有分组"} />
                 </TableMessageRow>
               )}
@@ -5350,7 +5349,6 @@ export function GroupsPage() {
                   <TableCell>
                     <StatusPill label={`${group.scheduling_closed} 关闭`} tone="danger" />
                   </TableCell>
-                  <TableCell>{group.scheduling_unknown}</TableCell>
                   <TableCell>
                     {group.strategy_source === "global_default"
                       ? "全局默认"

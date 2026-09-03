@@ -125,16 +125,17 @@ describe("OnboardingGroupBindingSelect", () => {
         groups={[
           { id: "27", name: "国模-平价", platform: "openai" },
           { id: "28", name: "GLM 专用", platform: "zhipu" },
+          { id: "29", name: "多协议复合组", platform: "composite" },
         ]}
-        value={["27", "28"]}
+        value={["27", "29"]}
         disabled={false}
         disabledReason={null}
         onValueChange={() => undefined}
       />,
     );
 
-    expect(markup).toContain("GLM 专用");
-    expect(markup).toContain("所选分组不可用");
+    expect(markup).toContain("多协议复合组");
+    expect(markup.match(/所选分组不可用/g)).toHaveLength(1);
     expect(markup).not.toContain("国模-平价");
   });
 });
