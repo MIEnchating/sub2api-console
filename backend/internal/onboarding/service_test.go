@@ -660,6 +660,34 @@ func TestValidateRejectsBindingZhipuUpstreamGroupToOpenAILocalGroup(t *testing.T
 	}
 }
 
+func TestValidateAllowsBindingOpenAIUpstreamGroupToCompositeLocalGroup(t *testing.T) {
+	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`UPDATE upstream_groups SET name='按量分组（0.1倍率）',platform='openai' WHERE group_id='6';
+		UPDATE local_groups SET name='国产-平价',platform='composite' WHERE remote_id='3'`); err != nil {
+		t.Fatal(err)
+	}
+
+	validated, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
+		context.Background(),
+		Request{
+			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"3"},
+			UpstreamGroupID: "6", Actor: "operator",
+		},
+	)
+	if err != nil {
+		t.Fatalf("openai account binding to composite group was rejected: %v", err)
+	}
+	platform, err := accountPlatform(validated.request, validated.candidate, validated.locals)
+	if err != nil || platform != "openai" {
+		t.Fatalf("platform=%q err=%v", platform, err)
+	}
+}
+
 func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
 	composite := "composite"
 	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"} {
