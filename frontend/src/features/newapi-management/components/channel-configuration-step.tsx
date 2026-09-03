@@ -1,26 +1,65 @@
+import { useMemo } from "react";
 import { RadioTower, RefreshCw } from "lucide-react";
 
 import { MultiSelect } from "@/components/multi-select";
+import type { NewAPIChannelEndpoint } from "@/api";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const customBaseURLValue = "__custom_base_url__";
 
 type Props = {
   channelName: string;
   sub2APIBaseURL: string;
+  apiEndpoints: NewAPIChannelEndpoint[];
+  baseURL: string;
+  customBaseURL: boolean;
   newAPIGroupOptions: Array<{ value: string; label: string }>;
   selectedGroups: string[];
   selectedModelCount: number;
   modelError?: string;
+  baseURLError?: string;
   groupError?: string;
   pending: boolean;
   fetchingModels: boolean;
   onFetchModels: () => void;
+  onBaseURLModeChange: (custom: boolean) => void;
+  onBaseURLChange: (baseURL: string) => void;
   onGroupsChange: (groups: string[]) => void;
 };
 
 export function NewAPIChannelConfigurationStep(props: Props) {
+  const endpoints = useMemo(
+    () =>
+      props.apiEndpoints.length
+        ? props.apiEndpoints
+        : [
+            {
+              name: "管理平台地址",
+              base_url: props.sub2APIBaseURL,
+              default: true,
+            },
+          ],
+    [props.apiEndpoints, props.sub2APIBaseURL],
+  );
+  const endpointLabels = useMemo(
+    () =>
+      new Map(
+        endpoints.map((endpoint) => [endpoint.base_url, `${endpoint.name} · ${endpoint.base_url}`]),
+      ),
+    [endpoints],
+  );
+
   return (
     <>
-      <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-3">
+      <div className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-2">
         <div className="bg-background p-3">
           <p className="text-muted-foreground text-xs">渠道名称</p>
           <p className="mt-1 truncate text-sm font-medium">{props.channelName}</p>
@@ -29,10 +68,56 @@ export function NewAPIChannelConfigurationStep(props: Props) {
           <p className="text-muted-foreground text-xs">类型</p>
           <p className="mt-1 text-sm font-medium">Sub2API</p>
         </div>
-        <div className="bg-background p-3">
-          <p className="text-muted-foreground text-xs">API 地址</p>
-          <p className="mt-1 truncate text-sm font-medium">{props.sub2APIBaseURL}</p>
-        </div>
+      </div>
+
+      <div className="grid gap-1.5 text-sm">
+        <label className="font-medium" htmlFor="newapi-channel-base-url-source">
+          API 地址
+        </label>
+        <Select
+          value={props.customBaseURL ? customBaseURLValue : props.baseURL || null}
+          itemToStringLabel={(value) => {
+            if (value === customBaseURLValue) return "自定义地址";
+            return endpointLabels.get(value) ?? value;
+          }}
+          onValueChange={(value) => {
+            if (!value) return;
+            if (value === customBaseURLValue) {
+              props.onBaseURLModeChange(true);
+              return;
+            }
+            props.onBaseURLModeChange(false);
+            props.onBaseURLChange(value);
+          }}
+        >
+          <SelectTrigger
+            id="newapi-channel-base-url-source"
+            aria-label="API 地址来源"
+            aria-invalid={Boolean(props.baseURLError)}
+          >
+            <SelectValue placeholder="选择 API 地址" />
+          </SelectTrigger>
+          <SelectContent>
+            {endpoints.map((endpoint) => (
+              <SelectItem key={endpoint.base_url} value={endpoint.base_url}>
+                {endpoint.name} · {endpoint.base_url}
+              </SelectItem>
+            ))}
+            <SelectItem value={customBaseURLValue}>自定义地址</SelectItem>
+          </SelectContent>
+        </Select>
+        {props.customBaseURL ? (
+          <Input
+            aria-label="自定义 API 地址"
+            value={props.baseURL}
+            onChange={(event) => props.onBaseURLChange(event.target.value)}
+            aria-invalid={Boolean(props.baseURLError)}
+            placeholder="https://api.example.com"
+          />
+        ) : null}
+        {props.baseURLError ? (
+          <span className="text-destructive text-xs">{props.baseURLError}</span>
+        ) : null}
       </div>
 
       <div className="grid gap-1.5 text-sm">

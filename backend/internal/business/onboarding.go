@@ -83,6 +83,7 @@ type OnboardingProjection struct {
 	Schedulable       bool
 	Priority          *int64
 	Concurrency       *int64
+	Models            []string
 	Notes             string
 	Actor             string
 	ReadbackConfirmed bool
@@ -314,6 +315,9 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	if baseURL := strings.TrimSpace(value.BaseURL); baseURL != "" {
 		metadataValues["base_url"] = baseURL
 	}
+	if len(value.Models) > 0 {
+		metadataValues["known_models"] = append([]string{}, value.Models...)
+	}
 	metadata, err := json.Marshal(metadataValues)
 	if err != nil {
 		return err
@@ -480,8 +484,16 @@ func (s *Store) UpstreamKeyProtected(ctx context.Context, host, keyID string) (b
 	if host == "" || keyID == "" {
 		return false, errors.New("上游 Host 和 Key ID 不能为空")
 	}
+	return upstreamKeyProtectedForQueryer(ctx, s.db, host, keyID)
+}
+
+func upstreamKeyProtectedForQueryer(
+	ctx context.Context,
+	queryer accountDeleteScopeQueryer,
+	host, keyID string,
+) (bool, error) {
 	var protected int
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
+	err := queryer.QueryRowContext(ctx, `SELECT EXISTS(
 		SELECT 1 FROM upstream_identity_hosts selected
 		JOIN binding_identities bi ON bi.upstream_id=selected.upstream_id
 		WHERE selected.host=? AND bi.upstream_key_id=?

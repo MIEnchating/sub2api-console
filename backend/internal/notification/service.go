@@ -351,24 +351,28 @@ var eventLabels = map[string]string{
 }
 
 var causeLabels = map[string]string{
-	"CONFIG":                        "配置或数据格式异常",
-	"CONFIG_METADATA_INVALID":       "上游元数据无法解析",
-	"CONFIG_AUTH_STATUS_MISSING":    "上游鉴权状态缺失",
-	"CONFIG_AUTH_STATUS_UNKNOWN":    "上游鉴权状态无法识别",
-	"CONFIG_BALANCE_CLOSED_INVALID": "余额关闭状态格式无效",
-	"CONFIG_BALANCE_INVALID":        "上游余额不是有效数字",
-	"AUTH":                          "鉴权已失效",
-	"RATE_SYNC":                     "倍率同步失败",
-	"BALANCE_HARD_CLOSED":           "上游因余额不足已关闭服务",
-	"PROBE":                         "连续主动探测失败",
-	"ROUTING_BREAKER":               "调度策略触发熔断判定",
-	"BINDING_INVALID":               "绑定的上游 Key 或分组已确认删除",
-	"ROUTING_DEGRADED":              "调度策略判定为降级",
-	"ROUTING_SURVIVOR":              "为避免分组断供而保底强留",
-	"GROUP_UNAVAILABLE":             "调度判定后没有可调度账号",
-	"GROUP_SURVIVOR_ONLY":           "调度判定后仅剩保底账号",
-	"APPLY_FAILED":                  "自动执行未成功",
-	"TEST":                          "测试通知",
+	"CONFIG":                              "配置或数据格式异常",
+	"CONFIG_METADATA_INVALID":             "上游元数据无法解析",
+	"CONFIG_AUTH_STATUS_MISSING":          "上游鉴权状态缺失",
+	"CONFIG_AUTH_STATUS_UNKNOWN":          "上游鉴权状态无法识别",
+	"CONFIG_BALANCE_CLOSED_INVALID":       "余额关闭状态格式无效",
+	"CONFIG_BALANCE_INVALID":              "上游余额不是有效数字",
+	"AUTH":                                "鉴权已失效",
+	"RATE_SYNC":                           "倍率同步失败",
+	"BALANCE_HARD_CLOSED":                 "上游因余额不足已关闭服务",
+	"PROBE":                               "连续主动探测失败",
+	"ROUTING_BREAKER":                     "调度策略触发熔断判定",
+	"BINDING_INVALID":                     "绑定的上游 Key 或分组已确认删除",
+	"ROUTING_DEGRADED":                    "调度策略判定为降级",
+	"ROUTING_DEGRADED_HEALTH_SCORE":       "健康分低于降级线",
+	"ROUTING_DEGRADED_GATEWAY_ERROR_RATE": "网关错误率达到降级阈值",
+	"ROUTING_DEGRADED_LATENCY":            "响应延迟达到降级阈值",
+	"ROUTING_DEGRADED_OTHER":              "其他调度条件触发降级",
+	"ROUTING_SURVIVOR":                    "为避免分组断供而保底强留",
+	"GROUP_UNAVAILABLE":                   "调度判定后没有可调度账号",
+	"GROUP_SURVIVOR_ONLY":                 "调度判定后仅剩保底账号",
+	"APPLY_FAILED":                        "自动执行未成功",
+	"TEST":                                "测试通知",
 }
 
 var objectLabels = map[string]string{"host": "上游", "account": "账号", "group": "分组"}
@@ -491,11 +495,41 @@ func routingDegradedDigestRow(incidents []business.AlertIncident) string {
 		status = "已恢复"
 	}
 	object := fmt.Sprintf("%d 个账号 · %d 个分组", len(incidents), len(groups))
-	cause := "批量状态变化；分组：" + groupSummary + "。账号明细请在账号管理中查看"
+	cause := routingDegradedReasonSummary(incidents) + "；分组：" + groupSummary + "。账号明细请在账号管理中查看"
 	return fmt.Sprintf("| %s | %s | %s | %s | %s |",
 		markdownTableValue(eventLabels["account.routing_degraded"]), markdownTableValue(object),
 		markdownTableValue(cause), status, markdownTableValue(notificationTime(latest.LastSeenAt)),
 	)
+}
+
+func routingDegradedReasonSummary(incidents []business.AlertIncident) string {
+	type reasonCount struct {
+		reason string
+		count  int
+	}
+	counts := map[string]int{}
+	for _, incident := range incidents {
+		reason := strings.TrimSpace(relatedAccountCause(incident))
+		if reason == "" {
+			reason = "未分类原因"
+		}
+		counts[reason]++
+	}
+	reasons := make([]reasonCount, 0, len(counts))
+	for reason, count := range counts {
+		reasons = append(reasons, reasonCount{reason: reason, count: count})
+	}
+	sort.Slice(reasons, func(i, j int) bool {
+		if reasons[i].count != reasons[j].count {
+			return reasons[i].count > reasons[j].count
+		}
+		return reasons[i].reason < reasons[j].reason
+	})
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, fmt.Sprintf("%s（%d 个账号）", reason.reason, reason.count))
+	}
+	return strings.Join(parts, "；")
 }
 
 func relatedRoutingMessage(title string, group notificationGroup) string {
@@ -589,6 +623,9 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	if eventLabel == "" {
 		eventLabel = "运行异常"
 	}
+	if incident.Status == "recovered" && incident.EventType == "upstream.balance" {
+		eventLabel = "上游余额恢复"
+	}
 	objectLabel := objectLabels[incident.ObjectKind]
 	if objectLabel == "" {
 		objectLabel = "对象"
@@ -596,10 +633,19 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	causeLabel := causeLabels[incident.CauseCode]
 	if strings.HasPrefix(incident.CauseCode, "BALANCE:") {
 		threshold := strings.TrimSpace(strings.TrimPrefix(incident.CauseCode, "BALANCE:"))
-		causeLabel = "余额不足"
-		if threshold != "" {
-			causeLabel = "余额达到或低于 " + threshold
+		if incident.Status == "recovered" {
+			causeLabel = "余额已恢复至告警阈值以上"
+			if threshold != "" {
+				causeLabel = "余额已高于告警阈值 " + threshold
+			}
+		} else {
+			causeLabel = "余额不足"
+			if threshold != "" {
+				causeLabel = "余额达到或低于 " + threshold
+			}
 		}
+	} else if incident.Status == "recovered" && incident.CauseCode == "BALANCE_HARD_CLOSED" {
+		causeLabel = "余额不足关闭状态已解除"
 	} else if strings.HasPrefix(incident.CauseCode, "RATE_SYNC:") {
 		reason := strings.TrimSpace(strings.TrimPrefix(incident.CauseCode, "RATE_SYNC:"))
 		causeLabel = "倍率同步失败"
@@ -644,7 +690,9 @@ func incidentTableRow(incident business.AlertIncident) string {
 func dynamicAlertCause(cause string) (string, string, bool) {
 	for _, code := range []string{
 		"AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
-		"ROUTING_BREAKER", "ROUTING_DEGRADED", "ROUTING_SURVIVOR", "BINDING_INVALID", "APPLY_FAILED",
+		"ROUTING_BREAKER", "ROUTING_DEGRADED_HEALTH_SCORE", "ROUTING_DEGRADED_GATEWAY_ERROR_RATE",
+		"ROUTING_DEGRADED_LATENCY", "ROUTING_DEGRADED_OTHER", "ROUTING_DEGRADED",
+		"ROUTING_SURVIVOR", "BINDING_INVALID", "APPLY_FAILED",
 	} {
 		prefix := code + ":"
 		if strings.HasPrefix(cause, prefix) {

@@ -74,14 +74,21 @@ function unknownLabel(prefix: string, value: string | null | undefined) {
   return normalized ? `${prefix}（${normalized}）` : prefix;
 }
 
-export function alertTypeLabel(eventType: string) {
+export function alertTypeLabel(eventType: string, status?: string): string {
+  if (status === "recovered" && eventType === "upstream.balance") return "上游余额恢复";
   return alertTypeLabels[eventType] ?? unknownLabel("其他告警", eventType);
 }
 
-export function alertCauseLabel(causeCode: string) {
+export function alertCauseLabel(causeCode: string, status?: string): string {
   if (causeCode.startsWith("BALANCE:")) {
     const threshold = causeCode.slice("BALANCE:".length).trim();
+    if (status === "recovered") {
+      return threshold ? `余额已高于告警阈值 ${threshold}` : "余额已恢复至告警阈值以上";
+    }
     return threshold ? `余额已达到或低于告警阈值 ${threshold}` : "余额已达到或低于告警阈值";
+  }
+  if (status === "recovered" && causeCode === "BALANCE_HARD_CLOSED") {
+    return "余额不足关闭状态已解除";
   }
   if (causeCode.startsWith("RATE_SYNC:")) {
     const reason = causeCode.slice("RATE_SYNC:".length).trim();

@@ -29,6 +29,8 @@ type PricingBackup struct {
 	Accounts     []PricingBackupAccount `json:"accounts,omitempty"`
 }
 
+var ErrPricingBackupNotFound = errors.New("价格分组备份不存在")
+
 func (s *Store) CreatePricingBackup(ctx context.Context, name, actor string) (PricingBackup, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 80 {
@@ -93,7 +95,7 @@ func (s *Store) PricingBackup(ctx context.Context, id string) (PricingBackup, er
 	err := s.db.QueryRowContext(ctx, `SELECT id,name,actor,account_count,created_at FROM pricing_backups WHERE id=?`, id).
 		Scan(&result.ID, &result.Name, &result.Actor, &result.AccountCount, &result.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return PricingBackup{}, errors.New("价格分组备份不存在")
+		return PricingBackup{}, ErrPricingBackupNotFound
 	}
 	if err != nil {
 		return PricingBackup{}, err
@@ -120,6 +122,22 @@ func (s *Store) PricingBackup(ctx context.Context, id string) (PricingBackup, er
 		result.Accounts = append(result.Accounts, item)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) DeletePricingBackup(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	result, err := s.db.ExecContext(ctx, `DELETE FROM pricing_backups WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return ErrPricingBackupNotFound
+	}
+	return nil
 }
 
 func pricingBackupAccounts(ctx context.Context, queryer policyQueryer) ([]PricingBackupAccount, error) {

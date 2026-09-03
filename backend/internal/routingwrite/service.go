@@ -325,11 +325,12 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	if err := runBatch(regularCount, len(orderedIDs)); err != nil {
 		return Result{}, err
 	}
+	recordApplyEvents := !contextFinished(ctx)
 	for index, item := range items {
 		result.Results = append(result.Results, item)
 		result.RemoteWrite = result.RemoteWrite || item.RemoteWrite
 		target := targets[orderedIDs[index]]
-		if target.CleanupAction == nil && (item.Changed || item.Error != nil) {
+		if recordApplyEvents && target.CleanupAction == nil && (item.Changed || item.Error != nil) {
 			s.recordRoutingApplyEvent(ctx, target, item)
 		}
 		if item.Changed {
@@ -901,6 +902,9 @@ func (s *Service) recordCleanupOutcome(ctx context.Context, target business.Acco
 }
 
 func (s *Service) recordRuntimeEvent(ctx context.Context, eventType, status, summary string, payload map[string]any) {
+	if contextFinished(ctx) {
+		return
+	}
 	if _, err := s.repository.RecordRuntimeEvent(ctx, eventType, status, summary, payload); err != nil {
 		slog.Error("调度运行事件保存失败", "event_type", eventType, "status", status, "error", err)
 	}
@@ -1442,9 +1446,16 @@ func operation(id, kind string, target business.AccountRoutingTarget, actor stri
 }
 
 func (s *Service) recordOperation(ctx context.Context, operation business.AccountOperation) {
+	if contextFinished(ctx) {
+		return
+	}
 	if err := s.repository.RecordAccountOperation(ctx, operation); err != nil {
 		slog.Error("调度写回操作记录保存失败", "operation_id", operation.OperationID, "account_id", operation.ObjectID, "error", err)
 	}
+}
+
+func contextFinished(ctx context.Context) bool {
+	return ctx != nil && ctx.Err() != nil
 }
 
 func operationType(release bool) string {

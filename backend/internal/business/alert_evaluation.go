@@ -73,18 +73,18 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 			}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT incident_key,event_type,object_kind,object_id,status FROM alert_incidents WHERE status IN ('firing','suppressed')`)
+	rows, err := tx.QueryContext(ctx, `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents WHERE status IN ('firing','suppressed')`)
 	if err != nil {
 		return AlertEvidenceResult{}, err
 	}
 	defer rows.Close()
 	type activeIncident struct {
-		key, eventType, objectKind, objectID, status string
+		key, eventType, objectKind, objectID, causeCode, status string
 	}
 	active := []activeIncident{}
 	for rows.Next() {
 		var incident activeIncident
-		if err := rows.Scan(&incident.key, &incident.eventType, &incident.objectKind, &incident.objectID, &incident.status); err != nil {
+		if err := rows.Scan(&incident.key, &incident.eventType, &incident.objectKind, &incident.objectID, &incident.causeCode, &incident.status); err != nil {
 			return AlertEvidenceResult{}, err
 		}
 		active = append(active, incident)
@@ -99,7 +99,7 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 		if _, stillFiring := current[incident.key]; stillFiring {
 			continue
 		}
-		ruleEnabled := alertRuleEnabled(policy, incident.eventType)
+		ruleEnabled := alertRuleEnabled(policy, incident.eventType, incident.causeCode)
 		_, sameScopeStillFiring := currentScopes[alertIncidentScope(incident.key, incident.eventType, incident.objectKind, incident.objectID)]
 		switch {
 		case incident.status == "firing" && !ruleEnabled:
@@ -178,7 +178,7 @@ func (s *Store) suppressFiringAlertIncidents(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func alertRuleEnabled(policy AlertPolicy, eventType string) bool {
+func alertRuleEnabled(policy AlertPolicy, eventType, causeCode string) bool {
 	switch eventType {
 	case "upstream.configuration":
 		return policy.ConfigurationEnabled
@@ -195,7 +195,10 @@ func alertRuleEnabled(policy AlertPolicy, eventType string) bool {
 	case "account.binding_invalid":
 		return policy.RoutingBreakerEnabled
 	case "account.routing_degraded":
-		return policy.RoutingDegradedEnabled
+		if !policy.RoutingDegradedEnabled {
+			return false
+		}
+		return stringSliceContains(policy.RoutingDegradedTypes, routingDegradedTypeFromCauseCode(causeCode))
 	case "account.routing_survivor":
 		return policy.RoutingSurvivorEnabled
 	case "group.routing_unavailable":
@@ -402,10 +405,11 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 				"account.routing_breaker", "account", accountID, alertCause("ROUTING_BREAKER", reason),
 			})
 			accountFindings[accountID] = struct{}{}
-		case policy.RoutingDegradedEnabled && state == "degraded":
+		case policy.RoutingDegradedEnabled && state == "degraded" && routingDegradedTypeEnabled(policy, reason):
+			degradedType := routingDegradedType(reason)
 			findings = append(findings, alertFinding{
 				"console:routing:degraded:" + accountID + ":" + primaryGroupName,
-				"account.routing_degraded", "account", accountID, alertCause("ROUTING_DEGRADED", reason),
+				"account.routing_degraded", "account", accountID, alertCause(routingDegradedCauseCode(degradedType), reason),
 			})
 			accountFindings[accountID] = struct{}{}
 		case policy.RoutingSurvivorEnabled && state == "survivor":
@@ -515,6 +519,62 @@ func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding
 
 func fusedRoutingDecisionState(state string) bool {
 	return valueIn(state, "fused", "hard_open", "soft_open")
+}
+
+func routingDegradedTypeEnabled(policy AlertPolicy, reason string) bool {
+	return stringSliceContains(policy.RoutingDegradedTypes, routingDegradedType(reason))
+}
+
+func routingDegradedType(reason string) string {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case strings.Contains(normalized, "健康分"), strings.Contains(normalized, "health score"), strings.Contains(normalized, "health_score"):
+		return "health_score"
+	case strings.Contains(normalized, "网关错误率"), strings.Contains(normalized, "gateway error"):
+		return "gateway_error_rate"
+	case strings.Contains(normalized, "延迟"), strings.Contains(normalized, "latency"):
+		return "latency"
+	default:
+		return "other"
+	}
+}
+
+func routingDegradedCauseCode(degradedType string) string {
+	switch degradedType {
+	case "health_score":
+		return "ROUTING_DEGRADED_HEALTH_SCORE"
+	case "gateway_error_rate":
+		return "ROUTING_DEGRADED_GATEWAY_ERROR_RATE"
+	case "latency":
+		return "ROUTING_DEGRADED_LATENCY"
+	default:
+		return "ROUTING_DEGRADED_OTHER"
+	}
+}
+
+func routingDegradedTypeFromCauseCode(causeCode string) string {
+	code := strings.TrimSpace(strings.SplitN(causeCode, ":", 2)[0])
+	switch code {
+	case "ROUTING_DEGRADED_HEALTH_SCORE":
+		return "health_score"
+	case "ROUTING_DEGRADED_GATEWAY_ERROR_RATE":
+		return "gateway_error_rate"
+	case "ROUTING_DEGRADED_LATENCY":
+		return "latency"
+	case "ROUTING_DEGRADED_OTHER", "ROUTING_DEGRADED":
+		return "other"
+	default:
+		return "other"
+	}
+}
+
+func stringSliceContains(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func alertCause(code, detail string) string {

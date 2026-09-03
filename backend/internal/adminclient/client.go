@@ -487,6 +487,27 @@ func (c *Client) SyncAccountModels(ctx context.Context, accountID string) ([]str
 	return c.accountModelIDs(ctx, http.MethodPost, accountID, "/models/sync-upstream")
 }
 
+func (c *Client) PreviewAccountModels(ctx context.Context, platform, accountType, baseURL, apiKey string) ([]string, error) {
+	platform = strings.TrimSpace(platform)
+	accountType = strings.TrimSpace(accountType)
+	baseURL = strings.TrimSpace(baseURL)
+	apiKey = strings.TrimSpace(apiKey)
+	if platform == "" || accountType == "" || baseURL == "" || apiKey == "" {
+		return nil, errors.New("开户模型同步参数不完整")
+	}
+	payload, err := c.request(ctx, http.MethodPost, "/admin/accounts/models/sync-upstream-preview", map[string]any{
+		"platform": platform, "type": accountType, "base_url": baseURL, "api_key": apiKey,
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	models := collectModelIDs(payload)
+	if len(models) == 0 {
+		return nil, errors.New("上游模型同步未返回可用模型")
+	}
+	return models, nil
+}
+
 func (c *Client) accountModelIDs(ctx context.Context, method, accountID, suffix string) ([]string, error) {
 	if !stableID(accountID) {
 		return nil, errors.New("账号 ID 必须是稳定数字 ID")

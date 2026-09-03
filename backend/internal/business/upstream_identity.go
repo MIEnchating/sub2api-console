@@ -366,8 +366,12 @@ func (s *Store) upstreamIdentityID(ctx context.Context, host string) (string, er
 	if err := s.ensureUpstreamIdentities(ctx); err != nil {
 		return "", err
 	}
+	return s.lookupUpstreamIdentityID(ctx, host)
+}
+
+func (s *Store) lookupUpstreamIdentityID(ctx context.Context, host string) (string, error) {
 	var upstreamID string
-	err := s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=?`, host).Scan(&upstreamID)
+	err := s.db.QueryRowContext(ctx, `SELECT upstream_id FROM upstream_identity_hosts WHERE host=?`, canonicalHost(host)).Scan(&upstreamID)
 	return upstreamID, err
 }
 

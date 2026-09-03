@@ -96,9 +96,23 @@ func run() error {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
 	}
 	serviceContext, cancelServices := context.WithCancel(context.Background())
-	backgroundTasks := taskrunner.New(serviceContext)
+	backgroundTasks := taskrunner.NewBounded(serviceContext, 4)
 	defer cancelServices()
 	defer backgroundTasks.Cancel()
+	if err := backgroundTasks.Go(func(ctx context.Context) {
+		compacted, compactErr := taskStore.CompactAutomaticInspectionHistory(ctx, 100)
+		if compactErr != nil {
+			if ctx.Err() == nil {
+				log.Printf("压缩历史自动巡检任务失败: %v", compactErr)
+			}
+			return
+		}
+		if compacted > 0 {
+			log.Printf("已压缩 %d 个历史自动巡检任务的重复明细", compacted)
+		}
+	}); err != nil {
+		return err
+	}
 	notificationService := notification.New(
 		businessStore,
 		privateStore,
@@ -221,6 +235,7 @@ func run() error {
 		businessStore,
 		&http.Client{Timeout: 20 * time.Second},
 		upstreamReader,
+		authClient,
 	)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{

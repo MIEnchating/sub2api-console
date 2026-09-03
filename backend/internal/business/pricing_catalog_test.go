@@ -150,6 +150,35 @@ func TestPricingBackupRejectsBlankOrDuplicateNames(t *testing.T) {
 	}
 }
 
+func TestDeletePricingBackupRemovesBackupAndAccountSnapshots(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	backup, err := store.CreatePricingBackup(context.Background(), "待删除", "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DeletePricingBackup(context.Background(), backup.ID); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := store.PricingBackups(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("deleted backup remains: %#v", backups)
+	}
+	var accountSnapshots int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM pricing_backup_accounts WHERE backup_id=?`, backup.ID).Scan(&accountSnapshots); err != nil {
+		t.Fatal(err)
+	}
+	if accountSnapshots != 0 {
+		t.Fatalf("deleted backup account snapshots=%d", accountSnapshots)
+	}
+	if err := store.DeletePricingBackup(context.Background(), backup.ID); err == nil {
+		t.Fatal("missing backup deletion succeeded")
+	}
+}
+
 func openPricingCatalogStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))

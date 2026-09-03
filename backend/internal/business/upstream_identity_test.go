@@ -23,6 +23,9 @@ func TestUpstreamIdentityMergesExplicitAliasesAndSurvivesMutableAddressChanges(t
 		('192.0.2.44:8080','https://subclaude.example','sub2api','已鉴权','{}','now')`); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	first, err := store.Upstreams(ctx)
 	if err != nil {
@@ -109,7 +112,7 @@ func TestUpstreamIdentityMergeMovesStableBindingsAndCatalogTombstones(t *testing
 		VALUES('a.example','https://a.example','sub2api','已鉴权','{}','2026-08-30T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Upstreams(ctx); err != nil {
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstream_groups(host,group_id,name,status,updated_at) VALUES('a.example','6','pro','active','2026-08-30T00:00:00Z');
@@ -126,10 +129,16 @@ func TestUpstreamIdentityMergeMovesStableBindingsAndCatalogTombstones(t *testing
 		VALUES('b.example','https://b.example','sub2api','已鉴权','{}','2026-08-30T01:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Upstreams(ctx); err != nil {
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET metadata_json='{"alias_hosts":["b.example"]}' WHERE host='a.example'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureUpstreamIdentities(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
 		t.Fatal(err)
 	}
 	summary, err := store.Upstreams(ctx)

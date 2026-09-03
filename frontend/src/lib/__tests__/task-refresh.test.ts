@@ -62,4 +62,20 @@ describe("terminal task refresh contract", () => {
     expect(keys).toContainEqual(["policy"]);
     expect(keys).toContainEqual(["logs"]);
   });
+
+  it("refreshes pricing projections after a partially failed adjustment", () => {
+    const keys = terminalRefreshKeys("pricing", { status: "failed" } as never);
+
+    expect(keys).toContainEqual(["pricing"]);
+    expect(keys).toContainEqual(["accounts"]);
+    expect(keys).toContainEqual(["groups"]);
+  });
+
+  it("refreshes onboarding catalogs after a key cleanup reaches any terminal state", () => {
+    const keys = terminalRefreshKeys("upstream-key-cleanup", { status: "failed" } as never);
+
+    expect(keys).toContainEqual(["upstreams"]);
+    expect(keys).toContainEqual(["onboarding-candidates"]);
+    expect(keys).toContainEqual(["onboarding-unbound-keys"]);
+  });
 });

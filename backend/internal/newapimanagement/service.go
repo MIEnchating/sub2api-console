@@ -30,6 +30,9 @@ type PrivateStore interface {
 	SaveNewAPIPlatform(context.Context, configstore.NewAPIPlatform) (configstore.NewAPIPlatformSummary, error)
 	DeleteNewAPIPlatform(context.Context, string) (bool, error)
 	TargetSettings(context.Context) (configstore.TargetSettings, error)
+	VaultEntry(context.Context, string) (*configstore.VaultEntry, error)
+	UpstreamKeySecret(context.Context, string, string, string) (*configstore.UpstreamKeySecret, error)
+	SaveUpstreamKeySecret(context.Context, configstore.UpstreamKeySecret) error
 }
 
 type Repository interface {
@@ -41,7 +44,10 @@ type Repository interface {
 
 type KeyManager interface {
 	CreateKeyWithVerification(context.Context, configstore.AuthRecord, string, string, bool) (upstreamsync.CreatedKey, error)
-	RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error)
+}
+
+type Authenticator interface {
+	Login(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error)
 }
 
 type Service struct {
@@ -49,6 +55,7 @@ type Service struct {
 	repository Repository
 	client     *http.Client
 	keys       KeyManager
+	auth       Authenticator
 }
 
 type Workspace struct {
@@ -103,6 +110,7 @@ type GroupBindingInput struct {
 type ChannelInput struct {
 	Sub2APIGroupID string   `json:"sub2api_group_id"`
 	KeyID          string   `json:"key_id"`
+	BaseURL        string   `json:"base_url"`
 	Models         []string `json:"models"`
 	NewAPIGroups   []string `json:"newapi_groups"`
 }
@@ -110,16 +118,28 @@ type ChannelInput struct {
 type ChannelModelsInput struct {
 	Sub2APIGroupID string `json:"sub2api_group_id"`
 	KeyID          string `json:"key_id"`
+	BaseURL        string `json:"base_url"`
 }
 
 type ChannelKeyInput struct {
-	Sub2APIGroupID string `json:"sub2api_group_id"`
+	Sub2APIGroupID   string `json:"sub2api_group_id"`
+	CredentialSource string `json:"credential_source"`
+	VaultEntry       string `json:"vault_entry"`
+	Username         string `json:"username"`
+	Password         string `json:"password"`
 }
 
 type ChannelKey struct {
-	KeyID   string `json:"key_id"`
+	KeyID     string            `json:"key_id"`
+	Name      string            `json:"name"`
+	GroupID   string            `json:"group_id"`
+	Endpoints []ChannelEndpoint `json:"endpoints"`
+}
+
+type ChannelEndpoint struct {
 	Name    string `json:"name"`
-	GroupID string `json:"group_id"`
+	BaseURL string `json:"base_url"`
+	Default bool   `json:"default"`
 }
 
 type ModelPriceInput struct {
@@ -128,11 +148,11 @@ type ModelPriceInput struct {
 	CompletionRatio string `json:"completion_ratio"`
 }
 
-func New(private PrivateStore, repository Repository, client *http.Client, keys KeyManager) *Service {
+func New(private PrivateStore, repository Repository, client *http.Client, keys KeyManager, auth Authenticator) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Service{private: private, repository: repository, client: client, keys: keys}
+	return &Service{private: private, repository: repository, client: client, keys: keys, auth: auth}
 }
 
 func (s *Service) Workspace(ctx context.Context, platformID string) (Workspace, error) {
@@ -293,9 +313,9 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	if err != nil {
 		return nil, err
 	}
-	baseURL, err := configstore.ValidateBaseURL(target.BaseURL)
+	baseURL, err := configstore.ValidateBaseURL(input.BaseURL)
 	if err != nil {
-		return nil, errors.New("Sub2API 管理平台地址无效")
+		return nil, errors.New("渠道 API 地址无效")
 	}
 	body := map[string]any{
 		"mode": "single",
@@ -327,13 +347,24 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 	if s.keys == nil {
 		return ChannelKey{}, errors.New("Sub2API 密钥管理服务尚未就绪")
 	}
+	if s.auth == nil {
+		return ChannelKey{}, errors.New("Sub2API 普通账号登录服务尚未就绪")
+	}
 	target, err := s.private.TargetSettings(ctx)
 	if err != nil {
 		return ChannelKey{}, err
 	}
+	credential, err := s.channelCredential(ctx, input)
+	if err != nil {
+		return ChannelKey{}, err
+	}
+	authenticated, err := s.auth.Login(ctx, sub2APIUserLoginRecord(target), credential)
+	if err != nil {
+		return ChannelKey{}, fmt.Errorf("Sub2API 普通账号登录失败：%w", err)
+	}
 	created, err := s.keys.CreateKeyWithVerification(
 		ctx,
-		sub2APIAdminRecord(target),
+		authenticated,
 		newChannelKeyName(group.Name),
 		group.ID,
 		true,
@@ -344,7 +375,50 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 	if strings.TrimSpace(created.KeyID) == "" || strings.TrimSpace(created.Secret) == "" || created.GroupID != group.ID {
 		return ChannelKey{}, errors.New("Sub2API 密钥创建结果不可读")
 	}
-	return ChannelKey{KeyID: created.KeyID, Name: created.Name, GroupID: created.GroupID}, nil
+	if err := s.private.SaveUpstreamKeySecret(ctx, configstore.UpstreamKeySecret{
+		Host: configstore.CanonicalHost(target.BaseURL), KeyID: created.KeyID,
+		GroupID: created.GroupID, Secret: created.Secret,
+	}); err != nil {
+		return ChannelKey{}, fmt.Errorf("Sub2API 密钥已创建，但本地安全保存失败：%w", err)
+	}
+	return ChannelKey{
+		KeyID: created.KeyID, Name: created.Name, GroupID: created.GroupID,
+		Endpoints: s.channelEndpoints(ctx, target),
+	}, nil
+}
+
+func (s *Service) channelCredential(ctx context.Context, input ChannelKeyInput) (configstore.VaultEntry, error) {
+	switch strings.TrimSpace(input.CredentialSource) {
+	case "vault":
+		entryName := strings.TrimSpace(input.VaultEntry)
+		if entryName == "" {
+			return configstore.VaultEntry{}, errors.New("请选择密码箱账号")
+		}
+		entry, err := s.private.VaultEntry(ctx, entryName)
+		if err != nil {
+			return configstore.VaultEntry{}, fmt.Errorf("密码箱账号读取失败：%w", err)
+		}
+		if entry == nil {
+			return configstore.VaultEntry{}, errors.New("所选密码箱账号不存在")
+		}
+		if blankText(entry.Username) || blankText(entry.Password) {
+			return configstore.VaultEntry{}, errors.New("所选密码箱账号缺少完整账号或密码")
+		}
+		return *entry, nil
+	case "custom":
+		username := strings.TrimSpace(input.Username)
+		password := input.Password
+		if username == "" || strings.TrimSpace(password) == "" {
+			return configstore.VaultEntry{}, errors.New("请输入完整的 Sub2API 账号和密码")
+		}
+		return configstore.VaultEntry{Username: &username, Password: &password, Headers: map[string]string{}}, nil
+	default:
+		return configstore.VaultEntry{}, errors.New("请选择密码箱账号或自定义账号密码")
+	}
+}
+
+func blankText(value *string) bool {
+	return value == nil || strings.TrimSpace(*value) == ""
 }
 
 func (s *Service) FetchChannelModels(ctx context.Context, platformID string, input ChannelModelsInput) ([]string, error) {
@@ -371,7 +445,86 @@ func (s *Service) FetchChannelModels(ctx context.Context, platformID string, inp
 	if err != nil {
 		return nil, err
 	}
-	return s.fetchSub2APIModels(ctx, target.BaseURL, serviceKey)
+	return s.fetchSub2APIModels(ctx, input.BaseURL, serviceKey)
+}
+
+func (s *Service) channelEndpoints(ctx context.Context, target configstore.TargetSettings) []ChannelEndpoint {
+	fallbackURL, fallbackErr := configstore.ValidateBaseURL(target.BaseURL)
+	if fallbackErr != nil {
+		return []ChannelEndpoint{}
+	}
+	fallback := []ChannelEndpoint{{Name: "管理平台地址", BaseURL: fallbackURL, Default: true}}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		fallbackURL+"/api/v1/settings/public",
+		nil,
+	)
+	if err != nil {
+		return fallback
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "Sub2API-Console/0.1")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return fallback
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return fallback
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
+	if err != nil || len(raw) > maximumResponseBytes {
+		return fallback
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return fallback
+	}
+	settings := payload
+	if data, ok := payload["data"].(map[string]any); ok {
+		settings = data
+	}
+	endpoints := decodeChannelEndpoints(settings)
+	if len(endpoints) == 0 {
+		return fallback
+	}
+	return endpoints
+}
+
+func decodeChannelEndpoints(settings map[string]any) []ChannelEndpoint {
+	result := []ChannelEndpoint{}
+	seen := map[string]struct{}{}
+	appendEndpoint := func(name, rawURL string, isDefault bool) {
+		baseURL, err := configstore.ValidateBaseURL(rawURL)
+		if err != nil {
+			return
+		}
+		if _, found := seen[baseURL]; found {
+			return
+		}
+		seen[baseURL] = struct{}{}
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name = baseURL
+		}
+		result = append(result, ChannelEndpoint{Name: name, BaseURL: baseURL, Default: isDefault})
+	}
+	if raw, ok := settings["api_base_url"].(string); ok {
+		appendEndpoint("API 端点", raw, true)
+	}
+	if rawEndpoints, ok := settings["custom_endpoints"].([]any); ok {
+		for _, rawEndpoint := range rawEndpoints {
+			endpoint, ok := rawEndpoint.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := endpoint["name"].(string)
+			baseURL, _ := endpoint["endpoint"].(string)
+			appendEndpoint(name, baseURL, false)
+		}
+	}
+	return result
 }
 
 func (s *Service) localGroup(ctx context.Context, groupID string) (business.NewAPILocalGroup, error) {
@@ -391,24 +544,21 @@ func (s *Service) localGroup(ctx context.Context, groupID string) (business.NewA
 }
 
 func (s *Service) revealChannelKey(ctx context.Context, target configstore.TargetSettings, keyID, groupID string) (string, error) {
-	if s.keys == nil {
-		return "", errors.New("Sub2API 密钥管理服务尚未就绪")
-	}
-	key, err := s.keys.RevealKey(ctx, sub2APIAdminRecord(target), keyID, groupID)
+	key, err := s.private.UpstreamKeySecret(ctx, target.BaseURL, keyID, groupID)
 	if err != nil {
-		return "", fmt.Errorf("Sub2API 密钥读取失败：%w", err)
+		return "", fmt.Errorf("Sub2API 本地密钥读取失败：%w", err)
 	}
-	if strings.TrimSpace(key.Secret) == "" || key.GroupID != groupID {
-		return "", errors.New("Sub2API 密钥与所选分组不匹配")
+	if key == nil || strings.TrimSpace(key.Secret) == "" || key.GroupID != groupID {
+		return "", errors.New("本地未找到与所选分组匹配的 Sub2API 密钥，请重新创建密钥")
 	}
 	return strings.TrimSpace(key.Secret), nil
 }
 
-func sub2APIAdminRecord(target configstore.TargetSettings) configstore.AuthRecord {
+func sub2APIUserLoginRecord(target configstore.TargetSettings) configstore.AuthRecord {
 	return configstore.AuthRecord{
 		Host: configstore.CanonicalHost(target.BaseURL), BaseURL: target.BaseURL,
-		UpstreamType: "sub2api", AuthMode: "custom_headers",
-		Headers: map[string]string{"X-API-Key": strings.TrimSpace(target.AdminKey)}, Cookies: map[string]string{},
+		UpstreamType: "sub2api", AuthMode: "sub2api_user_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
 	}
 }
 

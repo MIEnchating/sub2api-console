@@ -185,4 +185,42 @@ describe("account rate sync status", () => {
     expect(markup).not.toContain("account-rate-task");
     expect(markup).toContain('data-table-panel=""');
   });
+
+  it("shows skipped count and the live probe error for read-only fallback", () => {
+    const task: Task = {
+      id: "account-rate-fallback",
+      skill: "sub2api-operations",
+      operation: "account-rate-sync",
+      status: "succeeded",
+      progress: 100,
+      message: "账号倍率同步完成",
+      result: {
+        updated: 0,
+        unchanged: 0,
+        skipped: 1,
+        missing: 0,
+        failed: 0,
+        items: [
+          {
+            account_id: "25",
+            account_name: "Pixel API-0.25",
+            status: "只读降级，已跳过写回",
+            probe_error: "上游倍率接口暂时不可用",
+            upstream_raw_multiplier: "0.25",
+            recharge_rate: "1",
+            account_multiplier: "0.25",
+          },
+        ],
+      },
+      created_at: "2026-09-02T00:00:00Z",
+      updated_at: "2026-09-02T00:00:01Z",
+    };
+
+    const markup = renderToStaticMarkup(<AccountRateSyncTaskStatus task={task} />);
+
+    expect(markup).toContain("已跳过");
+    expect(markup).toContain("1 个");
+    expect(markup).toContain("只读降级，已跳过写回");
+    expect(markup).toContain("实时探测失败：上游倍率接口暂时不可用");
+  });
 });

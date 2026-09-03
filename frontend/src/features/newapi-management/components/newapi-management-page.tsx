@@ -115,6 +115,12 @@ export function NewAPIManagementPage(props: Props) {
   const selectedPlatform =
     workspace.data?.platforms.find((platform) => platform.id === platformId) ?? null;
   const needsRemoteSnapshot = newAPIViewNeedsRemoteSnapshot(props.view);
+  const vaultConfiguration = useQuery({
+    queryKey: ["auth-recovery-config"],
+    queryFn: api.authRecoveryConfig,
+    enabled: props.view === "channels" && selectedPlatform !== null,
+    staleTime: 15_000,
+  });
 
   const refresh = useMutation({
     mutationFn: () => api.refreshNewAPIPlatform(platformId),
@@ -283,6 +289,9 @@ export function NewAPIManagementPage(props: Props) {
       {workspace.error ? (
         <QueryErrorToast error={workspace.error} fallback="New API 管理数据读取失败" />
       ) : null}
+      {vaultConfiguration.error ? (
+        <QueryErrorToast error={vaultConfiguration.error} fallback="密码箱账号读取失败" />
+      ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
         {workspace.isLoading ? (
@@ -310,10 +319,17 @@ export function NewAPIManagementPage(props: Props) {
                   groups={workspace.data?.local_groups ?? []}
                   newAPIGroups={snapshot?.groups ?? []}
                   sub2APIBaseURL={workspace.data?.sub2api_base_url ?? ""}
+                  vaultEntries={vaultConfiguration.data?.vault_entries ?? []}
                   pending={createChannel.isPending}
                   creatingKey={createChannelKey.isPending}
                   fetchingModels={fetchChannelModels.isPending}
-                  onCreateKey={(payload) => createChannelKey.mutateAsync(payload)}
+                  onCreateKey={async (payload) => {
+                    try {
+                      return await createChannelKey.mutateAsync(payload);
+                    } finally {
+                      createChannelKey.reset();
+                    }
+                  }}
                   onFetchModels={(payload) => fetchChannelModels.mutateAsync(payload)}
                   onSubmit={async (payload) => {
                     await createChannel.mutateAsync(payload);

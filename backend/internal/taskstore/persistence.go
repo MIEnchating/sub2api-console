@@ -2,10 +2,13 @@ package taskstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
 type Saver interface {
@@ -131,6 +134,9 @@ func PersistLaunchFailure(saver Saver, task Task, err error) {
 	task.Status = "cancelled"
 	task.Progress = 100
 	task.Message = "服务正在停止，任务未启动"
+	if errors.Is(err, taskrunner.ErrCapacity) {
+		task.Message = "后台任务并发容量已满，任务未启动"
+	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = maps.Clone(task.Result)
 	if task.Result == nil {

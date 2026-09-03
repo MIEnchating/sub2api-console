@@ -55,6 +55,43 @@ func TestAccountProjectionUsesStableIDsAndPreservesInvalidBooleanAsUnknown(t *te
 	}
 }
 
+func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readOnly, err := sql.Open("sqlite", "file:"+store.path+"?mode=ro&_pragma=query_only%281%29&_pragma=foreign_keys%28ON%29")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readOnly.SetMaxOpenConns(8)
+	store.db = readOnly
+	if err := store.db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reads := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "accounts", run: func() error { _, err := store.Accounts(ctx); return err }},
+		{name: "account detail", run: func() error { _, err := store.Account(ctx, "41"); return err }},
+		{name: "upstreams", run: func() error { _, err := store.Upstreams(ctx); return err }},
+		{name: "upstream groups", run: func() error { _, err := store.UpstreamGroups(ctx, "api.example", true); return err }},
+		{name: "routing accounts", run: func() error { _, err := store.RoutingAccounts(ctx, nil, nil); return err }},
+		{name: "balance policy", run: func() error { _, err := store.HostBalanceSyncAllowed(ctx, "api.example"); return err }},
+		{name: "maintenance accounts", run: func() error { _, err := store.BoundAccountsForMaintenance(ctx, []string{"41"}); return err }},
+	}
+	for _, read := range reads {
+		if err := read.run(); err != nil {
+			t.Fatalf("%s attempted a SQLite write: %v", read.name, err)
+		}
+	}
+}
+
 func TestAccountBaseURLCheckAllowsDifferentCustomEndpoints(t *testing.T) {
 	accountURL := "http://10.0.0.8:8080/v1"
 	upstreamURL := "https://portal.example.test"
@@ -281,6 +318,54 @@ func TestAccountProjectionLimitsRecentResultsWithoutChangingScoringCount(t *test
 	}
 }
 
+func TestRecentEvidenceSelectionUsesBoundedPerAccountWindows(t *testing.T) {
+	store := openReadModelFixture(t)
+	for index := range 12 {
+		observedAt := fmt.Sprintf("2026-08-30T10:%02d:00Z", index)
+		evidenceKey := fmt.Sprintf("account-42-%02d", index)
+		if _, err := store.db.Exec(`INSERT INTO health_samples(
+			account_id,group_name,result,observed_at,source,evidence_key,payload_json
+		) VALUES('42','codex','success',?,'traffic',?,'{}')`, observedAt, evidenceKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.db.Exec(`INSERT INTO health_samples(
+		account_id,group_name,result,observed_at,source,evidence_key,payload_json
+	) VALUES
+		('41','codex','success','2026-08-30T11:03:00Z','traffic','duplicate','{}'),
+		('41','pro','success','2026-08-30T11:02:00Z','traffic','duplicate','{}'),
+		('41','codex','success','2026-08-30T11:01:00Z','traffic','unique','{}')`); err != nil {
+		t.Fatal(err)
+	}
+
+	selections, err := store.selectHealthSampleWindowsForAccounts(
+		context.Background(),
+		[]string{"42", "41"},
+		[]string{`LOWER(REPLACE(source,'_','-'))<>'account-state'`},
+		nil,
+		2,
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	samples, err := store.selectedHealthSamples(context.Background(), selections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := map[string][]string{}
+	for _, selection := range selections {
+		sample := samples[selection.id]
+		observed[sample.accountID] = append(observed[sample.accountID], sample.observedAt.String)
+	}
+	if !reflect.DeepEqual(observed["41"], []string{"2026-08-30T11:03:00Z", "2026-08-30T11:01:00Z"}) {
+		t.Fatalf("account 41 selection=%#v", observed["41"])
+	}
+	if !reflect.DeepEqual(observed["42"], []string{"2026-08-30T10:11:00Z", "2026-08-30T10:10:00Z"}) {
+		t.Fatalf("account 42 selection=%#v", observed["42"])
+	}
+}
+
 func TestAccountProjectionIncludesLatestErrorAndUpstreamSchedulingReason(t *testing.T) {
 	store := openReadModelFixture(t)
 	if _, err := store.db.Exec(`UPDATE accounts SET schedulable=1,metadata_json=? WHERE id='41'`,
@@ -488,6 +573,9 @@ func TestUpstreamGroupsRecognizesBindingsThroughExplicitHostAlias(t *testing.T) 
 		VALUES('edge.example:8080','edge-key','codex-key','1','1','active','now')`); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	groups, err := store.UpstreamGroups(ctx, "edge.example:8080", true)
 	if err != nil {
@@ -566,6 +654,9 @@ func openReadModelFixture(t *testing.T) *Store {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("fixture statement failed: %v\n%s", err, statement)
 		}
+	}
+	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
+		t.Fatal(err)
 	}
 	return store
 }

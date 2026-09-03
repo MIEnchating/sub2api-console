@@ -68,11 +68,13 @@ type fakeBusiness struct {
 }
 
 type fakePricingService struct {
-	snapshot pricing.Snapshot
-	updated  pricing.Config
-	revenue  pricing.RevenueRequest
-	enqueued int
-	backups  []business.PricingBackup
+	snapshot        pricing.Snapshot
+	updated         pricing.Config
+	revenue         pricing.RevenueRequest
+	enqueued        int
+	backups         []business.PricingBackup
+	deletedBackupID string
+	deleteBackupErr error
 }
 
 func (service *fakePricingService) Snapshot(context.Context) (pricing.Snapshot, error) {
@@ -104,6 +106,11 @@ func (service *fakePricingService) CreateBackup(_ context.Context, name, actor s
 
 func (service *fakePricingService) Backups(context.Context) ([]business.PricingBackup, error) {
 	return service.backups, nil
+}
+
+func (service *fakePricingService) DeleteBackup(_ context.Context, backupID string) error {
+	service.deletedBackupID = backupID
+	return service.deleteBackupErr
 }
 
 func (service *fakePricingService) EnqueueRestore(_ context.Context, backupID, _ string) (taskstore.Task, error) {
@@ -451,14 +458,23 @@ type accountDeleteCall struct {
 }
 
 type fakeAccountDelete struct {
-	preview accountdelete.Preview
-	task    taskstore.Task
-	err     error
-	calls   *[]accountDeleteCall
+	preview            accountdelete.Preview
+	batchPreview       accountdelete.BatchPreview
+	task               taskstore.Task
+	err                error
+	calls              *[]accountDeleteCall
+	batchConfirmations *[][]accountdelete.Confirmation
 }
 
 func (service fakeAccountDelete) Preview(context.Context, string) (accountdelete.Preview, error) {
 	return service.preview, service.err
+}
+
+func (service fakeAccountDelete) PreviewBatch(_ context.Context, accountIDs []string) (accountdelete.BatchPreview, error) {
+	if len(service.batchPreview.Accounts) > 0 {
+		return service.batchPreview, service.err
+	}
+	return accountdelete.BatchPreview{Accounts: []accountdelete.Preview{service.preview}, AccountCount: len(accountIDs)}, service.err
 }
 
 func (service fakeAccountDelete) Enqueue(
@@ -472,6 +488,18 @@ func (service fakeAccountDelete) Enqueue(
 		*service.calls = append(*service.calls, accountDeleteCall{
 			accountID: accountID, binding: binding, managementBaseURL: managementBaseURL, actor: actor,
 		})
+	}
+	return service.task, service.err
+}
+
+func (service fakeAccountDelete) EnqueueBatch(
+	_ context.Context,
+	confirmations []accountdelete.Confirmation,
+	_ string,
+) (taskstore.Task, error) {
+	if service.batchConfirmations != nil {
+		copy := append([]accountdelete.Confirmation{}, confirmations...)
+		*service.batchConfirmations = append(*service.batchConfirmations, copy)
 	}
 	return service.task, service.err
 }
@@ -1926,6 +1954,60 @@ func TestAccountDeleteAcceptsManagementOnlyScopeWhenPreviewHasNoBinding(t *testi
 	}
 }
 
+func TestAccountBatchDeleteRequiresPreviewScopesAndPassesStableConfirmations(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	previews := []accountdelete.Preview{
+		{
+			AccountID: "37", AccountName: "bound", Groups: []string{"codex"},
+			ManagementBaseURL: "https://management.example.test",
+			Binding: &accountdelete.Binding{
+				ID: 91, UpstreamID: "upstream-1", UpstreamHost: "upstream.example.test",
+				AuthHost: "auth.example.test", UpstreamKeyID: "key-8", UpstreamKeyName: "key",
+			},
+		},
+		{AccountID: "38", AccountName: "unbound", ManagementBaseURL: "https://management.example.test"},
+	}
+	task := taskstore.Task{
+		ID: "account-delete-batch", Skill: "sub2api-account-management", Operation: "account-delete-batch",
+		Status: "queued", Message: "2 个账号批量删除已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	calls := [][]accountdelete.Confirmation{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		AccountDelete: fakeAccountDelete{
+			batchPreview: accountdelete.BatchPreview{Accounts: previews, AccountCount: 2, UpstreamKeyCount: 1},
+			task:         task, batchConfirmations: &calls,
+		},
+	})
+	read := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/delete-preview", map[string]any{
+		"account_ids": []string{"37", "38"},
+	})
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"upstream_key_count":1`) {
+		t.Fatalf("unexpected batch preview response: %d %s", read.Code, read.Body.String())
+	}
+	deleted := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/delete", map[string]any{
+		"confirmations": []map[string]any{
+			{
+				"account_id": "37", "management_base_url": "https://management.example.test",
+				"binding": map[string]any{
+					"id": 91, "upstream_id": "upstream-1", "upstream_host": "upstream.example.test",
+					"auth_host": "auth.example.test", "upstream_key_id": "key-8", "upstream_key_name": "key",
+				},
+			},
+			{"account_id": "38", "management_base_url": "https://management.example.test", "binding": nil},
+		},
+	})
+	if deleted.Code != http.StatusOK || len(calls) != 1 || len(calls[0]) != 2 ||
+		calls[0][0].Binding == nil || calls[0][0].Binding.UpstreamKeyID != "key-8" || calls[0][1].Binding != nil {
+		t.Fatalf("unexpected batch delete response: %d %s calls=%#v", deleted.Code, deleted.Body.String(), calls)
+	}
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/accounts/delete-preview", map[string]any{
+		"account_ids": []string{"37", "37"},
+	})
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("duplicate batch preview IDs accepted: %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
 func TestAccountMutationReturnsNotFoundBeforeQueuing(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	calls := []fieldsCall{}
@@ -2269,6 +2351,15 @@ func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 	restore := authenticatedRequest(t, router, http.MethodPost, "/api/pricing/backups/backup-1/restore", nil)
 	if restore.Code != http.StatusAccepted || !strings.Contains(restore.Body.String(), `"operation":"price-group-restore"`) || service.enqueued != 3 {
 		t.Fatalf("restore=%d %s calls=%d", restore.Code, restore.Body.String(), service.enqueued)
+	}
+	deleted := authenticatedRequest(t, router, http.MethodDelete, "/api/pricing/backups/backup-1", nil)
+	if deleted.Code != http.StatusOK || !strings.Contains(deleted.Body.String(), `"deleted":true`) || service.deletedBackupID != "backup-1" {
+		t.Fatalf("deleted=%d %s backup_id=%q", deleted.Code, deleted.Body.String(), service.deletedBackupID)
+	}
+	service.deleteBackupErr = business.ErrPricingBackupNotFound
+	missingBackup := authenticatedRequest(t, router, http.MethodDelete, "/api/pricing/backups/missing", nil)
+	if missingBackup.Code != http.StatusNotFound || !strings.Contains(missingBackup.Body.String(), "价格分组备份不存在") {
+		t.Fatalf("missing backup deletion=%d %s", missingBackup.Code, missingBackup.Body.String())
 	}
 }
 
@@ -2871,16 +2962,20 @@ func TestAlertPolicyContracts(t *testing.T) {
 	policy := business.DefaultAlertPolicy()
 	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式", alertPolicy: policy})
 	read := authenticatedRequest(t, router, http.MethodGet, "/api/alerts/policy", nil)
-	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"balance_thresholds":["20","10","5"]`) {
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"balance_thresholds":["20","10","5"]`) ||
+		!strings.Contains(read.Body.String(), `"routing_degraded_types":["health_score","gateway_error_rate","latency","other"]`) ||
+		!strings.Contains(read.Body.String(), `"recovery_notification_types":["auth","balance","group_unavailable"]`) {
 		t.Fatalf("unexpected alert policy: %d %s", read.Code, read.Body.String())
 	}
 	payload := map[string]any{
 		"enabled": true, "configuration_enabled": true, "auth_enabled": true, "rate_sync_enabled": true,
 		"balance_enabled": true, "probe_enabled": true, "balance_thresholds": []any{"20", "10", "5"},
-		"routing_breaker_enabled": true, "routing_degraded_enabled": true, "routing_survivor_enabled": true,
+		"routing_breaker_enabled": true, "routing_degraded_enabled": true,
+		"routing_degraded_types": []any{"health_score", "gateway_error_rate", "latency", "other"}, "routing_survivor_enabled": true,
 		"group_unavailable_enabled": true, "group_survivor_enabled": true, "apply_failure_enabled": true,
 		"probe_failure_streak": 3, "probe_recovery_streak": 3, "probe_groups": []any{}, "delivery_enabled": true, "notify_recovery": true,
-		"repeat_interval_minutes": 0, "state_change_cooldown_minutes": 30, "merge_threshold": 10,
+		"recovery_notification_types": []any{"auth", "balance", "group_unavailable"},
+		"repeat_interval_minutes":     0, "state_change_cooldown_minutes": 30, "merge_threshold": 10,
 	}
 	updated := authenticatedRequest(t, router, http.MethodPut, "/api/alerts/policy", payload)
 	if updated.Code != http.StatusOK {

@@ -1,5 +1,26 @@
 import { z } from "zod";
 
+const routingDegradedTypeSchema = z.enum([
+  "health_score",
+  "gateway_error_rate",
+  "latency",
+  "other",
+]);
+
+const recoveryNotificationTypeSchema = z.enum([
+  "configuration",
+  "auth",
+  "rate_sync",
+  "balance",
+  "probe",
+  "routing_breaker",
+  "routing_degraded",
+  "routing_survivor",
+  "group_unavailable",
+  "group_survivor",
+  "apply_failure",
+]);
+
 export const alertPolicyFormSchema = z.object({
   enabled: z.boolean(),
   configuration_enabled: z.boolean(),
@@ -9,6 +30,7 @@ export const alertPolicyFormSchema = z.object({
   probe_enabled: z.boolean(),
   routing_breaker_enabled: z.boolean(),
   routing_degraded_enabled: z.boolean(),
+  routing_degraded_types: z.array(routingDegradedTypeSchema),
   routing_survivor_enabled: z.boolean(),
   group_unavailable_enabled: z.boolean(),
   group_survivor_enabled: z.boolean(),
@@ -41,6 +63,7 @@ export const alertPolicyFormSchema = z.object({
   probe_groups: z.string(),
   delivery_enabled: z.boolean(),
   notify_recovery: z.boolean(),
+  recovery_notification_types: z.array(recoveryNotificationTypeSchema),
   repeat_interval_minutes: z.number().int().min(0, "不能小于 0 分钟").max(10080, "不能超过 7 天"),
   state_change_cooldown_minutes: z
     .number()
@@ -61,6 +84,7 @@ export const defaultAlertPolicyForm: AlertPolicyFormValues = {
   probe_enabled: true,
   routing_breaker_enabled: true,
   routing_degraded_enabled: true,
+  routing_degraded_types: ["health_score", "gateway_error_rate", "latency", "other"],
   routing_survivor_enabled: true,
   group_unavailable_enabled: true,
   group_survivor_enabled: true,
@@ -71,6 +95,7 @@ export const defaultAlertPolicyForm: AlertPolicyFormValues = {
   probe_groups: "",
   delivery_enabled: true,
   notify_recovery: true,
+  recovery_notification_types: ["auth", "balance", "group_unavailable"],
   repeat_interval_minutes: 0,
   state_change_cooldown_minutes: 30,
   merge_threshold: 10,

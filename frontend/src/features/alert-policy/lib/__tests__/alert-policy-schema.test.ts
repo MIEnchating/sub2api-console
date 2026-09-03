@@ -7,6 +7,21 @@ describe("alertPolicyFormSchema", () => {
     expect(alertPolicyFormSchema.safeParse(defaultAlertPolicyForm).success).toBe(true);
   });
 
+  it("rejects unknown degraded and recovery notification types", () => {
+    expect(
+      alertPolicyFormSchema.safeParse({
+        ...defaultAlertPolicyForm,
+        routing_degraded_types: ["score"],
+      }).success,
+    ).toBe(false);
+    expect(
+      alertPolicyFormSchema.safeParse({
+        ...defaultAlertPolicyForm,
+        recovery_notification_types: ["everything"],
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects invalid thresholds and reminder intervals", () => {
     expect(
       alertPolicyFormSchema.safeParse({

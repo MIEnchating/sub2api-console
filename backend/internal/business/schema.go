@@ -233,7 +233,7 @@ CREATE INDEX IF NOT EXISTS ix_operation_audit_apply_error_recent ON operation_au
 ) WHERE operation_type IN ('routing.writeback','cleanup.delete') AND object_id IS NOT NULL
  AND (state='failed' OR readback_confirmed=1);
 CREATE INDEX IF NOT EXISTS ix_operation_audit_recent ON operation_audit(created_at DESC,source_id);
-CREATE INDEX IF NOT EXISTS ix_operation_audit_log_recent ON operation_audit(created_at DESC,source_id)
+CREATE INDEX IF NOT EXISTS ix_operation_audit_log_recent_v2 ON operation_audit(created_at DESC,source_id)
 	 WHERE phase<>'calculation' AND operation_type<>'upstream.rate_sync' AND (
 	  writeback=1 OR (operation_type='account.delete' AND state='failed') OR
 	  (operation_type IN ('account.scheduling','routing.writeback')

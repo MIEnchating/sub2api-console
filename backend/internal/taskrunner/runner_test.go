@@ -26,6 +26,32 @@ func TestGroupGoRejectsNilTask(t *testing.T) {
 	}
 }
 
+func TestBoundedGroupRejectsTasksBeyondActiveLimit(t *testing.T) {
+	runner := NewBounded(context.Background(), 2)
+	t.Cleanup(runner.Cancel)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	for range 2 {
+		if err := runner.Go(func(context.Context) {
+			started <- struct{}{}
+			<-release
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("bounded runner did not start accepted task")
+		}
+	}
+	if err := runner.Go(func(context.Context) {}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("task beyond capacity error = %v, want ErrCapacity", err)
+	}
+	close(release)
+}
+
 func TestShutdownCancelsAndWaitsForRunningTasks(t *testing.T) {
 	runner := New(context.Background())
 	started := make(chan struct{})

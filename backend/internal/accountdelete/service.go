@@ -72,6 +72,18 @@ type Preview struct {
 	managementTargetFingerprint string
 }
 
+type BatchPreview struct {
+	Accounts         []Preview `json:"accounts"`
+	AccountCount     int       `json:"account_count"`
+	UpstreamKeyCount int       `json:"upstream_key_count"`
+}
+
+type Confirmation struct {
+	AccountID         string   `json:"account_id"`
+	ManagementBaseURL string   `json:"management_base_url"`
+	Binding           *Binding `json:"binding"`
+}
+
 type Result struct {
 	AccountID                         string `json:"account_id"`
 	AccountName                       string `json:"account_name"`
@@ -153,6 +165,25 @@ func (s *Service) Preview(ctx context.Context, accountID string) (Preview, error
 	}, nil
 }
 
+func (s *Service) PreviewBatch(ctx context.Context, accountIDs []string) (BatchPreview, error) {
+	accountIDs, err := normalizeBatchAccountIDs(accountIDs)
+	if err != nil {
+		return BatchPreview{}, err
+	}
+	result := BatchPreview{Accounts: make([]Preview, 0, len(accountIDs)), AccountCount: len(accountIDs)}
+	for _, accountID := range accountIDs {
+		preview, previewErr := s.Preview(ctx, accountID)
+		if previewErr != nil {
+			return BatchPreview{}, fmt.Errorf("账号 %s 删除范围读取失败：%w", accountID, previewErr)
+		}
+		if preview.Binding != nil {
+			result.UpstreamKeyCount++
+		}
+		result.Accounts = append(result.Accounts, preview)
+	}
+	return result, nil
+}
+
 func (s *Service) Enqueue(
 	ctx context.Context,
 	accountID string,
@@ -215,6 +246,68 @@ func (s *Service) Enqueue(
 	return task, nil
 }
 
+func (s *Service) EnqueueBatch(
+	ctx context.Context,
+	confirmations []Confirmation,
+	actor string,
+) (taskstore.Task, error) {
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	if mode != runtimepolicy.Full {
+		return taskstore.Task{}, errors.New("账号批量删除只能在完全模式执行")
+	}
+	if len(confirmations) == 0 || len(confirmations) > 50 {
+		return taskstore.Task{}, errors.New("批量删除账号数量必须在 1 到 50 之间")
+	}
+	seen := make(map[string]struct{}, len(confirmations))
+	previews := make([]Preview, 0, len(confirmations))
+	for _, confirmation := range confirmations {
+		accountID := strings.TrimSpace(confirmation.AccountID)
+		if !stableID(accountID) {
+			return taskstore.Task{}, errors.New("批量删除账号必须使用有效的稳定 ID")
+		}
+		if _, found := seen[accountID]; found {
+			return taskstore.Task{}, fmt.Errorf("批量删除包含重复账号 ID：%s", accountID)
+		}
+		seen[accountID] = struct{}{}
+		preview, previewErr := s.Preview(ctx, accountID)
+		if previewErr != nil {
+			return taskstore.Task{}, fmt.Errorf("账号 %s 删除范围复核失败：%w", accountID, previewErr)
+		}
+		expectedBaseURL, validateErr := configstore.ValidateBaseURL(confirmation.ManagementBaseURL)
+		if validateErr != nil || preview.ManagementBaseURL != expectedBaseURL {
+			return taskstore.Task{}, fmt.Errorf("账号 %s 删除预览后的管理目标已变化，请重新确认", accountID)
+		}
+		if !sameBinding(preview.Binding, normalizedBinding(confirmation.Binding)) {
+			return taskstore.Task{}, fmt.Errorf("账号 %s 删除预览后的绑定已变化，请重新确认", accountID)
+		}
+		previews = append(previews, preview)
+	}
+	id, err := randomID()
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: id, Skill: "sub2api-account-management", Operation: "account-delete-batch", Status: "queued", Progress: 0,
+		Message: fmt.Sprintf("%d 个账号批量删除已排队", len(previews)), Result: map[string]any{
+			"requested": len(previews), "account_ids": previewAccountIDs(previews),
+		}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.tasks.Save(ctx, task); err != nil {
+		return taskstore.Task{}, err
+	}
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeBatch(parent, task, previews, actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
+	return task, nil
+}
+
 func (s *Service) execute(parent context.Context, task taskstore.Task, expected Preview, actor string) {
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
@@ -237,6 +330,51 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, expected 
 		cancelledMessage = "账号双端删除已取消"
 	}
 	taskstore.MarkCancelled(ctx, &task, cancelledMessage)
+	taskstore.PersistFinal(s.tasks, task)
+}
+
+func (s *Service) executeBatch(parent context.Context, task taskstore.Task, expected []Preview, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout*time.Duration(len(expected)))
+	defer cancel()
+	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 0,
+		fmt.Sprintf("正在批量删除 %d 个账号", len(expected)), time.Now().UTC().Format(time.RFC3339Nano)
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
+		return
+	}
+	items := make([]map[string]any, 0, len(expected))
+	succeeded, failed := 0, 0
+	for index, preview := range expected {
+		if ctx.Err() != nil {
+			break
+		}
+		result, err := s.Delete(ctx, preview, actor)
+		item := resultMap(result)
+		if err != nil {
+			failed++
+			item["status"], item["error"] = "failed", err.Error()
+		} else {
+			succeeded++
+			item["status"] = "succeeded"
+		}
+		items = append(items, item)
+		task.Progress = (index + 1) * 100 / len(expected)
+		task.Message = fmt.Sprintf("批量删除进度：已处理 %d/%d 个账号", index+1, len(expected))
+		task.Result = batchDeleteResult(len(expected), succeeded, failed, items)
+		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		taskstore.PersistProgress(s.tasks, task)
+	}
+	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
+	task.Result = batchDeleteResult(len(expected), succeeded, failed, items)
+	switch {
+	case failed == 0:
+		task.Status = "succeeded"
+	case succeeded > 0:
+		task.Status = "partial"
+	default:
+		task.Status = "failed"
+	}
+	task.Message = fmt.Sprintf("账号批量删除完成：成功 %d 个，失败 %d 个", succeeded, failed)
+	taskstore.MarkCancelled(ctx, &task, "账号批量删除已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
@@ -593,6 +731,61 @@ func sameBinding(left, right *Binding) bool {
 	return left.ID == right.ID && left.UpstreamID == right.UpstreamID &&
 		left.UpstreamHost == right.UpstreamHost && left.AuthHost == right.AuthHost &&
 		left.UpstreamKeyID == right.UpstreamKeyID
+}
+
+func normalizedBinding(binding *Binding) *Binding {
+	if binding == nil {
+		return nil
+	}
+	result := *binding
+	result.UpstreamID = strings.TrimSpace(result.UpstreamID)
+	result.UpstreamHost = strings.TrimSpace(result.UpstreamHost)
+	result.AuthHost = strings.TrimSpace(result.AuthHost)
+	result.UpstreamKeyID = strings.TrimSpace(result.UpstreamKeyID)
+	result.UpstreamKeyName = strings.TrimSpace(result.UpstreamKeyName)
+	return &result
+}
+
+func normalizeBatchAccountIDs(accountIDs []string) ([]string, error) {
+	if len(accountIDs) == 0 || len(accountIDs) > 50 {
+		return nil, errors.New("批量删除账号数量必须在 1 到 50 之间")
+	}
+	result := make([]string, 0, len(accountIDs))
+	seen := make(map[string]struct{}, len(accountIDs))
+	for _, value := range accountIDs {
+		accountID := strings.TrimSpace(value)
+		if !stableID(accountID) {
+			return nil, errors.New("批量删除账号必须使用有效的稳定 ID")
+		}
+		if _, found := seen[accountID]; found {
+			return nil, fmt.Errorf("批量删除包含重复账号 ID：%s", accountID)
+		}
+		seen[accountID] = struct{}{}
+		result = append(result, accountID)
+	}
+	return result, nil
+}
+
+func previewAccountIDs(previews []Preview) []string {
+	result := make([]string, 0, len(previews))
+	for _, preview := range previews {
+		result = append(result, preview.AccountID)
+	}
+	return result
+}
+
+func batchDeleteResult(requested, succeeded, failed int, items []map[string]any) map[string]any {
+	remoteWrite := false
+	for _, item := range items {
+		if item["upstream_key_delete_requested"] == true || item["management_account_delete_requested"] == true {
+			remoteWrite = true
+			break
+		}
+	}
+	return map[string]any{
+		"requested": requested, "succeeded": succeeded, "failed": failed, "items": items,
+		"remote_write": remoteWrite,
+	}
 }
 
 func accountDeleteQueuedMessage(hasBinding bool) string {

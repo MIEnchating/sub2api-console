@@ -342,9 +342,6 @@ func (s *Store) ManualPriorityControls(ctx context.Context, requestedIDs []strin
 }
 
 func (s *Store) HostBalanceSyncAllowed(ctx context.Context, host string) (bool, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return false, err
-	}
 	var boundAccounts, syncableAccounts int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT b.local_account_id),
 		COUNT(DISTINCT CASE WHEN m.account_id IS NULL OR m.sync_balance_multiplier=1 THEN b.local_account_id END)

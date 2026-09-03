@@ -306,21 +306,35 @@ func TestDeleteRejectsChangedPreviewBeforeAnyRemoteOrPrivateWrite(t *testing.T) 
 	}
 }
 
-func TestDeleteRejectsUpstreamContainingManualPriorityAccount(t *testing.T) {
-	repository := &deleteRepository{
-		preview: business.UpstreamDeletePreview{Host: "api.example", AccountIDs: []string{"41"}},
-		manualControls: map[string]business.ManualPriorityControl{
-			"41": {AccountID: "41"},
-		},
+func TestDeleteAllowsUpstreamContainingManualPriorityAccount(t *testing.T) {
+	service, repository, private := newDeleteService(t, http.StatusOK)
+	repository.manualControls = map[string]business.ManualPriorityControl{
+		"41": {AccountID: "41"},
 	}
-	private := &deletePrivateStore{targetErr: errors.New("target must not be read")}
-	service := New(repository, private, nil)
-	_, err := service.Delete(context.Background(), "api.example", []string{"41"}, "operator")
-	if err == nil || !strings.Contains(err.Error(), "人工优先位") {
-		t.Fatalf("manual priority delete error=%v", err)
+	result, err := service.Delete(context.Background(), "api.example", []string{"41"}, "operator")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if private.deleteCalls != 0 || repository.deleteCalls != 0 {
-		t.Fatalf("manual account deletion reached writes: private=%d projection=%d", private.deleteCalls, repository.deleteCalls)
+	if result.DeletedAccounts != 1 || private.deleteCalls != 1 || repository.deleteCalls != 1 {
+		t.Fatalf("result=%#v private=%d projection=%d", result, private.deleteCalls, repository.deleteCalls)
+	}
+}
+
+func TestEnqueueAllowsUpstreamContainingManualPriorityAccount(t *testing.T) {
+	service, repository, _ := newDeleteService(t, http.StatusOK)
+	repository.manualControls = map[string]business.ManualPriorityControl{
+		"41": {AccountID: "41"},
+	}
+	tasks := &deleteTaskObserver{updates: make(chan taskstore.Task, 1)}
+	runner := &deferredDeleteRunner{}
+	service.tasks = tasks
+	service.UseTaskRunner(runner)
+	task, err := service.Enqueue(context.Background(), "api.example", []string{"41"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "queued" || runner.run == nil {
+		t.Fatalf("task=%#v scheduled=%t", task, runner.run != nil)
 	}
 }
 

@@ -214,9 +214,6 @@ func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, 
 }
 
 func (s *Store) accountBindings(ctx context.Context, accountID string) ([]AccountBinding, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT b.id,b.local_account_id,COALESCE(bi.upstream_id,''),b.upstream_host,b.upstream_key_id,
 		b.upstream_key_name,b.upstream_group,b.upstream_group_id,b.local_group,b.local_rate,b.upstream_rate,
 		b.source_auth_host,b.binding_host_alias,b.description,b.status,b.updated_at
@@ -263,9 +260,6 @@ func (s *Store) groupAccountProjections(ctx context.Context) ([]accountProjectio
 }
 
 func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accountProjectionOptions) ([]accountProjection, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
 	query := `SELECT a.id,a.name,COALESCE(ownership.upstream_host,a.upstream_host),a.upstream_host,
 		ownership.upstream_host,ownership.upstream_id,COALESCE(ownership.identity_count,0),COALESCE(u.upstream_type,a.upstream_type),u.base_url,a.schedulable,a.priority,
 		a.load_factor,a.concurrency,a.multiplier,a.balance,a.paused,a.paused_reason,a.routing_state,a.health_status,
@@ -712,12 +706,11 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 
 func (s *Store) loadRecentEvidence(ctx context.Context, accounts map[string]*accountProjection) error {
 	clauses := []string{`LOWER(REPLACE(source,'_','-'))<>'account-state'`}
-	arguments := []any{}
-	if accountID, ok := soleProjectionAccountID(accounts); ok {
-		clauses = append(clauses, `account_id=?`)
-		arguments = append(arguments, accountID)
+	accountIDs := make([]string, 0, len(accounts))
+	for accountID := range accounts {
+		accountIDs = append(accountIDs, accountID)
 	}
-	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, 10, false)
+	selections, err := s.selectHealthSampleWindowsForAccounts(ctx, accountIDs, clauses, nil, 10, false)
 	if err != nil {
 		return err
 	}

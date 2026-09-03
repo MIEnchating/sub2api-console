@@ -33,11 +33,11 @@ export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
   groups: T[],
 ): T[] {
   const upstreamPlatform = normalizeOnboardingPlatform(candidate.platform);
-  if (!upstreamPlatform) return [];
   return groups.filter((group) => {
     const platforms = [group.platform, ...(group.platforms ?? [])]
       .map(normalizeOnboardingPlatform)
       .filter(Boolean);
+    if (!upstreamPlatform) return platforms.length > 0;
     return platforms.includes(upstreamPlatform);
   });
 }

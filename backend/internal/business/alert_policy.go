@@ -12,27 +12,29 @@ import (
 )
 
 type AlertPolicy struct {
-	Enabled                 bool     `json:"enabled"`
-	ConfigurationEnabled    bool     `json:"configuration_enabled"`
-	AuthEnabled             bool     `json:"auth_enabled"`
-	RateSyncEnabled         bool     `json:"rate_sync_enabled"`
-	BalanceEnabled          bool     `json:"balance_enabled"`
-	ProbeEnabled            bool     `json:"probe_enabled"`
-	RoutingBreakerEnabled   bool     `json:"routing_breaker_enabled"`
-	RoutingDegradedEnabled  bool     `json:"routing_degraded_enabled"`
-	RoutingSurvivorEnabled  bool     `json:"routing_survivor_enabled"`
-	GroupUnavailableEnabled bool     `json:"group_unavailable_enabled"`
-	GroupSurvivorEnabled    bool     `json:"group_survivor_enabled"`
-	ApplyFailureEnabled     bool     `json:"apply_failure_enabled"`
-	BalanceThresholds       []string `json:"balance_thresholds"`
-	ProbeFailureStreak      int      `json:"probe_failure_streak"`
-	ProbeRecoveryStreak     int      `json:"probe_recovery_streak"`
-	ProbeGroups             []string `json:"probe_groups"`
-	DeliveryEnabled         bool     `json:"delivery_enabled"`
-	NotifyRecovery          bool     `json:"notify_recovery"`
-	RepeatIntervalMinutes   int      `json:"repeat_interval_minutes"`
-	StateChangeCooldown     int      `json:"state_change_cooldown_minutes"`
-	MergeThreshold          int      `json:"merge_threshold"`
+	Enabled                   bool     `json:"enabled"`
+	ConfigurationEnabled      bool     `json:"configuration_enabled"`
+	AuthEnabled               bool     `json:"auth_enabled"`
+	RateSyncEnabled           bool     `json:"rate_sync_enabled"`
+	BalanceEnabled            bool     `json:"balance_enabled"`
+	ProbeEnabled              bool     `json:"probe_enabled"`
+	RoutingBreakerEnabled     bool     `json:"routing_breaker_enabled"`
+	RoutingDegradedEnabled    bool     `json:"routing_degraded_enabled"`
+	RoutingDegradedTypes      []string `json:"routing_degraded_types"`
+	RoutingSurvivorEnabled    bool     `json:"routing_survivor_enabled"`
+	GroupUnavailableEnabled   bool     `json:"group_unavailable_enabled"`
+	GroupSurvivorEnabled      bool     `json:"group_survivor_enabled"`
+	ApplyFailureEnabled       bool     `json:"apply_failure_enabled"`
+	BalanceThresholds         []string `json:"balance_thresholds"`
+	ProbeFailureStreak        int      `json:"probe_failure_streak"`
+	ProbeRecoveryStreak       int      `json:"probe_recovery_streak"`
+	ProbeGroups               []string `json:"probe_groups"`
+	DeliveryEnabled           bool     `json:"delivery_enabled"`
+	NotifyRecovery            bool     `json:"notify_recovery"`
+	RecoveryNotificationTypes []string `json:"recovery_notification_types"`
+	RepeatIntervalMinutes     int      `json:"repeat_interval_minutes"`
+	StateChangeCooldown       int      `json:"state_change_cooldown_minutes"`
+	MergeThreshold            int      `json:"merge_threshold"`
 }
 
 func DefaultAlertPolicy() AlertPolicy {
@@ -40,10 +42,23 @@ func DefaultAlertPolicy() AlertPolicy {
 		Enabled: true, ConfigurationEnabled: true, AuthEnabled: true, RateSyncEnabled: true,
 		BalanceEnabled: true, ProbeEnabled: true, BalanceThresholds: []string{"20", "10", "5"},
 		RoutingBreakerEnabled: true, RoutingDegradedEnabled: true, RoutingSurvivorEnabled: true,
+		RoutingDegradedTypes:    append([]string(nil), routingDegradedTypeValues...),
 		GroupUnavailableEnabled: true, GroupSurvivorEnabled: true, ApplyFailureEnabled: true,
 		ProbeFailureStreak: 3, ProbeRecoveryStreak: 3, ProbeGroups: []string{}, DeliveryEnabled: true,
-		NotifyRecovery: true, StateChangeCooldown: 30, MergeThreshold: 10,
+		NotifyRecovery: true, RecoveryNotificationTypes: append([]string(nil), defaultRecoveryNotificationTypes...),
+		StateChangeCooldown: 30, MergeThreshold: 10,
 	}
+}
+
+var routingDegradedTypeValues = []string{"health_score", "gateway_error_rate", "latency", "other"}
+
+var recoveryNotificationTypeValues = []string{
+	"configuration", "auth", "rate_sync", "balance", "probe", "routing_breaker",
+	"routing_degraded", "routing_survivor", "group_unavailable", "group_survivor", "apply_failure",
+}
+
+var defaultRecoveryNotificationTypes = []string{
+	"auth", "balance", "group_unavailable",
 }
 
 func (s *Store) AlertPolicy(ctx context.Context) (AlertPolicy, error) {
@@ -134,14 +149,34 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 			return err
 		}
 	}
+	if policy.RoutingDegradedEnabled {
+		enabledDegradedTypes := valueStringSet(policy.RoutingDegradedTypes...)
+		for _, degradedType := range routingDegradedTypeValues {
+			if _, enabled := enabledDegradedTypes[degradedType]; enabled {
+				continue
+			}
+			causeCode := routingDegradedCauseCode(degradedType)
+			if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='suppressed',last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
+				WHERE status='firing' AND event_type='account.routing_degraded' AND (cause_code=? OR cause_code LIKE ?)`,
+				now, causeCode, causeCode+":%"); err != nil {
+				return err
+			}
+			if degradedType == "other" {
+				if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='suppressed',last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
+					WHERE status='firing' AND event_type='account.routing_degraded' AND (cause_code='ROUTING_DEGRADED' OR cause_code LIKE 'ROUTING_DEGRADED:%')`, now); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
 func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, error) {
 	allowed := valueStringSet("enabled", "configuration_enabled", "auth_enabled", "rate_sync_enabled", "balance_enabled", "probe_enabled",
-		"routing_breaker_enabled", "routing_degraded_enabled", "routing_survivor_enabled", "group_unavailable_enabled",
+		"routing_breaker_enabled", "routing_degraded_enabled", "routing_degraded_types", "routing_survivor_enabled", "group_unavailable_enabled",
 		"group_survivor_enabled", "apply_failure_enabled",
-		"balance_thresholds", "balance_threshold", "probe_failure_streak", "probe_recovery_streak", "probe_groups", "delivery_enabled", "notify_recovery", "repeat_interval_minutes", "state_change_cooldown_minutes", "merge_threshold")
+		"balance_thresholds", "balance_threshold", "probe_failure_streak", "probe_recovery_streak", "probe_groups", "delivery_enabled", "notify_recovery", "recovery_notification_types", "repeat_interval_minutes", "state_change_cooldown_minutes", "merge_threshold")
 	for field := range raw {
 		if _, ok := allowed[field]; !ok {
 			return AlertPolicy{}, fmt.Errorf("告警策略包含未知字段：%s", field)
@@ -208,6 +243,14 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 			groupTexts = append(groupTexts, group)
 		}
 	}
+	routingDegradedTypes, err := normalizedEnumArray("routing_degraded_types", document["routing_degraded_types"], routingDegradedTypeValues)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
+	recoveryNotificationTypes, err := normalizedEnumArray("recovery_notification_types", document["recovery_notification_types"], recoveryNotificationTypeValues)
+	if err != nil {
+		return AlertPolicy{}, err
+	}
 	streak, err := boundedInteger("probe_failure_streak", document["probe_failure_streak"], 1, 100)
 	if err != nil {
 		return AlertPolicy{}, err
@@ -232,12 +275,36 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 		Enabled: booleans["enabled"], ConfigurationEnabled: booleans["configuration_enabled"], AuthEnabled: booleans["auth_enabled"],
 		RateSyncEnabled: booleans["rate_sync_enabled"], BalanceEnabled: booleans["balance_enabled"], ProbeEnabled: booleans["probe_enabled"],
 		RoutingBreakerEnabled: booleans["routing_breaker_enabled"], RoutingDegradedEnabled: booleans["routing_degraded_enabled"],
+		RoutingDegradedTypes:   routingDegradedTypes,
 		RoutingSurvivorEnabled: booleans["routing_survivor_enabled"], GroupUnavailableEnabled: booleans["group_unavailable_enabled"],
 		GroupSurvivorEnabled: booleans["group_survivor_enabled"], ApplyFailureEnabled: booleans["apply_failure_enabled"],
 		BalanceThresholds: thresholdTexts, ProbeFailureStreak: streak, ProbeRecoveryStreak: recoveryStreak, ProbeGroups: groupTexts,
-		DeliveryEnabled: booleans["delivery_enabled"], NotifyRecovery: booleans["notify_recovery"], RepeatIntervalMinutes: repeat,
+		DeliveryEnabled: booleans["delivery_enabled"], NotifyRecovery: booleans["notify_recovery"], RecoveryNotificationTypes: recoveryNotificationTypes, RepeatIntervalMinutes: repeat,
 		StateChangeCooldown: cooldown, MergeThreshold: mergeThreshold,
 	}, nil
+}
+
+func normalizedEnumArray(field string, value any, allowedValues []string) ([]string, error) {
+	items, err := normalizedStringArray(field, value)
+	if err != nil {
+		return nil, err
+	}
+	requested := make(map[string]struct{}, len(items))
+	allowed := valueStringSet(allowedValues...)
+	for _, item := range items {
+		text := item.(string)
+		if _, ok := allowed[text]; !ok {
+			return nil, fmt.Errorf("策略字段 %s 包含不支持的值：%s", field, text)
+		}
+		requested[text] = struct{}{}
+	}
+	result := make([]string, 0, len(requested))
+	for _, value := range allowedValues {
+		if _, ok := requested[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result, nil
 }
 
 func alertPolicyDocument(policy AlertPolicy) map[string]any {
@@ -253,10 +320,20 @@ func alertPolicyDocument(policy AlertPolicy) map[string]any {
 		"enabled": policy.Enabled, "configuration_enabled": policy.ConfigurationEnabled, "auth_enabled": policy.AuthEnabled,
 		"rate_sync_enabled": policy.RateSyncEnabled, "balance_enabled": policy.BalanceEnabled, "probe_enabled": policy.ProbeEnabled,
 		"routing_breaker_enabled": policy.RoutingBreakerEnabled, "routing_degraded_enabled": policy.RoutingDegradedEnabled,
+		"routing_degraded_types":   stringSliceValues(policy.RoutingDegradedTypes),
 		"routing_survivor_enabled": policy.RoutingSurvivorEnabled, "group_unavailable_enabled": policy.GroupUnavailableEnabled,
 		"group_survivor_enabled": policy.GroupSurvivorEnabled, "apply_failure_enabled": policy.ApplyFailureEnabled,
 		"balance_thresholds": thresholds, "probe_failure_streak": int64(policy.ProbeFailureStreak), "probe_recovery_streak": int64(policy.ProbeRecoveryStreak), "probe_groups": groups,
-		"delivery_enabled": policy.DeliveryEnabled, "notify_recovery": policy.NotifyRecovery, "repeat_interval_minutes": int64(policy.RepeatIntervalMinutes),
+		"delivery_enabled": policy.DeliveryEnabled, "notify_recovery": policy.NotifyRecovery,
+		"recovery_notification_types": stringSliceValues(policy.RecoveryNotificationTypes), "repeat_interval_minutes": int64(policy.RepeatIntervalMinutes),
 		"state_change_cooldown_minutes": int64(policy.StateChangeCooldown), "merge_threshold": int64(policy.MergeThreshold),
 	}
+}
+
+func stringSliceValues(values []string) []any {
+	result := make([]any, len(values))
+	for index, value := range values {
+		result[index] = value
+	}
+	return result
 }

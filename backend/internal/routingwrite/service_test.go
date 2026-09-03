@@ -549,8 +549,170 @@ type policyAccessRepository struct {
 
 type protectedRestoreRepository struct{ Repository }
 
+type recordingRoutingRepository struct {
+	Repository
+	mu         sync.Mutex
+	operations []business.AccountOperation
+	events     []string
+}
+
+func (r *recordingRoutingRepository) RecordAccountOperation(_ context.Context, operation business.AccountOperation) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.operations = append(r.operations, operation)
+	return nil
+}
+
+func (r *recordingRoutingRepository) RecordRuntimeEvent(
+	_ context.Context,
+	eventType string,
+	_ string,
+	_ string,
+	_ map[string]any,
+) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, eventType)
+	return int64(len(r.events)), nil
+}
+
+func (r *recordingRoutingRepository) operationCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.operations)
+}
+
+func (r *recordingRoutingRepository) eventCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.events)
+}
+
 func (protectedRestoreRepository) AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error) {
 	return business.AccountMutationProtection{Paused: true}, nil
+}
+
+func TestRecordOperationSkipsRepositoryAfterContextCancellation(t *testing.T) {
+	repository := &recordingRoutingRepository{}
+	service := newTestService(repository, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	service.recordOperation(ctx, business.AccountOperation{OperationID: "cancelled-operation", ObjectID: "41"})
+
+	if repository.operationCount() != 0 {
+		t.Fatal("cancelled operation attempted a repository write")
+	}
+}
+
+func TestRecordRuntimeEventSkipsRepositoryAfterContextCancellation(t *testing.T) {
+	repository := &recordingRoutingRepository{}
+	service := newTestService(repository, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	service.recordRuntimeEvent(ctx, "routing.apply_failed", "failed", "cancelled", nil)
+
+	if repository.eventCount() != 0 {
+		t.Fatal("cancelled runtime event attempted a repository write")
+	}
+}
+
+func TestRecordOperationPersistsBusinessFailureWhileContextIsActive(t *testing.T) {
+	repository := &recordingRoutingRepository{}
+	service := newTestService(repository, nil)
+
+	service.recordOperation(context.Background(), business.AccountOperation{
+		OperationID: "business-failure", ObjectID: "41", State: "failed",
+	})
+
+	if repository.operationCount() != 1 {
+		t.Fatal("active business failure was not recorded")
+	}
+}
+
+func TestRecordRuntimeEventPersistsBusinessFailureWhileContextIsActive(t *testing.T) {
+	repository := &recordingRoutingRepository{}
+	service := newTestService(repository, nil)
+
+	service.recordRuntimeEvent(context.Background(), "routing.apply_failed", "failed", "upstream rejected", nil)
+
+	if repository.eventCount() != 1 {
+		t.Fatal("active business failure event was not recorded")
+	}
+}
+
+func TestApplySkipsPerAccountEventsAfterBatchCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing-cancelled-events.sqlite3")
+	store, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncManagementSnapshot(ctx, []map[string]any{
+		{
+			"id": json.Number("41"), "name": "alpha", "schedulable": true,
+			"priority": json.Number("20"), "load_factor": json.Number("3"), "concurrency": json.Number("4"),
+			"groups": []any{json.Number("7")},
+		},
+		{
+			"id": json.Number("42"), "name": "beta", "schedulable": true,
+			"priority": json.Number("20"), "load_factor": json.Number("3"), "concurrency": json.Number("4"),
+			"groups": []any{json.Number("7")},
+		},
+	}, []map[string]any{{"id": json.Number("7"), "name": "codex"}}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	repository := &recordingRoutingRepository{Repository: store}
+	admin := &batchCoordinatorAdmin{
+		states: map[string]map[string]any{
+			"41": coordinatorState("41", 20),
+			"42": coordinatorState("42", 20),
+		},
+		started: make(chan struct{}, 1), release: make(chan struct{}), ignoreCancellation: true,
+	}
+	service := newTestService(repository, admin)
+	priority := int64(10)
+	applyCtx, cancel := context.WithCancel(ctx)
+	type applyResult struct {
+		result Result
+		err    error
+	}
+	done := make(chan applyResult, 1)
+	go func() {
+		result, applyErr := service.Apply(applyCtx, map[string]business.AccountRoutingTarget{
+			"41": {AccountID: "41", GroupNames: []string{"codex"}, Priority: &priority},
+			"42": {AccountID: "42", GroupNames: []string{"codex"}, Priority: &priority},
+		}, "scheduler")
+		done <- applyResult{result: result, err: applyErr}
+	}()
+	select {
+	case <-admin.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("batch write did not start")
+	}
+	cancel()
+	select {
+	case outcome := <-done:
+		t.Fatalf("apply returned before the remote write completed: %#v", outcome)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(admin.release)
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || outcome.result.Failed != 2 {
+			t.Fatalf("cancelled apply result=%#v err=%v", outcome.result, outcome.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("apply did not return after the remote write completed")
+	}
+	if repository.eventCount() != 0 {
+		t.Fatalf("cancelled apply recorded %d per-account runtime events", repository.eventCount())
+	}
 }
 
 func (r *policyAccessRepository) ControlPolicy(context.Context) (map[string]any, error) {

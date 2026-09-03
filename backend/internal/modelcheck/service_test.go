@@ -19,9 +19,10 @@ import (
 )
 
 type recordingTasks struct {
-	mu       sync.Mutex
-	tasks    []taskstore.Task
-	terminal chan taskstore.Task
+	mu        sync.Mutex
+	tasks     []taskstore.Task
+	terminal  chan taskstore.Task
+	listLimit int
 }
 
 func (store *recordingTasks) Save(_ context.Context, task taskstore.Task) error {
@@ -37,13 +38,17 @@ func (store *recordingTasks) Save(_ context.Context, task taskstore.Task) error 
 	return nil
 }
 
-func (store *recordingTasks) ListBySkill(_ context.Context, skill string) ([]taskstore.Task, error) {
+func (store *recordingTasks) ListBySkill(_ context.Context, skill string, limit int) ([]taskstore.Task, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.listLimit = limit
 	result := make([]taskstore.Task, 0, len(store.tasks))
 	for _, task := range store.tasks {
 		if task.Skill == skill {
 			result = append(result, task)
+			if len(result) == limit {
+				break
+			}
 		}
 	}
 	return result, nil
@@ -90,6 +95,9 @@ func TestAccountStatusesUseLatestModelCheckResultPerAccount(t *testing.T) {
 	}
 	if byID["41"].TaskID != "completed" || byID["41"].CheckedAt != "2026-08-31T02:00:00Z" {
 		t.Fatalf("running task must not replace the latest completed verdict: %#v", byID["41"])
+	}
+	if store.listLimit != accountStatusTaskLimit {
+		t.Fatalf("history limit=%d want=%d", store.listLimit, accountStatusTaskLimit)
 	}
 }
 

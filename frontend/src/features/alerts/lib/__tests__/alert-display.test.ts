@@ -43,6 +43,11 @@ describe("alert display labels", () => {
     expect(alertCauseLabel("BALANCE:5")).toBe("余额已达到或低于告警阈值 5");
   });
 
+  it("uses resolved wording after a balance alert recovers", () => {
+    expect(alertTypeLabel("upstream.balance", "recovered")).toBe("上游余额恢复");
+    expect(alertCauseLabel("BALANCE:10", "recovered")).toBe("余额已高于告警阈值 10");
+  });
+
   it("renders the concrete rate-sync failure reason", () => {
     expect(alertCauseLabel("RATE_SYNC:上游分组 auto 倍率不是有限数值")).toBe(
       "上游倍率同步失败：上游分组 auto 倍率不是有限数值",

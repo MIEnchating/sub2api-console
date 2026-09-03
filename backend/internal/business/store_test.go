@@ -27,7 +27,7 @@ func TestOpenCreatesAndRepairsPerformanceIndexes(t *testing.T) {
 		"ix_health_samples_probe_recent",
 		"ix_health_samples_recent",
 		"ix_operation_audit_apply_error_recent",
-		"ix_operation_audit_log_recent",
+		"ix_operation_audit_log_recent_v2",
 		"ix_operation_audit_recent",
 		"ix_operation_audit_routing_lookup",
 		"ix_operation_audit_type_object_recent",

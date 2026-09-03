@@ -105,6 +105,38 @@ func (s *Store) ReconcileDeletedUpstreamKeyProjection(
 	return tx.Commit()
 }
 
+func (s *Store) ReconcileDeletedUnboundUpstreamKeyProjection(ctx context.Context, host, keyID string) error {
+	host, keyID = canonicalHost(host), strings.TrimSpace(keyID)
+	if host == "" || keyID == "" {
+		return errors.New("上游 Host 和 Key ID 不能为空")
+	}
+	if err := s.ensureUpstreamIdentities(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	upstreamID, _, err := upstreamIdentityHostsForQueryer(ctx, tx, host)
+	if err != nil {
+		return err
+	}
+	protected, err := upstreamKeyProtectedForQueryer(ctx, tx, host, keyID)
+	if err != nil {
+		return err
+	}
+	if protected {
+		return errors.New("上游 Key 仍被账号绑定或开户待续引用，拒绝清理本地投影")
+	}
+	if err := deleteUpstreamKeyProjection(ctx, tx, AccountDeleteScope{
+		UpstreamID: upstreamID, UpstreamKeyID: keyID,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) DeleteAccountProjectionWithScope(
 	ctx context.Context,
 	accountID string,

@@ -204,6 +204,12 @@ func (s *Service) executeKeyCleanup(parent context.Context, task taskstore.Task,
 			appendAuditedResult(key, "failed", safeError(cause), true, false, true, cause)
 			continue
 		}
+		if projectionErr := s.repository.ReconcileDeletedUnboundUpstreamKeyProjection(ctx, host, keyID); projectionErr != nil {
+			cause := fmt.Errorf("上游 Key 已删除，但本地投影清理失败：%w", projectionErr)
+			failed++
+			appendAuditedResult(key, "failed", safeError(cause), true, true, true, cause)
+			continue
+		}
 		deleted++
 		reason := ""
 		if deleteErr != nil {

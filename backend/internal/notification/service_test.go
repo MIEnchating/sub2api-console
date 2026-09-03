@@ -554,15 +554,22 @@ func TestNotificationBatchesMergeOnlyWhenAlertCountReachesThreshold(t *testing.T
 }
 
 func TestNotificationBatchesMergeSmallRoutingDegradationDigest(t *testing.T) {
-	incidents := make([]business.AlertIncident, 3)
-	for index := range incidents {
-		group := fmt.Sprintf("group-%d", index%2)
-		incidents[index] = business.AlertIncident{
-			IncidentKey: fmt.Sprintf("console:routing:degraded:%d:%s", index, group),
-			EventType:   "account.routing_degraded", ObjectKind: "account", ObjectID: fmt.Sprint(index),
-			CauseCode: "ROUTING_DEGRADED:健康分下降", Status: "firing",
-			LastSeenAt: "2026-08-30T12:00:00Z",
-		}
+	incidents := []business.AlertIncident{
+		{
+			IncidentKey: "console:routing:degraded:1:group-0", EventType: "account.routing_degraded",
+			ObjectKind: "account", ObjectID: "1", CauseCode: "ROUTING_DEGRADED_LATENCY:延迟超标达到阈值，仅降级",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:degraded:2:group-1", EventType: "account.routing_degraded",
+			ObjectKind: "account", ObjectID: "2", CauseCode: "ROUTING_DEGRADED_LATENCY:延迟超标达到阈值，仅降级",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
+		{
+			IncidentKey: "console:routing:degraded:3:group-1", EventType: "account.routing_degraded",
+			ObjectKind: "account", ObjectID: "3", CauseCode: "ROUTING_DEGRADED_HEALTH_SCORE:健康分低于降级线 75",
+			Status: "firing", LastSeenAt: "2026-08-30T12:00:00Z",
+		},
 	}
 
 	batches := NotificationBatches(incidents, 10)
@@ -572,6 +579,14 @@ func TestNotificationBatchesMergeSmallRoutingDegradationDigest(t *testing.T) {
 	if !strings.Contains(batches[0].Message, "3 个账号") ||
 		strings.Count(batches[0].Message, "账号进入降级状态") != 1 {
 		t.Fatalf("small degradation wave was not rendered as one digest: %s", batches[0].Message)
+	}
+	for _, expected := range []string{"延迟超标达到阈值，仅降级（2 个账号）", "健康分低于降级线 75（1 个账号）"} {
+		if !strings.Contains(batches[0].Message, expected) {
+			t.Fatalf("small degradation digest is missing cause summary %q: %s", expected, batches[0].Message)
+		}
+	}
+	if strings.Contains(batches[0].Message, "批量状态变化") {
+		t.Fatalf("small degradation digest replaced concrete causes with a generic label: %s", batches[0].Message)
 	}
 }
 
@@ -800,6 +815,11 @@ func TestAlertDeliverySendsRelatedRoutingIncidentsOnceAndFinalizesBoth(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repository.Close() })
+	policy := defaultAlertPolicyPayload(t)
+	policy["recovery_notification_types"] = []any{"routing_survivor", "group_survivor"}
+	if _, err := repository.UpdateAlertPolicy(context.Background(), policy); err != nil {
+		t.Fatal(err)
+	}
 	settings := &staticSettings{value: configstore.NotificationSettings{
 		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
 	}}
@@ -833,6 +853,29 @@ func TestNotificationMessageUsesAccountNameAndExactBalanceBoundary(t *testing.T)
 	}})
 	if !strings.Contains(message, "主账号") || !strings.Contains(message, "\\#41") || !strings.Contains(message, "余额达到或低于 5") {
 		t.Fatalf("notification message is ambiguous: %s", message)
+	}
+}
+
+func TestRecoveryNotificationUsesResolvedBalanceWording(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "console:balance:api.example:10", EventType: "upstream.balance", ObjectKind: "host",
+		ObjectID: "api.example", CauseCode: "BALANCE:10", Status: "recovered",
+		LastSeenAt: "2026-08-26T08:00:00Z",
+	}})
+	for _, expected := range []string{
+		"## Sub2API · 恢复通知",
+		"| 告警类型 | 上游余额恢复 |",
+		"| 原因 | 余额已高于告警阈值 10 |",
+		"| 状态 | 已恢复 |",
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("balance recovery notification missing %q: %s", expected, message)
+		}
+	}
+	for _, stale := range []string{"上游余额不足", "余额达到或低于 10"} {
+		if strings.Contains(message, stale) {
+			t.Fatalf("balance recovery notification retained stale alert wording %q: %s", stale, message)
+		}
 	}
 }
 
@@ -953,6 +996,41 @@ func TestRecoverySuppressedByPolicyIsNotReplayedAfterReenable(t *testing.T) {
 	}
 	if second.Attempted != 0 || second.Suppressed != 1 || len(sender.messages) != 1 {
 		t.Fatalf("stale recovery was replayed after re-enable: result=%#v messages=%#v", second, sender.messages)
+	}
+}
+
+func TestRecoveryNotificationTypesSuppressNoisyRecoveries(t *testing.T) {
+	path := createAlertDatabase(t)
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	ctx := context.Background()
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.ExecContext(ctx, `UPDATE alert_incidents SET status='recovered';
+		UPDATE alert_incidents SET event_type='account.probe',cause_code='PROBE' WHERE incident_key='incident-2'`); err != nil {
+		t.Fatal(err)
+	}
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	result, err := service.Deliver(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Attempted != 1 || result.Sent != 1 || result.Suppressed != 1 || len(sender.messages) != 1 {
+		t.Fatalf("recovery type filter result=%#v messages=%#v", result, sender.messages)
+	}
+	if !strings.Contains(sender.messages[0], "上游鉴权失效") || strings.Contains(sender.messages[0], "主动探测") {
+		t.Fatalf("unexpected recovery message: %s", sender.messages[0])
 	}
 }
 

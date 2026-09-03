@@ -65,6 +65,7 @@ import { z } from "zod";
 import {
   api,
   type AccountControlAction,
+  type AccountDeleteBatchPreview,
   type AccountDeletePreview,
   type AccountStatus,
   type AutoInspectionConfig,
@@ -221,6 +222,10 @@ import { UpstreamEditDialog } from "./features/upstreams/components/upstream-edi
 import { UpstreamBoundAccountSelect } from "./features/upstreams/components/upstream-bound-account-select";
 import { OnboardingHeadingActions } from "./features/upstreams/components/onboarding-heading-actions";
 import { OnboardingMaintenanceActions } from "./features/upstreams/components/onboarding-maintenance-actions";
+import {
+  NavigationSettingsCard,
+  type NavigationSettingsSection,
+} from "./features/config/components/navigation-settings-card";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
 import { UpstreamGroupBindingEditor } from "./features/upstreams/components/upstream-group-binding-editor";
@@ -263,6 +268,12 @@ import {
   accountMatchesPoolFilter,
   type AccountPoolFilter,
 } from "./features/accounts/lib/account-pool";
+import {
+  pruneAccountSelection,
+  sameAccountSelection,
+  updateAccountSelection,
+} from "./features/accounts/lib/account-selection";
+import { applyAccountDeletionProgress } from "./features/accounts/lib/account-deletion-progress";
 import { groupPlatformSummary } from "./features/accounts/lib/account-labels";
 import {
   authModesForPlatform,
@@ -275,6 +286,11 @@ import {
   vaultEntriesForHost,
   vaultEntryLabel,
 } from "./lib/vault-entry-label";
+import {
+  readHiddenNavigationItemIDs,
+  visibleNavigationSections,
+  writeHiddenNavigationItemIDs,
+} from "./lib/navigation-preferences";
 import {
   adjacentOnboardingUpstreams,
   canSubmitOnboarding,
@@ -444,6 +460,19 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
   { label: "系统管理", itemIDs: ["vault", "logs", "config"] },
 ];
 
+const navigationItemIDs = navItems.map((item) => item.id);
+const lockedNavigationItemIDs = new Set<View>(["config"]);
+const emptyHiddenNavigationItemIDs = new Set<View>();
+const navigationSettingsSections: Array<NavigationSettingsSection<View>> = navSections.map(
+  (section) => ({
+    label: section.label,
+    items: section.itemIDs.flatMap((itemID) => {
+      const item = navItems.find((candidate) => candidate.id === itemID);
+      return item ? [{ id: item.id, label: item.label, path: item.to }] : [];
+    }),
+  }),
+);
+
 const viewByPath: Record<string, View> = {
   "/": "overview",
   "/accounts": "accounts",
@@ -482,6 +511,12 @@ function App() {
     if (typeof window === "undefined") return "dark";
     return window.localStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
   });
+  const [hiddenNavigationItemIDs, setHiddenNavigationItemIDs] = useState<Set<View>>(() => {
+    if (typeof window === "undefined") return new Set();
+    return readHiddenNavigationItemIDs(window.localStorage, navigationItemIDs, [
+      ...lockedNavigationItemIDs,
+    ]);
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const shouldReduceMotion = useReducedMotion();
@@ -491,6 +526,10 @@ function App() {
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem("sub2api-console-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    writeHiddenNavigationItemIDs(window.localStorage, hiddenNavigationItemIDs, navigationItemIDs);
+  }, [hiddenNavigationItemIDs]);
   useEffect(() => {
     const handleSessionExpired = () => {
       queryClient.removeQueries({
@@ -566,6 +605,19 @@ function App() {
     );
 
   const activeView = viewForPath(location.pathname);
+  const displayedNavigationSections = visibleNavigationSections(
+    navSections,
+    hiddenNavigationItemIDs,
+  );
+  function setNavigationItemVisibility(itemID: View, visible: boolean) {
+    if (lockedNavigationItemIDs.has(itemID)) return;
+    setHiddenNavigationItemIDs((current) => {
+      const next = new Set(current);
+      if (visible) next.delete(itemID);
+      else next.add(itemID);
+      return next;
+    });
+  }
   return (
     <>
       <SidebarProvider className="h-svh max-h-svh flex-col overflow-hidden" defaultOpen>
@@ -651,7 +703,7 @@ function App() {
           </div>
         </header>
         <div className="flex min-h-0 w-full flex-1">
-          <ConsoleSidebar activeView={activeView} />
+          <ConsoleSidebar activeView={activeView} sections={displayedNavigationSections} />
           <SidebarInset className="@container/content h-[calc(100svh-var(--app-header-height,0px))] min-h-0 overflow-hidden peer-data-[variant=inset]:h-[calc(100svh-var(--app-header-height,0px)-(var(--spacing)*4))]">
             <motion.div
               key={activeView}
@@ -703,7 +755,13 @@ function App() {
               {activeView === "trace" && <RequestTracePage />}
               {activeView === "vault" && <VaultPage />}
               {activeView === "profile" && <ProfilePage />}
-              {activeView === "config" && <ConfigPage />}
+              {activeView === "config" && (
+                <ConfigPage
+                  hiddenNavigationItemIDs={hiddenNavigationItemIDs}
+                  onNavigationItemVisibilityChange={setNavigationItemVisibility}
+                  onResetNavigation={() => setHiddenNavigationItemIDs(new Set())}
+                />
+              )}
               {activeView === "policy" && <PolicyPage />}
             </motion.div>
           </SidebarInset>
@@ -713,11 +771,14 @@ function App() {
   );
 }
 
-function ConsoleSidebar(props: { activeView: View }) {
+function ConsoleSidebar(props: {
+  activeView: View;
+  sections: Array<{ label: string; itemIDs: View[] }>;
+}) {
   return (
     <Sidebar variant="inset" collapsible="icon">
       <SidebarContent className="py-2">
-        {navSections.map((section) => (
+        {props.sections.map((section) => (
           <SidebarGroup key={section.label} className="px-2 py-1">
             <SidebarGroupLabel className="text-muted-foreground/70 px-2 text-[11px] font-medium tracking-wider uppercase">
               {section.label}
@@ -2035,16 +2096,16 @@ export function UpstreamsPage() {
   }, [groups.data]);
   useEffect(() => {
     if (!groupBindingTask.data || !taskStopsPolling(groupBindingTask.data)) return;
+    void Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["upstream-groups", selectedHost],
+      }),
+      queryClient.invalidateQueries({ queryKey: ["accounts"] }),
+      queryClient.invalidateQueries({ queryKey: ["groups"] }),
+    ]);
+    setGroupBindings({});
     if (groupBindingTask.data.status === "succeeded") {
       toast.success(groupBindingTask.data.message || "账号分组绑定变更已完成");
-      void Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: ["upstream-groups", selectedHost],
-        }),
-        queryClient.invalidateQueries({ queryKey: ["accounts"] }),
-        queryClient.invalidateQueries({ queryKey: ["groups"] }),
-      ]);
-      setGroupBindings({});
     } else {
       toast.error(groupBindingTask.data.message || "账号分组绑定变更失败");
     }
@@ -3405,6 +3466,7 @@ export function ManualAuthForm(props: {
 
 export function AccountsPage() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const upstreams = useQuery({ queryKey: ["upstreams"], queryFn: api.upstreams });
   const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
   const queryClient = useQueryClient();
   const rows = accounts.data ?? [];
@@ -3425,14 +3487,19 @@ export function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<AccountPoolFilter>("all");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(() => new Set());
   const [baseURLCheckOpen, setBaseURLCheckOpen] = useState(false);
   const [baseURLCheckTaskId, setBaseURLCheckTaskId] = useState<string | null>(null);
+  const [baseURLCheckAccountIds, setBaseURLCheckAccountIds] = useState<string[]>([]);
   const [baseURLCheckResultsReady, setBaseURLCheckResultsReady] = useState(false);
   const [baseURLRepairAccountId, setBaseURLRepairAccountId] = useState<string | null>(null);
   const [baseURLRepairKind, setBaseURLRepairKind] = useState<"base_url" | "upstream_host" | null>(
     null,
   );
   const [baseURLRepairTaskId, setBaseURLRepairTaskId] = useState<string | null>(null);
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  const [batchDeleteAccountIds, setBatchDeleteAccountIds] = useState<string[]>([]);
+  const [batchDeleteTaskId, setBatchDeleteTaskId] = useState<string | null>(null);
   const groupOptions = Array.from(new Set(rows.flatMap((account) => account.groups))).sort((a, b) =>
     a.localeCompare(b),
   );
@@ -3463,13 +3530,32 @@ export function AccountsPage() {
       (!typeFilter ||
         accountTypeValue(account.account_type ?? account.upstream_type) === typeFilter),
   );
-  const pagination = useClientPagination(filteredRows, 50);
+  const pagination = useClientPagination(filteredRows, 20);
   const pageRows = pagination.visibleItems;
+  const pageAccountIds = pageRows.map((account) => account.id);
+  const selectedRows = rows.filter((account) => selectedAccountIds.has(account.id));
+  const selectedAccountIDs = selectedRows.map((account) => account.id);
   const automaticAccountRows = filteredRows.filter((account) => account.manual_priority == null);
   const automaticAccountIDs = automaticAccountRows.map((account) => account.id);
   const rateSyncAccountIDs = filteredRows.map((account) => account.id);
+  const allPageSelected =
+    pageAccountIds.length > 0 &&
+    pageAccountIds.every((accountId) => selectedAccountIds.has(accountId));
+  const somePageSelected = pageAccountIds.some((accountId) => selectedAccountIds.has(accountId));
+  const allFilteredSelected =
+    filteredRows.length > 0 && filteredRows.every((account) => selectedAccountIds.has(account.id));
+  const baseURLCheckRows = rows.filter((account) => baseURLCheckAccountIds.includes(account.id));
+  useEffect(() => {
+    setSelectedAccountIds((current) => {
+      const next = pruneAccountSelection(
+        current,
+        rows.map((account) => account.id),
+      );
+      return sameAccountSelection(current, next) ? current : next;
+    });
+  }, [rows]);
   const baseURLCheckMutation = useMutation({
-    mutationFn: () => api.checkAccountConfiguration(automaticAccountIDs),
+    mutationFn: (accountIds: string[]) => api.checkAccountConfiguration(accountIds),
     onSuccess: (task) => setBaseURLCheckTaskId(task.id),
     onError: (error) => notifyOperationError(error, "配置校验与修复启动失败"),
   });
@@ -3481,6 +3567,28 @@ export function AccountsPage() {
   });
   const baseURLCheckPending =
     baseURLCheckMutation.isPending || taskIsPending(baseURLCheckTaskId, baseURLCheckTask);
+  const batchDeletePreview = useQuery({
+    queryKey: ["account-delete-batch-preview", batchDeleteAccountIds],
+    queryFn: () => api.accountDeleteBatchPreview(batchDeleteAccountIds),
+    enabled: batchDeleteOpen && batchDeleteAccountIds.length > 0 && batchDeleteTaskId === null,
+    retry: false,
+  });
+  const batchDeleteMutation = useMutation({
+    mutationFn: (preview: AccountDeleteBatchPreview) => api.deleteAccounts(preview),
+    onSuccess: (task) => setBatchDeleteTaskId(task.id),
+    onError: (error) => notifyOperationError(error, "账号批量删除启动失败"),
+  });
+  const batchDeleteTask = useQuery({
+    queryKey: ["account-delete-batch", batchDeleteTaskId],
+    queryFn: () => api.task(batchDeleteTaskId!),
+    enabled: Boolean(batchDeleteTaskId),
+    refetchInterval: taskPollInterval,
+  });
+  const batchDeletePending =
+    batchDeleteMutation.isPending || taskIsPending(batchDeleteTaskId, batchDeleteTask);
+  useEffect(() => {
+    applyAccountDeletionProgress(queryClient, batchDeleteTask.data);
+  }, [batchDeleteTask.data?.updated_at, queryClient]);
   const baseURLRepairMutation = useMutation({
     mutationFn: (input: { accountId: string; kind: "base_url" | "upstream_host" }) =>
       input.kind === "base_url"
@@ -3528,18 +3636,37 @@ export function AccountsPage() {
     setBaseURLRepairAccountId(null);
     setBaseURLRepairKind(null);
   }, [baseURLRepairTask.data?.status, baseURLRepairKind, queryClient]);
+  useEffect(() => {
+    if (!taskStopsPolling(batchDeleteTask.data)) return;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["accounts"] }),
+      queryClient.invalidateQueries({ queryKey: ["upstreams"] }),
+      queryClient.invalidateQueries({ queryKey: ["onboarding-candidates"] }),
+    ]);
+  }, [batchDeleteTask.data?.status, queryClient]);
   function startBaseURLCheck() {
+    const accountIds = [...automaticAccountIDs];
+    if (accountIds.length === 0) return;
     setBaseURLCheckOpen(true);
     if (baseURLCheckPending) return;
+    setBaseURLCheckAccountIds(accountIds);
     setBaseURLCheckTaskId(null);
     setBaseURLCheckResultsReady(false);
     baseURLCheckMutation.reset();
-    baseURLCheckMutation.mutate();
+    baseURLCheckMutation.mutate(accountIds);
+  }
+  function startBatchDelete() {
+    if (selectedAccountIDs.length === 0) return;
+    setBatchDeleteAccountIds([...selectedAccountIDs]);
+    setBatchDeleteTaskId(null);
+    batchDeleteMutation.reset();
+    setBatchDeleteOpen(true);
   }
   const [maintenanceKind, setMaintenanceKind] = useState<
     "balance" | "rate" | "revalidate" | "repair" | "cleanup" | null
   >(null);
   const [maintenanceTaskId, setMaintenanceTaskId] = useState<string | null>(null);
+  const [maintenanceAccountIds, setMaintenanceAccountIds] = useState<string[]>([]);
   const [missingBindingTargets, setMissingBindingTargets] = useState<AccountMaintenanceItem[]>([]);
   const maintenanceMutation = useMutation({
     mutationFn: (input: {
@@ -3563,6 +3690,7 @@ export function AccountsPage() {
   });
   const maintenancePending =
     maintenanceMutation.isPending || taskIsPending(maintenanceTaskId, maintenanceTask);
+  const batchOperationPending = maintenancePending || baseURLCheckPending || batchDeletePending;
   useEffect(() => {
     if (!taskStopsPolling(maintenanceTask.data)) return;
     void Promise.all([
@@ -3572,16 +3700,19 @@ export function AccountsPage() {
     ]);
   }, [maintenanceTask.data?.status, queryClient]);
   function startMaintenance(kind: "balance" | "rate" | "revalidate" | "repair") {
+    const accountIds = kind === "rate" ? [...rateSyncAccountIDs] : [...automaticAccountIDs];
+    if (kind !== "balance" && accountIds.length === 0) return;
     setMaintenanceKind(kind);
+    setMaintenanceAccountIds(accountIds);
     setMaintenanceTaskId(null);
     maintenanceMutation.reset();
-    if (kind !== "repair") {
-      maintenanceMutation.mutate({
-        kind,
-        accountIds: kind === "rate" ? rateSyncAccountIDs : automaticAccountIDs,
-      });
+    if (kind !== "repair" && kind !== "balance") {
+      maintenanceMutation.mutate({ kind, accountIds });
     }
   }
+  const maintenanceAccountRows = rows.filter((account) =>
+    maintenanceAccountIds.includes(account.id),
+  );
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -3592,43 +3723,51 @@ export function AccountsPage() {
           <PageActions>
             <Button
               variant="outline"
-              disabled={accounts.isLoading || automaticAccountIDs.length === 0}
-              onClick={startBaseURLCheck}
-            >
-              <ScanSearch className={baseURLCheckPending ? "animate-pulse" : ""} size={16} />
-              {baseURLCheckPending ? "配置校验中" : "配置校验与修复"}
-            </Button>
-            <Button
-              variant="outline"
               disabled={maintenancePending}
               onClick={() => startMaintenance("balance")}
             >
               <WalletCards size={16} />
-              同步余额
+              同步全部上游余额
             </Button>
             <Button
               variant="outline"
-              disabled={maintenancePending || rateSyncAccountIDs.length === 0}
+              disabled={batchOperationPending || automaticAccountIDs.length === 0}
+              onClick={startBaseURLCheck}
+            >
+              <ScanSearch />
+              配置校验与修复
+            </Button>
+            <Button
+              variant="outline"
+              disabled={batchOperationPending || rateSyncAccountIDs.length === 0}
               onClick={() => startMaintenance("rate")}
             >
-              <RefreshCw size={16} />
+              <RefreshCw />
               同步倍率
             </Button>
             <Button
               variant="outline"
-              disabled={maintenancePending || automaticAccountIDs.length === 0}
+              disabled={batchOperationPending || automaticAccountIDs.length === 0}
               onClick={() => startMaintenance("revalidate")}
             >
-              <BadgeCheck size={16} />
-              批量复验
+              <BadgeCheck />
+              复验绑定
             </Button>
             <Button
               variant="outline"
-              disabled={maintenancePending || automaticAccountIDs.length === 0}
+              disabled={batchOperationPending || automaticAccountIDs.length === 0}
               onClick={() => startMaintenance("repair")}
             >
-              <SpellCheck2 size={16} />
+              <SpellCheck2 />
               命名修复
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={batchOperationPending || selectedAccountIDs.length === 0}
+              onClick={startBatchDelete}
+            >
+              <Trash2 />
+              批量删除{selectedAccountIDs.length > 0 ? `（${selectedAccountIDs.length}）` : ""}
             </Button>
           </PageActions>
         }
@@ -3670,8 +3809,50 @@ export function AccountsPage() {
               pagination.setCurrentPage(1);
             }}
           />
+          <span className="text-muted-foreground text-xs tabular-nums" role="status">
+            已选 {selectedAccountIds.size} 个
+          </span>
+          {!allFilteredSelected && filteredRows.length > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setSelectedAccountIds((current) =>
+                  updateAccountSelection(
+                    current,
+                    filteredRows.map((account) => account.id),
+                    true,
+                  ),
+                )
+              }
+            >
+              <Check />
+              选择筛选结果
+            </Button>
+          ) : null}
+          {selectedAccountIds.size > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedAccountIds(new Set())}
+            >
+              <X />
+              清空选择
+            </Button>
+          ) : null}
           <Tooltip>
-            <TooltipTrigger render={<span className="ml-auto inline-flex" />}>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    "inline-flex",
+                    filteredRows.length === 0 && selectedAccountIds.size === 0 && "ml-auto",
+                  )}
+                />
+              }
+            >
               <Button
                 type="button"
                 variant="outline"
@@ -3687,9 +3868,22 @@ export function AccountsPage() {
           </Tooltip>
         </TableFilterToolbar>
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1500px]">
+          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1540px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
+                <TableHead className="w-10 px-3">
+                  <Checkbox
+                    checked={allPageSelected}
+                    indeterminate={somePageSelected && !allPageSelected}
+                    disabled={pageAccountIds.length === 0}
+                    aria-label={allPageSelected ? "取消选择当前页账号" : "选择当前页账号"}
+                    onCheckedChange={(checked) =>
+                      setSelectedAccountIds((current) =>
+                        updateAccountSelection(current, pageAccountIds, checked),
+                      )
+                    }
+                  />
+                </TableHead>
                 <TableHead className="w-64">账号</TableHead>
                 <TableHead className="w-32">Sub2API 状态</TableHead>
                 <TableHead className="w-28">Key 状态</TableHead>
@@ -3707,7 +3901,7 @@ export function AccountsPage() {
               {accounts.isLoading &&
                 Array.from({ length: 6 }, (_, row) => (
                   <TableRow key={`loading:${row}`}>
-                    <TableCell colSpan={11}>
+                    <TableCell colSpan={12}>
                       <div className="flex items-center gap-3 py-2">
                         {Array.from({ length: 11 }, (_, column) => (
                           <Skeleton
@@ -3721,7 +3915,7 @@ export function AccountsPage() {
                 ))}
               {!accounts.isLoading && !filteredRows.length && (
                 <TableRow>
-                  <TableCell colSpan={11}>
+                  <TableCell colSpan={12}>
                     <EmptyRow
                       text={
                         search || statusFilter !== "all" || groupFilter || typeFilter
@@ -3739,6 +3933,12 @@ export function AccountsPage() {
                     account={account}
                     accounts={rows}
                     reservedMax={reservedMax}
+                    selected={selectedAccountIds.has(account.id)}
+                    onSelectedChange={(selected) =>
+                      setSelectedAccountIds((current) =>
+                        updateAccountSelection(current, [account.id], selected),
+                      )
+                    }
                   />
                 ))}
             </TableBody>
@@ -3838,7 +4038,7 @@ export function AccountsPage() {
                   />
                 </div>
                 <BaseURLCheckResults
-                  accounts={filteredRows}
+                  accounts={baseURLCheckRows}
                   running={baseURLCheckPending}
                   repairing={baseURLRepairPending}
                   repairingAccountId={baseURLRepairAccountId}
@@ -3862,6 +4062,7 @@ export function AccountsPage() {
           if (!open && !maintenancePending) {
             setMaintenanceKind(null);
             setMaintenanceTaskId(null);
+            setMaintenanceAccountIds([]);
             setMissingBindingTargets([]);
             maintenanceMutation.reset();
           }
@@ -3875,26 +4076,52 @@ export function AccountsPage() {
           <DialogHeader>
             <DialogTitle>
               {maintenanceKind === "balance"
-                ? "同步账号余额"
+                ? "同步全部上游余额"
                 : maintenanceKind === "rate"
                   ? "同步账号倍率"
                   : maintenanceKind === "revalidate"
-                    ? "批量复验绑定"
+                    ? "复验账号绑定"
                     : maintenanceKind === "cleanup"
                       ? "修复失效绑定"
                       : "账号命名修复"}
             </DialogTitle>
-            {maintenanceKind !== "balance" && (
-              <DialogDescription>
-                {maintenanceKind === "cleanup"
+            <DialogDescription>
+              {maintenanceKind === "balance"
+                ? `将读取${upstreams.data ? `全部 ${upstreams.data.total_hosts} 个` : "全部已配置"}上游 Host 的最新余额。为避免重复请求，同一时间只允许一轮余额同步。`
+                : maintenanceKind === "cleanup"
                   ? `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`
                   : maintenanceKind === "rate"
-                    ? `将使用账号凭据向上游探测 ${rateSyncAccountIDs.length} 个账号当前有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`
-                    : `当前筛选结果中有 ${automaticAccountIDs.length} 个自动管理账号，只处理其中已有绑定的账号。`}
-              </DialogDescription>
-            )}
+                    ? `将使用账号凭据向上游探测当前筛选结果中的 ${maintenanceAccountIds.length} 个账号有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`
+                    : `将处理当前筛选结果中的 ${maintenanceAccountIds.length} 个自动管理账号，只处理其中已有绑定的账号。`}
+            </DialogDescription>
           </DialogHeader>
           <DialogBody className={cn(maintenanceTask.data && "overflow-hidden pr-0")}>
+            {maintenanceKind === "balance" &&
+              !maintenanceTaskId &&
+              !maintenanceMutation.isPending &&
+              !maintenanceMutation.error && (
+                <div className="grid gap-4">
+                  <div className="border-warning/40 bg-warning/10 rounded-lg border px-4 py-3 text-sm leading-6">
+                    此操作会访问全部已配置上游，不受当前账号筛选条件影响。任务运行期间再次发起同类同步会被拒绝。
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+                    <Button variant="outline" onClick={() => setMaintenanceKind(null)}>
+                      取消
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        maintenanceMutation.mutate({
+                          kind: "balance",
+                          accountIds: [],
+                        })
+                      }
+                    >
+                      <WalletCards size={16} />
+                      确认同步全部上游余额
+                    </Button>
+                  </div>
+                </div>
+              )}
             {maintenanceKind === "repair" &&
               !maintenanceTaskId &&
               !maintenanceMutation.isPending &&
@@ -3904,7 +4131,7 @@ export function AccountsPage() {
                     将按最新站点名称和账号倍率修复管理平台账号名称。名称已经正确、没有绑定或管理平台不存在的账号不会写入。
                   </div>
                   <div className="max-h-56 min-w-0 divide-y overflow-x-hidden overflow-y-auto rounded-lg border">
-                    {automaticAccountRows.map((account) => (
+                    {maintenanceAccountRows.map((account) => (
                       <div className="min-w-0 px-3 py-2.5 text-sm" key={account.id}>
                         <strong className="block truncate">
                           {account.name || `账号 ${account.id}`}
@@ -3923,12 +4150,12 @@ export function AccountsPage() {
                       onClick={() =>
                         maintenanceMutation.mutate({
                           kind: "repair",
-                          accountIds: automaticAccountIDs,
+                          accountIds: maintenanceAccountIds,
                         })
                       }
                     >
                       <SpellCheck2 size={16} />
-                      确认修复 {automaticAccountIDs.length} 个自动管理账号
+                      确认修复 {maintenanceAccountIds.length} 个自动管理账号
                     </Button>
                   </div>
                 </div>
@@ -4007,7 +4234,194 @@ export function AccountsPage() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={batchDeleteOpen}
+        onOpenChange={(open) => {
+          if (!open && !batchDeletePending) {
+            setBatchDeleteOpen(false);
+            setBatchDeleteAccountIds([]);
+            setBatchDeleteTaskId(null);
+            batchDeleteMutation.reset();
+          }
+        }}
+      >
+        <DialogContent
+          width="wide"
+          height="large"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
+          <DialogHeader>
+            <DialogTitle>批量删除账号</DialogTitle>
+            <DialogDescription>
+              删除将按稳定 ID 清理管理平台账号、Console 本地记录和可确认的独占上游
+              Key，此操作不可撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="overflow-hidden pr-0">
+            {batchDeletePreview.isLoading && !batchDeleteTaskId ? (
+              <TaskStartupState message="正在读取批量删除影响范围" />
+            ) : null}
+            {batchDeletePreview.error && !batchDeleteTaskId ? (
+              <QueryError
+                error={batchDeletePreview.error}
+                fallback="批量删除影响范围读取失败"
+                embedded
+              />
+            ) : null}
+            {batchDeletePreview.data && !batchDeleteTaskId && !batchDeleteMutation.isPending ? (
+              <div className="flex h-full min-h-0 flex-col gap-4 pr-4">
+                <div className="border-destructive/40 bg-destructive/10 rounded-lg border px-4 py-3 text-sm text-destructive">
+                  将删除 {batchDeletePreview.data.account_count} 个账号，其中{" "}
+                  {batchDeletePreview.data.upstream_key_count} 个账号会连带删除独占上游 Key。
+                </div>
+                <div className="min-h-0 flex-1 divide-y overflow-y-auto rounded-lg border">
+                  {batchDeletePreview.data.accounts.map((account) => (
+                    <div className="grid gap-1 px-3 py-2.5 text-sm" key={account.account_id}>
+                      <div className="flex items-center justify-between gap-3">
+                        <strong className="min-w-0 truncate">{account.account_name}</strong>
+                        <span className="text-muted-foreground shrink-0 font-mono text-xs">
+                          #{account.account_id}
+                        </span>
+                      </div>
+                      <span className="text-muted-foreground truncate text-xs">
+                        分组：{account.groups.length ? account.groups.join("、") : "未分组"}
+                      </span>
+                      <span
+                        className={cn("truncate text-xs", account.binding && "text-destructive")}
+                      >
+                        {account.binding
+                          ? `连带删除上游 Key：${account.binding.upstream_key_name || "未命名 Key"}（#${account.binding.upstream_key_id}）`
+                          : "仅删除管理平台账号和本地记录"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end gap-2 border-t pt-4">
+                  <Button variant="outline" onClick={() => setBatchDeleteOpen(false)}>
+                    取消
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => batchDeleteMutation.mutate(batchDeletePreview.data)}
+                  >
+                    <Trash2 />
+                    确认删除 {batchDeletePreview.data.account_count} 个账号
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {batchDeleteMutation.isPending ? (
+              <TaskStartupState message="正在创建账号批量删除任务" />
+            ) : null}
+            {batchDeleteMutation.error ? (
+              <QueryError
+                error={batchDeleteMutation.error}
+                fallback="账号批量删除任务启动失败"
+                embedded
+              />
+            ) : null}
+            {batchDeleteTask.error ? (
+              <QueryError
+                error={batchDeleteTask.error}
+                fallback="账号批量删除任务状态读取失败"
+                embedded
+              />
+            ) : null}
+            {batchDeleteTaskId && !batchDeleteTask.data && !batchDeleteTask.error ? (
+              <TaskStartupState message="正在读取账号批量删除任务" />
+            ) : null}
+            {batchDeleteTask.data ? (
+              <AccountBatchDeleteTaskStatus task={batchDeleteTask.data} />
+            ) : null}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
     </PageLayout>
+  );
+}
+
+type AccountBatchDeleteItem = {
+  accountId: string;
+  accountName: string;
+  status: string;
+  upstreamKeyDeleted: boolean;
+  managementAccountDeleted: boolean;
+  localProjectionDeleted: boolean;
+  error: string;
+};
+
+function accountBatchDeleteItems(task: Task): AccountBatchDeleteItem[] {
+  if (!Array.isArray(task.result.items)) return [];
+  return task.result.items.flatMap((raw) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return [];
+    const item = raw as Record<string, unknown>;
+    return [
+      {
+        accountId: String(item.account_id ?? ""),
+        accountName: String(item.account_name ?? ""),
+        status: String(item.status ?? "failed"),
+        upstreamKeyDeleted: item.upstream_key_deleted === true,
+        managementAccountDeleted: item.management_account_deleted === true,
+        localProjectionDeleted: item.local_projection_deleted === true,
+        error: String(item.error ?? ""),
+      },
+    ];
+  });
+}
+
+export function AccountBatchDeleteTaskStatus(props: { task: Task }) {
+  if (!taskStopsPolling(props.task)) {
+    return (
+      <TaskProgressState
+        message={displayTaskMessage(props.task.message)}
+        progress={props.task.progress}
+      />
+    );
+  }
+  const items = accountBatchDeleteItems(props.task);
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 pr-4">
+      <div className="grid grid-cols-3 divide-x rounded-lg border">
+        <ResultSummaryRow
+          label="计划删除"
+          value={`${syncResultCount(props.task.result.requested)} 个`}
+        />
+        <ResultSummaryRow
+          label="删除成功"
+          value={`${syncResultCount(props.task.result.succeeded)} 个`}
+        />
+        <ResultSummaryRow
+          label="删除失败"
+          value={`${syncResultCount(props.task.result.failed)} 个`}
+        />
+      </div>
+      <div className="min-h-0 flex-1 divide-y overflow-y-auto rounded-lg border">
+        {items.map((item) => (
+          <div
+            className="grid gap-2 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+            key={item.accountId}
+          >
+            <div className="min-w-0">
+              <strong className="block truncate">
+                {item.accountName || `账号 ${item.accountId}`}
+              </strong>
+              <span className="text-muted-foreground block truncate text-xs">
+                #{item.accountId} · 上游 Key {item.upstreamKeyDeleted ? "已删除" : "未删除"} ·
+                管理账号 {item.managementAccountDeleted ? "已删除" : "未删除"} · 本地记录
+                {item.localProjectionDeleted ? "已清理" : "未清理"}
+              </span>
+              {item.error ? (
+                <span className="text-destructive mt-1 block text-xs">{item.error}</span>
+              ) : null}
+            </div>
+            <StatusPill
+              label={item.status === "succeeded" ? "删除成功" : "删除失败"}
+              tone={item.status === "succeeded" ? "success" : "danger"}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -4033,6 +4447,7 @@ type AccountRateSyncItem = {
   after: string;
   nameBefore: string;
   nameAfter: string;
+  probeError: string;
   error: string;
 };
 
@@ -4054,6 +4469,7 @@ function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
         after: item.after == null ? "—" : String(item.after),
         nameBefore: String(item.name_before ?? ""),
         nameAfter: String(item.name_after ?? ""),
+        probeError: String(item.probe_error ?? ""),
         error: String(item.error ?? ""),
       },
     ];
@@ -4074,7 +4490,7 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
   }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-4">
+      <div className="grid grid-cols-2 divide-x rounded-lg border sm:grid-cols-5">
         <ResultSummaryRow
           label="已更新"
           value={`${syncResultCount(props.task.result.updated)} 个`}
@@ -4082,6 +4498,10 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
         <ResultSummaryRow
           label="无需更新"
           value={`${syncResultCount(props.task.result.unchanged)} 个`}
+        />
+        <ResultSummaryRow
+          label="已跳过"
+          value={`${syncResultCount(props.task.result.skipped)} 个`}
         />
         <ResultSummaryRow
           label="未绑定/缺失"
@@ -4138,6 +4558,11 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
                 />
                 {item.error && (
                   <span className="text-destructive max-w-64 text-xs">{item.error}</span>
+                )}
+                {!item.error && item.probeError && (
+                  <span className="text-muted-foreground max-w-64 text-xs">
+                    实时探测失败：{item.probeError}
+                  </span>
                 )}
               </div>
             </div>
@@ -4471,6 +4896,8 @@ function AccountRow(props: {
   account: AccountStatus;
   accounts: AccountStatus[];
   reservedMax: number;
+  selected: boolean;
+  onSelectedChange: (selected: boolean) => void;
 }) {
   const account = props.account;
   const queryClient = useQueryClient();
@@ -4509,16 +4936,23 @@ function AccountRow(props: {
     if (activeAction === "同步账号倍率") refreshScope = "management-sync";
     const keys = terminalRefreshKeys(refreshScope, task.data);
     if (keys.length) {
+      const detailRefresh =
+        activeAction === "删除账号"
+          ? []
+          : [
+              queryClient.invalidateQueries({
+                queryKey: ["account-detail", account.id],
+              }),
+            ];
       void Promise.all([
         ...keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-        queryClient.invalidateQueries({
-          queryKey: ["account-detail", account.id],
-        }),
+        ...detailRefresh,
       ]);
     }
   }, [account.id, activeAction, queryClient, task.data?.status]);
   useEffect(() => {
     if (!taskStopsPolling(task.data) || activeAction === null) return;
+    applyAccountDeletionProgress(queryClient, task.data);
     if (task.data?.status === "succeeded") {
       toast.success(`${account.name}：${activeAction}完成`);
     } else {
@@ -4563,7 +4997,14 @@ function AccountRow(props: {
   }
   return (
     <>
-      <TableRow className="h-20">
+      <TableRow className="h-20" data-state={props.selected ? "selected" : undefined}>
+        <TableCell className="px-3 align-middle" overflowTooltip={false}>
+          <Checkbox
+            checked={props.selected}
+            aria-label={`选择账号 ${account.name}（#${account.id}）`}
+            onCheckedChange={props.onSelectedChange}
+          />
+        </TableCell>
         <TableCell className="align-middle">
           <AccountIdentityCell account={account} />
         </TableCell>
@@ -5823,7 +6264,7 @@ function OnboardingPage() {
       void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
   }, [queryClient, task.data?.status]);
   useEffect(() => {
-    if (balanceTask.data?.status !== "succeeded") return;
+    if (!taskStopsPolling(balanceTask.data)) return;
     const host = verifiedUpstream?.host;
     if (!host) return;
     void Promise.all([
@@ -5833,7 +6274,14 @@ function OnboardingPage() {
       }),
     ]);
     prepare.mutate(host);
-  }, [balanceTask.data?.status]);
+  }, [balanceTask.data?.status, queryClient, verifiedUpstream?.host]);
+  useEffect(() => {
+    const keys = terminalRefreshKeys("upstream-key-cleanup", keyCleanupTask.data);
+    if (keys.length === 0) return;
+    void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    const host = verifiedUpstream?.host;
+    if (host) prepare.mutate(host);
+  }, [keyCleanupTask.data?.status, queryClient, verifiedUpstream?.host]);
   useEffect(() => {
     if (!taskStopsPolling(onboardingMaintenanceTask.data)) return;
     const host = verifiedUpstream?.host;
@@ -7966,7 +8414,13 @@ function notificationTargetTaskPresentation(status?: Task["status"]): {
   }
 }
 
-export function ConfigPage() {
+type ConfigPageProps = {
+  hiddenNavigationItemIDs?: ReadonlySet<View>;
+  onNavigationItemVisibilityChange?: (itemID: View, visible: boolean) => void;
+  onResetNavigation?: () => void;
+};
+
+export function ConfigPage(props: ConfigPageProps = {}) {
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
   const notifications = useQuery({
@@ -8074,16 +8528,15 @@ export function ConfigPage() {
     logCleanupEdited,
   ]);
   useEffect(() => {
-    if (managementTask.data?.status === "succeeded") {
+    const completedTask = managementTask.data;
+    if (!completedTask || !taskStopsPolling(completedTask)) return;
+    for (const queryKey of terminalRefreshKeys("management-sync", completedTask)) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+    if (completedTask.status === "succeeded") {
       toast.success("Sub2API 连接测试与管理数据同步完成");
-      void Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["overview"] }),
-        queryClient.invalidateQueries({ queryKey: ["accounts"] }),
-        queryClient.invalidateQueries({ queryKey: ["groups"] }),
-        queryClient.invalidateQueries({ queryKey: ["logs"] }),
-      ]);
-    } else if (managementTask.data?.status === "failed") {
-      toast.error(managementTask.data.message || "Sub2API 连接测试同步失败");
+    } else {
+      toast.error(completedTask.message || "Sub2API 连接测试同步失败");
     }
   }, [managementTask.data?.message, managementTask.data?.status, queryClient]);
   const saveNotification = useMutation({
@@ -8227,7 +8680,7 @@ export function ConfigPage() {
         <PageHeading
           eyebrow="SYSTEM / SETTINGS"
           title="系统设置"
-          description="管理外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
+          description="管理菜单显示、外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
         />
         <QueryError error={config.error} fallback="系统设置读取失败" />
       </PageLayout>
@@ -8237,7 +8690,7 @@ export function ConfigPage() {
       <PageHeading
         eyebrow="SYSTEM / SETTINGS"
         title="系统设置"
-        description="管理外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
+        description="管理菜单显示、外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
       />
       <div className="w-full space-y-4" data-testid="system-settings-page">
         {config.data?.configuration_errors?.length ? (
@@ -8251,7 +8704,7 @@ export function ConfigPage() {
           <div
             className="grid min-w-0 content-start gap-4"
             data-testid="system-settings-flow-primary"
-            aria-label="平台接入"
+            aria-label="平台接入与账号默认值"
           >
             <Card size="sm">
               <CardHeader>
@@ -8352,6 +8805,67 @@ export function ConfigPage() {
                     {taskIsPending(managementTaskId, managementTask)
                       ? `测试同步 ${managementTask.data?.progress ?? 0}%`
                       : "保存并测试同步"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>账号创建默认值</CardTitle>
+                <CardDescription>添加账号和参数修复统一使用；单次添加时仍可覆盖</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField label="默认并发">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10_000_000}
+                      inputMode="numeric"
+                      value={accountDefaultsForm.concurrency}
+                      onChange={(event) => {
+                        setAccountDefaultsEdited(true);
+                        setAccountDefaultsForm({
+                          ...accountDefaultsForm,
+                          concurrency: event.target.value,
+                        });
+                      }}
+                    />
+                  </FormField>
+                  <FormField label="默认优先级">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10_000_000}
+                      inputMode="numeric"
+                      value={accountDefaultsForm.priority}
+                      onChange={(event) => {
+                        setAccountDefaultsEdited(true);
+                        setAccountDefaultsForm({
+                          ...accountDefaultsForm,
+                          priority: event.target.value,
+                        });
+                      }}
+                    />
+                  </FormField>
+                </div>
+                <div>
+                  <Button
+                    onClick={() => saveAccountDefaults.mutate()}
+                    disabled={
+                      saveAccountDefaults.isPending ||
+                      !accountDefaultsEdited ||
+                      ![accountDefaultsForm.concurrency, accountDefaultsForm.priority].every(
+                        (value) =>
+                          Number.isInteger(Number(value)) &&
+                          Number(value) >= 1 &&
+                          Number(value) <= 10_000_000,
+                      )
+                    }
+                  >
+                    <Save size={16} />
+                    {saveAccountDefaults.isPending ? "保存中…" : "保存默认参数"}
                   </Button>
                 </div>
               </CardContent>
@@ -8622,68 +9136,17 @@ export function ConfigPage() {
           <div
             className="grid min-w-0 content-start gap-4"
             data-testid="system-settings-flow-secondary"
-            aria-label="默认值与数据维护"
+            aria-label="菜单与数据维护"
           >
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>账号创建默认值</CardTitle>
-                <CardDescription>添加账号和参数修复统一使用；单次添加时仍可覆盖</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField label="默认并发">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10_000_000}
-                      inputMode="numeric"
-                      value={accountDefaultsForm.concurrency}
-                      onChange={(event) => {
-                        setAccountDefaultsEdited(true);
-                        setAccountDefaultsForm({
-                          ...accountDefaultsForm,
-                          concurrency: event.target.value,
-                        });
-                      }}
-                    />
-                  </FormField>
-                  <FormField label="默认优先级">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10_000_000}
-                      inputMode="numeric"
-                      value={accountDefaultsForm.priority}
-                      onChange={(event) => {
-                        setAccountDefaultsEdited(true);
-                        setAccountDefaultsForm({
-                          ...accountDefaultsForm,
-                          priority: event.target.value,
-                        });
-                      }}
-                    />
-                  </FormField>
-                </div>
-                <div>
-                  <Button
-                    onClick={() => saveAccountDefaults.mutate()}
-                    disabled={
-                      saveAccountDefaults.isPending ||
-                      !accountDefaultsEdited ||
-                      ![accountDefaultsForm.concurrency, accountDefaultsForm.priority].every(
-                        (value) =>
-                          Number.isInteger(Number(value)) &&
-                          Number(value) >= 1 &&
-                          Number(value) <= 10_000_000,
-                      )
-                    }
-                  >
-                    <Save size={16} />
-                    {saveAccountDefaults.isPending ? "保存中…" : "保存默认参数"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <NavigationSettingsCard
+              sections={navigationSettingsSections}
+              hiddenItemIDs={props.hiddenNavigationItemIDs ?? emptyHiddenNavigationItemIDs}
+              lockedItemIDs={lockedNavigationItemIDs}
+              onItemVisibilityChange={(itemID, visible) =>
+                props.onNavigationItemVisibilityChange?.(itemID, visible)
+              }
+              onReset={() => props.onResetNavigation?.()}
+            />
 
             <Card size="sm">
               <CardHeader className="flex items-start justify-between gap-3">

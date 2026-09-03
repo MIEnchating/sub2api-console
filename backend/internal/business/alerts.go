@@ -83,6 +83,7 @@ type NotificationQueueDetails struct {
 type alertPolicy struct {
 	DeliveryEnabled           bool
 	NotifyRecovery            bool
+	RecoveryNotificationTypes map[string]struct{}
 	RepeatIntervalMinute      int
 	StateChangeCooldownMinute int
 	MergeThreshold            int
@@ -122,22 +123,20 @@ func (s *Store) PrepareAlertDelivery(
 		plan.Disabled = true
 		return plan, nil
 	}
-	if !policy.NotifyRecovery {
-		recovered := make([]AlertIncident, 0)
-		active := make([]AlertIncident, 0, len(incidents))
-		for _, incident := range incidents {
-			if incident.Status == "recovered" {
-				recovered = append(recovered, incident)
-			} else {
-				active = append(active, incident)
-			}
+	recovered := make([]AlertIncident, 0)
+	active := make([]AlertIncident, 0, len(incidents))
+	for _, incident := range incidents {
+		if incident.Status == "recovered" && !recoveryNotificationEnabled(policy, incident.EventType) {
+			recovered = append(recovered, incident)
+		} else {
+			active = append(active, incident)
 		}
-		if err := s.markIncidentDeliveryState(ctx, recovered, "恢复通知已关闭", nil); err != nil {
-			return AlertDeliveryPlan{}, err
-		}
-		plan.Suppressed = len(recovered)
-		incidents = active
 	}
+	if err := s.markIncidentDeliveryState(ctx, recovered, "恢复通知已关闭", nil); err != nil {
+		return AlertDeliveryPlan{}, err
+	}
+	plan.Suppressed = len(recovered)
+	incidents = active
 	// A recovery deliberately suppressed by policy is final for that incident.
 	// Re-enabling recovery notifications must not replay stale recoveries.
 	if policy.NotifyRecovery {
@@ -296,7 +295,7 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
-		if incident.Status == "recovered" && (!policy.NotifyRecovery || pointerTextValue(incident.DeliveryStatus) == "恢复通知已关闭") {
+		if incident.Status == "recovered" && (!recoveryNotificationEnabled(policy, incident.EventType) || pointerTextValue(incident.DeliveryStatus) == "恢复通知已关闭") {
 			item.QueueStatus = "已抑制"
 			item.QueueReason = "恢复通知已关闭"
 			result.ConsumerItems = append(result.ConsumerItems, item)
@@ -425,50 +424,59 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 }
 
 func (s *Store) readAlertPolicy(ctx context.Context) (alertPolicy, error) {
-	result := alertPolicy{DeliveryEnabled: true, NotifyRecovery: true, StateChangeCooldownMinute: 30, MergeThreshold: 10}
-	document, err := s.readPolicyDocument(ctx, s.db, "alert-policy")
+	policy, err := s.AlertPolicy(ctx)
 	if err != nil {
 		return alertPolicy{}, err
 	}
-	if document == nil {
-		return result, nil
+	return alertPolicy{
+		DeliveryEnabled:           policy.DeliveryEnabled,
+		NotifyRecovery:            policy.NotifyRecovery,
+		RecoveryNotificationTypes: valueStringSet(policy.RecoveryNotificationTypes...),
+		RepeatIntervalMinute:      policy.RepeatIntervalMinutes,
+		StateChangeCooldownMinute: policy.StateChangeCooldown,
+		MergeThreshold:            policy.MergeThreshold,
+	}, nil
+}
+
+func recoveryNotificationEnabled(policy alertPolicy, eventType string) bool {
+	if !policy.NotifyRecovery {
+		return false
 	}
-	if value, present := document["delivery_enabled"]; present {
-		parsed := strictAnyBool(value)
-		if parsed == nil {
-			return alertPolicy{}, errors.New("告警策略 delivery_enabled 必须是布尔值")
-		}
-		result.DeliveryEnabled = *parsed
+	category := recoveryNotificationType(eventType)
+	if category == "" {
+		return false
 	}
-	if value, present := document["notify_recovery"]; present {
-		parsed := strictAnyBool(value)
-		if parsed == nil {
-			return alertPolicy{}, errors.New("告警策略 notify_recovery 必须是布尔值")
-		}
-		result.NotifyRecovery = *parsed
+	_, enabled := policy.RecoveryNotificationTypes[category]
+	return enabled
+}
+
+func recoveryNotificationType(eventType string) string {
+	switch eventType {
+	case "upstream.configuration":
+		return "configuration"
+	case "upstream.auth":
+		return "auth"
+	case "upstream.rate_sync":
+		return "rate_sync"
+	case "upstream.balance":
+		return "balance"
+	case "account.probe":
+		return "probe"
+	case "account.routing_breaker", "account.binding_invalid":
+		return "routing_breaker"
+	case "account.routing_degraded":
+		return "routing_degraded"
+	case "account.routing_survivor":
+		return "routing_survivor"
+	case "group.routing_unavailable":
+		return "group_unavailable"
+	case "group.routing_survivor":
+		return "group_survivor"
+	case "routing.apply_failure":
+		return "apply_failure"
+	default:
+		return ""
 	}
-	if value, present := document["repeat_interval_minutes"]; present {
-		parsed, parseErr := strictInteger(value)
-		if parseErr != nil || parsed < 0 || parsed > 10080 {
-			return alertPolicy{}, errors.New("告警策略 repeat_interval_minutes 必须在 0 到 10080 之间")
-		}
-		result.RepeatIntervalMinute = parsed
-	}
-	if value, present := document["state_change_cooldown_minutes"]; present {
-		parsed, parseErr := strictInteger(value)
-		if parseErr != nil || parsed < 0 || parsed > 10080 {
-			return alertPolicy{}, errors.New("告警策略 state_change_cooldown_minutes 必须在 0 到 10080 之间")
-		}
-		result.StateChangeCooldownMinute = parsed
-	}
-	if value, present := document["merge_threshold"]; present {
-		parsed, parseErr := strictInteger(value)
-		if parseErr != nil || parsed < 2 || parsed > 500 {
-			return alertPolicy{}, errors.New("告警策略 merge_threshold 必须在 2 到 500 之间")
-		}
-		result.MergeThreshold = parsed
-	}
-	return result, nil
 }
 
 func (s *Store) notificationRules(ctx context.Context, privateConfigured bool) (bool, bool, []string, error) {

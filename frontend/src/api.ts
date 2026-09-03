@@ -68,7 +68,27 @@ export type NewAPIChannelKey = {
   key_id: string;
   name: string;
   group_id: string;
+  endpoints: NewAPIChannelEndpoint[];
 };
+
+export type NewAPIChannelEndpoint = {
+  name: string;
+  base_url: string;
+  default: boolean;
+};
+
+export type NewAPIChannelKeyRequest =
+  | {
+      sub2api_group_id: string;
+      credential_source: "vault";
+      vault_entry: string;
+    }
+  | {
+      sub2api_group_id: string;
+      credential_source: "custom";
+      username: string;
+      password: string;
+    };
 
 export type NewAPIRemoteGroup = {
   id: string;
@@ -804,6 +824,12 @@ export type AccountDeletePreview = {
   } | null;
 };
 
+export type AccountDeleteBatchPreview = {
+  accounts: AccountDeletePreview[];
+  account_count: number;
+  upstream_key_count: number;
+};
+
 export type AccountControlAction = "pause" | "resume" | "exclude" | "include" | "fuse" | "recover";
 
 export type RunEvent = {
@@ -946,6 +972,7 @@ export type AlertPolicy = {
   probe_enabled: boolean;
   routing_breaker_enabled: boolean;
   routing_degraded_enabled: boolean;
+  routing_degraded_types: Array<"health_score" | "gateway_error_rate" | "latency" | "other">;
   routing_survivor_enabled: boolean;
   group_unavailable_enabled: boolean;
   group_survivor_enabled: boolean;
@@ -956,6 +983,19 @@ export type AlertPolicy = {
   probe_groups: string[];
   delivery_enabled: boolean;
   notify_recovery: boolean;
+  recovery_notification_types: Array<
+    | "configuration"
+    | "auth"
+    | "rate_sync"
+    | "balance"
+    | "probe"
+    | "routing_breaker"
+    | "routing_degraded"
+    | "routing_survivor"
+    | "group_unavailable"
+    | "group_survivor"
+    | "apply_failure"
+  >;
   repeat_interval_minutes: number;
   state_change_cooldown_minutes: number;
   merge_threshold: number;
@@ -1151,6 +1191,7 @@ export const api = {
     payload: {
       sub2api_group_id: string;
       key_id: string;
+      base_url: string;
       models: string[];
       newapi_groups: string[];
     },
@@ -1159,14 +1200,14 @@ export const api = {
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
-  createNewAPIChannelKey: (platformId: string, payload: { sub2api_group_id: string }) =>
+  createNewAPIChannelKey: (platformId: string, payload: NewAPIChannelKeyRequest) =>
     request<NewAPIChannelKey>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-key`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
   fetchNewAPIChannelModels: (
     platformId: string,
-    payload: { sub2api_group_id: string; key_id: string },
+    payload: { sub2api_group_id: string; key_id: string; base_url: string },
   ) =>
     request<{ models: string[] }>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-models`,
@@ -1290,6 +1331,11 @@ export const api = {
     request<Task>(`/api/pricing/backups/${encodeURIComponent(backupId)}/restore`, {
       method: "POST",
     }),
+  deletePricingBackup: (backupId: string) =>
+    request<{ id: string; deleted: boolean }>(
+      `/api/pricing/backups/${encodeURIComponent(backupId)}`,
+      { method: "DELETE" },
+    ),
   calculateRevenue: (date: string) =>
     request<Task>("/api/pricing/revenue", {
       method: "POST",
@@ -1398,6 +1444,11 @@ export const api = {
     request<AccountDetail>(`/api/accounts/${encodeURIComponent(accountId)}`),
   accountDeletePreview: (accountId: string) =>
     request<AccountDeletePreview>(`/api/accounts/${encodeURIComponent(accountId)}/delete-preview`),
+  accountDeleteBatchPreview: (accountIds: string[]) =>
+    request<AccountDeleteBatchPreview>("/api/accounts/delete-preview", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
   deleteAccount: (preview: AccountDeletePreview) => {
     const body: Record<string, unknown> = {
       confirmation_account_id: preview.account_id,
@@ -1415,6 +1466,17 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
+  deleteAccounts: (preview: AccountDeleteBatchPreview) =>
+    request<Task>("/api/accounts/delete", {
+      method: "POST",
+      body: JSON.stringify({
+        confirmations: preview.accounts.map((account) => ({
+          account_id: account.account_id,
+          management_base_url: account.management_base_url,
+          binding: account.binding,
+        })),
+      }),
+    }),
   setAccountControl: (accountId: string, action: AccountControlAction) =>
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/control`, {
       method: "POST",

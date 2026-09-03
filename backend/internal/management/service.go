@@ -139,11 +139,22 @@ func (s *Service) acquireAccountMutation(ctx context.Context, accountID string) 
 }
 
 func (s *Service) acquireAccountMutations(ctx context.Context, accountIDs []string, includeCatalog bool) (context.Context, func(), error) {
+	return s.acquireAccountMutationResources(
+		ctx,
+		accountIDs,
+		accountMutationResources(accountIDs, includeCatalog),
+	)
+}
+
+func (s *Service) acquireAccountMutationResources(
+	ctx context.Context,
+	accountIDs []string,
+	resources []string,
+) (context.Context, func(), error) {
 	ctx, err := targetguard.Capture(ctx, s.targets)
 	if err != nil {
 		return nil, nil, err
 	}
-	resources := accountMutationResources(accountIDs, includeCatalog)
 	guarded, release, err := targetguard.Acquire(ctx, s.repository, resources...)
 	if err != nil {
 		return nil, nil, err
@@ -1347,38 +1358,6 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		return load.snapshot, load.fallbackEligible, load.err
 	}
 
-	var client *adminclient.Client
-	var releaseManagement func()
-	managementGuarded := false
-	ensureManagementGuard := func() error {
-		if managementGuarded {
-			return nil
-		}
-		guarded, release, guardErr := s.acquireAccountMutations(ctx, accountIDs, false)
-		if guardErr != nil {
-			return guardErr
-		}
-		ctx = guarded
-		releaseManagement = release
-		managementGuarded = true
-		return nil
-	}
-	defer func() {
-		if releaseManagement != nil {
-			releaseManagement()
-		}
-	}()
-	loadManagementClient := func() (*adminclient.Client, error) {
-		if client != nil {
-			return client, nil
-		}
-		loaded, loadErr := s.maintenanceClient(ctx)
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		client = loaded
-		return client, nil
-	}
 	upstreamRates := make([]accountRateProbe, len(accountIDs))
 	sub2APIIDs := make([]string, 0, len(accountIDs))
 	newAPIIndexes := make([]int, 0, len(accountIDs))
@@ -1498,6 +1477,49 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 			liveAccountIDs = append(liveAccountIDs, probe.account.AccountID)
 		}
 	}
+	var client *adminclient.Client
+	var releaseManagement func()
+	managementGuarded := false
+	releaseManagementGuard := func() {
+		if releaseManagement == nil {
+			return
+		}
+		releaseManagement()
+		releaseManagement = nil
+	}
+	ensureManagementGuard := func() error {
+		if managementGuarded {
+			return nil
+		}
+		resources := accountMutationResources(liveAccountIDs, false)
+		for _, index := range liveIndexes {
+			rateSourceResource := mutationguard.Upstream(upstreamRates[index].account.RateSourceHost())
+			if rateSourceResource == "" {
+				return fmt.Errorf("账号 %s 倍率同步来源 Host 无效", upstreamRates[index].account.AccountID)
+			}
+			resources = append(resources, rateSourceResource)
+		}
+		guarded, release, guardErr := s.acquireAccountMutationResources(ctx, liveAccountIDs, resources)
+		if guardErr != nil {
+			return guardErr
+		}
+		ctx = guarded
+		releaseManagement = release
+		managementGuarded = true
+		return nil
+	}
+	defer releaseManagementGuard()
+	loadManagementClient := func() (*adminclient.Client, error) {
+		if client != nil {
+			return client, nil
+		}
+		loaded, loadErr := s.maintenanceClient(ctx)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		client = loaded
+		return client, nil
+	}
 	managementObservation := false
 	for _, index := range liveIndexes {
 		if !isNewAPIType(upstreamRates[index].account.UpstreamType) {
@@ -1605,6 +1627,9 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 			remoteByID[accountID] = row
 		}
 	}
+	// The catalog snapshot and local observations are complete. Per-account
+	// writers acquire their own account and rate-source leases below.
+	releaseManagementGuard()
 	type rateResult struct {
 		item      map[string]any
 		updated   bool

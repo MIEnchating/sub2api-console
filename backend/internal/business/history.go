@@ -513,7 +513,7 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
 		FROM operation_audit oa`
 	if writebackOnly {
-		query += ` INDEXED BY ix_operation_audit_log_recent`
+		query += ` INDEXED BY ix_operation_audit_log_recent_v2`
 	}
 	query += ` LEFT JOIN accounts a ON a.id=oa.object_id`
 	if writebackOnly {
@@ -542,7 +542,7 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 	recent := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
 		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name) AS object_name,oa.group_names_json,
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
-		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent LEFT JOIN accounts a ON a.id=oa.object_id
+		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent_v2 LEFT JOIN accounts a ON a.id=oa.object_id
 		WHERE oa.phase<>'calculation' AND oa.operation_type<>'upstream.rate_sync' AND (
 			oa.writeback=1 OR (oa.operation_type='account.delete' AND oa.state='failed') OR
 			(oa.operation_type IN ('account.scheduling','routing.writeback')

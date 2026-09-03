@@ -40,10 +40,15 @@ describe("onboarding entry workflow", () => {
     expect(compatibleOnboardingLocalGroups(candidate, groups)).toEqual([groups[1]]);
   });
 
-  it("fails closed when the upstream group platform is missing", () => {
-    const groups = [{ id: "27", name: "国模-平价", platform: "openai" }];
+  it("offers typed local groups when the upstream catalog omits its platform", () => {
+    const groups = [
+      { id: "6", name: "codex-平价", platform: "openai" },
+      { id: "22", name: "Gemini", platform: "gemini" },
+      { id: "27", name: "kiro-旗舰", platform: "anthropic" },
+      { id: "30", name: "未标注", platform: null },
+    ];
 
-    expect(compatibleOnboardingLocalGroups({ platform: null }, groups)).toEqual([]);
+    expect(compatibleOnboardingLocalGroups({ platform: null }, groups)).toEqual(groups.slice(0, 3));
   });
 
   it("finds the previous and next upstream in management-list order", () => {

@@ -376,9 +376,6 @@ func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kin
 }
 
 func (s *Store) accountCatalogBindingStates(ctx context.Context) (map[string]accountCatalogBindingState, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT b.local_account_id,bi.upstream_key_id,bi.upstream_group_id,
 		k.parent_entity_id,k.observed_status,k.lifecycle_state,k.missing_observations,
 		g.entity_id,g.observed_status,g.lifecycle_state,g.missing_observations

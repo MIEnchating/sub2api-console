@@ -91,6 +91,45 @@ func TestRoutingRuleDisableSuppressesIncidentWithoutFalseRecovery(t *testing.T) 
 	assertAlertStatus(t, store, incidentKey, "closed")
 }
 
+func TestRoutingDegradedAlertsCanBeFilteredByCauseType(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO routing_decisions(account_id,group_name,schedulable,role,routing_state,reason,updated_at,payload_json) VALUES
+		('score','codex',1,'degraded','degraded','健康分低于降级线 75','2026-08-27T01:00:00Z','{}'),
+		('gateway','codex',1,'degraded','degraded','网关错误率达到阈值，仅降级','2026-08-27T01:00:00Z','{}'),
+		('latency','codex',1,'degraded','degraded','延迟超标达到阈值，仅降级','2026-08-27T01:00:00Z','{}')`); err != nil {
+		t.Fatal(err)
+	}
+	policy := DefaultAlertPolicy()
+	policy.RoutingDegradedTypes = []string{"latency"}
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertAlertStatus(t, store, "console:routing:degraded:latency:codex", "firing")
+	for _, incidentKey := range []string{
+		"console:routing:degraded:score:codex",
+		"console:routing:degraded:gateway:codex",
+	} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM alert_incidents WHERE incident_key=?`, incidentKey).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("disabled degraded cause created incident %s", incidentKey)
+		}
+	}
+	var cause string
+	if err := store.db.QueryRow(`SELECT cause_code FROM alert_incidents WHERE incident_key='console:routing:degraded:latency:codex'`).Scan(&cause); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(cause, "ROUTING_DEGRADED_LATENCY:") {
+		t.Fatalf("latency cause was not classified: %q", cause)
+	}
+}
+
 func TestAlertMasterSwitchSuppressesFiringIncidents(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

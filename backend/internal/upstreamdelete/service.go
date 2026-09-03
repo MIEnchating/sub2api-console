@@ -28,7 +28,6 @@ type Repository interface {
 	Mode(context.Context) (string, error)
 	UpstreamDeletePreview(context.Context, string) (business.UpstreamDeletePreview, error)
 	DeleteUpstreamProjection(context.Context, string, []string, business.UpstreamDeleteAudit) (business.UpstreamDeleteProjection, error)
-	ManualPriorityControls(context.Context, []string) (map[string]business.ManualPriorityControl, error)
 }
 
 type PrivateStore interface {
@@ -85,9 +84,6 @@ func (s *Service) Enqueue(ctx context.Context, host string, expected []string, a
 	}
 	if !sameIDs(preview.AccountIDs, expected) {
 		return taskstore.Task{}, errors.New("删除预览后的账号范围已变化，请重新确认")
-	}
-	if err := s.rejectManualPriorityAccounts(ctx, preview.AccountIDs); err != nil {
-		return taskstore.Task{}, err
 	}
 	expectedTarget, err := s.private.TargetSettings(ctx)
 	if err != nil {
@@ -264,7 +260,7 @@ func sameHosts(left, right []string) bool {
 func (s *Service) rejectMutationProtectedAccounts(ctx context.Context, accountIDs []string) error {
 	repository, ok := s.repository.(mutationProtectionRepository)
 	if !ok {
-		return s.rejectManualPriorityAccounts(ctx, accountIDs)
+		return nil
 	}
 	protections, err := repository.AccountMutationProtections(ctx, accountIDs)
 	if err != nil {
@@ -272,6 +268,7 @@ func (s *Service) rejectMutationProtectedAccounts(ctx context.Context, accountID
 	}
 	protected := make([]string, 0, len(protections))
 	for accountID, protection := range protections {
+		protection.ManualPriority = false
 		if protection.Protected() {
 			protected = append(protected, accountID+"（"+strings.Join(protection.Reasons(), "、")+"）")
 		}
@@ -281,22 +278,6 @@ func (s *Service) rejectMutationProtectedAccounts(ctx context.Context, accountID
 	}
 	sort.Strings(protected)
 	return fmt.Errorf("上游包含人工保护账号 %s，请先解除保护再删除", strings.Join(protected, "、"))
-}
-
-func (s *Service) rejectManualPriorityAccounts(ctx context.Context, accountIDs []string) error {
-	controls, err := s.repository.ManualPriorityControls(ctx, accountIDs)
-	if err != nil {
-		return fmt.Errorf("人工优先位保护状态读取失败：%w", err)
-	}
-	if len(controls) == 0 {
-		return nil
-	}
-	protected := make([]string, 0, len(controls))
-	for accountID := range controls {
-		protected = append(protected, accountID)
-	}
-	sort.Strings(protected)
-	return fmt.Errorf("上游包含人工优先位账号 %s，请先取消人工优先位再删除", strings.Join(protected, "、"))
 }
 
 type accountDeleter interface {

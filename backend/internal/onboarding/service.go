@@ -32,6 +32,7 @@ type Repository interface {
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProtectedUpstreamKeyIDs(context.Context, string) ([]string, error)
 	UpstreamKeyProtected(context.Context, string, string) (bool, error)
+	ReconcileDeletedUnboundUpstreamKeyProjection(context.Context, string, string) error
 	LocalOnboardingGroup(context.Context, string) (business.LocalOnboardingGroup, error)
 	PendingOnboarding(context.Context, string, string, []string) (*business.PendingOnboarding, error)
 	SavePendingOnboarding(context.Context, business.PendingOnboarding) error
@@ -360,7 +361,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	}
 	primaryLocal := validated.locals[0]
 	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier)
-	platform, err := accountPlatform(validated.request, validated.candidate)
+	platform, err := accountPlatform(validated.request, validated.candidate, validated.locals)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -487,9 +488,15 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
 	}
+	models, err := client.PreviewAccountModels(ctx, platform, accountType, validated.accountBaseURL, key.Secret)
+	if err != nil {
+		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
+	}
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
-		"credentials": map[string]any{"api_key": key.Secret, "base_url": validated.accountBaseURL}, "extra": validated.request.Extra,
+		"credentials": map[string]any{
+			"api_key": key.Secret, "base_url": validated.accountBaseURL, "model_mapping": identityModelMapping(models),
+		}, "extra": validated.request.Extra,
 		"rate_multiplier": json.Number(validated.multiplier), "group_ids": localGroupNumericIDs,
 		"concurrency": concurrency, "priority": priority, "schedulable": validated.request.Schedulable,
 		"auto_pause_on_expired": true,
@@ -564,7 +571,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		UpstreamKeyID: key.KeyID, UpstreamKeyName: key.Name, UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
 		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: validated.request.Schedulable,
-		Priority: &priority, Concurrency: &concurrency, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
+		Priority: &priority, Concurrency: &concurrency, Models: models, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
@@ -581,7 +588,16 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	result["readback_confirmed"] = readbackConfirmed
 	result["concurrency"] = concurrency
 	result["priority"] = priority
+	result["model_count"] = len(models)
 	return result, nil
+}
+
+func identityModelMapping(models []string) map[string]string {
+	mapping := make(map[string]string, len(models))
+	for _, model := range models {
+		mapping[model] = model
+	}
+	return mapping
 }
 
 func onboardingMutationResources(host string, accountIDs []string) []string {
@@ -757,7 +773,7 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 		request: request, accountBaseURL: accountBaseURL, multiplier: multiplier,
 		locals: locals, candidate: *candidate, auth: *auth,
 	}
-	platform, err := accountPlatform(request, *candidate)
+	platform, err := accountPlatform(request, *candidate, locals)
 	if err != nil {
 		return validatedRequest{}, err
 	}
@@ -1065,23 +1081,28 @@ func stableIDs(value any) ([]string, error) {
 	return result, nil
 }
 
-func accountPlatform(request Request, candidate business.OnboardingCandidate) (string, error) {
+func accountPlatform(request Request, candidate business.OnboardingCandidate, locals []business.LocalOnboardingGroup) (string, error) {
+	if len(locals) == 0 || locals[0].Platform == nil || strings.TrimSpace(*locals[0].Platform) == "" {
+		return "", errors.New("所选本地分组缺少平台，无法确定账号平台")
+	}
+	localPlatform := normalizePlatform(*locals[0].Platform)
 	candidatePlatform := ""
 	if candidate.Platform != nil {
 		candidatePlatform = normalizePlatform(*candidate.Platform)
 	}
-	if candidatePlatform == "" {
-		candidatePlatform = inferCandidatePlatform(candidate)
+	resolvedPlatform := localPlatform
+	if candidatePlatform != "" {
+		resolvedPlatform = candidatePlatform
 	}
 	if request.PlatformPresent {
 		if request.Platform == nil || strings.TrimSpace(*request.Platform) == "" {
 			return "", errors.New("平台不能为空")
 		}
 		requestedPlatform := normalizePlatform(*request.Platform)
-		if candidatePlatform == "" {
-			return "", errors.New("上游分组目录缺少平台且无法安全识别，已拒绝使用请求值覆盖")
-		}
-		if requestedPlatform != candidatePlatform {
+		if requestedPlatform != resolvedPlatform {
+			if candidatePlatform == "" {
+				return "", fmt.Errorf("请求平台 %s 与所选本地分组平台 %s 不一致", requestedPlatform, localPlatform)
+			}
 			return "", fmt.Errorf(
 				"请求平台 %s 与上游分组平台 %s 不一致，已拒绝覆盖目录平台",
 				requestedPlatform,
@@ -1090,34 +1111,7 @@ func accountPlatform(request Request, candidate business.OnboardingCandidate) (s
 		}
 		return requestedPlatform, nil
 	}
-	if candidatePlatform != "" {
-		return candidatePlatform, nil
-	}
-	return "", errors.New("上游分组目录缺少平台且无法从上游分组识别")
-}
-
-func inferCandidatePlatform(candidate business.OnboardingCandidate) string {
-	identity := candidate.GroupName
-	if candidate.Description != nil {
-		identity += " " + *candidate.Description
-	}
-	identity = strings.ToLower(identity)
-	for _, item := range []struct {
-		markers  []string
-		platform string
-	}{
-		{[]string{"gemini"}, "gemini"}, {[]string{"grok"}, "grok"}, {[]string{"deepseek"}, "deepseek"},
-		{[]string{"kimi", "moonshot"}, "kimi"},
-		{[]string{"glm", "zhipu"}, "zhipu"}, {[]string{"claude", "ccmax", "kiro", "anthropic"}, "anthropic"},
-		{[]string{"codex", "pro", "gpt", "openai"}, "openai"},
-	} {
-		for _, marker := range item.markers {
-			if strings.Contains(identity, marker) {
-				return item.platform
-			}
-		}
-	}
-	return ""
+	return resolvedPlatform, nil
 }
 
 func validateLocalGroupPlatforms(platform string, candidate business.OnboardingCandidate, locals []business.LocalOnboardingGroup) error {
@@ -1140,20 +1134,7 @@ func validateLocalGroupPlatforms(platform string, candidate business.OnboardingC
 }
 
 func normalizePlatform(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "sub2api", "newapi", "oneapi":
-		return "openai"
-	case "glm", "zhipuai":
-		return "zhipu"
-	case "claude":
-		return "anthropic"
-	case "google":
-		return "gemini"
-	case "moonshot":
-		return "kimi"
-	}
-	return value
+	return business.NormalizePlatform(value)
 }
 
 func accountCreationMarker(operationID string) string {

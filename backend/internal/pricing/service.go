@@ -37,6 +37,7 @@ type Repository interface {
 	CreatePricingBackup(context.Context, string, string) (business.PricingBackup, error)
 	PricingBackups(context.Context) ([]business.PricingBackup, error)
 	PricingBackup(context.Context, string) (business.PricingBackup, error)
+	DeletePricingBackup(context.Context, string) error
 }
 
 type mutationProtectionRepository interface {
@@ -159,6 +160,10 @@ func (s *Service) CreateBackup(ctx context.Context, name, actor string) (busines
 
 func (s *Service) Backups(ctx context.Context) ([]business.PricingBackup, error) {
 	return s.repository.PricingBackups(ctx)
+}
+
+func (s *Service) DeleteBackup(ctx context.Context, backupID string) error {
+	return s.repository.DeletePricingBackup(ctx, strings.TrimSpace(backupID))
 }
 
 func (s *Service) RestoreBackupNow(ctx context.Context, backupID, actor string) (Result, error) {
@@ -617,7 +622,7 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 	sort.Slice(resultGroups, func(i, j int) bool { return numericLess(resultGroups[i].ID, resultGroups[j].ID) })
 	margin := new(big.Rat)
 	margin.SetString(strconv.FormatFloat(config.ProfitMargin, 'f', -1, 64))
-	oneMinusMargin := new(big.Rat).Sub(big.NewRat(1, 1), margin)
+	onePlusMargin := new(big.Rat).Add(big.NewRat(1, 1), margin)
 	decisions := make([]Decision, 0, len(catalog.Accounts))
 	changes, skipped := 0, 0
 	for _, account := range catalog.Accounts {
@@ -687,7 +692,7 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 					continue
 				}
 				compatible++
-				limit := new(big.Rat).Mul(groupPrice[groupID], oneMinusMargin)
+				limit := new(big.Rat).Quo(groupPrice[groupID], onePlusMargin)
 				if cost.Cmp(limit) > 0 {
 					continue
 				}

@@ -178,6 +178,7 @@ func TestDeleteUpstreamProjectionCollectsPreviewBeforeNestedQueries(t *testing.T
 		`INSERT INTO accounts(id,name,upstream_host,paused,updated_at) VALUES('41','example-0.2','api.example',0,'now')`,
 		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','codex','3')`,
 		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group_id,local_group,updated_at) VALUES('41','api.example','91','pro-key','6','codex','now')`,
+		`INSERT INTO manual_priority_accounts(account_id,priority,created_at,updated_at) VALUES('41',3,'now','now')`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
@@ -203,7 +204,7 @@ func TestDeleteUpstreamProjectionCollectsPreviewBeforeNestedQueries(t *testing.T
 	if projection.DeletedAccounts != 1 || projection.DeletedGroups != 1 || projection.EventID >= 0 {
 		t.Fatalf("projection=%#v", projection)
 	}
-	for table, expected := range map[string]int{"upstreams": 0, "accounts": 0, "bindings": 0, "upstream_groups": 0} {
+	for table, expected := range map[string]int{"upstreams": 0, "accounts": 0, "bindings": 0, "upstream_groups": 0, "manual_priority_accounts": 0} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&count); err != nil || count != expected {
 			t.Fatalf("%s count=%d err=%v", table, count, err)

@@ -240,6 +240,72 @@ func TestReconcileDeletedUpstreamKeyProjectionRechecksExclusiveScope(t *testing.
 	}
 }
 
+func TestReconcileDeletedUnboundUpstreamKeyProjectionIsScopedAndRechecksReferences(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO upstream_identities(upstream_id,created_at,updated_at) VALUES
+			('upstream-1','now','now'),('upstream-2','now','now');
+		INSERT INTO upstream_identity_hosts(host,upstream_id,is_primary,updated_at) VALUES
+			('api.example','upstream-1',1,'now'),('alias.example','upstream-1',0,'now'),
+			('other.example','upstream-2',1,'now');
+		INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,metadata_json,updated_at) VALUES
+			('api.example','key-8','delete-me','group-1','active','{}','now'),
+			('alias.example','key-8','delete-me','group-1','active','{}','now'),
+			('other.example','key-8','keep-me','group-2','active','{}','now');
+		INSERT INTO upstream_catalog_entities(
+			upstream_id,entity_kind,entity_id,name,lifecycle_state,missing_observations,updated_at
+		) VALUES
+			('upstream-1','key','key-8','delete-me','active',0,'now'),
+			('upstream-2','key','key-8','keep-me','active',0,'now');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileDeletedUnboundUpstreamKeyProjection(ctx, "alias.example", "key-8"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileDeletedUnboundUpstreamKeyProjection(ctx, "api.example", "key-8"); err != nil {
+		t.Fatalf("reconcile must be idempotent: %v", err)
+	}
+	for _, query := range []string{
+		`SELECT COUNT(*) FROM upstream_keys WHERE host IN ('api.example','alias.example') AND key_id='key-8'`,
+		`SELECT COUNT(*) FROM upstream_catalog_entities WHERE upstream_id='upstream-1' AND entity_kind='key' AND entity_id='key-8'`,
+	} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, query).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("deleted identity projection remained: count=%d err=%v", count, err)
+		}
+	}
+	for _, query := range []string{
+		`SELECT COUNT(*) FROM upstream_keys WHERE host='other.example' AND key_id='key-8'`,
+		`SELECT COUNT(*) FROM upstream_catalog_entities WHERE upstream_id='upstream-2' AND entity_kind='key' AND entity_id='key-8'`,
+	} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, query).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("same key ID on another identity changed: count=%d err=%v", count, err)
+		}
+	}
+
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO upstream_keys(host,key_id,name,status,metadata_json,updated_at)
+			VALUES('api.example','protected-key','protected','active','{}','now');
+		INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('37','owner','{}','now');
+		INSERT INTO bindings(id,local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,metadata_json,updated_at)
+			VALUES(91,'37','alias.example','protected-key','protected','group','{}','now');
+		INSERT INTO binding_identities(binding_id,upstream_id,upstream_key_id,updated_at)
+			VALUES(91,'upstream-1','protected-key','now');
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconcileDeletedUnboundUpstreamKeyProjection(ctx, "api.example", "protected-key"); err == nil || !strings.Contains(err.Error(), "仍被") {
+		t.Fatalf("protected Key projection was accepted: %v", err)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM upstream_keys WHERE host='api.example' AND key_id='protected-key'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("protected Key projection changed: count=%d err=%v", count, err)
+	}
+}
+
 func TestConfirmAccountDeleteScopeRejectsSharedBindingAndPendingOnboarding(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

@@ -86,4 +86,32 @@ describe("NotificationQueueStatus", () => {
     expect(markup).toContain("转到第 2 页");
     expect(markup).toContain('data-table-panel=""');
   });
+
+  it("shows resolved balance wording for a recovered queue item", () => {
+    const recoveredBalance: NotificationQueueItem = {
+      ...queueItem(1),
+      event_type: "upstream.balance",
+      object_kind: "host",
+      object_id: "api.example",
+      object_name: null,
+      cause_code: "BALANCE:10",
+      status: "recovered",
+    };
+    const markup = renderToStaticMarkup(
+      <NotificationQueueDetailsList
+        kind="producer"
+        details={{
+          producer_firing: [],
+          producer_recovered: [recoveredBalance],
+          consumer_pending: [],
+          consumer_failed: [],
+          consumer_items: [],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("上游余额恢复");
+    expect(markup).toContain("余额已高于告警阈值 10");
+    expect(markup).not.toContain("上游余额不足");
+  });
 });

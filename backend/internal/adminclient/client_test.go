@@ -832,6 +832,31 @@ func TestAccountUpstreamMultiplierFallsBackToResolvedValue(t *testing.T) {
 	}
 }
 
+func TestPreviewAccountModelsUsesCreationCredentials(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts/models/sync-upstream-preview" {
+			t.Fatalf("request=%s %s", request.Method, request.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["platform"] != "openai" || body["type"] != "apikey" ||
+			body["base_url"] != "https://api.example/v1" || body["api_key"] != "account-secret" {
+			t.Fatalf("body=%#v", body)
+		}
+		writeJSON(w, `{"data":{"models":["gpt-5.2","gpt-5.1-codex","gpt-5.2"]}}`)
+	})
+	defer server.Close()
+
+	models, err := client.PreviewAccountModels(
+		context.Background(), "openai", "apikey", "https://api.example/v1", "account-secret",
+	)
+	if err != nil || strings.Join(models, ",") != "gpt-5.1-codex,gpt-5.2" {
+		t.Fatalf("models=%v err=%v", models, err)
+	}
+}
+
 func TestUpdateAccountGroupsConfirmsNumericIDsIndependentOfResponseOrder(t *testing.T) {
 	requests := 0
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {

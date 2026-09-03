@@ -25,8 +25,10 @@ import (
 
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
-	ListBySkill(context.Context, string) ([]taskstore.Task, error)
+	ListBySkill(context.Context, string, int) ([]taskstore.Task, error)
 }
+
+const accountStatusTaskLimit = 100
 
 type CredentialStore interface {
 	AuthRecord(context.Context, string) (*configstore.AuthRecord, error)
@@ -128,7 +130,7 @@ func (s *Service) Capabilities() Capabilities {
 }
 
 func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, error) {
-	tasks, err := s.tasks.ListBySkill(ctx, "sub2api-model-check")
+	tasks, err := s.tasks.ListBySkill(ctx, "sub2api-model-check", accountStatusTaskLimit)
 	if err != nil {
 		return nil, fmt.Errorf("模型检测历史读取失败: %w", err)
 	}

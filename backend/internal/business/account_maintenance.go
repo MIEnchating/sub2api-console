@@ -225,9 +225,6 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	for _, id := range requestedIDs {
 		requested[strings.TrimSpace(id)] = struct{}{}
 	}
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT a.id,a.name,COALESCE(a.multiplier,''),u.host,COALESCE(b.source_auth_host,''),u.upstream_type,
 		b.upstream_key_id,COALESCE(b.upstream_group_id,''),COALESCE(source_rate.recharge_rate,primary_rate.recharge_rate,'1'),
 		COALESCE(NULLIF(TRIM(b.upstream_rate),''),source_group_catalog.raw_rate,primary_group_catalog.raw_rate,''),

@@ -3,7 +3,49 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
 import { AccountsPage } from "../../../../App";
+import type { AccountStatus } from "../../../../api";
 import { AccountStatusFilter, accountStatusFilterOptions } from "../account-status-tabs";
+
+function account(id = "11"): AccountStatus {
+  return {
+    id,
+    name: `示例账号 ${id}`,
+    groups: ["codex"],
+    upstream_id: "upstream-1",
+    upstream_host: "api.example.test",
+    upstream_type: "newapi",
+    schedulable: true,
+    priority: 1,
+    load_factor: "1",
+    concurrency: 10,
+    multiplier: "0.1",
+    balance: "10",
+    paused: false,
+    paused_reason: null,
+    routing_state: "healthy",
+    health_status: "healthy",
+    health: "healthy",
+    desired_health: "healthy",
+    apply_pending: false,
+    apply_error: null,
+    decision_state: "applied",
+    decision_reason: null,
+    failure_streak: 0,
+    recovery_pass_streak: 0,
+    target_priority: 1,
+    target_load_factor: "1",
+    target_schedulable: true,
+    target_concurrency: 10,
+    health_score: 100,
+    short_score: 100,
+    long_score: 100,
+    sample_count: 1,
+    recent_results: [],
+    ttfb_p50_ms: 100,
+    ttfb_p95_ms: 200,
+    weight: 1,
+  };
+}
 
 describe("AccountStatusFilter", () => {
   it("shows the filter name and selected state using the shared faceted style", () => {
@@ -58,29 +100,71 @@ describe("AccountStatusFilter", () => {
     expect(toolbar).not.toContain("个账号");
     expect(markup).not.toMatch(/<th[^>]*>分组<\/th>/);
     expect(markup).toContain("调度权重");
-    expect(markup).toContain("配置校验与修复");
     expect(markup).toContain("Key 状态");
     expect(markup).toContain("Sub2API 状态");
     expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
-    expect(markup).toContain("min-w-[1500px]");
+    expect(markup).toContain("min-w-[1540px]");
     expect(markup).toContain('data-table-panel=""');
+    expect(markup).toContain('aria-label="选择当前页账号"');
+    expect(markup).toContain('aria-disabled="true"');
   });
 
-  it("shows balance sync, batch revalidation, and name repair as page-level actions", () => {
+  it("keeps maintenance actions independent from selection and requires selection only for batch delete", () => {
     const queryClient = new QueryClient();
-    queryClient.setQueryData(["accounts"], []);
+    queryClient.setQueryData(["accounts"], [account()]);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AccountsPage />
+      </QueryClientProvider>,
+    );
+    const buttons = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(
+      (match) => match[0],
+    );
+    const actionButton = (label: string) => buttons.find((button) => button.includes(label)) ?? "";
+
+    expect(markup).toContain("同步全部上游余额");
+    expect(markup).toContain("配置校验与修复");
+    expect(markup).toContain("同步倍率");
+    expect(markup).toContain("复验绑定");
+    expect(markup).toContain("命名修复");
+    expect(markup).toContain("批量删除");
+    expect(markup).not.toContain("批量操作");
+    expect(markup).not.toContain('data-slot="dropdown-menu-trigger"');
+    for (const label of ["配置校验与修复", "同步倍率", "复验绑定", "命名修复"]) {
+      expect(actionButton(label)).not.toContain(' disabled=""');
+    }
+    expect(actionButton("批量删除")).toContain(' disabled=""');
+    expect(markup).toContain('role="checkbox"');
+  });
+
+  it("shows 20 accounts on the first page by default", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(
+      ["accounts"],
+      Array.from({ length: 21 }, (_, index) => account(String(index + 1))),
+    );
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
         <AccountsPage />
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("同步余额");
-    expect(markup).toContain("批量复验");
-    expect(markup).toContain("同步倍率");
-    expect(markup).toContain("命名修复");
-    expect(markup).toContain("配置校验与修复");
-    expect(markup).not.toContain(">参数修复<");
-    expect(markup).not.toContain('type="checkbox"');
+    expect(markup).toContain('aria-label="选择账号 示例账号 20（#20）"');
+    expect(markup).not.toContain('aria-label="选择账号 示例账号 21（#21）"');
+  });
+
+  it("renders accessible page and row selection controls when accounts are available", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["accounts"], [account()]);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <AccountsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="选择当前页账号"');
+    expect(markup).toContain('aria-label="选择账号 示例账号 11（#11）"');
+    expect(markup).toContain("选择筛选结果");
+    expect(markup.match(/role="checkbox"/g)).toHaveLength(2);
   });
 });

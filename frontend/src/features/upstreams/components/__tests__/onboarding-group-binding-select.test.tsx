@@ -68,6 +68,26 @@ describe("OnboardingGroupBindingSelect", () => {
     expect(markup).not.toContain(">8<");
   });
 
+  it("keeps an existing typed selection available when the upstream platform is missing", () => {
+    const markup = renderToStaticMarkup(
+      <OnboardingGroupBindingSelect
+        upstreamGroupName="Codex 满血稳定官渠"
+        upstreamPlatform={null}
+        groups={[
+          { id: "25", name: "codex-pro-旗舰", platform: "openai" },
+          { id: "22", name: "Gemini", platform: "gemini" },
+        ]}
+        value={["25"]}
+        disabled={false}
+        disabledReason={null}
+        onValueChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("codex-pro-旗舰");
+    expect(markup).not.toContain("所选分组不可用");
+  });
+
   it("keeps the unavailable reason after the separate status column is removed", () => {
     const markup = renderToStaticMarkup(
       <OnboardingGroupBindingSelect

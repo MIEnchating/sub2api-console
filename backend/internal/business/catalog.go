@@ -124,14 +124,6 @@ type GroupStatus struct {
 }
 
 func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
-	// The upstream list is the ownership boundary where newly discovered host aliases
-	// are reconciled, including aliases added after both hosts already had identities.
-	if err := s.ensureUpstreamIdentities(ctx); err != nil {
-		return UpstreamSummary{}, err
-	}
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return UpstreamSummary{}, err
-	}
 	identityHosts, err := upstreamIdentityHostSets(ctx, s.db)
 	if err != nil {
 		return UpstreamSummary{}, err
@@ -229,7 +221,7 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 
 func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bool) ([]UpstreamGroup, error) {
 	normalized := canonicalHost(host)
-	upstreamID, err := s.upstreamIdentityID(ctx, normalized)
+	upstreamID, err := s.lookupUpstreamIdentityID(ctx, normalized)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
 	}
@@ -337,10 +329,7 @@ func (s *Store) UpstreamGroups(ctx context.Context, host string, includeBound bo
 }
 
 func (s *Store) upstreamBoundAccounts(ctx context.Context, host string) (map[string][]UpstreamBoundAccount, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
-	upstreamID, err := s.upstreamIdentityID(ctx, host)
+	upstreamID, err := s.lookupUpstreamIdentityID(ctx, host)
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +725,7 @@ func timestampAfter(candidate, baseline string) bool {
 }
 
 func (s *Store) upstreamKeyStates(ctx context.Context, host string) (map[string]string, error) {
-	upstreamID, err := s.upstreamIdentityID(ctx, host)
+	upstreamID, err := s.lookupUpstreamIdentityID(ctx, host)
 	if err != nil {
 		return nil, err
 	}

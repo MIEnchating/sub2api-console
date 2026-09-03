@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -38,6 +39,7 @@ func (s *Store) selectHealthSampleWindow(
 	arguments []any,
 	limit int,
 	normalizeSource bool,
+	stopAfterLimit bool,
 ) ([]healthSampleSelection, error) {
 	query := `SELECT id,account_id,observed_at,source,evidence_key
 		FROM health_samples INDEXED BY ix_health_samples_account_recent` + whereSQL(clauses) +
@@ -79,8 +81,53 @@ func (s *Store) selectHealthSampleWindow(
 		}
 		result = append(result, healthSampleSelection{id: item.id})
 		selectedForAccount++
+		if stopAfterLimit && selectedForAccount >= limit {
+			break
+		}
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) selectHealthSampleWindowsForAccounts(
+	ctx context.Context,
+	accountIDs []string,
+	clauses []string,
+	arguments []any,
+	limit int,
+	normalizeSource bool,
+) ([]healthSampleSelection, error) {
+	unique := make(map[string]struct{}, len(accountIDs))
+	ordered := make([]string, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			continue
+		}
+		if _, found := unique[accountID]; found {
+			continue
+		}
+		unique[accountID] = struct{}{}
+		ordered = append(ordered, accountID)
+	}
+	sort.Strings(ordered)
+	result := make([]healthSampleSelection, 0, len(ordered)*limit)
+	for _, accountID := range ordered {
+		accountClauses := append(append([]string{}, clauses...), "account_id=?")
+		accountArguments := append(append([]any{}, arguments...), accountID)
+		selections, err := s.selectHealthSampleWindow(
+			ctx,
+			accountClauses,
+			accountArguments,
+			limit,
+			normalizeSource,
+			true,
+		)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, selections...)
+	}
+	return result, nil
 }
 
 func (s *Store) selectedHealthSamples(

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PricingSnapshot } from "@/api";
 import {
   GroupAccountCostDetails,
+  PricingBackupList,
   PricingConfigPage,
   PricingPage,
   PricingPreviewTable,
@@ -114,6 +115,30 @@ describe("价格配置执行顺序", () => {
 });
 
 describe("PricingPage", () => {
+  it("offers a separate accessible delete action for every pricing backup", () => {
+    const markup = renderToStaticMarkup(
+      <PricingBackupList
+        backups={[
+          {
+            id: "backup-1",
+            name: "调价前",
+            actor: "operator",
+            account_count: 2,
+            created_at: "2026-09-02T08:00:00Z",
+          },
+        ]}
+        selectedBackupID="backup-1"
+        onSelect={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="选择备份 调价前"');
+    expect(markup).toContain('aria-label="删除备份 调价前"');
+    expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain("2 个账号");
+  });
+
   it("keeps the account adjustment preview with price management", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
     queryClient.setQueryData(["pricing"], snapshot);
@@ -213,6 +238,7 @@ describe("PricingPage", () => {
     expect(markup).toContain("默认关闭");
     expect(markup).toContain('aria-label="启用动态价格分组"');
     expect(markup).toContain("目标盈利比例");
+    expect(markup).toContain("利润 ÷ 账号成本；允许范围 0% - 99%");
     expect(markup).toContain('value="20"');
     expect(markup).toContain('aria-label="互换组 1 分组 标准"');
     expect(markup).toContain('aria-label="互换组 1 分组 复合"');
@@ -344,7 +370,7 @@ describe("PricingPage", () => {
     expect(markup).toContain('data-testid="pricing-preview-table"');
     expect(markup).toContain("h-full");
     expect(markup).toContain(
-      "账号成本 0.3 不高于 codex-限时 可接受的 0.4；这是仍能保证 20% 目标利润的最低售价分组。",
+      "账号成本 0.3 不高于 codex-限时 可接受的 0.4167；这是仍能保证 20% 目标成本利润率的最低售价分组。",
     );
     expect(markup).toContain("计算明细");
     expect(markup).toContain("将调整");
@@ -437,7 +463,7 @@ describe("PricingPage", () => {
     expect(decisions[0].changed).toBe(true);
   });
 
-  it("keeps the current group when no compatible group can meet the profit target", () => {
+  it("treats the profit target as markup on cost at and below the exact boundary", () => {
     const decisions = pricingPreviewDecisions(
       [
         {
@@ -445,6 +471,18 @@ describe("PricingPage", () => {
           account_name: "high-cost-account",
           platform: "openai",
           cost_multiplier: "0.198",
+          current_group_ids: ["8"],
+          desired_group_ids: ["8"],
+          eligible_groups: [],
+          changed: false,
+          skipped: false,
+          reason: null,
+        },
+        {
+          account_id: "24",
+          account_name: "boundary-account",
+          platform: "openai",
+          cost_multiplier: "0.2",
           current_group_ids: ["8"],
           desired_group_ids: ["8"],
           eligible_groups: [],
@@ -468,7 +506,7 @@ describe("PricingPage", () => {
         },
         {
           ...snapshot.groups[0],
-          id: "10",
+          id: "25",
           name: "codex-pro-旗舰",
           rate_multiplier: "0.25",
         },
@@ -476,12 +514,15 @@ describe("PricingPage", () => {
       {
         ...snapshot.config,
         profit_margin: 0.25,
-        exchange_group_sets: [["8", "9", "10"]],
+        exchange_group_sets: [["8", "9", "25"]],
       },
     );
 
-    expect(decisions[0].desired_group_ids).toEqual(["8"]);
-    expect(decisions[0].changed).toBe(false);
-    expect(decisions[0].reason).toContain("保留当前分组");
+    expect(decisions[0].desired_group_ids).toEqual(["25"]);
+    expect(decisions[0].eligible_groups).toEqual(["codex-pro-旗舰"]);
+    expect(decisions[0].changed).toBe(true);
+    expect(decisions[1].desired_group_ids).toEqual(["25"]);
+    expect(decisions[1].eligible_groups).toEqual(["codex-pro-旗舰"]);
+    expect(decisions[1].changed).toBe(true);
   });
 });

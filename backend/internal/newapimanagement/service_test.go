@@ -3,6 +3,7 @@ package newapimanagement
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,11 +12,13 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
 type keyManagerStub struct {
 	created       upstreamsync.CreatedKey
+	createErr     error
 	createRecord  configstore.AuthRecord
 	createName    string
 	createGroupID string
@@ -26,7 +29,7 @@ type keyManagerStub struct {
 
 func (stub *keyManagerStub) CreateKeyWithVerification(_ context.Context, record configstore.AuthRecord, name, groupID string, _ bool) (upstreamsync.CreatedKey, error) {
 	stub.createRecord, stub.createName, stub.createGroupID = record, name, groupID
-	return stub.created, nil
+	return stub.created, stub.createErr
 }
 
 func (stub *keyManagerStub) RevealKey(_ context.Context, record configstore.AuthRecord, keyID, groupID string) (upstreamsync.CreatedKey, error) {
@@ -35,8 +38,11 @@ func (stub *keyManagerStub) RevealKey(_ context.Context, record configstore.Auth
 }
 
 type privateStub struct {
-	platform configstore.NewAPIPlatform
-	target   configstore.TargetSettings
+	platform      configstore.NewAPIPlatform
+	target        configstore.TargetSettings
+	vaultEntries  map[string]configstore.VaultEntry
+	storedSecret  *configstore.UpstreamKeySecret
+	saveSecretErr error
 }
 
 func (stub *privateStub) NewAPIPlatforms(context.Context) ([]configstore.NewAPIPlatformSummary, error) {
@@ -60,6 +66,45 @@ func (*privateStub) DeleteNewAPIPlatform(context.Context, string) (bool, error) 
 
 func (stub *privateStub) TargetSettings(context.Context) (configstore.TargetSettings, error) {
 	return stub.target, nil
+}
+
+func (stub *privateStub) VaultEntry(_ context.Context, entry string) (*configstore.VaultEntry, error) {
+	value, found := stub.vaultEntries[entry]
+	if !found {
+		return nil, nil
+	}
+	copy := value
+	return &copy, nil
+}
+
+func (stub *privateStub) UpstreamKeySecret(_ context.Context, host, keyID, groupID string) (*configstore.UpstreamKeySecret, error) {
+	if stub.storedSecret == nil || stub.storedSecret.Host != configstore.CanonicalHost(host) ||
+		stub.storedSecret.KeyID != keyID || stub.storedSecret.GroupID != groupID {
+		return nil, nil
+	}
+	copy := *stub.storedSecret
+	return &copy, nil
+}
+
+func (stub *privateStub) SaveUpstreamKeySecret(_ context.Context, value configstore.UpstreamKeySecret) error {
+	if stub.saveSecretErr != nil {
+		return stub.saveSecretErr
+	}
+	value.Host = configstore.CanonicalHost(value.Host)
+	stub.storedSecret = &value
+	return nil
+}
+
+type authenticatorStub struct {
+	loginRecord     configstore.AuthRecord
+	loginCredential configstore.VaultEntry
+	result          configstore.AuthRecord
+	err             error
+}
+
+func (stub *authenticatorStub) Login(_ context.Context, record configstore.AuthRecord, credential configstore.VaultEntry) (configstore.AuthRecord, error) {
+	stub.loginRecord, stub.loginCredential = record, credential
+	return stub.result, stub.err
 }
 
 type repositoryStub struct {
@@ -110,7 +155,7 @@ func TestRefreshReadsAuthenticatedOptionsAndComparesPublicPricing(t *testing.T) 
 	private := &privateStub{platform: configstore.NewAPIPlatform{
 		ID: "platform-1", Name: "Production", BaseURL: server.URL, AdminKey: "admin-secret", UserID: "7",
 	}}
-	service := New(private, &repositoryStub{}, server.Client(), nil)
+	service := New(private, &repositoryStub{}, server.Client(), nil, nil)
 	snapshot, err := service.Refresh(context.Background(), "platform-1")
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +190,7 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 	ratio := "0.35"
 	repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "低价", Ratio: &ratio}}}
 	private := &privateStub{platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: server.URL, AdminKey: "key", UserID: "1"}}
-	service := New(private, repository, server.Client(), nil)
+	service := New(private, repository, server.Client(), nil, nil)
 	bindings, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
 		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", SyncRatio: true,
 	}})
@@ -159,7 +204,7 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 
 func TestSavePlatformRejectsASecondMainPlatform(t *testing.T) {
 	private := &privateStub{platform: configstore.NewAPIPlatform{ID: "primary", Name: "主平台"}}
-	service := New(private, &repositoryStub{}, nil, nil)
+	service := New(private, &repositoryStub{}, nil, nil, nil)
 
 	_, err := service.SavePlatform(context.Background(), PlatformInput{
 		ID: "second", Name: "第二平台", BaseURL: "https://second.example", AdminKey: "key", UserID: "2",
@@ -186,64 +231,202 @@ func TestFetchChannelModelsUsesConfiguredSub2APIAddress(t *testing.T) {
 	private := &privateStub{
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
 		target:   configstore.TargetSettings{BaseURL: target.URL, AdminKey: "management-secret"},
+		storedSecret: &configstore.UpstreamKeySecret{
+			Host: configstore.CanonicalHost(target.URL), KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key",
+		},
 	}
 	keys := &keyManagerStub{created: upstreamsync.CreatedKey{KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key"}}
-	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, target.Client(), keys)
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, target.Client(), keys, nil)
 	models, err := service.FetchChannelModels(context.Background(), "platform-1", ChannelModelsInput{
-		Sub2APIGroupID: "6", KeyID: "key-7",
+		Sub2APIGroupID: "6", KeyID: "key-7", BaseURL: target.URL,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keys.revealKeyID != "key-7" || keys.revealGroupID != "6" || requestedPath != "/v1/models" || !reflect.DeepEqual(models, []string{"claude-sonnet-4", "gpt-5.2"}) {
+	if keys.revealKeyID != "" || requestedPath != "/v1/models" || !reflect.DeepEqual(models, []string{"claude-sonnet-4", "gpt-5.2"}) {
 		t.Fatalf("path=%q models=%v", requestedPath, models)
 	}
 }
 
-func TestCreateChannelKeyUsesManagementCredentialsWithoutReturningSecret(t *testing.T) {
-	var receivedName string
+func TestCreateChannelKeyLogsInWithSelectedVaultEntryAndStoresSecret(t *testing.T) {
+	username, password, token := "operator@example.test", "password", "user-jwt"
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1"},
+		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example", AdminKey: "must-not-be-used"},
+		vaultEntries: map[string]configstore.VaultEntry{
+			"运营账号": {Entry: "运营账号", Username: &username, Password: &password},
+		},
+	}
+	authenticator := &authenticatorStub{result: configstore.AuthRecord{
+		Host: "sub2api.example", BaseURL: "https://sub2api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_login", AccessToken: &token,
+	}}
+	keys := &keyManagerStub{created: upstreamsync.CreatedKey{
+		KeyID: "17", Name: "NewAPI-标准-marker", GroupID: "6", Secret: "service-secret",
+	}}
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, keys, authenticator)
+
+	created, err := service.CreateChannelKey(context.Background(), "platform-1", ChannelKeyInput{
+		Sub2APIGroupID: "6", CredentialSource: "vault", VaultEntry: "运营账号",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.KeyID != "17" || created.GroupID != "6" || !strings.Contains(created.Name, "标准") {
+		t.Fatalf("created=%#v", created)
+	}
+	if len(created.Endpoints) != 1 || created.Endpoints[0].BaseURL != "https://sub2api.example" || created.Endpoints[0].Name != "管理平台地址" {
+		t.Fatalf("fallback endpoints=%#v", created.Endpoints)
+	}
+	if authenticator.loginRecord.AuthMode != "sub2api_user_login" || authenticator.loginRecord.AdminKey != nil ||
+		authenticator.loginCredential.Entry != "运营账号" || keys.createRecord.AccessToken == nil || *keys.createRecord.AccessToken != token {
+		t.Fatalf("login=%#v credential=%#v create=%#v", authenticator.loginRecord, authenticator.loginCredential, keys.createRecord)
+	}
+	if private.storedSecret == nil || private.storedSecret.Secret != "service-secret" || private.storedSecret.KeyID != "17" || private.storedSecret.GroupID != "6" {
+		t.Fatalf("stored secret=%#v", private.storedSecret)
+	}
+	encoded, marshalErr := json.Marshal(created)
+	if marshalErr != nil || strings.Contains(string(encoded), "service-secret") {
+		t.Fatalf("channel key response leaked secret: %s", encoded)
+	}
+}
+
+func TestCreateChannelKeyUsesOfficialSub2APIUserEndpoints(t *testing.T) {
+	paths := []string{}
 	target := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.Method+" "+request.URL.Path)
 		writer.Header().Set("Content-Type", "application/json")
-		if request.URL.Path != "/api/v1/keys" || request.Method != http.MethodPost {
+		switch request.URL.Path {
+		case "/api/v1/auth/login":
+			var body map[string]string
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["email"] != "operator@example.test" || body["password"] != "password" || request.Header.Get("Authorization") != "" {
+				t.Fatalf("login body=%#v headers=%#v", body, request.Header)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]string{"access_token": "user-jwt"}})
+		case "/api/v1/user/profile":
+			if request.Header.Get("Authorization") != "Bearer user-jwt" {
+				t.Fatalf("profile authorization=%q", request.Header.Get("Authorization"))
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]any{"id": 9}})
+		case "/api/v1/keys":
+			if request.Method != http.MethodPost || request.Header.Get("Authorization") != "Bearer user-jwt" || request.Header.Get("X-API-Key") != "" {
+				t.Fatalf("key request headers=%#v", request.Header)
+			}
+			var body struct {
+				Name    string `json:"name"`
+				GroupID int64  `json:"group_id"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]any{
+				"id": 17, "name": body.Name, "group_id": body.GroupID, "key": "service-secret",
+			}})
+		case "/api/v1/settings/public":
+			if request.Header.Get("Authorization") != "" || request.Header.Get("X-API-Key") != "" {
+				t.Fatalf("public settings reused authentication: %#v", request.Header)
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]any{
+				"api_base_url": "https://api.example.test/",
+				"custom_endpoints": []map[string]string{
+					{"name": "Docker 内网", "endpoint": "http://sub2api:8080"},
+					{"name": "重复", "endpoint": "https://api.example.test"},
+					{"name": "无效", "endpoint": "javascript:alert(1)"},
+				},
+			}})
+		default:
 			http.NotFound(writer, request)
-			return
 		}
-		if request.Header.Get("X-API-Key") != "management-secret" || request.Header.Get("Authorization") != "" {
-			writer.WriteHeader(http.StatusUnauthorized)
-			_ = json.NewEncoder(writer).Encode(map[string]any{"message": "Invalid token"})
-			return
-		}
-		var body struct {
-			Name    string `json:"name"`
-			GroupID int64  `json:"group_id"`
-		}
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		receivedName = body.Name
-		_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]any{
-			"id": 17, "name": body.Name, "group_id": body.GroupID, "key": "service-secret",
-		}})
 	}))
 	defer target.Close()
 
 	private := &privateStub{
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
-		target:   configstore.TargetSettings{BaseURL: target.URL, AdminKey: "management-secret"},
+		target:   configstore.TargetSettings{BaseURL: target.URL, AdminKey: "must-not-be-used"},
 	}
 	service := New(
 		private,
 		&repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}},
 		target.Client(),
 		upstreamsync.NewReader(target.Client()),
+		upstreamauth.New(target.Client()),
 	)
-
-	created, err := service.CreateChannelKey(context.Background(), "platform-1", ChannelKeyInput{Sub2APIGroupID: "6"})
+	created, err := service.CreateChannelKey(context.Background(), "platform-1", ChannelKeyInput{
+		Sub2APIGroupID: "6", CredentialSource: "custom", Username: "operator@example.test", Password: "password",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.KeyID != "17" || created.GroupID != "6" || created.Name != receivedName || !strings.Contains(created.Name, "标准") {
-		t.Fatalf("created=%#v", created)
+	if created.KeyID != "17" || private.storedSecret == nil || private.storedSecret.Secret != "service-secret" {
+		t.Fatalf("created=%#v stored=%#v", created, private.storedSecret)
+	}
+	wantEndpoints := []ChannelEndpoint{
+		{Name: "API 端点", BaseURL: "https://api.example.test", Default: true},
+		{Name: "Docker 内网", BaseURL: "http://sub2api:8080"},
+	}
+	if !reflect.DeepEqual(created.Endpoints, wantEndpoints) {
+		t.Fatalf("endpoints=%#v want=%#v", created.Endpoints, wantEndpoints)
+	}
+	wantPaths := []string{"POST /api/v1/auth/login", "GET /api/v1/user/profile", "POST /api/v1/keys", "GET /api/v1/settings/public"}
+	if !reflect.DeepEqual(paths, wantPaths) {
+		t.Fatalf("paths=%#v want=%#v", paths, wantPaths)
+	}
+}
+
+func TestCreateChannelKeyUsesRequestScopedCustomCredentials(t *testing.T) {
+	token := "user-jwt"
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1"},
+		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
+	}
+	authenticator := &authenticatorStub{result: configstore.AuthRecord{AccessToken: &token, AuthMode: "sub2api_user_login"}}
+	keys := &keyManagerStub{created: upstreamsync.CreatedKey{KeyID: "17", Name: "marker", GroupID: "6", Secret: "secret"}}
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, keys, authenticator)
+
+	_, err := service.CreateChannelKey(context.Background(), "platform-1", ChannelKeyInput{
+		Sub2APIGroupID: "6", CredentialSource: "custom", Username: "user@example.test", Password: "pass",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authenticator.loginCredential.Entry != "" || authenticator.loginCredential.Username == nil ||
+		*authenticator.loginCredential.Username != "user@example.test" || authenticator.loginCredential.Password == nil ||
+		*authenticator.loginCredential.Password != "pass" || len(private.vaultEntries) != 0 {
+		t.Fatalf("custom credential=%#v vault=%#v", authenticator.loginCredential, private.vaultEntries)
+	}
+}
+
+func TestCreateChannelKeyRejectsMissingCredentialAndLoginFailure(t *testing.T) {
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1"},
+		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
+		vaultEntries: map[string]configstore.VaultEntry{
+			"incomplete": {Entry: "incomplete"},
+		},
+	}
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, &keyManagerStub{}, &authenticatorStub{})
+	for name, input := range map[string]ChannelKeyInput{
+		"missing vault":    {Sub2APIGroupID: "6", CredentialSource: "vault", VaultEntry: "missing"},
+		"incomplete vault": {Sub2APIGroupID: "6", CredentialSource: "vault", VaultEntry: "incomplete"},
+		"empty custom":     {Sub2APIGroupID: "6", CredentialSource: "custom"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := service.CreateChannelKey(context.Background(), "platform-1", input); err == nil {
+				t.Fatal("expected credential validation error")
+			}
+		})
+	}
+
+	authenticator := &authenticatorStub{err: errors.New("invalid credentials")}
+	service = New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, &keyManagerStub{}, authenticator)
+	_, err := service.CreateChannelKey(context.Background(), "platform-1", ChannelKeyInput{
+		Sub2APIGroupID: "6", CredentialSource: "custom", Username: "user@example.test", Password: "wrong",
+	})
+	if err == nil || !strings.Contains(err.Error(), "登录失败") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -270,11 +453,14 @@ func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 	private := &privateStub{
 		platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: newAPI.URL, AdminKey: "admin", UserID: "1"},
 		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example", AdminKey: "management-secret"},
+		storedSecret: &configstore.UpstreamKeySecret{
+			Host: "sub2api.example", KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key",
+		},
 	}
 	keys := &keyManagerStub{created: upstreamsync.CreatedKey{KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key"}}
-	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, newAPI.Client(), keys)
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, newAPI.Client(), keys, nil)
 	_, err := service.CreateChannel(context.Background(), "platform-1", ChannelInput{
-		Sub2APIGroupID: "6", KeyID: "key-7", Models: []string{"gpt-5.2"},
+		Sub2APIGroupID: "6", KeyID: "key-7", BaseURL: "https://edge.example/v1", Models: []string{"gpt-5.2"},
 		NewAPIGroups: []string{"vip", "default"},
 	})
 	if err != nil {
@@ -285,7 +471,7 @@ func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 		t.Fatalf("request missing channel wrapper: %#v", created)
 	}
 	if created["mode"] != "single" || channel["type"] != float64(59) || channel["name"] != "标准" ||
-		channel["base_url"] != "https://sub2api.example" || channel["key"] != "sub2api-user-key" ||
+		channel["base_url"] != "https://edge.example/v1" || channel["key"] != "sub2api-user-key" ||
 		channel["models"] != "gpt-5.2" || channel["group"] != "default,vip" {
 		t.Fatalf("unexpected create request: %#v", created)
 	}

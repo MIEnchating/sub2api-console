@@ -284,6 +284,8 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			var body map[string]any
 			decoder := json.NewDecoder(request.Body)
@@ -364,6 +366,114 @@ func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateSto
 	}
 }
 
+func TestOnboardCreatesAccountWithSynchronizedModelWhitelist(t *testing.T) {
+	var previewCalls, accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/models/sync-upstream-preview":
+			previewCalls++
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["api_key"] != "never-store-this" || body["base_url"] != "https://upstream.test" {
+				t.Fatalf("preview body=%#v", body)
+			}
+			_, _ = writer.Write([]byte(`{"data":{"models":["gpt-5.2","gpt-5.1-codex","gpt-5.2"]}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			credentials, _ := body["credentials"].(map[string]any)
+			mapping, _ := credentials["model_mapping"].(map[string]any)
+			if len(mapping) != 2 || mapping["gpt-5.1-codex"] != "gpt-5.1-codex" || mapping["gpt-5.2"] != "gpt-5.2" {
+				t.Fatalf("model mapping=%#v", mapping)
+			}
+			body["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": body})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	result, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).Onboard(
+		context.Background(),
+		Request{
+			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+			UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previewCalls != 1 || accountPosts != 1 || result["model_count"] != 2 {
+		t.Fatalf("previewCalls=%d accountPosts=%d result=%#v", previewCalls, accountPosts, result)
+	}
+	detail, err := repository.Account(context.Background(), "77")
+	if err != nil {
+		t.Fatal(err)
+	}
+	knownModels, _ := detail.Metadata["known_models"].([]any)
+	if len(knownModels) != 2 || knownModels[0] != "gpt-5.1-codex" || knownModels[1] != "gpt-5.2" {
+		t.Fatalf("known models=%#v", detail.Metadata["known_models"])
+	}
+}
+
+func TestOnboardRetriesModelSyncWithoutCreatingASecondKey(t *testing.T) {
+	var previewCalls, accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case isModelPreviewRequest(request):
+			previewCalls++
+			if previewCalls == 1 {
+				http.Error(writer, `{"message":"upstream model catalog unavailable"}`, http.StatusBadGateway)
+				return
+			}
+			writeModelPreviewResponse(writer)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			body["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": body})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	first, firstErr := service.Onboard(context.Background(), request)
+	if firstErr == nil || !strings.Contains(firstErr.Error(), "开户模型同步失败") || accountPosts != 0 {
+		t.Fatalf("first=%#v err=%v accountPosts=%d", first, firstErr, accountPosts)
+	}
+	second, secondErr := service.Onboard(context.Background(), request)
+	if secondErr != nil || second["account_id"] != "77" || accountPosts != 1 {
+		t.Fatalf("second=%#v err=%v accountPosts=%d", second, secondErr, accountPosts)
+	}
+	if previewCalls != 2 || keys.createCalls != 1 || keys.revealCalls != 1 {
+		t.Fatalf("previewCalls=%d createCalls=%d revealCalls=%d", previewCalls, keys.createCalls, keys.revealCalls)
+	}
+}
+
 func TestValidateUsesCatalogConvertedMultiplierWithoutClientInput(t *testing.T) {
 	repository, private, _ := onboardingFixture(t, "http://127.0.0.1:1")
 	validated, err := New(repository, private, nil, nil).validate(context.Background(), Request{
@@ -431,6 +541,10 @@ func TestOnboardingCreationLeaseDoesNotWaitForUpstreamSynchronization(t *testing
 func TestOnboardDoesNotWaitForInspectionOrAccountCatalog(t *testing.T) {
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
+		if isModelPreviewRequest(request) {
+			writeModelPreviewResponse(writer)
+			return
+		}
 		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts" {
 			writer.WriteHeader(http.StatusNotFound)
 			return
@@ -476,24 +590,8 @@ func TestOnboardWaitsForExistingAccountLeaseBeforeRemoteGroupWrite(t *testing.T)
 		writer.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer admin.Close()
-	repository, private, databasePath := onboardingFixture(t, admin.URL)
-	database, err := sql.Open("sqlite", "file:"+databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','existing','upstream.test','sub2api','{}','now')`,
-		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
-		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','pro-key','pro','6','codex','active','now')`,
-	} {
-		if _, err := database.Exec(statement); err != nil {
-			_ = database.Close()
-			t.Fatal(err)
-		}
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
+	repository, private, _ := onboardingFixture(t, admin.URL)
+	seedExistingOnboardingAccount(t, repository, "77", "existing", "91", "pro-key")
 	_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.Account("77"))
 	if err != nil {
 		t.Fatal(err)
@@ -587,7 +685,7 @@ func TestValidateRejectsExplicitPlatformOverrideOfUpstreamCatalog(t *testing.T) 
 	}
 }
 
-func TestValidateRejectsMissingUpstreamPlatformInsteadOfTrustingLocalGroup(t *testing.T) {
+func TestValidateUsesLocalGroupPlatformWhenUpstreamCatalogOmitsIt(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
 	database, err := sql.Open("sqlite", "file:"+databasePath)
 	if err != nil {
@@ -598,15 +696,22 @@ func TestValidateRejectsMissingUpstreamPlatformInsteadOfTrustingLocalGroup(t *te
 		t.Fatal(err)
 	}
 
-	_, err = New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
+	validated, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
 		context.Background(),
 		Request{
 			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"3"},
 			UpstreamGroupID: "6", Actor: "operator",
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "缺少平台") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.locals[0].Platform == nil || *validated.locals[0].Platform != "openai" {
+		t.Fatalf("local groups=%#v", validated.locals)
+	}
+	platform, err := accountPlatform(validated.request, validated.candidate, validated.locals)
+	if err != nil || platform != "openai" {
+		t.Fatalf("platform=%q err=%v", platform, err)
 	}
 }
 
@@ -649,21 +754,7 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 	}))
 	defer admin.Close()
 	repository, private, databasePath := onboardingFixture(t, admin.URL)
-	database, err := sql.Open("sqlite", "file:"+databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','existing','upstream.test','sub2api','{}','now')`,
-		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
-		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','pro-key','pro','6','codex','active','now')`,
-	} {
-		if _, err := database.Exec(statement); err != nil {
-			database.Close()
-			t.Fatal(err)
-		}
-	}
-	_ = database.Close()
+	seedExistingOnboardingAccount(t, repository, "77", "existing", "91", "pro-key")
 	keys := &checkingKeys{databasePath: databasePath}
 	baseURL := accountBaseURL
 	result, err := New(repository, private, keys, nil).Onboard(context.Background(), Request{
@@ -676,7 +767,7 @@ func TestOnboardUpdatesExistingAccountGroupsWithoutCreatingAnotherKey(t *testing
 	if keys.createCalls != 0 || result["operation"] != "account.groups" || reads != 2 {
 		t.Fatalf("result=%#v keys=%#v reads=%d", result, keys, reads)
 	}
-	database, err = sql.Open("sqlite", "file:"+databasePath)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -720,25 +811,9 @@ func TestExistingAccountGroupUpdateReportsEarlierWritesWhenLaterReadFails(t *tes
 		}
 	}))
 	defer admin.Close()
-	repository, private, databasePath := onboardingFixture(t, admin.URL)
-	database, err := sql.Open("sqlite", "file:"+databasePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('77','first','upstream.test','sub2api','{}','now')`,
-		`INSERT INTO accounts(id,name,upstream_host,upstream_type,metadata_json,updated_at) VALUES('78','second','upstream.test','sub2api','{}','now')`,
-		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('77','codex','3')`,
-		`INSERT INTO account_groups(account_id,group_name,group_id) VALUES('78','codex','3')`,
-		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('77','upstream.test','91','first-key','pro','6','codex','active','now')`,
-		`INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,upstream_group,upstream_group_id,local_group,status,updated_at) VALUES('78','upstream.test','92','second-key','pro','6','codex','active','now')`,
-	} {
-		if _, err := database.Exec(statement); err != nil {
-			_ = database.Close()
-			t.Fatal(err)
-		}
-	}
-	_ = database.Close()
+	repository, private, _ := onboardingFixture(t, admin.URL)
+	seedExistingOnboardingAccount(t, repository, "77", "first", "91", "first-key")
+	seedExistingOnboardingAccount(t, repository, "78", "second", "92", "second-key")
 	groupID := "6"
 	result, err := New(repository, private, &probeKeys{}, nil).updateAccountGroups(context.Background(), validatedRequest{
 		request:   Request{AccountIDs: []string{"77", "78"}, Actor: "operator"},
@@ -1113,6 +1188,8 @@ func TestOnboardDoesNotWaitForAccountReadbackAfterStableCreate(t *testing.T) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			decoder := json.NewDecoder(request.Body)
 			decoder.UseNumber()
@@ -1198,6 +1275,10 @@ func TestOnboardRejectsChangedRetryAgainstFrozenCreationIntent(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
 			return
 		}
+		if isModelPreviewRequest(request) {
+			writeModelPreviewResponse(writer)
+			return
+		}
 		if request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts" {
 			accountPosts++
 			http.Error(writer, `{"message":"validation rejected"}`, http.StatusUnprocessableEntity)
@@ -1242,6 +1323,8 @@ func TestOnboardMultiplierChangeFindsFrozenPendingBeforeAnyNewRemoteCall(t *test
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			accountPosts++
 			http.Error(writer, `{"message":"validation rejected"}`, http.StatusUnprocessableEntity)
@@ -1323,6 +1406,8 @@ func TestOnboardPersistsUnknownKeyIntentAndNeverBlindlyCreatesAgain(t *testing.T
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			decoder := json.NewDecoder(request.Body)
 			decoder.UseNumber()
@@ -1428,6 +1513,8 @@ func TestOnboardReconcilesUnknownAccountCommitBeforeAnySecondCreate(t *testing.T
 				items = append(items, account)
 			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{"data": map[string]any{"items": items, "total": len(items)}})
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			posts++
 			decoder := json.NewDecoder(request.Body)
@@ -1502,6 +1589,8 @@ func TestOnboardDoesNotRequireCompleteAccountReadback(t *testing.T) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			accountPosts++
 			decoder := json.NewDecoder(request.Body)
@@ -1550,6 +1639,8 @@ func TestOnboardDoesNotFetchAccountDetailAfterCreate(t *testing.T) {
 		switch {
 		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
 			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			writeModelPreviewResponse(writer)
 		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
 			accountPosts++
 			decoder := json.NewDecoder(request.Body)
@@ -1755,6 +1846,12 @@ func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.
 		`INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,upstream_key_id,upstream_key_name,
 			upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,intent_hash,reason,created_at,updated_at)
 			VALUES('pending-1','upstream.test','sub2api','pending-key','pending','6','pro','3','codex','0.2','test-intent','retry','now','now')`,
+		`INSERT INTO upstream_keys(host,key_id,name,upstream_group,status,metadata_json,updated_at)
+			VALUES('upstream.test','unused-key','unused','6','active','{}','now')`,
+		`INSERT INTO upstream_catalog_entities(
+			upstream_id,entity_kind,entity_id,parent_entity_id,name,observed_status,lifecycle_state,missing_observations,updated_at
+		) SELECT upstream_id,'key','unused-key','6','unused','active','active',0,'now'
+			FROM upstream_identity_hosts WHERE host='upstream.test'`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
 			database.Close()
@@ -1803,6 +1900,17 @@ func TestKeyCleanupOnlyDeletesKeysWithoutBindingsOrPendingOnboarding(t *testing.
 		t.Fatal(err)
 	}
 	defer database.Close()
+	for _, query := range []string{
+		`SELECT COUNT(*) FROM upstream_keys WHERE host='upstream.test' AND key_id='unused-key'`,
+		`SELECT COUNT(*) FROM upstream_catalog_entities entities
+			JOIN upstream_identity_hosts hosts ON hosts.upstream_id=entities.upstream_id
+			WHERE hosts.host='upstream.test' AND entities.entity_kind='key' AND entities.entity_id='unused-key'`,
+	} {
+		var count int
+		if err := database.QueryRow(query).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("deleted Key remained in local projection: count=%d err=%v", count, err)
+		}
+	}
 	var eventStatus, payloadRaw string
 	if err := database.QueryRow(`SELECT status,payload_json FROM runtime_events
 		WHERE event_type='upstream.key.cleanup' ORDER BY source_id LIMIT 1`).Scan(&eventStatus, &payloadRaw); err != nil {
@@ -2037,13 +2145,18 @@ func onboardingFixture(t *testing.T, adminURL string) (*business.Store, *configs
 	if err := repository.Bootstrap(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	upstreamName := "upstream"
+	if _, err := repository.CreateUpstreamConfiguration(context.Background(), business.UpstreamConfigurationWrite{
+		Host: "upstream.test", Name: &upstreamName, BaseURL: "https://upstream.test",
+		UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	database, err := sql.Open("sqlite", "file:"+databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
-		`INSERT INTO upstreams(host,base_url,upstream_type,auth_status,metadata_json,updated_at) VALUES('upstream.test','https://upstream.test','sub2api','已鉴权','{}','now')`,
-		`INSERT INTO recharge_rates(host,recharge_rate,updated_at) VALUES('upstream.test','1','now')`,
 		`INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,updated_at) VALUES('upstream.test','6','pro','stable','openai','active','0.2','0.2','now')`,
 		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,platform,updated_at) VALUES('codex','3','balanced','global_default','openai','now')`,
 		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,platform,updated_at) VALUES('pro','4','balanced','global_default','openai','now')`,
@@ -2071,6 +2184,34 @@ func onboardingFixture(t *testing.T, adminURL string) (*business.Store, *configs
 		t.Fatal(err)
 	}
 	return repository, private, databasePath
+}
+
+func seedExistingOnboardingAccount(
+	t *testing.T,
+	repository *business.Store,
+	accountID, accountName, keyID, keyName string,
+) {
+	t.Helper()
+	priority, concurrency := int64(1), int64(10)
+	platform := "openai"
+	if err := repository.CommitOnboardingProjection(context.Background(), business.OnboardingProjection{
+		OperationID: "seed-" + accountID, AccountID: accountID, AccountName: accountName,
+		Platform: "openai", UpstreamHost: "upstream.test", UpstreamType: "sub2api",
+		UpstreamKeyID: keyID, UpstreamKeyName: keyName, UpstreamGroupID: "6", UpstreamGroupName: "pro",
+		LocalGroupID: "3", LocalGroupName: "codex",
+		LocalGroups: []business.LocalOnboardingGroup{{ID: "3", Name: "codex", Platform: &platform}},
+		Multiplier:  "0.2", Priority: &priority, Concurrency: &concurrency, Actor: "test", ReadbackConfirmed: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func isModelPreviewRequest(request *http.Request) bool {
+	return request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts/models/sync-upstream-preview"
+}
+
+func writeModelPreviewResponse(writer http.ResponseWriter) {
+	_, _ = writer.Write([]byte(`{"data":{"models":["gpt-5.2"]}}`))
 }
 
 func assertSecretAbsent(t *testing.T, databasePath, secret string) {

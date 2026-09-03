@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	ErrStopped = errors.New("后台任务执行器已停止")
-	ErrNilTask = errors.New("后台任务不能为空")
+	ErrStopped  = errors.New("后台任务执行器已停止")
+	ErrNilTask  = errors.New("后台任务不能为空")
+	ErrCapacity = errors.New("后台任务并发容量已满")
 )
 
 type Runner interface {
@@ -22,15 +23,31 @@ type Group struct {
 	mu      sync.Mutex
 	stopped bool
 	active  int
+	slots   chan struct{}
 	done    chan struct{}
 }
 
 func New(parent context.Context) *Group {
+	return newGroup(parent, 0)
+}
+
+func NewBounded(parent context.Context, maxActive int) *Group {
+	if maxActive < 1 {
+		maxActive = 1
+	}
+	return newGroup(parent, maxActive)
+}
+
+func newGroup(parent context.Context, maxActive int) *Group {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	return &Group{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	group := &Group{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	if maxActive > 0 {
+		group.slots = make(chan struct{}, maxActive)
+	}
+	return group
 }
 
 func (g *Group) Go(run func(context.Context)) error {
@@ -42,10 +59,23 @@ func (g *Group) Go(run func(context.Context)) error {
 		g.mu.Unlock()
 		return ErrStopped
 	}
+	if g.slots != nil {
+		select {
+		case g.slots <- struct{}{}:
+		default:
+			g.mu.Unlock()
+			return ErrCapacity
+		}
+	}
 	g.active++
 	g.mu.Unlock()
 	go func() {
-		defer g.finish()
+		defer func() {
+			if g.slots != nil {
+				<-g.slots
+			}
+			g.finish()
+		}()
 		run(g.ctx)
 	}()
 	return nil

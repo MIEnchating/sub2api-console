@@ -17,7 +17,13 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { api, type PricingConfig, type PricingDecision, type PricingGroup } from "@/api";
+import {
+  api,
+  type PricingBackup,
+  type PricingConfig,
+  type PricingDecision,
+  type PricingGroup,
+} from "@/api";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -53,6 +59,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
+import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { cn } from "@/lib/utils";
 
@@ -413,9 +420,9 @@ function pricingDecisionBasis(
         rows.push(`${name}：售价倍率无效`);
         continue;
       }
-      const limit = sale * (1 - config.profit_margin);
+      const limit = acceptableAccountCost(sale, config.profit_margin);
       rows.push(
-        `${name}：账号成本 ${decision.cost_multiplier} ${cost <= limit ? "≤" : ">"} 可接受成本 ${decimal(limit)}（售价 ${group.rate_multiplier} 扣除 ${percent(config.profit_margin)} 目标利润）`,
+        `${name}：账号成本 ${decision.cost_multiplier} ${cost <= limit ? "≤" : ">"} 可接受成本 ${decimal(limit)}（售价 ${group.rate_multiplier} ÷（1 + ${percent(config.profit_margin)}），目标盈利比例按利润 ÷ 账号成本计算）`,
       );
     }
   }
@@ -435,7 +442,7 @@ function pricingDecisionReason(
   if (!decision.changed) {
     return basis[0]?.startsWith("当前分组不属于")
       ? "当前分组不在价格自动调整范围内。"
-      : `当前已经是能保证 ${percent(config.profit_margin)} 目标利润的最低售价分组。`;
+      : `当前已经是能保证 ${percent(config.profit_margin)} 目标成本利润率的最低售价分组。`;
   }
   const transition = pricingGroupTransition(decision, config);
   const groupByID = new Map(groups.map((group) => [group.id, group]));
@@ -446,12 +453,12 @@ function pricingDecisionReason(
   });
   if (targetGroups.length === 1) {
     const { group, sale } = targetGroups[0];
-    return `账号成本 ${decision.cost_multiplier} 不高于 ${group.name} 可接受的 ${decimal(sale * (1 - config.profit_margin))}；这是仍能保证 ${percent(config.profit_margin)} 目标利润的最低售价分组。`;
+    return `账号成本 ${decision.cost_multiplier} 不高于 ${group.name} 可接受的 ${decimal(acceptableAccountCost(sale, config.profit_margin))}；这是仍能保证 ${percent(config.profit_margin)} 目标成本利润率的最低售价分组。`;
   }
   if (targetGroups.length > 1) {
-    return `已分别选择每个互换组中仍能保证 ${percent(config.profit_margin)} 目标利润的最低售价分组。`;
+    return `已分别选择每个互换组中仍能保证 ${percent(config.profit_margin)} 目标成本利润率的最低售价分组。`;
   }
-  return `账号成本 ${decision.cost_multiplier} 已高于本互换组所有分组可接受的成本，继续使用会低于 ${percent(config.profit_margin)} 目标利润。`;
+  return `账号成本 ${decision.cost_multiplier} 已高于本互换组所有分组可接受的成本，继续使用会低于 ${percent(config.profit_margin)} 目标成本利润率。`;
 }
 
 function pricingConfigIsValid(config: PricingConfig, groups: PricingGroup[]) {
@@ -527,7 +534,7 @@ export function pricingPreviewDecisions(
         compatible.push({ group, rate });
       }
       const chosen = compatible
-        .filter(({ rate }) => cost <= rate * (1 - config.profit_margin))
+        .filter(({ rate }) => cost <= acceptableAccountCost(rate, config.profit_margin))
         .sort(
           (left, right) => left.rate - right.rate || Number(left.group.id) - Number(right.group.id),
         )[0];
@@ -555,6 +562,64 @@ export function pricingPreviewDecisions(
       skipped: false,
       reason,
     };
+  });
+}
+
+function acceptableAccountCost(sale: number, profitMargin: number): number {
+  return sale / (1 + profitMargin);
+}
+
+export function PricingBackupList(props: {
+  backups: PricingBackup[];
+  selectedBackupID: string;
+  onSelect: (backupID: string) => void;
+  onDelete: (backup: PricingBackup) => void;
+}) {
+  if (props.backups.length === 0) {
+    return <p className="text-muted-foreground py-6 text-center text-sm">暂无可还原的备份</p>;
+  }
+  return props.backups.map((backup) => {
+    const selected = backup.id === props.selectedBackupID;
+    return (
+      <div
+        key={backup.id}
+        data-selected={selected}
+        className="data-[selected=true]:border-primary data-[selected=true]:bg-primary/5 hover:bg-muted/40 flex items-stretch rounded-lg border"
+      >
+        <button
+          type="button"
+          aria-label={`选择备份 ${backup.name}`}
+          aria-pressed={selected}
+          className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 py-2.5 text-left"
+          onClick={() => props.onSelect(backup.id)}
+        >
+          <span className="min-w-0">
+            <span className="block truncate font-medium">{backup.name}</span>
+            <span className="text-muted-foreground block text-xs">
+              {new Date(backup.created_at).toLocaleString("zh-CN", { hour12: false })}
+            </span>
+          </span>
+          <Badge variant="secondary">{backup.account_count} 个账号</Badge>
+        </button>
+        <span className="flex shrink-0 items-center border-l px-2">
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="text-destructive"
+                aria-label={`删除备份 ${backup.name}`}
+                onClick={() => props.onDelete(backup)}
+              >
+                <Trash2 aria-hidden="true" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>删除备份</TooltipContent>
+          </Tooltip>
+        </span>
+      </div>
+    );
   });
 }
 
@@ -1085,6 +1150,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   const [backupDialog, setBackupDialog] = useState<"create" | "restore" | null>(null);
   const [backupName, setBackupName] = useState("");
   const [selectedBackupID, setSelectedBackupID] = useState("");
+  const [deleteBackupTarget, setDeleteBackupTarget] = useState<PricingBackup | null>(null);
   const backups = useQuery({
     queryKey: ["pricing-backups"],
     queryFn: api.pricingBackups,
@@ -1103,11 +1169,11 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
 
   useEffect(() => {
     if (!taskID || !taskStopsPolling(task.data)) return;
+    for (const queryKey of terminalRefreshKeys("pricing", task.data)) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
     if (task.data?.status === "succeeded") {
       toast.success(task.data.message || "价格分组调整完成");
-      void queryClient.invalidateQueries({ queryKey: ["pricing"] });
-      void queryClient.invalidateQueries({ queryKey: ["accounts"] });
-      void queryClient.invalidateQueries({ queryKey: ["groups"] });
     } else if (task.data) {
       toast.error(task.data.message || "价格分组调整失败");
     }
@@ -1167,6 +1233,21 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "价格分组备份还原启动失败"),
+  });
+  const deleteBackup = useMutation({
+    mutationFn: (backup: PricingBackup) => api.deletePricingBackup(backup.id),
+    onSuccess: async (_result, deletedBackup) => {
+      const remaining = (backups.data ?? []).filter((backup) => backup.id !== deletedBackup.id);
+      queryClient.setQueryData(["pricing-backups"], remaining);
+      setSelectedBackupID((selected) =>
+        selected === deletedBackup.id ? (remaining[0]?.id ?? "") : selected,
+      );
+      setDeleteBackupTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ["pricing-backups"] });
+      toast.success(`备份“${deletedBackup.name}”已删除`);
+    },
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : "价格分组备份删除失败"),
   });
   const current =
     draft ?? (snapshot.data ? pricingConfigWithRuleNames(snapshot.data.config) : null);
@@ -1344,7 +1425,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
               >
                 <span className="min-w-0">
                   <span className="block text-sm font-medium">目标盈利比例</span>
-                  <span className="text-muted-foreground block text-xs">允许范围 0% - 99%</span>
+                  <span className="text-muted-foreground block text-xs">
+                    利润 ÷ 账号成本；允许范围 0% - 99%
+                  </span>
                 </span>
                 <span className="relative block">
                   <Input
@@ -1486,8 +1569,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             <DialogHeader>
               <DialogTitle>账号分组调整明细</DialogTitle>
               <DialogDescription>
-                按目标盈利比例 {percent(current.profit_margin)}{" "}
-                计算。默认只显示需要调整的账号，完整公式可在每行的计算明细中查看。
+                按目标盈利比例 {percent(current.profit_margin)} （利润 ÷
+                账号成本）计算。默认只显示需要调整的账号，完整公式可在每行的计算明细中查看。
               </DialogDescription>
             </DialogHeader>
             <DialogBody className="overflow-hidden pr-0">
@@ -1540,54 +1623,73 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       <Dialog
         open={backupDialog === "restore"}
         onOpenChange={(open) => {
-          if (!open) setBackupDialog(null);
+          if (!open && !deleteBackup.isPending) {
+            setBackupDialog(null);
+            setDeleteBackupTarget(null);
+          }
         }}
       >
         <DialogContent height="medium" className="grid grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
-            <DialogTitle>从备份还原分组</DialogTitle>
+            <DialogTitle>{deleteBackupTarget ? "删除价格分组备份" : "从备份还原分组"}</DialogTitle>
             <DialogDescription>
-              将批量改写管理平台账号分组。已不存在的账号或分组会跳过，人工优先账号不会被修改。
+              {deleteBackupTarget
+                ? "只删除这份本地备份，不会修改当前账号分组；删除后无法恢复。"
+                : "将批量改写管理平台账号分组。已不存在的账号或分组会跳过，人工优先账号不会被修改。"}
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="grid content-start gap-2 pr-1">
-            {backups.isError ? (
-              <p className="text-destructive text-sm">价格分组备份读取失败</p>
-            ) : null}
-            {backups.data?.map((backup) => {
-              const selected = backup.id === selectedBackupID;
-              return (
-                <button
-                  key={backup.id}
-                  type="button"
-                  data-selected={selected}
-                  aria-pressed={selected}
-                  className="data-[selected=true]:border-primary data-[selected=true]:bg-primary/5 hover:bg-muted/40 flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left"
-                  onClick={() => setSelectedBackupID(backup.id)}
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium">{backup.name}</span>
-                    <span className="text-muted-foreground block text-xs">
-                      {new Date(backup.created_at).toLocaleString("zh-CN", {
-                        hour12: false,
-                      })}
-                    </span>
-                  </span>
-                  <Badge variant="secondary">{backup.account_count} 个账号</Badge>
-                </button>
-              );
-            })}
+            {deleteBackupTarget ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-3">
+                <span className="min-w-0 truncate font-medium">{deleteBackupTarget.name}</span>
+                <Badge variant="secondary">{deleteBackupTarget.account_count} 个账号</Badge>
+              </div>
+            ) : (
+              <>
+                {backups.isError ? (
+                  <p className="text-destructive text-sm">价格分组备份读取失败</p>
+                ) : null}
+                <PricingBackupList
+                  backups={backups.data ?? []}
+                  selectedBackupID={selectedBackupID}
+                  onSelect={setSelectedBackupID}
+                  onDelete={setDeleteBackupTarget}
+                />
+              </>
+            )}
           </DialogBody>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setBackupDialog(null)}>
-              取消
-            </Button>
-            <Button
-              disabled={!selectedBackupID || restoreBackup.isPending || running}
-              onClick={() => restoreBackup.mutate(selectedBackupID)}
-            >
-              <RotateCcw /> {restoreBackup.isPending ? "正在提交" : "确认还原"}
-            </Button>
+            {deleteBackupTarget ? (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={deleteBackup.isPending}
+                  onClick={() => setDeleteBackupTarget(null)}
+                >
+                  取消
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={deleteBackup.isPending}
+                  onClick={() => deleteBackup.mutate(deleteBackupTarget)}
+                >
+                  <Trash2 aria-hidden="true" />
+                  {deleteBackup.isPending ? "删除中" : "确认删除"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setBackupDialog(null)}>
+                  取消
+                </Button>
+                <Button
+                  disabled={!selectedBackupID || restoreBackup.isPending || running}
+                  onClick={() => restoreBackup.mutate(selectedBackupID)}
+                >
+                  <RotateCcw /> {restoreBackup.isPending ? "正在提交" : "确认还原"}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

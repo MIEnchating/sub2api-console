@@ -75,11 +75,16 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain('data-testid="system-settings-flow-secondary"');
     expect(markup.match(/grid min-w-0 content-start gap-4/g)).toHaveLength(2);
     expect(markup).not.toContain("xl:row-span-2");
-    expect(markup.match(/data-size="sm"/g)).toHaveLength(4);
+    expect(markup.match(/data-slot="card"[^>]*data-size="sm"/g)).toHaveLength(5);
     expect(markup).not.toContain("执行模式");
+    expect(markup).toContain("菜单设置");
+    expect(markup).toContain("当前显示 22 / 22 个菜单入口");
+    expect(markup).toContain('aria-label="在菜单中显示账号管理"');
+    expect(markup).toContain("/config · 始终显示");
     expect(markup).toContain("Sub2API 连接");
     expect(markup).not.toContain("运行状态");
-    expect(markup).not.toContain("自动巡检");
+    expect(markup).toContain("自动巡检");
+    expect(markup).not.toContain('data-testid="auto-inspection-controls"');
     expect(markup).not.toContain("真实流量采集");
     expect(markup).not.toContain("页面数据更新");
     expect(markup).not.toContain("上一轮概要");
@@ -88,8 +93,22 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("请求超时（秒）");
     expect(markup).toContain("保存并测试同步");
     expect(markup).toContain("账号创建默认值");
-    expect(markup).toContain('aria-label="平台接入"');
-    expect(markup).toContain('aria-label="默认值与数据维护"');
+    expect(markup).toContain('aria-label="平台接入与账号默认值"');
+    expect(markup).toContain('aria-label="菜单与数据维护"');
+    const primaryColumnStart = markup.indexOf('data-testid="system-settings-flow-primary"');
+    const secondaryColumnStart = markup.indexOf('data-testid="system-settings-flow-secondary"');
+    const primaryColumn = markup.slice(primaryColumnStart, secondaryColumnStart);
+    const secondaryColumn = markup.slice(secondaryColumnStart);
+    expect(primaryColumn.indexOf("Sub2API 连接")).toBeLessThan(
+      primaryColumn.indexOf("账号创建默认值"),
+    );
+    expect(primaryColumn.indexOf("账号创建默认值")).toBeLessThan(
+      primaryColumn.indexOf("QQBot 通知接入"),
+    );
+    expect(primaryColumn).not.toContain("菜单设置");
+    expect(primaryColumn).not.toContain("日志保留");
+    expect(secondaryColumn.indexOf("菜单设置")).toBeLessThan(secondaryColumn.indexOf("日志保留"));
+    expect(secondaryColumn).not.toContain("账号创建默认值");
     expect(markup).toContain("默认并发");
     expect(markup).toContain("默认优先级");
     expect(markup).toContain("保存默认参数");
@@ -125,7 +144,7 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("定时清理");
     expect(markup).toContain('aria-label="日志保留天数"');
     expect(markup).toContain("立即按期限清理");
-    expect(markup.match(/flex items-start justify-between gap-3/g)).toHaveLength(2);
+    expect(markup.match(/flex items-start justify-between gap-3/g)).toHaveLength(3);
     const cleanupLabel = markup.match(
       /<label[^>]*for="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>定时清理<\/span>/,
     );

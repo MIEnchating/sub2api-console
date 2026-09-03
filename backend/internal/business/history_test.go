@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -90,6 +91,55 @@ func TestLogSearchFiltersBeforeDecodingPayloads(t *testing.T) {
 	audits, err := store.SearchAuditEvents(ctx, "needle-error", &limit)
 	if err != nil || len(audits) != 1 || audits[0].ID != 103 {
 		t.Fatalf("audits=%#v err=%v", audits, err)
+	}
+}
+
+func TestAuditEventsRemainReadableAfterLogFilterIndexChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history-legacy-index.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO operation_audit(
+		source_id,operation_id,operation_type,state,phase,group_names_json,writeback,created_at
+	) VALUES(-1,'delete-failure','account.delete','failed','management-target-check','[]',0,'2026-09-02T15:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS ix_operation_audit_log_recent_v2;
+		DROP INDEX IF EXISTS ix_operation_audit_log_recent;
+		CREATE INDEX ix_operation_audit_log_recent ON operation_audit(created_at DESC,source_id)
+		WHERE phase<>'calculation' AND operation_type<>'upstream.rate_sync' AND (
+			writeback=1 OR (operation_type IN ('account.scheduling','routing.writeback')
+			AND state='succeeded' AND remote_confirmed=0 AND readback_confirmed=1
+			AND before_json IS NOT NULL AND after_json IS NOT NULL)
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	limit := 20
+	audits, err := reopened.AuditEvents(ctx, &limit, true)
+	if err != nil {
+		t.Fatalf("日志查询不应依赖旧部分索引定义: %v", err)
+	}
+	if len(audits) != 1 || audits[0].OperationID != "delete-failure" {
+		t.Fatalf("账号删除失败审计缺失: %#v", audits)
 	}
 }
 

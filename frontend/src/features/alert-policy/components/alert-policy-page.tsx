@@ -21,10 +21,17 @@ import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  alertRuleFields,
+  notificationTargetTypeLabels,
+  recoveryNotificationFields,
+  routingDegradedFields,
+} from "../constants";
 import {
   alertPolicyFormSchema,
   defaultAlertPolicyForm,
@@ -35,72 +42,14 @@ type AlertPolicyPageProps = {
   onOpenSettings: () => void;
 };
 
-const ruleFields: Array<{
-  name:
-    | "configuration_enabled"
-    | "auth_enabled"
-    | "rate_sync_enabled"
-    | "balance_enabled"
-    | "probe_enabled"
-    | "routing_breaker_enabled"
-    | "routing_degraded_enabled"
-    | "routing_survivor_enabled"
-    | "group_unavailable_enabled"
-    | "group_survivor_enabled"
-    | "apply_failure_enabled";
-  label: string;
-  description: string;
-}> = [
-  {
-    name: "configuration_enabled",
-    label: "配置异常",
-    description: "上游状态、余额或元数据无法解析时产生告警",
-  },
-  { name: "auth_enabled", label: "鉴权失效", description: "Token 失效、过期、未鉴权或恢复失败" },
-  { name: "rate_sync_enabled", label: "倍率同步失败", description: "最近一次上游倍率同步任务失败" },
-  { name: "balance_enabled", label: "余额不足", description: "余额达到阈值或上游已触发余额硬关闭" },
-  {
-    name: "probe_enabled",
-    label: "主动探测失败",
-    description: "账号在分组中的连续主动探测结果未通过",
-  },
-  {
-    name: "routing_breaker_enabled",
-    label: "账号熔断判定",
-    description: "调度策略判定账号需要停止接收流量",
-  },
-  {
-    name: "routing_degraded_enabled",
-    label: "账号降级",
-    description: "健康分或响应质量达到调度策略的降级条件",
-  },
-  {
-    name: "routing_survivor_enabled",
-    label: "保底强留",
-    description: "账号本应熔断，但为避免分组断供而继续保留",
-  },
-  {
-    name: "group_unavailable_enabled",
-    label: "分组无可调度账号",
-    description: "本轮调度判定后，分组内没有账号可以接收流量",
-  },
-  {
-    name: "group_survivor_enabled",
-    label: "分组仅剩保底账号",
-    description: "本轮调度判定后，分组仅靠保底账号维持服务",
-  },
-  {
-    name: "apply_failure_enabled",
-    label: "自动执行失败",
-    description: "调度目标写入远端失败，或写入后无法确认实际状态",
-  },
-];
-
-const notificationTargetTypeLabels: Record<string, string> = {
-  c2c: "私聊",
-  group: "群聊",
-  channel: "频道",
-};
+function updateSelection<Value extends string>(
+  values: Value[],
+  value: Value,
+  checked: boolean,
+): Value[] {
+  if (checked) return values.includes(value) ? values : [...values, value];
+  return values.filter((item) => item !== value);
+}
 
 function notificationTargetTypeLabel(channelType: string): string {
   return notificationTargetTypeLabels[channelType] ?? "未知目标";
@@ -109,6 +58,10 @@ function notificationTargetTypeLabel(channelType: string): string {
 function policyToForm(policy: AlertPolicy): AlertPolicyFormValues {
   return {
     ...policy,
+    routing_degraded_types:
+      policy.routing_degraded_types ?? defaultAlertPolicyForm.routing_degraded_types,
+    recovery_notification_types:
+      policy.recovery_notification_types ?? defaultAlertPolicyForm.recovery_notification_types,
     balance_thresholds: policy.balance_thresholds.map((value) => ({ value })),
     probe_groups: policy.probe_groups.join(", "),
   };
@@ -224,6 +177,8 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
   const balanceEnabled = form.watch("balance_enabled");
   const probeEnabled = form.watch("probe_enabled");
   const deliveryEnabled = form.watch("delivery_enabled");
+  const routingDegradedEnabled = form.watch("routing_degraded_enabled");
+  const notifyRecovery = form.watch("notify_recovery");
   const policyReady = policy.data !== undefined && !policy.error;
 
   const submit = form.handleSubmit((values) => {
@@ -276,30 +231,10 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
           data-slot="alert-policy-columns"
           className="grid items-start gap-4 lg:grid-cols-2"
         >
-          <div className="grid min-w-0 gap-4">
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldAlert className="text-primary" />
-                  告警检测
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Controller
-                  control={form.control}
-                  name="enabled"
-                  render={({ field }) => (
-                    <SettingSwitch
-                      label="启用告警检测"
-                      description="关闭后保留现有告警记录，不再检查新的异常或恢复状态"
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  )}
-                />
-              </CardContent>
-            </Card>
-
+          <div
+            className="order-2 grid min-w-0 gap-4 lg:col-start-2 lg:row-start-1"
+            data-slot="alert-policy-threshold-column"
+          >
             <Card>
               <CardHeader className="border-b">
                 <CardTitle>阈值与范围</CardTitle>
@@ -434,44 +369,125 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
 
             <Card>
               <CardHeader className="border-b">
-                <CardTitle className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2">
-                    <BellRing className="text-primary" />
-                    通知渠道
-                  </span>
-                  <Badge variant={notification.data?.configured ? "secondary" : "warning"}>
-                    {notification.data?.configured ? "已连接" : "未配置"}
-                  </Badge>
-                </CardTitle>
+                <CardTitle>检测规则</CardTitle>
               </CardHeader>
-              <CardContent className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
-                <div className="min-w-0">
-                  <p className="text-sm">当前支持 QQBot 通知渠道。</p>
-                  <p className="text-muted-foreground mt-1 text-xs leading-5">
-                    {notification.data?.configured
-                      ? `目标类型：${notificationTargetTypeLabel(notification.data.channel_type)}。敏感凭据继续由系统设置统一管理。`
-                      : "未配置渠道时仍会检测并保存告警，但不会发送通知。"}
-                  </p>
+              <CardContent>
+                <div className="grid gap-x-6 xl:grid-cols-2" data-slot="alert-rule-grid">
+                  {alertRuleFields.map((rule) => (
+                    <Controller
+                      key={rule.name}
+                      control={form.control}
+                      name={rule.name}
+                      render={({ field }) => (
+                        <SettingSwitch
+                          label={rule.label}
+                          description={rule.description}
+                          checked={field.value}
+                          disabled={!enabled}
+                          onCheckedChange={field.onChange}
+                        />
+                      )}
+                    />
+                  ))}
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={props.onOpenSettings}
-                >
-                  <Settings2 /> 管理通知渠道
-                </Button>
+                <div className="mt-4 border-t pt-4" data-slot="routing-degraded-rules">
+                  <Controller
+                    control={form.control}
+                    name="routing_degraded_enabled"
+                    render={({ field }) => (
+                      <SettingSwitch
+                        label="账号降级"
+                        description="控制全部账号降级告警；可继续选择需要关注的降级来源"
+                        checked={field.value}
+                        disabled={!enabled}
+                        onCheckedChange={field.onChange}
+                      />
+                    )}
+                  />
+                  <div className="grid gap-x-6 pl-4 xl:grid-cols-2">
+                    {routingDegradedFields.map((item) => (
+                      <Controller
+                        key={item.value}
+                        control={form.control}
+                        name="routing_degraded_types"
+                        render={({ field }) => (
+                          <SettingSwitch
+                            label={item.label}
+                            description={item.description}
+                            checked={field.value.includes(item.value)}
+                            disabled={!enabled || !routingDegradedEnabled}
+                            onCheckedChange={(checked) =>
+                              field.onChange(updateSelection(field.value, item.value, checked))
+                            }
+                          />
+                        )}
+                      />
+                    ))}
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </div>
 
-          <div className="grid min-w-0 gap-4">
+          <div
+            className="order-1 grid min-w-0 gap-4 lg:col-start-1 lg:row-start-1"
+            data-slot="alert-policy-detection-column"
+          >
             <Card>
               <CardHeader className="border-b">
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldAlert className="text-primary" />
+                  告警检测
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Controller
+                  control={form.control}
+                  name="enabled"
+                  render={({ field }) => (
+                    <SettingSwitch
+                      label="启用告警检测"
+                      description="关闭后保留现有告警记录，不再检查新的异常或恢复状态"
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  )}
+                />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <BellRing className="text-primary" />
                   通知发送
                 </CardTitle>
+                <CardAction
+                  className="flex items-center gap-1.5"
+                  data-slot="notification-channel-summary"
+                >
+                  <Badge variant={notification.data?.configured ? "secondary" : "warning"}>
+                    {notification.data?.configured
+                      ? `QQBot · ${notificationTargetTypeLabel(notification.data.channel_type)}`
+                      : "QQBot 未配置"}
+                  </Badge>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label="管理通知渠道"
+                          onClick={props.onOpenSettings}
+                        />
+                      }
+                    >
+                      <Settings2 />
+                    </TooltipTrigger>
+                    <TooltipContent>管理通知渠道</TooltipContent>
+                  </Tooltip>
+                </CardAction>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-x-6 sm:grid-cols-2" data-slot="alert-delivery-switches">
@@ -494,13 +510,39 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     render={({ field }) => (
                       <SettingSwitch
                         label="发送恢复通知"
-                        description="异常恢复时发送一次恢复消息"
+                        description="仅为下方选中的告警类型发送一次恢复消息"
                         checked={field.value}
                         disabled={!enabled || !deliveryEnabled}
                         onCheckedChange={field.onChange}
                       />
                     )}
                   />
+                </div>
+                <div className="mt-4 border-t pt-4" data-slot="recovery-notification-types">
+                  <p className="text-sm font-medium">恢复通知类型</p>
+                  <p className="text-muted-foreground mt-1 text-xs leading-5">
+                    默认关闭容易频繁波动或无需闭环确认的恢复消息，告警记录仍会正常更新。
+                  </p>
+                  <div className="mt-2 grid gap-x-6 sm:grid-cols-2">
+                    {recoveryNotificationFields.map((item) => (
+                      <Controller
+                        key={item.value}
+                        control={form.control}
+                        name="recovery_notification_types"
+                        render={({ field }) => (
+                          <SettingSwitch
+                            label={item.label}
+                            description={item.description}
+                            checked={field.value.includes(item.value)}
+                            disabled={!enabled || !deliveryEnabled || !notifyRecovery}
+                            onCheckedChange={(checked) =>
+                              field.onChange(updateSelection(field.value, item.value, checked))
+                            }
+                          />
+                        )}
+                      />
+                    ))}
+                  </div>
                 </div>
                 <div
                   className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
@@ -576,30 +618,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     )}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle>检测规则</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-x-6 xl:grid-cols-2" data-slot="alert-rule-grid">
-                {ruleFields.map((rule) => (
-                  <Controller
-                    key={rule.name}
-                    control={form.control}
-                    name={rule.name}
-                    render={({ field }) => (
-                      <SettingSwitch
-                        label={rule.label}
-                        description={rule.description}
-                        checked={field.value}
-                        disabled={!enabled}
-                        onCheckedChange={field.onChange}
-                      />
-                    )}
-                  />
-                ))}
               </CardContent>
             </Card>
           </div>

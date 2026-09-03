@@ -119,9 +119,6 @@ type AccountRoutingTarget struct {
 }
 
 func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *string) ([]RoutingAccount, error) {
-	if err := s.ensureStableUpstreamRelations(ctx); err != nil {
-		return nil, err
-	}
 	clauses := []string{}
 	arguments := []any{}
 	if accountID != nil {
@@ -236,7 +233,7 @@ func (s *Store) RoutingSamples(
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true)
+	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true, false)
 	if err != nil {
 		return nil, err
 	}

@@ -191,7 +191,9 @@ type AccountTaskEnqueuer interface {
 
 type AccountDeleteService interface {
 	Preview(context.Context, string) (accountdelete.Preview, error)
+	PreviewBatch(context.Context, []string) (accountdelete.BatchPreview, error)
 	Enqueue(context.Context, string, *accountdelete.Binding, string, string) (taskstore.Task, error)
+	EnqueueBatch(context.Context, []accountdelete.Confirmation, string) (taskstore.Task, error)
 }
 
 type ProbeTaskEnqueuer interface {
@@ -211,6 +213,7 @@ type PricingService interface {
 	EnqueueRevenue(context.Context, pricing.RevenueRequest, string) (taskstore.Task, error)
 	CreateBackup(context.Context, string, string) (business.PricingBackup, error)
 	Backups(context.Context) ([]business.PricingBackup, error)
+	DeleteBackup(context.Context, string) error
 	EnqueueRestore(context.Context, string, string) (taskstore.Task, error)
 }
 
@@ -403,6 +406,7 @@ type newAPIGroupBindingsRequest struct {
 type newAPIChannelRequest struct {
 	Sub2APIGroupID string   `json:"sub2api_group_id" binding:"required,min=1,max=128"`
 	KeyID          string   `json:"key_id" binding:"required,min=1,max=128"`
+	BaseURL        string   `json:"base_url" binding:"required,min=1,max=2048,url"`
 	Models         []string `json:"models" binding:"required,min=1,max=500,dive,required,max=256"`
 	NewAPIGroups   []string `json:"newapi_groups" binding:"required,min=1,max=500,dive,required,max=128"`
 }
@@ -410,10 +414,15 @@ type newAPIChannelRequest struct {
 type newAPIChannelModelsRequest struct {
 	Sub2APIGroupID string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
 	KeyID          string `json:"key_id" binding:"required,min=1,max=128"`
+	BaseURL        string `json:"base_url" binding:"required,min=1,max=2048,url"`
 }
 
 type newAPIChannelKeyRequest struct {
-	Sub2APIGroupID string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
+	Sub2APIGroupID   string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
+	CredentialSource string `json:"credential_source" binding:"required,oneof=vault custom"`
+	VaultEntry       string `json:"vault_entry" binding:"omitempty,min=1,max=255"`
+	Username         string `json:"username" binding:"omitempty,max=65536"`
+	Password         string `json:"password" binding:"omitempty,max=65536"`
 }
 
 type newAPIModelPricesRequest struct {
@@ -535,6 +544,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/notifications/target-discovery", server.discoverNotificationTarget)
 	authorized.DELETE("/notifications/target-discovery/:task_id", server.cancelNotificationTargetDiscovery)
 	authorized.GET("/accounts", server.accounts)
+	authorized.POST("/accounts/delete-preview", server.accountDeleteBatchPreview)
+	authorized.POST("/accounts/delete", server.deleteAccounts)
 	authorized.GET("/accounts/:account_id", server.account)
 	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
 	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
@@ -577,6 +588,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/pricing/revenue/latest", server.latestPricingRevenue)
 	authorized.GET("/pricing/backups", server.pricingBackups)
 	authorized.POST("/pricing/backups", server.createPricingBackup)
+	authorized.DELETE("/pricing/backups/:backup_id", server.deletePricingBackup)
 	authorized.POST("/pricing/backups/:backup_id/restore", server.restorePricingBackup)
 	authorized.GET("/newapi", server.newAPIWorkspace)
 	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
@@ -1226,6 +1238,135 @@ func (s *Server) accountDeletePreview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Server) accountDeleteBatchPreview(c *gin.Context) {
+	if s.accountDelete == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号删除服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "批量删除预览参数必须只包含 account_ids")
+		return
+	}
+	accountIDs, err := stableAccountIDs(payload["account_ids"], 50)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	preview, err := s.accountDelete.PreviewBatch(c.Request.Context(), accountIDs)
+	if err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+		}
+		writeError(c, status, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Server) deleteAccounts(c *gin.Context) {
+	if s.accountDelete == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号删除服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "账号批量删除参数必须只包含 confirmations")
+		return
+	}
+	confirmations, err := accountDeleteConfirmations(payload["confirmations"])
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountDelete.EnqueueBatch(c.Request.Context(), confirmations, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func stableAccountIDs(raw any, maximum int) ([]string, error) {
+	rawIDs, ok := raw.([]any)
+	if !ok || len(rawIDs) == 0 {
+		return nil, errors.New("请至少提供一个账号 ID")
+	}
+	if len(rawIDs) > maximum {
+		return nil, fmt.Errorf("单次最多处理 %d 个账号", maximum)
+	}
+	result := make([]string, 0, len(rawIDs))
+	seen := make(map[string]struct{}, len(rawIDs))
+	for _, rawID := range rawIDs {
+		accountID, ok := rawID.(string)
+		accountID = strings.TrimSpace(accountID)
+		if !ok || !positiveNumericID(accountID) {
+			return nil, errors.New("账号必须全部使用稳定数字 ID")
+		}
+		if _, found := seen[accountID]; found {
+			return nil, fmt.Errorf("账号 ID 不能重复：%s", accountID)
+		}
+		seen[accountID] = struct{}{}
+		result = append(result, accountID)
+	}
+	return result, nil
+}
+
+func accountDeleteConfirmations(raw any) ([]accountdelete.Confirmation, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 {
+		return nil, errors.New("请至少提供一个账号删除确认范围")
+	}
+	if len(values) > 50 {
+		return nil, errors.New("单次最多删除 50 个账号")
+	}
+	result := make([]accountdelete.Confirmation, 0, len(values))
+	for _, rawValue := range values {
+		value, ok := rawValue.(map[string]any)
+		if !ok || len(value) != 3 {
+			return nil, errors.New("每个账号删除确认必须包含 account_id、management_base_url 和 binding")
+		}
+		accountID, err := requiredText(value, "account_id", 1, 64)
+		if err != nil || !positiveNumericID(accountID) {
+			return nil, errors.New("批量删除确认中的账号 ID 无效")
+		}
+		managementBaseURL, err := requiredText(value, "management_base_url", 1, 2048)
+		if err != nil {
+			return nil, errors.New("批量删除确认中的管理目标地址无效")
+		}
+		confirmation := accountdelete.Confirmation{
+			AccountID: accountID, ManagementBaseURL: managementBaseURL,
+		}
+		if value["binding"] != nil {
+			binding, bindingOK := value["binding"].(map[string]any)
+			if !bindingOK || len(binding) != 6 {
+				return nil, errors.New("批量删除确认中的账号绑定范围不完整")
+			}
+			bindingID, bindingErr := positiveJSONInteger(binding["id"], "binding.id", 1, 1<<62)
+			upstreamID, upstreamErr := requiredText(binding, "upstream_id", 1, 255)
+			upstreamHost, hostErr := requiredText(binding, "upstream_host", 1, 2048)
+			authHost, authErr := requiredText(binding, "auth_host", 1, 2048)
+			keyID, keyErr := requiredText(binding, "upstream_key_id", 1, 255)
+			keyName, nameErr := requiredText(binding, "upstream_key_name", 0, 255)
+			if bindingErr != nil || upstreamErr != nil || hostErr != nil || authErr != nil || keyErr != nil || nameErr != nil {
+				return nil, errors.New("批量删除确认中的账号绑定范围无效")
+			}
+			confirmation.Binding = &accountdelete.Binding{
+				ID: bindingID, UpstreamID: upstreamID, UpstreamHost: upstreamHost,
+				AuthHost: authHost, UpstreamKeyID: keyID, UpstreamKeyName: keyName,
+			}
+		}
+		result = append(result, confirmation)
+	}
+	return result, nil
 }
 
 func (s *Server) deleteAccount(c *gin.Context) {
@@ -2613,6 +2754,27 @@ func (s *Server) createPricingBackup(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, backup)
+}
+
+func (s *Server) deletePricingBackup(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	backupID := strings.TrimSpace(c.Param("backup_id"))
+	if backupID == "" || len(backupID) > 128 {
+		writeError(c, http.StatusUnprocessableEntity, "备份 ID 无效")
+		return
+	}
+	if err := s.pricing.DeleteBackup(c.Request.Context(), backupID); err != nil {
+		if errors.Is(err, business.ErrPricingBackupNotFound) {
+			writeError(c, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": backupID, "deleted": true})
 }
 
 func (s *Server) restorePricingBackup(c *gin.Context) {
@@ -4014,7 +4176,7 @@ func (s *Server) createNewAPIChannel(c *gin.Context) {
 		return
 	}
 	result, err := s.newAPIManagement.CreateChannel(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelInput{
-		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID, Models: request.Models,
+		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID, BaseURL: request.BaseURL, Models: request.Models,
 		NewAPIGroups: request.NewAPIGroups,
 	})
 	if err != nil {
@@ -4035,7 +4197,8 @@ func (s *Server) createNewAPIChannelKey(c *gin.Context) {
 		return
 	}
 	result, err := s.newAPIManagement.CreateChannelKey(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelKeyInput{
-		Sub2APIGroupID: request.Sub2APIGroupID,
+		Sub2APIGroupID: request.Sub2APIGroupID, CredentialSource: request.CredentialSource,
+		VaultEntry: request.VaultEntry, Username: request.Username, Password: request.Password,
 	})
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())
@@ -4055,7 +4218,7 @@ func (s *Server) fetchNewAPIChannelModels(c *gin.Context) {
 		return
 	}
 	models, err := s.newAPIManagement.FetchChannelModels(c.Request.Context(), c.Param("platform_id"), newapimanagement.ChannelModelsInput{
-		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID,
+		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID, BaseURL: request.BaseURL,
 	})
 	if err != nil {
 		writeError(c, http.StatusBadGateway, err.Error())

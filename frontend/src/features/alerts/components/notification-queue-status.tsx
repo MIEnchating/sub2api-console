@@ -107,9 +107,9 @@ function queueItemMatches(item: QueueDisplayItem, search: string) {
   if (!query) return true;
   const { alert } = item;
   return [
-    alertTypeLabel(alert.event_type),
+    alertTypeLabel(alert.event_type, alert.status),
     alertObjectLabel(alert),
-    alertCauseLabel(alert.cause_code),
+    alertCauseLabel(alert.cause_code, alert.status),
     item.queueStatus,
     item.queueReason,
     alert.last_error,
@@ -132,7 +132,9 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[]; kind: QueueKind }
           <article className="space-y-2.5 p-3" key={`${queueStatus}:${alert.incident_key}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <strong className="block font-medium">{alertTypeLabel(alert.event_type)}</strong>
+                <strong className="block font-medium">
+                  {alertTypeLabel(alert.event_type, alert.status)}
+                </strong>
                 <span className="text-muted-foreground mt-0.5 block text-xs">
                   {alertObjectLabel(alert)}
                 </span>
@@ -154,7 +156,7 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[]; kind: QueueKind }
               </div>
             ) : null}
             <div className="text-sm">
-              <span>{alertCauseLabel(alert.cause_code)}</span>
+              <span>{alertCauseLabel(alert.cause_code, alert.status)}</span>
               {alert.last_error ? (
                 <span className="text-destructive mt-0.5 block text-xs">{alert.last_error}</span>
               ) : null}
@@ -183,7 +185,9 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[]; kind: QueueKind }
             {props.items.map(({ alert, queueStatus, queueReason, danger }) => (
               <TableRow key={`${queueStatus}:${alert.incident_key}`}>
                 <TableCell className="whitespace-normal" overflowTooltip={false}>
-                  <strong className="block font-medium">{alertTypeLabel(alert.event_type)}</strong>
+                  <strong className="block font-medium">
+                    {alertTypeLabel(alert.event_type, alert.status)}
+                  </strong>
                   <span className="text-muted-foreground mt-0.5 block text-xs">
                     {alertObjectLabel(alert)}
                   </span>
@@ -199,7 +203,7 @@ function QueueDetailsTable(props: { items: QueueDisplayItem[]; kind: QueueKind }
                   ) : null}
                 </TableCell>
                 <TableCell className="whitespace-normal" overflowTooltip={false}>
-                  <span>{alertCauseLabel(alert.cause_code)}</span>
+                  <span>{alertCauseLabel(alert.cause_code, alert.status)}</span>
                   {alert.last_error ? (
                     <span className="text-destructive mt-0.5 block text-xs">
                       {alert.last_error}

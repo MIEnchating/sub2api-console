@@ -8,7 +8,9 @@ export type TaskRefreshScope =
   | "management-sync"
   | "account-scheduling"
   | "alerts"
-  | "onboarding";
+  | "onboarding"
+  | "pricing"
+  | "upstream-key-cleanup";
 
 const refreshKeys: Record<TaskRefreshScope, string[]> = {
   "upstream-action": [
@@ -41,6 +43,15 @@ const refreshKeys: Record<TaskRefreshScope, string[]> = {
     "groups",
     "upstreams",
     "upstream-groups",
+    "logs",
+    "overview",
+    "overview-events",
+  ],
+  pricing: ["pricing", "accounts", "groups", "logs", "overview", "overview-events"],
+  "upstream-key-cleanup": [
+    "upstreams",
+    "onboarding-candidates",
+    "onboarding-unbound-keys",
     "logs",
     "overview",
     "overview-events",

@@ -3,6 +3,7 @@ package taskstore
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -105,7 +106,7 @@ func TestTaskLogSummaryPreservesExplicitObjectLabel(t *testing.T) {
 	}
 }
 
-func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
+func TestListBySkillOnlyLoadsBoundedMatchingTaskResults(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +114,7 @@ func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	for _, task := range []Task{
+		{ID: "older-model-check", Skill: "sub2api-model-check", Operation: "check", Status: "succeeded", Progress: 100, Message: "旧结果", Result: map[string]any{"account_ids": []string{"40"}, "large": strings.Repeat("z", 4096)}, CreatedAt: "2026-08-30T01:00:00Z", UpdatedAt: "2026-08-30T02:00:00Z"},
 		{ID: "model-check", Skill: "sub2api-model-check", Operation: "check", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"account_ids": []string{"41"}}, CreatedAt: "2026-08-31T01:00:00Z", UpdatedAt: "2026-08-31T02:00:00Z"},
 		{ID: "inspection", Skill: "sub2api-inspection", Operation: "inspect", Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"account_id": "42"}, CreatedAt: "2026-08-31T01:00:00Z", UpdatedAt: "2026-08-31T03:00:00Z"},
 	} {
@@ -120,12 +122,15 @@ func TestListBySkillOnlyLoadsMatchingTaskResults(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := store.ListBySkill(ctx, "sub2api-model-check")
+	rows, err := store.ListBySkill(ctx, "sub2api-model-check", 1)
 	if err != nil || len(rows) != 1 || rows[0].ID != "model-check" {
 		t.Fatalf("unexpected skill tasks: %#v err=%v", rows, err)
 	}
-	if _, err := store.ListBySkill(ctx, " "); err == nil {
+	if _, err := store.ListBySkill(ctx, " ", 1); err == nil {
 		t.Fatal("empty skill must be rejected")
+	}
+	if _, err := store.ListBySkill(ctx, "sub2api-model-check", 0); err == nil {
+		t.Fatal("zero limit must be rejected")
 	}
 }
 
@@ -154,13 +159,169 @@ func TestLatestByOperationReturnsNewestMatchingStatus(t *testing.T) {
 	}
 }
 
+func TestSaveRejectsOverlappingActiveOperationUntilTerminalState(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	first := Task{ID: "first", Skill: "console", Operation: "account-rate-sync", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	second := Task{ID: "second", Skill: "console", Operation: "account-rate-sync", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	if err := store.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, second); !errors.Is(err, ErrOperationActive) {
+		t.Fatalf("overlapping operation error = %v, want ErrOperationActive", err)
+	}
+	first.Status, first.Progress, first.Message = "succeeded", 100, "done"
+	if err := store.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, second); err != nil {
+		t.Fatalf("operation remained reserved after terminal state: %v", err)
+	}
+	for _, task := range []Task{
+		{ID: "control-1", Skill: "console", Operation: "account-control", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+		{ID: "control-2", Skill: "console", Operation: "account-control", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatalf("ordinary operations must remain independently runnable: %v", err)
+		}
+	}
+	upstreamBalance := Task{ID: "balance", Skill: "console", Operation: "upstream-balances-sync", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	upstreamCatalog := Task{ID: "catalog", Skill: "console", Operation: "upstream-sync", Status: "queued", Progress: 0, Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now}
+	if err := store.Save(ctx, upstreamBalance); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, upstreamCatalog); !errors.Is(err, ErrOperationActive) {
+		t.Fatalf("overlapping upstream batch error = %v, want ErrOperationActive", err)
+	}
+}
+
+func TestCompactAutomaticInspectionHistoryKeepsRecentAndActiveDetails(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	for index := range 4 {
+		createdAt := time.Date(2026, 9, 2, 10, index, 0, 0, time.UTC).Format(time.RFC3339Nano)
+		status := "succeeded"
+		if index == 0 {
+			status = "running"
+		}
+		task := Task{
+			ID: fmt.Sprintf("auto-%d", index), Skill: "sub2api-auto-inspection",
+			Operation: "automatic-inspection", Status: status, Progress: 100, Message: "巡检完成",
+			Result: map[string]any{
+				"routing": map[string]any{
+					"accounts": 2, "account_targets": map[string]any{"41": map[string]any{"priority": 1}},
+					"account_decisions": map[string]any{"41:codex": map[string]any{"role": "primary"}},
+				},
+				"account_rate_sync": map[string]any{"updated": 1, "items": []any{map[string]any{"account_id": "41"}}},
+				"writeback":         map[string]any{"changed": 1, "results": []any{map[string]any{"account_id": "41"}}},
+				"upstream_sync":     map[string]any{"total": 1, "hosts": []any{map[string]any{"host": "api.example"}}},
+				"operation_timings": []any{map[string]any{"operation": "routing_calculation", "duration_seconds": 1}},
+			},
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		}
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manual := Task{
+		ID: "manual", Skill: "sub2api-auto-inspection", Operation: "manual-inspection",
+		Status: "succeeded", Progress: 100, Message: "巡检完成",
+		Result:    map[string]any{"routing": map[string]any{"account_targets": map[string]any{"41": true}}},
+		CreatedAt: "2026-09-02T09:00:00Z", UpdatedAt: "2026-09-02T09:00:00Z",
+	}
+	if err := store.Save(ctx, manual); err != nil {
+		t.Fatal(err)
+	}
+
+	compacted, err := store.CompactAutomaticInspectionHistory(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted != 1 {
+		t.Fatalf("compacted=%d want 1", compacted)
+	}
+	old, err := store.Get(ctx, "auto-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Result["compacted"] != true {
+		t.Fatalf("old automatic task was not marked compacted: %#v", old.Result)
+	}
+	routing, _ := old.Result["routing"].(map[string]any)
+	if routing["accounts"] != json.Number("2") || routing["account_targets"] != nil || routing["account_decisions"] != nil {
+		t.Fatalf("routing summary was not compacted safely: %#v", routing)
+	}
+	rateSync, _ := old.Result["account_rate_sync"].(map[string]any)
+	if rateSync["updated"] != json.Number("1") || rateSync["items"] != nil {
+		t.Fatalf("rate sync summary was not compacted safely: %#v", rateSync)
+	}
+	for _, taskID := range []string{"auto-0", "auto-2", "auto-3", "manual"} {
+		preserved, getErr := store.Get(ctx, taskID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if preserved.Result["compacted"] != nil {
+			t.Fatalf("task %s must retain full details: %#v", taskID, preserved.Result)
+		}
+	}
+	compacted, err = store.CompactAutomaticInspectionHistory(ctx, 2)
+	if err != nil || compacted != 0 {
+		t.Fatalf("second compaction rows=%d err=%v", compacted, err)
+	}
+}
+
+func TestSaveKeepsAutomaticInspectionHistoryBounded(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	for index := range 101 {
+		createdAt := time.Date(2026, 9, 2, 10, 0, index, 0, time.UTC).Format(time.RFC3339Nano)
+		if err := store.Save(ctx, Task{
+			ID: fmt.Sprintf("automatic-%03d", index), Skill: "sub2api-auto-inspection",
+			Operation: "automatic-inspection", Status: "succeeded", Progress: 100, Message: "巡检完成",
+			Result: map[string]any{"routing": map[string]any{
+				"accounts": 1, "account_targets": map[string]any{"41": map[string]any{"priority": index}},
+			}},
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldest, err := store.Get(ctx, "automatic-000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest.Result["compacted"] != true {
+		t.Fatalf("oldest result remained unbounded: %#v", oldest.Result)
+	}
+	newest, err := store.Get(ctx, "automatic-100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newest.Result["compacted"] != nil {
+		t.Fatalf("newest result lost details: %#v", newest.Result)
+	}
+}
+
 func TestOpenCreatesAndRepairsTaskIndexes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.sqlite3")
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_operation_status_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search"} {
+	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_operation_status_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search", "sqlite_autoindex_active_task_operations_1"} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("task index %s missing: count=%d err=%v", name, count, err)

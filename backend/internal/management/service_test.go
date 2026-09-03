@@ -18,6 +18,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
@@ -271,6 +272,61 @@ type captureRateWriter struct {
 	checks              int
 	calls               int
 	multiplierOnlyCalls int
+}
+
+type guardedCaptureRateWriter struct {
+	*captureRateWriter
+	repository           any
+	requireOuterReleased bool
+}
+
+func (writer *guardedCaptureRateWriter) withResources(
+	ctx context.Context,
+	accountID string,
+	rateSourceHost string,
+	write func(context.Context) (map[string]any, error),
+) (map[string]any, error) {
+	resources := []string{
+		mutationguard.Account(accountID),
+		mutationguard.Upstream(rateSourceHost),
+	}
+	if writer.requireOuterReleased {
+		resources = append(resources, mutationguard.AccountCatalog())
+	}
+	guarded, release, err := targetguard.Acquire(
+		ctx,
+		writer.repository,
+		resources...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = release() }()
+	return write(guarded)
+}
+
+func (writer *guardedCaptureRateWriter) SyncAccountRateIfCurrent(
+	ctx context.Context,
+	accountID, name, multiplier, actor, rateSourceHost string,
+	check func(context.Context) error,
+) (map[string]any, error) {
+	return writer.withResources(ctx, accountID, rateSourceHost, func(guarded context.Context) (map[string]any, error) {
+		return writer.captureRateWriter.SyncAccountRateIfCurrent(
+			guarded, accountID, name, multiplier, actor, rateSourceHost, check,
+		)
+	})
+}
+
+func (writer *guardedCaptureRateWriter) SyncAccountMultiplierIfCurrent(
+	ctx context.Context,
+	accountID, multiplier, actor, rateSourceHost string,
+	check func(context.Context) error,
+) (map[string]any, error) {
+	return writer.withResources(ctx, accountID, rateSourceHost, func(guarded context.Context) (map[string]any, error) {
+		return writer.captureRateWriter.SyncAccountMultiplierIfCurrent(
+			guarded, accountID, multiplier, actor, rateSourceHost, check,
+		)
+	})
 }
 
 func (writer *captureRateWriter) checkCurrent(ctx context.Context, accountID, rateSourceHost string, check func(context.Context) error) error {
@@ -1354,6 +1410,44 @@ func TestAccountRateSyncAppliesRechargeRatioToSub2APIMultiplier(t *testing.T) {
 	items, ok := result["items"].([]map[string]any)
 	if !ok || len(items) != 1 || items[0]["upstream_raw_multiplier"] != "1.5" || items[0]["recharge_rate"] != "10" || items[0]["account_multiplier"] != "0.15" {
 		t.Fatalf("rate audit fields=%#v", result["items"])
+	}
+}
+
+func TestAccountRateSyncReleasesBatchResourcesBeforeAccountWrites(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v1/admin/accounts/upstream-billing-probe/batch":
+			_, _ = w.Write([]byte(`{"data":{"results":[{"account_id":11,"snapshot":{"status":"ok","data":{"resolved_rate_multiplier":0.6}}}]}}`))
+		case "/api/v1/admin/accounts":
+			_, _ = w.Write([]byte(`{"data":{"items":[{"id":11,"name":"Relay-0.1","rate_multiplier":0.1}],"total":1}}`))
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	repository := &captureRepository{maintenance: []business.BoundAccountMaintenance{{
+		AccountID: "11", AccountName: "Relay-0.1", UpstreamHost: "upstream.example",
+		CurrentMultiplier: "0.1", RechargeRate: "10", NamingSiteName: "Relay",
+		NamingBaseURL: "https://upstream.example",
+	}}}
+	captured := &captureRateWriter{}
+	writer := &guardedCaptureRateWriter{
+		captureRateWriter:    captured,
+		repository:           repository,
+		requireOuterReleased: true,
+	}
+	service := New(staticTarget{value: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 1,
+	}}, repository, &memoryTasks{}, writer)
+
+	result, err := service.syncAccountRates(context.Background(), []string{"11"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["updated"] != 1 || result["failed"] != 0 || captured.calls != 1 ||
+		captured.values["11"] != "0.06" {
+		t.Fatalf("batch rate write result=%#v calls=%d values=%#v", result, captured.calls, captured.values)
 	}
 }
 

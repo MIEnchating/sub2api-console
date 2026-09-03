@@ -106,6 +106,37 @@ func TestEvaluatePreservesCurrentGroupWhenNoCompatibleGroupMeetsProfitMargin(t *
 	}
 }
 
+func TestEvaluateTreatsProfitMarginAsMarkupOnAccountCost(t *testing.T) {
+	config := Config{Enabled: true, ProfitMargin: 0.25, ExchangeGroupSets: [][]string{{"8", "9", "25"}}, IntervalSeconds: 120, WriteConcurrency: 4}
+	catalog := business.PricingCatalog{
+		Groups: []business.PricingGroup{
+			{ID: "8", Name: "codex-pro-平价", Platform: "openai", RateMultiplier: testString("0.2")},
+			{ID: "9", Name: "codex-pro-特价", Platform: "openai", RateMultiplier: testString("0.15")},
+			{ID: "25", Name: "codex-pro-旗舰", Platform: "openai", RateMultiplier: testString("0.25")},
+		},
+		Accounts: []business.PricingAccount{
+			{ID: "22", Name: "11451495-0.198", Platform: "openai", Multiplier: testString("0.198"), GroupIDs: []string{"8"}, GroupsValid: true},
+			{ID: "24", Name: "mdkj-0.2", Platform: "openai", Multiplier: testString("0.2"), GroupIDs: []string{"8"}, GroupsValid: true},
+		},
+	}
+
+	snapshot, err := evaluate(config, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Decisions) != 2 {
+		t.Fatalf("decisions=%#v", snapshot.Decisions)
+	}
+	for _, decision := range snapshot.Decisions {
+		if !decision.Changed || !reflect.DeepEqual(decision.DesiredGroupIDs, []string{"25"}) {
+			t.Fatalf("markup boundary decision=%#v", decision)
+		}
+		if !reflect.DeepEqual(decision.EligibleGroups, []string{"codex-pro-旗舰"}) {
+			t.Fatalf("eligible groups=%#v", decision.EligibleGroups)
+		}
+	}
+}
+
 func TestEvaluateUsesStableGroupIDToBreakEqualPriceTie(t *testing.T) {
 	config := Config{Enabled: true, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"7", "6"}}, IntervalSeconds: 120, WriteConcurrency: 4}
 	catalog := business.PricingCatalog{
@@ -944,6 +975,16 @@ func (repository *fakeRepository) PricingBackup(_ context.Context, id string) (b
 		}
 	}
 	return business.PricingBackup{}, errors.New("missing backup")
+}
+
+func (repository *fakeRepository) DeletePricingBackup(_ context.Context, id string) error {
+	for index, backup := range repository.backups {
+		if backup.ID == id {
+			repository.backups = append(repository.backups[:index], repository.backups[index+1:]...)
+			return nil
+		}
+	}
+	return business.ErrPricingBackupNotFound
 }
 
 type fakeTargets struct {

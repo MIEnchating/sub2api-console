@@ -14,12 +14,14 @@ import (
 
 type deleteRepository struct {
 	account         *business.AccountDetail
+	accounts        map[string]*business.AccountDetail
 	protection      business.AccountMutationProtection
 	confirmErr      error
 	deleteErr       error
 	recordErr       error
 	reconcileErr    error
 	deleted         bool
+	deletedIDs      []string
 	keyReconciled   bool
 	operation       business.AccountOperation
 	confirmedScope  business.AccountDeleteScope
@@ -32,15 +34,19 @@ type deleteRepository struct {
 
 func (repository *deleteRepository) Mode(context.Context) (string, error) { return "完全模式", nil }
 
-func (repository *deleteRepository) Account(context.Context, string) (*business.AccountDetail, error) {
+func (repository *deleteRepository) Account(_ context.Context, accountID string) (*business.AccountDetail, error) {
 	repository.accountReads++
-	if repository.account == nil {
+	account := repository.account
+	if repository.accounts != nil {
+		account = repository.accounts[accountID]
+	}
+	if account == nil {
 		return nil, errors.New("missing")
 	}
-	copy := *repository.account
-	copy.Bindings = append([]business.AccountBinding{}, repository.account.Bindings...)
+	copy := *account
+	copy.Bindings = append([]business.AccountBinding{}, account.Bindings...)
 	if repository.accountReads == 1 && repository.afterFirstGet != nil {
-		repository.afterFirstGet(repository.account)
+		repository.afterFirstGet(account)
 	}
 	return &copy, nil
 }
@@ -70,11 +76,12 @@ func (repository *deleteRepository) ReconcileDeletedUpstreamKeyProjection(
 
 func (repository *deleteRepository) DeleteAccountProjectionWithScope(
 	_ context.Context,
-	_ string,
+	accountID string,
 	scope business.AccountDeleteScope,
 	operation business.AccountOperation,
 ) error {
 	repository.deleted = true
+	repository.deletedIDs = append(repository.deletedIDs, accountID)
 	repository.deletedScope = scope
 	repository.operation = operation
 	return repository.deleteErr
@@ -82,10 +89,11 @@ func (repository *deleteRepository) DeleteAccountProjectionWithScope(
 
 func (repository *deleteRepository) DeleteAccountProjection(
 	_ context.Context,
-	_ string,
+	accountID string,
 	operation business.AccountOperation,
 ) error {
 	repository.deleted = true
+	repository.deletedIDs = append(repository.deletedIDs, accountID)
 	repository.operation = operation
 	return repository.deleteErr
 }
@@ -150,8 +158,9 @@ func (keys *deleteKeys) DeleteKey(_ context.Context, _ configstore.AuthRecord, k
 }
 
 type deleteAdmin struct {
-	err   error
-	calls []string
+	err    error
+	errors map[string]error
+	calls  []string
 }
 
 func (admin *deleteAdmin) DeleteAccountWithVerification(_ context.Context, accountID string, verification bool) (map[string]any, error) {
@@ -159,6 +168,9 @@ func (admin *deleteAdmin) DeleteAccountWithVerification(_ context.Context, accou
 		return nil, errors.New("verification disabled")
 	}
 	admin.calls = append(admin.calls, accountID)
+	if err := admin.errors[accountID]; err != nil {
+		return nil, err
+	}
 	return map[string]any{"confirmed_absent": true}, admin.err
 }
 
@@ -208,6 +220,89 @@ type heldDeleteRunner struct{ run func(context.Context) }
 func (runner *heldDeleteRunner) Go(run func(context.Context)) error {
 	runner.run = run
 	return nil
+}
+
+func unboundAccount(id, name string) *business.AccountDetail {
+	return &business.AccountDetail{
+		AccountStatus: business.AccountStatus{ID: id, Name: name, Groups: []string{"special"}},
+	}
+}
+
+func TestPreviewBatchPreservesOrderAndSummarizesUpstreamKeys(t *testing.T) {
+	bound := boundAccount()
+	repository := &deleteRepository{accounts: map[string]*business.AccountDetail{
+		"37": bound,
+		"38": unboundAccount("38", "management-only"),
+	}}
+	service := configuredService(repository, &deleteKeys{}, &deleteAdmin{})
+
+	preview, err := service.PreviewBatch(context.Background(), []string{"38", "37"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.AccountCount != 2 || preview.UpstreamKeyCount != 1 ||
+		preview.Accounts[0].AccountID != "38" || preview.Accounts[1].AccountID != "37" {
+		t.Fatalf("unexpected batch preview: %#v", preview)
+	}
+	if _, err := service.PreviewBatch(context.Background(), []string{"37", "37"}); err == nil ||
+		!strings.Contains(err.Error(), "重复账号 ID") {
+		t.Fatalf("duplicate account IDs were accepted: %v", err)
+	}
+}
+
+func TestBatchDeleteContinuesAfterOneAccountFails(t *testing.T) {
+	repository := &deleteRepository{accounts: map[string]*business.AccountDetail{
+		"37": unboundAccount("37", "first"),
+		"38": unboundAccount("38", "second"),
+	}}
+	tasks := &deleteTaskStore{}
+	runner := &heldDeleteRunner{}
+	admin := &deleteAdmin{errors: map[string]error{
+		"37": &adminclient.AccountStillReadableError{AccountID: "37"},
+	}}
+	service := New(repository, configuredDeletePrivate(), &deleteKeys{}, tasks)
+	service.UseTaskRunner(runner)
+	service.adminFactory = func(configstore.TargetSettings) (Admin, error) { return admin, nil }
+	preview, err := service.PreviewBatch(context.Background(), []string{"37", "38"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmations := make([]Confirmation, 0, len(preview.Accounts))
+	for _, item := range preview.Accounts {
+		confirmations = append(confirmations, Confirmation{
+			AccountID: item.AccountID, ManagementBaseURL: item.ManagementBaseURL, Binding: item.Binding,
+		})
+	}
+	if _, err := service.EnqueueBatch(context.Background(), confirmations, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if runner.run == nil {
+		t.Fatal("batch delete worker was not queued")
+	}
+	runner.run(context.Background())
+	final := tasks.tasks[len(tasks.tasks)-1]
+	if final.Status != "partial" || final.Result["succeeded"] != 1 || final.Result["failed"] != 1 {
+		t.Fatalf("unexpected final task: %#v", final)
+	}
+	if strings.Join(admin.calls, ",") != "37,38" || len(repository.deletedIDs) != 1 || repository.deletedIDs[0] != "38" {
+		t.Fatalf("batch did not continue safely: admin=%#v deleted=%#v", admin.calls, repository.deletedIDs)
+	}
+}
+
+func TestBatchDeleteResultReportsOnlyActualRemoteRequests(t *testing.T) {
+	beforeWrite := batchDeleteResult(1, 0, 1, []map[string]any{{
+		"status": "failed", "management_account_delete_requested": false,
+	}})
+	if beforeWrite["remote_write"] != false {
+		t.Fatalf("preflight failure was reported as a remote write: %#v", beforeWrite)
+	}
+
+	afterWrite := batchDeleteResult(1, 0, 1, []map[string]any{{
+		"status": "failed", "upstream_key_delete_requested": true,
+	}})
+	if afterWrite["remote_write"] != true {
+		t.Fatalf("attempted deletion was not reported as a remote write: %#v", afterWrite)
+	}
 }
 
 func TestDeleteRemovesExactKeyThenManagementAccountAndProjection(t *testing.T) {

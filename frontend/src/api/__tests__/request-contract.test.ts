@@ -269,6 +269,67 @@ describe("account deletion request contract", () => {
       expected_management_base_url: "https://management.example.test",
     });
   });
+
+  it("previews and confirms every stable scope for a batch deletion", async () => {
+    const preview = {
+      accounts: [
+        {
+          account_id: "37",
+          account_name: "bound",
+          groups: ["codex"],
+          management_base_url: "https://management.example.test",
+          binding: {
+            id: 91,
+            upstream_id: "upstream-1",
+            upstream_host: "upstream.example.test",
+            auth_host: "auth.example.test",
+            upstream_key_id: "key-8",
+            upstream_key_name: "key",
+          },
+        },
+        {
+          account_id: "38",
+          account_name: "unbound",
+          groups: [],
+          management_base_url: "https://management.example.test",
+          binding: null,
+        },
+      ],
+      account_count: 2,
+      upstream_key_count: 1,
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(preview), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "delete-batch", status: "queued", result: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.accountDeleteBatchPreview(["37", "38"]);
+    await api.deleteAccounts(preview);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/delete-preview");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      account_ids: ["37", "38"],
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/delete");
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      confirmations: preview.accounts.map((account) => ({
+        account_id: account.account_id,
+        management_base_url: account.management_base_url,
+        binding: account.binding,
+      })),
+    });
+  });
 });
 
 describe("account control request contract", () => {
@@ -1143,7 +1204,7 @@ describe("pricing backup request contracts", () => {
     vi.unstubAllGlobals();
   });
 
-  it("creates a named backup and restores it by encoded stable ID", async () => {
+  it("creates a named backup and restores or deletes it by encoded stable ID", async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(
         new Response(JSON.stringify({ id: "backup/1" }), {
@@ -1156,6 +1217,7 @@ describe("pricing backup request contracts", () => {
 
     await api.createPricingBackup("调价前");
     await api.restorePricingBackup("backup/1");
+    await api.deletePricingBackup("backup/1");
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pricing/backups");
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
@@ -1163,6 +1225,8 @@ describe("pricing backup request contracts", () => {
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/pricing/backups/backup%2F1/restore");
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("POST");
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/pricing/backups/backup%2F1");
+    expect((fetchMock.mock.calls[2]?.[1] as RequestInit).method).toBe("DELETE");
   });
 });
 
@@ -1277,6 +1341,7 @@ describe("New API management request contracts", () => {
     await api.createNewAPIChannel("platform-1", {
       sub2api_group_id: "6",
       key_id: "key-7",
+      base_url: "https://edge.example",
       models: ["gpt-5"],
       newapi_groups: ["default", "vip"],
     });
@@ -1286,6 +1351,7 @@ describe("New API management request contracts", () => {
     expect(JSON.parse(String(request.body))).toEqual({
       sub2api_group_id: "6",
       key_id: "key-7",
+      base_url: "https://edge.example",
       models: ["gpt-5"],
       newapi_groups: ["default", "vip"],
     });
@@ -1300,11 +1366,17 @@ describe("New API management request contracts", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.createNewAPIChannelKey("platform-1", { sub2api_group_id: "6" });
+    await api.createNewAPIChannelKey("platform-1", {
+      sub2api_group_id: "6",
+      credential_source: "vault",
+      vault_entry: "运营账号",
+    });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/platform-1/channel-key");
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       sub2api_group_id: "6",
+      credential_source: "vault",
+      vault_entry: "运营账号",
     });
     expect(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).not.toContain("secret");
   });
@@ -1321,6 +1393,7 @@ describe("New API management request contracts", () => {
     await api.fetchNewAPIChannelModels("platform-1", {
       sub2api_group_id: "6",
       key_id: "key-7",
+      base_url: "https://edge.example",
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/newapi/platforms/platform-1/channel-models");
@@ -1328,6 +1401,7 @@ describe("New API management request contracts", () => {
     expect(JSON.parse(String(request.body))).toEqual({
       sub2api_group_id: "6",
       key_id: "key-7",
+      base_url: "https://edge.example",
     });
   });
 });
