@@ -2,7 +2,7 @@
 set -eu
 
 frontend_image="${SUB2API_CONSOLE_FRONTEND_TEST_IMAGE:-sub2api-console-frontend:proxy-test}"
-nginx_image="${SUB2API_CONSOLE_NGINX_TEST_IMAGE:-nginx:1.27.5-alpine}"
+helper_image="${SUB2API_CONSOLE_NGINX_TEST_IMAGE:-$frontend_image}"
 script_directory="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 test_suffix="$$"
 network="sub2api-console-proxy-test-${test_suffix}"
@@ -92,9 +92,10 @@ start_api() {
     --network "$network" \
     --network-alias api \
     --network-alias 1234 \
+    --entrypoint nginx \
     -v "$socket_volume:/run/sub2api-console" \
     -v "${script_directory}/testdata/echo-api.nginx.conf:/etc/nginx/nginx.conf:ro" \
-    "$nginx_image" >/dev/null
+    "$helper_image" -g 'daemon off;' >/dev/null
 
   attempts=0
   until docker exec "$api_container" wget -q -O /dev/null http://127.0.0.1:8080/api/proxy-test; do
@@ -113,8 +114,29 @@ stop_api() {
 
 remove_stale_test_socket() {
   docker run --rm \
+    --entrypoint rm \
     -v "$socket_volume:/run/sub2api-console" \
-    "$nginx_image" rm -f /run/sub2api-console/echo-api.sock
+    "$helper_image" -f /run/sub2api-console/echo-api.sock
+}
+
+reserve_old_api_address() {
+  attempts=0
+  while :; do
+    docker rm -f "$api_address_holder_container" >/dev/null 2>&1 || true
+    if docker run -d \
+      --name "$api_address_holder_container" \
+      --network "$network" \
+      --ip "$old_api_ip" \
+      --entrypoint sh \
+      "$helper_image" -c 'sleep 300' >/dev/null; then
+      return
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 10 ]; then
+      fail "could not reserve the original API address after container removal"
+    fi
+    sleep 1
+  done
 }
 
 proxy_request() {
@@ -152,7 +174,8 @@ trusted_subnet="$(docker network inspect --format '{{(index .IPAM.Config 0).Subn
 docker run -d \
   --name "$client_container" \
   --network "$network" \
-  "$nginx_image" sh -c 'sleep 300' >/dev/null
+  --entrypoint sh \
+  "$helper_image" -c 'sleep 300' >/dev/null
 
 client_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.IPAddress}}{{end}}" "$client_container")"
 [ -n "$client_ip" ] || fail "could not resolve the test client address"
@@ -170,11 +193,7 @@ old_api_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"
 [ -n "$old_api_ip" ] || fail "could not resolve the original API address"
 stop_api
 remove_stale_test_socket
-docker run -d \
-  --name "$api_address_holder_container" \
-  --network "$network" \
-  --ip "$old_api_ip" \
-  "$nginx_image" sh -c 'sleep 300' >/dev/null
+reserve_old_api_address
 start_api
 new_api_ip="$(docker inspect --format "{{with index .NetworkSettings.Networks \"$network\"}}{{.IPAddress}}{{end}}" "$api_container")"
 [ -n "$new_api_ip" ] || fail "could not resolve the recreated API address"
