@@ -613,19 +613,21 @@ func initialControlPolicy() map[string]any {
 		"weights": map[string]any{
 			"scheduling_missing_rate_fallback": "current_cost_wall", "enabled": true, "budget": int64(400),
 			"gate_floor": int64(40), "price_exp": 1.0, "speed_exp": 1.0, "balanced_price_ratio": 0.5,
+			"performance_min_samples": int64(5), "speed_advantage_cap": 4.0,
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
 		"manual_priority":     map[string]any{"reserved_max": int64(10)},
-		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": false, "retry_source": "fixed", "retry_count": int64(0), "retry_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}},
+		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+		"account_rate_sync":   map[string]any{"interval_seconds": int64(120), "batch_size": int64(0), "batch_percent": int64(0)},
 		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
 			"event_scores": map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
 			"short_window": int64(10), "long_window": int64(60), "latest_weight": 0.5, "short_ratio": 0.7, "slow_ttfb_ms": int64(5000),
 		},
-		"breaker":  map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
+		"breaker":  map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "transient_consecutive_failures": int64(2), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
 		"degrade":  map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
 		"recovery": map[string]any{"enabled": true, "probe_interval_seconds": int64(180), "target_score": int64(75), "success_count": int64(2), "hold_seconds": int64(60)},
 		"scaling":  map[string]any{"enabled": false, "global_max_concurrency": int64(900), "min_per_account": int64(3), "max_per_account": int64(250), "scale_up_ratio": 0.8, "step_up": int64(5), "step_down": int64(5), "cooldown_seconds": int64(60)},
@@ -633,7 +635,7 @@ func initialControlPolicy() map[string]any {
 		"classify": map[string]any{"fatal_patterns": []any{
 			"invalid api key", "unauthorized", "forbidden", "authentication", "account not found", "no api key", "no access token",
 			"insufficient", "balance", "quota exceeded", "usage limit", "credit", "expired",
-		}, "gateway_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}},
+		}, "gateway_status_codes": []any{int64(429), int64(500), int64(502), int64(503), int64(504)}, "client_error_status_codes": []any{int64(400), int64(403), int64(404), int64(405), int64(409), int64(413), int64(415), int64(422)}},
 		"scope": map[string]any{
 			"manage_all_accounts": true, "managed_group_mode": "all", "managed_group_ids": []any{}, "excluded_group_ids": []any{},
 			"account_types": []any{}, "platforms": []any{}, "paused_account_ids": []any{},

@@ -101,20 +101,21 @@ type siteNameReader interface {
 }
 
 type HostResult struct {
-	Host                 string  `json:"host"`
-	Status               string  `json:"status"`
-	AuthStatus           string  `json:"auth_status"`
-	BalanceStatus        string  `json:"balance_status"`
-	Balance              *string `json:"balance,omitempty"`
-	DisplayBalance       *string `json:"display_balance,omitempty"`
-	BalanceUnit          *string `json:"balance_unit,omitempty"`
-	GroupCount           int     `json:"group_count"`
-	KeyCount             int     `json:"key_count"`
-	AccountTotal         int     `json:"account_total"`
-	AccountRateSucceeded int     `json:"account_rate_succeeded"`
-	AccountRateFailed    int     `json:"account_rate_failed"`
-	AuthRecovered        bool    `json:"auth_recovered"`
-	Reason               *string `json:"reason,omitempty"`
+	Host                 string                            `json:"host"`
+	Status               string                            `json:"status"`
+	AuthStatus           string                            `json:"auth_status"`
+	BalanceStatus        string                            `json:"balance_status"`
+	Balance              *string                           `json:"balance,omitempty"`
+	DisplayBalance       *string                           `json:"display_balance,omitempty"`
+	BalanceUnit          *string                           `json:"balance_unit,omitempty"`
+	GroupCount           int                               `json:"group_count"`
+	KeyCount             int                               `json:"key_count"`
+	AccountTotal         int                               `json:"account_total"`
+	AccountRateSucceeded int                               `json:"account_rate_succeeded"`
+	AccountRateFailed    int                               `json:"account_rate_failed"`
+	AuthRecovered        bool                              `json:"auth_recovered"`
+	Reason               *string                           `json:"reason,omitempty"`
+	Catalog              *business.UpstreamCatalogSnapshot `json:"-"`
 }
 
 type BatchResult struct {
@@ -487,7 +488,10 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 	if err != nil {
 		return s.failed(ctx, host, failureScope, IsAuthenticationError(err), err.Error())
 	}
-	write := business.UpstreamSyncWrite{Host: host, Catalog: catalog, Balance: balance, NameOnly: scope.Name, KeyID: scope.KeyID, AuthRecovered: recovered, AuthenticationOK: !scope.Name}
+	write := business.UpstreamSyncWrite{
+		Host: host, Catalog: catalog, Balance: balance, NameOnly: scope.Name, KeyID: scope.KeyID,
+		AuthRecovered: recovered, AuthenticationOK: !scope.Name, AuthMethod: record.AuthMode,
+	}
 	persisted, err := s.repository.ApplyUpstreamSync(ctx, write)
 	if err != nil {
 		return s.failed(ctx, host, scope, false, "本地同步提交失败："+err.Error())
@@ -510,6 +514,7 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,
+		Catalog: catalog,
 	}
 }
 

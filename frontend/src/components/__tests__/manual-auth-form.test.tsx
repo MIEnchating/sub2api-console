@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   ManualAuthForm,
   ManualAuthHeadersEditor,
+  UpstreamLoginAgreementConsent,
   manualAuthCompletion,
   manualAuthIncomplete,
 } from "../../App";
@@ -59,6 +60,21 @@ describe("manual upstream authentication form", () => {
     expect(markup).toContain("[overflow-wrap:anywhere]");
     expect(markup).not.toContain("max-h-96");
     expect(markup).not.toContain("overflow-y-auto");
+  });
+
+  it("requires an unchecked explicit consent control before accepting an upstream agreement", () => {
+    const markup = renderToStaticMarkup(
+      <UpstreamLoginAgreementConsent
+        checked={false}
+        upstreamBaseURL="https://ai-pixel.online/"
+        onCheckedChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="我已阅读并同意上游当前登录协议"');
+    expect(markup).toContain('data-unchecked=""');
+    expect(markup).toContain('href="https://ai-pixel.online/"');
+    expect(markup).toContain("查看上游登录页");
   });
 
   it("allows omitted mode credentials only when custom headers are configured", () => {

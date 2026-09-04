@@ -90,7 +90,7 @@ func run() error {
 			_ = taskStore.Close()
 		}
 	}()
-	if recovered, err := taskStore.RecoverInterrupted(context.Background()); err != nil {
+	if recovered, err := taskStore.RecoverStaleInterrupted(context.Background(), 45*time.Minute); err != nil {
 		return err
 	} else if recovered > 0 {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
@@ -204,6 +204,7 @@ func run() error {
 		taskStore,
 		managementTasks,
 		pricingTasks,
+		authRecoveryService,
 	)
 	inspectionScheduler, err := inspection.NewScheduler(businessStore, inspectionRunner)
 	if err != nil {

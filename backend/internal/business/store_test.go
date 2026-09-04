@@ -655,10 +655,10 @@ func TestGoBootstrapInitializesFreshDatabaseWithFullModeAndTypedPolicy(t *testin
 	if probe["model"] != "" {
 		t.Fatalf("fresh probe.model=%#v, want empty string", probe["model"])
 	}
-	if probe["retry_enabled"] != false || probe["retry_source"] != "fixed" || probe["retry_count"] != int64(0) {
-		t.Fatalf("fresh probe retry policy is not disabled by default: %#v", probe)
+	if probe["retry_enabled"] != true || probe["retry_source"] != "fixed" || probe["retry_count"] != int64(1) {
+		t.Fatalf("fresh probe retry policy does not protect transient failures: %#v", probe)
 	}
-	if !reflect.DeepEqual(probe["retry_status_codes"], []any{int64(429), int64(500), int64(502), int64(503), int64(504)}) {
+	if !reflect.DeepEqual(probe["retry_status_codes"], []any{int64(500), int64(502), int64(503), int64(504)}) {
 		t.Fatalf("fresh probe retry status codes are invalid: %#v", probe["retry_status_codes"])
 	}
 	pricing := policy["price_management"].(map[string]any)

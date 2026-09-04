@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { filterChannelModels } from "../channel-model-dialog";
 import { NewAPIChannelConfigurationStep } from "../channel-configuration-step";
-import { NewAPIChannelForm } from "../channel-form";
+import { NewAPIChannelForm, NewAPIChannelSteps } from "../channel-form";
 
 describe("New API 渠道表单", () => {
   it("第一步选择普通账号来源、Sub2API 分组并创建密钥", () => {
@@ -39,8 +39,9 @@ describe("New API 渠道表单", () => {
       />,
     );
 
-    expect(markup).toContain("1. 创建密钥");
-    expect(markup).toContain("2. 配置渠道");
+    expect(markup).toContain("步骤 1 / 2");
+    expect(markup).toContain("创建密钥");
+    expect(markup).toContain("配置渠道");
     expect(markup).toContain('aria-label="账号来源"');
     expect(markup).toContain("密码箱账号");
     expect(markup).toContain("自定义账号密码");
@@ -50,6 +51,23 @@ describe("New API 渠道表单", () => {
     expect(markup).toContain("创建密钥");
     expect(markup).not.toContain("从上游获取");
     expect(markup).not.toContain('aria-label="New API 分组"');
+    expect(markup).toContain("w-full gap-0");
+    expect(markup).not.toContain("max-w-5xl");
+    expect(markup).toContain('data-channel-credentials-layout=""');
+    expect(markup).toContain(
+      "lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0",
+    );
+    expect(markup).toContain('data-channel-step="credentials" data-state="current"');
+    expect(markup).toContain('aria-current="step"');
+  });
+
+  it("密钥创建后将第一步标记为完成并把当前步骤切换到渠道配置", () => {
+    const markup = renderToStaticMarkup(<NewAPIChannelSteps configurationReady />);
+
+    expect(markup).toContain('data-channel-step="credentials" data-state="complete"');
+    expect(markup).toContain('data-channel-step="configuration" data-state="current"');
+    expect(markup).toContain("步骤 2 / 2");
+    expect(markup.match(/aria-current="step"/g)).toHaveLength(1);
   });
 
   it("第二步获取模型、选择 New API 分组并添加渠道", () => {
@@ -82,6 +100,12 @@ describe("New API 渠道表单", () => {
     expect(markup).toContain("添加渠道");
     expect(markup).toContain('aria-label="API 地址来源"');
     expect(markup).toContain("https://api.example");
+    expect(markup).toContain('data-channel-configuration-layout=""');
+    expect(markup).toContain(
+      "divide-y lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0",
+    );
+    expect(markup).toContain("min-h-24");
+    expect(markup).toContain("border-t px-4 py-3 sm:px-5");
   });
 
   it("第二步选择自定义来源时显示可编辑 API 地址", () => {

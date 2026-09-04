@@ -48,6 +48,33 @@ func TestTaskHistoryRecoveryAndStrictJSON(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleInterruptedPreservesRecentTasks(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for _, task := range []Task{
+		{ID: "stale", Skill: "console", Operation: "inspect", Status: "running", Progress: 50, Message: "运行", Result: map[string]any{}, CreatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), UpdatedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+		{ID: "recent", Skill: "console", Operation: "inspect", Status: "running", Progress: 50, Message: "运行", Result: map[string]any{}, CreatedAt: now.Format(time.RFC3339Nano), UpdatedAt: now.Format(time.RFC3339Nano)},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recovered, err := store.RecoverStaleInterrupted(ctx, 15*time.Minute)
+	if err != nil || recovered != 1 {
+		t.Fatalf("recovered=%d err=%v", recovered, err)
+	}
+	stale, _ := store.Get(ctx, "stale")
+	recent, _ := store.Get(ctx, "recent")
+	if stale.Status != "failed" || recent.Status != "running" {
+		t.Fatalf("stale=%s recent=%s", stale.Status, recent.Status)
+	}
+}
+
 func TestTaskLogSummaryAndSearchAvoidLoadingUnmatchedResults(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
 	if err != nil {

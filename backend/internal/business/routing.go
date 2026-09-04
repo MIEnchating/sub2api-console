@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -211,15 +212,10 @@ func (s *Store) RoutingSamples(
 	if limit < 1 {
 		return nil, errors.New("路由样本上限必须是正整数")
 	}
-	clauses := []string{"LOWER(REPLACE(source,'_','-')) IN ('traffic','active-probe')"}
+	clauses := []string{}
 	arguments := []any{}
-	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "traffic":
-		// Real-traffic mode uses the unified account history. Active probes fill
-		// accounts without fresh traffic, matching Guardian's sample window.
-	case "active_probe", "active-probe":
-		clauses = append(clauses, "LOWER(REPLACE(source,'_','-'))='active-probe'")
-	default:
+	mode := strings.ToLower(strings.TrimSpace(source))
+	if mode != "traffic" && mode != "active_probe" && mode != "active-probe" {
 		return nil, errors.New("路由样本来源模式无效")
 	}
 	if accountID != nil {
@@ -233,9 +229,19 @@ func (s *Store) RoutingSamples(
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	selections, err := s.selectHealthSampleWindow(ctx, clauses, arguments, limit, true, false)
-	if err != nil {
-		return nil, err
+	selections := []healthSampleSelection{}
+	sources := []string{"active-probe"}
+	if mode == "traffic" {
+		sources = []string{"traffic", "active-probe"}
+	}
+	for _, normalizedSource := range sources {
+		sourceClauses := append(append([]string{}, clauses...), "LOWER(REPLACE(source,'_','-'))=?")
+		sourceArguments := append(append([]any{}, arguments...), normalizedSource)
+		selected, err := s.selectHealthSampleWindow(ctx, sourceClauses, sourceArguments, limit, true, false)
+		if err != nil {
+			return nil, err
+		}
+		selections = append(selections, selected...)
 	}
 	samples, err := s.selectedHealthSamples(ctx, selections)
 	if err != nil {
@@ -256,6 +262,12 @@ func (s *Store) RoutingSamples(
 		}
 		result = append(result, item)
 	}
+	sort.SliceStable(result, func(left, right int) bool {
+		if result[left].AccountID != result[right].AccountID {
+			return result[left].AccountID < result[right].AccountID
+		}
+		return result[left].ObservedAt > result[right].ObservedAt
+	})
 	return result, nil
 }
 

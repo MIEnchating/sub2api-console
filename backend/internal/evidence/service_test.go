@@ -144,7 +144,7 @@ func TestConvertTrafficRowsKeepsExplicitFirstTokenSeparateFromCombinedLatency(t 
 	rows := []map[string]any{{
 		"account_id": "41", "request_id": "request-1", "kind": "success",
 		"created_at": now.Format(time.RFC3339Nano), "duration_ms": json.Number("195843"),
-		"first_token_ms": json.Number("1250"),
+		"first_token_ms": json.Number("1250"), "model": "gpt-test",
 	}}
 
 	samples, malformed := convertTrafficRows(
@@ -160,6 +160,20 @@ func TestConvertTrafficRowsKeepsExplicitFirstTokenSeparateFromCombinedLatency(t 
 	}
 	if samples[0].Payload["latency_metric"] != "request_duration" || samples[0].Payload["first_token_ms"] != "1250" {
 		t.Fatalf("真实流量总耗时和首字没有分开保存：%#v", samples[0].Payload)
+	}
+	if samples[0].Payload["model"] != "gpt-test" {
+		t.Fatalf("真实流量模型维度丢失：%#v", samples[0].Payload)
+	}
+}
+
+func TestConvertTrafficRowsAcceptsModelNameField(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	samples, malformed := convertTrafficRows("41", []business.EvidenceTarget{{AccountID: "41", GroupName: "codex"}}, []map[string]any{{
+		"account_id": "41", "request_id": "request-1", "kind": "success",
+		"created_at": now.Format(time.RFC3339Nano), "first_token_ms": json.Number("1250"), "model_name": "gpt-test",
+	}}, now.Add(-time.Minute), 10)
+	if malformed != 0 || len(samples) != 1 || samples[0].Payload["model"] != "gpt-test" {
+		t.Fatalf("model_name was not preserved: samples=%#v malformed=%d", samples, malformed)
 	}
 }
 

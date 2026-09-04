@@ -2,10 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { PricingSnapshot } from "@/api";
+import type { PricingChangeRecord, PricingSnapshot } from "@/api";
 import {
   GroupAccountCostDetails,
   PricingBackupList,
+  PricingChangeList,
   PricingConfigPage,
   PricingPage,
   PricingPreviewTable,
@@ -115,6 +116,134 @@ describe("价格配置执行顺序", () => {
 });
 
 describe("PricingPage", () => {
+  it("shows the actual account group transition in each pricing change record", () => {
+    const records: PricingChangeRecord[] = [
+      {
+        id: -1,
+        actor: "operator",
+        created_at: "2026-09-03T08:30:00Z",
+        changes: [
+          {
+            account_id: "41",
+            account_name: "account-41",
+            before: [{ id: "6", name: "标准" }],
+            after: [{ id: "7", name: "低价" }],
+          },
+        ],
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<PricingChangeList records={records} />);
+
+    expect(markup).toContain("变更时间");
+    expect(markup).toContain("account-41");
+    expect(markup).toContain("标准（#6）");
+    expect(markup).toContain("低价（#7）");
+    expect(markup).toContain("operator");
+    expect(markup).toContain('data-testid="pricing-change-list"');
+  });
+
+  it("shows a batch summary when a legacy change record has no account details", () => {
+    const records: PricingChangeRecord[] = [
+      {
+        id: -20,
+        actor: "自动巡检",
+        created_at: "2026-09-02T21:31:52Z",
+        account_count: 7,
+        group_link_count: 7,
+        changes: [],
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<PricingChangeList records={records} />);
+
+    expect(markup).toContain('data-testid="pricing-change-list"');
+    expect(markup).toContain('data-slot="pricing-change-batch-summary"');
+    expect(markup).toContain("7 个账号");
+    expect(markup).toContain("7 条成员关系");
+    expect(markup).toContain("旧记录未保存账号级明细");
+    expect(markup).toContain("自动巡检");
+    expect(markup).not.toContain("暂无变更记录");
+  });
+
+  it("handles a legacy change record whose account details are null", () => {
+    const records: PricingChangeRecord[] = [
+      {
+        id: -21,
+        actor: "自动任务",
+        created_at: "2026-09-02T21:31:52Z",
+        account_count: 3,
+        group_link_count: 4,
+        changes: null,
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<PricingChangeList records={records} />);
+
+    expect(markup).toContain('data-slot="pricing-change-batch-summary"');
+    expect(markup).toContain("3 个账号");
+    expect(markup).toContain("4 条成员关系");
+  });
+
+  it("paginates account changes with legacy summaries and matches the preview table styling", () => {
+    const records: PricingChangeRecord[] = [
+      {
+        id: -1,
+        actor: "operator",
+        created_at: "2026-09-03T08:30:00Z",
+        changes: Array.from({ length: 20 }, (_, index) => ({
+          account_id: String(index + 1),
+          account_name: `change-account-${index + 1}`,
+          before: [{ id: "6", name: "标准" }],
+          after: [{ id: "7", name: "低价" }],
+        })),
+      },
+      {
+        id: -2,
+        actor: "自动任务",
+        created_at: "2026-09-03T08:20:00Z",
+        account_count: 7,
+        group_link_count: 7,
+        changes: [],
+      },
+      {
+        id: -3,
+        actor: "operator",
+        created_at: "2026-09-03T08:10:00Z",
+        changes: [
+          {
+            account_id: "21",
+            account_name: "change-account-21",
+            before: [{ id: "6", name: "标准" }],
+            after: [{ id: "7", name: "低价" }],
+          },
+        ],
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<PricingChangeList records={records} />);
+
+    expect(markup).toContain("change-account-20");
+    expect(markup).not.toContain("change-account-21");
+    expect(markup).toContain('aria-label="转到第 2 页"');
+    expect(markup).toContain('aria-label="转到下一页"');
+    expect(markup).toContain(">22</span>");
+    expect(markup).toContain("min-w-[68rem] table-fixed");
+    expect(markup).toContain("min-h-0 flex-1 overflow-auto");
+    expect(markup).toContain('data-overflow-tooltip="false"');
+    expect(markup).toContain("text-destructive");
+    expect(markup).toContain("text-success");
+    expect(markup).toContain("align-top whitespace-normal");
+  });
+
+  it("shows a clear empty state when no pricing changes have completed", () => {
+    const markup = renderToStaticMarkup(<PricingChangeList records={[]} />);
+
+    expect(markup).toContain("暂无账号分组变更");
+    expect(markup).toContain("这里只记录实际写入的分组变化");
+    expect(markup).toContain('data-testid="pricing-changes-empty"');
+  });
+
   it("offers a separate accessible delete action for every pricing backup", () => {
     const markup = renderToStaticMarkup(
       <PricingBackupList
@@ -162,6 +291,7 @@ describe("PricingPage", () => {
     expect(markup).not.toContain("价格配置");
     expect(markup).not.toContain("目标盈利比例");
     expect(markup).toContain("查看账号调整明细");
+    expect(markup).toContain("变更记录");
     expect(markup).toContain("创建备份");
     expect(markup).toContain("从备份还原");
     expect(markup).toContain("min-w-[960px]");
@@ -238,7 +368,10 @@ describe("PricingPage", () => {
     expect(markup).toContain("默认关闭");
     expect(markup).toContain('aria-label="启用动态价格分组"');
     expect(markup).toContain("目标盈利比例");
-    expect(markup).toContain("利润 ÷ 账号成本；允许范围 0% - 99%");
+    expect(markup).toContain('aria-label="目标盈利比例说明"');
+    expect(markup).toContain('aria-label="动态调整间隔说明"');
+    expect(markup).toContain('aria-label="写入并发说明"');
+    expect(markup).not.toContain("利润 ÷ 账号成本；允许范围 0% - 99%");
     expect(markup).toContain('value="20"');
     expect(markup).toContain('aria-label="互换组 1 分组 标准"');
     expect(markup).toContain('aria-label="互换组 1 分组 复合"');
@@ -275,6 +408,28 @@ describe("PricingPage", () => {
     expect(markup).toContain(">售价 1</span>");
     expect(markup).not.toContain("account-41");
     expect(markup).toContain("disabled");
+  });
+
+  it("数字价格参数清空后保持空白并等待保存校验", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    queryClient.setQueryData(["pricing"], {
+      ...snapshot,
+      config: {
+        ...snapshot.config,
+        profit_margin: null,
+        interval_seconds: null,
+        write_concurrency: null,
+      },
+    } as unknown as PricingSnapshot);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <PricingConfigPage />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('data-testid="pricing-config-page"');
+    expect(markup).toContain('value=""');
+    expect(markup).not.toContain("价格配置存在空值或无效数字");
   });
 
   it("uses a compact actionable empty state when no exchange set exists", () => {
@@ -398,8 +553,8 @@ describe("PricingPage", () => {
       />,
     );
 
-    expect(markup).toContain("preview-account-10");
-    expect(markup).not.toContain("preview-account-11");
+    expect(markup).toContain("preview-account-20");
+    expect(markup).not.toContain("preview-account-21");
     expect(markup).toContain('aria-label="转到第 2 页"');
     expect(markup).toContain('aria-label="转到下一页"');
   });

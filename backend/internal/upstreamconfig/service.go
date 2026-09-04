@@ -50,6 +50,10 @@ type Verifier interface {
 	Login(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error)
 }
 
+type loginOptionsVerifier interface {
+	LoginWithOptions(context.Context, configstore.AuthRecord, configstore.VaultEntry, upstreamauth.LoginOptions) (configstore.AuthRecord, error)
+}
+
 type AccountRateSyncScheduler interface {
 	EnqueueHostAccountRateSync(context.Context, string, string) (string, error)
 	EnqueueHostAccountBaseURLSync(context.Context, string, string) (string, error)
@@ -67,24 +71,25 @@ type classificationStore interface {
 }
 
 type Input struct {
-	Host           string
-	Name           *string
-	BaseURL        string
-	AccountBaseURL string
-	UpstreamType   string
-	AuthMode       string
-	RechargeRate   string
-	AccessToken    *string
-	RefreshToken   *string
-	AdminKey       *string
-	UserID         *string
-	Headers        map[string]string
-	Cookies        map[string]string
-	Username       *string
-	Password       *string
-	SaveToVault    bool
-	Entry          *string
-	Present        map[string]bool
+	Host                 string
+	Name                 *string
+	BaseURL              string
+	AccountBaseURL       string
+	UpstreamType         string
+	AuthMode             string
+	RechargeRate         string
+	AccessToken          *string
+	RefreshToken         *string
+	AdminKey             *string
+	UserID               *string
+	Headers              map[string]string
+	Cookies              map[string]string
+	Username             *string
+	Password             *string
+	SaveToVault          bool
+	AcceptLoginAgreement bool
+	Entry                *string
+	Present              map[string]bool
 }
 
 type Configuration struct {
@@ -456,6 +461,16 @@ func (s *Service) prepareVerified(ctx context.Context, host string, input Input,
 	if existing != nil {
 		record = cloneRecord(*existing)
 		record.Host, record.BaseURL, record.UpstreamType, record.AuthMode = host, baseURL, strings.ToLower(strings.TrimSpace(input.UpstreamType)), strings.TrimSpace(input.AuthMode)
+		if !sameBaseURL(existing.BaseURL, baseURL) {
+			// Credentials and browser session material are scoped to the original
+			// origin. A new origin must be explicitly authenticated again.
+			record.AccessToken = nil
+			record.RefreshToken = nil
+			record.AdminKey = nil
+			record.UserID = nil
+			record.Headers = map[string]string{}
+			record.Cookies = map[string]string{}
+		}
 	}
 	applyInput(&record, input)
 	mode := record.AuthMode
@@ -498,7 +513,13 @@ func (s *Service) prepareVerified(ctx context.Context, host string, input Input,
 		}
 	}
 	if credential != nil {
-		record, err = s.verifier.Login(ctx, record, *credential)
+		if verifier, ok := s.verifier.(loginOptionsVerifier); ok {
+			record, err = verifier.LoginWithOptions(ctx, record, *credential, upstreamauth.LoginOptions{
+				AcceptLoginAgreement: input.AcceptLoginAgreement,
+			})
+		} else {
+			record, err = s.verifier.Login(ctx, record, *credential)
+		}
 	} else {
 		err = upstreamauth.ValidateRecord(record)
 		if err == nil {

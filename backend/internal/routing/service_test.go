@@ -128,7 +128,9 @@ func TestUpstreamManagementAuthFailureDoesNotFuseHealthyAccount(t *testing.T) {
 			ObservedAt: "2026-08-28T00:00:00Z", Payload: map[string]any{"status_code": int64(200)},
 		}},
 	}
-	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	service := NewService(repository)
+	service.now = func() time.Time { return time.Date(2026, 8, 28, 0, 30, 0, 0, time.UTC) }
+	result, err := service.Calculate(context.Background(), Scope{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +430,9 @@ func TestCostWallStopsSchedulingWhenEveryManagedMembershipIsAboveWall(t *testing
 		}},
 	}
 
-	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	service := NewService(repository)
+	service.now = func() time.Time { return time.Date(2026, 8, 28, 0, 30, 0, 0, time.UTC) }
+	result, err := service.Calculate(context.Background(), Scope{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +467,9 @@ func TestCostWallKeepsMultiGroupAccountWhenAnyManagedMembershipIsWithinWall(t *t
 		}},
 	}
 
-	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
+	service := NewService(repository)
+	service.now = func() time.Time { return time.Date(2026, 8, 28, 0, 30, 0, 0, time.UTC) }
+	result, err := service.Calculate(context.Background(), Scope{}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +719,10 @@ func TestHealthyButManuallyUnschedulableAccountStaysClosed(t *testing.T) {
 		t.Fatalf("人工关闭调度的健康账号被自动重开：%#v", item)
 	}
 
-	item.health.HealthScore = 50
+	item.health = Health{
+		HealthScore: 50, SampleCount: 2, LatestEvent: EventGateway, FailureStreak: 2,
+		Events: []Event{EventGateway, EventGateway},
+	}
 	applyInitialState(item, configured, business.PreviousRoutingDecision{}, now)
 	if item.state != "degraded" || item.schedulable {
 		t.Fatalf("降级分支不应覆盖人工关闭状态：%#v", item)
@@ -1089,6 +1098,277 @@ func TestUnknownErrorsDoNotCountAsGatewayFailures(t *testing.T) {
 	}
 }
 
+func TestSingleTransientGatewayFailureDoesNotChangeRoutingHealthOrState(t *testing.T) {
+	schedulable, rate := true, "1"
+	item := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, Metadata: map[string]any{}},
+		health:  Health{HealthScore: 25, SampleCount: 1, LatestEvent: EventGateway, FailureStreak: 1, Events: []Event{EventGateway}},
+		state:   "healthy", schedulable: true, rateText: &rate,
+	}
+	item.rate = big.NewRat(1, 1)
+	config := engineConfig{
+		breakerEnabled: true, httpWindow: 5, httpFailures: 3, httpScoreBelow: 60,
+		transientFailures: 2, degradeEnabled: true, degradeThreshold: 75,
+	}
+	previous := business.PreviousRoutingDecision{State: "healthy", Payload: map[string]any{"routing_health_score": 100.0}}
+	applyInitialState(item, config, previous, time.Now().UTC())
+	if item.state != "healthy" || !item.schedulable || item.routingHealth != 100 {
+		t.Fatalf("single retryable failure changed routing placement: %#v", item)
+	}
+}
+
+func TestNeutralOnlyTrafficPreservesPreviousRoutingState(t *testing.T) {
+	status := 400
+	health, err := HealthScore([]Sample{{Result: "失败", FailureReason: "context length exceeded", Source: "traffic", StatusCode: &status}}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedulable, rate := true, "1"
+	build := func(effectiveState string) *candidate {
+		item := &candidate{
+			account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, EffectiveState: effectiveState, Metadata: map[string]any{}},
+			health:  health, rows: []business.RoutingSample{{Result: "失败", FailureReason: "context length exceeded", Source: "traffic"}},
+			state: "healthy", schedulable: true, rateText: &rate,
+		}
+		item.rate = big.NewRat(1, 1)
+		return item
+	}
+	config := engineConfig{degradeEnabled: true, degradeThreshold: 75, recoveryEnabled: true, recoveryTarget: 80, recoverySuccesses: 2}
+
+	healthy := build("healthy")
+	applyInitialState(healthy, config, business.PreviousRoutingDecision{State: "healthy", Payload: map[string]any{"routing_health_score": 100.0}}, time.Now().UTC())
+	if healthy.state != "healthy" || healthy.routingHealth != 100 {
+		t.Fatalf("neutral traffic displaced healthy routing state: %#v", healthy)
+	}
+
+	degraded := build("degraded")
+	applyInitialState(degraded, config, business.PreviousRoutingDecision{State: "degraded", Payload: map[string]any{"routing_health_score": 60.0}}, time.Now().UTC())
+	if degraded.state != "degraded" || degraded.routingHealth != 60 {
+		t.Fatalf("neutral traffic recovered degraded routing state: %#v", degraded)
+	}
+}
+
+func TestRollingTransientFailuresStillDegrade(t *testing.T) {
+	schedulable, rate := true, "1"
+	item := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, Metadata: map[string]any{}},
+		health: Health{
+			HealthScore: 50, SampleCount: 5, LatestEvent: EventGateway, FailureStreak: 1,
+			Events: []Event{EventGateway, EventHealthy, EventGateway, EventHealthy, EventGateway},
+		},
+		state: "healthy", schedulable: true, rateText: &rate,
+	}
+	item.rate = big.NewRat(1, 1)
+	config := engineConfig{
+		breakerEnabled: true, httpWindow: 5, httpFailures: 3, httpScoreBelow: 60, httpDegradeOnly: true,
+		degradeEnabled: true, degradeThreshold: 75,
+	}
+	applyInitialState(item, config, business.PreviousRoutingDecision{}, time.Now().UTC())
+	if item.state != "degraded" || item.routingHealth != 50 {
+		t.Fatalf("rolling gateway failures escaped confirmed degradation: %#v", item)
+	}
+}
+
+func TestDegradedAccountRequiresRecoveryStreakBeforeReturningHealthy(t *testing.T) {
+	schedulable, rate := true, "1"
+	build := func(streak int) *candidate {
+		item := &candidate{
+			account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, EffectiveState: "degraded", Metadata: map[string]any{}},
+			health:  Health{HealthScore: 90, SampleCount: streak, LatestEvent: EventHealthy, RecoveryPassStreak: streak, Events: make([]Event, streak)},
+			rows:    make([]business.RoutingSample, streak), state: "healthy", schedulable: true, rateText: &rate,
+		}
+		item.rate = big.NewRat(1, 1)
+		for index := range item.health.Events {
+			item.health.Events[index] = EventHealthy
+			item.rows[index] = business.RoutingSample{Result: "通过", Source: "traffic", ObservedAt: time.Now().UTC().Add(-time.Duration(index) * time.Second).Format(time.RFC3339Nano)}
+		}
+		return item
+	}
+	config := engineConfig{degradeEnabled: true, degradeThreshold: 75, recoveryEnabled: true, recoveryTarget: 80, recoverySuccesses: 2}
+	previous := business.PreviousRoutingDecision{State: "degraded", Payload: map[string]any{"routing_health_score": 60.0}}
+	one := build(1)
+	applyInitialState(one, config, previous, time.Now().UTC())
+	if one.state != "degraded" {
+		t.Fatalf("one success recovered degraded account: %#v", one)
+	}
+	two := build(2)
+	applyInitialState(two, config, previous, time.Now().UTC())
+	if two.state != "healthy" {
+		t.Fatalf("confirmed recovery did not restore account: %#v", two)
+	}
+}
+
+func TestEvidenceSelectionPrefersFreshTrafficAndExpiresOldSamples(t *testing.T) {
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	rows := []business.RoutingSample{
+		{Result: "通过", Source: "active-probe", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339Nano)},
+		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-30 * time.Minute).Format(time.RFC3339Nano)},
+		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano)},
+	}
+	healthRows, performanceRows := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
+	if len(healthRows) != 1 || healthRows[0].Source != "traffic" || len(performanceRows) != 1 || performanceRows[0].Source != "traffic" {
+		t.Fatalf("fresh traffic was not isolated from probe/stale evidence: health=%#v performance=%#v", healthRows, performanceRows)
+	}
+
+	staleOnly := []business.RoutingSample{{Result: "通过", Source: "traffic", ObservedAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano)}}
+	healthRows, performanceRows = selectRoutingEvidence(staleOnly, now, 2*time.Hour, 15*time.Minute, 60)
+	if len(healthRows) != 0 || len(performanceRows) != 0 {
+		t.Fatalf("expired evidence remained eligible: health=%#v performance=%#v", healthRows, performanceRows)
+	}
+}
+
+func TestGroupProbeIntervalControlsProbeEvidenceTTL(t *testing.T) {
+	groupID := "7"
+	config := engineConfig{
+		probeMaxAge: 15 * time.Minute,
+		groupBindings: map[string]any{
+			groupID: map[string]any{"probe_interval_seconds": int64(3600)},
+		},
+	}
+	groupConfig, enabled, err := config.forGroup(&groupID)
+	if err != nil || !enabled {
+		t.Fatalf("group override failed: enabled=%v err=%v", enabled, err)
+	}
+	if groupConfig.probeMaxAge != 3*time.Hour {
+		t.Fatalf("probe evidence ttl=%s want=3h", groupConfig.probeMaxAge)
+	}
+}
+
+func TestFreshFatalProbeOverridesOlderFreshTraffic(t *testing.T) {
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	status := 401
+	rows := []business.RoutingSample{
+		{Result: "失败", FailureReason: "invalid api key", Source: "active-probe", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), Payload: map[string]any{"status_code": status}},
+		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-2 * time.Minute).Format(time.RFC3339Nano)},
+	}
+	healthRows, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
+	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, testPolicy())
+	if len(healthRows) == 0 || healthRows[0].Source != "active-probe" {
+		t.Fatalf("new fatal probe did not override older traffic: %#v", healthRows)
+	}
+}
+
+func TestOlderFatalProbeDoesNotOverrideNewerTrafficOrProbeSuccess(t *testing.T) {
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	status := 401
+	rows := []business.RoutingSample{
+		{Result: "通过", Source: "active-probe", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339Nano)},
+		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-2 * time.Minute).Format(time.RFC3339Nano)},
+		{Result: "失败", FailureReason: "invalid api key", Source: "active-probe", ObservedAt: now.Add(-3 * time.Minute).Format(time.RFC3339Nano), Payload: map[string]any{"status_code": status}},
+	}
+	healthRows, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
+	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, testPolicy())
+	if len(healthRows) != 1 || healthRows[0].Source != "traffic" {
+		t.Fatalf("superseded fatal probe overrode newer evidence: %#v", healthRows)
+	}
+}
+
+func TestSmallLatencySamplesShrinkToRobustGroupBaseline(t *testing.T) {
+	fast := &candidate{performanceP95MS: floatPointer(10), performanceSamples: 1}
+	typical := &candidate{performanceP95MS: floatPointer(1000), performanceSamples: 20}
+	slow := &candidate{performanceP95MS: floatPointer(1200), performanceSamples: 20}
+	applyPerformanceConfidence([]*candidate{fast, typical, slow}, 5, 4)
+	if fast.rankingLatencyMS < 500 {
+		t.Fatalf("single fast sample received an excessive speed advantage: %#v", fast)
+	}
+	if typical.rankingLatencyMS >= slow.rankingLatencyMS {
+		t.Fatalf("well-sampled latency was unexpectedly rewritten: typical=%#v slow=%#v", typical, slow)
+	}
+}
+
+func TestDifferentTrafficModelsDoNotCreateCrossModelSpeedAdvantage(t *testing.T) {
+	fast := &candidate{performanceP95MS: floatPointer(100), performanceSamples: 20, performanceModel: "model-a"}
+	slow := &candidate{performanceP95MS: floatPointer(2000), performanceSamples: 20, performanceModel: "model-b"}
+	applyPerformanceConfidence([]*candidate{fast, slow}, 5, 4)
+	if fast.rankingLatencyMS != slow.rankingLatencyMS {
+		t.Fatalf("incomparable models affected speed order: fast=%v slow=%v", fast.rankingLatencyMS, slow.rankingLatencyMS)
+	}
+}
+
+func TestPerformanceSummaryDoesNotMixLatencyAcrossModels(t *testing.T) {
+	rows := []business.RoutingSample{
+		{Result: "通过", Source: "traffic", Payload: map[string]any{"first_token_ms": "100", "model": "model-a"}},
+		{Result: "通过", Source: "traffic", Payload: map[string]any{"first_token_ms": "5000", "model": "model-b"}},
+		{Result: "通过", Source: "traffic", Payload: map[string]any{"first_token_ms": "200", "model": "model-a"}},
+	}
+	p50, p95, samples, model := performanceLatencySummary(rows)
+	if p50 == nil || p95 == nil || *p50 != 100 || *p95 != 200 || samples != 2 || model != "model-a" {
+		t.Fatalf("mixed-model performance summary: p50=%v p95=%v samples=%d model=%q", p50, p95, samples, model)
+	}
+}
+
+func TestRepeatedRetryRecoveryBecomesConfirmedDegradation(t *testing.T) {
+	schedulable, rate := true, "1"
+	rows := make([]business.RoutingSample, 3)
+	for index := range rows {
+		rows[index] = business.RoutingSample{Result: "通过", Source: "active-probe", Payload: map[string]any{"retry_recovered": true}}
+	}
+	item := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, Metadata: map[string]any{}},
+		health:  Health{HealthScore: 100, SampleCount: 3, LatestEvent: EventHealthy, RecoveryPassStreak: 3, Events: []Event{EventHealthy, EventHealthy, EventHealthy}},
+		rows:    rows, state: "healthy", schedulable: true, rateText: &rate,
+	}
+	item.rate = big.NewRat(1, 1)
+	config := engineConfig{breakerEnabled: true, httpWindow: 5, httpFailures: 3, transientFailures: 2, degradeEnabled: true, degradeThreshold: 75}
+	applyInitialState(item, config, business.PreviousRoutingDecision{}, time.Now().UTC())
+	if item.state != "degraded" {
+		t.Fatalf("repeated retry dependence stayed healthy: %#v", item)
+	}
+}
+
+func TestPlacementKeepsCurrentOrderWhenWeightsAreWithinChangeThreshold(t *testing.T) {
+	firstPriority, secondPriority := int64(20), int64(21)
+	first := &candidate{account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &firstPriority}, state: "healthy", schedulable: true, weight: 100}
+	second := &candidate{account: business.RoutingAccount{ID: "42", GroupName: "codex", Priority: &secondPriority}, state: "healthy", schedulable: true, weight: 105}
+	config := engineConfig{manualPriorityMax: 10, changeThreshold: big.NewRat(1, 10)}
+	assignAccountPlacements(
+		map[string][]*candidate{"codex": {first, second}}, map[string]engineConfig{"codex": config},
+		map[string][]*candidate{"41": {first}, "42": {second}},
+	)
+	if first.rank == nil || second.rank == nil || *first.rank != 1 || *second.rank != 2 {
+		t.Fatalf("small weight noise reordered priorities: first=%#v second=%#v", first, second)
+	}
+}
+
+func TestPlacementHysteresisKeepsDeterministicOrderAcrossNonTransitiveWeightPairs(t *testing.T) {
+	firstPriority, secondPriority, thirdPriority := int64(20), int64(21), int64(22)
+	first := &candidate{account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &firstPriority}, state: "healthy", schedulable: true, weight: 100}
+	second := &candidate{account: business.RoutingAccount{ID: "42", GroupName: "codex", Priority: &secondPriority}, state: "healthy", schedulable: true, weight: 109}
+	third := &candidate{account: business.RoutingAccount{ID: "43", GroupName: "codex", Priority: &thirdPriority}, state: "healthy", schedulable: true, weight: 119}
+	config := engineConfig{manualPriorityMax: 10, changeThreshold: big.NewRat(1, 10)}
+
+	assignAccountPlacements(
+		map[string][]*candidate{"codex": {third, first, second}}, map[string]engineConfig{"codex": config},
+		map[string][]*candidate{"41": {first}, "42": {second}, "43": {third}},
+	)
+
+	if first.rank == nil || second.rank == nil || third.rank == nil || *first.rank != 1 || *second.rank != 2 || *third.rank != 3 {
+		t.Fatalf("hysteresis produced an unstable order: first=%#v second=%#v third=%#v", first.rank, second.rank, third.rank)
+	}
+}
+
+func TestWriteCooldownProtectsPriorityUnlessRoutingStateChanges(t *testing.T) {
+	now := time.Now().UTC()
+	currentPriority, desiredPriority := int64(20), int64(11)
+	item := &candidate{
+		account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &currentPriority},
+		state:   "healthy", desiredPriority: &desiredPriority,
+	}
+	previous := map[string]business.PreviousRoutingDecision{
+		routingKey("41", "codex"): {AccountID: "41", GroupName: "codex", State: "healthy", LastApplyAt: now.Add(-30 * time.Second)},
+	}
+	applyDeadband([]*candidate{item}, previous, engineConfig{cooldown: time.Minute}, now)
+	if item.desiredPriority == nil || *item.desiredPriority != currentPriority {
+		t.Fatalf("cooldown did not protect priority: %#v", item)
+	}
+
+	item.state, item.desiredPriority = "degraded", &desiredPriority
+	applyDeadband([]*candidate{item}, previous, engineConfig{cooldown: time.Minute}, now)
+	if item.desiredPriority == nil || *item.desiredPriority != desiredPriority {
+		t.Fatalf("cooldown blocked confirmed state transition: %#v", item)
+	}
+}
+
 func fuseTestCandidate(accountID, groupName, kind string, score float64) *candidate {
 	schedulable := true
 	return &candidate{
@@ -1290,6 +1570,7 @@ func TestCleanupDoesNotRemoveMinimumPoolSurvivor(t *testing.T) {
 	policy := cleanupRoutingPolicy("delete", 0, true)
 	repository := cleanupRoutingRepository(policy, false)
 	service := NewService(repository)
+	service.now = func() time.Time { return time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC) }
 
 	result, err := service.Calculate(context.Background(), Scope{}, true)
 	if err != nil {
@@ -1447,17 +1728,27 @@ func TestSlowOccurrencesCountsOnlyFirstTokenLatency(t *testing.T) {
 	firstToken := "16000"
 	rows := []business.RoutingSample{
 		{
-			Source: "traffic", LatencyP95: &totalDuration,
+			Result: "通过", Source: "traffic", LatencyP95: &totalDuration,
 			Payload: map[string]any{"latency_unit": "ms", "duration_ms": totalDuration},
 		},
 		{
-			Source: "traffic", LatencyP95: &firstToken,
+			Result: "通过", Source: "traffic", LatencyP95: &firstToken,
 			Payload: map[string]any{"latency_unit": "ms", "latency_metric": "first_token"},
 		},
 	}
 
 	if count := slowOccurrences(rows, 10, 15000); count != 1 {
 		t.Fatalf("slow occurrences=%d, want 1", count)
+	}
+}
+
+func TestSlowOccurrencesIgnoreFailedRequests(t *testing.T) {
+	rows := []business.RoutingSample{
+		{Result: "失败", FailureReason: "503 Service Unavailable", Source: "traffic", Payload: map[string]any{"first_token_ms": "20000"}},
+		{Result: "通过", Source: "traffic", Payload: map[string]any{"first_token_ms": "16000"}},
+	}
+	if count := slowOccurrences(rows, 10, 15000); count != 1 {
+		t.Fatalf("failed traffic was counted as a slow success: %d", count)
 	}
 }
 

@@ -70,6 +70,7 @@ type Business interface {
 	TrafficRanking(context.Context, business.TrafficRankingQuery) (business.TrafficRanking, error)
 	Groups(context.Context) ([]business.GroupStatus, error)
 	GroupAllocation(context.Context, string) (business.GroupAllocation, error)
+	GroupProbeModels(context.Context, string) (business.GroupProbeModels, error)
 	ControlPolicy(context.Context) (map[string]any, error)
 	PolicySnapshot(context.Context) (business.PolicySnapshot, error)
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
@@ -122,6 +123,8 @@ type NewAPIManagementService interface {
 	SavePlatform(context.Context, newapimanagement.PlatformInput) (configstore.NewAPIPlatformSummary, error)
 	DeletePlatform(context.Context, string) (bool, error)
 	Refresh(context.Context, string) (newapimanagement.RemoteSnapshot, error)
+	ManagementModelPrices(context.Context, string) ([]newapimanagement.Sub2APIModelPrice, error)
+	RemoteModelPricingSource(context.Context, string) (newapimanagement.RemotePricingSource, error)
 	SaveBindings(context.Context, string, []newapimanagement.GroupBindingInput) ([]business.NewAPIGroupBinding, error)
 	CreateChannelKey(context.Context, string, newapimanagement.ChannelKeyInput) (newapimanagement.ChannelKey, error)
 	FetchChannelModels(context.Context, string, newapimanagement.ChannelModelsInput) ([]string, error)
@@ -208,6 +211,7 @@ type ModelCheckService interface {
 
 type PricingService interface {
 	Snapshot(context.Context) (pricing.Snapshot, error)
+	Changes(context.Context) ([]business.PricingChangeRecord, error)
 	UpdateConfig(context.Context, pricing.Config, string) (pricing.Snapshot, error)
 	Enqueue(context.Context, string) (taskstore.Task, error)
 	EnqueueRevenue(context.Context, pricing.RevenueRequest, string) (taskstore.Task, error)
@@ -237,6 +241,7 @@ type OnboardingService interface {
 	Candidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProbeModels(context.Context, string, string) ([]string, error)
 	Probe(context.Context, string, string, string) (onboarding.ProbeResult, error)
+	CancelProbe(context.Context, string, string) error
 	PreviewUnboundKeys(context.Context, string) (onboarding.KeyCleanupPreview, error)
 	EnqueueKeyCleanup(context.Context, string, []string, string) (taskstore.Task, error)
 	Enqueue(context.Context, onboarding.Request) (taskstore.Task, error)
@@ -250,7 +255,8 @@ type UpstreamDeleteService interface {
 
 type AuthRecoveryService interface {
 	VerifyManual(context.Context, authrecovery.ManualInput, string) (authrecovery.ManualResult, error)
-	Enqueue(context.Context, string, string, string) (taskstore.Task, error)
+	Enqueue(context.Context, string, string, bool, string) (taskstore.Task, error)
+	EnqueueBatch(context.Context, []string, string) (taskstore.Task, error)
 	SubmitCaptcha(context.Context, string, string, string) (authrecovery.CaptchaCompletion, error)
 	CancelCaptcha(string) bool
 }
@@ -313,6 +319,7 @@ type Server struct {
 	pricing            PricingService
 	newAPIManagement   NewAPIManagementService
 	loginThrottle      *loginThrottle
+	sseSlots           chan struct{}
 	now                func() time.Time
 }
 
@@ -435,8 +442,11 @@ type notificationTestRequest struct {
 }
 
 type autoInspectionRequest struct {
-	Enabled         *bool `json:"enabled" binding:"required"`
-	IntervalSeconds int   `json:"interval_seconds" binding:"required,min=15,max=86400"`
+	Enabled                        *bool `json:"enabled" binding:"required"`
+	IntervalSeconds                int   `json:"interval_seconds" binding:"required,min=15,max=86400"`
+	AccountRateSyncIntervalSeconds int   `json:"account_rate_sync_interval_seconds" binding:"omitempty,min=15,max=86400"`
+	AccountRateSyncBatchSize       int   `json:"account_rate_sync_batch_size" binding:"min=0,max=100000"`
+	AccountRateSyncBatchPercent    int   `json:"account_rate_sync_batch_percent" binding:"min=0,max=100"`
 }
 
 type modelCheckRequest struct {
@@ -516,6 +526,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		pricing:            services.Pricing,
 		newAPIManagement:   services.NewAPIManagement,
 		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
+		sseSlots:           make(chan struct{}, 100),
 		now:                time.Now,
 	}
 	gin.SetMode(gin.ReleaseMode)
@@ -573,8 +584,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/onboarding/keys/cleanup", server.onboardingKeyCleanup)
 	authorized.POST("/onboarding/probe/models", server.onboardingProbeModels)
 	authorized.POST("/onboarding/probe", server.onboardingProbe)
+	authorized.POST("/onboarding/probe/cancel", server.cancelOnboardingProbe)
 	authorized.GET("/groups", server.groups)
 	authorized.GET("/groups/:group_id/allocation", server.groupAllocation)
+	authorized.GET("/groups/:group_id/models", server.groupProbeModels)
 	authorized.PUT("/groups/:group_id/policy", server.updateGroupPolicy)
 	authorized.DELETE("/groups/:group_id/policy", server.clearGroupPolicy)
 	authorized.PUT("/groups/:group_id/excluded", server.setGroupExcluded)
@@ -582,6 +595,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/policy", server.updatePolicy)
 	authorized.POST("/policy/restore-control", server.restoreRoutingControl)
 	authorized.GET("/pricing", server.pricingSnapshot)
+	authorized.GET("/pricing/changes", server.pricingChanges)
 	authorized.PUT("/pricing/config", server.updatePricingConfig)
 	authorized.POST("/pricing/apply", server.applyPricing)
 	authorized.POST("/pricing/revenue", server.calculatePricingRevenue)
@@ -594,6 +608,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
 	authorized.POST("/newapi/platforms/:platform_id/refresh", server.refreshNewAPIPlatform)
+	authorized.GET("/newapi/platforms/:platform_id/management-model-prices", server.managementModelPrices)
+	authorized.GET("/newapi/platforms/:platform_id/remote-model-prices/raw", server.remoteModelPricingSource)
 	authorized.PUT("/newapi/platforms/:platform_id/group-bindings", server.saveNewAPIGroupBindings)
 	authorized.POST("/newapi/platforms/:platform_id/channel-key", server.createNewAPIChannelKey)
 	authorized.POST("/newapi/platforms/:platform_id/channel-models", server.fetchNewAPIChannelModels)
@@ -619,6 +635,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.DELETE("/auth-recovery/vault-entry", server.deleteVaultEntry)
 	authorized.POST("/auth-recovery/manual", server.verifyManualAuth)
 	authorized.POST("/auth-recovery/run", server.runAuthRecovery)
+	authorized.POST("/auth-recovery/run-batch", server.runAuthRecoveryBatch)
 	authorized.POST("/auth-recovery/captcha/submit", server.submitAuthCaptcha)
 	authorized.POST("/auth-recovery/captcha/cancel", server.cancelAuthCaptcha)
 	authorized.GET("/events", server.events)
@@ -873,7 +890,8 @@ func (s *Server) trafficRanking(c *gin.Context) {
 		StartAt: endAt.Add(-duration), EndAt: endAt, GroupName: groupName, SortBy: sortBy,
 	})
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "流量排行读取失败："+err.Error())
+		slog.Error("流量排行读取失败", "error", err)
+		writeError(c, http.StatusInternalServerError, "流量排行读取失败")
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -2072,6 +2090,22 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (s *Server) cancelOnboardingProbe(c *gin.Context) {
+	if s.onboarding == nil {
+		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
+		return
+	}
+	host, groupID, _, ok := onboardingProbePayload(c, false)
+	if !ok {
+		return
+	}
+	if err := s.onboarding.CancelProbe(c.Request.Context(), host, groupID); err != nil {
+		writeError(c, http.StatusBadGateway, "临时测试 Key 清理失败："+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"cancelled": true})
+}
+
 func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, string, bool) {
 	payload, err := decodeRequestObject(c)
 	expected := 2
@@ -2563,6 +2597,24 @@ func (s *Server) groupAllocation(c *gin.Context) {
 	c.JSON(http.StatusOK, allocation)
 }
 
+func (s *Server) groupProbeModels(c *gin.Context) {
+	groupID := strings.TrimSpace(c.Param("group_id"))
+	if !positiveNumericID(groupID) {
+		writeError(c, http.StatusUnprocessableEntity, "分组必须使用已登记的稳定数字 ID")
+		return
+	}
+	models, err := s.business.GroupProbeModels(c.Request.Context(), groupID)
+	if errors.Is(err, business.ErrGroupNotFound) {
+		writeError(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "分组探测模型读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, models)
+}
+
 func (s *Server) policy(c *gin.Context) {
 	snapshot, err := s.business.PolicySnapshot(c.Request.Context())
 	if err != nil {
@@ -2628,6 +2680,19 @@ func (s *Server) pricingSnapshot(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, snapshot)
+}
+
+func (s *Server) pricingChanges(c *gin.Context) {
+	if s.pricing == nil {
+		writeError(c, http.StatusServiceUnavailable, "价格管理服务尚未就绪")
+		return
+	}
+	records, err := s.pricing.Changes(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "价格变更记录读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, records)
 }
 
 func (s *Server) updatePricingConfig(c *gin.Context) {
@@ -3386,7 +3451,7 @@ func (s *Server) runAuthRecovery(c *gin.Context) {
 		return
 	}
 	for key := range payload {
-		if key != "host" && key != "entry" {
+		if key != "host" && key != "entry" && key != "accept_login_agreement" {
 			writeError(c, http.StatusUnprocessableEntity, "鉴权恢复参数包含未知字段："+key)
 			return
 		}
@@ -3405,17 +3470,80 @@ func (s *Server) runAuthRecovery(c *gin.Context) {
 		}
 		entry = strings.TrimSpace(value)
 	}
+	acceptLoginAgreement := false
+	if raw, present := payload["accept_login_agreement"]; present {
+		value, ok := raw.(bool)
+		if !ok {
+			writeError(c, http.StatusUnprocessableEntity, "accept_login_agreement 必须是布尔值")
+			return
+		}
+		acceptLoginAgreement = value
+	}
 	actor, err := s.requestActor(c)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	task, err := s.authRecovery.Enqueue(c.Request.Context(), host, entry, actor)
+	task, err := s.authRecovery.Enqueue(c.Request.Context(), host, entry, acceptLoginAgreement, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) runAuthRecoveryBatch(c *gin.Context) {
+	if s.authRecovery == nil {
+		writeError(c, http.StatusServiceUnavailable, "鉴权恢复服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "批量鉴权恢复参数必须是 JSON 对象")
+		return
+	}
+	if len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "批量鉴权恢复只允许 hosts 字段")
+		return
+	}
+	hosts, err := authRecoveryHosts(payload["hosts"])
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.authRecovery.EnqueueBatch(c.Request.Context(), hosts, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func authRecoveryHosts(raw any) ([]string, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 100 {
+		return nil, errors.New("hosts 必须是包含 1 到 100 项的字符串数组")
+	}
+	hosts := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, rawHost := range values {
+		host, ok := rawHost.(string)
+		host = configstore.CanonicalHost(host)
+		if !ok || host == "" || utf8.RuneCountInString(host) > 255 {
+			return nil, errors.New("hosts 必须全部是长度不超过 255 的有效 Host")
+		}
+		if _, found := seen[host]; found {
+			return nil, errors.New("hosts 不能包含重复 Host：" + host)
+		}
+		seen[host] = struct{}{}
+		hosts = append(hosts, host)
+	}
+	return hosts, nil
 }
 
 func (s *Server) submitAuthCaptcha(c *gin.Context) {
@@ -3484,7 +3612,7 @@ func (s *Server) cancelAuthCaptcha(c *gin.Context) {
 func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, error) {
 	allowed := map[string]struct{}{
 		"host": {}, "auth_mode": {}, "access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {},
-		"username": {}, "password": {}, "save_to_vault": {}, "entry": {}, "headers": {},
+		"username": {}, "password": {}, "save_to_vault": {}, "accept_login_agreement": {}, "entry": {}, "headers": {},
 	}
 	for key := range payload {
 		if _, present := allowed[key]; !present {
@@ -3537,6 +3665,13 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 			return authrecovery.ManualInput{}, errors.New("save_to_vault 必须是布尔值")
 		}
 		result.SaveToVault, result.Present["save_to_vault"] = value, true
+	}
+	if raw, present := payload["accept_login_agreement"]; present {
+		value, ok := raw.(bool)
+		if !ok {
+			return authrecovery.ManualInput{}, errors.New("accept_login_agreement 必须是布尔值")
+		}
+		result.AcceptLoginAgreement, result.Present["accept_login_agreement"] = value, true
 	}
 	if raw, present := payload["headers"]; present {
 		value, fieldErr := nullableStringMap(raw, "headers")
@@ -3649,7 +3784,8 @@ func (s *Server) modelCheckAccountStatuses(c *gin.Context) {
 	}
 	statuses, err := s.modelChecks.AccountStatuses(c.Request.Context())
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, err.Error())
+		slog.Error("模型检测账号状态读取失败", "error", err)
+		writeError(c, http.StatusInternalServerError, "模型检测账号状态读取失败")
 		return
 	}
 	c.JSON(http.StatusOK, statuses)
@@ -3756,8 +3892,15 @@ func (s *Server) updateAutoInspection(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "自动巡检配置参数无效")
 		return
 	}
+	rateInterval := payload.AccountRateSyncIntervalSeconds
+	if rateInterval == 0 {
+		rateInterval = business.DefaultAutoInspectionConfig().AccountRateSyncIntervalSeconds
+	}
 	status, err := s.inspection.UpdateConfig(c.Request.Context(), business.AutoInspectionConfig{
 		Enabled: *payload.Enabled, IntervalSeconds: payload.IntervalSeconds,
+		AccountRateSyncIntervalSeconds: rateInterval,
+		AccountRateSyncBatchSize:       payload.AccountRateSyncBatchSize,
+		AccountRateSyncBatchPercent:    payload.AccountRateSyncBatchPercent,
 	})
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
@@ -3774,6 +3917,9 @@ func (s *Server) updateAutoInspection(c *gin.Context) {
 	}
 	s.recordRuntimeEventBestEffort(c.Request.Context(), "inspection.automation.updated", "succeeded", "自动巡检已"+state, map[string]any{
 		"actor": actor, "enabled": *payload.Enabled, "interval_seconds": payload.IntervalSeconds,
+		"account_rate_sync_interval_seconds": rateInterval,
+		"account_rate_sync_batch_size":       payload.AccountRateSyncBatchSize,
+		"account_rate_sync_batch_percent":    payload.AccountRateSyncBatchPercent,
 	})
 	c.JSON(http.StatusOK, status)
 }
@@ -3836,6 +3982,11 @@ func (s *Server) autoInspectionEvents(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "自动巡检服务尚未就绪")
 		return
 	}
+	if !s.acquireSSESlot() {
+		writeError(c, http.StatusTooManyRequests, "实时连接数量已达上限，请稍后重试")
+		return
+	}
+	defer s.releaseSSESlot()
 	updates, unsubscribe := s.inspection.Subscribe()
 	defer unsubscribe()
 	c.Header("Content-Type", "text/event-stream; charset=utf-8")
@@ -3859,7 +4010,8 @@ func (s *Server) autoInspectionEvents(c *gin.Context) {
 		return nil
 	}
 	if err := writeStatus(); err != nil {
-		_ = writeSSEError(c.Writer, err.Error())
+		slog.Error("自动巡检状态推送失败", "error", err)
+		_ = writeSSEError(c.Writer, "自动巡检状态读取失败")
 		c.Writer.Flush()
 		return
 	}
@@ -4055,7 +4207,8 @@ func (s *Server) evaluateAlerts(c *gin.Context) {
 }
 
 func optionalLimit(c *gin.Context) (*int, bool) {
-	return optionalLimitDefault(c, nil)
+	defaultLimit := 200
+	return optionalLimitDefault(c, &defaultLimit)
 }
 
 func optionalLimitDefault(c *gin.Context, fallback *int) (*int, bool) {
@@ -4145,6 +4298,32 @@ func (s *Server) refreshNewAPIPlatform(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) managementModelPrices(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	models, err := s.newAPIManagement.ManagementModelPrices(c.Request.Context(), c.Param("platform_id"))
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
+}
+
+func (s *Server) remoteModelPricingSource(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
+		return
+	}
+	source, err := s.newAPIManagement.RemoteModelPricingSource(c.Request.Context(), c.Param("platform_id"))
+	if err != nil {
+		writeError(c, http.StatusBadGateway, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, source)
 }
 
 func (s *Server) saveNewAPIGroupBindings(c *gin.Context) {
@@ -4272,6 +4451,11 @@ func (s *Server) taskEvents(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "任务服务尚未就绪")
 		return
 	}
+	if !s.acquireSSESlot() {
+		writeError(c, http.StatusTooManyRequests, "实时连接数量已达上限，请稍后重试")
+		return
+	}
+	defer s.releaseSSESlot()
 	taskID := strings.TrimSpace(c.Param("task_id"))
 	if taskID == "" || utf8.RuneCountInString(taskID) > 255 {
 		writeError(c, http.StatusUnprocessableEntity, "任务 ID 长度必须在 1 到 255 之间")
@@ -4297,7 +4481,9 @@ func (s *Server) taskEvents(c *gin.Context) {
 	if terminalTaskStatus(task.Status) {
 		return
 	}
-	ticker := time.NewTicker(250 * time.Millisecond)
+	// Task state is persisted in SQLite; polling more frequently than once per
+	// second only adds database load and does not improve user-visible latency.
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
@@ -4306,7 +4492,8 @@ func (s *Server) taskEvents(c *gin.Context) {
 		case <-ticker.C:
 			task, err = s.tasks.Get(c.Request.Context(), taskID)
 			if err != nil {
-				_ = writeSSEError(c.Writer, "任务状态读取失败："+err.Error())
+				slog.Error("任务 SSE 状态读取失败", "task_id", taskID, "error", err)
+				_ = writeSSEError(c.Writer, "任务状态读取失败")
 				c.Writer.Flush()
 				return
 			}
@@ -4346,6 +4533,25 @@ func terminalTaskStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Server) acquireSSESlot() bool {
+	if s.sseSlots == nil {
+		return true
+	}
+	select {
+	case s.sseSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseSSESlot() {
+	if s.sseSlots == nil {
+		return
+	}
+	<-s.sseSlots
 }
 
 func (s *Server) logsPage(c *gin.Context) {
@@ -4759,5 +4965,24 @@ func normalizedURLOrigin(raw string, originOnly bool) (string, bool) {
 }
 
 func writeError(c *gin.Context, status int, detail string) {
-	c.JSON(status, gin.H{"detail": detail})
+	code := "internal_error"
+	switch {
+	case status == http.StatusBadRequest:
+		code = "bad_request"
+	case status == http.StatusUnauthorized:
+		code = "unauthorized"
+	case status == http.StatusForbidden:
+		code = "forbidden"
+	case status == http.StatusNotFound:
+		code = "not_found"
+	case status == http.StatusConflict:
+		code = "conflict"
+	case status == http.StatusUnprocessableEntity:
+		code = "validation_error"
+	case status == http.StatusTooManyRequests:
+		code = "rate_limited"
+	case status >= 500:
+		code = "internal_error"
+	}
+	c.JSON(status, gin.H{"code": code, "detail": detail})
 }

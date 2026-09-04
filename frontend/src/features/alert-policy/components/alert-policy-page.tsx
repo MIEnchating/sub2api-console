@@ -1,16 +1,7 @@
 import { useEffect, useId } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  BellRing,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Save,
-  Settings2,
-  ShieldAlert,
-  Trash2,
-} from "lucide-react";
+import { BellRing, Plus, RotateCcw, Save, Settings2, ShieldAlert, Trash2 } from "lucide-react";
 import { Controller, useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -18,6 +9,8 @@ import { api, type AlertPolicy } from "@/api";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
+import { RefreshButton } from "@/components/refresh-button";
+import { FieldLabel } from "@/components/field-help-tooltip";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -131,16 +124,12 @@ function PolicyUnavailable(props: { isFetching: boolean; onRetry: () => void }) 
           <p className="text-muted-foreground mt-1 max-w-lg text-sm leading-6">
             未能读取现有策略。为避免覆盖当前配置，读取成功前无法编辑或保存。
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="mt-4"
-            disabled={props.isFetching}
+          <RefreshButton
+            pending={props.isFetching}
+            ariaLabel="刷新告警策略"
             onClick={props.onRetry}
-          >
-            <RefreshCw className={props.isFetching ? "animate-spin" : ""} />
-            {props.isFetching ? "重试中" : "重试读取"}
-          </Button>
+            className="mt-4"
+          />
         </div>
       </CardContent>
     </Card>
@@ -242,7 +231,10 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
               <CardContent className="grid gap-5 sm:grid-cols-2">
                 <div className="sm:col-span-2">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-medium">余额告警阈值</span>
+                    <FieldLabel
+                      label="余额告警阈值"
+                      description="支持多个提醒档位，例如 20、10、5；余额达到或低于下一档时会再次告警。"
+                    />
                     <Button
                       type="button"
                       variant="outline"
@@ -296,9 +288,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                       </div>
                     ))}
                   </div>
-                  <p className="text-muted-foreground mt-1.5 text-xs">
-                    支持多个提醒档位，例如 20、10、5；余额达到或低于下一档时会再次告警。
-                  </p>
                   {form.formState.errors.balance_thresholds?.root && (
                     <p className="text-destructive mt-1 text-xs">
                       {form.formState.errors.balance_thresholds.root.message}
@@ -306,9 +295,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                   )}
                 </div>
                 <div>
-                  <label className="text-sm font-medium" htmlFor="probe_failure_streak">
-                    连续主动探测失败次数
-                  </label>
+                  <FieldLabel
+                    label="连续主动探测失败次数"
+                    description="达到次数后才产生主动探测告警。"
+                    htmlFor="probe_failure_streak"
+                  />
                   <Input
                     id="probe_failure_streak"
                     type="number"
@@ -318,9 +309,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     disabled={!enabled || !probeEnabled}
                     {...form.register("probe_failure_streak", { valueAsNumber: true })}
                   />
-                  <p className="text-muted-foreground mt-1.5 text-xs">
-                    达到次数后才产生主动探测告警。
-                  </p>
                   {form.formState.errors.probe_failure_streak && (
                     <p className="text-destructive mt-1 text-xs">
                       {form.formState.errors.probe_failure_streak.message}
@@ -328,9 +316,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                   )}
                 </div>
                 <div>
-                  <label className="text-sm font-medium" htmlFor="probe_recovery_streak">
-                    连续主动探测成功次数
-                  </label>
+                  <FieldLabel
+                    label="连续主动探测成功次数"
+                    description="达到次数后才确认恢复并发送恢复通知。"
+                    htmlFor="probe_recovery_streak"
+                  />
                   <Input
                     id="probe_recovery_streak"
                     type="number"
@@ -340,9 +330,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     disabled={!enabled || !probeEnabled}
                     {...form.register("probe_recovery_streak", { valueAsNumber: true })}
                   />
-                  <p className="text-muted-foreground mt-1.5 text-xs">
-                    达到次数后才确认恢复并发送恢复通知。
-                  </p>
                   {form.formState.errors.probe_recovery_streak && (
                     <p className="text-destructive mt-1 text-xs">
                       {form.formState.errors.probe_recovery_streak.message}
@@ -350,9 +337,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                   )}
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="text-sm font-medium" htmlFor="probe_groups">
-                    主动探测告警分组
-                  </label>
+                  <FieldLabel
+                    label="主动探测告警分组"
+                    description="仅限制主动探测失败规则，其他上游告警不受影响。"
+                    htmlFor="probe_groups"
+                  />
                   <Input
                     id="probe_groups"
                     className="mt-2"
@@ -360,9 +349,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     disabled={!enabled || !probeEnabled}
                     {...form.register("probe_groups")}
                   />
-                  <p className="text-muted-foreground mt-1.5 text-xs">
-                    仅限制主动探测失败规则，其他上游告警不受影响。
-                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -549,9 +535,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                   data-slot="alert-delivery-fields"
                 >
                   <div>
-                    <label className="block text-sm font-medium" htmlFor="repeat_interval_minutes">
-                      重复提醒间隔（分钟）
-                    </label>
+                    <FieldLabel
+                      label="重复提醒间隔（分钟）"
+                      description="设为 0 表示持续告警只发送一次。"
+                      htmlFor="repeat_interval_minutes"
+                    />
                     <Input
                       id="repeat_interval_minutes"
                       type="number"
@@ -561,9 +549,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                       disabled={!enabled || !deliveryEnabled}
                       {...form.register("repeat_interval_minutes", { valueAsNumber: true })}
                     />
-                    <p className="text-muted-foreground mt-1.5 text-xs">
-                      设为 0 表示持续告警只发送一次。
-                    </p>
                     {form.formState.errors.repeat_interval_minutes && (
                       <p className="text-destructive mt-1 text-xs">
                         {form.formState.errors.repeat_interval_minutes.message}
@@ -571,12 +556,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     )}
                   </div>
                   <div>
-                    <label
-                      className="block text-sm font-medium"
+                    <FieldLabel
+                      label="状态变化冷却（分钟）"
+                      description="异常与恢复反复切换时，只在冷却结束后发送当前状态。"
                       htmlFor="state_change_cooldown_minutes"
-                    >
-                      状态变化冷却（分钟）
-                    </label>
+                    />
                     <Input
                       id="state_change_cooldown_minutes"
                       type="number"
@@ -586,9 +570,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                       disabled={!enabled || !deliveryEnabled}
                       {...form.register("state_change_cooldown_minutes", { valueAsNumber: true })}
                     />
-                    <p className="text-muted-foreground mt-1.5 text-xs">
-                      异常与恢复反复切换时，只在冷却结束后发送当前状态。
-                    </p>
                     {form.formState.errors.state_change_cooldown_minutes && (
                       <p className="text-destructive mt-1 text-xs">
                         {form.formState.errors.state_change_cooldown_minutes.message}
@@ -596,9 +577,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                     )}
                   </div>
                   <div>
-                    <label className="block text-sm font-medium" htmlFor="merge_threshold">
-                      多少条以上合并发送
-                    </label>
+                    <FieldLabel
+                      label="多少条以上合并发送"
+                      description="少于该数量时，每条告警单独发送。"
+                      htmlFor="merge_threshold"
+                    />
                     <Input
                       id="merge_threshold"
                       type="number"
@@ -608,9 +591,6 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
                       disabled={!enabled || !deliveryEnabled}
                       {...form.register("merge_threshold", { valueAsNumber: true })}
                     />
-                    <p className="text-muted-foreground mt-1.5 text-xs">
-                      少于该数量时，每条告警单独发送。
-                    </p>
                     {form.formState.errors.merge_threshold && (
                       <p className="text-destructive mt-1 text-xs">
                         {form.formState.errors.merge_threshold.message}

@@ -31,7 +31,6 @@
     "react-aria-components": "^1.20.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.86.0",
-    "shadcn": "^4.19.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3",
@@ -48,6 +47,7 @@
     "eslint": "^9.0.0",
     "knip": "^6.32.3",
     "oxfmt": "0.65.0",
+    "shadcn": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.67.0",
     "vitest": "^2.1.0"

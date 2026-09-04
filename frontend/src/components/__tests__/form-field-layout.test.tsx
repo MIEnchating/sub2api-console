@@ -22,4 +22,17 @@ describe("form field layout", () => {
     expect(markup).not.toContain("<label");
     expect(markup).toContain('data-slot="select-trigger"');
   });
+
+  it("shows field descriptions through an accessible help tooltip", () => {
+    const markup = renderToStaticMarkup(
+      <FormField label="人工优先位范围" description="保留优先级 1 至 N；自动调度从 N+1 开始">
+        <input type="number" />
+      </FormField>,
+    );
+
+    expect(markup).toContain('data-slot="field-label"');
+    expect(markup).toContain('aria-label="人工优先位范围说明"');
+    expect(markup).toContain('data-slot="tooltip-trigger"');
+    expect(markup).not.toContain("保留优先级 1 至 N；自动调度从 N+1 开始");
+  });
 });

@@ -1,56 +1,22 @@
 import { useState } from "react";
-import { Clock3, RefreshCw, RotateCcw, Search } from "lucide-react";
+import { Clock3, FileSearch, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 
 import { api, type SystemLogSearchQuery, type UsageRecord } from "@/api";
-import { FilterMenu } from "@/components/data-table/filter-menu";
+import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { DataTablePanel } from "@/components/data-table/table-panel";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-
-const timeRanges: Array<{ value: SystemLogSearchQuery["timeRange"]; label: string }> = [
-  { value: "5m", label: "最近 5 分钟" },
-  { value: "30m", label: "最近 30 分钟" },
-  { value: "1h", label: "最近 1 小时" },
-  { value: "6h", label: "最近 6 小时" },
-  { value: "24h", label: "最近 24 小时" },
-  { value: "7d", label: "最近 7 天" },
-  { value: "30d", label: "最近 30 天" },
-];
-
-const levels = [
-  { value: "debug", label: "调试" },
-  { value: "info", label: "信息" },
-  { value: "warn", label: "警告" },
-  { value: "error", label: "错误" },
-];
 
 function emptySearch(): SystemLogSearchQuery {
   return {
-    timeRange: "1h",
-    startTime: "",
-    endTime: "",
-    host: "",
-    level: "",
     requestId: "",
-    clientRequestId: "",
-    apiKeyId: "",
-    accountId: "",
-    platform: "",
-    model: "",
-    keyword: "",
     page: 1,
     pageSize: 20,
   };
-}
-
-function optionalISODate(value: string): string {
-  if (!value) return "";
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
 }
 
 function displayValue(value: unknown): string {
@@ -194,9 +160,9 @@ function statusVariant(record: UsageRecord, status: string): "danger" | "warning
 
 function Field(props: { label: string; children: React.ReactNode }) {
   return (
-    <label className="grid min-w-0 gap-1.5 text-xs font-medium">
-      <span className="text-muted-foreground">{props.label}</span>
-      {props.children}
+    <label className="flex min-w-0 items-center gap-3 text-xs font-medium">
+      <span className="text-muted-foreground shrink-0 whitespace-nowrap">{props.label}</span>
+      <span className="min-w-0 flex-1">{props.children}</span>
     </label>
   );
 }
@@ -283,8 +249,7 @@ export function SystemLogSearchPanel() {
     event.preventDefault();
     const query = {
       ...form,
-      startTime: optionalISODate(form.startTime),
-      endTime: optionalISODate(form.endTime),
+      requestId: form.requestId.trim(),
       page: 1,
     };
     setSubmitted((current) => nextSystemLogSubmission(current, query));
@@ -311,137 +276,45 @@ export function SystemLogSearchPanel() {
   const totalPages = logs.data ? Math.max(1, Math.ceil(logs.data.total / logs.data.page_size)) : 1;
 
   return (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle>查询 Sub2API 系统日志</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form className="grid gap-3" onSubmit={submit}>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
-              <Field label="时间范围">
-                <FilterMenu
-                  label="时间范围"
-                  options={timeRanges.map((option) => option.value)}
-                  value={form.timeRange}
-                  onValueChange={(value) => value && update("timeRange", value)}
-                  optionLabel={(value) =>
-                    timeRanges.find((option) => option.value === value)?.label ?? value
-                  }
-                  clearable={false}
-                  className="w-full max-w-full"
-                />
-              </Field>
-              <Field label="开始时间（可选）">
-                <Input
-                  type="datetime-local"
-                  value={form.startTime}
-                  onChange={(event) => update("startTime", event.target.value)}
-                />
-              </Field>
-              <Field label="结束时间（可选）">
-                <Input
-                  type="datetime-local"
-                  value={form.endTime}
-                  onChange={(event) => update("endTime", event.target.value)}
-                />
-              </Field>
-              <Field label="级别">
-                <FilterMenu
-                  label="级别"
-                  options={levels.map((option) => option.value)}
-                  value={form.level || null}
-                  onValueChange={(value) => update("level", value ?? "")}
-                  optionLabel={(value) =>
-                    levels.find((option) => option.value === value)?.label ?? value
-                  }
-                  className="w-full max-w-full"
-                />
-              </Field>
-              <Field label="Host">
-                <Input value={form.host} onChange={(event) => update("host", event.target.value)} />
-              </Field>
-              <Field label="request_id">
-                <Input
-                  value={form.requestId}
-                  onChange={(event) => update("requestId", event.target.value)}
-                  autoComplete="off"
-                />
-              </Field>
-              <Field label="client_request_id">
-                <Input
-                  value={form.clientRequestId}
-                  onChange={(event) => update("clientRequestId", event.target.value)}
-                  autoComplete="off"
-                />
-              </Field>
-              <Field label="KEY ID">
-                <Input
-                  inputMode="numeric"
-                  value={form.apiKeyId}
-                  onChange={(event) => update("apiKeyId", event.target.value)}
-                />
-              </Field>
-              <Field label="account_id">
-                <Input
-                  inputMode="numeric"
-                  value={form.accountId}
-                  onChange={(event) => update("accountId", event.target.value)}
-                />
-              </Field>
-              <Field label="平台">
-                <Input
-                  value={form.platform}
-                  onChange={(event) => update("platform", event.target.value)}
-                />
-              </Field>
-              <Field label="模型">
-                <Input
-                  value={form.model}
-                  onChange={(event) => update("model", event.target.value)}
-                />
-              </Field>
-              <Field label="关键词">
-                <Input
-                  value={form.keyword}
-                  onChange={(event) => update("keyword", event.target.value)}
-                  placeholder="消息或附加字段"
-                />
-              </Field>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="submit" disabled={logs.isFetching}>
-                {logs.isFetching ? <RefreshCw className="animate-spin" /> : <Search />}
-                {logs.isFetching ? "查询中" : "查询"}
-              </Button>
-              <Button type="button" variant="outline" onClick={reset} disabled={logs.isFetching}>
-                <RotateCcw />
-                重置
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+    <div className="flex h-full min-h-0 flex-col">
+      <TableFilterToolbar aria-label="系统日志查询">
+        <form className="contents" onSubmit={submit}>
+          <div className="min-w-0 basis-72 flex-1">
+            <Field label="request_id">
+              <Input
+                value={form.requestId}
+                onChange={(event) => update("requestId", event.target.value)}
+                autoComplete="off"
+                placeholder="输入完整 request_id"
+              />
+            </Field>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="submit" disabled={logs.isFetching}>
+              {logs.isFetching ? <RefreshCw className="animate-spin" /> : <Search />}
+              {logs.isFetching ? "查询中" : "查询"}
+            </Button>
+            <Button type="button" variant="outline" onClick={reset} disabled={logs.isFetching}>
+              <RotateCcw />
+              重置
+            </Button>
+          </div>
+        </form>
+      </TableFilterToolbar>
 
       {logs.isError ? (
         <QueryErrorToast error={logs.error} fallback="Sub2API 系统日志查询失败" />
       ) : null}
       {submitted ? (
-        <Card className="mt-3 sm:mt-4">
-          <CardHeader className="flex-row items-center justify-between gap-3">
-            <CardTitle>系统日志结果</CardTitle>
-            <span className="text-muted-foreground text-xs">
-              {logs.data ? `共 ${logs.data.total} 条` : "正在读取"}
-            </span>
-          </CardHeader>
+        <DataTablePanel className="mt-3 flex-1 sm:mt-4">
           {logs.isLoading ? (
-            <CardContent className="text-muted-foreground flex min-h-28 items-center justify-center gap-2 text-sm">
+            <div className="text-muted-foreground flex min-h-28 items-center justify-center gap-2 text-sm">
               <RefreshCw className="size-4 animate-spin" />
               正在读取 Sub2API 系统日志
-            </CardContent>
+            </div>
           ) : logs.data?.items.length ? (
             <>
-              <div className="divide-y">
+              <div className="min-h-0 flex-1 divide-y overflow-y-auto">
                 {logs.data.items.map((record) => (
                   <SystemLogResult
                     key={`${record.id}:${record.request_id}:${record.observed_at ?? ""}`}
@@ -459,12 +332,20 @@ export function SystemLogSearchPanel() {
               />
             </>
           ) : (
-            <CardContent className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">
+            <div className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">
               没有匹配的系统日志
-            </CardContent>
+            </div>
           )}
-        </Card>
-      ) : null}
-    </>
+        </DataTablePanel>
+      ) : (
+        <div
+          data-slot="request-trace-placeholder"
+          className="text-muted-foreground flex min-h-0 flex-1 flex-col items-center justify-center gap-3"
+        >
+          <FileSearch className="size-8" aria-hidden="true" />
+          <p className="text-sm">输入 request_id 开始查询</p>
+        </div>
+      )}
+    </div>
   );
 }

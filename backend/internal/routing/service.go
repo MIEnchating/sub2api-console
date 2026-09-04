@@ -57,6 +57,7 @@ type Decision struct {
 	Rank                  *int     `json:"rank"`
 	Reason                string   `json:"reason"`
 	HealthScore           float64  `json:"health_score"`
+	RoutingHealthScore    float64  `json:"routing_health_score"`
 	ShortScore            float64  `json:"short_score"`
 	LongScore             float64  `json:"long_score"`
 	SampleCount           int      `json:"sample_count"`
@@ -86,79 +87,90 @@ type Service struct {
 }
 
 type engineConfig struct {
-	strategy            string
-	trafficEnabled      bool
-	shortWindow         int
-	longWindow          int
-	breakerEnabled      bool
-	hardFatal           bool
-	httpWindow          int
-	httpFailures        int
-	httpScoreBelow      float64
-	latencyWindow       int
-	latencyOccurrences  int
-	latencyTTFBMS       float64
-	maxSwitch           int
-	minPool             int
-	minPoolScore        float64
-	fusedCooldown       time.Duration
-	instantCodes        map[int]struct{}
-	httpDegradeOnly     bool
-	latencyDegradeOnly  bool
-	degradeEnabled      bool
-	degradeThreshold    float64
-	degradePriorityStep int64
-	degradeLoadRatio    float64
-	degradeMinLoad      int64
-	recoveryEnabled     bool
-	recoveryTarget      float64
-	recoverySuccesses   int
-	recoveryHold        time.Duration
-	weightsEnabled      bool
-	weightBudget        int64
-	manualPriorityMax   int64
-	manageAllAccounts   bool
-	gateFloor           float64
-	priceExp            float64
-	speedExp            float64
-	balancedPriceRatio  float64
-	missingRateFallback string
-	changeThreshold     *big.Rat
-	cooldown            time.Duration
-	minLoadFactor       int64
-	maxLoadFactor       int64
-	scalingEnabled      bool
-	scalingGlobalMax    int64
-	scalingMin          int64
-	scalingMax          int64
-	scalingUpRatio      float64
-	scalingStepUp       int64
-	scalingStepDown     int64
-	scalingCooldown     time.Duration
-	excludedGroups      map[string]struct{}
-	excludedAccounts    map[string]struct{}
-	pausedAccounts      map[string]struct{}
-	manualFusedAccounts map[string]struct{}
-	managedMode         string
-	managedGroups       map[string]struct{}
-	accountTypes        map[string]struct{}
-	platforms           map[string]struct{}
-	groupBindings       map[string]any
-	cleanupEnabled      bool
-	cleanupAction       string
-	cleanupOccurrences  int
-	cleanupWindow       int
-	cleanupObservation  time.Duration
-	cleanupMaxPerRound  int
-	cleanupKeepLast     bool
-	cleanupOnlyAuth     bool
-	cleanupStatusCodes  map[int]struct{}
+	strategy              string
+	trafficEnabled        bool
+	trafficMaxAge         time.Duration
+	probeMaxAge           time.Duration
+	shortWindow           int
+	longWindow            int
+	breakerEnabled        bool
+	hardFatal             bool
+	httpWindow            int
+	httpFailures          int
+	httpScoreBelow        float64
+	transientFailures     int
+	latencyWindow         int
+	latencyOccurrences    int
+	latencyTTFBMS         float64
+	maxSwitch             int
+	minPool               int
+	minPoolScore          float64
+	fusedCooldown         time.Duration
+	instantCodes          map[int]struct{}
+	httpDegradeOnly       bool
+	latencyDegradeOnly    bool
+	degradeEnabled        bool
+	degradeThreshold      float64
+	degradePriorityStep   int64
+	degradeLoadRatio      float64
+	degradeMinLoad        int64
+	recoveryEnabled       bool
+	recoveryTarget        float64
+	recoverySuccesses     int
+	recoveryHold          time.Duration
+	weightsEnabled        bool
+	weightBudget          int64
+	manualPriorityMax     int64
+	manageAllAccounts     bool
+	gateFloor             float64
+	priceExp              float64
+	speedExp              float64
+	balancedPriceRatio    float64
+	performanceMinSamples int
+	speedAdvantageCap     float64
+	missingRateFallback   string
+	changeThreshold       *big.Rat
+	cooldown              time.Duration
+	minLoadFactor         int64
+	maxLoadFactor         int64
+	scalingEnabled        bool
+	scalingGlobalMax      int64
+	scalingMin            int64
+	scalingMax            int64
+	scalingUpRatio        float64
+	scalingStepUp         int64
+	scalingStepDown       int64
+	scalingCooldown       time.Duration
+	excludedGroups        map[string]struct{}
+	excludedAccounts      map[string]struct{}
+	pausedAccounts        map[string]struct{}
+	manualFusedAccounts   map[string]struct{}
+	managedMode           string
+	managedGroups         map[string]struct{}
+	accountTypes          map[string]struct{}
+	platforms             map[string]struct{}
+	groupBindings         map[string]any
+	cleanupEnabled        bool
+	cleanupAction         string
+	cleanupOccurrences    int
+	cleanupWindow         int
+	cleanupObservation    time.Duration
+	cleanupMaxPerRound    int
+	cleanupKeepLast       bool
+	cleanupOnlyAuth       bool
+	cleanupStatusCodes    map[int]struct{}
 }
 
 type candidate struct {
 	account            business.RoutingAccount
 	health             Health
+	routingHealth      float64
 	rows               []business.RoutingSample
+	performanceP50MS   *float64
+	performanceP95MS   *float64
+	performanceSamples int
+	performanceModel   string
+	rankingLatencyMS   float64
 	rate               *big.Rat
 	rateText           *string
 	rateKnown          bool
@@ -300,9 +312,13 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			if groupConfig.trafficEnabled {
 				source = "traffic"
 			}
-			rows := filterAndLimitSamples(sampleMap[account.ID], source, groupConfig.longWindow)
-			healthInput := make([]Sample, 0, len(rows))
-			for _, row := range rows {
+			rows := filterAndLimitSamples(sampleMap[account.ID], source, groupConfig.longWindow*2)
+			healthRows, performanceRows := selectRoutingEvidence(
+				rows, now, groupConfig.trafficMaxAge, groupConfig.probeMaxAge, groupConfig.longWindow,
+			)
+			healthRows = withCriticalProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, policy)
+			healthInput := make([]Sample, 0, len(healthRows))
+			for _, row := range healthRows {
 				healthInput = append(healthInput, Sample{
 					Result: row.Result, FailureReason: row.FailureReason, Source: row.Source,
 					LatencyP95: row.LatencyP95, StatusCode: routingSampleStatus(row), Payload: row.Payload,
@@ -312,8 +328,13 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			if scoreErr != nil {
 				return Result{}, scoreErr
 			}
+			performanceP50, performanceP95, performanceCount, performanceModel := performanceLatencySummary(performanceRows)
+			health.P50MS, health.P95MS = performanceP50, performanceP95
 			current := &candidate{
-				account: account, health: health, rows: rows, state: "healthy", reason: "已计算",
+				account: account, health: health, routingHealth: health.HealthScore, rows: healthRows,
+				performanceP50MS: performanceP50, performanceP95MS: performanceP95, performanceSamples: performanceCount,
+				performanceModel: performanceModel,
+				state:            "healthy", reason: "已计算",
 				schedulable: remoteSchedulable(account), strategy: groupConfig.strategy,
 			}
 			if health.SampleCount == 0 {
@@ -594,6 +615,10 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 	if err != nil {
 		return engineConfig{}, err
 	}
+	probe, err := optionalObject(policy, "probe")
+	if err != nil {
+		return engineConfig{}, err
+	}
 	breaker, err := requiredObject(policy, "breaker")
 	if err != nil {
 		return engineConfig{}, err
@@ -670,14 +695,18 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		return engineConfig{}, errors.New("scope.managed_group_mode 配置无效")
 	}
 	reader := &policyReader{}
+	probeInterval := reader.integer(probe, "probe.interval_seconds", "interval_seconds", 300, 1, 86400)
 	config := engineConfig{
 		strategy: strategy, trafficEnabled: reader.boolean(traffic, "traffic.enabled", "enabled", true),
+		trafficMaxAge:  time.Duration(reader.integer(traffic, "traffic.lookback_minutes", "lookback_minutes", 120, 1, 10080)) * time.Minute,
+		probeMaxAge:    time.Duration(max(probeInterval*3, 300)) * time.Second,
 		shortWindow:    reader.nestedInteger(policy, "scoring", "short_window", 10, 1, 10000),
 		longWindow:     reader.nestedInteger(policy, "scoring", "long_window", 60, 1, 100000),
 		breakerEnabled: reader.boolean(breaker, "breaker.enabled", "enabled", true), hardFatal: reader.boolean(breaker, "breaker.hard_fatal", "hard_fatal", true),
 		httpWindow: reader.integer(breaker, "breaker.http_window", "http_window", 5, 1, 10000), httpFailures: reader.integer(breaker, "breaker.http_failures", "http_failures", 3, 1, 10000),
-		httpScoreBelow: reader.number(breaker, "breaker.http_score_below", "http_score_below", 60, 0, 100),
-		latencyWindow:  reader.integer(breaker, "breaker.latency_window", "latency_window", 10, 1, 10000), latencyOccurrences: reader.integer(breaker, "breaker.latency_occurrences", "latency_occurrences", 5, 1, 10000),
+		httpScoreBelow:    reader.number(breaker, "breaker.http_score_below", "http_score_below", 60, 0, 100),
+		transientFailures: reader.integer(breaker, "breaker.transient_consecutive_failures", "transient_consecutive_failures", 2, 1, 10000),
+		latencyWindow:     reader.integer(breaker, "breaker.latency_window", "latency_window", 10, 1, 10000), latencyOccurrences: reader.integer(breaker, "breaker.latency_occurrences", "latency_occurrences", 5, 1, 10000),
 		latencyTTFBMS: reader.number(breaker, "breaker.latency_ttfb_ms", "latency_ttfb_ms", 15000, 1, 3_600_000),
 		maxSwitch:     reader.integer(breaker, "breaker.max_switch_per_round", "max_switch_per_round", 1, 1, 10000), minPool: reader.integer(breaker, "breaker.min_pool_size", "min_pool_size", 1, 0, 10000),
 		minPoolScore:  reader.number(breaker, "breaker.min_pool_score", "min_pool_score", 3, 0, 100),
@@ -693,8 +722,10 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		manageAllAccounts: reader.boolean(scope, "scope.manage_all_accounts", "manage_all_accounts", true),
 		gateFloor:         reader.number(weights, "weights.gate_floor", "gate_floor", 40, 0, 100), priceExp: reader.number(weights, "weights.price_exp", "price_exp", 1, math.SmallestNonzeroFloat64, 100), speedExp: reader.number(weights, "weights.speed_exp", "speed_exp", 1, math.SmallestNonzeroFloat64, 100),
 		balancedPriceRatio: reader.number(weights, "weights.balanced_price_ratio", "balanced_price_ratio", .5, 0, 1), missingRateFallback: missing, changeThreshold: change,
-		cooldown:      time.Duration(reader.integer(weights, "weights.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
-		minLoadFactor: int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
+		performanceMinSamples: reader.integer(weights, "weights.performance_min_samples", "performance_min_samples", 5, 1, 200),
+		speedAdvantageCap:     reader.number(weights, "weights.speed_advantage_cap", "speed_advantage_cap", 4, 1, 100),
+		cooldown:              time.Duration(reader.integer(weights, "weights.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
+		minLoadFactor:         int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
 		scalingEnabled: reader.boolean(scaling, "scaling.enabled", "enabled", false), scalingGlobalMax: int64(reader.integer(scaling, "scaling.global_max_concurrency", "global_max_concurrency", 900, 1, 10_000_000)),
 		scalingMin: int64(reader.integer(scaling, "scaling.min_per_account", "min_per_account", 3, 1, 1_000_000)), scalingMax: int64(reader.integer(scaling, "scaling.max_per_account", "max_per_account", 250, 1, 1_000_000)),
 		scalingUpRatio: reader.number(scaling, "scaling.scale_up_ratio", "scale_up_ratio", .8, math.SmallestNonzeroFloat64, 1), scalingStepUp: int64(reader.integer(scaling, "scaling.step_up", "step_up", 5, 1, 1_000_000)),
@@ -750,6 +781,13 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 		}
 		result.strategy = value
 	}
+	if rawInterval, present := binding["probe_interval_seconds"]; present {
+		value, err := exactInteger(rawInterval)
+		if err != nil || value < 30 || value > 86400 {
+			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.probe_interval_seconds 必须在 30 到 86400 之间", *groupID)
+		}
+		result.probeMaxAge = time.Duration(max(value*3, 300)) * time.Second
+	}
 	for field, target := range map[string]*bool{
 		"breaker_enabled": &result.breakerEnabled, "recovery_enabled": &result.recoveryEnabled,
 		"weights_enabled": &result.weightsEnabled, "scaling_enabled": &result.scalingEnabled,
@@ -792,6 +830,9 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 
 func applyInitialState(item *candidate, config engineConfig, previous business.PreviousRoutingDecision, now time.Time) {
 	item.schedulable = remoteSchedulable(item.account)
+	neutralOnly := item.health.SampleCount == 0 && item.health.NeutralCount > 0
+	confirmedUnhealthy, transientPending := routingEvidenceConfirmation(item, config)
+	item.routingHealth = confirmedRoutingHealth(item, config, previous, confirmedUnhealthy, transientPending)
 	allowed, reason := eligibleScope(item.account, config)
 	_, accountPaused := config.pausedAccounts[strings.ToLower(strings.TrimSpace(item.account.ID))]
 	_, manuallyFused := config.manualFusedAccounts[strings.ToLower(strings.TrimSpace(item.account.ID))]
@@ -842,23 +883,104 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		} else {
 			item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, "网关错误率达到熔断阈值", "soft"
 		}
-	case config.breakerEnabled && !candidateRateLimited(item, now) && slowOccurrences(item.rows, config.latencyWindow, config.latencyTTFBMS) >= config.latencyOccurrences:
+	case config.breakerEnabled && config.latencyOccurrences > 0 && !candidateRateLimited(item, now) && slowOccurrences(item.rows, config.latencyWindow, config.latencyTTFBMS) >= config.latencyOccurrences:
 		if config.latencyDegradeOnly {
 			item.state, item.reason = "degraded", "延迟超标达到阈值，仅降级"
 		} else {
 			item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, "延迟超标达到熔断阈值", "soft"
 		}
+	case config.breakerEnabled && config.httpFailures > 0 && retryRecoveredOccurrences(item.rows, config.httpWindow) >= config.httpFailures:
+		item.state, item.reason = "degraded", "近期多次依赖重试成功"
+	case neutralOnly:
+		item.state, item.reason = preservedRoutingState(item.account.EffectiveState, previous.State), "客户端错误仅记录，保持上一调度状态"
 	case item.health.SampleCount == 0:
 		// Guardian keeps an unprobed account's health unknown while still
 		// counting the remotely schedulable account in the minimum pool. Health
 		// evidence and current traffic eligibility are separate facts.
 		item.state, item.reason = "unknown", "尚无样本，等待首次探测"
-	case config.degradeEnabled && item.health.SampleCount > 0 && item.health.HealthScore < config.degradeThreshold:
+	case degradedRoutingState(item.account.EffectiveState, previous.State) && !degradedRecoveryAllowed(item, config, now):
+		item.state, item.reason = "degraded", "降级恢复条件未满足"
+	case config.degradeEnabled && confirmedUnhealthy && item.health.SampleCount > 0 && item.health.HealthScore < config.degradeThreshold:
 		item.state, item.reason = "degraded", fmt.Sprintf("健康分低于降级线 %.4g", config.degradeThreshold)
+	case transientPending:
+		item.reason = "短暂异常待确认，保持当前调度位置"
 	}
 	if config.manageAllAccounts && managedAccountCanReceiveTraffic(item, now) {
 		item.schedulable = true
 	}
+}
+
+func routingEvidenceConfirmation(item *candidate, config engineConfig) (bool, bool) {
+	recent := recentTransientFailures(item.health, config.httpWindow)
+	retryRecovered := retryRecoveredOccurrences(item.rows, config.httpWindow)
+	consecutiveThreshold := config.transientFailures
+	if consecutiveThreshold < 1 {
+		consecutiveThreshold = 2
+	}
+	confirmed := item.health.FailureStreak >= consecutiveThreshold
+	if config.httpFailures > 0 {
+		confirmed = confirmed || recent >= config.httpFailures || retryRecovered >= config.httpFailures
+	}
+	slowConfirmed := config.latencyOccurrences > 0 && slowOccurrences(item.rows, config.latencyWindow, config.latencyTTFBMS) >= config.latencyOccurrences
+	rateLimited := item.health.LatestEvent == EventRateLimited
+	hasPending := (recent > 0 || retryRecovered > 0) && !confirmed
+	return confirmed || slowConfirmed || rateLimited, hasPending
+}
+
+func confirmedRoutingHealth(
+	item *candidate,
+	config engineConfig,
+	previous business.PreviousRoutingDecision,
+	confirmed bool,
+	pending bool,
+) float64 {
+	neutralOnly := item.health.SampleCount == 0 && item.health.NeutralCount > 0
+	if confirmed || !pending && !neutralOnly {
+		return item.health.HealthScore
+	}
+	if raw, present := previous.Payload["routing_health_score"]; present {
+		if value, err := strictNumber(raw); err == nil {
+			return value
+		}
+	}
+	if raw, present := previous.Payload["health_score"]; present {
+		if value, err := strictNumber(raw); err == nil {
+			return value
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(previous.State), "healthy") || strings.EqualFold(strings.TrimSpace(item.account.EffectiveState), "healthy") {
+		return 100
+	}
+	return config.degradeThreshold
+}
+
+func preservedRoutingState(values ...string) string {
+	if degradedRoutingState(values...) {
+		return "degraded"
+	}
+	for _, value := range values {
+		switch normalized := strings.ToLower(strings.TrimSpace(value)); normalized {
+		case "healthy", "unknown", "survivor":
+			return normalized
+		}
+	}
+	return "unknown"
+}
+
+func degradedRoutingState(values ...string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), "degraded") {
+			return true
+		}
+	}
+	return false
+}
+
+func degradedRecoveryAllowed(item *candidate, config engineConfig, now time.Time) bool {
+	if !config.recoveryEnabled || item.health.Fatal || item.health.HealthScore < config.recoveryTarget || item.health.RecoveryPassStreak < config.recoverySuccesses {
+		return false
+	}
+	return recoverySpan(item.rows, item.health.RecoveryPassStreak, now) >= config.recoveryHold
 }
 
 func managedAccountCanReceiveTraffic(item *candidate, now time.Time) bool {
@@ -1105,6 +1227,7 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 		}
 		eligible = append(eligible, item)
 	}
+	applyPerformanceConfidence(eligible, config.performanceMinSamples, config.speedAdvantageCap)
 	benchmark := strategyScoreBenchmark(eligible, config)
 	qualityTotal := 0.0
 	for _, item := range eligible {
@@ -1159,12 +1282,8 @@ func assignAccountPlacements(
 		if len(owned) == 0 {
 			continue
 		}
-		sort.SliceStable(owned, func(left, right int) bool {
-			if owned[left].weight != owned[right].weight {
-				return owned[left].weight > owned[right].weight
-			}
-			return stableIDLess(owned[left].account.ID, owned[right].account.ID)
-		})
+		config := configs[groupName]
+		sortOwnedWithHysteresis(owned, config.changeThreshold)
 		priorities := make([]int64, 0, len(owned))
 		for _, item := range owned {
 			if item.account.BaselinePriority != nil && *item.account.BaselinePriority > 0 {
@@ -1176,7 +1295,6 @@ func assignAccountPlacements(
 			}
 		}
 		sort.Slice(priorities, func(left, right int) bool { return priorities[left] < priorities[right] })
-		config := configs[groupName]
 		base := max(config.manualPriorityMax+1, priorities[len(priorities)/2]-int64(len(owned)/2))
 		for index, item := range owned {
 			rank := index + 1
@@ -1373,6 +1491,9 @@ func applyDeadband(items []*candidate, previous map[string]business.PreviousRout
 		if !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.cooldown {
 			item.writeCooldown = true
 			item.desiredLoad = cloneString(item.account.LoadFactor)
+			if item.account.Priority != nil && strings.EqualFold(strings.TrimSpace(prior.State), strings.TrimSpace(item.state)) {
+				item.desiredPriority = cloneInt64(item.account.Priority)
+			}
 		}
 		if !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.scalingCooldown {
 			item.scalingCooldown = true
@@ -1710,7 +1831,8 @@ func publicDecision(item *candidate, groupName string, config engineConfig) Deci
 	return Decision{
 		AccountID: item.account.ID, GroupName: groupName, GroupID: item.account.GroupID,
 		Priority: item.desiredPriority, Schedulable: item.schedulable, Role: item.state, RoutingState: item.state,
-		Rank: item.rank, Reason: item.reason, HealthScore: item.health.HealthScore, ShortScore: item.health.ShortScore,
+		Rank: item.rank, Reason: item.reason, HealthScore: item.health.HealthScore,
+		RoutingHealthScore: item.routingHealth, ShortScore: item.health.ShortScore,
 		LongScore: item.health.LongScore, SampleCount: item.health.SampleCount, TTFBP50MS: item.health.P50MS,
 		TTFBP95MS: item.health.P95MS, LatestEvent: item.health.LatestEvent, Strategy: item.strategy,
 		Rate: item.rateText, RateKnown: item.rateKnown, Weight: round4(item.weight), DesiredLoadFactor: item.desiredLoad,
@@ -1734,7 +1856,8 @@ func evaluationWrite(item *candidate, groupName string) business.RoutingEvaluati
 
 func decisionWrite(item Decision) business.RoutingDecisionWrite {
 	payload := map[string]any{
-		"health_score": item.HealthScore, "short_score": item.ShortScore, "long_score": item.LongScore,
+		"health_score": item.HealthScore, "routing_health_score": item.RoutingHealthScore,
+		"short_score": item.ShortScore, "long_score": item.LongScore,
 		"sample_count": item.SampleCount, "ttfb_p50_ms": item.TTFBP50MS, "ttfb_p95_ms": item.TTFBP95MS,
 		"strategy": item.Strategy, "rate": item.Rate, "rate_known": item.RateKnown, "weight": item.Weight,
 		"desired_load_factor": item.DesiredLoadFactor, "desired_concurrency": item.DesiredConcurrency,
@@ -1815,7 +1938,9 @@ func candidateStrategyScores(item *candidate, config engineConfig) strategyScore
 	}
 	priceScore := 1 / max(multiplier, math.SmallestNonzeroFloat64)
 	latencySeconds := 1.0
-	if item.health.P95MS != nil && *item.health.P95MS > 0 {
+	if item.rankingLatencyMS > 0 {
+		latencySeconds = max(item.rankingLatencyMS/1000, .05)
+	} else if item.health.P95MS != nil && *item.health.P95MS > 0 {
 		latencySeconds = max(*item.health.P95MS/1000, .05)
 	} else if item.health.P50MS != nil && *item.health.P50MS > 0 {
 		latencySeconds = max(*item.health.P50MS/1000, .05)
@@ -1850,7 +1975,11 @@ func strategyQuality(item *candidate, config engineConfig, benchmark strategySco
 	scores := candidateStrategyScores(item, config)
 	priceScore := relativeStrategyScore(scores.price, benchmark.price)
 	speedScore := relativeStrategyScore(scores.speed, benchmark.speed)
-	healthValue := min(100.0, max(0.0, item.health.HealthScore))
+	routingHealth := item.routingHealth
+	if routingHealth == 0 && item.health.HealthScore > 0 {
+		routingHealth = item.health.HealthScore
+	}
+	healthValue := min(100.0, max(0.0, routingHealth))
 	if healthValue <= config.gateFloor && item.state != "survivor" {
 		return 0
 	}
@@ -1924,6 +2053,236 @@ func filterAndLimitSamples(samples []business.RoutingSample, source string, limi
 		return filtered[:limit]
 	}
 	return filtered
+}
+
+func selectRoutingEvidence(
+	samples []business.RoutingSample,
+	now time.Time,
+	trafficMaxAge time.Duration,
+	probeMaxAge time.Duration,
+	limit int,
+) ([]business.RoutingSample, []business.RoutingSample) {
+	traffic := freshSourceSamples(samples, "traffic", now, trafficMaxAge, limit)
+	probes := freshSourceSamples(samples, "active-probe", now, probeMaxAge, limit)
+	performance := append([]business.RoutingSample{}, traffic...)
+	if len(traffic) > 0 {
+		return traffic, performance
+	}
+	return probes, performance
+}
+
+func withCriticalProbeEvidence(
+	healthRows []business.RoutingSample,
+	allRows []business.RoutingSample,
+	now time.Time,
+	probeMaxAge time.Duration,
+	policy map[string]any,
+) []business.RoutingSample {
+	probes := freshSourceSamples(allRows, "active-probe", now, probeMaxAge, len(allRows))
+	if len(probes) == 0 {
+		return healthRows
+	}
+	latestProbe := probes[0]
+	classified, err := ClassifySample(Sample{
+		Result: latestProbe.Result, FailureReason: latestProbe.FailureReason, Source: latestProbe.Source,
+		LatencyP95: latestProbe.LatencyP95, StatusCode: routingSampleStatus(latestProbe), Payload: latestProbe.Payload,
+	}, policy)
+	if err != nil || !classified.Fatal {
+		return healthRows
+	}
+	probeObserved, err := time.Parse(time.RFC3339Nano, latestProbe.ObservedAt)
+	if err != nil {
+		return healthRows
+	}
+	if len(healthRows) > 0 {
+		healthObserved, parseErr := time.Parse(time.RFC3339Nano, healthRows[0].ObservedAt)
+		if parseErr == nil && !probeObserved.After(healthObserved) {
+			return healthRows
+		}
+	}
+	return append([]business.RoutingSample{latestProbe}, healthRows...)
+}
+
+func freshSourceSamples(
+	samples []business.RoutingSample,
+	source string,
+	now time.Time,
+	maxAge time.Duration,
+	limit int,
+) []business.RoutingSample {
+	result := make([]business.RoutingSample, 0, min(limit, len(samples)))
+	for _, sample := range samples {
+		normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
+		if normalized != source {
+			continue
+		}
+		observed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(sample.ObservedAt))
+		if err != nil || observed.After(now.Add(time.Minute)) || now.Sub(observed) > maxAge {
+			continue
+		}
+		result = append(result, sample)
+	}
+	sort.SliceStable(result, func(left, right int) bool {
+		return result[left].ObservedAt > result[right].ObservedAt
+	})
+	if limit > 0 && len(result) > limit {
+		return result[:limit]
+	}
+	return result
+}
+
+func performanceLatencySummary(samples []business.RoutingSample) (*float64, *float64, int, string) {
+	latenciesByModel := map[string][]float64{}
+	models := map[string]int{}
+	for _, row := range samples {
+		if !successfulRoutingSample(row) {
+			continue
+		}
+		latency := latencyMS(Sample{Source: row.Source, LatencyP95: row.LatencyP95, Payload: row.Payload})
+		if latency != nil {
+			model := performanceModel(row.Payload)
+			latenciesByModel[model] = append(latenciesByModel[model], *latency)
+			models[model]++
+		}
+	}
+	if len(latenciesByModel) == 0 {
+		return nil, nil, 0, ""
+	}
+	model := dominantModel(models)
+	latencies := latenciesByModel[model]
+	sort.Float64s(latencies)
+	p50 := latencies[max(0, int(math.Ceil(.50*float64(len(latencies))))-1)]
+	p95 := latencies[max(0, int(math.Ceil(.95*float64(len(latencies))))-1)]
+	return floatPointer(round4(p50)), floatPointer(round4(p95)), len(latencies), model
+}
+
+func applyPerformanceConfidence(items []*candidate, minimumSamples int, advantageCap float64) {
+	modelValues := map[string][]float64{}
+	for _, item := range items {
+		latency, samples := candidatePerformanceEvidence(item)
+		if latency != nil && samples >= minimumSamples {
+			modelValues[item.performanceModel] = append(modelValues[item.performanceModel], *latency)
+		}
+	}
+	if len(modelValues) == 0 {
+		for _, item := range items {
+			latency, _ := candidatePerformanceEvidence(item)
+			if latency != nil {
+				modelValues[item.performanceModel] = append(modelValues[item.performanceModel], *latency)
+			}
+		}
+	}
+	modelBaselines := map[string]float64{}
+	for model, values := range modelValues {
+		modelBaselines[model] = medianFloat64(values)
+	}
+	const neutralLatency = 1000.0
+	minimumLatency := neutralLatency / max(1.0, advantageCap)
+	for _, item := range items {
+		latency := neutralLatency
+		performanceLatency, performanceSamples := candidatePerformanceEvidence(item)
+		baseline := modelBaselines[item.performanceModel]
+		if performanceLatency != nil && baseline > 0 {
+			latency = *performanceLatency / baseline * neutralLatency
+			if performanceSamples < minimumSamples {
+				confidence := float64(performanceSamples) / float64(max(1, minimumSamples))
+				latency = latency*confidence + neutralLatency*(1-confidence)
+			}
+		}
+		item.rankingLatencyMS = max(minimumLatency, latency)
+	}
+}
+
+func performanceModel(payload map[string]any) string {
+	for _, key := range []string{"model", "model_name", "actual_model"} {
+		if value := strings.ToLower(strings.TrimSpace(fmt.Sprint(payload[key]))); value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func dominantModel(counts map[string]int) string {
+	result, best := "", 0
+	for model, count := range counts {
+		if count > best || count == best && model < result {
+			result, best = model, count
+		}
+	}
+	return result
+}
+
+func successfulRoutingSample(row business.RoutingSample) bool {
+	if strings.TrimSpace(row.FailureReason) != "" {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(row.Result)) {
+	case "通过", "passed", "pass", "success", "succeeded", "healthy", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortOwnedWithHysteresis(items []*candidate, threshold *big.Rat) {
+	sort.SliceStable(items, func(left, right int) bool {
+		leftPriority, leftHasPriority := positivePriority(items[left].account.Priority)
+		rightPriority, rightHasPriority := positivePriority(items[right].account.Priority)
+		if leftHasPriority != rightHasPriority {
+			return leftHasPriority
+		}
+		if leftHasPriority && leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		return stableIDLess(items[left].account.ID, items[right].account.ID)
+	})
+	for index := 1; index < len(items); index++ {
+		for current := index; current > 0 && weightAdvantageExceeds(items[current].weight, items[current-1].weight, threshold); current-- {
+			items[current], items[current-1] = items[current-1], items[current]
+		}
+	}
+}
+
+func positivePriority(priority *int64) (int64, bool) {
+	if priority == nil || *priority <= 0 {
+		return 0, false
+	}
+	return *priority, true
+}
+
+func weightAdvantageExceeds(challenger, incumbent float64, threshold *big.Rat) bool {
+	if challenger <= incumbent {
+		return false
+	}
+	if threshold == nil {
+		return true
+	}
+	limit, _ := threshold.Float64()
+	base := max(math.Abs(challenger), math.Abs(incumbent))
+	return base > 0 && (challenger-incumbent)/base > limit
+}
+
+func candidatePerformanceEvidence(item *candidate) (*float64, int) {
+	if item.performanceP95MS != nil {
+		return item.performanceP95MS, item.performanceSamples
+	}
+	if item.health.P95MS != nil {
+		return item.health.P95MS, max(1, item.health.SampleCount)
+	}
+	return nil, 0
+}
+
+func medianFloat64(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	ordered := append([]float64{}, values...)
+	sort.Float64s(ordered)
+	middle := len(ordered) / 2
+	if len(ordered)%2 == 0 {
+		return (ordered[middle-1] + ordered[middle]) / 2
+	}
+	return ordered[middle]
 }
 
 func requiredObject(parent map[string]any, key string) (map[string]any, error) {
@@ -2165,9 +2524,33 @@ func recentHTTPFailures(health Health, window int) int {
 	return count
 }
 
+func recentTransientFailures(health Health, window int) int {
+	count := 0
+	for _, event := range health.Events[:min(window, len(health.Events))] {
+		switch event {
+		case EventUnknown, EventGateway, EventProbeFailed:
+			count++
+		}
+	}
+	return count
+}
+
+func retryRecoveredOccurrences(rows []business.RoutingSample, window int) int {
+	count := 0
+	for _, row := range rows[:min(window, len(rows))] {
+		if recovered, _ := row.Payload["retry_recovered"].(bool); recovered {
+			count++
+		}
+	}
+	return count
+}
+
 func slowOccurrences(rows []business.RoutingSample, window int, threshold float64) int {
 	count := 0
 	for _, row := range rows[:min(window, len(rows))] {
+		if !successfulRoutingSample(row) {
+			continue
+		}
 		value := latencyMS(Sample{Source: row.Source, LatencyP95: row.LatencyP95, Payload: row.Payload})
 		if value != nil && *value > threshold {
 			count++

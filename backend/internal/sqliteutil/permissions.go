@@ -15,11 +15,6 @@ func Prepare(path string) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return err
 	}
-	if directory != "." {
-		if err := os.Chmod(directory, 0o700); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

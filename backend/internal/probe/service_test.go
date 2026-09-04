@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -293,6 +294,42 @@ func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 	}
 	if requestCount != 3 || summary.Passed != 1 || len(summary.Results) != 1 || summary.Results[0].Attempts != 3 {
 		t.Fatalf("requests=%d summary=%#v", requestCount, summary)
+	}
+	if !reflect.DeepEqual(summary.Results[0].AttemptStatusCodes, []int{503, 503, 200}) {
+		t.Fatalf("retry attempt history was lost: %#v", summary.Results[0])
+	}
+	if !summary.Results[0].RetryRecovered {
+		t.Fatalf("successful retry was not marked as recovered: %#v", summary.Results[0])
+	}
+}
+
+func TestFixedRetryExhaustsStatusReportedInsideStream(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"type\":\"error\",\"error\":{\"message\":\"API returned 503: service temporarily unavailable\"}}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{
+			"retry_enabled": true, "retry_source": "fixed", "retry_count": int64(2),
+			"retry_status_codes": []any{int64(503)},
+		}},
+		candidates: []business.ProbeCandidate{{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}}},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret"}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestCount != 3 || summary.Failed != 1 || summary.Results[0].Attempts != 3 {
+		t.Fatalf("stream error was not retried: requests=%d summary=%#v", requestCount, summary)
+	}
+	if !reflect.DeepEqual(summary.Results[0].AttemptStatusCodes, []int{503, 503, 503}) || summary.Results[0].RetryRecovered ||
+		summary.Results[0].FailureReason == nil || *summary.Results[0].FailureReason != "API returned 503: service temporarily unavailable" {
+		t.Fatalf("stream retry evidence is incomplete: %#v", summary.Results[0])
 	}
 }
 

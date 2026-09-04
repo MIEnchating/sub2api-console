@@ -71,12 +71,16 @@ func Load() (Config, error) {
 	if setupToken != "" && len(setupToken) < 32 {
 		return Config{}, errors.New("SUB2API_CONSOLE_SETUP_TOKEN 至少需要 32 个字符")
 	}
+	adminToken := strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN"))
+	if adminToken != "" && len(adminToken) < 32 {
+		return Config{}, errors.New("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN 至少需要 32 个字符")
+	}
 	return Config{
 		DataDir:            dataDir,
 		TaskDB:             taskDB,
 		ConfigDB:           configDB,
 		DataDB:             dataDB,
-		AdminToken:         strings.TrimSpace(os.Getenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN")),
+		AdminToken:         adminToken,
 		SetupToken:         setupToken,
 		Origins:            origins,
 		CookieSecure:       cookieSecure,

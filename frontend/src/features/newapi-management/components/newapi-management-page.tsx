@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CirclePlus, Pencil, RefreshCw, ServerCog, Trash2 } from "lucide-react";
+import { CirclePlus, Pencil, ServerCog, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { api, type NewAPIPlatform, type NewAPIRemoteSnapshot } from "@/api";
+import { api, type NewAPIModelPrice, type NewAPIPlatform } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
+import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,15 +17,20 @@ import type { NewAPIManagementView } from "../constants";
 import type { NewAPIPlatformValues } from "../lib/schemas";
 import { NewAPIChannelForm } from "./channel-form";
 import { NewAPIGroupBindings } from "./group-bindings";
-import { NewAPIModelPrices, NewAPIPriceDifferences } from "./model-prices";
+import {
+  NewAPIModelPrices,
+  NewAPIPriceDifferences,
+  remotePriceToNewAPIModelPrice,
+} from "./model-prices";
 import { NewAPIPlatformDialog } from "./platform-dialog";
+import { RawPricingSourceDialog } from "./raw-pricing-source-dialog";
 
 type Props = {
   view: "platform" | NewAPIManagementView;
 };
 
 const pageTitles: Record<Props["view"], string> = {
-  platform: "New API 主平台",
+  platform: "New API 配置",
   groups: "分组绑定",
   channels: "渠道管理",
   prices: "模型价格",
@@ -33,6 +39,41 @@ const pageTitles: Record<Props["view"], string> = {
 
 export function newAPIViewNeedsRemoteSnapshot(view: Props["view"]): boolean {
   return view === "groups" || view === "channels" || view === "prices" || view === "differences";
+}
+
+export function newAPIRemoteSnapshotQueryKey(
+  platformId: string,
+): readonly ["newapi-remote-snapshot", string] {
+  return ["newapi-remote-snapshot", platformId];
+}
+
+export function NewAPIHeadingAction(props: {
+  hasPlatform: boolean;
+  needsRemoteSnapshot: boolean;
+  refreshPending: boolean;
+  onRefresh: () => void;
+  onConfigure: () => void;
+}) {
+  if (props.hasPlatform && props.needsRemoteSnapshot) {
+    return (
+      <RefreshButton
+        pending={props.refreshPending}
+        ariaLabel="刷新 New API 数据"
+        onClick={props.onRefresh}
+      />
+    );
+  }
+
+  if (!props.hasPlatform) {
+    return (
+      <Button size="sm" onClick={props.onConfigure}>
+        <CirclePlus aria-hidden="true" />
+        配置 New API
+      </Button>
+    );
+  }
+
+  return null;
 }
 
 export function NewAPIRemoteLoading(props: { label: string }) {
@@ -66,28 +107,63 @@ export function NewAPIRemoteLoading(props: { label: string }) {
   );
 }
 
-export function NewAPIPlatformDetails(props: { platform: NewAPIPlatform }) {
+export function NewAPIPlatformDetails(props: {
+  platform: NewAPIPlatform;
+  onEdit?: () => void;
+  onDelete?: () => void;
+}) {
   return (
-    <section className="grid gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-2">
-      <div className="bg-background p-4">
-        <p className="text-muted-foreground text-xs">平台地址</p>
-        <p className="mt-1 truncate text-sm font-medium">{props.platform.base_url}</p>
+    <section className="overflow-hidden rounded-md border bg-background">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+        <h2 className="text-sm font-semibold">平台配置</h2>
+        {props.onEdit || props.onDelete ? (
+          <div className="flex items-center gap-2">
+            {props.onEdit ? (
+              <Button size="sm" variant="outline" onClick={props.onEdit}>
+                <Pencil aria-hidden="true" />
+                编辑配置
+              </Button>
+            ) : null}
+            {props.onDelete ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex" />}>
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="text-destructive"
+                    aria-label="删除 New API 配置"
+                    onClick={props.onDelete}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>删除配置</TooltipContent>
+              </Tooltip>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      <div className="bg-background p-4">
-        <p className="text-muted-foreground text-xs">User ID</p>
-        <p className="mt-1 font-mono text-sm font-medium">{props.platform.user_id}</p>
-      </div>
-      <div className="bg-background p-4">
-        <p className="text-muted-foreground text-xs">Admin Key</p>
-        <p className="mt-1 text-sm font-medium">
-          {props.platform.admin_key_configured ? "已配置" : "未配置"}
-        </p>
-      </div>
-      <div className="bg-background p-4">
-        <p className="text-muted-foreground text-xs">最后更新</p>
-        <p className="mt-1 text-sm font-medium">
-          {new Date(props.platform.updated_at).toLocaleString("zh-CN")}
-        </p>
+      <div className="grid gap-px bg-border sm:grid-cols-2">
+        <div className="bg-background p-4">
+          <p className="text-muted-foreground text-xs">平台地址</p>
+          <p className="mt-1 truncate text-sm font-medium">{props.platform.base_url}</p>
+        </div>
+        <div className="bg-background p-4">
+          <p className="text-muted-foreground text-xs">User ID</p>
+          <p className="mt-1 font-mono text-sm font-medium">{props.platform.user_id}</p>
+        </div>
+        <div className="bg-background p-4">
+          <p className="text-muted-foreground text-xs">Admin Key</p>
+          <p className="mt-1 text-sm font-medium">
+            {props.platform.admin_key_configured ? "已配置" : "未配置"}
+          </p>
+        </div>
+        <div className="bg-background p-4">
+          <p className="text-muted-foreground text-xs">最后更新</p>
+          <p className="mt-1 text-sm font-medium">
+            {new Date(props.platform.updated_at).toLocaleString("zh-CN")}
+          </p>
+        </div>
       </div>
     </section>
   );
@@ -99,7 +175,9 @@ export function NewAPIManagementPage(props: Props) {
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [editingPlatform, setEditingPlatform] = useState<NewAPIPlatform | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [snapshot, setSnapshot] = useState<NewAPIRemoteSnapshot | null>(null);
+  const [managementPricesOpen, setManagementPricesOpen] = useState(false);
+  const [rawPricingSourceOpen, setRawPricingSourceOpen] = useState(false);
+  const [writtenModelPrice, setWrittenModelPrice] = useState<NewAPIModelPrice | null>(null);
 
   const workspace = useQuery({
     queryKey: ["newapi-workspace", platformId],
@@ -122,18 +200,46 @@ export function NewAPIManagementPage(props: Props) {
     staleTime: 15_000,
   });
 
-  const refresh = useMutation({
-    mutationFn: () => api.refreshNewAPIPlatform(platformId),
-    onSuccess: (value) => {
-      setSnapshot(value);
-    },
-    onError: (error) => notifyOperationError(error, "New API 数据刷新失败"),
+  const remoteSnapshot = useQuery({
+    queryKey: newAPIRemoteSnapshotQueryKey(platformId),
+    queryFn: () => api.refreshNewAPIPlatform(platformId),
+    enabled: Boolean(platformId && needsRemoteSnapshot),
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+  });
+  const snapshot = remoteSnapshot.data ?? null;
+  const managementPrices = useQuery({
+    queryKey: ["newapi-management-model-prices", platformId],
+    queryFn: () => api.managementModelPrices(platformId),
+    enabled: Boolean(platformId && managementPricesOpen),
+    retry: false,
+    staleTime: 60_000,
+  });
+  const rawPricingSource = useQuery({
+    queryKey: ["newapi-remote-model-pricing-source", platformId],
+    queryFn: () => api.remoteModelPricingSource(platformId),
+    enabled: Boolean(platformId && rawPricingSourceOpen),
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
   });
 
-  useEffect(() => {
-    setSnapshot(null);
-    if (platformId && needsRemoteSnapshot) refresh.mutate();
-  }, [needsRemoteSnapshot, platformId]);
+  const saveModelPrice = useMutation({
+    mutationFn: (price: Parameters<typeof remotePriceToNewAPIModelPrice>[0]) =>
+      api.saveNewAPIModelPrices(platformId, [remotePriceToNewAPIModelPrice(price)]),
+    onMutate: () => setWrittenModelPrice(null),
+    onSuccess: (nextSnapshot, price) => {
+      queryClient.setQueryData(newAPIRemoteSnapshotQueryKey(platformId), nextSnapshot);
+      const writtenPrice = nextSnapshot.models.find((model) => model.model === price.model) ?? null;
+      setWrittenModelPrice(writtenPrice);
+      if (writtenPrice) {
+        toast.success(`${price.model} 的价格已写入并从 New API 读回`);
+        return;
+      }
+      toast.error(`${price.model} 已提交，但 New API 读回结果中没有该模型`);
+    },
+    onError: (error) => notifyOperationError(error, "模型价格写入 New API 失败"),
+  });
 
   const savePlatform = useMutation({
     mutationFn: (values: NewAPIPlatformValues) =>
@@ -147,6 +253,7 @@ export function NewAPIManagementPage(props: Props) {
     onSuccess: async (platform) => {
       setPlatformDialogOpen(false);
       setEditingPlatform(null);
+      queryClient.removeQueries({ queryKey: newAPIRemoteSnapshotQueryKey(platform.id) });
       await queryClient.invalidateQueries({ queryKey: ["newapi-workspace"] });
       setPlatformId(platform.id);
       toast.success("New API 平台已保存");
@@ -158,8 +265,10 @@ export function NewAPIManagementPage(props: Props) {
     mutationFn: () => api.deleteNewAPIPlatform(platformId),
     onSuccess: async () => {
       setDeleteOpen(false);
-      setSnapshot(null);
+      setManagementPricesOpen(false);
+      setRawPricingSourceOpen(false);
       setPlatformId("");
+      queryClient.removeQueries({ queryKey: newAPIRemoteSnapshotQueryKey(platformId) });
       await queryClient.invalidateQueries({ queryKey: ["newapi-workspace"] });
       toast.success("New API 平台已删除");
     },
@@ -171,8 +280,9 @@ export function NewAPIManagementPage(props: Props) {
       api.saveNewAPIGroupBindings(platformId, bindings),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["newapi-workspace", platformId] });
-      const refreshed = await api.refreshNewAPIPlatform(platformId);
-      setSnapshot(refreshed);
+      await queryClient.invalidateQueries({
+        queryKey: newAPIRemoteSnapshotQueryKey(platformId),
+      });
       toast.success("分组绑定已保存");
     },
     onError: (error) => notifyOperationError(error, "分组绑定保存失败"),
@@ -198,16 +308,6 @@ export function NewAPIManagementPage(props: Props) {
     },
   });
 
-  const savePrices = useMutation({
-    mutationFn: (prices: Parameters<typeof api.saveNewAPIModelPrices>[1]) =>
-      api.saveNewAPIModelPrices(platformId, prices),
-    onSuccess: (value) => {
-      setSnapshot(value);
-      toast.success("模型价格已更新");
-    },
-    onError: (error) => notifyOperationError(error, "模型价格更新失败"),
-  });
-
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -215,74 +315,20 @@ export function NewAPIManagementPage(props: Props) {
         title={pageTitles[props.view]}
         description=""
         action={
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {selectedPlatform ? (
-              <>
-                {needsRemoteSnapshot ? (
-                  <Tooltip>
-                    <TooltipTrigger render={<span className="inline-flex" />}>
-                      <Button
-                        size="icon-sm"
-                        variant="outline"
-                        aria-label="刷新 New API 数据"
-                        disabled={refresh.isPending}
-                        onClick={() => refresh.mutate()}
-                      >
-                        <RefreshCw
-                          className={refresh.isPending ? "animate-spin" : ""}
-                          aria-hidden="true"
-                        />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>刷新</TooltipContent>
-                  </Tooltip>
-                ) : null}
-                <Tooltip>
-                  <TooltipTrigger render={<span className="inline-flex" />}>
-                    <Button
-                      size="icon-sm"
-                      variant="outline"
-                      aria-label="编辑 New API 主平台"
-                      onClick={() => {
-                        setEditingPlatform(selectedPlatform);
-                        setPlatformDialogOpen(true);
-                      }}
-                    >
-                      <Pencil aria-hidden="true" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>编辑主平台</TooltipContent>
-                </Tooltip>
-                {props.view === "platform" ? (
-                  <Tooltip>
-                    <TooltipTrigger render={<span className="inline-flex" />}>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        className="text-destructive"
-                        aria-label="删除 New API 主平台"
-                        onClick={() => setDeleteOpen(true)}
-                      >
-                        <Trash2 aria-hidden="true" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>删除主平台</TooltipContent>
-                  </Tooltip>
-                ) : null}
-              </>
-            ) : (
-              <Button
-                size="sm"
-                onClick={() => {
-                  setEditingPlatform(null);
-                  setPlatformDialogOpen(true);
-                }}
-              >
-                <CirclePlus aria-hidden="true" />
-                配置主平台
-              </Button>
-            )}
-          </div>
+          selectedPlatform && !needsRemoteSnapshot ? undefined : (
+            <NewAPIHeadingAction
+              hasPlatform={selectedPlatform !== null}
+              needsRemoteSnapshot={needsRemoteSnapshot}
+              refreshPending={remoteSnapshot.isFetching}
+              onRefresh={() => {
+                void remoteSnapshot.refetch();
+              }}
+              onConfigure={() => {
+                setEditingPlatform(null);
+                setPlatformDialogOpen(true);
+              }}
+            />
+          )
         }
       />
 
@@ -292,20 +338,36 @@ export function NewAPIManagementPage(props: Props) {
       {vaultConfiguration.error ? (
         <QueryErrorToast error={vaultConfiguration.error} fallback="密码箱账号读取失败" />
       ) : null}
+      {remoteSnapshot.error ? (
+        <QueryErrorToast error={remoteSnapshot.error} fallback="New API 数据读取失败" />
+      ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
         {workspace.isLoading ? (
-          <NewAPIRemoteLoading label="正在加载 New API 主平台" />
+          <NewAPIRemoteLoading label="正在加载 New API 配置" />
         ) : selectedPlatform ? (
           <>
-            <div className="min-h-0 flex-1 overflow-auto">
-              {needsRemoteSnapshot && refresh.isPending && snapshot === null ? (
+            <div
+              className={
+                props.view === "channels"
+                  ? "min-h-0 flex-1 overflow-y-auto"
+                  : "flex min-h-0 flex-1 flex-col overflow-hidden"
+              }
+            >
+              {needsRemoteSnapshot && remoteSnapshot.isFetching && snapshot === null ? (
                 <NewAPIRemoteLoading label={`正在加载${pageTitles[props.view]}`} />
               ) : null}
               {props.view === "platform" ? (
-                <NewAPIPlatformDetails platform={selectedPlatform} />
+                <NewAPIPlatformDetails
+                  platform={selectedPlatform}
+                  onEdit={() => {
+                    setEditingPlatform(selectedPlatform);
+                    setPlatformDialogOpen(true);
+                  }}
+                  onDelete={() => setDeleteOpen(true)}
+                />
               ) : null}
-              {props.view === "groups" && !(refresh.isPending && snapshot === null) ? (
+              {props.view === "groups" && !(remoteSnapshot.isFetching && snapshot === null) ? (
                 <NewAPIGroupBindings
                   groups={snapshot?.groups ?? []}
                   localGroups={workspace.data?.local_groups ?? []}
@@ -314,7 +376,7 @@ export function NewAPIManagementPage(props: Props) {
                   onSave={(bindings) => saveBindings.mutate(bindings)}
                 />
               ) : null}
-              {props.view === "channels" && !(refresh.isPending && snapshot === null) ? (
+              {props.view === "channels" && !(remoteSnapshot.isFetching && snapshot === null) ? (
                 <NewAPIChannelForm
                   groups={workspace.data?.local_groups ?? []}
                   newAPIGroups={snapshot?.groups ?? []}
@@ -336,11 +398,29 @@ export function NewAPIManagementPage(props: Props) {
                   }}
                 />
               ) : null}
-              {props.view === "prices" && !(refresh.isPending && snapshot === null) ? (
+              {props.view === "prices" && !(remoteSnapshot.isFetching && snapshot === null) ? (
                 <NewAPIModelPrices
                   models={snapshot?.models ?? []}
-                  pending={savePrices.isPending}
-                  onSave={(prices) => savePrices.mutate(prices)}
+                  unsetModels={snapshot?.unset_models ?? []}
+                  toolPrices={snapshot?.tool_prices ?? []}
+                  managementPrices={managementPrices.data?.models}
+                  managementPricesPending={managementPrices.isFetching}
+                  managementPricesError={
+                    managementPrices.error instanceof Error ? managementPrices.error.message : ""
+                  }
+                  onViewManagementPrices={() => setManagementPricesOpen(true)}
+                  onCompareManagementPrices={() => {
+                    void managementPrices.refetch();
+                  }}
+                  onViewRawPricingSource={() => setRawPricingSourceOpen(true)}
+                  onWriteManagementPrice={(price) => saveModelPrice.mutate(price)}
+                  writingManagementPrice={
+                    saveModelPrice.isPending ? saveModelPrice.variables?.model : undefined
+                  }
+                  writtenManagementPrice={writtenModelPrice}
+                  onWrittenManagementPriceOpenChange={(open) => {
+                    if (!open) setWrittenModelPrice(null);
+                  }}
                 />
               ) : null}
               {props.view === "differences" && snapshot ? (
@@ -351,7 +431,7 @@ export function NewAPIManagementPage(props: Props) {
         ) : (
           <div className="text-muted-foreground flex min-h-72 flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-background px-6 text-center text-sm">
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
-            <span>尚未配置 New API 平台</span>
+            <span>尚未配置 New API</span>
             <Button
               size="sm"
               onClick={() => {
@@ -360,7 +440,7 @@ export function NewAPIManagementPage(props: Props) {
               }}
             >
               <CirclePlus aria-hidden="true" />
-              配置主平台
+              配置 New API
             </Button>
           </div>
         )}
@@ -375,12 +455,19 @@ export function NewAPIManagementPage(props: Props) {
       />
       <ConfirmActionDialog
         open={deleteOpen}
-        title="删除 New API 平台"
+        title="删除 New API 配置"
         description={`将删除 ${selectedPlatform?.name ?? "当前平台"} 的管理凭据和全部分组绑定。`}
-        confirmLabel="删除平台"
+        confirmLabel="删除配置"
         pending={deletePlatform.isPending}
         onOpenChange={setDeleteOpen}
         onConfirm={() => deletePlatform.mutate()}
+      />
+      <RawPricingSourceDialog
+        open={rawPricingSourceOpen}
+        source={rawPricingSource.data}
+        pending={rawPricingSource.isFetching}
+        error={rawPricingSource.error instanceof Error ? rawPricingSource.error.message : ""}
+        onOpenChange={setRawPricingSourceOpen}
       />
     </PageLayout>
   );

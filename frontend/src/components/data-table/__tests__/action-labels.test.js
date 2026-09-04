@@ -15,6 +15,13 @@ function sourceFiles(directory) {
 
 function isActionOnlyLabel(expression) {
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return true;
+  if (
+    ts.isPropertyAccessExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === "accountOperationCopy"
+  ) {
+    return true;
+  }
   if (ts.isParenthesizedExpression(expression)) return isActionOnlyLabel(expression.expression);
   if (ts.isConditionalExpression(expression)) {
     return isActionOnlyLabel(expression.whenTrue) && isActionOnlyLabel(expression.whenFalse);

@@ -31,6 +31,10 @@ type InteractionError struct {
 	Detail string
 }
 
+type LoginOptions struct {
+	AcceptLoginAgreement bool
+}
+
 func (e *InteractionError) Error() string { return e.Detail }
 
 func (e *HTTPError) Error() string {
@@ -114,10 +118,62 @@ func (c *Client) Verify(ctx context.Context, record configstore.AuthRecord) erro
 		path = "/api/user/self"
 	}
 	_, _, err := c.request(ctx, record, http.MethodGet, path, nil)
+	if err == nil || !isSub2API(record.UpstreamType) || !adminComplianceRequired(err) {
+		return err
+	}
+	if err := c.acceptSub2APIAdminCompliance(ctx, record); err != nil {
+		return fmt.Errorf("Sub2API 协议自动同意失败：%w", err)
+	}
+	_, _, err = c.request(ctx, record, http.MethodGet, path, nil)
 	return err
 }
 
+func (c *Client) acceptSub2APIAdminCompliance(ctx context.Context, record configstore.AuthRecord) error {
+	payload, _, err := c.request(ctx, record, http.MethodGet, "/api/v1/admin/compliance", nil)
+	if err != nil {
+		return err
+	}
+	status := nestedObject(payload["data"])
+	required, ok := status["required"].(bool)
+	if !ok {
+		return errors.New("上游协议状态缺少 required")
+	}
+	if !required {
+		return nil
+	}
+	phrase := nonemptyText(status["ack_phrase_zh"])
+	language := "zh"
+	if phrase == nil {
+		phrase = nonemptyText(status["ack_phrase_en"])
+		language = "en"
+	}
+	if phrase == nil {
+		return errors.New("上游协议状态缺少确认短语")
+	}
+	_, _, err = c.request(ctx, record, http.MethodPost, "/api/v1/admin/compliance/accept", map[string]string{
+		"language": language,
+		"phrase":   *phrase,
+	})
+	return err
+}
+
+func adminComplianceRequired(err error) bool {
+	var httpError *HTTPError
+	if !errors.As(err, &httpError) || (httpError.StatusCode != http.StatusForbidden && httpError.StatusCode != http.StatusLocked) {
+		return false
+	}
+	detail := strings.ToLower(strings.TrimSpace(httpError.Detail))
+	return strings.Contains(detail, "admin_compliance_ack_required") ||
+		detail == "please read" ||
+		strings.Contains(detail, "please read and accept") ||
+		strings.Contains(detail, "compliance acknowledgement is required")
+}
+
 func (c *Client) Login(ctx context.Context, record configstore.AuthRecord, credential configstore.VaultEntry) (configstore.AuthRecord, error) {
+	return c.LoginWithOptions(ctx, record, credential, LoginOptions{})
+}
+
+func (c *Client) LoginWithOptions(ctx context.Context, record configstore.AuthRecord, credential configstore.VaultEntry, options LoginOptions) (configstore.AuthRecord, error) {
 	if blank(credential.Username) || blank(credential.Password) {
 		return configstore.AuthRecord{}, errors.New("所选密码箱项缺少完整用户名或密码")
 	}
@@ -138,9 +194,24 @@ func (c *Client) Login(ctx context.Context, record configstore.AuthRecord, crede
 	for key, value := range credential.Headers {
 		loginRecord.Headers[key] = value
 	}
-	payload, response, err := c.request(ctx, loginRecord, http.MethodPost, path, map[string]string{
+	loginPayload := map[string]string{
 		identityField: *credential.Username, "password": *credential.Password,
-	})
+	}
+	payload, response, err := c.request(ctx, loginRecord, http.MethodPost, path, loginPayload)
+	if err != nil && isSub2API(record.UpstreamType) && loginAgreementRequired(err) {
+		if !options.AcceptLoginAgreement {
+			return configstore.AuthRecord{}, &InteractionError{
+				Code:   "login_agreement_required",
+				Detail: "上游要求阅读并同意最新登录协议后才能登录",
+			}
+		}
+		revision, revisionErr := c.latestLoginAgreementRevision(ctx, loginRecord)
+		if revisionErr != nil {
+			return configstore.AuthRecord{}, fmt.Errorf("上游最新登录协议读取失败：%w", revisionErr)
+		}
+		loginPayload["login_agreement_revision"] = revision
+		payload, response, err = c.request(ctx, loginRecord, http.MethodPost, path, loginPayload)
+	}
 	if err != nil {
 		return configstore.AuthRecord{}, classifyLoginError(err)
 	}
@@ -191,6 +262,40 @@ func (c *Client) Login(ctx context.Context, record configstore.AuthRecord, crede
 		return configstore.AuthRecord{}, fmt.Errorf("登录成功但鉴权复核失败：%w", err)
 	}
 	return result, nil
+}
+
+func (c *Client) latestLoginAgreementRevision(ctx context.Context, record configstore.AuthRecord) (string, error) {
+	payload, _, err := c.request(ctx, record, http.MethodGet, "/api/v1/settings/public", nil)
+	if err != nil {
+		return "", err
+	}
+	settings := payload
+	if raw, present := payload["data"]; present {
+		var ok bool
+		settings, ok = raw.(map[string]any)
+		if !ok {
+			return "", errors.New("上游公开设置 data 不可读")
+		}
+	}
+	enabled, ok := settings["login_agreement_enabled"].(bool)
+	if !ok || !enabled {
+		return "", errors.New("上游公开设置未启用登录协议")
+	}
+	revision := nonemptyText(settings["login_agreement_revision"])
+	if revision == nil || len(*revision) > 255 || strings.ContainsAny(*revision, "\r\n") {
+		return "", errors.New("上游公开设置缺少有效的登录协议版本")
+	}
+	return *revision, nil
+}
+
+func loginAgreementRequired(err error) bool {
+	var httpError *HTTPError
+	if !errors.As(err, &httpError) || (httpError.StatusCode != http.StatusForbidden && httpError.StatusCode != http.StatusLocked) {
+		return false
+	}
+	detail := strings.ToLower(strings.TrimSpace(httpError.Detail))
+	return strings.Contains(detail, "login_agreement_required") ||
+		strings.Contains(detail, "latest login agreement")
 }
 
 func (c *Client) Refresh(ctx context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -459,6 +564,9 @@ func classifyLoginError(err error) error {
 		detail = httpError.Detail
 	}
 	lower := strings.ToLower(detail)
+	if loginAgreementRequired(err) {
+		return &InteractionError{Code: "login_agreement_required", Detail: "上游要求阅读并同意最新登录协议后才能登录"}
+	}
 	if strings.Contains(lower, "credential_browser_flow_required") || strings.Contains(lower, "browser credential flow") {
 		return &InteractionError{Code: "image_captcha_required", Detail: "登录要求加密凭据和图片验证码"}
 	}
@@ -509,6 +617,9 @@ func blankCookie(values map[string]string, name string) bool {
 func isNewAPI(value string) bool {
 	value = strings.ToLower(strings.TrimSpace(value))
 	return value == "newapi" || value == "oneapi"
+}
+func isSub2API(value string) bool {
+	return strings.EqualFold(strings.TrimSpace(value), "sub2api")
 }
 func platformOrCustom(value string) string {
 	if value == "" {

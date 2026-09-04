@@ -1,5 +1,5 @@
 import { useDeferredValue, useEffect, useState } from "react";
-import { Eye, RefreshCw } from "lucide-react";
+import { Eye } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
@@ -18,22 +18,14 @@ import { SearchField } from "@/components/data-table/search-field";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { TableActionButton } from "@/components/data-table/table-action-button";
+import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
+import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -44,7 +36,6 @@ import {
 } from "@/components/ui/table";
 import {
   formatLogDate,
-  logDetailRows,
   logEventLevel,
   logEventLevelLabel,
   logKindLabel,
@@ -53,10 +44,8 @@ import {
   logStatusLabel,
   logStatusVariant,
   logTitleLabel,
-  relatedChanges,
-  relatedEvents,
-  type LogChangeRow,
 } from "../lib/log-display";
+import { LogDetailsDialog } from "./log-details-dialog";
 
 const kinds: UnifiedLogKind[] = ["all", "task", "event", "change"];
 const states: UnifiedLogState[] = ["all", "active", "failed", "warning", "succeeded"];
@@ -138,57 +127,6 @@ function EventGroupFilter(props: {
   );
 }
 
-export function LogChangesTable(props: { changes: LogChangeRow[] }) {
-  return (
-    <DataTablePanel>
-      <Table containerClassName="max-h-[28rem] overflow-auto" className="min-w-[72rem]">
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-36">时间</TableHead>
-            <TableHead className="w-44">渠道</TableHead>
-            <TableHead className="w-32">分组</TableHead>
-            <TableHead className="w-40">操作</TableHead>
-            <TableHead>变更</TableHead>
-            <TableHead className="w-24">结果</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {props.changes.map((change) => (
-            <TableRow key={change.id}>
-              <TableCell className="text-xs">{formatLogDate(change.occurredAt)}</TableCell>
-              <TableCell>
-                <div className="grid min-w-0 gap-0.5">
-                  <span className="truncate font-medium">{change.object}</span>
-                  {change.objectId && (
-                    <span className="text-muted-foreground text-xs">#{change.objectId}</span>
-                  )}
-                </div>
-              </TableCell>
-              <TableCell className="text-muted-foreground text-xs">
-                {change.groups.length ? change.groups.join("、") : "未记录"}
-              </TableCell>
-              <TableCell>
-                <Badge variant="outline">{change.operation}</Badge>
-              </TableCell>
-              <TableCell overflowTooltip={false}>
-                <Tooltip>
-                  <TooltipTrigger render={<p className="whitespace-nowrap text-xs leading-5" />}>
-                    {change.change}
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-sm">{change.change}</TooltipContent>
-                </Tooltip>
-              </TableCell>
-              <TableCell overflowTooltip={false}>
-                <StatusBadge label={change.result} variant={logStatusVariant(change.status)} />
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </DataTablePanel>
-  );
-}
-
 export function LogsFilterToolbar(props: {
   search: string;
   kind: UnifiedLogKind;
@@ -196,23 +134,21 @@ export function LogsFilterToolbar(props: {
   eventLevel: UnifiedLogEventLevel;
   eventGroup: string;
   groups: GroupStatus[];
-  fetching: boolean;
   truncated: boolean;
   onSearchChange: (value: string) => void;
   onKindChange: (value: UnifiedLogKind) => void;
   onStateChange: (value: UnifiedLogState) => void;
   onEventLevelChange: (value: UnifiedLogEventLevel) => void;
   onEventGroupChange: (value: string) => void;
-  onRefresh: () => void;
 }) {
   return (
     <TableFilterToolbar className="min-w-0" data-testid="logs-filter-toolbar" aria-label="日志筛选">
-      <LogKindFilter value={props.kind} onChange={props.onKindChange} />
       <SearchField
         value={props.search}
         onChange={props.onSearchChange}
         placeholder="搜索任务、对象或原因"
       />
+      <LogKindFilter value={props.kind} onChange={props.onKindChange} />
       {props.kind === "event" ? (
         <>
           <EventLevelFilter value={props.eventLevel} onChange={props.onEventLevelChange} />
@@ -225,117 +161,12 @@ export function LogsFilterToolbar(props: {
       ) : (
         <LogStateFilter value={props.state} onChange={props.onStateChange} />
       )}
-      <div className="flex w-full shrink-0 items-center justify-end gap-2 sm:ml-auto sm:w-auto">
-        {props.truncated && <Badge variant="outline">仅显示最近记录</Badge>}
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-sm"
-          aria-label="刷新日志"
-          onClick={props.onRefresh}
-          disabled={props.fetching}
-        >
-          <RefreshCw className={props.fetching ? "animate-spin" : undefined} />
-        </Button>
-      </div>
+      {props.truncated && (
+        <Badge variant="outline" className="sm:ml-auto">
+          仅显示最近记录
+        </Badge>
+      )}
     </TableFilterToolbar>
-  );
-}
-
-function LogDetailsDialog(props: { entry: UnifiedLogEntry | null; onClose: () => void }) {
-  const taskDetail = useQuery({
-    queryKey: ["task", props.entry?.source_id],
-    queryFn: () => api.task(props.entry!.source_id),
-    enabled: props.entry?.source === "task",
-    retry: false,
-  });
-  const details = props.entry ? { ...props.entry.details } : {};
-  if (props.entry?.source === "task" && taskDetail.data) {
-    details.result = taskDetail.data.result;
-  }
-  const detailRows = props.entry ? logDetailRows(details) : [];
-  const events = props.entry ? relatedEvents(props.entry) : [];
-  const changes = props.entry ? relatedChanges(props.entry) : [];
-  return (
-    <Dialog open={props.entry !== null} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent
-        width="wide"
-        height="tall"
-        className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
-      >
-        <DialogHeader>
-          <DialogTitle>{props.entry ? logTitleLabel(props.entry.title) : "记录详情"}</DialogTitle>
-          <DialogDescription>
-            {props.entry
-              ? `${logKindLabel(props.entry.kind)} · ${formatLogDate(props.entry.occurred_at)}`
-              : "查看日志记录"}
-          </DialogDescription>
-        </DialogHeader>
-        {props.entry && (
-          <DialogBody className="space-y-4">
-            <section className="border-b pb-4">
-              <h3 className="text-muted-foreground text-xs font-medium">执行摘要</h3>
-              <p className="mt-1 text-sm leading-6">{props.entry.summary}</p>
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                <StatusBadge
-                  label={logStatusLabel(props.entry.status)}
-                  variant={logStatusVariant(props.entry.status)}
-                />
-                <span className="text-muted-foreground">
-                  来源：{logSourceLabel(props.entry.source)}
-                </span>
-                {props.entry.actor && (
-                  <span className="text-muted-foreground">执行人：{props.entry.actor}</span>
-                )}
-                {props.entry.object_label && (
-                  <span className="text-muted-foreground">对象：{props.entry.object_label}</span>
-                )}
-              </div>
-            </section>
-            {detailRows.length > 0 && (
-              <section>
-                <h3 className="text-muted-foreground mb-1 text-xs font-medium">执行信息</h3>
-                <dl className="divide-border divide-y">
-                  {detailRows.map((row) => (
-                    <div
-                      className="grid gap-1 py-2.5 sm:grid-cols-[8rem_minmax(0,1fr)]"
-                      key={row.key}
-                    >
-                      <dt className="text-muted-foreground">{row.label}</dt>
-                      <dd className="break-words font-medium">{row.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </section>
-            )}
-            {events.length > 0 && (
-              <section className="border-t pt-4">
-                <h3 className="text-muted-foreground mb-1 text-xs font-medium">关联的事件日志</h3>
-                <div className="divide-border divide-y">
-                  {events.map((event) => (
-                    <div className="grid gap-1 py-2.5" key={event.id}>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-medium">{logTitleLabel(event.title)}</span>
-                        <span className="text-muted-foreground text-xs">
-                          {formatLogDate(event.occurred_at)}
-                        </span>
-                      </div>
-                      <p className="text-muted-foreground text-xs leading-5">{event.summary}</p>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-            {changes.length > 0 && (
-              <section className="border-t pt-4">
-                <h3 className="text-muted-foreground mb-1 text-xs font-medium">关联的数据变更</h3>
-                <LogChangesTable changes={changes} />
-              </section>
-            )}
-          </DialogBody>
-        )}
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -401,6 +232,15 @@ export function LogsCenterPage() {
         eyebrow="OBSERVABILITY / LOGS"
         title="日志中心"
         description="统一查看任务、事件日志以及远程读取、写入和写后复核。"
+        action={
+          <PageActions>
+            <RefreshButton
+              pending={logs.isFetching}
+              ariaLabel="刷新日志"
+              onClick={() => void logs.refetch()}
+            />
+          </PageActions>
+        }
       />
       <div className="flex h-full min-h-0 flex-col gap-3">
         <LogsFilterToolbar
@@ -410,7 +250,6 @@ export function LogsCenterPage() {
           eventLevel={eventLevel}
           eventGroup={eventGroup}
           groups={groups.data ?? []}
-          fetching={logs.isFetching}
           truncated={logs.data?.truncated === true}
           onSearchChange={(value) => {
             setSearch(value);
@@ -429,7 +268,6 @@ export function LogsCenterPage() {
             setEventGroup(value);
             setPage(1);
           }}
-          onRefresh={() => void logs.refetch()}
         />
         <DataTablePanel className="flex-1" data-testid="logs-table-shell">
           <div className="min-h-0 flex-1 overflow-hidden" data-testid="logs-table-scroll-region">

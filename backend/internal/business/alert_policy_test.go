@@ -11,13 +11,17 @@ func TestAlertPolicyTypedPersistenceAndThresholdNormalization(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	defaults, err := store.AlertPolicy(ctx)
-	if err != nil || !defaults.Enabled || !reflect.DeepEqual(defaults.BalanceThresholds, []string{"20", "10", "5"}) ||
+	document := alertPolicyDocument(defaults)
+	if err != nil || !defaults.Enabled || document["multiplier_increase_enabled"] != true || document["multiplier_decrease_enabled"] != true ||
+		!reflect.DeepEqual(defaults.BalanceThresholds, []string{"20", "10", "5"}) ||
 		defaults.ProbeFailureStreak != 3 || defaults.ProbeRecoveryStreak != 3 || defaults.StateChangeCooldown != 30 ||
 		!reflect.DeepEqual(defaults.RoutingDegradedTypes, []string{"health_score", "gateway_error_rate", "latency", "other"}) ||
 		!reflect.DeepEqual(defaults.RecoveryNotificationTypes, []string{"auth", "balance", "group_unavailable"}) {
 		t.Fatalf("unexpected defaults: %#v err=%v", defaults, err)
 	}
 	payload := alertPolicyDocument(defaults)
+	payload["multiplier_increase_enabled"] = false
+	payload["multiplier_decrease_enabled"] = true
 	payload["balance_thresholds"] = []any{"5.00", "20", "10", "20.0"}
 	payload["probe_groups"] = []any{"codex", "codex", " pro "}
 	payload["routing_degraded_types"] = []any{"other", "health_score", "health_score"}
@@ -26,7 +30,9 @@ func TestAlertPolicyTypedPersistenceAndThresholdNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(stored.BalanceThresholds, []string{"20", "10", "5"}) || !reflect.DeepEqual(stored.ProbeGroups, []string{"codex", "pro"}) ||
+	storedDocument := alertPolicyDocument(stored)
+	if storedDocument["multiplier_increase_enabled"] != false || storedDocument["multiplier_decrease_enabled"] != true ||
+		!reflect.DeepEqual(stored.BalanceThresholds, []string{"20", "10", "5"}) || !reflect.DeepEqual(stored.ProbeGroups, []string{"codex", "pro"}) ||
 		!reflect.DeepEqual(stored.RoutingDegradedTypes, []string{"health_score", "other"}) ||
 		!reflect.DeepEqual(stored.RecoveryNotificationTypes, []string{"auth", "apply_failure"}) {
 		t.Fatalf("unexpected normalized policy: %#v", stored)

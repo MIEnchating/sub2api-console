@@ -326,19 +326,41 @@ func (s *Store) SearchLogs(ctx context.Context, search string, limit *int) ([]Ta
 }
 
 func (s *Store) RecoverInterrupted(ctx context.Context) (int64, error) {
+	return s.recoverInterruptedBefore(ctx, time.Time{})
+}
+
+// RecoverStaleInterrupted only reclaims tasks that have not emitted a
+// heartbeat for maxAge. This is safe to run during startup when another
+// console process may still own recently updated tasks.
+func (s *Store) RecoverStaleInterrupted(ctx context.Context, maxAge time.Duration) (int64, error) {
+	if maxAge <= 0 {
+		return 0, errors.New("任务回收期限必须大于零")
+	}
+	return s.recoverInterruptedBefore(ctx, time.Now().UTC().Add(-maxAge))
+}
+
+func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE tasks SET status='failed',progress=100,message='进程重启导致任务中断',
+	query := `UPDATE tasks SET status='failed',progress=100,message='进程重启导致任务中断',
 		result_json='{"error":"进程重启导致任务中断","interrupted":true}',updated_at=?
-		WHERE status IN ('queued','running','waiting_input')`, now)
+		WHERE status IN ('queued','running','waiting_input')`
+	args := []any{now}
+	if !cutoff.IsZero() {
+		query += ` AND updated_at < ?`
+		args = append(args, cutoff.UTC().Format(time.RFC3339Nano))
+	}
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM active_task_operations`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM active_task_operations WHERE task_id IN (
+		SELECT id FROM tasks WHERE status='failed' AND message='进程重启导致任务中断' AND updated_at=?
+	)`, now); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

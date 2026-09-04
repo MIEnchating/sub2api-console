@@ -194,8 +194,9 @@ describe("upstream synchronization status", () => {
       />,
     );
 
-    expect(markup).toContain("失败明细");
-    expect(markup).toContain("共 1 个 Host");
+    expect(markup).toContain('data-table-panel=""');
+    expect(markup).not.toContain("失败明细");
+    expect(markup).not.toContain("共 1 个 Host");
     expect(markup).toContain("groups-failed.test");
     expect(markup).toContain("分组目录接口返回 404");
     expect(markup).not.toContain("ok.test");
@@ -229,7 +230,8 @@ describe("upstream synchronization status", () => {
       />,
     );
 
-    expect(markup).toContain("失败明细");
+    expect(markup).toContain('data-table-panel=""');
+    expect(markup).not.toContain("失败明细");
     expect(markup).toContain("login-failed.test");
     expect(markup).toContain("密码登录返回 401");
     expect(markup).not.toContain("ok.test");

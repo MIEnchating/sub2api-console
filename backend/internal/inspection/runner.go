@@ -30,6 +30,7 @@ type RunnerRepository interface {
 	AlertPolicy(context.Context) (business.AlertPolicy, error)
 	InspectionTaskDue(context.Context, string, int, time.Time) (bool, error)
 	MarkInspectionTask(context.Context, string, time.Time) error
+	ResetInspectionTask(context.Context, string, time.Time) error
 	RoutingWritebackPending(context.Context) (bool, error)
 }
 
@@ -58,8 +59,24 @@ type AccountRateSynchronizer interface {
 	SyncAllAccountRates(context.Context, string) (map[string]any, error)
 }
 
+type AccountRateSynchronizerWithCatalog interface {
+	SyncAllAccountRatesWithCatalog(context.Context, string, map[string]business.UpstreamCatalogSnapshot) (map[string]any, error)
+}
+
+type AccountRateSyncScheduler interface {
+	EnqueueAccountRateSyncBatch(context.Context, int, int, string) (string, error)
+}
+
 type PriceAllocator interface {
 	ApplyNow(context.Context, string) (pricing.Result, error)
+}
+
+type InvalidAuthRecoverer interface {
+	RecoverInvalid(context.Context, []string, string) (business.AuthRecoverySummary, error)
+}
+
+type InvalidAuthHostSource interface {
+	AuthRecoveryRequiredHosts(context.Context, time.Time) ([]string, error)
 }
 
 type InspectionTaskStore interface {
@@ -71,53 +88,63 @@ type InspectionTargetStore interface {
 }
 
 type RunRequest struct {
-	AccountID *string
-	GroupName *string
-	Actor     string
-	Automatic bool
+	AccountID  *string
+	GroupName  *string
+	Actor      string
+	Automatic  bool
+	AutoConfig *business.AutoInspectionConfig
 }
 
 type Runner struct {
-	repository   RunnerRepository
-	targets      InspectionTargetStore
-	evidence     EvidenceCollector
-	router       Router
-	writer       RoutingWriter
-	alerts       AlertEvaluator
-	upstreams    UpstreamSynchronizer
-	accountRates AccountRateSynchronizer
-	pricing      PriceAllocator
-	tasks        InspectionTaskStore
-	now          func() time.Time
+	repository    RunnerRepository
+	targets       InspectionTargetStore
+	evidence      EvidenceCollector
+	router        Router
+	writer        RoutingWriter
+	alerts        AlertEvaluator
+	upstreams     UpstreamSynchronizer
+	accountRates  AccountRateSynchronizer
+	rateScheduler AccountRateSyncScheduler
+	pricing       PriceAllocator
+	authRecovery  InvalidAuthRecoverer
+	tasks         InspectionTaskStore
+	now           func() time.Time
 }
 
 type duePlan struct {
-	traffic      bool
-	probes       bool
-	upstreams    bool
-	alert        bool
-	routing      bool
-	accountRates bool
-	pricing      bool
-	policy       map[string]any
-	mode         string
-	probeIDs     []string
+	traffic                 bool
+	probes                  bool
+	upstreams               bool
+	alert                   bool
+	routing                 bool
+	accountRates            bool
+	pricing                 bool
+	policy                  map[string]any
+	mode                    string
+	probeIDs                []string
+	accountRateInterval     int
+	accountRateBatchSize    int
+	accountRateBatchPercent int
+	authRecoveryHosts       []string
 }
 
 type upstreamSyncOutcome struct {
 	batch     upstreamsync.BatchResult
 	err       error
 	startedAt time.Time
+	duration  time.Duration
 }
 
 type evidenceCollectionOutcome struct {
 	result    evidence.Result
 	err       error
 	startedAt time.Time
+	duration  time.Duration
 }
 
 const (
 	operationUpstreamSync       = "upstream_sync"
+	operationAuthRecovery       = "auth_recovery"
 	operationAccountRateSync    = "account_rate_sync"
 	operationPriceManagement    = "price_management"
 	operationTrafficRefresh     = "traffic_refresh"
@@ -126,6 +153,8 @@ const (
 	operationRoutingWriteback   = "routing_writeback"
 	operationAlertEvaluation    = "alert_evaluation"
 )
+
+const authRecoveryRetryInterval = 5 * time.Minute
 
 func NewRunner(
 	repository RunnerRepository,
@@ -143,22 +172,32 @@ func NewRunner(
 		writer: writer, alerts: alerts, upstreams: upstreams, tasks: tasks, now: time.Now,
 	}
 	for _, extension := range extensions {
-		switch value := extension.(type) {
-		case AccountRateSynchronizer:
+		if value, ok := extension.(AccountRateSynchronizer); ok {
 			runner.accountRates = value
-		case PriceAllocator:
+		}
+		if value, ok := extension.(AccountRateSyncScheduler); ok {
+			runner.rateScheduler = value
+		}
+		if value, ok := extension.(PriceAllocator); ok {
 			runner.pricing = value
+		}
+		if value, ok := extension.(InvalidAuthRecoverer); ok {
+			runner.authRecovery = value
 		}
 	}
 	return runner
 }
 
-func (r *Runner) Execute(ctx context.Context, _ business.AutoInspectionConfig) (ExecutionResult, error) {
-	return r.Run(ctx, RunRequest{Actor: "自动巡检", Automatic: true})
+func (r *Runner) Execute(ctx context.Context, config business.AutoInspectionConfig) (ExecutionResult, error) {
+	return r.Run(ctx, RunRequest{Actor: "自动巡检", Automatic: true, AutoConfig: &config})
 }
 
 func (r *Runner) Preview(ctx context.Context, now time.Time) (QueueItem, error) {
-	plan, err := r.plan(ctx, RunRequest{Automatic: true}, now.UTC())
+	config, err := r.repositoryAutoInspectionConfig(ctx)
+	if err != nil {
+		return QueueItem{}, err
+	}
+	plan, err := r.plan(ctx, RunRequest{Automatic: true, AutoConfig: &config}, now.UTC())
 	if err != nil {
 		return QueueItem{}, err
 	}
@@ -212,9 +251,32 @@ func previewOperations(plan duePlan) ([]QueueOperation, error) {
 		})
 	}
 	if plan.accountRates {
+		cycle := "每2分钟"
+		if plan.accountRateInterval > 0 {
+			cycle = periodicCycle(plan.accountRateInterval)
+		}
+		if plan.accountRateBatchSize > 0 {
+			cycle += fmt.Sprintf("，每轮 %d 个账号", plan.accountRateBatchSize)
+		} else if plan.accountRateBatchPercent > 0 {
+			cycle += fmt.Sprintf("，每轮 %d%% 账号", plan.accountRateBatchPercent)
+		} else {
+			cycle += "，每轮全量账号"
+		}
+		var targetCount *int
+		if plan.accountRateBatchSize > 0 {
+			target := plan.accountRateBatchSize
+			targetCount = &target
+		}
 		operations = append(operations, QueueOperation{
 			Operation: operationAccountRateSync, Label: "账号倍率与名称同步",
-			Cycle: "上游数据同步后（完全模式）", Due: true,
+			TargetCount: targetCount, Cycle: cycle, Due: true,
+		})
+	}
+	if len(plan.authRecoveryHosts) > 0 {
+		targets := len(plan.authRecoveryHosts)
+		operations = append(operations, QueueOperation{
+			Operation: operationAuthRecovery, Label: "鉴权自动恢复", TargetCount: &targets,
+			Cycle: "发现鉴权失效后尝试，失败后每5分钟重试", Due: true,
 		})
 	}
 	if plan.pricing {
@@ -374,7 +436,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	if !plan.traffic && !plan.probes && !plan.upstreams && !plan.routing && !plan.alert && !plan.pricing {
+	if !plan.traffic && !plan.probes && !plan.upstreams && !plan.routing && !plan.alert && !plan.pricing && !plan.accountRates && len(plan.authRecoveryHosts) == 0 {
 		return ExecutionResult{Status: "succeeded", Operations: []string{}, OperationTiming: []business.OperationTiming{}, Skipped: true}, nil
 	}
 	task, err := r.QueueTask(ctx, request.Automatic)
@@ -449,6 +511,14 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 		result.traffic, result.probes = evidencePlan.RequestedSource == "traffic", len(evidencePlan.ProbeAccountIDs) > 0
 		return result, nil
 	}
+	if request.Automatic && r.authRecovery != nil {
+		if source, ok := r.repository.(InvalidAuthHostSource); ok {
+			result.authRecoveryHosts, err = source.AuthRecoveryRequiredHosts(ctx, now.Add(-authRecoveryRetryInterval))
+			if err != nil {
+				return duePlan{}, err
+			}
+		}
+	}
 	traffic, err := inspectionSection(policy, "traffic")
 	if err != nil {
 		return duePlan{}, err
@@ -486,7 +556,27 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 		if err != nil {
 			return duePlan{}, err
 		}
-		result.accountRates = result.upstreams && r.accountRates != nil
+		if r.accountRates != nil || r.rateScheduler != nil {
+			interval := 120
+			batchSize, batchPercent := 0, 0
+			if configured, ok := accountRateSyncPolicy(result.policy); ok {
+				interval, batchSize, batchPercent = configured.interval, configured.batchSize, configured.percent
+			} else if request.AutoConfig != nil {
+				if request.AutoConfig.AccountRateSyncIntervalSeconds > 0 {
+					interval = request.AutoConfig.AccountRateSyncIntervalSeconds
+				}
+				batchSize, batchPercent = request.AutoConfig.AccountRateSyncBatchSize, request.AutoConfig.AccountRateSyncBatchPercent
+			}
+			result.accountRateInterval, result.accountRateBatchSize, result.accountRateBatchPercent = interval, batchSize, batchPercent
+			if request.AutoConfig == nil {
+				result.accountRates = result.upstreams
+			} else {
+				result.accountRates, err = r.repository.InspectionTaskDue(ctx, "account-rate-sync", interval, now)
+				if err != nil {
+					return duePlan{}, err
+				}
+			}
+		}
 		priceConfig, configErr := pricing.ConfigFromPolicy(policy)
 		if configErr != nil {
 			return duePlan{}, configErr
@@ -499,6 +589,90 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 		}
 	}
 	return result, nil
+}
+
+type accountRateSyncPolicySettings struct {
+	interval  int
+	batchSize int
+	percent   int
+}
+
+func accountRateSyncPolicy(policy map[string]any) (accountRateSyncPolicySettings, bool) {
+	raw, ok := policy["account_rate_sync"]
+	section, ok := raw.(map[string]any)
+	if !ok {
+		return accountRateSyncPolicySettings{}, false
+	}
+	read := func(key string, fallback int) int {
+		switch value := section[key].(type) {
+		case int64:
+			return int(value)
+		case int:
+			return value
+		case float64:
+			return int(value)
+		default:
+			return fallback
+		}
+	}
+	return accountRateSyncPolicySettings{interval: read("interval_seconds", 120), batchSize: read("batch_size", 0), percent: read("batch_percent", 0)}, true
+}
+
+func (r *Runner) repositoryAutoInspectionConfig(ctx context.Context) (business.AutoInspectionConfig, error) {
+	reader, ok := r.repository.(interface {
+		AutoInspectionConfig(context.Context) (business.AutoInspectionConfig, error)
+	})
+	if !ok {
+		return business.DefaultAutoInspectionConfig(), nil
+	}
+	return reader.AutoInspectionConfig(ctx)
+}
+
+func (r *Runner) enqueueAccountRateSync(
+	ctx context.Context,
+	request RunRequest,
+	plan duePlan,
+	resultPayload map[string]any,
+	operations *[]string,
+	failures *[]string,
+	partialFailures *[]string,
+) {
+	if !plan.accountRates {
+		return
+	}
+	*operations = append(*operations, operationAccountRateSync)
+	if r.rateScheduler != nil {
+		batchSize, batchPercent := 0, 0
+		if request.AutoConfig != nil {
+			batchSize = request.AutoConfig.AccountRateSyncBatchSize
+			batchPercent = request.AutoConfig.AccountRateSyncBatchPercent
+		}
+		taskID, err := r.rateScheduler.EnqueueAccountRateSyncBatch(ctx, batchSize, batchPercent, request.Actor)
+		if err != nil {
+			if errors.Is(err, taskstore.ErrOperationActive) {
+				resultPayload["account_rate_sync"] = map[string]any{"queued": false, "already_running": true}
+				return
+			}
+			*failures = append(*failures, "账号倍率与名称同步排队失败："+err.Error())
+			return
+		}
+		resultPayload["account_rate_sync"] = map[string]any{"queued": true, "task_id": taskID, "batch_size": batchSize, "batch_percent": batchPercent}
+		return
+	}
+	if r.accountRates == nil {
+		return
+	}
+	rateResult, err := r.accountRates.SyncAllAccountRates(ctx, request.Actor)
+	resultPayload["account_rate_sync"] = rateResult
+	if err != nil {
+		*failures = append(*failures, "账号倍率与名称同步："+err.Error())
+		return
+	}
+	missing := integerResultValue(rateResult, "missing")
+	failed := integerResultValue(rateResult, "failed")
+	if missing+failed > 0 {
+		*partialFailures = append(*partialFailures, fmt.Sprintf("账号倍率与名称同步部分失败：缺失 %d，失败 %d", missing, failed))
+	}
 }
 
 func trafficSourceEnabled(policy map[string]any) (bool, error) {
@@ -585,6 +759,12 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			plan.pricing = false
 		}
 	}
+	if plan.accountRates {
+		if err := r.repository.MarkInspectionTask(ctx, "account-rate-sync", started); err != nil {
+			failures = append(failures, "账号倍率同步到期状态保存失败："+err.Error())
+			plan.accountRates = false
+		}
+	}
 	runInspection := plan.traffic || plan.probes
 	collectionOperations := make([]string, 0, 3)
 	if plan.upstreams {
@@ -605,7 +785,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		upstreamStartedAt := time.Now()
 		go func() {
 			batch, syncErr := r.upstreams.SyncAllNow(ctx, upstreamsync.Scope{Catalog: true, Balance: true}, request.Actor)
-			upstreamResults <- upstreamSyncOutcome{batch: batch, err: syncErr, startedAt: upstreamStartedAt}
+			upstreamResults <- upstreamSyncOutcome{batch: batch, err: syncErr, startedAt: upstreamStartedAt, duration: time.Since(upstreamStartedAt)}
 		}()
 	}
 	var evidenceResults chan evidenceCollectionOutcome
@@ -619,42 +799,26 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 				StrictFallback: strictEvidenceFallback(request),
 				ProbesAllowed:  plan.probes, Now: started,
 			})
-			evidenceResults <- evidenceCollectionOutcome{result: evidenceResult, err: collectErr, startedAt: evidenceStarted}
+			evidenceResults <- evidenceCollectionOutcome{result: evidenceResult, err: collectErr, startedAt: evidenceStarted, duration: time.Since(evidenceStarted)}
 		}()
 	}
 	if plan.upstreams {
 		outcome := <-upstreamResults
-		timings = append(timings, operationTiming(operationUpstreamSync, outcome.startedAt))
+		timings = append(timings, operationTimingDuration(operationUpstreamSync, outcome.startedAt, outcome.duration))
 		operations = append(operations, operationUpstreamSync)
 		resultPayload["upstream_sync"] = outcome.batch
 		if outcome.err != nil {
 			failures = append(failures, "上游同步："+outcome.err.Error())
-		} else if outcome.batch.AuthFailed > 0 || outcome.batch.Failed > 0 {
-			partialFailures = append(partialFailures, fmt.Sprintf("上游同步部分失败：鉴权 %d，其他 %d", outcome.batch.AuthFailed, outcome.batch.Failed))
+		} else if outcome.batch.Failed > 0 {
+			partialFailures = append(partialFailures, fmt.Sprintf("上游同步部分失败：其他 %d", outcome.batch.Failed))
+		} else if outcome.batch.AuthFailed > 0 && (!request.Automatic || r.authRecovery == nil) {
+			partialFailures = append(partialFailures, fmt.Sprintf("上游同步部分失败：鉴权 %d", outcome.batch.AuthFailed))
 		}
-		if plan.accountRates && outcome.err == nil && (outcome.batch.Total == 0 || outcome.batch.Succeeded > 0) {
-			persistStage(48, "正在同步账号倍率与名称", []string{operationAccountRateSync})
-			rateStarted := time.Now()
-			rateResult, rateErr := r.accountRates.SyncAllAccountRates(ctx, request.Actor)
-			timings = append(timings, operationTiming(operationAccountRateSync, rateStarted))
-			operations = append(operations, operationAccountRateSync)
-			resultPayload["account_rate_sync"] = rateResult
-			if rateErr != nil {
-				failures = append(failures, "账号倍率与名称同步："+rateErr.Error())
-			} else {
-				requested := integerResultValue(rateResult, "requested")
-				updated := integerResultValue(rateResult, "updated")
-				unchanged := integerResultValue(rateResult, "unchanged")
-				missing := integerResultValue(rateResult, "missing")
-				failed := integerResultValue(rateResult, "failed")
-				outcome.batch.AccountTotal = requested
-				outcome.batch.AccountRateSucceeded = updated + unchanged
-				outcome.batch.AccountRateFailed = missing + failed
-				resultPayload["upstream_sync"] = outcome.batch
-				if missing+failed > 0 {
-					partialFailures = append(partialFailures, fmt.Sprintf("账号倍率与名称同步部分失败：缺失 %d，失败 %d", missing, failed))
-				}
-			}
+		if request.Automatic {
+			plan.authRecoveryHosts = uniqueHostList(append(plan.authRecoveryHosts, authenticationFailedHosts(outcome.batch)...))
+		}
+		if plan.accountRates {
+			r.enqueueAccountRateSync(ctx, request, plan, resultPayload, &operations, &failures, &partialFailures)
 		}
 		if runInspection {
 			active := make([]string, 0, 2)
@@ -667,6 +831,22 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			persistStage(45, collectionStageMessage(false, plan.traffic, plan.probes), active)
 		}
 	}
+	if request.Automatic && r.authRecovery != nil && len(plan.authRecoveryHosts) > 0 {
+		recoveryStarted := time.Now()
+		recoverySummary, recoveryErr := r.authRecovery.RecoverInvalid(ctx, plan.authRecoveryHosts, request.Actor)
+		timings = append(timings, operationTiming(operationAuthRecovery, recoveryStarted))
+		operations = append(operations, operationAuthRecovery)
+		resultPayload["auth_recovery"] = recoverySummary
+		summary.AuthRecovered = recoverySummary.Recovered
+		if recoveryErr != nil {
+			failures = append(failures, "鉴权自动恢复："+recoveryErr.Error())
+		} else if recoverySummary.Failed > 0 {
+			partialFailures = append(partialFailures, fmt.Sprintf("鉴权自动恢复部分失败：成功 %d，失败 %d", recoverySummary.Recovered, recoverySummary.Failed))
+		}
+	}
+	if plan.accountRates && !plan.upstreams {
+		r.enqueueAccountRateSync(ctx, request, plan, resultPayload, &operations, &failures, &partialFailures)
+	}
 	if plan.pricing && r.pricing != nil {
 		persistStage(55, "正在按盈利比例动态调整账号分组", []string{operationPriceManagement})
 		priceStarted := time.Now()
@@ -675,6 +855,12 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		operations = append(operations, operationPriceManagement)
 		resultPayload["price_management"] = priceResult
 		if priceErr != nil {
+			if errors.Is(priceErr, context.Canceled) {
+				resetCtx := context.WithoutCancel(ctx)
+				if resetErr := r.repository.ResetInspectionTask(resetCtx, "price-management", started); resetErr != nil {
+					failures = append(failures, "价格分组调整取消后恢复到期状态失败："+resetErr.Error())
+				}
+			}
 			failures = append(failures, "价格分组调整："+priceErr.Error())
 		}
 	}
@@ -691,7 +877,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		if evidenceResult.ProbeDurationSecond > 0 || plan.probes {
 			operations = append(operations, operationActiveProbe)
 		}
-		timings = append(timings, operationTiming("evidence_collection", outcome.startedAt))
+		timings = append(timings, operationTimingDuration("evidence_collection", outcome.startedAt, outcome.duration))
 		if err != nil {
 			return finish(append(failures, "请求记录与探针："+err.Error()), partialFailures)
 		}
@@ -750,6 +936,33 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 	}
 	return finish(failures, partialFailures)
+}
+
+func authenticationFailedHosts(batch upstreamsync.BatchResult) []string {
+	hosts := make([]string, 0, batch.AuthFailed)
+	for _, result := range batch.Hosts {
+		if result.Status == "auth_failed" {
+			hosts = append(hosts, result.Host)
+		}
+	}
+	return hosts
+}
+
+func uniqueHostList(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		host := configstore.CanonicalHost(value)
+		if host == "" {
+			continue
+		}
+		if _, found := seen[host]; found {
+			continue
+		}
+		seen[host] = struct{}{}
+		result = append(result, host)
+	}
+	return result
 }
 
 func integerResultValue(result map[string]any, key string) int {
@@ -830,13 +1043,26 @@ func (r *Runner) finishTask(
 	payload["active_operations"] = []string{}
 	payload["completed_operations"] = append([]string{}, operations...)
 	task.Progress, task.UpdatedAt, task.Result = 100, r.now().UTC().Format(time.RFC3339Nano), payload
+	contextFailure := taskstore.ContextFailureCause(ctx)
+	if errors.Is(contextFailure, mutationguard.ErrAutomaticInspectionPreempted) {
+		task.Status, task.Message = "cancelled", "自动巡检已让位于手工操作"
+		if task.Result == nil {
+			task.Result = map[string]any{}
+		}
+		delete(task.Result, "error")
+		task.Result["cancelled"] = true
+		task.Result["cancel_reason"] = mutationguard.ErrAutomaticInspectionPreempted.Error()
+		if err := taskstore.SaveFinal(context.Background(), r.tasks, task); err != nil {
+			return failedExecution(&task.ID, operations, timings, err)
+		}
+		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
+	}
 	if taskstore.MarkCancelled(ctx, &task, "巡检已取消") {
 		if err := taskstore.SaveFinal(context.Background(), r.tasks, task); err != nil {
 			return failedExecution(&task.ID, operations, timings, err)
 		}
 		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
 	}
-	contextFailure := taskstore.ContextFailureCause(ctx)
 	if contextFailure != nil {
 		failures = append(failures, contextFailure.Error())
 	}
@@ -942,8 +1168,15 @@ func boolSetting(section map[string]any, key string, fallback bool) (bool, error
 }
 
 func operationTiming(name string, started time.Time) business.OperationTiming {
+	return operationTimingDuration(name, started, time.Since(started))
+}
+
+func operationTimingDuration(name string, started time.Time, duration time.Duration) business.OperationTiming {
 	startedAt := started.UTC().Format(time.RFC3339Nano)
-	return business.OperationTiming{Operation: name, DurationSeconds: time.Since(started).Seconds(), StartedAt: &startedAt}
+	if duration < 0 {
+		duration = 0
+	}
+	return business.OperationTiming{Operation: name, DurationSeconds: duration.Seconds(), StartedAt: &startedAt}
 }
 
 func failedExecution(taskID *string, operations []string, timings []business.OperationTiming, err error) ExecutionResult {

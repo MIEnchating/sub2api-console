@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
@@ -599,7 +600,8 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	go func() { renewalDone <- s.renewLease(executionContext, cancelExecutionCause) }()
 	result, executionErr := executor.Execute(executorContext, config)
 	executionCause := context.Cause(executionContext)
-	executionContextFailed := executionCause != nil && executionCause != context.Canceled
+	preemptedByManualOperation := errors.Is(executionCause, mutationguard.ErrAutomaticInspectionPreempted)
+	executionContextFailed := executionCause != nil && executionCause != context.Canceled && !preemptedByManualOperation
 	plainExecutionCancellation := executionContext.Err() == context.Canceled && executionCause == context.Canceled
 	cancelExecution()
 	renewalErr := <-renewalDone
@@ -627,7 +629,7 @@ func (s *Scheduler) runDue(ctx context.Context, at time.Time, force bool, execut
 	s.mu.Lock()
 	wasCanceled := s.cancelRequested
 	s.mu.Unlock()
-	if renewalErr == nil && !executionContextFailed && (wasCanceled || plainExecutionCancellation) {
+	if renewalErr == nil && !executionContextFailed && (wasCanceled || plainExecutionCancellation || preemptedByManualOperation) {
 		status = "cancelled"
 		errorText = nil
 	}

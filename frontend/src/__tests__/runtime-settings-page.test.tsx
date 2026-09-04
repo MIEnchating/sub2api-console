@@ -66,6 +66,7 @@ describe("系统设置页面职责", () => {
     );
 
     expect(markup).toContain("系统设置");
+    expect(markup).toContain('aria-label="刷新系统设置"');
     const pageShell = markup.match(/<div[^>]*data-testid="system-settings-page"[^>]*>/)?.[0];
     expect(pageShell).toContain('class="w-full space-y-4"');
     expect(markup).not.toContain("max-w-7xl");
@@ -76,7 +77,15 @@ describe("系统设置页面职责", () => {
     expect(markup.match(/grid min-w-0 content-start gap-4/g)).toHaveLength(2);
     expect(markup).not.toContain("xl:row-span-2");
     expect(markup.match(/data-slot="card"[^>]*data-size="sm"/g)).toHaveLength(5);
-    expect(markup).not.toContain("执行模式");
+    expect(markup).toContain('data-testid="runtime-controls"');
+    expect(markup).not.toContain("运行控制");
+    expect(markup).toContain("执行模式");
+    expect(markup).toContain('aria-label="执行模式"');
+    expect(markup).toContain("监控模式");
+    expect(markup).toContain("完全模式");
+    expect(markup).toMatch(
+      /<button(?=[^>]*aria-label="完全模式：)(?=[^>]*aria-pressed="true")[^>]*>/,
+    );
     expect(markup).toContain("菜单设置");
     expect(markup).toContain("当前显示 22 / 22 个菜单入口");
     expect(markup).toContain('aria-label="在菜单中显示账号管理"');
@@ -99,6 +108,11 @@ describe("系统设置页面职责", () => {
     const secondaryColumnStart = markup.indexOf('data-testid="system-settings-flow-secondary"');
     const primaryColumn = markup.slice(primaryColumnStart, secondaryColumnStart);
     const secondaryColumn = markup.slice(secondaryColumnStart);
+    const connectionCardStart = primaryColumn.indexOf("Sub2API 连接");
+    const accountDefaultsCardStart = primaryColumn.indexOf("账号创建默认值");
+    const connectionCard = primaryColumn.slice(connectionCardStart, accountDefaultsCardStart);
+    expect(connectionCard).toContain('data-testid="runtime-controls"');
+    expect(connectionCard).toContain("执行模式");
     expect(primaryColumn.indexOf("Sub2API 连接")).toBeLessThan(
       primaryColumn.indexOf("账号创建默认值"),
     );
@@ -112,7 +126,6 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("默认并发");
     expect(markup).toContain("默认优先级");
     expect(markup).toContain("保存默认参数");
-    expect(markup).not.toContain('data-testid="runtime-controls"');
     expect(markup).not.toContain("divide-border/70 divide-y rounded-lg border px-3");
     expect(markup).not.toContain("first:pt-0 last:pb-0");
     expect(markup).toContain("QQBot 通知接入");
@@ -124,18 +137,12 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain('data-testid="notification-destination"');
     expect(markup).toContain("sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]");
     expect(markup).toContain("border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4");
-    expect(markup).toContain("打开 QQ 开放平台");
-    expect(markup).toContain("开发设置");
+    expect(markup).toContain('aria-label="App ID说明"');
+    expect(markup).toContain('aria-label="Client Secret说明"');
     expect(markup).toContain('placeholder="输入 user_openid"');
-    expect(markup).toContain("查看事件服务接入说明");
+    expect(markup).toContain('aria-label="目标 ID说明"');
     expect(markup).toContain("连接获取");
-    expect(markup).toContain("系统会自动填入 user_openid");
-    expect(markup).toContain("机器人无需回复");
     expect(markup).not.toContain("本控制台目前只负责发送通知");
-    expect(markup).toContain("https://q.qq.com/qqbot/#/developer/developer-setting");
-    expect(markup).toContain(
-      "https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/interface-framework/event-emit.html",
-    );
     expect(markup).toContain('value="configured-app"');
     expect(markup).toContain('value="configured-target"');
     expect(markup.match(/placeholder="已配置，留空则不修改"/g)).toHaveLength(2);
@@ -143,6 +150,8 @@ describe("系统设置页面职责", () => {
     expect(markup).toContain("日志保留");
     expect(markup).toContain("定时清理");
     expect(markup).toContain('aria-label="日志保留天数"');
+    expect(markup).toContain('aria-label="日志保留天数说明"');
+    expect(markup).not.toContain("允许 1–3650 天");
     expect(markup).toContain("立即按期限清理");
     expect(markup.match(/flex items-start justify-between gap-3/g)).toHaveLength(3);
     const cleanupLabel = markup.match(
@@ -267,7 +276,7 @@ describe("系统设置页面职责", () => {
     );
 
     expect(markup).toContain("读取成功后才能修改设置或清理日志");
-    expect(markup).toContain("重试读取");
+    expect(markup).toContain('aria-label="刷新日志清理配置"');
     expect(markup).toMatch(
       /<span(?=[^>]*role="switch")(?=[^>]*aria-label="定时清理")(?=[^>]*aria-disabled="true")[^>]*>/,
     );

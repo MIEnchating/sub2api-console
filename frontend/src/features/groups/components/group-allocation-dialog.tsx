@@ -37,7 +37,7 @@ export const groupAllocationLayout = {
   dialog: "grid min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden",
   width: "table",
   height: "tall",
-  content: "flex min-h-0 flex-col gap-3 overflow-hidden",
+  content: "flex h-full min-h-0 flex-col gap-3 overflow-hidden",
   loading: "grid h-full min-h-0 grid-rows-[4rem_minmax(0,1fr)] gap-4",
   policy:
     "bg-muted/40 grid min-w-0 grid-cols-1 divide-y overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x sm:divide-y-0",
@@ -45,6 +45,7 @@ export const groupAllocationLayout = {
   metrics: "bg-border grid grid-cols-2 gap-px overflow-hidden rounded-lg border lg:grid-cols-4",
   metric: "bg-popover grid min-w-0 content-start gap-1 px-3 py-3",
   table: "min-w-[1060px] table-fixed",
+  tableContainer: "h-full min-h-0 overflow-auto overscroll-contain",
 } as const;
 
 const stateLabels: Record<string, string> = {
@@ -235,7 +236,7 @@ export function GroupAllocationContent(props: { allocation: GroupAllocation }) {
         <DataTablePanel className="flex-1">
           <Table
             className={groupAllocationLayout.table}
-            containerClassName="h-full min-h-0 overflow-auto"
+            containerClassName={groupAllocationLayout.tableContainer}
           >
             <TableHeader>
               <TableRow>

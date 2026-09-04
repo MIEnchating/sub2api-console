@@ -96,6 +96,7 @@ describe("OverviewPage", () => {
     expect(markup).toContain("风险分组");
     expect(markup).toContain("立即同步");
     expect(markup).toContain("分组管理");
+    expect(markup).not.toContain("按当前可调度渠道汇总各分组健康状态。");
     expect(markup).toContain('data-slot="page-heading"');
     expect(markup).toContain('data-slot="card"');
     expect(markup).toContain('data-slot="card-header"');

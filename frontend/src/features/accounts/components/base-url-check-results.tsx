@@ -110,7 +110,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
         />
       </TableFilterToolbar>
 
-      <DataTablePanel>
+      <DataTablePanel className="flex-1">
         <Table
           overflowTooltip={false}
           containerClassName="min-h-0 flex-1 overflow-auto"

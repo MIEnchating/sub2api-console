@@ -336,42 +336,44 @@ func routingIncidentGroup(incident business.AlertIncident) string {
 }
 
 var eventLabels = map[string]string{
-	"upstream.configuration":    "上游配置异常",
-	"upstream.auth":             "上游鉴权失效",
-	"upstream.rate_sync":        "上游倍率同步失败",
-	"upstream.balance":          "上游余额不足",
-	"account.probe":             "账号主动探测失败",
-	"account.routing_breaker":   "账号触发熔断判定",
-	"account.binding_invalid":   "账号上游绑定失效",
-	"account.routing_degraded":  "账号进入降级状态",
-	"account.routing_survivor":  "账号被保底强留",
-	"group.routing_unavailable": "分组无可调度账号",
-	"group.routing_survivor":    "分组仅剩保底账号",
-	"routing.apply_failure":     "自动执行失败",
+	"upstream.configuration":       "上游配置有问题",
+	"upstream.auth":                "上游鉴权失败",
+	"upstream.rate_sync":           "上游倍率同步失败",
+	"upstream.balance":             "上游余额不足",
+	"account.multiplier_increased": "账号倍率上涨",
+	"account.multiplier_decreased": "账号倍率下降",
+	"account.probe":                "账号连接探测失败",
+	"account.routing_breaker":      "账号已停止调度",
+	"account.binding_invalid":      "账号绑定已失效",
+	"account.routing_degraded":     "账号已降级调度",
+	"account.routing_survivor":     "账号被临时保留",
+	"group.routing_unavailable":    "分组没有可用账号",
+	"group.routing_survivor":       "分组只剩保底账号",
+	"routing.apply_failure":        "自动处理失败",
 }
 
 var causeLabels = map[string]string{
-	"CONFIG":                              "配置或数据格式异常",
-	"CONFIG_METADATA_INVALID":             "上游元数据无法解析",
-	"CONFIG_AUTH_STATUS_MISSING":          "上游鉴权状态缺失",
+	"CONFIG":                              "上游配置有问题",
+	"CONFIG_METADATA_INVALID":             "上游返回信息无法识别",
+	"CONFIG_AUTH_STATUS_MISSING":          "上游没有返回鉴权状态",
 	"CONFIG_AUTH_STATUS_UNKNOWN":          "上游鉴权状态无法识别",
-	"CONFIG_BALANCE_CLOSED_INVALID":       "余额关闭状态格式无效",
+	"CONFIG_BALANCE_CLOSED_INVALID":       "上游余额关闭状态无效",
 	"CONFIG_BALANCE_INVALID":              "上游余额不是有效数字",
-	"AUTH":                                "鉴权已失效",
+	"AUTH":                                "上游鉴权失败",
 	"RATE_SYNC":                           "倍率同步失败",
-	"BALANCE_HARD_CLOSED":                 "上游因余额不足已关闭服务",
-	"PROBE":                               "连续主动探测失败",
-	"ROUTING_BREAKER":                     "调度策略触发熔断判定",
-	"BINDING_INVALID":                     "绑定的上游 Key 或分组已确认删除",
-	"ROUTING_DEGRADED":                    "调度策略判定为降级",
-	"ROUTING_DEGRADED_HEALTH_SCORE":       "健康分低于降级线",
-	"ROUTING_DEGRADED_GATEWAY_ERROR_RATE": "网关错误率达到降级阈值",
-	"ROUTING_DEGRADED_LATENCY":            "响应延迟达到降级阈值",
-	"ROUTING_DEGRADED_OTHER":              "其他调度条件触发降级",
-	"ROUTING_SURVIVOR":                    "为避免分组断供而保底强留",
-	"GROUP_UNAVAILABLE":                   "调度判定后没有可调度账号",
-	"GROUP_SURVIVOR_ONLY":                 "调度判定后仅剩保底账号",
-	"APPLY_FAILED":                        "自动执行未成功",
+	"BALANCE_HARD_CLOSED":                 "上游因余额不足停止服务",
+	"PROBE":                               "连续连接探测失败",
+	"ROUTING_BREAKER":                     "连续失败，已停止调度",
+	"BINDING_INVALID":                     "绑定的上游或分组已不存在",
+	"ROUTING_DEGRADED":                    "调度规则判定账号需要降级",
+	"ROUTING_DEGRADED_HEALTH_SCORE":       "健康分低于降级标准",
+	"ROUTING_DEGRADED_GATEWAY_ERROR_RATE": "网关错误率过高，达到降级标准",
+	"ROUTING_DEGRADED_LATENCY":            "响应太慢，超过降级标准",
+	"ROUTING_DEGRADED_OTHER":              "其他调度规则触发降级",
+	"ROUTING_SURVIVOR":                    "为保证分组可用，暂时保留账号",
+	"GROUP_UNAVAILABLE":                   "分组中没有可调度账号",
+	"GROUP_SURVIVOR_ONLY":                 "分组中只剩保底账号",
+	"APPLY_FAILED":                        "自动处理未成功，请查看执行记录",
 	"TEST":                                "测试通知",
 }
 
@@ -599,6 +601,9 @@ func notificationAccountIdentity(incident business.AlertIncident) string {
 }
 
 func relatedAccountCause(incident business.AlertIncident) string {
+	if incident.Status == "recovered" {
+		return notificationIncidentFields(incident).cause
+	}
 	if _, reason, found := dynamicAlertCause(incident.CauseCode); found && reason != "" {
 		if incident.EventType == "account.routing_survivor" {
 			reason = strings.TrimSpace(strings.TrimPrefix(reason, "保底强留："))
@@ -623,15 +628,33 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	if eventLabel == "" {
 		eventLabel = "运行异常"
 	}
-	if incident.Status == "recovered" && incident.EventType == "upstream.balance" {
-		eventLabel = "上游余额恢复"
+	if incident.Status == "recovered" {
+		recoveredLabels := map[string]string{
+			"upstream.configuration":    "上游配置已恢复",
+			"upstream.auth":             "上游鉴权已恢复",
+			"upstream.rate_sync":        "上游倍率同步已恢复",
+			"upstream.balance":          "上游余额已恢复",
+			"account.probe":             "账号连接探测已恢复",
+			"account.routing_breaker":   "账号已恢复调度",
+			"account.binding_invalid":   "账号绑定已恢复",
+			"account.routing_degraded":  "账号已恢复正常调度",
+			"account.routing_survivor":  "账号已退出临时保留",
+			"group.routing_unavailable": "分组已恢复可用",
+			"group.routing_survivor":    "分组已恢复正常",
+			"routing.apply_failure":     "自动处理已恢复",
+		}
+		if recoveredLabel := recoveredLabels[incident.EventType]; recoveredLabel != "" {
+			eventLabel = recoveredLabel
+		}
 	}
 	objectLabel := objectLabels[incident.ObjectKind]
 	if objectLabel == "" {
 		objectLabel = "对象"
 	}
 	causeLabel := causeLabels[incident.CauseCode]
-	if strings.HasPrefix(incident.CauseCode, "BALANCE:") {
+	if multiplierCause, found := multiplierChangeCause(incident.CauseCode); found {
+		causeLabel = multiplierCause
+	} else if strings.HasPrefix(incident.CauseCode, "BALANCE:") {
 		threshold := strings.TrimSpace(strings.TrimPrefix(incident.CauseCode, "BALANCE:"))
 		if incident.Status == "recovered" {
 			causeLabel = "余额已恢复至告警阈值以上"
@@ -644,14 +667,40 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 				causeLabel = "余额达到或低于 " + threshold
 			}
 		}
-	} else if incident.Status == "recovered" && incident.CauseCode == "BALANCE_HARD_CLOSED" {
-		causeLabel = "余额不足关闭状态已解除"
+	} else if incident.Status == "recovered" {
+		recoveredCauses := map[string]string{
+			"CONFIG":                              "上游配置已恢复正常",
+			"AUTH":                                "上游鉴权已恢复",
+			"RATE_SYNC":                           "倍率同步已恢复",
+			"BALANCE_HARD_CLOSED":                 "余额不足导致的停服已解除",
+			"PROBE":                               "账号连接探测已恢复",
+			"ROUTING_BREAKER":                     "账号已恢复调度",
+			"BINDING_INVALID":                     "账号绑定已恢复",
+			"ROUTING_DEGRADED":                    "账号已恢复正常调度",
+			"ROUTING_DEGRADED_HEALTH_SCORE":       "账号已恢复正常调度",
+			"ROUTING_DEGRADED_GATEWAY_ERROR_RATE": "账号已恢复正常调度",
+			"ROUTING_DEGRADED_LATENCY":            "账号已恢复正常调度",
+			"ROUTING_DEGRADED_OTHER":              "账号已恢复正常调度",
+			"ROUTING_SURVIVOR":                    "账号已退出临时保留",
+			"GROUP_UNAVAILABLE":                   "分组已恢复可用",
+			"GROUP_SURVIVOR_ONLY":                 "分组已恢复正常",
+			"APPLY_FAILED":                        "自动处理已恢复",
+		}
+		if recoveredCause := recoveredCauses[incident.CauseCode]; recoveredCause != "" {
+			causeLabel = recoveredCause
+		} else if strings.HasPrefix(incident.CauseCode, "RATE_SYNC:") {
+			causeLabel = recoveredCauses["RATE_SYNC"]
+		} else if code, _, found := dynamicAlertCause(incident.CauseCode); found {
+			causeLabel = recoveredCauses[code]
+			if causeLabel == "" {
+				causeLabel = "相关问题已恢复"
+			}
+		} else if causeLabel == "" {
+			causeLabel = "相关问题已恢复"
+		}
 	} else if strings.HasPrefix(incident.CauseCode, "RATE_SYNC:") {
 		reason := strings.TrimSpace(strings.TrimPrefix(incident.CauseCode, "RATE_SYNC:"))
-		causeLabel = "倍率同步失败"
-		if reason != "" {
-			causeLabel += "：" + reason
-		}
+		causeLabel = compactRateSyncReason(reason)
 	} else if code, reason, found := dynamicAlertCause(incident.CauseCode); found {
 		causeLabel = causeLabels[code]
 		if reason != "" {
@@ -677,6 +726,98 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 		event: eventLabel, object: objectValue, cause: causeLabel,
 		status: statusLabel, observedAt: notificationTime(incident.LastSeenAt),
 	}
+}
+
+func multiplierChangeCause(causeCode string) (string, bool) {
+	for _, change := range []struct {
+		prefix, verb string
+	}{
+		{prefix: "MULTIPLIER_INCREASED:", verb: "上涨"},
+		{prefix: "MULTIPLIER_DECREASED:", verb: "下降"},
+	} {
+		if !strings.HasPrefix(causeCode, change.prefix) {
+			continue
+		}
+		values := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(causeCode, change.prefix)), " -> ", 2)
+		if len(values) != 2 || strings.TrimSpace(values[0]) == "" || strings.TrimSpace(values[1]) == "" {
+			return "倍率发生变化", true
+		}
+		return fmt.Sprintf("倍率从 %s %s至 %s", strings.TrimSpace(values[0]), change.verb, strings.TrimSpace(values[1])), true
+	}
+	return "", false
+}
+
+var rateSyncHTTPStatusPattern = regexp.MustCompile(`HTTP\s+([1-5][0-9]{2})`)
+
+func compactRateSyncReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	for _, prefix := range []string{"上游倍率同步失败：", "倍率同步失败："} {
+		for strings.HasPrefix(reason, prefix) {
+			reason = strings.TrimSpace(strings.TrimPrefix(reason, prefix))
+		}
+	}
+	if reason == "" {
+		return "未能读取上游倍率信息"
+	}
+	statuses := map[string]struct{}{}
+	for _, match := range rateSyncHTTPStatusPattern.FindAllStringSubmatch(reason, -1) {
+		statuses[match[1]] = struct{}{}
+	}
+	scopes := make([]string, 0, 2)
+	if strings.Contains(reason, "分组目录读取失败") {
+		scopes = append(scopes, "分组目录")
+	}
+	if strings.Contains(reason, "余额读取失败") {
+		scopes = append(scopes, "余额")
+	}
+	if len(statuses) == 0 && len(scopes) > 0 && strings.Contains(reason, "上游网络请求失败") {
+		return "上游网络请求失败，" + strings.Join(scopes, "和") + "读取失败"
+	}
+	if len(statuses) == 1 && len(scopes) > 0 {
+		status := ""
+		for value := range statuses {
+			status = value
+		}
+		return "上游返回 HTTP " + status + "，" + strings.Join(scopes, "和") + "读取失败"
+	}
+	if len(statuses) > 0 && len(scopes) > 0 {
+		details := make([]string, 0, len(scopes))
+		for _, part := range strings.Split(reason, "；") {
+			scope := ""
+			if strings.Contains(part, "分组目录读取失败") {
+				scope = "分组目录"
+			} else if strings.Contains(part, "余额读取失败") {
+				scope = "余额"
+			}
+			if scope == "" {
+				continue
+			}
+			match := rateSyncHTTPStatusPattern.FindStringSubmatch(part)
+			if len(match) > 1 {
+				scope += "（HTTP " + match[1] + "）"
+			}
+			details = append(details, scope)
+		}
+		if len(details) > 0 {
+			return strings.Join(details, "、") + "读取失败"
+		}
+	}
+	if len(statuses) == 1 {
+		status := ""
+		for value := range statuses {
+			status = value
+		}
+		return "上游返回 HTTP " + status + "，倍率同步未完成"
+	}
+	return truncateWithEllipsis(reason, 120)
+}
+
+func truncateWithEllipsis(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func incidentTableRow(incident business.AlertIncident) string {

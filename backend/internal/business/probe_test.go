@@ -134,6 +134,26 @@ func TestProbeRepositoryPersistsFailedProbeEvent(t *testing.T) {
 	}
 }
 
+func TestProbeRepositoryPersistsRetryAttemptHistory(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	observed := time.Now().UTC().Format(time.RFC3339Nano)
+	statusCode := 200
+	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
+		AccountID: "41", GroupName: "codex", Result: "通过", SampleCount: 1, Attempts: 2,
+		ObservedAt: observed, StatusCode: &statusCode, AttemptStatusCodes: []int{503, 200}, RetryRecovered: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	var payload string
+	if err := store.db.QueryRow(`SELECT payload_json FROM health_samples WHERE account_id='41' AND source='active-probe'`).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, `"attempt_status_codes":[503,200]`) || !strings.Contains(payload, `"retry_recovered":true`) {
+		t.Fatalf("retry audit evidence missing from payload: %s", payload)
+	}
+}
+
 func TestPersistProbeSamplesKeepsLatestTwoHundred(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

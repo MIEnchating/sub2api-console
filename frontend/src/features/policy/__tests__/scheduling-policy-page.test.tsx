@@ -10,7 +10,9 @@ import {
   PolicyRulesEditor,
   PolicyScopeEditor,
   PolicyScopeLayout,
+  policyPayload,
   policyDraft,
+  policySettingsPayload,
   policyRelationshipError,
   schedulingStrategyOptions,
   withManagedGroupScope,
@@ -204,15 +206,10 @@ describe("调度策略入口", () => {
     expect(markup).not.toContain("Client Secret");
     expect(markup).not.toContain("系统级规则");
     expect(markup).toContain("负载因子调权");
-    expect(markup).toContain("运行控制");
-    expect(markup).toContain("随“保存策略”一起生效");
-    expect(markup).toContain("执行模式");
-    expect(markup).toContain("监控模式");
-    expect(markup).toContain(
-      "只读取上游与真实流量数据并执行巡检告警，不主动探测、不保存调度结果、不写入 Sub2API",
-    );
+    expect(markup).not.toContain("运行控制");
+    expect(markup).not.toContain("执行模式");
+    expect(markup).not.toContain("监控模式");
     expect(markup).not.toContain("调度模式");
-    expect(markup).toContain("完全模式");
     expect(renderOperationsSection("sampling")).toContain('aria-label="启用主动探测"');
     expect(schedulingStrategyOptions).toContainEqual({
       value: "reliability",
@@ -234,7 +231,52 @@ describe("调度策略入口", () => {
       concurrency: true,
     });
     expect(policyDraft(policy).mode).toBe("完全模式");
+    expect(policySettingsPayload(policyPayload(policyDraft(policy))!)).not.toHaveProperty("mode");
     expect(navItems.find((candidate) => candidate.id === "groups")?.to).toBe("/groups");
+  });
+
+  it("旧策略缺少倍率同步分区时使用兼容默认值并允许保存", () => {
+    const legacy = {
+      ...policy,
+      advanced_policy: { ...policy.advanced_policy },
+    };
+    delete legacy.advanced_policy.account_rate_sync;
+
+    const markup = renderPolicyPage(legacy);
+    const schedule = renderToStaticMarkup(
+      <PolicyInspectionSchedule value={policyDraft(legacy)} onChange={() => undefined} />,
+    );
+
+    expect(markup).not.toContain("策略参数存在空值或无效数字");
+    expect(schedule).toContain("倍率同步每轮数量");
+    expect(schedule).toContain("倍率同步每轮比例");
+  });
+
+  it("清空倍率同步间隔时保留空值并由保存校验拦截", () => {
+    const clearedSnapshot = {
+      ...policy,
+      advanced_policy: {
+        ...policy.advanced_policy,
+        account_rate_sync: { interval_seconds: null, batch_size: null, batch_percent: null },
+      },
+    } satisfies PolicySnapshot;
+    const cleared = policyDraft(clearedSnapshot);
+    const markup = renderToStaticMarkup(
+      <PolicyInspectionSchedule value={cleared} onChange={() => undefined} />,
+    );
+    const pageMarkup = renderPolicyPage(clearedSnapshot);
+    const saveLabelPosition = pageMarkup.indexOf("保存策略");
+    const saveButtonStart = pageMarkup.lastIndexOf("<button", saveLabelPosition);
+    const saveButtonEnd = pageMarkup.indexOf(">", saveButtonStart);
+    const labelPosition = markup.indexOf("账号倍率同步间隔（秒）");
+    const inputStart = markup.indexOf("<input", labelPosition);
+    const inputEnd = markup.indexOf(">", inputStart);
+
+    expect(markup.slice(inputStart, inputEnd)).not.toContain('value="120"');
+    expect(markup).not.toContain('value="0"');
+    expect(policyPayload(cleared)).toBeNull();
+    expect(pageMarkup).not.toContain("策略参数存在空值或无效数字");
+    expect(pageMarkup.slice(saveButtonStart, saveButtonEnd)).not.toMatch(/\sdisabled(?:=|>)/);
   });
 
   it("使用可持续定位的页签和按业务成组的紧凑布局", () => {
@@ -245,15 +287,15 @@ describe("调度策略入口", () => {
     expect(markup).toContain('data-testid="policy-category-navigation"');
     expect(markup).toContain("sticky top-0");
     expect(markup).toContain("overflow-x-auto");
-    expect(markup.match(/data-slot="card"/g)).toHaveLength(5);
+    expect(markup.match(/data-slot="card"/g)).toHaveLength(4);
     expect(markup.match(/data-slot="card" data-card-hover="false" data-size="sm"/g)).toHaveLength(
-      5,
+      4,
     );
     expect(markup).not.toContain("探活来源");
     expect(markup).not.toContain("60s");
     expect(markup).not.toContain("xl:grid-cols-4");
     expect(markup).toContain('data-testid="policy-auto-apply"');
-    expect(markup).toContain('data-testid="policy-runtime-modes"');
+    expect(markup).not.toContain('data-testid="policy-runtime-modes"');
     expect(markup).toContain('data-slot="segmented-control"');
     expect(markup).toContain("flex-wrap");
     expect(markup.match(/data-slot="select-trigger"[^>]*class="[^"]*w-full/g)).toHaveLength(2);
@@ -329,23 +371,20 @@ describe("调度策略入口", () => {
     const inspectionIntervals = renderToStaticMarkup(
       <PolicyInspectionSchedule value={policyDraft(policy)} onChange={() => undefined} />,
     );
-    const runtime = policySection(markup, "运行控制", "全局默认策略");
     const global = policySection(markup, "全局默认策略", "自动执行范围");
     const autoApply = policySection(routing, "自动执行范围", "负载因子调权");
     const weights = policySection(routing, "负载因子调权", "智能扩容");
     const cleanup = policySection(health, "认证失效自动处置");
     const scaling = policySection(routing, "智能扩容");
 
-    expect(runtime).toContain("执行模式");
-    expect(runtime).not.toContain("启用主动探测");
-
     expect(global).toContain("倍率缺失回退");
     expect(global).toContain("每组总权重预算");
     expect(global).toContain("人工优先位范围");
-    expect(global).toContain("自动调度从 N+1 开始");
-    expect(global).toContain("由同一分组内参与调度的账号按策略共享");
+    expect(global).toContain('aria-label="人工优先位范围说明"');
     expect(global).toContain("权重健康闸门");
     expect(global).toContain("均衡中价格占比");
+    expect(global).toContain("性能最小样本数");
+    expect(global).toContain("速度优势上限");
     expect(global).not.toContain("上游数据拉取间隔");
     expect(global).not.toContain("默认探测模型");
     expect(global).not.toContain("探测间隔");
@@ -357,7 +396,7 @@ describe("调度策略入口", () => {
 
     expect(inspectionIntervals).toContain("上游数据拉取间隔（秒）");
     expect(inspectionIntervals).toContain("请求记录拉取间隔（秒）");
-    expect(inspectionIntervals).toContain("同一轮刷新倍率、站点余额和鉴权状态");
+    expect(inspectionIntervals).toContain('aria-label="上游数据拉取间隔（秒）说明"');
     expect(inspectionIntervals).toContain('min="30"');
     expect(inspectionIntervals).toContain('min="1"');
     expect(inspectionIntervals).toContain('value="120"');
@@ -375,6 +414,7 @@ describe("调度策略入口", () => {
     expect(autoApply).not.toContain("每组每轮自动执行占比上限");
     expect(health).toContain("窗口内慢响应次数");
     expect(health).toContain("每轮最多熔断");
+    expect(health).toContain("连续瞬时失败阈值");
     expect(health).toContain("保底与降级");
     expect(health).toContain("认证失效自动处置");
     expect(routing).not.toContain("认证失效自动处置");
@@ -518,6 +558,8 @@ describe("调度策略入口", () => {
     expect(markup).toContain("最终分 = 短期分 × 0.70 + 长期分 × 0.30");
     expect(markup).toContain("致命错误关键字");
     expect(markup).toContain("网关错误状态码");
+    expect(markup).toContain("客户端错误状态码");
+    expect(markup).toContain("普通 403");
     expect(markup).not.toContain("网关错误关键字");
     expect(markup).not.toContain("限流 / 额度关键字");
     expect(markup).not.toContain("几何衰减");

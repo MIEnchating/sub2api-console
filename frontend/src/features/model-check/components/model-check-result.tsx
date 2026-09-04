@@ -136,11 +136,11 @@ function summaryBadges(summary: ResultRecord) {
   return Object.entries(summary)
     .filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([verdict, count]) => {
+    .map(([verdict]) => {
       const variant = verdict === "ERROR" ? "destructive" : "outline";
       return (
         <Badge key={verdict} variant={variant}>
-          {verdictLabels[verdict] ?? verdict} {count}
+          {verdictLabels[verdict] ?? verdict}
         </Badge>
       );
     });
@@ -278,7 +278,7 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
 
 export function ModelCheckResult(props: { task: Task }) {
   const rows = resultRows(props.task.result.tests);
-  const pagination = useClientPagination(rows, 10);
+  const pagination = useClientPagination(rows);
 
   useEffect(() => {
     pagination.setCurrentPage(1);
@@ -311,9 +311,6 @@ export function ModelCheckResult(props: { task: Task }) {
           <p className="flex items-center gap-2 font-medium">
             <CheckCircle2 className="text-primary size-4" aria-hidden="true" />
             检测完成
-          </p>
-          <p className="text-muted-foreground mt-0.5 text-xs tabular-nums">
-            {rows.length} 个账号模型组合
           </p>
         </div>
         <div className="flex max-w-full flex-wrap gap-1.5 sm:justify-end">
@@ -455,8 +452,6 @@ export function ModelCheckResult(props: { task: Task }) {
             );
           })}
         </div>
-      </DataTablePanel>
-      <div className="shrink-0">
         <DataTablePagination
           currentPage={pagination.currentPage}
           totalPages={pagination.totalPages}
@@ -466,7 +461,7 @@ export function ModelCheckResult(props: { task: Task }) {
           onPageChange={pagination.setCurrentPage}
           onPageSizeChange={pagination.setPageSize}
         />
-      </div>
+      </DataTablePanel>
     </div>
   );
 }

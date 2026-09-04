@@ -265,6 +265,27 @@ func (s *Store) SavePendingOnboarding(ctx context.Context, value PendingOnboardi
 	return err
 }
 
+func (s *Store) UpgradePendingOnboardingIntent(ctx context.Context, operationID, previousHash, nextHash string) (bool, error) {
+	operationID = strings.TrimSpace(operationID)
+	previousHash = strings.TrimSpace(previousHash)
+	nextHash = strings.TrimSpace(nextHash)
+	if operationID == "" || previousHash == "" || nextHash == "" || previousHash == nextHash {
+		return false, errors.New("待续开户意图升级参数无效")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE onboarding_pending SET intent_hash=?,updated_at=?
+		WHERE operation_id=? AND intent_hash=? AND upstream_key_id<>'' AND upstream_account_id=''
+		AND key_commit_unknown=0 AND account_commit_unknown=0`,
+		nextHash, time.Now().UTC().Format(time.RFC3339Nano), operationID, previousHash)
+	if err != nil {
+		return false, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return updated == 1, nil
+}
+
 func canonicalPendingLocalGroupIDs(values []string) ([]string, string, error) {
 	result := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))

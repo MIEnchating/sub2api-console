@@ -2,6 +2,7 @@ import {
   Activity,
   Ban,
   LoaderCircle,
+  MoreHorizontal,
   Pause,
   Pencil,
   Pin,
@@ -12,6 +13,13 @@ import {
 
 import type { AccountControlAction, AccountStatus } from "@/api";
 import { TableActionButton } from "@/components/data-table/table-action-button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 import { cn } from "@/lib/utils";
 
@@ -41,12 +49,11 @@ export function AccountOperationButtons(props: {
   const excluded = state === "excluded";
   const manualControlled = props.account.manual_priority != null;
   return (
-    <div className="ml-auto grid w-[9.5rem] grid-cols-4 gap-1">
+    <div className="ml-auto flex items-center justify-end gap-1">
       {excluded ? (
         <TableActionButton
           label="恢复管控"
           tone="primary"
-          className="col-span-3 w-full"
           disabled={props.pending || manualControlled}
           onClick={() => props.onControl("include", "恢复管控")}
         >
@@ -86,7 +93,9 @@ export function AccountOperationButtons(props: {
               props.onControl(
                 fused ? "recover" : "fuse",
                 fused ? "解除熔断" : "手动熔断",
-                fused ? undefined : `手动熔断“${props.account.name}”后，该账号将立即停止参与调度。`,
+                fused
+                  ? undefined
+                  : `熔断“${props.account.name}”后，该账号会停止调度，直到手动解除熔断。`,
               )
             }
           >
@@ -94,34 +103,44 @@ export function AccountOperationButtons(props: {
           </TableActionButton>
         </>
       )}
-      <TableActionButton label="同步账号倍率" disabled={props.pending} onClick={props.onRateSync}>
-        <RefreshCw />
-      </TableActionButton>
-      <TableActionButton
-        label={props.account.manual_priority == null ? "设置人工优先位" : "调整人工优先位"}
-        tone={props.account.manual_priority == null ? "default" : "primary"}
-        disabled={props.pending}
-        onClick={props.onManualPriority}
-      >
-        <Pin />
-      </TableActionButton>
-      <TableActionButton
-        label="查看并编辑账号"
-        className={cn(excluded && "col-span-3 w-full")}
-        disabled={props.pending || manualControlled}
-        onClick={props.onEdit}
-      >
-        <Pencil />
-      </TableActionButton>
-      <TableActionButton
-        label="删除账号及上游 Key"
-        tone="danger"
-        className={prominentDangerActionClassName}
-        disabled={props.pending}
-        onClick={props.onDelete}
-      >
-        <Trash2 />
-      </TableActionButton>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon-sm"
+              className="data-popup-open:bg-muted"
+              aria-label="更多账号操作"
+              disabled={props.pending}
+            />
+          }
+        >
+          <MoreHorizontal className="size-4" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem disabled={props.pending} onClick={props.onRateSync}>
+            <RefreshCw />
+            同步账号倍率
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={props.pending} onClick={props.onManualPriority}>
+            <Pin />
+            {props.account.manual_priority == null ? "设置人工优先位" : "调整人工优先位"}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={props.pending || manualControlled} onClick={props.onEdit}>
+            <Pencil />
+            查看并编辑账号
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-destructive focus:text-destructive"
+            disabled={props.pending}
+            onClick={props.onDelete}
+          >
+            <Trash2 />
+            删除账号及上游 Key
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

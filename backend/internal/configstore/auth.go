@@ -143,6 +143,9 @@ func (s *Store) DeleteAuthRecord(ctx context.Context, host string) (bool, error)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM upstream_key_secrets WHERE host=?`, host); err != nil {
 		return false, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM auth_recovery_preferences WHERE host=?`, host); err != nil {
+		return false, err
+	}
 	count, err := result.RowsAffected()
 	if err != nil {
 		return false, err

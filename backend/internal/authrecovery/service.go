@@ -46,6 +46,10 @@ type Authenticator interface {
 	Login(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error)
 }
 
+type loginOptionsAuthenticator interface {
+	LoginWithOptions(context.Context, configstore.AuthRecord, configstore.VaultEntry, upstreamauth.LoginOptions) (configstore.AuthRecord, error)
+}
+
 type Configurator interface {
 	ConfigureAuthRecord(context.Context, upstreamconfig.Input) (string, error)
 }
@@ -85,19 +89,25 @@ type mutationRepositoryAware interface {
 	UseMutationRepository(any)
 }
 
+type recoveryPreferenceStore interface {
+	AuthRecoveryPreference(context.Context, string) (*configstore.AuthRecoveryPreference, error)
+	SaveAuthRecoveryPreference(context.Context, configstore.AuthRecoveryPreference) error
+}
+
 type ManualInput struct {
-	Host         string
-	AuthMode     *string
-	AccessToken  *string
-	RefreshToken *string
-	AdminKey     *string
-	UserID       *string
-	Username     *string
-	Password     *string
-	SaveToVault  bool
-	Entry        *string
-	Headers      map[string]string
-	Present      map[string]bool
+	Host                 string
+	AuthMode             *string
+	AccessToken          *string
+	RefreshToken         *string
+	AdminKey             *string
+	UserID               *string
+	Username             *string
+	Password             *string
+	SaveToVault          bool
+	AcceptLoginAgreement bool
+	Entry                *string
+	Headers              map[string]string
+	Present              map[string]bool
 }
 
 type BalanceResult struct {
@@ -120,6 +130,11 @@ type CaptchaCompletion struct {
 	CaptchaResult
 	Projection  business.AuthRecoverySummary `json:"projection"`
 	BalanceSync BalanceResult                `json:"balance_sync"`
+}
+
+type BatchResult struct {
+	Summary  business.AuthRecoverySummary   `json:"summary"`
+	Outcomes []business.AuthRecoveryOutcome `json:"outcomes"`
 }
 
 type Service struct {
@@ -181,7 +196,8 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 		Host: host, BaseURL: current.BaseURL, UpstreamType: current.UpstreamType, AuthMode: mode, RechargeRate: "1",
 		AccessToken: input.AccessToken, RefreshToken: input.RefreshToken, AdminKey: input.AdminKey, UserID: input.UserID,
 		Username: input.Username, Password: input.Password, SaveToVault: input.SaveToVault, Entry: input.Entry,
-		Headers: headers, Cookies: cloneMap(current.Cookies), Present: map[string]bool{},
+		AcceptLoginAgreement: input.AcceptLoginAgreement,
+		Headers:              headers, Cookies: cloneMap(current.Cookies), Present: map[string]bool{},
 	}
 	for key, present := range input.Present {
 		configuration.Present[key] = present
@@ -219,11 +235,19 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 		return ManualResult{}, err
 	}
 	result, syncErr := s.balances.SyncHost(ctx, verifiedHost, upstreamsync.Scope{Balance: true}, actor)
+	var vaultEntry *string
+	if input.SaveToVault && input.Entry != nil && strings.TrimSpace(*input.Entry) != "" {
+		entry := strings.TrimSpace(*input.Entry)
+		vaultEntry = &entry
+	}
+	if err := s.saveRecoveryPreference(ctx, verifiedHost, mode, "manual", vaultEntry); err != nil {
+		return ManualResult{}, fmt.Errorf("鉴权已复核，但最近成功方式保存失败：%w", err)
+	}
 	balance := balanceResult(result, syncErr)
 	return ManualResult{Host: verifiedHost, Verified: true, BalanceSync: &balance}, nil
 }
 
-func (s *Service) Enqueue(ctx context.Context, host, entry, actor string) (taskstore.Task, error) {
+func (s *Service) Enqueue(ctx context.Context, host, entry string, acceptLoginAgreement bool, actor string) (taskstore.Task, error) {
 	host = configstore.CanonicalHost(host)
 	entry = strings.TrimSpace(entry)
 	if host == "" {
@@ -254,11 +278,48 @@ func (s *Service) Enqueue(ctx context.Context, host, entry, actor string) (tasks
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, *record, entry, actor) }); err != nil {
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.execute(parent, task, *record, entry, acceptLoginAgreement, actor)
+	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}
 	return task, nil
+}
+
+func (s *Service) EnqueueBatch(ctx context.Context, hosts []string, actor string) (taskstore.Task, error) {
+	records, err := s.recoveryRecords(ctx, hosts)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	id, err := recoveryTaskID()
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: id, Skill: "sub2api-upstream-auth", Operation: "recover-hosts", Status: "queued", Progress: 0,
+		Message: fmt.Sprintf("%d 个上游的鉴权恢复已排队", len(records)), Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.tasks.Save(ctx, task); err != nil {
+		return taskstore.Task{}, err
+	}
+	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		s.executeBatch(parent, task, records, actor)
+	}); err != nil {
+		taskstore.PersistLaunchFailure(s.tasks, task, err)
+		return taskstore.Task{}, err
+	}
+	return task, nil
+}
+
+func (s *Service) RecoverInvalid(ctx context.Context, hosts []string, actor string) (business.AuthRecoverySummary, error) {
+	records, err := s.recoveryRecords(ctx, hosts)
+	if err != nil {
+		return business.AuthRecoverySummary{}, err
+	}
+	result, err := s.recoverRecords(ctx, records, actor)
+	return result.Summary, err
 }
 
 // ResolveAuth provisions a missing exact-Host authorization only from an explicit,
@@ -408,7 +469,7 @@ func hostWithoutPort(host string) string {
 	return configstore.CanonicalHost(parsed.Hostname())
 }
 
-func (s *Service) execute(parent context.Context, task taskstore.Task, record configstore.AuthRecord, entry, actor string) {
+func (s *Service) execute(parent context.Context, task taskstore.Task, record configstore.AuthRecord, entry string, acceptLoginAgreement bool, actor string) {
 	host := record.Host
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
@@ -416,7 +477,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, record co
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
-	outcome := s.recover(ctx, record, entry)
+	outcome := s.recover(ctx, record, entry, acceptLoginAgreement)
 	var challenge *CaptchaChallenge
 	if pointerOr(outcome.Code, "") == "image_captcha_required" && entry != "" && s.captcha != nil {
 		prepared, prepareErr := s.captcha.Prepare(ctx, record, entry, &task.ID)
@@ -463,6 +524,81 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, record co
 	taskstore.PersistFinal(s.tasks, task)
 }
 
+func (s *Service) executeBatch(parent context.Context, task taskstore.Task, records []configstore.AuthRecord, actor string) {
+	ctx, cancel := context.WithTimeout(parent, s.timeout)
+	defer cancel()
+	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 10, "正在按最近成功方式恢复鉴权", time.Now().UTC().Format(time.RFC3339Nano)
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
+		return
+	}
+	result, err := s.recoverRecords(ctx, records, actor)
+	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
+	task.Result = map[string]any{"summary": result.Summary, "outcomes": result.Outcomes}
+	if err != nil {
+		task.Status, task.Message = "failed", "批量鉴权恢复失败："+safeReason(err.Error())
+		task.Result["error"] = safeReason(err.Error())
+	} else if result.Summary.Failed > 0 {
+		task.Status = "failed"
+		task.Message = fmt.Sprintf("鉴权恢复完成：成功 %d，失败 %d", result.Summary.Recovered, result.Summary.Failed)
+	} else {
+		task.Status = "succeeded"
+		task.Message = fmt.Sprintf("%d 个上游的鉴权已恢复", result.Summary.Recovered)
+	}
+	taskstore.MarkCancelled(ctx, &task, "批量鉴权恢复已取消")
+	taskstore.PersistFinal(s.tasks, task)
+}
+
+func (s *Service) recoverRecords(ctx context.Context, records []configstore.AuthRecord, actor string) (BatchResult, error) {
+	outcomes := make([]business.AuthRecoveryOutcome, 0, len(records))
+	originals := make(map[string]configstore.AuthRecord, len(records))
+	for _, record := range records {
+		if current, err := s.private.AuthRecord(ctx, record.Host); err == nil && current != nil {
+			originals[record.Host] = cloneAuthRecord(*current)
+		}
+	}
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return BatchResult{Outcomes: outcomes}, err
+		}
+		outcomes = append(outcomes, s.recover(ctx, record, "", false))
+	}
+	summary, err := s.repository.PersistAuthRecoveryOutcomes(ctx, outcomes, actor)
+	if err != nil && len(originals) > 0 {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		for host, original := range originals {
+			if rollbackErr := s.private.SaveAuthRecord(rollbackCtx, original, allAuthFields()); rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("上游 %s 鉴权回滚失败：%w", host, rollbackErr))
+			}
+		}
+	}
+	return BatchResult{Summary: summary, Outcomes: outcomes}, err
+}
+
+func (s *Service) recoveryRecords(ctx context.Context, hosts []string) ([]configstore.AuthRecord, error) {
+	if len(hosts) == 0 || len(hosts) > 100 {
+		return nil, errors.New("鉴权恢复必须选择 1 到 100 个上游")
+	}
+	records := make([]configstore.AuthRecord, 0, len(hosts))
+	seen := make(map[string]struct{}, len(hosts))
+	for _, rawHost := range hosts {
+		host := configstore.CanonicalHost(rawHost)
+		if host == "" {
+			return nil, errors.New("鉴权恢复包含无效的上游 Host")
+		}
+		if _, found := seen[host]; found {
+			continue
+		}
+		seen[host] = struct{}{}
+		record, err := s.recoveryRecord(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("上游 %s 无法恢复：%w", host, err)
+		}
+		records = append(records, *record)
+	}
+	return records, nil
+}
+
 func (s *Service) SubmitCaptcha(ctx context.Context, challengeID, code, actor string) (CaptchaCompletion, error) {
 	if s.captcha == nil {
 		return CaptchaCompletion{}, errors.New("图片验证码恢复服务尚未就绪")
@@ -471,8 +607,11 @@ func (s *Service) SubmitCaptcha(ctx context.Context, challengeID, code, actor st
 	if err != nil {
 		return CaptchaCompletion{}, err
 	}
+	if err := s.saveRecoveryPreference(ctx, result.Host, result.AuthMode, "vault", result.VaultEntry); err != nil {
+		return CaptchaCompletion{}, fmt.Errorf("验证码鉴权已复核，但最近成功方式保存失败：%w", err)
+	}
 	outcome := successfulOutcome(business.AuthRecoveryOutcome{Host: result.Host, Attempted: true},
-		"recovered_by_image_captcha", "图片验证码登录成功并完成鉴权复核", "vault")
+		"recovered_by_image_captcha", "图片验证码登录成功并完成鉴权复核", "vault", result.AuthMode)
 	kind := "image_captcha_ocr"
 	outcome.InteractionKind = &kind
 	projection, err := s.repository.PersistAuthRecoveryOutcomes(ctx, []business.AuthRecoveryOutcome{outcome}, actor)
@@ -530,7 +669,7 @@ func (s *Service) finishCaptchaParent(parentTaskID *string, status, message stri
 	}
 }
 
-func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, entry string) business.AuthRecoveryOutcome {
+func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, entry string, acceptLoginAgreement bool) business.AuthRecoveryOutcome {
 	host := record.Host
 	outcome := business.AuthRecoveryOutcome{Host: host, Attempted: true}
 	originalType, originalMode := record.UpstreamType, record.AuthMode
@@ -545,9 +684,19 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 			if saveErr := s.commitRecoveredAuth(ctx, rotated, classificationChanged); saveErr != nil {
 				return failedOutcome(outcome, "credential_commit_failed", "refresh 已复核但凭据保存失败："+saveErr.Error(), false, stringPointer("refresh 已复核"), stringPointer("refresh"))
 			}
-			return successfulOutcome(outcome, "recovered_by_refresh", "refresh token 续签并复核成功", "refresh")
+			if saveErr := s.saveRecoveryPreference(ctx, host, rotated.AuthMode, "refresh_token", nil); saveErr != nil {
+				return failedOutcome(outcome, "recovery_preference_commit_failed", "refresh 已复核但最近成功方式保存失败："+saveErr.Error(), false, stringPointer("refresh 已复核"), stringPointer("refresh"))
+			}
+			return successfulOutcome(outcome, "recovered_by_refresh", "refresh token 续签并复核成功", "refresh_token", rotated.AuthMode)
 		}
 		refreshReason = safeReason(refreshErr.Error())
+	}
+	if entry == "" {
+		selectedEntry, entryErr := s.recoveryEntry(ctx, host)
+		if entryErr != nil {
+			return failedOutcome(outcome, "vault_entry_unavailable", entryErr.Error(), false, optionalPointer(refreshReason), stringPointer("vault"))
+		}
+		entry = selectedEntry
 	}
 	if entry == "" {
 		reason := "未选择密码箱项"
@@ -560,7 +709,14 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 	if err != nil || credential == nil {
 		return failedOutcome(outcome, "vault_entry_unavailable", errorOr(err, "所选密码箱项不存在"), false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
-	loggedIn, err := s.authenticator.Login(ctx, record, *credential)
+	var loggedIn configstore.AuthRecord
+	if authenticator, ok := s.authenticator.(loginOptionsAuthenticator); ok {
+		loggedIn, err = authenticator.LoginWithOptions(ctx, record, *credential, upstreamauth.LoginOptions{
+			AcceptLoginAgreement: acceptLoginAgreement,
+		})
+	} else {
+		loggedIn, err = s.authenticator.Login(ctx, record, *credential)
+	}
 	if err != nil {
 		var interaction *upstreamauth.InteractionError
 		if errors.As(err, &interaction) {
@@ -576,7 +732,51 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 	if err := s.commitRecoveredAuth(ctx, loggedIn, classificationChanged); err != nil {
 		return failedOutcome(outcome, "credential_commit_failed", "密码箱登录已复核但凭据保存失败："+safeReason(err.Error()), false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
-	return successfulOutcome(outcome, "recovered_by_vault", "所选密码箱项登录并复核成功", "vault")
+	if err := s.saveRecoveryPreference(ctx, host, loggedIn.AuthMode, "vault", &entry); err != nil {
+		return failedOutcome(outcome, "recovery_preference_commit_failed", "密码箱登录已复核但最近成功方式保存失败："+safeReason(err.Error()), false, optionalPointer(refreshReason), stringPointer("vault"))
+	}
+	return successfulOutcome(outcome, "recovered_by_vault", "所选密码箱项登录并复核成功", "vault", loggedIn.AuthMode)
+}
+
+func (s *Service) recoveryEntry(ctx context.Context, host string) (string, error) {
+	if preferences, ok := s.private.(recoveryPreferenceStore); ok {
+		preference, err := preferences.AuthRecoveryPreference(ctx, host)
+		if err != nil {
+			return "", fmt.Errorf("最近成功方式读取失败：%w", err)
+		}
+		if preference != nil && preference.VaultEntry != nil {
+			entry := strings.TrimSpace(*preference.VaultEntry)
+			credential, err := s.private.VaultEntry(ctx, entry)
+			if err != nil {
+				return "", fmt.Errorf("最近成功密码箱项读取失败：%w", err)
+			}
+			if credential != nil {
+				return entry, nil
+			}
+		}
+	}
+	entries, err := s.private.VaultEntryIndex(ctx)
+	if err != nil {
+		return "", fmt.Errorf("密码箱索引读取失败：%w", err)
+	}
+	matches := matchingVaultEntries(entries, configstore.CanonicalHost(host))
+	if len(matches) == 1 {
+		return matches[0].Entry, nil
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("Host %q 匹配到多个密码箱项（%s），请先手动恢复一次以记录最近成功方式", host, strings.Join(vaultEntryNames(matches), "、"))
+	}
+	return "", nil
+}
+
+func (s *Service) saveRecoveryPreference(ctx context.Context, host, authMode, recoveryMethod string, vaultEntry *string) error {
+	preferences, ok := s.private.(recoveryPreferenceStore)
+	if !ok {
+		return nil
+	}
+	return preferences.SaveAuthRecoveryPreference(ctx, configstore.AuthRecoveryPreference{
+		Host: host, AuthMode: authMode, RecoveryMethod: recoveryMethod, VaultEntry: vaultEntry,
+	})
 }
 
 func (s *Service) detectRecoveryPlatform(ctx context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
@@ -695,8 +895,12 @@ func recoveryLoginMode(platform string) string {
 	}
 }
 
-func successfulOutcome(value business.AuthRecoveryOutcome, code, reason, kind string) business.AuthRecoveryOutcome {
+func successfulOutcome(value business.AuthRecoveryOutcome, code, reason, kind, authMethod string) business.AuthRecoveryOutcome {
 	value.Success, value.Code, value.Reason, value.RefreshKind = true, &code, &reason, &kind
+	authMethod = strings.TrimSpace(authMethod)
+	if authMethod != "" {
+		value.AuthMethod = &authMethod
+	}
 	attempt := "鉴权恢复已完成"
 	value.RefreshAttempt = &attempt
 	return value

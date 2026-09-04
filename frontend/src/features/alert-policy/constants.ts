@@ -5,6 +5,8 @@ export const alertRuleFields: Array<{
     | "configuration_enabled"
     | "auth_enabled"
     | "rate_sync_enabled"
+    | "multiplier_increase_enabled"
+    | "multiplier_decrease_enabled"
     | "balance_enabled"
     | "probe_enabled"
     | "routing_breaker_enabled"
@@ -22,6 +24,16 @@ export const alertRuleFields: Array<{
   },
   { name: "auth_enabled", label: "鉴权失效", description: "Token 失效、过期、未鉴权或恢复失败" },
   { name: "rate_sync_enabled", label: "倍率同步失败", description: "最近一次上游倍率同步任务失败" },
+  {
+    name: "multiplier_increase_enabled",
+    label: "倍率上涨通知",
+    description: "仅在账号倍率确认实际上涨后发送一次通知",
+  },
+  {
+    name: "multiplier_decrease_enabled",
+    label: "倍率下降通知",
+    description: "仅在账号倍率确认实际下降后发送一次通知",
+  },
   { name: "balance_enabled", label: "余额不足", description: "余额达到阈值或上游已触发余额硬关闭" },
   {
     name: "probe_enabled",
@@ -60,14 +72,26 @@ export const routingDegradedFields: Array<{
   label: string;
   description: string;
 }> = [
-  { value: "health_score", label: "健康分过低", description: "健康分低于调度策略的降级线" },
+  {
+    value: "health_score",
+    label: "健康分过低",
+    description: "健康分低于调度策略的降级线",
+  },
   {
     value: "gateway_error_rate",
     label: "网关错误率过高",
     description: "近期网关错误达到仅降级阈值",
   },
-  { value: "latency", label: "响应延迟超标", description: "慢响应次数达到仅降级阈值" },
-  { value: "other", label: "其他降级原因", description: "无法归入以上类型的降级判定" },
+  {
+    value: "latency",
+    label: "响应延迟超标",
+    description: "慢响应次数达到仅降级阈值",
+  },
+  {
+    value: "other",
+    label: "其他降级原因",
+    description: "无法归入以上类型的降级判定",
+  },
 ];
 
 export const recoveryNotificationFields: Array<{
@@ -79,14 +103,26 @@ export const recoveryNotificationFields: Array<{
   { value: "auth", label: "鉴权恢复", description: "上游鉴权重新通过" },
   { value: "rate_sync", label: "倍率同步恢复", description: "倍率同步任务重新成功" },
   { value: "balance", label: "余额恢复", description: "余额离开告警区间或解除硬关闭" },
-  { value: "probe", label: "主动探测恢复", description: "连续探测重新通过，频繁波动时建议关闭" },
-  { value: "routing_breaker", label: "账号熔断恢复", description: "账号重新满足回池条件" },
+  {
+    value: "probe",
+    label: "主动探测恢复",
+    description: "连续探测重新通过，频繁波动时建议关闭",
+  },
+  {
+    value: "routing_breaker",
+    label: "账号熔断恢复",
+    description: "账号重新满足回池条件",
+  },
   {
     value: "routing_degraded",
     label: "账号降级恢复",
     description: "账号退出降级状态，频繁调权时建议关闭",
   },
-  { value: "routing_survivor", label: "保底强留恢复", description: "账号不再需要保底强留" },
+  {
+    value: "routing_survivor",
+    label: "保底强留恢复",
+    description: "账号不再需要保底强留",
+  },
   { value: "group_unavailable", label: "分组可用性恢复", description: "分组重新出现可调度账号" },
   { value: "group_survivor", label: "分组保底恢复", description: "分组不再仅依赖保底账号" },
   { value: "apply_failure", label: "自动执行恢复", description: "后续远端写入和复核重新成功" },

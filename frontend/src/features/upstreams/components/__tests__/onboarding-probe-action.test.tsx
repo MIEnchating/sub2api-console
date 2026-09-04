@@ -22,7 +22,7 @@ describe("OnboardingProbeAction", () => {
     expect(markup.match(/<button[^>]*>/)?.[0]).not.toMatch(/\sdisabled(?:=|\s|>)/);
   });
 
-  it("disables probing only when the upstream group has no stable target", () => {
+  it("disables probing when the upstream group has no stable target", () => {
     const markup = renderToStaticMarkup(
       <OnboardingProbeAction
         target={null}
@@ -35,5 +35,21 @@ describe("OnboardingProbeAction", () => {
     expect(markup).toContain("当前不可探活");
     expect(markup).not.toContain("Codex 当前不可探活");
     expect(markup).toContain("disabled");
+  });
+
+  it("disables probing when the upstream group cannot be selected for onboarding", () => {
+    const markup = renderToStaticMarkup(
+      <OnboardingProbeAction
+        target={{ host: "api.example", groupId: "6", name: "Codex" }}
+        groupName="Codex"
+        pending={false}
+        disabled
+        disabledReason="没有与上游平台一致的本地分组"
+        onProbe={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("没有与上游平台一致的本地分组");
+    expect(markup.match(/<button[^>]*>/)?.[0]).toMatch(/\sdisabled(?:=|\s|>)/);
   });
 });

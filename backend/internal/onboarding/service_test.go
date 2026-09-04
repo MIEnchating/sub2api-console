@@ -19,6 +19,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/naming"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
@@ -29,6 +30,7 @@ type checkingKeys struct {
 	createCalls  int
 	revealCalls  int
 	verification []bool
+	createNames  []string
 }
 
 type uncertainKeys struct {
@@ -206,21 +208,23 @@ func (keys *uncertainProbeKeys) DeleteKey(ctx context.Context, _ configstore.Aut
 	return nil
 }
 
-func (keys *checkingKeys) CreateKeyWithVerification(_ context.Context, _ configstore.AuthRecord, _, _ string, verification bool) (upstreamsync.CreatedKey, error) {
+func (keys *checkingKeys) CreateKeyWithVerification(_ context.Context, _ configstore.AuthRecord, name, groupID string, verification bool) (upstreamsync.CreatedKey, error) {
 	keys.createCalls++
 	keys.verification = append(keys.verification, verification)
+	keys.createNames = append(keys.createNames, name)
 	if err := keys.checkNoTransaction(); err != nil {
 		return upstreamsync.CreatedKey{}, err
 	}
-	return upstreamsync.CreatedKey{KeyID: "91", Name: "pro-key", GroupID: "6", Secret: "never-store-this"}, nil
+	return upstreamsync.CreatedKey{KeyID: "91", Name: name, GroupID: groupID, Secret: "never-store-this"}, nil
 }
 
-func (keys *checkingKeys) CreateKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
+func (keys *checkingKeys) CreateKey(_ context.Context, _ configstore.AuthRecord, name, groupID string) (upstreamsync.CreatedKey, error) {
 	keys.createCalls++
+	keys.createNames = append(keys.createNames, name)
 	if err := keys.checkNoTransaction(); err != nil {
 		return upstreamsync.CreatedKey{}, err
 	}
-	return upstreamsync.CreatedKey{KeyID: "91", Name: "pro-key", GroupID: "6", Secret: "never-store-this"}, nil
+	return upstreamsync.CreatedKey{KeyID: "91", Name: name, GroupID: groupID, Secret: "never-store-this"}, nil
 }
 
 func (keys *checkingKeys) RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
@@ -688,6 +692,57 @@ func TestValidateAllowsBindingOpenAIUpstreamGroupToCompositeLocalGroup(t *testin
 	}
 }
 
+func TestValidateAllowsExplicitConcretePlatformForCompositeUpstreamGroup(t *testing.T) {
+	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`UPDATE upstream_groups SET name='混合模型',platform='composite' WHERE group_id='6';
+		UPDATE local_groups SET name='国产-平价',platform='composite' WHERE remote_id='3'`); err != nil {
+		t.Fatal(err)
+	}
+	requestedPlatform := "openai"
+	validated, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
+		context.Background(),
+		Request{
+			Host: "upstream.test", UpstreamType: "sub2api", PlatformPresent: true, Platform: &requestedPlatform,
+			LocalGroupIDs: []string{"3"}, UpstreamGroupID: "6", Actor: "operator",
+		},
+	)
+	if err != nil {
+		t.Fatalf("explicit platform should allow composite upstream: %v", err)
+	}
+	platform, err := accountPlatform(validated.request, validated.candidate, validated.locals)
+	if err != nil || platform != "openai" {
+		t.Fatalf("platform=%q err=%v", platform, err)
+	}
+}
+
+func TestValidateRejectsCompositeUpstreamWithoutConcretePlatform(t *testing.T) {
+	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`UPDATE upstream_groups SET name='混合模型',platform='composite' WHERE group_id='6';
+		UPDATE local_groups SET name='国产-平价',platform='composite' WHERE remote_id='3'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
+		context.Background(),
+		Request{
+			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"3"},
+			UpstreamGroupID: "6", Actor: "operator",
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "无法确定具体账号协议") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
 	composite := "composite"
 	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"} {
@@ -707,6 +762,125 @@ func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
 				t.Fatalf("composite binding rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestAccountPlatformDerivesOpenCodeFromCompositeCatalogGroup(t *testing.T) {
+	composite := "composite"
+	resolved, err := accountPlatform(
+		Request{},
+		business.OnboardingCandidate{GroupName: "OPENCODE", Platform: &composite},
+		[]business.LocalOnboardingGroup{{Name: "国产-平价", Platform: &composite}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != "opencode" {
+		t.Fatalf("resolved platform = %q, want opencode", resolved)
+	}
+}
+
+func TestOnboardResumesLegacyCompositeIntentWithConcretePlatformAndExistingKey(t *testing.T) {
+	var previewCalls, accountPosts int
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case isModelPreviewRequest(request):
+			previewCalls++
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if body["platform"] != "opencode" {
+				t.Errorf("preview platform = %#v, want opencode", body["platform"])
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			writeModelPreviewResponse(writer)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			accountPosts++
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Error(err)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			body["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": body})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE upstream_groups SET name='OPENCODE',platform='composite' WHERE group_id='6';
+		UPDATE local_groups SET name='国产-平价',platform='composite' WHERE remote_id='3'`); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := &checkingKeys{databasePath: databasePath}
+	service := New(repository, private, keys, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	validated, err := service.validate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := private.AccountDefaults(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	priority, concurrency := accountCreationParameters(defaults, request)
+	target, err := private.TargetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier)
+	legacyHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, "composite", "apikey", priority, concurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyName := "legacy-composite-key"
+	if err := repository.SavePendingOnboarding(context.Background(), business.PendingOnboarding{
+		OperationID: "legacy-composite-operation", UpstreamHost: validated.auth.Host, UpstreamType: request.UpstreamType,
+		UpstreamKeyID: "91", UpstreamKeyName: &keyName, UpstreamGroupID: validated.candidateID(), UpstreamGroupName: validated.candidate.GroupName,
+		LocalGroupID: validated.locals[0].ID, LocalGroupName: validated.locals[0].Name, LocalGroupIDs: onboardingLocalIDs(validated.locals),
+		Multiplier: validated.multiplier, IntentHash: legacyHash, Reason: "开户模型同步失败：Unsupported platform for upstream model sync: composite",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Onboard(context.Background(), request)
+	if err != nil {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result["account_id"] != "77" || previewCalls != 1 || accountPosts != 1 || keys.createCalls != 0 || keys.revealCalls != 1 {
+		t.Fatalf("result=%#v preview=%d posts=%d create=%d reveal=%d", result, previewCalls, accountPosts, keys.createCalls, keys.revealCalls)
+	}
+	database, err = sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var pending int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM onboarding_pending`).Scan(&pending); err != nil || pending != 0 {
+		t.Fatalf("pending=%d err=%v", pending, err)
 	}
 }
 
@@ -961,6 +1135,12 @@ func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 	if strings.Join(models, ",") != "gpt-5.1-codex,gpt-5.2" {
 		t.Fatalf("models=%v", models)
 	}
+	if _, err := service.ProbeModels(context.Background(), "HTTPS://UPSTREAM.TEST/", "6"); err != nil {
+		t.Fatal(err)
+	}
+	if keys.creates != 1 || keys.deletes != 0 {
+		t.Fatalf("reloaded models recreated temporary key: creates=%d deletes=%d", keys.creates, keys.deletes)
+	}
 	result, err := service.Probe(context.Background(), "upstream.test", "6", "gpt-5.2")
 	if err != nil {
 		t.Fatal(err)
@@ -968,7 +1148,7 @@ func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 	if result.Status != "passed" || result.HTTPStatus != http.StatusOK || result.RequestModel != "gpt-5.2" || result.ActualModel != "gpt-5.2" || !result.TemporaryKey {
 		t.Fatalf("result=%#v", result)
 	}
-	if keys.creates != 2 || keys.deletes != 2 {
+	if keys.creates != 1 || keys.deletes != 1 {
 		t.Fatalf("creates=%d deletes=%d", keys.creates, keys.deletes)
 	}
 	database, err := sql.Open("sqlite", "file:"+databasePath)
@@ -1004,15 +1184,17 @@ func TestProbeHoldsCanonicalUpstreamLeaseUntilTemporaryKeyCleanupFinishes(t *tes
 	keys := &blockingProbeKeys{
 		probeKeys: &probeKeys{}, deleteStarted: make(chan struct{}), allowDelete: make(chan struct{}),
 	}
+	service := New(repository, private, keys, nil)
 	probeDone := make(chan error, 1)
 	go func() {
-		_, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "HTTPS://UPSTREAM.TEST/", "6")
+		_, err := service.ProbeModels(context.Background(), "HTTPS://UPSTREAM.TEST/", "6")
 		probeDone <- err
 	}()
 	<-requestStarted
+	waiterContext, cancelWaiter := context.WithCancel(context.Background())
 	secondAcquired := make(chan func() error, 1)
 	go func() {
-		_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.UpstreamKeyCatalog("upstream.test"))
+		_, release, err := mutationguard.Acquire(waiterContext, repository, mutationguard.UpstreamKeyCatalog("upstream.test"))
 		if err != nil {
 			secondAcquired <- func() error { return err }
 			return
@@ -1024,15 +1206,38 @@ func TestProbeHoldsCanonicalUpstreamLeaseUntilTemporaryKeyCleanupFinishes(t *tes
 		t.Fatal("canonical upstream lease was released while the probe request was active")
 	case <-time.After(50 * time.Millisecond):
 	}
+	cancelWaiter()
+	if release := <-secondAcquired; !errors.Is(release(), context.Canceled) {
+		t.Fatal("cancelled lease waiter did not return context cancellation")
+	}
 	close(allowResponse)
+	if err := <-probeDone; err != nil {
+		t.Fatal(err)
+	}
+	if keys.creates != 1 || keys.deletes != 0 {
+		t.Fatalf("models phase creates=%d deletes=%d", keys.creates, keys.deletes)
+	}
+	cancelDone := make(chan error, 1)
+	go func() {
+		cancelDone <- service.CancelProbe(context.Background(), "https://upstream.test/", "6")
+	}()
 	<-keys.deleteStarted
+	secondAcquired = make(chan func() error, 1)
+	go func() {
+		_, release, err := mutationguard.Acquire(context.Background(), repository, mutationguard.UpstreamKeyCatalog("upstream.test"))
+		if err != nil {
+			secondAcquired <- func() error { return err }
+			return
+		}
+		secondAcquired <- release
+	}()
 	select {
 	case <-secondAcquired:
 		t.Fatal("canonical upstream lease was released before temporary Key cleanup finished")
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(keys.allowDelete)
-	if err := <-probeDone; err != nil {
+	if err := <-cancelDone; err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -1043,6 +1248,30 @@ func TestProbeHoldsCanonicalUpstreamLeaseUntilTemporaryKeyCleanupFinishes(t *tes
 	case <-time.After(2 * time.Second):
 		t.Fatal("waiting upstream mutation did not resume after probe cleanup")
 	}
+}
+
+func TestTemporaryProbeSessionExpiresAndCleansKey(t *testing.T) {
+	keys := &blockingProbeKeys{
+		probeKeys: &probeKeys{}, deleteStarted: make(chan struct{}), allowDelete: make(chan struct{}),
+	}
+	service := New(nil, nil, keys, nil)
+	credential := probeCredential{
+		auth: configstore.AuthRecord{Host: "upstream.test"},
+		key:  upstreamsync.CreatedKey{KeyID: "temporary-key"}, temporary: true,
+		expiresAt: time.Now().Add(20 * time.Millisecond),
+	}
+	if !service.saveProbeSessionUnlessCanceled("upstream.test", "6", credential) {
+		t.Fatal("temporary probe session was not saved")
+	}
+	select {
+	case <-keys.deleteStarted:
+	case <-time.After(time.Second):
+		t.Fatal("expired temporary probe key was not cleaned")
+	}
+	if _, found := service.probeSession("upstream.test", "6"); found {
+		t.Fatal("expired temporary probe session remains available")
+	}
+	close(keys.allowDelete)
 }
 
 func TestProbeRequestCancellationStillCleansTemporaryKey(t *testing.T) {
@@ -1133,12 +1362,16 @@ func TestProbeIgnoresTemporaryKeyLeftInLocalCatalog(t *testing.T) {
 	_ = database.Close()
 
 	keys := &probeKeys{}
-	models, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "upstream.test", "6")
+	service := New(repository, private, keys, nil)
+	models, err := service.ProbeModels(context.Background(), "upstream.test", "6")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 0 || keys.creates != 1 || keys.deletes != 1 {
+	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 0 || keys.creates != 1 || keys.deletes != 0 {
 		t.Fatalf("models=%v reveals=%d creates=%d deletes=%d", models, keys.reveals, keys.creates, keys.deletes)
+	}
+	if err := service.CancelProbe(context.Background(), "upstream.test", "6"); err != nil || keys.deletes != 1 {
+		t.Fatalf("cancel err=%v deletes=%d", err, keys.deletes)
 	}
 }
 
@@ -1172,12 +1405,16 @@ func TestProbeReplacesExistingKeyConfirmedMissingUpstream(t *testing.T) {
 	_ = database.Close()
 
 	keys := &probeKeys{revealErr: upstreamsync.ErrKeyNotFound}
-	models, err := New(repository, private, keys, nil).ProbeModels(context.Background(), "upstream.test", "6")
+	service := New(repository, private, keys, nil)
+	models, err := service.ProbeModels(context.Background(), "upstream.test", "6")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 1 || keys.creates != 1 || keys.deletes != 1 {
+	if strings.Join(models, ",") != "gpt-5.2" || keys.reveals != 1 || keys.creates != 1 || keys.deletes != 0 {
 		t.Fatalf("models=%v reveals=%d creates=%d deletes=%d", models, keys.reveals, keys.creates, keys.deletes)
+	}
+	if err := service.CancelProbe(context.Background(), "upstream.test", "6"); err != nil || keys.deletes != 1 {
+		t.Fatalf("cancel err=%v deletes=%d", err, keys.deletes)
 	}
 }
 
@@ -1542,6 +1779,100 @@ func TestOnboardPersistsUnknownKeyIntentAndNeverBlindlyCreatesAgain(t *testing.T
 	result, err := service.Onboard(context.Background(), request)
 	if err != nil || result["account_id"] != "77" || keys.creates != 1 || keys.reconciles != 2 {
 		t.Fatalf("result=%#v err=%v creates=%d reconciles=%d", result, err, keys.creates, keys.reconciles)
+	}
+}
+
+func TestOnboardingKeyMarkerUsesNeutralName(t *testing.T) {
+	marker := onboardingKeyMarker("account-onboarding-0123456789abcdef")
+	if marker != "console-0123456789abcdef" {
+		t.Fatalf("marker=%q", marker)
+	}
+	if strings.Contains(marker, "account") || strings.Contains(marker, "onboarding") {
+		t.Fatalf("marker still contains prohibited legacy wording: %q", marker)
+	}
+}
+
+func TestPendingKeyMarkerRotatesExplicitlyUncommittedLegacyName(t *testing.T) {
+	legacy := "account-onboarding-0123456789abcdef"
+	pending := &business.PendingOnboarding{OperationID: legacy, UpstreamKeyName: &legacy}
+	marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(pending.OperationID))
+	if marker != "console-0123456789abcdef" || !rotated {
+		t.Fatalf("marker=%q rotated=%t", marker, rotated)
+	}
+}
+
+func TestPendingKeyMarkerPreservesUncertainLegacyNameForReconciliation(t *testing.T) {
+	legacy := "account-onboarding-0123456789abcdef"
+	pending := &business.PendingOnboarding{
+		OperationID: legacy, UpstreamKeyName: &legacy, KeyCommitUnknown: true,
+	}
+	marker, rotated := pendingKeyMarker(pending, onboardingKeyMarker(pending.OperationID))
+	if marker != legacy || rotated {
+		t.Fatalf("marker=%q rotated=%t", marker, rotated)
+	}
+}
+
+func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithNeutralName(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+		_, _ = writer.Write([]byte(`{"message":"model service unavailable"}`))
+	}))
+	defer admin.Close()
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	service := New(repository, private, &checkingKeys{databasePath: databasePath}, nil)
+	request := Request{
+		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+	}
+	validated, err := service.validate(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults, err := private.AccountDefaults(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	priority, concurrency := accountCreationParameters(defaults, request)
+	target, err := private.TargetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountName := naming.AccountName(validated.candidate.UpstreamName, validated.accountBaseURL, validated.multiplier)
+	intentHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, "openai", "apikey", priority, concurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := "account-onboarding-0123456789abcdef"
+	if err := repository.SavePendingOnboarding(context.Background(), business.PendingOnboarding{
+		OperationID: legacy, UpstreamHost: validated.auth.Host, UpstreamType: request.UpstreamType,
+		UpstreamKeyName: &legacy, UpstreamGroupID: validated.candidateID(), UpstreamGroupName: validated.candidate.GroupName,
+		LocalGroupID: validated.locals[0].ID, LocalGroupName: validated.locals[0].Name, LocalGroupIDs: onboardingLocalIDs(validated.locals),
+		Multiplier: validated.multiplier, IntentHash: intentHash,
+		Reason:    "上游请求失败（HTTP 400，/api/v1/keys）：PROHIBITED_CONTENT",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := &checkingKeys{databasePath: databasePath}
+	service = New(repository, private, keys, nil)
+	if _, err := service.Onboard(context.Background(), request); err == nil {
+		t.Fatal("model preview failure should keep onboarding pending")
+	}
+	if keys.createCalls != 1 || len(keys.createNames) != 1 || keys.createNames[0] != "console-0123456789abcdef" {
+		t.Fatalf("createCalls=%d names=%v", keys.createCalls, keys.createNames)
+	}
+	database, err := sql.Open("sqlite", "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var keyID, keyName string
+	if err := database.QueryRow(`SELECT upstream_key_id,upstream_key_name FROM onboarding_pending WHERE operation_id=?`, legacy).Scan(&keyID, &keyName); err != nil {
+		t.Fatal(err)
+	}
+	if keyID != "91" || keyName != "console-0123456789abcdef" {
+		t.Fatalf("keyID=%q keyName=%q", keyID, keyName)
 	}
 }
 

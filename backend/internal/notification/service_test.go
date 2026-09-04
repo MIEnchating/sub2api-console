@@ -171,7 +171,7 @@ func TestZeroRepeatIntervalDoesNotResendPersistentIncidents(t *testing.T) {
 	}
 }
 
-func TestStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
+func TestRoutingDegradedStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
 	path := createAlertDatabase(t)
 	channelKey := business.NotificationChannelKey("qqbot", "target")
 	database, err := sql.Open("sqlite", "file:"+path)
@@ -179,7 +179,8 @@ func TestStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := database.Exec(`UPDATE alert_incidents SET status='recovered' WHERE incident_key='incident-1';
+	if _, err := database.Exec(`UPDATE alert_incidents SET event_type='account.routing_degraded',status='firing'
+		WHERE incident_key='incident-1';
 		INSERT INTO alert_deliveries(incident_key,channel_key,status,attempts,delivered_at,updated_at)
 		VALUES('incident-1',?,'transition',1,?,?)`, channelKey, now, now); err != nil {
 		database.Close()
@@ -210,7 +211,7 @@ func TestStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "状态变化冷却中" {
+	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "账号降级变化冷却中" {
 		t.Fatalf("cooldown queue state is missing: %#v", details.ConsumerItems)
 	}
 
@@ -245,6 +246,47 @@ func TestStateChangeCooldownDelaysFlappingNotification(t *testing.T) {
 	}
 	if ready.Sent != 1 || len(sender.messages) != 2 {
 		t.Fatalf("changed incident was not sent after cooldown: result=%#v messages=%#v", ready, sender.messages)
+	}
+}
+
+func TestBalanceRecoveryBypassesStateChangeCooldown(t *testing.T) {
+	path := createAlertDatabase(t)
+	channelKey := business.NotificationChannelKey("qqbot", "target")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := database.Exec(`DELETE FROM alert_incidents WHERE incident_key='incident-1';
+		UPDATE alert_incidents SET status='recovered' WHERE incident_key='incident-2';
+		INSERT INTO alert_deliveries(incident_key,channel_key,status,attempts,delivered_at,updated_at)
+		VALUES('incident-2',?,'transition',1,?,?)`, channelKey, now, now); err != nil {
+		database.Close()
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	settings := &staticSettings{value: configstore.NotificationSettings{
+		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+	}}
+	sender := &concurrentWriteSender{path: path}
+	service := New(repository, settings, sender)
+
+	result, err := service.Deliver(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Sent != 1 || result.Skipped != 0 || len(sender.messages) != 1 {
+		t.Fatalf("balance recovery was delayed by state change cooldown: result=%#v messages=%#v", result, sender.messages)
+	}
+	if !strings.Contains(sender.messages[0], "上游余额已恢复") {
+		t.Fatalf("unexpected balance recovery message: %s", sender.messages[0])
 	}
 }
 
@@ -356,7 +398,7 @@ func TestRoutingDegradedDeliveriesShareChannelDigestCooldown(t *testing.T) {
 		}
 	}
 	if delayed == nil || delayed.QueueStatus != "降级告警汇总冷却中" ||
-		!strings.Contains(delayed.QueueReason, "统一汇总发送") {
+		!strings.Contains(delayed.QueueReason, "合并通知") {
 		t.Fatalf("digest cooldown is not visible in queue details: %#v", details.ConsumerItems)
 	}
 
@@ -441,7 +483,7 @@ func TestConcurrentAlertDeliveriesSendPersistentIncidentOnlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "本轮不发送" ||
-		details.ConsumerItems[0].QueueReason != "持续告警已通知，策略设置为只发送一次" {
+		details.ConsumerItems[0].QueueReason != "已发送过一次，当前策略不重复提醒" {
 		t.Fatalf("sent incidents do not explain why this round is skipped: %#v", details.ConsumerItems)
 	}
 }
@@ -526,7 +568,7 @@ func TestNotificationQueueDetailsExplainSuppressedDeliveries(t *testing.T) {
 		t.Fatalf("suppressed deliveries were counted as pending: %#v", details)
 	}
 	for _, item := range details.ConsumerItems {
-		if item.QueueStatus != "已抑制" || item.QueueReason != "告警通知发送已关闭" {
+		if item.QueueStatus != "已抑制" || item.QueueReason != "告警通知开关已关闭" {
 			t.Fatalf("suppression reason is missing: %#v", item)
 		}
 	}
@@ -577,7 +619,7 @@ func TestNotificationBatchesMergeSmallRoutingDegradationDigest(t *testing.T) {
 		t.Fatalf("small degradation wave was split into separate notifications: %#v", batches)
 	}
 	if !strings.Contains(batches[0].Message, "3 个账号") ||
-		strings.Count(batches[0].Message, "账号进入降级状态") != 1 {
+		strings.Count(batches[0].Message, "账号已降级调度") != 1 {
 		t.Fatalf("small degradation wave was not rendered as one digest: %s", batches[0].Message)
 	}
 	for _, expected := range []string{"延迟超标达到阈值，仅降级（2 个账号）", "健康分低于降级线 75（1 个账号）"} {
@@ -611,7 +653,13 @@ func TestNotificationBatchesMergeRelatedSurvivorAlertAndRecoveryBelowThreshold(t
 			t.Fatalf("status=%s related survivor incidents were not merged: %#v", status, batches)
 		}
 		message := batches[0].Message
-		for _, expected := range []string{"分组仅剩保底账号", "A-CCMAX\\(特价渠道\\)", "关联账号", "鲨鱼辣椒-0.8", "\\#323", "凭据失效"} {
+		expectedCause := "凭据失效"
+		expectedGroup := "分组只剩保底账号"
+		if status == "recovered" {
+			expectedCause = "分组已恢复正常"
+			expectedGroup = "分组已恢复正常"
+		}
+		for _, expected := range []string{expectedGroup, "A-CCMAX\\(特价渠道\\)", "关联账号", "鲨鱼辣椒-0.8", "\\#323", expectedCause} {
 			if !strings.Contains(message, expected) {
 				t.Fatalf("status=%s merged notification missing %q: %s", status, expected, message)
 			}
@@ -649,7 +697,7 @@ func TestNotificationBatchesMergeAllBreakerAccountsIntoUnavailableGroup(t *testi
 	if len(batches) != 1 || len(batches[0].Incidents) != 3 {
 		t.Fatalf("group outage and breaker accounts were not merged: %#v", batches)
 	}
-	for _, expected := range []string{"分组无可调度账号", "账号一", "凭据失效", "账号二", "余额不足"} {
+	for _, expected := range []string{"分组没有可用账号", "账号一", "凭据失效", "账号二", "余额不足"} {
 		if !strings.Contains(batches[0].Message, expected) {
 			t.Fatalf("merged group outage missing %q: %s", expected, batches[0].Message)
 		}
@@ -675,7 +723,7 @@ func TestNotificationBatchesMergeBindingInvalidAccountIntoUnavailableGroup(t *te
 	if len(batches) != 1 || len(batches[0].Incidents) != 2 {
 		t.Fatalf("binding invalid account was not merged with group outage: %#v", batches)
 	}
-	for _, expected := range []string{"分组无可调度账号", "账号一", "Key key-1 已确认删除"} {
+	for _, expected := range []string{"分组没有可用账号", "账号一", "Key key-1 已确认删除"} {
 		if !strings.Contains(batches[0].Message, expected) {
 			t.Fatalf("merged binding notification missing %q: %s", expected, batches[0].Message)
 		}
@@ -732,7 +780,7 @@ func TestNotificationBatchesCollapseRelatedRowsInsideLargeSummary(t *testing.T) 
 		t.Fatalf("large related summary lost delivery incidents: %#v", batches)
 	}
 	message := batches[0].Message
-	if !strings.Contains(message, "告警汇总（9项）") || strings.Count(message, "分组仅剩保底账号") != 1 || strings.Contains(message, "账号被保底强留") {
+	if !strings.Contains(message, "告警汇总（9项）") || strings.Count(message, "分组只剩保底账号") != 1 || strings.Contains(message, "账号被临时保留") {
 		t.Fatalf("large summary did not collapse its related rows: %s", message)
 	}
 	if strings.Contains(message, "保底强留：保底强留") {
@@ -764,10 +812,10 @@ func TestNotificationBatchesCollapseMassRoutingDegradationIntoOneDigest(t *testi
 	if !strings.Contains(message, "24 个账号") || !strings.Contains(message, "4 个分组") {
 		t.Fatalf("mass degradation digest is missing its scope: %s", message)
 	}
-	if strings.Count(message, "账号进入降级状态") != 1 {
+	if strings.Count(message, "账号已降级调度") != 1 {
 		t.Fatalf("mass degradation was not collapsed into one row: %s", message)
 	}
-	if !strings.Contains(message, "账号主动探测失败") {
+	if !strings.Contains(message, "账号连接探测失败") {
 		t.Fatalf("non-degradation alert was lost from the digest: %s", message)
 	}
 }
@@ -864,7 +912,7 @@ func TestRecoveryNotificationUsesResolvedBalanceWording(t *testing.T) {
 	}})
 	for _, expected := range []string{
 		"## Sub2API · 恢复通知",
-		"| 告警类型 | 上游余额恢复 |",
+		"| 告警类型 | 上游余额已恢复 |",
 		"| 原因 | 余额已高于告警阈值 10 |",
 		"| 状态 | 已恢复 |",
 	} {
@@ -885,8 +933,8 @@ func TestSingleNotificationUsesVerticalDetailsTable(t *testing.T) {
 		CauseCode: "AUTH:令牌已过期", Status: "firing", LastSeenAt: "2026-08-26T08:00:00Z",
 	}})
 	for _, expected := range []string{
-		"## Sub2API · 告警通知", "| 项目 | 内容 |", "| 告警类型 | 上游鉴权失效 |",
-		"| 告警对象 | 上游：api.example |", "| 原因 | 鉴权已失效：令牌已过期 |",
+		"## Sub2API · 告警通知", "| 项目 | 内容 |", "| 告警类型 | 上游鉴权失败 |",
+		"| 告警对象 | 上游：api.example |", "| 原因 | 上游鉴权失败：令牌已过期 |",
 		"| 状态 | 告警中 |", "| 时间（北京时间） | 2026-08-26 16:00:00 |",
 	} {
 		if !strings.Contains(message, expected) {
@@ -920,6 +968,24 @@ func TestNotificationMessageDistinguishesProbeGroups(t *testing.T) {
 	}
 }
 
+func TestNotificationMessageShowsProbeRetryCount(t *testing.T) {
+	name := "mdkj-0.08"
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "console:probe:99:codex-特价", EventType: "account.probe", ObjectKind: "account",
+		ObjectID: "99", ObjectName: &name,
+		CauseCode: `PROBE:已重试 3 次；API returned 503: {"error":{"message":"Service temporarily unavailable"}}`,
+		Status:    "firing", LastSeenAt: "2026-09-04T12:52:00Z",
+	}})
+	for _, expected := range []string{
+		`| 告警对象 | 账号：mdkj-0.08（\#99） · 分组：codex-特价 |`,
+		`| 原因 | 连续连接探测失败：已重试 3 次；API returned 503: \{"error":\{"message":"Service temporarily unavailable"\}\} |`,
+	} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("probe retry notification missing %q: %s", expected, message)
+		}
+	}
+}
+
 func TestNotificationMessageShowsRateSyncFailureReason(t *testing.T) {
 	message := BatchMessage([]business.AlertIncident{{
 		IncidentKey: "rate", EventType: "upstream.rate_sync", ObjectKind: "host", ObjectID: "api.example",
@@ -927,6 +993,70 @@ func TestNotificationMessageShowsRateSyncFailureReason(t *testing.T) {
 	}})
 	if !strings.Contains(message, "上游分组 auto 倍率不是有限数值") {
 		t.Fatalf("rate-sync reason is missing: %s", message)
+	}
+	if strings.Contains(message, "原因 | 上游倍率同步失败：") {
+		t.Fatalf("rate-sync reason repeats the alert type: %s", message)
+	}
+}
+
+func TestNotificationMessageShowsMultiplierChangeDirectionAndValues(t *testing.T) {
+	name := "倍率账号"
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "multiplier-up", EventType: "account.multiplier_increased", ObjectKind: "account",
+		ObjectID: "41", ObjectName: &name, CauseCode: "MULTIPLIER_INCREASED:0.1 -> 0.2",
+		Status: "firing", LastSeenAt: "2026-09-04T08:00:00Z",
+	}})
+	for _, expected := range []string{"账号倍率上涨", "倍率账号", "倍率从 0.1 上涨至 0.2"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("multiplier-change notification missing %q: %s", expected, message)
+		}
+	}
+}
+
+func TestNotificationMessageCompactsRepeatedRateSyncHTTPFailures(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "rate", EventType: "upstream.rate_sync", ObjectKind: "host", ObjectID: "api.example",
+		CauseCode: "RATE_SYNC:倍率同步失败：分组目录读取失败：上游请求失败（HTTP 502，/api/v1/admin/groups）；余额读取失败：上游请求失败（HTTP 502，/api/user/self）",
+		Status:    "firing", LastSeenAt: "2026-09-03T20:43:30Z",
+	}})
+	if !strings.Contains(message, "| 原因 | 上游返回 HTTP 502，分组目录和余额读取失败 |") {
+		t.Fatalf("rate-sync HTTP failures were not compacted: %s", message)
+	}
+	for _, noisy := range []string{"/api/v1/admin/groups", "/api/user/self", "上游请求失败"} {
+		if strings.Contains(message, noisy) {
+			t.Fatalf("rate-sync notification leaked noisy detail %q: %s", noisy, message)
+		}
+	}
+}
+
+func TestNotificationMessageCompactsRepeatedRateSyncNetworkFailures(t *testing.T) {
+	message := BatchMessage([]business.AlertIncident{{
+		IncidentKey: "rate", EventType: "upstream.rate_sync", ObjectKind: "host", ObjectID: "api.eblan.top",
+		CauseCode: "RATE_SYNC:倍率同步失败：分组目录读取失败：上游网络请求失败：*url.Error；余额读取失败：上游网络请求失败：*url.Error",
+		Status:    "firing", LastSeenAt: "2026-09-04T04:09:48Z",
+	}})
+	if !strings.Contains(message, "| 原因 | 上游网络请求失败，分组目录和余额读取失败 |") {
+		t.Fatalf("rate-sync network failures were not compacted: %s", message)
+	}
+	if strings.Contains(message, "url.Error") {
+		t.Fatalf("rate-sync notification leaked an internal Go error type: %s", message)
+	}
+}
+
+func TestCompactRateSyncReasonKeepsUsefulFailureScope(t *testing.T) {
+	tests := []struct {
+		name, reason, expected string
+	}{
+		{"single read", "余额读取失败：上游请求失败（HTTP 504，/api/user/self）", "上游返回 HTTP 504，余额读取失败"},
+		{"different statuses", "分组目录读取失败：上游请求失败（HTTP 502，/groups）；余额读取失败：上游请求失败（HTTP 503，/balance）", "分组目录（HTTP 502）、余额（HTTP 503）读取失败"},
+		{"business detail", "上游分组 auto 倍率不是有限数值", "上游分组 auto 倍率不是有限数值"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if actual := compactRateSyncReason(test.reason); actual != test.expected {
+				t.Fatalf("compactRateSyncReason()=%q want=%q", actual, test.expected)
+			}
+		})
 	}
 }
 
@@ -944,7 +1074,7 @@ func TestNotificationMessageExplainsRoutingDecisionAndApplyFailure(t *testing.T)
 			CauseCode: "APPLY_FAILED:network timeout", Status: "firing", LastSeenAt: "2026-08-26T08:00:01Z",
 		},
 	})
-	for _, expected := range []string{"账号触发熔断判定", "分组：codex", "连续网关错误", "自动执行失败", "network timeout"} {
+	for _, expected := range []string{"账号已停止调度", "分组：codex", "连续网关错误", "自动处理失败", "network timeout"} {
 		if !strings.Contains(message, expected) {
 			t.Fatalf("routing notification missing %q: %s", expected, message)
 		}
@@ -1029,7 +1159,7 @@ func TestRecoveryNotificationTypesSuppressNoisyRecoveries(t *testing.T) {
 	if result.Attempted != 1 || result.Sent != 1 || result.Suppressed != 1 || len(sender.messages) != 1 {
 		t.Fatalf("recovery type filter result=%#v messages=%#v", result, sender.messages)
 	}
-	if !strings.Contains(sender.messages[0], "上游鉴权失效") || strings.Contains(sender.messages[0], "主动探测") {
+	if !strings.Contains(sender.messages[0], "上游鉴权已恢复") || strings.Contains(sender.messages[0], "连接探测") {
 		t.Fatalf("unexpected recovery message: %s", sender.messages[0])
 	}
 }

@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	TrafficRankingSortTraffic     = "traffic"
-	TrafficRankingSortStability   = "stability"
-	TrafficRankingSortSuccessRate = "success_rate"
-	TrafficRankingSortLatency     = "latency"
+	TrafficRankingSortTraffic        = "traffic"
+	TrafficRankingSortStability      = "stability"
+	TrafficRankingSortSuccessRate    = "success_rate"
+	TrafficRankingSortLatency        = "latency"
+	trafficRankingLatencySampleLimit = 10000
 )
 
 type TrafficRankingQuery struct {
@@ -224,7 +225,9 @@ func (s *Store) accumulateTrafficRanking(
 		if latency != nil {
 			value, parseErr := strconv.ParseFloat(strings.TrimSpace(*latency), 64)
 			if parseErr == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 {
-				account.latencies = append(account.latencies, value)
+				if len(account.latencies) < trafficRankingLatencySampleLimit {
+					account.latencies = append(account.latencies, value)
+				}
 			}
 		}
 		bucketAt := observedAt.UTC().Truncate(bucketDuration)

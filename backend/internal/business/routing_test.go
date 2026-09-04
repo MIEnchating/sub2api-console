@@ -42,11 +42,37 @@ func TestRoutingSamplesLimitsCombinedSourcesPerAccount(t *testing.T) {
 	for _, row := range rows {
 		counts[row.AccountID]++
 	}
-	if counts["41"] != 60 || counts["42"] != 8 || len(rows) != 68 {
-		t.Fatalf("combined scoring window must be capped per account: counts=%v total=%d", counts, len(rows))
+	if counts["41"] != 63 || counts["42"] != 8 || len(rows) != 71 {
+		t.Fatalf("independent source windows were not preserved per account: counts=%v total=%d", counts, len(rows))
 	}
 	if rows[0].AccountID != "41" || rows[0].Source != "active-probe" {
 		t.Fatalf("latest mixed-source sample must be first: %#v", rows[0])
+	}
+}
+
+func TestRoutingSamplesPreservesIndependentTrafficAndProbeWindows(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	for index := range 4 {
+		for _, source := range []string{"traffic", "active-probe"} {
+			if _, err := store.db.ExecContext(ctx, `INSERT INTO health_samples(
+				account_id,group_name,result,observed_at,source,evidence_key,payload_json
+			) VALUES('41','codex','通过',?,?,?,'{}')`, base.Add(time.Duration(index)*time.Second).Format(time.RFC3339Nano), source, fmt.Sprintf("%s:%d", source, index)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	rows, err := store.RoutingSamples(ctx, nil, nil, "traffic", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, row := range rows {
+		counts[row.Source]++
+	}
+	if counts["traffic"] != 3 || counts["active-probe"] != 3 {
+		t.Fatalf("one source displaced the other source window: %#v", counts)
 	}
 }
 

@@ -9,7 +9,7 @@ import {
 } from "../system-log-search-panel";
 
 describe("SystemLogSearchPanel", () => {
-  it("shows the same searchable fields as the Sub2API system log page", () => {
+  it("shows only request_id as a searchable field", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { enabled: false, retry: false } },
     });
@@ -19,13 +19,21 @@ describe("SystemLogSearchPanel", () => {
       </QueryClientProvider>,
     );
 
+    expect(markup).toContain("request_id");
+    expect(markup).toContain("输入完整 request_id");
+    expect(markup).toContain('data-slot="table-filter-toolbar"');
+    expect(markup).toContain("flex min-w-0 items-center gap-3");
+    expect(markup).toContain("shrink-0 whitespace-nowrap");
+    expect(markup).toContain("min-w-0 flex-1");
+    expect(markup).toContain("min-w-0 basis-72 flex-1");
+    expect(markup).not.toContain("查询 Sub2API 系统日志");
+    expect(markup).not.toContain("快速定位对应的请求日志和执行结果");
     for (const label of [
       "时间范围",
       "开始时间（可选）",
       "结束时间（可选）",
       "级别",
       "Host",
-      "request_id",
       "client_request_id",
       "KEY ID",
       "account_id",
@@ -33,16 +41,24 @@ describe("SystemLogSearchPanel", () => {
       "模型",
       "关键词",
     ]) {
-      expect(markup).toContain(label);
+      expect(markup).not.toContain(label);
     }
-    expect(markup).toContain("查询 Sub2API 系统日志");
-    expect(markup).toContain('type="datetime-local"');
-    expect(markup).toContain('aria-label="时间范围筛选"');
-    expect(markup).toContain('aria-label="级别筛选"');
-    expect(markup).not.toContain('data-slot="select-trigger"');
-    expect(markup).not.toContain("全部级别");
-    expect(markup).not.toContain("组件");
-    expect(markup).not.toContain("user_id");
+  });
+
+  it("fills the remaining area with a placeholder before the first search", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false, retry: false } },
+    });
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <SystemLogSearchPanel />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('data-slot="request-trace-placeholder"');
+    expect(markup).toContain("min-h-0 flex-1");
+    expect(markup).toContain("items-center justify-center");
+    expect(markup).toContain("输入 request_id 开始查询");
   });
 
   it("turns the compact HTTP log message into readable request fields", () => {
@@ -101,18 +117,7 @@ describe("SystemLogSearchPanel", () => {
 
   it("creates a new execution when the same search is submitted again", () => {
     const query = {
-      timeRange: "1h" as const,
-      startTime: "",
-      endTime: "",
-      host: "",
-      level: "",
       requestId: "req-1",
-      clientRequestId: "",
-      apiKeyId: "",
-      accountId: "",
-      platform: "",
-      model: "",
-      keyword: "",
       page: 1,
       pageSize: 20,
     };

@@ -2,7 +2,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { GroupPolicyOverrideUpdate } from "../../../../api";
-import { GroupPolicyEditorFields, groupPolicyDialogLayout } from "../group-policy-editor-fields";
+import {
+  GroupPolicyEditorFields,
+  groupPolicyDialogLayout,
+  groupProbeModelOptions,
+} from "../group-policy-editor-fields";
 
 const value: GroupPolicyOverrideUpdate = {
   enabled: true,
@@ -26,6 +30,53 @@ function section(markup: string, start: string, end?: string): string {
 }
 
 describe("分组策略编辑布局", () => {
+  it("自动获取模型后去重排序并保留当前分组模型", () => {
+    expect(
+      groupProbeModelOptions(["gpt-5.2", "gpt-5.1-codex", "gpt-5.2", ""], "custom-probe-model"),
+    ).toEqual(["custom-probe-model", "gpt-5.1-codex", "gpt-5.2"]);
+
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields
+        value={value}
+        onChange={() => undefined}
+        onReloadProbeModels={() => undefined}
+        probeModels={{
+          group_id: "6",
+          group_name: "codex",
+          models: ["gpt-5.1-codex", "gpt-5.2"],
+          account_count: 2,
+          accounts_with_models: 2,
+          complete: true,
+        }}
+      />,
+    );
+    const probe = section(markup, 'data-testid="group-policy-probe-settings"');
+
+    expect(probe).toContain('aria-label="选择测试模型"');
+    expect(probe).toContain("重新获取组内模型");
+    expect(probe).toContain('type="button"');
+    expect(probe).not.toContain('disabled=""');
+    expect(probe).not.toContain("已自动获取");
+    expect(probe).not.toContain("覆盖 2 / 2 个账号");
+  });
+
+  it("初次自动获取模型时显示加载骨架而不展示模型输入框", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields
+        value={value}
+        onChange={() => undefined}
+        probeModelsLoading
+        onReloadProbeModels={() => undefined}
+      />,
+    );
+    const probe = section(markup, 'data-testid="group-policy-probe-settings"');
+
+    expect(probe).toContain('aria-label="正在自动获取组内模型"');
+    expect(probe).toContain("animate-pulse");
+    expect(probe).toContain("正在获取");
+    expect(probe).not.toContain('value="claude-sonnet-4-6"');
+  });
+
   it("调度策略使用四个等尺寸选项且选中态不改变尺寸", () => {
     const markup = renderToStaticMarkup(
       <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
@@ -66,6 +117,7 @@ describe("分组策略编辑布局", () => {
     expect(capabilities).toContain("健康回池");
     expect(capabilities).toContain("负载因子调权");
     expect(capabilities).toContain("智能扩容");
+    expect(capabilities).toContain("连续失败达到条件后触发熔断");
     expect(capabilities).not.toContain("定时测试");
     expect(probe).toContain("定时测试");
     expect(probe).toContain("测试间隔（秒）");
@@ -78,7 +130,27 @@ describe("分组策略编辑布局", () => {
     );
 
     expect(markup).toContain("min-w-0");
+    expect(markup).toContain('aria-label="组内总权重预算说明"');
+    expect(markup).not.toContain("由同组参与调度的账号按策略共享");
     expect(groupPolicyDialogLayout.body).toContain("overflow-x-hidden");
+  });
+
+  it("数字策略字段清空后保持空白", () => {
+    const markup = renderToStaticMarkup(
+      <GroupPolicyEditorFields
+        value={{
+          ...value,
+          min_pool_size: null,
+          weight_budget: null,
+          balanced_price_ratio: null,
+          probe_interval_seconds: null,
+        }}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('value=""');
+    expect(markup).not.toContain('value="0"');
   });
 
   it("弹窗正文独立纵向滚动并保留固定页脚", () => {

@@ -26,7 +26,8 @@ describe("global focus policy", () => {
       const source = readFileSync(path, "utf8");
       const relativePath = relative(sourceRoot, path);
       const allowsDropdownSearchFocus = relativePath === "components/ui/dropdown-search-focus.ts";
-      if (allowsDropdownSearchFocus) return [];
+      const allowsKeyboardNavigationFocus = relativePath === "components/ui/segmented-control.tsx";
+      if (allowsDropdownSearchFocus || allowsKeyboardNavigationFocus) return [];
       return source.includes(nativeFocusAttribute) ||
         programmaticFocusCall.test(source) ||
         enabledInitialFocus.test(source)

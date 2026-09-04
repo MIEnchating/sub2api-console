@@ -15,7 +15,7 @@ func TestNormalizePlatformAliasesMatchOnboardingCatalogNames(t *testing.T) {
 }
 
 func TestAccountPlatformCanJoinCompositeGroup(t *testing.T) {
-	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"}
+	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek", "opencode"}
 	for _, platform := range platforms {
 		if !AccountPlatformCanJoinGroup(platform, platform) {
 			t.Fatalf("%s account should join its own platform group", platform)

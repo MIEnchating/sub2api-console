@@ -35,7 +35,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
   }));
 
   return (
-    <div className="border-t px-3 py-2.5 sm:px-4 sm:py-3">
+    <div className="shrink-0 border-t px-3 py-2.5 sm:px-4 sm:py-3">
       <div
         className={cn("@container/pagination flex min-w-0 items-center justify-end overflow-clip")}
       >

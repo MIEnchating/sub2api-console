@@ -12,9 +12,22 @@ const platformLabels: Record<string, string> = {
   kimi: "Kimi",
   zhipu: "Zhipu GLM",
   deepseek: "DeepSeek",
+  opencode: "OpenCode",
   composite: "Composite",
   claude: "Claude",
 };
+
+export const concreteAccountPlatformOptions = [
+  { value: "anthropic", label: "Anthropic" },
+  { value: "openai", label: "OpenAI" },
+  { value: "gemini", label: "Gemini" },
+  { value: "antigravity", label: "Antigravity" },
+  { value: "grok", label: "Grok" },
+  { value: "kimi", label: "Kimi" },
+  { value: "zhipu", label: "Zhipu GLM" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "opencode", label: "OpenCode" },
+] as const;
 
 function mappedLabel(
   value: string | null | undefined,
@@ -25,7 +38,7 @@ function mappedLabel(
   return labels[normalized.toLowerCase()] ?? normalized;
 }
 
-function accountPlatformLabel(value: string | null | undefined): string | null {
+export function accountPlatformLabel(value: string | null | undefined): string | null {
   return mappedLabel(value, platformLabels);
 }
 

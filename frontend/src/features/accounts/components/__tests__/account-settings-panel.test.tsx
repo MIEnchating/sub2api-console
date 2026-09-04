@@ -6,6 +6,7 @@ import type { AccountDetail, Task } from "@/api";
 import { accountDetailDialogLayout } from "../account-detail-dialog";
 import {
   AccountSettingsPanel,
+  accountTestModelOptions,
   accountSettingControlActions,
   waitForAccountSettingTasks,
 } from "../account-settings-panel";
@@ -71,6 +72,12 @@ function renderPanel() {
 }
 
 describe("账号设置面板", () => {
+  it("获取模型后去重排序并保留当前探测模型供选择", () => {
+    expect(
+      accountTestModelOptions(["gpt-5.2", "gpt-5.1-codex", "gpt-5.2", ""], "custom-probe-model"),
+    ).toEqual(["custom-probe-model", "gpt-5.1-codex", "gpt-5.2"]);
+  });
+
   it("matches channel settings and omits group editing and multiplier breaker fields", () => {
     const markup = renderPanel();
 
@@ -78,7 +85,7 @@ describe("账号设置面板", () => {
       "优先级",
       "负载因子",
       "并发上限",
-      "倍率",
+      "账号成本",
       "暂停调度",
       "排除该账号",
       "探测模型",
@@ -90,7 +97,9 @@ describe("账号设置面板", () => {
     expect(markup).not.toContain("账号名称");
     expect(markup).not.toContain("备注");
     expect(markup).toContain('aria-readonly="true"');
-    expect(markup).toContain("请使用“同步倍率”更新");
+    expect(markup).toContain('aria-label="优先级说明"');
+    expect(markup).toContain('aria-label="账号成本说明"');
+    expect(markup).not.toContain("请使用“同步倍率”更新");
     expect(markup).not.toContain("上游 Host");
     expect(markup).not.toContain("账号 Base URL");
   });

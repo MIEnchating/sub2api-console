@@ -16,6 +16,7 @@ import {
   composeOnboardingBaseUrl,
   localGroupSelectionLabel,
   localGroupMultiplierLabel,
+  normalizeOnboardingBaseUrlInput,
   normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryKind,
@@ -40,18 +41,25 @@ describe("onboarding entry workflow", () => {
     expect(compatibleOnboardingLocalGroups(candidate, groups)).toEqual([groups[1]]);
   });
 
-  it.each(["anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"])(
-    "offers Composite as a target for %s accounts",
-    (platform) => {
-      const groups = [
-        { id: "10", name: "同平台", platform },
-        { id: "11", name: "Composite", platform: "composite" },
-        { id: "12", name: "其他平台", platform: platform === "openai" ? "anthropic" : "openai" },
-      ];
+  it.each([
+    "anthropic",
+    "openai",
+    "gemini",
+    "antigravity",
+    "grok",
+    "kimi",
+    "zhipu",
+    "deepseek",
+    "opencode",
+  ])("offers Composite as a target for %s accounts", (platform) => {
+    const groups = [
+      { id: "10", name: "同平台", platform },
+      { id: "11", name: "Composite", platform: "composite" },
+      { id: "12", name: "其他平台", platform: platform === "openai" ? "anthropic" : "openai" },
+    ];
 
-      expect(compatibleOnboardingLocalGroups({ platform }, groups)).toEqual(groups.slice(0, 2));
-    },
-  );
+    expect(compatibleOnboardingLocalGroups({ platform }, groups)).toEqual(groups.slice(0, 2));
+  });
 
   it("offers typed local groups when the upstream catalog omits its platform", () => {
     const groups = [
@@ -119,6 +127,32 @@ describe("onboarding entry workflow", () => {
       baseUrlProtocol: "http",
       baseUrl: "10.0.0.8:8080/api",
     });
+  });
+
+  it.each([
+    ["https://ai.example.test/", "http", "https", "ai.example.test/"],
+    ["HTTP://10.0.0.8:8080/api", "https", "http", "10.0.0.8:8080/api"],
+  ] as const)(
+    "detects the protocol in %s and removes it from the address field",
+    (input, selectedProtocol, expectedProtocol, expectedAddress) => {
+      expect(normalizeOnboardingBaseUrlInput(input, selectedProtocol)).toEqual({
+        baseUrlProtocol: expectedProtocol,
+        baseUrl: expectedAddress,
+      });
+    },
+  );
+
+  it("keeps the selected protocol when the typed address has no protocol", () => {
+    expect(normalizeOnboardingBaseUrlInput("ai.example.test/path", "http")).toEqual({
+      baseUrlProtocol: "http",
+      baseUrl: "ai.example.test/path",
+    });
+  });
+
+  it("composes a pasted complete address without duplicating its protocol", () => {
+    const fields = normalizeOnboardingBaseUrlInput("https://ai.example.test/", "https");
+
+    expect(composeOnboardingBaseUrl(fields)).toBe("https://ai.example.test/");
   });
 
   it("skips upstream setup when entering from a Host row", () => {

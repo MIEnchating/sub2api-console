@@ -21,19 +21,21 @@ type ProbeCandidate struct {
 }
 
 type ProbeSample struct {
-	AccountID     string
-	GroupName     string
-	Result        string
-	LatencyP50    *string
-	LatencyP95    *string
-	LatencyP99    *string
-	SampleCount   int
-	Attempts      int
-	FailureReason *string
-	ObservedAt    string
-	StatusCode    *int
-	RequestModel  string
-	ActualModel   string
+	AccountID          string
+	GroupName          string
+	Result             string
+	LatencyP50         *string
+	LatencyP95         *string
+	LatencyP99         *string
+	SampleCount        int
+	Attempts           int
+	FailureReason      *string
+	ObservedAt         string
+	StatusCode         *int
+	RequestModel       string
+	ActualModel        string
+	AttemptStatusCodes []int
+	RetryRecovered     bool
 }
 
 func (s *Store) ControlPolicy(ctx context.Context) (map[string]any, error) {
@@ -106,10 +108,15 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		if _, err := time.Parse(time.RFC3339Nano, sample.ObservedAt); err != nil {
 			return 0, errors.New("探测样本时间无效")
 		}
-		payload, err := json.Marshal(map[string]any{
+		payloadValue := map[string]any{
 			"status_code": sample.StatusCode, "request_model": sample.RequestModel, "actual_model": sample.ActualModel,
 			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
-		})
+		}
+		if sample.Attempts > 1 || len(sample.AttemptStatusCodes) > 1 {
+			payloadValue["attempt_status_codes"] = sample.AttemptStatusCodes
+			payloadValue["retry_recovered"] = sample.RetryRecovered
+		}
+		payload, err := json.Marshal(payloadValue)
 		if err != nil {
 			return 0, fmt.Errorf("探测样本无法序列化：%w", err)
 		}

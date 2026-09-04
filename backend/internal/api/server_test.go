@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -49,6 +50,7 @@ type fakeBusiness struct {
 	accountDetail        *business.AccountDetail
 	groupRows            []business.GroupStatus
 	groupAllocation      business.GroupAllocation
+	groupProbeModels     business.GroupProbeModels
 	policySnapshot       business.PolicySnapshot
 	policyUpdates        *[]map[string]any
 	policyActors         *[]string
@@ -69,6 +71,7 @@ type fakeBusiness struct {
 
 type fakePricingService struct {
 	snapshot        pricing.Snapshot
+	changes         []business.PricingChangeRecord
 	updated         pricing.Config
 	revenue         pricing.RevenueRequest
 	enqueued        int
@@ -79,6 +82,10 @@ type fakePricingService struct {
 
 func (service *fakePricingService) Snapshot(context.Context) (pricing.Snapshot, error) {
 	return service.snapshot, nil
+}
+
+func (service *fakePricingService) Changes(context.Context) ([]business.PricingChangeRecord, error) {
+	return service.changes, nil
 }
 
 func (service *fakePricingService) UpdateConfig(_ context.Context, config pricing.Config, _ string) (pricing.Snapshot, error) {
@@ -218,6 +225,9 @@ func (f fakeBusiness) Groups(context.Context) ([]business.GroupStatus, error) {
 }
 func (f fakeBusiness) GroupAllocation(context.Context, string) (business.GroupAllocation, error) {
 	return f.groupAllocation, nil
+}
+func (f fakeBusiness) GroupProbeModels(context.Context, string) (business.GroupProbeModels, error) {
+	return f.groupProbeModels, nil
 }
 func (f fakeBusiness) ControlPolicy(context.Context) (map[string]any, error) {
 	if f.policySnapshot.AdvancedPolicy == nil {
@@ -595,8 +605,10 @@ type fakeAuthRecovery struct {
 	captchaCompletion authrecovery.CaptchaCompletion
 	manualCalls       *[]authrecovery.ManualInput
 	runCalls          *[]upstreamSyncCall
+	agreementCalls    *[]bool
 	captchaSubmits    *[]upstreamSyncCall
 	captchaCancels    *[]string
+	batchCalls        *[][]string
 }
 
 func (f fakeAuthRecovery) VerifyManual(_ context.Context, input authrecovery.ManualInput, actor string) (authrecovery.ManualResult, error) {
@@ -605,9 +617,18 @@ func (f fakeAuthRecovery) VerifyManual(_ context.Context, input authrecovery.Man
 	}
 	return f.manual, nil
 }
-func (f fakeAuthRecovery) Enqueue(_ context.Context, host, entry, actor string) (taskstore.Task, error) {
+func (f fakeAuthRecovery) Enqueue(_ context.Context, host, entry string, acceptLoginAgreement bool, actor string) (taskstore.Task, error) {
 	if f.runCalls != nil {
 		*f.runCalls = append(*f.runCalls, upstreamSyncCall{host: host, actor: actor, operation: entry})
+	}
+	if f.agreementCalls != nil {
+		*f.agreementCalls = append(*f.agreementCalls, acceptLoginAgreement)
+	}
+	return f.task, nil
+}
+func (f fakeAuthRecovery) EnqueueBatch(_ context.Context, hosts []string, actor string) (taskstore.Task, error) {
+	if f.batchCalls != nil {
+		*f.batchCalls = append(*f.batchCalls, append([]string{}, hosts...))
 	}
 	return f.task, nil
 }
@@ -799,6 +820,10 @@ func (f fakeOnboarding) ProbeModels(context.Context, string, string) ([]string, 
 
 func (f fakeOnboarding) Probe(context.Context, string, string, string) (onboarding.ProbeResult, error) {
 	return f.probe, f.err
+}
+
+func (f fakeOnboarding) CancelProbe(context.Context, string, string) error {
+	return f.err
 }
 
 func (f fakeOnboarding) PreviewUnboundKeys(context.Context, string) (onboarding.KeyCleanupPreview, error) {
@@ -1713,12 +1738,15 @@ func TestAuthRecoveryRoutesUseTypedManualCredentialsAndSelectedVaultEntry(t *tes
 	}
 	manualCalls := []authrecovery.ManualInput{}
 	runCalls := []upstreamSyncCall{}
+	agreementCalls := []bool{}
+	batchCalls := [][]string{}
 	captchaSubmits := []upstreamSyncCall{}
 	captchaCancels := []string{}
 	balance := authrecovery.BalanceResult{Status: "succeeded", BalanceStatus: "已读取"}
 	service := fakeAuthRecovery{
 		manual: authrecovery.ManualResult{Host: "api.example", Verified: true, BalanceSync: &balance},
-		task:   task, manualCalls: &manualCalls, runCalls: &runCalls, captchaSubmits: &captchaSubmits, captchaCancels: &captchaCancels,
+		task:   task, manualCalls: &manualCalls, runCalls: &runCalls, agreementCalls: &agreementCalls, batchCalls: &batchCalls,
+		captchaSubmits: &captchaSubmits, captchaCancels: &captchaCancels,
 		captchaCompletion: authrecovery.CaptchaCompletion{CaptchaResult: authrecovery.CaptchaResult{
 			Success: true, Host: "api.example", ProfileStatus: "verified", Stored: true, InteractionKind: "image_captcha_ocr",
 		}},
@@ -1730,14 +1758,19 @@ func TestAuthRecoveryRoutesUseTypedManualCredentialsAndSelectedVaultEntry(t *tes
 	}
 	manual := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/manual", map[string]any{
 		"host": "api.example", "auth_mode": "newapi_admin_key", "admin_key": "admin", "user_id": "7",
-		"headers": map[string]any{"X-CF-Access": "signed-header"},
+		"accept_login_agreement": true,
+		"headers":                map[string]any{"X-CF-Access": "signed-header"},
 	})
-	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].AdminKey == nil || *manualCalls[0].AdminKey != "admin" || !manualCalls[0].Present["admin_key"] || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
+	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].AdminKey == nil || *manualCalls[0].AdminKey != "admin" || !manualCalls[0].AcceptLoginAgreement || !manualCalls[0].Present["admin_key"] || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
 		t.Fatalf("manual=%d %s calls=%#v", manual.Code, manual.Body.String(), manualCalls)
 	}
-	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry": "Selected"})
-	if run.Code != http.StatusOK || len(runCalls) != 1 || runCalls[0].host != "api.example" || runCalls[0].operation != "Selected" {
+	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry": "Selected", "accept_login_agreement": true})
+	if run.Code != http.StatusOK || len(runCalls) != 1 || runCalls[0].host != "api.example" || runCalls[0].operation != "Selected" || len(agreementCalls) != 1 || !agreementCalls[0] {
 		t.Fatalf("run=%d %s calls=%#v", run.Code, run.Body.String(), runCalls)
+	}
+	batch := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run-batch", map[string]any{"hosts": []string{"ONE.EXAMPLE", "two.example"}})
+	if batch.Code != http.StatusOK || len(batchCalls) != 1 || !slices.Equal(batchCalls[0], []string{"one.example", "two.example"}) {
+		t.Fatalf("batch=%d %s calls=%#v", batch.Code, batch.Body.String(), batchCalls)
 	}
 	submit := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/captcha/submit", map[string]any{"challenge_id": "challenge-1", "captcha_code": "AB12"})
 	if submit.Code != http.StatusOK || len(captchaSubmits) != 1 || captchaSubmits[0].host != "challenge-1" || captchaSubmits[0].operation != "AB12" {
@@ -2097,6 +2130,10 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 			GroupID: "1", GroupName: "codex", AccountCount: 1, AssignedConcurrency: 32,
 			Channels: []business.GroupAllocationChannel{{AccountID: "41", AccountName: "alpha"}},
 		},
+		groupProbeModels: business.GroupProbeModels{
+			GroupID: "1", GroupName: "codex", Models: []string{"gpt-5.2"},
+			AccountCount: 1, AccountsWithModels: 1, Complete: true,
+		},
 		upstreamSummary: business.UpstreamSummary{
 			Hosts: []business.UpstreamHost{{
 				Host: "api.example", BaseURL: "https://api.example", Name: "Example",
@@ -2120,6 +2157,11 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 	allocation := authenticatedRequest(t, router, http.MethodGet, "/api/groups/1/allocation", nil)
 	if allocation.Code != http.StatusOK || !strings.Contains(allocation.Body.String(), `"assigned_concurrency":32`) {
 		t.Fatalf("unexpected group allocation response: %d %s", allocation.Code, allocation.Body.String())
+	}
+	models := authenticatedRequest(t, router, http.MethodGet, "/api/groups/1/models", nil)
+	if models.Code != http.StatusOK || !strings.Contains(models.Body.String(), `"models":["gpt-5.2"]`) ||
+		!strings.Contains(models.Body.String(), `"complete":true`) {
+		t.Fatalf("unexpected group model response: %d %s", models.Code, models.Body.String())
 	}
 	upstreams := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams", nil)
 	if upstreams.Code != http.StatusOK || !strings.Contains(upstreams.Body.String(), `"authenticated_hosts":1`) {
@@ -2258,6 +2300,12 @@ func TestOnboardingProbeEndpointsWorkWithoutALocalAccount(t *testing.T) {
 	if probe.Code != http.StatusOK || !strings.Contains(probe.Body.String(), `"status":"passed"`) || !strings.Contains(probe.Body.String(), `"temporary_key":true`) {
 		t.Fatalf("probe=%d %s", probe.Code, probe.Body.String())
 	}
+	cancel := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe/cancel", map[string]any{
+		"host": "api.example", "group_id": "6",
+	})
+	if cancel.Code != http.StatusOK || cancel.Body.String() != `{"cancelled":true}` {
+		t.Fatalf("cancel=%d %s", cancel.Code, cancel.Body.String())
+	}
 	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe", map[string]any{
 		"host": "api.example", "group_id": "6", "model": "gpt-5.2", "account_id": "41",
 	})
@@ -2306,7 +2354,13 @@ func TestOnboardingKeyCleanupRequiresPreviewAndStableKeyIDs(t *testing.T) {
 func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 	service := &fakePricingService{snapshot: pricing.Snapshot{Config: pricing.Config{
 		Enabled: false, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}}, IntervalSeconds: 120, WriteConcurrency: 4,
-	}, Accounts: 2, Changes: 1}}
+	}, Accounts: 2, Changes: 1}, changes: []business.PricingChangeRecord{{
+		ID: -1, Actor: "operator", CreatedAt: "2026-09-03T08:00:00Z", Changes: []business.PricingAccountChange{{
+			AccountID: "41", AccountName: "account-41",
+			Before: []business.PricingChangeGroup{{ID: "6", Name: "标准"}},
+			After:  []business.PricingChangeGroup{{ID: "7", Name: "低价"}},
+		}},
+	}}}
 	revenueTask := taskstore.Task{
 		ID: "latest-revenue", Skill: "sub2api-billing-reconciliation", Operation: "revenue-calculation", Status: "succeeded",
 		Progress: 100, Message: "完成", Result: map[string]any{"report_date": "2026-08-29"},
@@ -2319,6 +2373,11 @@ func TestPricingEndpointsExposeConfigSaveAndQueuedApply(t *testing.T) {
 	read := authenticatedRequest(t, router, http.MethodGet, "/api/pricing", nil)
 	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"profit_margin":0.2`) || !strings.Contains(read.Body.String(), `"enabled":false`) {
 		t.Fatalf("read=%d %s", read.Code, read.Body.String())
+	}
+	changes := authenticatedRequest(t, router, http.MethodGet, "/api/pricing/changes", nil)
+	if changes.Code != http.StatusOK || !strings.Contains(changes.Body.String(), `"account_name":"account-41"`) ||
+		!strings.Contains(changes.Body.String(), `"actor":"operator"`) {
+		t.Fatalf("changes=%d %s", changes.Code, changes.Body.String())
 	}
 	saved := authenticatedRequest(t, router, http.MethodPut, "/api/pricing/config", map[string]any{
 		"enabled": true, "profit_margin": 0.25, "exchange_group_sets": []any{[]any{"6", "7"}},
@@ -2963,12 +3022,15 @@ func TestAlertPolicyContracts(t *testing.T) {
 	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式", alertPolicy: policy})
 	read := authenticatedRequest(t, router, http.MethodGet, "/api/alerts/policy", nil)
 	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"balance_thresholds":["20","10","5"]`) ||
+		!strings.Contains(read.Body.String(), `"multiplier_increase_enabled":true`) ||
+		!strings.Contains(read.Body.String(), `"multiplier_decrease_enabled":true`) ||
 		!strings.Contains(read.Body.String(), `"routing_degraded_types":["health_score","gateway_error_rate","latency","other"]`) ||
 		!strings.Contains(read.Body.String(), `"recovery_notification_types":["auth","balance","group_unavailable"]`) {
 		t.Fatalf("unexpected alert policy: %d %s", read.Code, read.Body.String())
 	}
 	payload := map[string]any{
 		"enabled": true, "configuration_enabled": true, "auth_enabled": true, "rate_sync_enabled": true,
+		"multiplier_increase_enabled": true, "multiplier_decrease_enabled": true,
 		"balance_enabled": true, "probe_enabled": true, "balance_thresholds": []any{"20", "10", "5"},
 		"routing_breaker_enabled": true, "routing_degraded_enabled": true,
 		"routing_degraded_types": []any{"health_score", "gateway_error_rate", "latency", "other"}, "routing_survivor_enabled": true,
@@ -2988,7 +3050,7 @@ func TestParseOnboardingBatchRequestsKeepsEachBindingExplicit(t *testing.T) {
 		"items": []any{
 			map[string]any{
 				"host": "https://upstream.test", "upstream_type": "sub2api",
-				"local_group_id": json.Number("3"), "upstream_group_id": "6",
+				"local_group_id": json.Number("3"), "upstream_group_id": "6", "platform": "openai",
 			},
 			map[string]any{
 				"host": "https://upstream.test", "upstream_type": "sub2api",
@@ -2999,7 +3061,8 @@ func TestParseOnboardingBatchRequestsKeepsEachBindingExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(requests) != 2 || requests[0].LocalGroupID != "3" || requests[1].UpstreamGroupID != "7" {
+	if len(requests) != 2 || requests[0].LocalGroupID != "3" || requests[0].Platform == nil ||
+		*requests[0].Platform != "openai" || !requests[0].PlatformPresent || requests[1].UpstreamGroupID != "7" {
 		t.Fatalf("requests=%#v", requests)
 	}
 }

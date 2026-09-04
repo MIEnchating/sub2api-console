@@ -164,6 +164,184 @@ func TestSub2APILoginUsesEmailAndVerifiesReturnedToken(t *testing.T) {
 	}
 }
 
+func TestSub2APILoginRequiresExplicitConsentForLatestLoginAgreement(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{`{"code":"LOGIN_AGREEMENT_REQUIRED","message":"please read and accept the latest login agreement before signing in"}`},
+		statuses:  []int{http.StatusForbidden},
+	}
+	client := New(&http.Client{Transport: transport})
+	username, password := "user@example.com", "secret"
+
+	_, err := client.Login(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+
+	var interaction *InteractionError
+	if !errors.As(err, &interaction) || interaction.Code != "login_agreement_required" {
+		t.Fatalf("agreement response was not classified: %v", err)
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("login retried without explicit consent: %d requests", len(transport.requests))
+	}
+}
+
+func TestSub2APILoginDoesNotRetryUnrelatedForbiddenResponseWithAgreementConsent(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{`{"code":"ACCOUNT_DISABLED","message":"account is disabled"}`},
+		statuses:  []int{http.StatusForbidden},
+	}
+	client := New(&http.Client{Transport: transport})
+	username, password := "user@example.com", "secret"
+
+	_, err := client.LoginWithOptions(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
+		AcceptLoginAgreement: true,
+	})
+
+	var httpError *HTTPError
+	if !errors.As(err, &httpError) || httpError.StatusCode != http.StatusForbidden {
+		t.Fatalf("unrelated forbidden response was reclassified: %v", err)
+	}
+	if len(transport.requests) != 1 {
+		t.Fatalf("unrelated forbidden response triggered agreement retry: %d requests", len(transport.requests))
+	}
+}
+
+func TestSub2APILoginRetriesWithLatestAgreementRevisionAfterExplicitConsent(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{
+			`{"code":"LOGIN_AGREEMENT_REQUIRED","message":"please read and accept the latest login agreement before signing in"}`,
+			`{"code":0,"message":"success","data":{"login_agreement_enabled":true,"login_agreement_revision":"a90464c54fba46d4"}}`,
+			`{"code":0,"data":{"access_token":"new-token","refresh_token":"new-refresh"}}`,
+			`{"code":0,"data":{"id":9}}`,
+		},
+		statuses: []int{http.StatusForbidden, http.StatusOK, http.StatusOK, http.StatusOK},
+	}
+	client := New(&http.Client{Transport: transport})
+	username, password := "user@example.com", "secret"
+
+	record, err := client.LoginWithOptions(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}}, LoginOptions{
+		AcceptLoginAgreement: true,
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AccessToken == nil || *record.AccessToken != "new-token" {
+		t.Fatalf("unexpected login result: %#v", record)
+	}
+	wantPaths := []string{"/api/v1/auth/login", "/api/v1/settings/public", "/api/v1/auth/login", "/api/v1/user/profile"}
+	if len(transport.requests) != len(wantPaths) {
+		t.Fatalf("requests=%d want=%d", len(transport.requests), len(wantPaths))
+	}
+	for index, path := range wantPaths {
+		if transport.requests[index].URL.Path != path {
+			t.Fatalf("request %d path=%q want=%q", index, transport.requests[index].URL.Path, path)
+		}
+	}
+	body, err := io.ReadAll(transport.requests[2].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"email":"user@example.com","login_agreement_revision":"a90464c54fba46d4","password":"secret"}` {
+		t.Fatalf("unexpected agreement login body: %s", body)
+	}
+}
+
+func TestSub2APILoginAcceptsRequiredAdminComplianceBeforeRetryingVerification(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{
+			`{"code":0,"data":{"access_token":"new-token","refresh_token":"new-refresh"}}`,
+			`{"message":"please read"}`,
+			`{"code":0,"data":{"required":true,"version":"v2026.06.10","ack_phrase_zh":"我已阅读并同意当前协议"}}`,
+			`{"code":0,"data":{"required":false,"version":"v2026.06.10"}}`,
+			`{"code":0,"data":{"id":9}}`,
+		},
+		statuses: []int{http.StatusOK, http.StatusForbidden, http.StatusOK, http.StatusOK, http.StatusOK},
+	}
+	client := New(&http.Client{Transport: transport})
+	username, password := "user@example.com", "secret"
+
+	_, err := client.Login(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/auth/login"},
+		{http.MethodGet, "/api/v1/user/profile"},
+		{http.MethodGet, "/api/v1/admin/compliance"},
+		{http.MethodPost, "/api/v1/admin/compliance/accept"},
+		{http.MethodGet, "/api/v1/user/profile"},
+	}
+	if len(transport.requests) != len(want) {
+		t.Fatalf("requests=%d want=%d", len(transport.requests), len(want))
+	}
+	for index, expected := range want {
+		request := transport.requests[index]
+		if request.Method != expected.method || request.URL.Path != expected.path {
+			t.Fatalf("request %d=%s %s", index, request.Method, request.URL.Path)
+		}
+		if index > 0 && request.Header.Get("Authorization") != "Bearer new-token" {
+			t.Fatalf("request %d did not use recovered token: %#v", index, request.Header)
+		}
+	}
+	body, err := io.ReadAll(transport.requests[3].Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"language":"zh","phrase":"我已阅读并同意当前协议"}` {
+		t.Fatalf("unexpected compliance acceptance body: %s", body)
+	}
+}
+
+func TestAdminComplianceRequiredRecognizesCurrentSub2APIContract(t *testing.T) {
+	err := &HTTPError{
+		StatusCode: http.StatusLocked,
+		Detail:     "administrator compliance acknowledgement is required；ADMIN_COMPLIANCE_ACK_REQUIRED",
+	}
+
+	if !adminComplianceRequired(err) {
+		t.Fatal("current Sub2API compliance response was not recognized")
+	}
+}
+
+func TestSub2APILoginDoesNotAcceptComplianceForUnrelatedForbiddenResponse(t *testing.T) {
+	transport := &recordingTransport{
+		responses: []string{
+			`{"code":0,"data":{"access_token":"new-token","refresh_token":"new-refresh"}}`,
+			`{"code":"ACCOUNT_DISABLED","message":"account disabled"}`,
+		},
+		statuses: []int{http.StatusOK, http.StatusForbidden},
+	}
+	client := New(&http.Client{Transport: transport})
+	username, password := "user@example.com", "secret"
+
+	_, err := client.Login(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_manual_login",
+		Headers: map[string]string{}, Cookies: map[string]string{},
+	}, configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}})
+
+	if err == nil || !strings.Contains(err.Error(), "ACCOUNT_DISABLED") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(transport.requests) != 2 {
+		t.Fatalf("unrelated 403 triggered compliance requests: %d", len(transport.requests))
+	}
+}
+
 func TestNewAPILegacyLoginUsesSessionCookieAndUserIDWithoutTokens(t *testing.T) {
 	transport := &recordingTransport{
 		responses: []string{

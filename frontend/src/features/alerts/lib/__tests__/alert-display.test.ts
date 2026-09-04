@@ -6,6 +6,7 @@ import {
   alertDeliveryLabel,
   alertObjectLabel,
   alertStatusLabel,
+  alertSubjectLabel,
   alertTypeLabel,
 } from "../alert-display";
 
@@ -27,11 +28,18 @@ const alert: AlertIncident = {
 
 describe("alert display labels", () => {
   it("translates known alert fields into business language", () => {
+    expect(alertSubjectLabel(alert.event_type)).toBe("账号主动探测");
     expect(alertTypeLabel(alert.event_type)).toBe("账号主动探测失败");
     expect(alertCauseLabel(alert.cause_code)).toBe("连续主动探测失败");
     expect(alertStatusLabel(alert.status)).toBe("告警中");
     expect(alertDeliveryLabel(alert.delivery_status)).toBe("通知发送失败");
     expect(alertDeliveryLabel("已发送", alert.delivery_attempts)).toBe("通知已发送 1 次");
+  });
+
+  it("uses a neutral subject label independent of the current alert state", () => {
+    expect(alertSubjectLabel("account.binding_invalid")).toBe("账号绑定");
+    expect(alertSubjectLabel("upstream.balance")).toBe("上游余额");
+    expect(alertSubjectLabel("custom.event")).toBe("其他告警（custom.event）");
   });
 
   it("resolves an account id to its account name", () => {
@@ -44,14 +52,47 @@ describe("alert display labels", () => {
   });
 
   it("uses resolved wording after a balance alert recovers", () => {
-    expect(alertTypeLabel("upstream.balance", "recovered")).toBe("上游余额恢复");
+    expect(alertTypeLabel("upstream.balance", "recovered")).toBe("上游余额已恢复");
     expect(alertCauseLabel("BALANCE:10", "recovered")).toBe("余额已高于告警阈值 10");
   });
 
   it("renders the concrete rate-sync failure reason", () => {
     expect(alertCauseLabel("RATE_SYNC:上游分组 auto 倍率不是有限数值")).toBe(
-      "上游倍率同步失败：上游分组 auto 倍率不是有限数值",
+      "上游分组 auto 倍率不是有限数值",
     );
+  });
+
+  it("renders multiplier increases and decreases with their exact values", () => {
+    expect(alertTypeLabel("account.multiplier_increased")).toBe("账号倍率上涨");
+    expect(alertSubjectLabel("account.multiplier_decreased")).toBe("账号倍率");
+    expect(alertCauseLabel("MULTIPLIER_INCREASED:0.1 -> 0.2")).toBe("倍率从 0.1 上涨至 0.2");
+    expect(alertCauseLabel("MULTIPLIER_DECREASED:0.2 -> 0.1")).toBe("倍率从 0.2 下降至 0.1");
+  });
+
+  it("compacts repeated rate-sync HTTP failures and hides internal paths", () => {
+    const cause = alertCauseLabel(
+      "RATE_SYNC:倍率同步失败：分组目录读取失败：上游请求失败（HTTP 502，/api/v1/admin/groups）；余额读取失败：上游请求失败（HTTP 502，/api/user/self）",
+    );
+
+    expect(cause).toBe("上游返回 HTTP 502，分组目录和余额读取失败");
+    expect(cause).not.toContain("/api/");
+  });
+
+  it("compacts repeated rate-sync network failures and hides internal error types", () => {
+    const cause = alertCauseLabel(
+      "RATE_SYNC:倍率同步失败：分组目录读取失败：上游网络请求失败：*url.Error；余额读取失败：上游网络请求失败：*url.Error",
+    );
+
+    expect(cause).toBe("上游网络请求失败，分组目录和余额读取失败");
+    expect(cause).not.toContain("url.Error");
+  });
+
+  it("keeps rate-sync failure scope when upstream responses differ", () => {
+    expect(
+      alertCauseLabel(
+        "RATE_SYNC:分组目录读取失败：上游请求失败（HTTP 502，/groups）；余额读取失败：上游请求失败（HTTP 503，/balance）",
+      ),
+    ).toBe("分组目录（HTTP 502）、余额（HTTP 503）读取失败");
   });
 
   it("explains routing decisions and keeps their group context", () => {

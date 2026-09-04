@@ -568,6 +568,9 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 		payload := map[string]any{
 			"request_id": requestID, "status_code": safeScalar(row["status_code"]), "phase": safeScalar(row["phase"]),
 		}
+		if model := firstTrafficModel(row); model != "" {
+			payload["model"] = model
+		}
 		if duration != nil {
 			payload["duration_ms"] = *duration
 			payload["duration_unit"] = "ms"
@@ -595,6 +598,15 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 		})
 	}
 	return result, malformed
+}
+
+func firstTrafficModel(row map[string]any) string {
+	for _, key := range []string{"model", "model_name", "actual_model"} {
+		if value := strings.TrimSpace(textValue(row[key])); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func primaryEvidenceMembership(memberships []business.EvidenceTarget) (business.EvidenceTarget, bool) {

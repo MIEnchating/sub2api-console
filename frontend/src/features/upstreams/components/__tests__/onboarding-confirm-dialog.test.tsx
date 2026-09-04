@@ -12,6 +12,7 @@ describe("OnboardingConfirmContent", () => {
           items={[
             {
               upstreamGroup: "codex-special",
+              platform: "OpenAI",
               multiplier: "0.15",
               localGroup: "codex",
               concurrency: 100,
@@ -29,6 +30,8 @@ describe("OnboardingConfirmContent", () => {
     expect(markup).toContain("确认账号绑定变更");
     expect(markup).toContain("新增项按每个本地分组分别创建账号");
     expect(markup).toContain("codex-special");
+    expect(markup).toContain("账号协议");
+    expect(markup).toContain("OpenAI");
     expect(markup).not.toContain("示例上游");
     expect(markup).not.toContain("账号 Base URL");
     expect(markup).not.toContain("https://account-api.example/v1");

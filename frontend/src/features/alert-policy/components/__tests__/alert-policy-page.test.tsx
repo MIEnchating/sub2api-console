@@ -10,6 +10,8 @@ const policy: AlertPolicy = {
   configuration_enabled: true,
   auth_enabled: true,
   rate_sync_enabled: true,
+  multiplier_increase_enabled: true,
+  multiplier_decrease_enabled: true,
   balance_enabled: true,
   probe_enabled: true,
   routing_breaker_enabled: true,
@@ -65,6 +67,8 @@ describe("AlertPolicyPage", () => {
       "配置异常",
       "鉴权失效",
       "倍率同步失败",
+      "倍率上涨通知",
+      "倍率下降通知",
       "余额不足",
       "主动探测失败",
       "账号熔断判定",
@@ -106,6 +110,18 @@ describe("AlertPolicyPage", () => {
     expect(markup).toContain("重复提醒间隔");
     expect(markup).toContain("状态变化冷却");
     expect(markup).toContain("多少条以上合并发送");
+    for (const label of [
+      "余额告警阈值",
+      "连续主动探测失败次数",
+      "连续主动探测成功次数",
+      "主动探测告警分组",
+      "重复提醒间隔（分钟）",
+      "状态变化冷却（分钟）",
+      "多少条以上合并发送",
+    ]) {
+      expect(markup).toContain(`aria-label="${label}说明"`);
+    }
+    expect(markup).not.toContain("达到次数后才产生主动探测告警。");
     expect(markup).toContain("告警检测");
     expect(markup).toContain("通知发送");
     expect(markup).not.toContain("运行控制");
@@ -165,7 +181,7 @@ describe("AlertPolicyPage", () => {
     );
 
     expect(markup).toContain('data-testid="alert-policy-load-error"');
-    expect(markup).toContain("重试读取");
+    expect(markup).toContain('aria-label="刷新告警策略"');
     expect(markup).not.toContain('data-slot="alert-policy-columns"');
     expect(markup).toMatch(
       /<button(?=[^>]*data-testid="alert-policy-reset")(?=[^>]*disabled="")[^>]*>/,

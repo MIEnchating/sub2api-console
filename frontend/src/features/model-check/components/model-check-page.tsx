@@ -283,7 +283,7 @@ export function ModelCheckPage() {
             modelsError ?? (capabilities.error instanceof Error ? capabilities.error.message : null)
           }
           rounds={rounds}
-          timeoutSeconds={timeoutSeconds}
+          timeoutSeconds={Number.isFinite(timeoutSeconds) ? timeoutSeconds : null}
           combinationCount={combinationCount}
           selectionError={selectionError ?? null}
           disabled={pending}
@@ -324,7 +324,7 @@ export function ModelCheckPage() {
             })
           }
           onTimeoutChange={(value) =>
-            form.setValue("timeout_seconds", Number.isFinite(value) ? value : 45, {
+            form.setValue("timeout_seconds", value ?? Number.NaN, {
               shouldValidate: true,
             })
           }

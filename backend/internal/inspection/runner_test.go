@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,16 +23,23 @@ import (
 )
 
 type runnerRepositoryStub struct {
-	trafficDue   bool
-	upstreamDue  bool
-	pricingDue   bool
-	alertEnabled bool
-	routingDue   bool
-	mode         string
-	controlErr   error
-	markErr      error
-	marked       []string
-	policy       map[string]any
+	trafficDue       bool
+	upstreamDue      bool
+	pricingDue       bool
+	accountRateDue   bool
+	alertEnabled     bool
+	routingDue       bool
+	mode             string
+	controlErr       error
+	markErr          error
+	marked           []string
+	reset            []string
+	policy           map[string]any
+	invalidAuthHosts []string
+}
+
+func (r *runnerRepositoryStub) AuthRecoveryRequiredHosts(context.Context, time.Time) ([]string, error) {
+	return append([]string{}, r.invalidAuthHosts...), nil
 }
 
 type releaseFailRepository struct {
@@ -112,6 +120,31 @@ func TestManualInspectionKeepsTaskResultWhenSchedulerFinalizationFails(t *testin
 	}
 }
 
+func TestFinishTaskTreatsManualPreemptionAsCancellation(t *testing.T) {
+	tasks := openRunnerTaskStore(t)
+	runner := NewRunner(&runnerRepositoryStub{}, nil, nil, nil, nil, nil, nil, tasks)
+	parent, cancel := context.WithCancelCause(context.Background())
+	ctx := mutationguard.WithAutomaticInspection(parent)
+	cancel(mutationguard.ErrAutomaticInspectionPreempted)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "preempted-inspection", Skill: "inspection", Operation: "automatic-inspection", Status: "running",
+		Progress: 60, Message: "running", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+
+	result := runner.finishTask(ctx, task, []string{operationRoutingCalculation}, nil, map[string]any{}, nil, nil)
+	stored, err := tasks.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "cancelled" || result.Error != nil {
+		t.Fatalf("result=%#v", result)
+	}
+	if stored.Status != "cancelled" || stored.Result["cancelled"] != true {
+		t.Fatalf("stored task=%#v", stored)
+	}
+}
+
 func (r *runnerRepositoryStub) Mode(context.Context) (string, error) {
 	if r.mode == "" {
 		return runtimepolicy.Full, nil
@@ -130,12 +163,20 @@ func (r *runnerRepositoryStub) InspectionTaskDue(_ context.Context, name string,
 	if name == "price-management" {
 		return r.pricingDue, nil
 	}
+	if name == "account-rate-sync" {
+		return r.accountRateDue, nil
+	}
 	return r.upstreamDue, nil
 }
 
 func (r *runnerRepositoryStub) MarkInspectionTask(_ context.Context, name string, _ time.Time) error {
 	r.marked = append(r.marked, name)
 	return r.markErr
+}
+
+func (r *runnerRepositoryStub) ResetInspectionTask(_ context.Context, name string, _ time.Time) error {
+	r.reset = append(r.reset, name)
+	return nil
 }
 
 func (r *runnerRepositoryStub) RoutingWritebackPending(context.Context) (bool, error) {
@@ -205,6 +246,18 @@ type accountRateSyncStub struct {
 	done  bool
 }
 
+type accountRateBatchSchedulerStub struct {
+	calls   int
+	size    int
+	percent int
+}
+
+func (s *accountRateBatchSchedulerStub) EnqueueAccountRateSyncBatch(_ context.Context, size, percent int, _ string) (string, error) {
+	s.calls++
+	s.size, s.percent = size, percent
+	return "rate-task", nil
+}
+
 func (s *accountRateSyncStub) SyncAllAccountRates(context.Context, string) (map[string]any, error) {
 	s.calls++
 	s.done = true
@@ -227,11 +280,15 @@ type rateAwareRouterStub struct {
 type priceAllocatorStub struct {
 	calls int
 	done  bool
+	err   error
 }
 
 func (stub *priceAllocatorStub) ApplyNow(context.Context, string) (pricing.Result, error) {
 	stub.calls++
 	stub.done = true
+	if stub.err != nil {
+		return pricing.Result{}, stub.err
+	}
 	return pricing.Result{Requested: 2, Changed: 1, Unchanged: 1, RemoteWrite: true}, nil
 }
 
@@ -431,6 +488,17 @@ func TestInspectionRunsUpstreamSyncAndEvidenceCollectionInParallel(t *testing.T)
 	}
 }
 
+func TestOperationTimingDurationKeepsCapturedCompletionDuration(t *testing.T) {
+	started := time.Date(2026, 9, 3, 7, 0, 0, 0, time.UTC)
+	timing := operationTimingDuration("evidence_collection", started, 125*time.Millisecond)
+	if timing.DurationSeconds != 0.125 {
+		t.Fatalf("duration=%v", timing.DurationSeconds)
+	}
+	if timing.StartedAt == nil || *timing.StartedAt != started.Format(time.RFC3339Nano) {
+		t.Fatalf("started_at=%#v", timing.StartedAt)
+	}
+}
+
 func TestInspectionDoesNotRepeatExternalWorkWhenDueStateCannotBeSaved(t *testing.T) {
 	repository := &runnerRepositoryStub{
 		trafficDue: true, upstreamDue: true, mode: runtimepolicy.Monitoring,
@@ -550,6 +618,71 @@ func TestUpstreamOnlyInspectionStillRecalculatesAndAppliesRouting(t *testing.T) 
 	}
 }
 
+type authFailureUpstreams struct{}
+
+func (authFailureUpstreams) SyncAllNow(context.Context, upstreamsync.Scope, string) (upstreamsync.BatchResult, error) {
+	reason := "token expired"
+	return upstreamsync.BatchResult{
+		Total: 1, AuthFailed: 1,
+		Hosts: []upstreamsync.HostResult{{Host: "api.example", Status: "auth_failed", Reason: &reason}},
+	}, nil
+}
+
+type inspectionAuthRecoverer struct {
+	hosts []string
+	actor string
+}
+
+func (s *inspectionAuthRecoverer) RecoverInvalid(_ context.Context, hosts []string, actor string) (business.AuthRecoverySummary, error) {
+	s.hosts = append([]string{}, hosts...)
+	s.actor = actor
+	return business.AuthRecoverySummary{Hosts: len(hosts), Recovered: len(hosts)}, nil
+}
+
+func TestAutomaticInspectionRecoversHostsWhoseUpstreamSyncAuthenticationFailed(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
+	recoverer := &inspectionAuthRecoverer{}
+	runner := NewRunner(
+		repository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil,
+		authFailureUpstreams{}, &countingTaskStore{}, recoverer,
+	)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "自动巡检", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(recoverer.hosts, []string{"api.example"}) || recoverer.actor != "自动巡检" {
+		t.Fatalf("hosts=%#v actor=%q", recoverer.hosts, recoverer.actor)
+	}
+	if !slices.Contains(result.Operations, operationAuthRecovery) {
+		t.Fatalf("operations=%#v", result.Operations)
+	}
+}
+
+func TestAutomaticInspectionRecoversPreviouslyInvalidHostsWithoutWaitingForUpstreamSync(t *testing.T) {
+	repository := &runnerRepositoryStub{
+		mode: runtimepolicy.Full, invalidAuthHosts: []string{"stale.example"},
+	}
+	recoverer := &inspectionAuthRecoverer{}
+	runner := NewRunner(
+		repository, nil, &evidencePlannerStub{}, nil, nil, nil, nil, &countingTaskStore{}, recoverer,
+	)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "自动巡检", Automatic: true})
+	if err != nil || result.Skipped {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if !slices.Equal(recoverer.hosts, []string{"stale.example"}) || !slices.Contains(result.Operations, operationAuthRecovery) {
+		t.Fatalf("hosts=%#v operations=%#v", recoverer.hosts, result.Operations)
+	}
+	preview, err := runner.Preview(context.Background(), time.Now().UTC())
+	if err != nil || !slices.ContainsFunc(preview.Operations, func(operation QueueOperation) bool {
+		return operation.Operation == operationAuthRecovery && operation.Due && operation.TargetCount != nil && *operation.TargetCount == 1
+	}) {
+		t.Fatalf("preview=%#v err=%v", preview, err)
+	}
+}
+
 func TestFullInspectionSyncsAccountRatesBeforeRouting(t *testing.T) {
 	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
 	planner := &evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}}
@@ -574,6 +707,17 @@ func TestFullInspectionSyncsAccountRatesBeforeRouting(t *testing.T) {
 		if result.Operations[index] != want[index] {
 			t.Fatalf("operations=%#v want=%#v", result.Operations, want)
 		}
+	}
+}
+
+func TestAutomaticInspectionQueuesBoundedAccountRateSync(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, accountRateDue: true}
+	scheduler := &accountRateBatchSchedulerStub{}
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, nil, nil, nil, nil, &countingTaskStore{}, scheduler)
+	config := business.AutoInspectionConfig{Enabled: true, IntervalSeconds: 15, AccountRateSyncIntervalSeconds: 300, AccountRateSyncBatchSize: 7}
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "auto-inspection", Automatic: true, AutoConfig: &config})
+	if err != nil || result.Status != "succeeded" || scheduler.calls != 1 || scheduler.size != 7 || scheduler.percent != 0 {
+		t.Fatalf("result=%#v calls=%d err=%v", result, scheduler.calls, err)
 	}
 }
 
@@ -634,6 +778,28 @@ func TestEnabledPriceManagementRunsBeforeRoutingAndDefaultRemainsOff(t *testing.
 	want := []string{operationPriceManagement, operationRoutingCalculation, operationRoutingWriteback}
 	if !reflect.DeepEqual(result.Operations, want) {
 		t.Fatalf("operations=%#v want=%#v", result.Operations, want)
+	}
+}
+
+func TestCancelledPriceManagementDoesNotEnterConfiguredCooldown(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, pricingDue: true, policy: map[string]any{
+		"traffic": map[string]any{"enabled": false, "refresh_seconds": int64(60)},
+		"probe":   map[string]any{"enabled": false}, "recovery": map[string]any{"enabled": false},
+		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
+		"price_management": map[string]any{
+			"enabled": true, "profit_margin": 0.2, "exchange_group_sets": []any{[]any{"6", "7"}},
+			"interval_seconds": int64(120), "write_concurrency": int64(4),
+		},
+	}}
+	allocator := &priceAllocatorStub{err: context.Canceled}
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil, nil, &countingTaskStore{}, allocator)
+
+	_, err := runner.Run(context.Background(), RunRequest{Actor: "auto", Automatic: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repository.marked, []string{"price-management"}) || !reflect.DeepEqual(repository.reset, []string{"price-management"}) {
+		t.Fatalf("cancelled pricing cooldown state: marked=%v reset=%v", repository.marked, repository.reset)
 	}
 }
 

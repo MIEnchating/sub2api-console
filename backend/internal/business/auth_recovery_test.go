@@ -82,3 +82,74 @@ func TestAuthRecoveryFailureIgnoresSnapshotOlderThanCurrentUpstreamState(t *test
 		t.Fatalf("stale failure=%v err=%v", failure, err)
 	}
 }
+
+func TestAuthRecoverySuccessProjectsLastSuccessfulMethod(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := "Example"
+	if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "api.example", Name: &name, BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RechargeRate: "1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	method, recoveryMethod := "sub2api_user_token", "refresh_token"
+	if _, err := store.PersistAuthRecoveryOutcomes(ctx, []AuthRecoveryOutcome{{
+		Host: "api.example", Success: true, Attempted: true, AuthMethod: &method, RefreshKind: &recoveryMethod,
+	}}, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	upstreams, err := store.Upstreams(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(upstreams.Hosts) != 1 || upstreams.Hosts[0].LastAuthSuccessMethod == nil || *upstreams.Hosts[0].LastAuthSuccessMethod != method || upstreams.Hosts[0].LastAuthRecoveryMethod == nil || *upstreams.Hosts[0].LastAuthRecoveryMethod != recoveryMethod || upstreams.Hosts[0].LastAuthSuccessAt == nil {
+		t.Fatalf("upstreams=%#v", upstreams.Hosts)
+	}
+}
+
+func TestAuthRecoveryRequiredHostsAppliesRetryBackoff(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, host := range []string{"fresh.example", "retried.example"} {
+		name := host
+		if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+			Host: host, Name: &name, BaseURL: "https://" + host, UpstreamType: "sub2api",
+			AuthMode: "sub2api_user_token", RechargeRate: "1",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE upstreams SET auth_status=? WHERE host=?`, UpstreamAuthStatusInvalid, host); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reason := "refresh failed"
+	if _, err := store.PersistAuthRecoveryOutcomes(ctx, []AuthRecoveryOutcome{{
+		Host: "retried.example", Attempted: true, Reason: &reason,
+	}}, "自动巡检"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	hosts, err := store.AuthRecoveryRequiredHosts(ctx, now.Add(-5*time.Minute))
+	if err != nil || len(hosts) != 1 || hosts[0] != "fresh.example" {
+		t.Fatalf("hosts=%#v err=%v", hosts, err)
+	}
+	hosts, err = store.AuthRecoveryRequiredHosts(ctx, now.Add(time.Minute))
+	if err != nil || len(hosts) != 2 {
+		t.Fatalf("hosts after backoff=%#v err=%v", hosts, err)
+	}
+}

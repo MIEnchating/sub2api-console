@@ -38,6 +38,7 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 			"weights": map[string]any{
 				"enabled": false, "budget": int64(777), "gate_floor": 41.5,
 				"price_exp": 1.7, "speed_exp": 2.3, "balanced_price_ratio": 0.35,
+				"performance_min_samples": int64(9), "speed_advantage_cap": 3.5,
 				"min_load_factor": int64(2), "max_load_factor": int64(97),
 			},
 			"scope": map[string]any{
@@ -61,7 +62,8 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 			},
 			"breaker": map[string]any{
 				"enabled": false, "hard_fatal": false, "http_window": int64(7), "http_failures": int64(4),
-				"http_score_below": 61.5, "latency_window": int64(12), "latency_occurrences": int64(6),
+				"transient_consecutive_failures": int64(3),
+				"http_score_below":               61.5, "latency_window": int64(12), "latency_occurrences": int64(6),
 				"latency_ttfb_ms": int64(16000), "max_switch_per_round": int64(2),
 				"min_pool_size": int64(2), "min_pool_score": 4.5, "fused_cooldown_seconds": int64(181),
 				"instant_status_codes": []any{int64(401), int64(403)}, "http_degrade_only": false, "latency_degrade_only": false,
@@ -85,8 +87,9 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 				"only_auth_errors": false, "trigger_status_codes": []any{int64(401), int64(403)},
 			},
 			"classify": map[string]any{
-				"fatal_patterns":       []any{"invalid contract key"},
-				"gateway_status_codes": []any{int64(429), int64(502)},
+				"fatal_patterns":            []any{"invalid contract key"},
+				"gateway_status_codes":      []any{int64(429), int64(502)},
+				"client_error_status_codes": []any{int64(400), int64(403), int64(422)},
 			},
 		},
 	}, "contract-test")
@@ -110,13 +113,19 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 	if health.HealthScore != 99.5 || health.ShortScore != 99.5 || health.LongScore != 99.5 {
 		t.Fatalf("event score did not reach scoring execution: %#v", health)
 	}
+	status403 := 403
+	classified, err := ClassifySample(Sample{Result: "失败", Source: "traffic", StatusCode: &status403}, document)
+	if err != nil || !classified.Neutral || classified.Event != EventClientError {
+		t.Fatalf("client error policy did not reach scoring execution: classified=%#v err=%v", classified, err)
+	}
 }
 
 func assertEngineContract(t *testing.T, config engineConfig) {
 	t.Helper()
 	if config.strategy != "speed_first" || config.trafficEnabled ||
+		config.trafficMaxAge != 131*time.Minute || config.probeMaxAge != 933*time.Second ||
 		config.shortWindow != 11 || config.longWindow != 67 || config.breakerEnabled || config.hardFatal ||
-		config.httpWindow != 7 || config.httpFailures != 4 || config.httpScoreBelow != 61.5 ||
+		config.httpWindow != 7 || config.httpFailures != 4 || config.transientFailures != 3 || config.httpScoreBelow != 61.5 ||
 		config.latencyWindow != 12 || config.latencyOccurrences != 6 || config.latencyTTFBMS != 16000 ||
 		config.maxSwitch != 2 || config.minPool != 2 || config.minPoolScore != 4.5 ||
 		config.fusedCooldown != 181*time.Second || config.httpDegradeOnly || config.latencyDegradeOnly ||
@@ -124,7 +133,8 @@ func assertEngineContract(t *testing.T, config engineConfig) {
 		config.degradeLoadRatio != 0.45 || config.degradeMinLoad != 2 || config.recoveryEnabled ||
 		config.recoveryTarget != 76.5 || config.recoverySuccesses != 3 || config.recoveryHold != 61*time.Second ||
 		config.weightsEnabled || config.weightBudget != 777 || config.gateFloor != 41.5 || config.priceExp != 1.7 ||
-		config.speedExp != 2.3 || config.balancedPriceRatio != 0.35 || config.missingRateFallback != "fail_closed" ||
+		config.speedExp != 2.3 || config.balancedPriceRatio != 0.35 || config.performanceMinSamples != 9 ||
+		config.speedAdvantageCap != 3.5 || config.missingRateFallback != "fail_closed" ||
 		config.cooldown != 73*time.Second || config.minLoadFactor != 2 || config.maxLoadFactor != 97 ||
 		!config.scalingEnabled || config.scalingGlobalMax != 901 || config.scalingMin != 4 || config.scalingMax != 251 ||
 		config.scalingUpRatio != 0.81 || config.scalingStepUp != 6 || config.scalingStepDown != 7 ||

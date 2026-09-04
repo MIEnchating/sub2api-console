@@ -1,7 +1,8 @@
-import { Check, RefreshCw, Trash2, XCircle } from "lucide-react";
+import { Check, Trash2, XCircle } from "lucide-react";
 
 import type { KeyCleanupPreview, Task } from "@/api";
 import { DataTablePanel } from "@/components/data-table/table-panel";
+import { RefreshButton } from "@/components/refresh-button";
 import { TaskProgressState, TaskStartupState } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,20 @@ function keyCleanupTaskRunning(task: Task | null): boolean {
   return Boolean(task && ["queued", "running", "waiting_input"].includes(task.status));
 }
 
+export const keyCleanupDialogLayout = {
+  height: "adaptive",
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+} as const;
+
+export function keyCleanupDialogWidth(
+  preview: KeyCleanupPreview | null,
+  task: Task | null,
+): "medium" | "wide" {
+  const hasPreviewRows = (preview?.keys.length ?? 0) > 0;
+  const hasResultRows = task ? keyCleanupResultItems(task).length > 0 : false;
+  return hasPreviewRows || hasResultRows ? "wide" : "medium";
+}
+
 export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDialogProps) {
   const keys = props.preview?.keys ?? [];
   const taskRunning = keyCleanupTaskRunning(props.task);
@@ -123,7 +138,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
                 Key。执行前后端会再次复核绑定关系，已建立绑定或进入开户待续的 Key 会自动跳过。
               </div>
             ) : (
-              <div className="text-muted-foreground rounded-lg border border-dashed px-4 py-8 text-center text-sm">
+              <div className="text-muted-foreground rounded-lg border border-dashed px-4 py-6 text-center text-sm">
                 未发现无绑定的上游 Key。
               </div>
             )}
@@ -238,20 +253,20 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
               disabled={controlsDisabled}
               onClick={() => props.onOpenChange(false)}
             >
-              取消
+              {keys.length > 0 ? "取消" : "关闭"}
             </Button>
-            <Button variant="outline" disabled={controlsDisabled} onClick={props.onRefresh}>
-              <RefreshCw aria-hidden="true" />
-              重新扫描
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={controlsDisabled || keys.length === 0}
-              onClick={props.onConfirm}
-            >
-              <Trash2 aria-hidden="true" />
-              确认删除 {keys.length} 个 Key
-            </Button>
+            <RefreshButton
+              pending={props.previewPending}
+              disabled={controlsDisabled}
+              ariaLabel="刷新扫描结果"
+              onClick={props.onRefresh}
+            />
+            {keys.length > 0 ? (
+              <Button variant="destructive" disabled={controlsDisabled} onClick={props.onConfirm}>
+                <Trash2 aria-hidden="true" />
+                确认删除 {keys.length} 个 Key
+              </Button>
+            ) : null}
           </>
         ) : taskFinished ? (
           <Button onClick={props.onComplete}>
@@ -283,9 +298,9 @@ export function OnboardingKeyCleanupDialog(props: OnboardingKeyCleanupDialogProp
       }}
     >
       <DialogContent
-        width="wide"
-        height="large"
-        className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        width={keyCleanupDialogWidth(props.preview, props.task)}
+        height={keyCleanupDialogLayout.height}
+        className={keyCleanupDialogLayout.content}
       >
         <OnboardingKeyCleanupDialogContent {...props} />
       </DialogContent>

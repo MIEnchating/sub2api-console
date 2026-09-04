@@ -99,6 +99,8 @@ describe("account pool cells", () => {
     expect(markup).toContain("降级");
     expect(markup).toContain("降级原因：健康分低于降级线 75");
     expect(markup).toContain("最近错误：上游网关错误");
+    expect(markup).toContain("text-warning");
+    expect(markup).toContain("text-destructive");
     expect(markup).not.toContain("已停止调度");
   });
 
@@ -117,6 +119,7 @@ describe("account pool cells", () => {
 
     expect(markup).toContain("健康");
     expect(markup).toContain("最近错误：API returned 503: service unavailable");
+    expect(markup).toContain("text-destructive");
   });
 
   it("does not repeat a decision reason as a second scheduling stop reason", () => {
@@ -385,6 +388,8 @@ describe("account pool cells", () => {
     expect(markup).toContain("健康分 72.5");
     expect(markup).toContain("短期 68");
     expect(markup).toContain("长期 83");
+    expect(markup).toContain("评分构成");
+    expect(markup).toContain('aria-label="查看健康分评分构成"');
     expect(markup).toContain('data-slot="account-recent-results"');
     expect(markup).toContain("2 条样本");
     expect(latencyMarkup).toContain("P95 1s");

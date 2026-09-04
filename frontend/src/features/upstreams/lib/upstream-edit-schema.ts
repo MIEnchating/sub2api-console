@@ -103,3 +103,13 @@ export function defaultAuthModeForPlatform(platform: string): string {
     "custom_headers"
   );
 }
+
+export function authMethodLabel(value: string | null | undefined): string {
+  if (!value) return "尚未记录";
+  const options = [
+    ...authModesForPlatform("sub2api"),
+    ...authModesForPlatform("newapi"),
+    ...authModesForPlatform("custom"),
+  ];
+  return options.find((option) => option.value === value)?.label ?? value;
+}

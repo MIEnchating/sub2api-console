@@ -51,7 +51,10 @@ const account: AccountStatus = {
   weight: 100,
 };
 
-function selectionMarkup(accounts: AccountStatus[] = [account]): string {
+function selectionMarkup(
+  accounts: AccountStatus[] = [account],
+  timeoutSeconds: number | null = 45,
+): string {
   return renderToStaticMarkup(
     <ModelCheckSelection
       accounts={accounts}
@@ -64,7 +67,7 @@ function selectionMarkup(accounts: AccountStatus[] = [account]): string {
       modelsLoading={false}
       modelsError={null}
       rounds={2}
-      timeoutSeconds={45}
+      timeoutSeconds={timeoutSeconds}
       combinationCount={1}
       selectionError={null}
       disabled={false}
@@ -121,17 +124,26 @@ describe("模型检测响应式布局", () => {
     expect(markup).toContain("08/31");
   });
 
-  it("账号列表默认每页展示十条并显示筛选后的总数", () => {
-    const accounts = Array.from({ length: 12 }, (_, index) => ({
+  it("请求超时清空后保持空白", () => {
+    const markup = selectionMarkup([account], null);
+    const inputPosition = markup.indexOf('aria-label="请求超时秒数"');
+    const inputStart = markup.lastIndexOf("<input", inputPosition);
+    const inputEnd = markup.indexOf(">", inputStart);
+
+    expect(markup.slice(inputStart, inputEnd)).toContain('value=""');
+  });
+
+  it("账号列表默认每页展示二十条并显示筛选后的总数", () => {
+    const accounts = Array.from({ length: 22 }, (_, index) => ({
       ...account,
       id: `${index + 1}`,
       name: `分页账号 ${index + 1}`,
     }));
     const markup = selectionMarkup(accounts);
 
-    expect(markup).toContain("分页账号 10");
-    expect(markup).not.toContain("分页账号 11");
-    expect(markup).toContain(">12</span>");
+    expect(markup).toContain("分页账号 20");
+    expect(markup).not.toContain("分页账号 21");
+    expect(markup).toContain(">22</span>");
     expect(markup).toContain('aria-label="转到第 2 页"');
   });
 

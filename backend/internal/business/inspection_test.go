@@ -47,6 +47,61 @@ func TestInspectionHeartbeatsNormalizesMissingLegacyArrays(t *testing.T) {
 	}
 }
 
+func TestAutoInspectionConfigKeepsLegacyDefaultsAndPersistsRateBatch(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-config.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)`, inspectionConfigKey, `{"enabled":true,"interval_seconds":30}`, "now"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := store.AutoInspectionConfig(ctx)
+	if err != nil || legacy.AccountRateSyncIntervalSeconds != 120 || legacy.AccountRateSyncBatchSize != 0 {
+		t.Fatalf("legacy config=%#v err=%v", legacy, err)
+	}
+	updated, err := store.UpdateAutoInspectionConfig(ctx, AutoInspectionConfig{Enabled: true, IntervalSeconds: 30, AccountRateSyncIntervalSeconds: 300, AccountRateSyncBatchPercent: 20})
+	if err != nil || updated.AccountRateSyncBatchPercent != 20 {
+		t.Fatalf("updated config=%#v err=%v", updated, err)
+	}
+	loaded, err := store.AutoInspectionConfig(ctx)
+	if err != nil || loaded.AccountRateSyncIntervalSeconds != 300 || loaded.AccountRateSyncBatchPercent != 20 {
+		t.Fatalf("loaded config=%#v err=%v", loaded, err)
+	}
+}
+
+func TestResetInspectionTaskOnlyClearsMatchingAttempt(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "inspection-reset.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	markedAt := time.Date(2026, 9, 3, 7, 33, 16, 0, time.UTC)
+	if err := store.MarkInspectionTask(ctx, "price-management", markedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ResetInspectionTask(ctx, "price-management", markedAt.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if due, err := store.InspectionTaskDue(ctx, "price-management", 36000, markedAt.Add(time.Hour)); err != nil || due {
+		t.Fatalf("mismatched reset changed cooldown: due=%v err=%v", due, err)
+	}
+	if err := store.ResetInspectionTask(ctx, "price-management", markedAt); err != nil {
+		t.Fatal(err)
+	}
+	if due, err := store.InspectionTaskDue(ctx, "price-management", 36000, markedAt.Add(time.Hour)); err != nil || !due {
+		t.Fatalf("matching reset did not restore due state: due=%v err=%v", due, err)
+	}
+}
+
 func TestInspectionHeartbeatsNormalizesLegacyBatchFailuresAsPartial(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "inspection-partial.sqlite3"))
 	if err != nil {

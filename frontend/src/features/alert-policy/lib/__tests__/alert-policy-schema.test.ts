@@ -4,7 +4,11 @@ import { alertPolicyFormSchema, defaultAlertPolicyForm } from "../alert-policy-s
 
 describe("alertPolicyFormSchema", () => {
   it("accepts the complete default strategy", () => {
-    expect(alertPolicyFormSchema.safeParse(defaultAlertPolicyForm).success).toBe(true);
+    const parsed = alertPolicyFormSchema.safeParse(defaultAlertPolicyForm);
+
+    expect(parsed.success).toBe(true);
+    expect(defaultAlertPolicyForm.multiplier_increase_enabled).toBe(true);
+    expect(defaultAlertPolicyForm.multiplier_decrease_enabled).toBe(true);
   });
 
   it("rejects unknown degraded and recovery notification types", () => {

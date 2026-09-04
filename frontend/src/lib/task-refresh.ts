@@ -47,7 +47,15 @@ const refreshKeys: Record<TaskRefreshScope, string[]> = {
     "overview",
     "overview-events",
   ],
-  pricing: ["pricing", "accounts", "groups", "logs", "overview", "overview-events"],
+  pricing: [
+    "pricing",
+    "pricing-changes",
+    "accounts",
+    "groups",
+    "logs",
+    "overview",
+    "overview-events",
+  ],
   "upstream-key-cleanup": [
     "upstreams",
     "onboarding-candidates",

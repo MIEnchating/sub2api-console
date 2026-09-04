@@ -748,7 +748,7 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 	}
 	response, err := r.http.Do(request)
 	if err != nil {
-		cause := fmt.Errorf("上游网络请求失败：%T", err)
+		cause := errors.New("上游网络请求失败")
 		if nonIdempotentCreate {
 			return nil, 0, &CommitUnknownError{Cause: cause}
 		}

@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -36,6 +37,27 @@ type PricingSyncResult struct {
 	Accounts   int   `json:"accounts"`
 	GroupLinks int   `json:"group_links"`
 	EventID    int64 `json:"event_id"`
+}
+
+type PricingChangeGroup struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type PricingAccountChange struct {
+	AccountID   string               `json:"account_id"`
+	AccountName string               `json:"account_name"`
+	Before      []PricingChangeGroup `json:"before"`
+	After       []PricingChangeGroup `json:"after"`
+}
+
+type PricingChangeRecord struct {
+	ID             int64                  `json:"id"`
+	Actor          string                 `json:"actor"`
+	CreatedAt      string                 `json:"created_at"`
+	AccountCount   int                    `json:"account_count"`
+	GroupLinkCount int                    `json:"group_link_count"`
+	Changes        []PricingAccountChange `json:"changes"`
 }
 
 func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
@@ -202,9 +224,11 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 	sort.Slice(accountIDs, func(left, right int) bool { return stableNumericLess(accountIDs[left], accountIDs[right]) })
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	groupLinks := 0
+	changeRecords := make([]PricingAccountChange, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
+		var accountName string
 		var multiplier sql.NullString
-		if err := tx.QueryRowContext(ctx, `SELECT multiplier FROM accounts WHERE id=?`, accountID).Scan(&multiplier); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT name,multiplier FROM accounts WHERE id=?`, accountID).Scan(&accountName, &multiplier); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return PricingSyncResult{}, fmt.Errorf("价格管理写回账号 %s 已不存在", accountID)
 			}
@@ -214,20 +238,31 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 		if groupIDs == nil {
 			return PricingSyncResult{}, fmt.Errorf("价格管理写回账号 %s 包含无效分组 ID", accountID)
 		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, accountID); err != nil {
+		before, err := pricingAccountChangeGroups(ctx, tx, accountID)
+		if err != nil {
 			return PricingSyncResult{}, err
 		}
+		after := make([]PricingChangeGroup, 0, len(groupIDs))
 		for _, groupID := range groupIDs {
 			name, found := groupNames[groupID]
 			if !found {
 				return PricingSyncResult{}, fmt.Errorf("价格管理写回分组 %s 不在 Console 本地目录中", groupID)
 			}
+			after = append(after, PricingChangeGroup{ID: groupID, Name: name})
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, accountID); err != nil {
+			return PricingSyncResult{}, err
+		}
+		for _, group := range after {
 			if _, err := tx.ExecContext(ctx, `INSERT INTO account_groups(account_id,group_name,group_id,group_rate)
-				VALUES(?,?,?,?)`, accountID, name, groupID, nullablePricingString(multiplier)); err != nil {
+				VALUES(?,?,?,?)`, accountID, group.Name, group.ID, nullablePricingString(multiplier)); err != nil {
 				return PricingSyncResult{}, err
 			}
 			groupLinks++
 		}
+		changeRecords = append(changeRecords, PricingAccountChange{
+			AccountID: accountID, AccountName: accountName, Before: before, After: after,
+		})
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
 		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
@@ -235,7 +270,8 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 		return PricingSyncResult{}, err
 	}
 	payload := map[string]any{
-		"actor": strings.TrimSpace(actor), "accounts": len(accountIDs), "group_links": groupLinks, "remote_write": true,
+		"actor": strings.TrimSpace(actor), "accounts": len(accountIDs), "group_links": groupLinks,
+		"remote_write": true, "changes": changeRecords,
 	}
 	if err := insertRuntimeEventWithStatus(ctx, tx, "pricing.groups.synced", "succeeded",
 		fmt.Sprintf("价格分组本地状态已同步：账号 %d，成员关系 %d", len(accountIDs), groupLinks), payload, now); err != nil {
@@ -249,6 +285,86 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 		return PricingSyncResult{}, err
 	}
 	return PricingSyncResult{Accounts: len(accountIDs), GroupLinks: groupLinks, EventID: eventID}, nil
+}
+
+func (s *Store) PricingChangeRecords(ctx context.Context, limit int) ([]PricingChangeRecord, error) {
+	if limit < 1 || limit > 200 {
+		return nil, errors.New("价格变更记录条数必须在 1 到 200 之间")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT source_id,created_at,payload_json FROM runtime_events
+		WHERE event_type='pricing.groups.synced' AND status='succeeded'
+		ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN source_id END ASC,
+		CASE WHEN source_id >= 0 THEN source_id END DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := []PricingChangeRecord{}
+	for rows.Next() {
+		var record PricingChangeRecord
+		var payloadJSON string
+		if err := rows.Scan(&record.ID, &record.CreatedAt, &payloadJSON); err != nil {
+			return nil, err
+		}
+		var payload struct {
+			Actor      string                 `json:"actor"`
+			Accounts   int                    `json:"accounts"`
+			GroupLinks int                    `json:"group_links"`
+			Changes    []PricingAccountChange `json:"changes"`
+		}
+		if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+			return nil, fmt.Errorf("价格变更记录 %d 不可读：%w", record.ID, err)
+		}
+		if payload.Changes == nil {
+			payload.Changes = []PricingAccountChange{}
+		}
+		if payload.Accounts <= 0 && len(payload.Changes) == 0 {
+			continue
+		}
+		record.Actor = payload.Actor
+		record.AccountCount = payload.Accounts
+		if record.AccountCount == 0 {
+			record.AccountCount = len(payload.Changes)
+		}
+		record.GroupLinkCount = payload.GroupLinks
+		record.Changes = payload.Changes
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func pricingAccountChangeGroups(ctx context.Context, queryer policyQueryer, accountID string) ([]PricingChangeGroup, error) {
+	rows, err := queryer.QueryContext(ctx, `SELECT COALESCE(ag.group_id,lg.remote_id),COALESCE(lg.name,ag.group_name)
+		FROM account_groups ag LEFT JOIN local_groups lg ON lg.name=ag.group_name
+		WHERE ag.account_id=? ORDER BY COALESCE(ag.group_id,lg.remote_id),ag.group_name`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := map[string]string{}
+	for rows.Next() {
+		var id sql.NullString
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		if id.Valid && positiveNumericID(id.String) {
+			byID[id.String] = name
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(left, right int) bool { return stableNumericLess(ids[left], ids[right]) })
+	groups := make([]PricingChangeGroup, 0, len(ids))
+	for _, id := range ids {
+		groups = append(groups, PricingChangeGroup{ID: id, Name: byID[id]})
+	}
+	return groups, nil
 }
 
 func pricingGroupNames(ctx context.Context, queryer policyQueryer) (map[string]string, error) {

@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
 export const dialogContentLayout =
-  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0";
+  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100svh-2rem)] w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0";
 
 export const dialogBodyLayout =
   "min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1";
@@ -24,9 +24,9 @@ type DialogContentWidth = keyof typeof dialogWidthLayouts;
 export const dialogHeightLayouts = {
   content: "",
   adaptive: "max-h-[calc(100svh-2rem)]",
-  medium: "h-[min(40rem,calc(100svh-2rem))]",
-  large: "h-[min(42rem,calc(100svh-2rem))]",
-  tall: "h-[min(46rem,calc(100svh-2rem))]",
+  medium: "max-h-[min(32rem,calc(100svh-2rem))]",
+  large: "max-h-[min(38rem,calc(100svh-2rem))]",
+  tall: "max-h-[min(44rem,calc(100svh-2rem))]",
 } as const;
 
 type DialogContentHeight = keyof typeof dialogHeightLayouts;

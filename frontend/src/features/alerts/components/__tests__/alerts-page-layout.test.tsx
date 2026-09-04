@@ -44,7 +44,7 @@ function renderPage(): string {
   const queryClient = new QueryClient();
   queryClient.setQueryData(
     ["alerts"],
-    Array.from({ length: 12 }, (_, index) => alertIncident(index + 1)),
+    Array.from({ length: 22 }, (_, index) => alertIncident(index + 1)),
   );
   queryClient.setQueryData(["notification-status"], notificationStatus);
   return renderToStaticMarkup(
@@ -55,7 +55,7 @@ function renderPage(): string {
 }
 
 describe("AlertsPage layout", () => {
-  it("keeps queue metrics visible while the paged alert list owns the remaining scroll area", () => {
+  it("keeps the combined queue entry visible while the paged alert list owns the remaining scroll area", () => {
     const markup = renderPage();
     const alertPanel = markup.slice(
       markup.indexOf('data-testid="alert-list-panel"'),
@@ -64,6 +64,8 @@ describe("AlertsPage layout", () => {
 
     expect(markup).toContain('data-testid="alerts-operations-layout"');
     expect(markup).toContain('data-testid="notification-queue-overview"');
+    expect(markup).not.toContain("告警与通知队列");
+    expect(markup.match(/>查看队列</g)).toHaveLength(1);
     expect(markup).toContain('data-testid="alert-list-panel"');
     expect(markup).toContain('data-testid="alert-list-scroll-area"');
     expect(markup).toContain("flex h-full min-h-0 flex-col gap-3");
@@ -71,10 +73,11 @@ describe("AlertsPage layout", () => {
     expect(markup.indexOf("notification-queue-overview")).toBeLessThan(
       markup.indexOf("alert-list-panel"),
     );
-    expect(markup).toContain("告警测试-10");
-    expect(markup).not.toContain("告警测试-11");
+    expect(markup).toContain("告警测试-20");
+    expect(markup).not.toContain("告警测试-21");
     expect(markup).toContain("转到第 2 页");
     expect(markup).not.toContain("搜索类型、对象或原因");
+    expect(markup).not.toContain("查看对象、原因、时间和通知状态");
     expect(alertPanel).not.toContain('data-slot="input"');
   });
 

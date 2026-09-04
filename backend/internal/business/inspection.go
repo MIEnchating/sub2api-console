@@ -23,8 +23,11 @@ const (
 )
 
 type AutoInspectionConfig struct {
-	Enabled         bool `json:"enabled"`
-	IntervalSeconds int  `json:"interval_seconds"`
+	Enabled                        bool `json:"enabled"`
+	IntervalSeconds                int  `json:"interval_seconds"`
+	AccountRateSyncIntervalSeconds int  `json:"account_rate_sync_interval_seconds"`
+	AccountRateSyncBatchSize       int  `json:"account_rate_sync_batch_size"`
+	AccountRateSyncBatchPercent    int  `json:"account_rate_sync_batch_percent"`
 }
 
 type OperationTiming struct {
@@ -34,14 +37,15 @@ type OperationTiming struct {
 }
 
 type InspectionRoundSummary struct {
-	Channels  int `json:"channels"`
-	Probed    int `json:"probed"`
-	Samples   int `json:"samples"`
-	Fused     int `json:"fused"`
-	Recovered int `json:"recovered"`
-	Applied   int `json:"applied"`
-	CleanedUp int `json:"cleaned_up"`
-	Alerts    int `json:"alerts"`
+	Channels      int `json:"channels"`
+	Probed        int `json:"probed"`
+	Samples       int `json:"samples"`
+	Fused         int `json:"fused"`
+	Recovered     int `json:"recovered"`
+	AuthRecovered int `json:"auth_recovered"`
+	Applied       int `json:"applied"`
+	CleanedUp     int `json:"cleaned_up"`
+	Alerts        int `json:"alerts"`
 }
 
 type InspectionHeartbeat struct {
@@ -66,12 +70,24 @@ type inspectionLease struct {
 }
 
 func DefaultAutoInspectionConfig() AutoInspectionConfig {
-	return AutoInspectionConfig{Enabled: false, IntervalSeconds: 15}
+	return AutoInspectionConfig{Enabled: false, IntervalSeconds: 15, AccountRateSyncIntervalSeconds: 120}
 }
 
 func ValidateAutoInspectionConfig(value AutoInspectionConfig) error {
 	if value.IntervalSeconds < 15 || value.IntervalSeconds > 86400 {
 		return errors.New("interval_seconds 必须在 15 到 86400 之间")
+	}
+	if value.AccountRateSyncIntervalSeconds != 0 && (value.AccountRateSyncIntervalSeconds < 15 || value.AccountRateSyncIntervalSeconds > 86400) {
+		return errors.New("account_rate_sync_interval_seconds 必须在 15 到 86400 之间")
+	}
+	if value.AccountRateSyncBatchSize < 0 || value.AccountRateSyncBatchSize > 100000 {
+		return errors.New("account_rate_sync_batch_size 必须在 0 到 100000 之间")
+	}
+	if value.AccountRateSyncBatchPercent < 0 || value.AccountRateSyncBatchPercent > 100 {
+		return errors.New("account_rate_sync_batch_percent 必须在 0 到 100 之间")
+	}
+	if value.AccountRateSyncBatchSize > 0 && value.AccountRateSyncBatchPercent > 0 {
+		return errors.New("账号倍率同步每轮只能配置固定数量或比例之一")
 	}
 	return nil
 }
@@ -84,8 +100,11 @@ func (s *Store) AutoInspectionConfig(ctx context.Context) (AutoInspectionConfig,
 	if document == nil {
 		return DefaultAutoInspectionConfig(), nil
 	}
-	if len(document) != 2 {
-		return AutoInspectionConfig{}, errors.New("自动巡检配置包含未知或缺失字段")
+	allowed := map[string]bool{"enabled": true, "interval_seconds": true, "account_rate_sync_interval_seconds": true, "account_rate_sync_batch_size": true, "account_rate_sync_batch_percent": true}
+	for key := range document {
+		if !allowed[key] {
+			return AutoInspectionConfig{}, errors.New("自动巡检配置包含未知字段：" + key)
+		}
 	}
 	enabled := strictAnyBool(document["enabled"])
 	if enabled == nil {
@@ -95,7 +114,32 @@ func (s *Store) AutoInspectionConfig(ctx context.Context) (AutoInspectionConfig,
 	if err != nil {
 		return AutoInspectionConfig{}, errors.New("interval_seconds 必须是整数")
 	}
-	result := AutoInspectionConfig{Enabled: *enabled, IntervalSeconds: interval}
+	readOptional := func(key string, fallback int) (int, error) {
+		raw, present := document[key]
+		if !present {
+			return fallback, nil
+		}
+		value, valueErr := strictInteger(raw)
+		if valueErr != nil {
+			return 0, errors.New(key + " 必须是整数")
+		}
+		return value, nil
+	}
+	rateInterval, err := readOptional("account_rate_sync_interval_seconds", 120)
+	if err != nil {
+		return AutoInspectionConfig{}, err
+	}
+	batchSize, err := readOptional("account_rate_sync_batch_size", 0)
+	if err != nil {
+		return AutoInspectionConfig{}, err
+	}
+	batchPercent, err := readOptional("account_rate_sync_batch_percent", 0)
+	if err != nil {
+		return AutoInspectionConfig{}, err
+	}
+	result := AutoInspectionConfig{Enabled: *enabled, IntervalSeconds: interval,
+		AccountRateSyncIntervalSeconds: rateInterval, AccountRateSyncBatchSize: batchSize,
+		AccountRateSyncBatchPercent: batchPercent}
 	if err := ValidateAutoInspectionConfig(result); err != nil {
 		return AutoInspectionConfig{}, err
 	}
@@ -103,6 +147,9 @@ func (s *Store) AutoInspectionConfig(ctx context.Context) (AutoInspectionConfig,
 }
 
 func (s *Store) UpdateAutoInspectionConfig(ctx context.Context, value AutoInspectionConfig) (AutoInspectionConfig, error) {
+	if value.AccountRateSyncIntervalSeconds == 0 {
+		value.AccountRateSyncIntervalSeconds = DefaultAutoInspectionConfig().AccountRateSyncIntervalSeconds
+	}
 	if err := ValidateAutoInspectionConfig(value); err != nil {
 		return AutoInspectionConfig{}, err
 	}
@@ -111,7 +158,10 @@ func (s *Store) UpdateAutoInspectionConfig(ctx context.Context, value AutoInspec
 		return AutoInspectionConfig{}, err
 	}
 	defer tx.Rollback()
-	document := map[string]any{"enabled": value.Enabled, "interval_seconds": int64(value.IntervalSeconds)}
+	document := map[string]any{"enabled": value.Enabled, "interval_seconds": int64(value.IntervalSeconds),
+		"account_rate_sync_interval_seconds": int64(value.AccountRateSyncIntervalSeconds),
+		"account_rate_sync_batch_size":       int64(value.AccountRateSyncBatchSize),
+		"account_rate_sync_batch_percent":    int64(value.AccountRateSyncBatchPercent)}
 	if err := s.writePolicyDocument(ctx, tx, inspectionConfigKey, document, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return AutoInspectionConfig{}, err
 	}
@@ -412,6 +462,27 @@ func (s *Store) MarkInspectionTask(ctx context.Context, taskName string, now tim
 	_, err = s.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
 		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
 		inspectionHeartbeatKey, string(encoded), now.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *Store) ResetInspectionTask(ctx context.Context, taskName string, markedAt time.Time) error {
+	state, err := s.inspectionTaskState(ctx)
+	if err != nil {
+		return err
+	}
+	marked := markedAt.UTC().Format(time.RFC3339Nano)
+	if state[taskName] != marked {
+		return nil
+	}
+	delete(state, taskName)
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	updatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at) VALUES(?,?,?)
+		ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at`,
+		inspectionHeartbeatKey, string(encoded), updatedAt)
 	return err
 }
 

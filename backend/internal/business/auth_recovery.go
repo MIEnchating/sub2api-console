@@ -13,6 +13,7 @@ import (
 
 type AuthRecoveryOutcome struct {
 	Host            string  `json:"host"`
+	AuthMethod      *string `json:"auth_method,omitempty"`
 	TriggerStatus   *string `json:"trigger_status,omitempty"`
 	Success         bool    `json:"success"`
 	Attempted       bool    `json:"attempted"`
@@ -28,6 +29,38 @@ type AuthRecoverySummary struct {
 	Hosts     int `json:"hosts"`
 	Recovered int `json:"recovered"`
 	Failed    int `json:"failed"`
+}
+
+func (s *Store) AuthRecoveryRequiredHosts(ctx context.Context, retryBefore time.Time) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT host,metadata_json FROM upstreams
+		WHERE auth_status IN (?,?) ORDER BY host`, UpstreamAuthStatusInvalid, UpstreamAuthStatusRecoveryTemporarilyFailed)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	hosts := []string{}
+	for rows.Next() {
+		var host, metadataRaw string
+		if err := rows.Scan(&host, &metadataRaw); err != nil {
+			return nil, err
+		}
+		metadata, err := decodeObject(metadataRaw)
+		if err != nil {
+			return nil, errors.New("上游 metadata 记录损坏")
+		}
+		lastAttempt := strings.TrimSpace(stringValue(metadata["auth_recovery_at"]))
+		if lastAttempt != "" {
+			attemptedAt, err := time.Parse(time.RFC3339Nano, lastAttempt)
+			if err != nil {
+				return nil, errors.New("上游鉴权恢复时间记录损坏")
+			}
+			if attemptedAt.After(retryBefore) {
+				continue
+			}
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts, rows.Err()
 }
 
 func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRecoveryOutcome, _ string) (AuthRecoverySummary, error) {
@@ -85,6 +118,15 @@ func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRe
 		metadata["auth_recovery_code"] = pointerValue(item.Code)
 		metadata["auth_recovery_reason"] = pointerValue(item.Reason)
 		metadata["auth_recovery_at"] = now
+		if item.Success {
+			if item.AuthMethod != nil {
+				metadata["last_auth_success_method"] = pointerValue(item.AuthMethod)
+			}
+			if item.RefreshKind != nil {
+				metadata["last_auth_recovery_method"] = pointerValue(item.RefreshKind)
+			}
+			metadata["last_auth_success_at"] = now
+		}
 		encoded, err := json.Marshal(metadata)
 		if err != nil {
 			return AuthRecoverySummary{}, err
@@ -108,6 +150,7 @@ func normalizeAuthRecoveryOutcomes(values []AuthRecoveryOutcome) ([]AuthRecovery
 			return nil, errors.New("鉴权恢复结果缺少 Host")
 		}
 		item.Code = normalizedAuthRecoveryText(item.Code)
+		item.AuthMethod = normalizedAuthRecoveryText(item.AuthMethod)
 		item.InteractionKind = normalizedAuthRecoveryText(item.InteractionKind)
 		item.RefreshKind = normalizedAuthRecoveryText(item.RefreshKind)
 		item.TriggerStatus = normalizedAuthRecoveryText(item.TriggerStatus)

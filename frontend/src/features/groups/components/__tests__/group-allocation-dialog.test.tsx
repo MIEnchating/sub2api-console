@@ -130,7 +130,11 @@ describe("group allocation detail", () => {
     expect(groupAllocationLayout.width).toBe("table");
     expect(groupAllocationLayout.height).toBe("tall");
     expect(groupAllocationLayout.loading).toContain("h-full");
+    expect(groupAllocationLayout.content).toContain("h-full");
     expect(groupAllocationLayout.content).toContain("min-h-0");
+    expect(groupAllocationLayout.tableContainer).toContain("h-full");
+    expect(groupAllocationLayout.tableContainer).toContain("overflow-auto");
+    expect(groupAllocationLayout.tableContainer).toContain("overscroll-contain");
     expect(groupAllocationLayout.policy).toContain("bg-muted");
     expect(groupAllocationLayout.policy).toContain("grid-cols-3");
     expect(groupAllocationLayout.metrics).toContain("lg:grid-cols-4");

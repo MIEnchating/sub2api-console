@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,19 +86,21 @@ type Target struct {
 }
 
 type Result struct {
-	AccountID      string  `json:"account_id"`
-	GroupName      string  `json:"group_name"`
-	Result         string  `json:"result"`
-	LatencyP50     *string `json:"latency_p50_ms"`
-	LatencyP95     *string `json:"latency_p95_ms"`
-	LatencyP99     *string `json:"latency_p99_ms"`
-	Attempts       int     `json:"attempts"`
-	FailureReason  *string `json:"failure_reason"`
-	StatusCode     *int    `json:"status_code"`
-	ObservedAt     string  `json:"observed_at"`
-	RequestModel   string  `json:"request_model"`
-	ActualModel    string  `json:"actual_model"`
-	ModelRewritten bool    `json:"model_rewritten"`
+	AccountID          string  `json:"account_id"`
+	GroupName          string  `json:"group_name"`
+	Result             string  `json:"result"`
+	LatencyP50         *string `json:"latency_p50_ms"`
+	LatencyP95         *string `json:"latency_p95_ms"`
+	LatencyP99         *string `json:"latency_p99_ms"`
+	Attempts           int     `json:"attempts"`
+	FailureReason      *string `json:"failure_reason"`
+	StatusCode         *int    `json:"status_code"`
+	ObservedAt         string  `json:"observed_at"`
+	RequestModel       string  `json:"request_model"`
+	ActualModel        string  `json:"actual_model"`
+	ModelRewritten     bool    `json:"model_rewritten"`
+	AttemptStatusCodes []int   `json:"attempt_status_codes"`
+	RetryRecovered     bool    `json:"retry_recovered"`
 }
 
 type preparedRun struct {
@@ -309,6 +312,7 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 			SampleCount: boolCount(result.Result == "通过"), Attempts: result.Attempts,
 			FailureReason: result.FailureReason, ObservedAt: result.ObservedAt, StatusCode: result.StatusCode,
 			RequestModel: result.RequestModel, ActualModel: result.ActualModel,
+			AttemptStatusCodes: result.AttemptStatusCodes, RetryRecovered: result.RetryRecovered,
 		})
 		if result.Result == "通过" {
 			passed++
@@ -396,9 +400,13 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	var firstResponse bool
 	var lastReason, actualModel string
 	attempts := 0
+	attemptStatusCodes := []int{}
 	for {
 		attempts++
 		lastStatus, firstResponse, lastReason, actualModel = probeAttempt(ctx, client, target, config)
+		if lastStatus != nil {
+			attemptStatusCodes = append(attemptStatusCodes, *lastStatus)
+		}
 		if firstResponse || !config.RetryEnabled || attempts > retry.Count || lastStatus == nil {
 			break
 		}
@@ -417,7 +425,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
 	if firstResponse {
 		latency := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
-		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
+		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -428,7 +436,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten}
+	return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) bool {
@@ -484,6 +492,9 @@ func probeAttempt(ctx context.Context, client *adminclient.Client, target Target
 			actualModel = eventModel(event)
 		}
 		if reason := eventError(event); reason != "" {
+			if upstreamStatus, found := upstreamStatusFromError(reason); found {
+				status = upstreamStatus
+			}
 			return &status, false, reason, actualModel
 		}
 		if eventHasContent(event) {
@@ -578,6 +589,20 @@ func eventError(value any) string {
 		return typeText
 	}
 	return ""
+}
+
+var apiReturnedStatusPattern = regexp.MustCompile(`(?i)\bAPI returned\s+([1-5][0-9]{2})\b`)
+
+func upstreamStatusFromError(reason string) (int, bool) {
+	match := apiReturnedStatusPattern.FindStringSubmatch(reason)
+	if len(match) != 2 {
+		return 0, false
+	}
+	status, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, false
+	}
+	return status, true
 }
 
 func failure(status int, body string) string {

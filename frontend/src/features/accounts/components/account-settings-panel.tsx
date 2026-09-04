@@ -8,8 +8,16 @@ import { z } from "zod";
 
 import { api, type AccountControlAction, type AccountDetail, type Task } from "@/api";
 import { Button } from "@/components/ui/button";
+import { FieldLabel } from "@/components/field-help-tooltip";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
@@ -42,6 +50,15 @@ const settingsSchema = z.object({
 type AccountSettingsValues = z.infer<typeof settingsSchema>;
 
 type AccountSettingControlState = Pick<AccountSettingsValues, "excluded" | "paused">;
+
+const inheritedTestModelValue = "\u0000inherited-test-model";
+
+export function accountTestModelOptions(models: string[], currentModel: string): string[] {
+  const normalized = [...models, currentModel]
+    .map((model) => model.trim())
+    .filter((model) => model.length > 0);
+  return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
+}
 
 export function accountSettingControlActions(
   previous: AccountSettingControlState,
@@ -93,6 +110,7 @@ export function AccountSettingsPanel(props: {
   const queryClient = useQueryClient();
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const form = useForm<AccountSettingsValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
@@ -174,6 +192,7 @@ export function AccountSettingsPanel(props: {
     try {
       const result = await api.accountModels(props.accountId);
       setModels(result.models);
+      setModelsLoaded(true);
       toast.success(`已读取 ${result.models.length} 个模型`);
     } catch (error) {
       notifyOperationError(error, "账号模型读取失败");
@@ -183,6 +202,12 @@ export function AccountSettingsPanel(props: {
   }
 
   const formId = `account-settings-${props.accountId}`;
+  const testModel = form.watch("testModel");
+  const modelOptions = accountTestModelOptions(models, testModel);
+  const fetchedModelCount = accountTestModelOptions(models, "").length;
+  let modelsButtonLabel = "获取上游模型";
+  if (modelsLoading) modelsButtonLabel = "获取中";
+  else if (modelsLoaded) modelsButtonLabel = "重新获取上游模型";
   return (
     <>
       <DialogBody className={accountDetailDialogLayout.body}>
@@ -275,11 +300,47 @@ export function AccountSettingsPanel(props: {
                 description="留空时继承分组或全局默认模型。"
               />
               <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                <Input
-                  className="min-w-0"
-                  placeholder="留空使用分组或全局默认模型"
-                  {...form.register("testModel")}
-                />
+                {modelsLoaded && modelOptions.length > 0 ? (
+                  <Select
+                    value={testModel.trim() || inheritedTestModelValue}
+                    itemToStringLabel={(value) =>
+                      value === inheritedTestModelValue ? "继承分组或全局默认模型" : value
+                    }
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      form.setValue("testModel", value === inheritedTestModelValue ? "" : value, {
+                        shouldDirty: true,
+                        shouldValidate: true,
+                      });
+                    }}
+                  >
+                    <SelectTrigger
+                      className="min-w-0"
+                      aria-label="选择探测模型"
+                      aria-invalid={Boolean(form.formState.errors.testModel)}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="start">
+                      <SelectItem value={inheritedTestModelValue}>
+                        继承分组或全局默认模型
+                      </SelectItem>
+                      {modelOptions.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    className="min-w-0"
+                    aria-label="探测模型"
+                    aria-invalid={Boolean(form.formState.errors.testModel)}
+                    placeholder="留空使用分组或全局默认模型"
+                    {...form.register("testModel")}
+                  />
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -288,7 +349,7 @@ export function AccountSettingsPanel(props: {
                   onClick={() => void loadModels()}
                 >
                   <RefreshCw className={modelsLoading ? "animate-spin" : undefined} />
-                  {modelsLoading ? "获取中" : "获取上游模型"}
+                  {modelsButtonLabel}
                 </Button>
               </div>
               {form.formState.errors.testModel?.message ? (
@@ -296,23 +357,12 @@ export function AccountSettingsPanel(props: {
                   {form.formState.errors.testModel.message}
                 </span>
               ) : null}
-              {models.length > 0 ? (
-                <div
-                  className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto"
-                  aria-label="可用模型"
-                >
-                  {models.map((model) => (
-                    <Button
-                      key={model}
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      onClick={() => form.setValue("testModel", model, { shouldDirty: true })}
-                    >
-                      {model}
-                    </Button>
-                  ))}
-                </div>
+              {modelsLoaded ? (
+                <p className="text-muted-foreground text-xs" role="status">
+                  {fetchedModelCount > 0
+                    ? `已读取 ${fetchedModelCount} 个上游模型`
+                    : "上游未返回可用模型，可继续手动输入"}
+                </p>
               ) : null}
             </section>
           </form>
@@ -338,14 +388,11 @@ function SettingsField(props: {
   children: ReactNode;
 }) {
   return (
-    <label className="grid min-w-0 gap-1.5 text-sm">
-      <span className="font-medium">{props.label}</span>
+    <div className="grid min-w-0 gap-1.5 text-sm">
+      <FieldLabel label={props.label} description={!props.error ? props.hint : undefined} />
       {props.children}
       {props.error ? <span className="text-destructive text-xs">{props.error}</span> : null}
-      {!props.error && props.hint ? (
-        <span className="text-muted-foreground text-xs">{props.hint}</span>
-      ) : null}
-    </label>
+    </div>
   );
 }
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
@@ -36,6 +37,7 @@ type Repository interface {
 	LocalOnboardingGroup(context.Context, string) (business.LocalOnboardingGroup, error)
 	PendingOnboarding(context.Context, string, string, []string) (*business.PendingOnboarding, error)
 	SavePendingOnboarding(context.Context, business.PendingOnboarding) error
+	UpgradePendingOnboardingIntent(context.Context, string, string, string) (bool, error)
 	CommitOnboardingProjection(context.Context, business.OnboardingProjection) error
 	CommitAccountGroupsReadback(context.Context, string, []business.LocalOnboardingGroup, *string, business.AccountOperation) error
 	RecordAccountOperation(context.Context, business.AccountOperation) error
@@ -86,12 +88,16 @@ type Request struct {
 }
 
 type Service struct {
-	repository Repository
-	private    PrivateStore
-	keys       KeyClient
-	tasks      TaskStore
-	taskRunner taskrunner.Runner
-	timeout    time.Duration
+	repository    Repository
+	private       PrivateStore
+	keys          KeyClient
+	tasks         TaskStore
+	taskRunner    taskrunner.Runner
+	timeout       time.Duration
+	probeMu       sync.Mutex
+	probeSessions map[string]probeCredential
+	probeActive   map[string]bool
+	probeCanceled map[string]bool
 }
 
 const schedulableWriteTimeout = 2 * time.Second
@@ -113,7 +119,7 @@ type batchItem struct {
 }
 
 func New(repository Repository, private PrivateStore, keys KeyClient, tasks TaskStore) *Service {
-	return &Service{repository: repository, private: private, keys: keys, tasks: tasks, timeout: 10 * time.Minute}
+	return &Service{repository: repository, private: private, keys: keys, tasks: tasks, timeout: 10 * time.Minute, probeSessions: map[string]probeCredential{}, probeActive: map[string]bool{}, probeCanceled: map[string]bool{}}
 }
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
@@ -400,11 +406,36 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("待续开户记录缺少首次冻结意图，已拒绝远端写入")
 		}
 		if pending.IntentHash != intentHash {
-			return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("续办参数与首次冻结的开户意图不一致，已拒绝远端写入")
+			legacyCompositeHash, hashErr := onboardingIntentHash(
+				validated, target.BaseURL, accountName, "composite", accountType, priority, concurrency,
+			)
+			canUpgrade := hashErr == nil && platform != "composite" && pending.IntentHash == legacyCompositeHash &&
+				strings.TrimSpace(pending.UpstreamKeyID) != "" && strings.TrimSpace(pending.UpstreamAccountID) == "" &&
+				!pending.KeyCommitUnknown && !pending.AccountCommitUnknown
+			if !canUpgrade {
+				return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("续办参数与首次冻结的开户意图不一致，已拒绝远端写入")
+			}
+			upgraded, upgradeErr := s.repository.UpgradePendingOnboardingIntent(
+				ctx, pending.OperationID, pending.IntentHash, intentHash,
+			)
+			if upgradeErr != nil {
+				return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, fmt.Errorf("旧版复合平台待续记录升级失败：%w", upgradeErr)
+			}
+			if !upgraded {
+				return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, errors.New("旧版复合平台待续记录已变化，请重新提交")
+			}
+			pending.IntentHash = intentHash
 		}
 		operationID = pending.OperationID
 	}
-	keyMarker := operationID
+	keyMarker, markerRotated := pendingKeyMarker(pending, onboardingKeyMarker(operationID))
+	if markerRotated {
+		pending.UpstreamKeyName = &keyMarker
+		pending.Reason = "旧版 Key marker 已在明确未写入远端时安全更新"
+		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+			return map[string]any{"remote_write": false, "pending": pendingResult(*pending)}, fmt.Errorf("待续开户 Key marker 更新失败：%w", err)
+		}
+	}
 	if pending == nil {
 		pending = &business.PendingOnboarding{
 			OperationID: operationID, UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType,
@@ -1090,19 +1121,15 @@ func accountPlatform(request Request, candidate business.OnboardingCandidate, lo
 	if candidate.Platform != nil {
 		candidatePlatform = normalizePlatform(*candidate.Platform)
 	}
-	resolvedPlatform := localPlatform
-	if candidatePlatform != "" {
-		resolvedPlatform = candidatePlatform
-	}
 	if request.PlatformPresent {
 		if request.Platform == nil || strings.TrimSpace(*request.Platform) == "" {
 			return "", errors.New("平台不能为空")
 		}
 		requestedPlatform := normalizePlatform(*request.Platform)
-		if requestedPlatform != resolvedPlatform {
-			if candidatePlatform == "" {
-				return "", fmt.Errorf("请求平台 %s 与所选本地分组平台 %s 不一致", requestedPlatform, localPlatform)
-			}
+		if !concreteAccountPlatform(requestedPlatform) {
+			return "", fmt.Errorf("账号平台必须是具体协议，不能使用 %s", requestedPlatform)
+		}
+		if concreteAccountPlatform(candidatePlatform) && requestedPlatform != candidatePlatform {
 			return "", fmt.Errorf(
 				"请求平台 %s 与上游分组平台 %s 不一致，已拒绝覆盖目录平台",
 				requestedPlatform,
@@ -1111,7 +1138,22 @@ func accountPlatform(request Request, candidate business.OnboardingCandidate, lo
 		}
 		return requestedPlatform, nil
 	}
-	return resolvedPlatform, nil
+	if concreteAccountPlatform(candidatePlatform) {
+		return candidatePlatform, nil
+	}
+	groupNamePlatform := normalizePlatform(candidate.GroupName)
+	if concreteAccountPlatform(groupNamePlatform) {
+		return groupNamePlatform, nil
+	}
+	if concreteAccountPlatform(localPlatform) {
+		return localPlatform, nil
+	}
+	return "", fmt.Errorf("上游分组「%s」使用复合平台，无法确定具体账号协议", candidate.GroupName)
+}
+
+func concreteAccountPlatform(platform string) bool {
+	platform = normalizePlatform(platform)
+	return platform != "" && platform != "composite" && business.AccountPlatformCanJoinGroup(platform, "composite")
 }
 
 func validateLocalGroupPlatforms(platform string, candidate business.OnboardingCandidate, locals []business.LocalOnboardingGroup) error {
@@ -1139,6 +1181,34 @@ func normalizePlatform(value string) string {
 
 func accountCreationMarker(operationID string) string {
 	return "[sub2api-console:onboarding:" + operationID + "]"
+}
+
+const legacyOnboardingKeyMarkerPrefix = "account-onboarding-"
+
+func onboardingKeyMarker(operationID string) string {
+	suffix := strings.TrimPrefix(strings.TrimSpace(operationID), legacyOnboardingKeyMarkerPrefix)
+	return "console-" + suffix
+}
+
+func pendingKeyMarker(pending *business.PendingOnboarding, next string) (string, bool) {
+	if pending == nil {
+		return next, false
+	}
+	current := ""
+	if pending.UpstreamKeyName != nil {
+		current = strings.TrimSpace(*pending.UpstreamKeyName)
+	}
+	if current == "" {
+		return next, false
+	}
+	legacy := strings.TrimSpace(pending.OperationID)
+	canRotate := current == legacy && strings.HasPrefix(legacy, legacyOnboardingKeyMarkerPrefix) &&
+		strings.TrimSpace(pending.UpstreamKeyID) == "" && strings.TrimSpace(pending.UpstreamAccountID) == "" &&
+		!pending.KeyCommitUnknown && !pending.AccountCommitUnknown
+	if canRotate && current != next {
+		return next, true
+	}
+	return current, false
 }
 
 func creationRemark(candidate business.OnboardingCandidate, supplied *string, marker, createdAt string) string {

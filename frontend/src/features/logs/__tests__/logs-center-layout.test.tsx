@@ -56,10 +56,12 @@ describe("LogsCenterPage layout", () => {
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('aria-label="日志筛选"');
     expect(markup).toContain('aria-label="搜索任务、对象或原因"');
+    expect(markup).toContain('aria-label="刷新日志"');
+    expect(markup.indexOf('aria-label="刷新日志"')).toBeLessThan(toolbarStart);
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-label="记录类型"');
-    expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
-      markup.indexOf('aria-label="搜索任务、对象或原因"'),
+    expect(markup.indexOf('aria-label="搜索任务、对象或原因"')).toBeLessThan(
+      markup.indexOf('aria-label="记录类型"'),
     );
   });
 

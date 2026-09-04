@@ -201,7 +201,7 @@ func (s *Store) PrepareAlertDelivery(
 			plan.Skipped++
 			continue
 		}
-		coolingDown := found && previous.status == "transition" &&
+		coolingDown := incidentUsesStateChangeCooldown(incident) && found && previous.status == "transition" &&
 			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now)
 		if coolingDown {
 			plan.Skipped++
@@ -278,26 +278,26 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		}
 		if !found && incident.EventType == "account.routing_degraded" && incident.Status == "recovered" {
 			item.QueueStatus = "无需发送"
-			item.QueueReason = "异常在首次通知前已恢复"
+			item.QueueReason = "问题已自行恢复，未发送告警"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if !found && incident.EventType == "account.routing_degraded" &&
 			!incidentObservationDue(incident.FirstSeenAt, policy.StateChangeCooldownMinute, now) {
 			item.QueueStatus = "状态观察中"
-			item.QueueReason = fmt.Sprintf("持续 %d 分钟后才通知，避免瞬时降级刷屏", policy.StateChangeCooldownMinute)
+			item.QueueReason = fmt.Sprintf("持续 %d 分钟后才通知，避免短暂波动反复提醒", policy.StateChangeCooldownMinute)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if !policy.DeliveryEnabled {
 			item.QueueStatus = "已抑制"
-			item.QueueReason = "告警通知发送已关闭"
+			item.QueueReason = "告警通知开关已关闭"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if incident.Status == "recovered" && (!recoveryNotificationEnabled(policy, incident.EventType) || pointerTextValue(incident.DeliveryStatus) == "恢复通知已关闭") {
 			item.QueueStatus = "已抑制"
-			item.QueueReason = "恢复通知已关闭"
+			item.QueueReason = "恢复通知开关已关闭"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
@@ -309,19 +309,19 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		}
 		if !privateConfigured {
 			item.QueueStatus = "已抑制"
-			item.QueueReason = "QQBot 通知凭据或目标未配置完整"
+			item.QueueReason = "QQBot 通知配置不完整"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if !enabled {
 			item.QueueStatus = "已抑制"
-			item.QueueReason = "通知规则已关闭"
+			item.QueueReason = "通知规则开关已关闭"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if !qqbotEnabled {
 			item.QueueStatus = "已抑制"
-			item.QueueReason = "QQBot 通知渠道未启用"
+			item.QueueReason = "QQBot 通知渠道未开启"
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
@@ -329,23 +329,23 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			item.QueueStatus = "发送失败，等待重试"
 			item.QueueReason = pointerTextValue(incident.LastError)
 			if item.QueueReason == "" {
-				item.QueueReason = "上次通知发送失败"
+				item.QueueReason = "上次通知发送失败，等待重试"
 			}
 			result.ConsumerFailed = append(result.ConsumerFailed, item)
 			result.ConsumerPending = append(result.ConsumerPending, item)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
-		if found && previous.status == "transition" &&
+		if incidentUsesStateChangeCooldown(incident) && found && previous.status == "transition" &&
 			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now) {
-			item.QueueStatus = "状态变化冷却中"
-			item.QueueReason = fmt.Sprintf("距离上次通知不足 %d 分钟", policy.StateChangeCooldownMinute)
+			item.QueueStatus = "账号降级变化冷却中"
+			item.QueueReason = fmt.Sprintf("账号降级状态变化后等待 %d 分钟再通知", policy.StateChangeCooldownMinute)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
 		if incident.EventType == "account.routing_degraded" && degradedDigestCooling {
 			item.QueueStatus = "降级告警汇总冷却中"
-			item.QueueReason = fmt.Sprintf("本渠道 %d 分钟内的降级变化将在冷却结束后统一汇总发送", policy.StateChangeCooldownMinute)
+			item.QueueReason = fmt.Sprintf("降级变化将在 %d 分钟冷却结束后合并通知", policy.StateChangeCooldownMinute)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
@@ -354,9 +354,9 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			item.QueueStatus = "待发送"
 			switch {
 			case !found:
-				item.QueueReason = "尚未发送通知"
+				item.QueueReason = "等待发送首次通知"
 			case repeatDue:
-				item.QueueReason = "已到再次通知时间"
+				item.QueueReason = "已到再次提醒时间"
 			default:
 				item.QueueReason = "等待通知服务处理"
 			}
@@ -369,9 +369,9 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		case incident.Status == "recovered":
 			item.QueueReason = "恢复通知已发送"
 		case policy.RepeatIntervalMinute <= 0:
-			item.QueueReason = "持续告警已通知，策略设置为只发送一次"
+			item.QueueReason = "已发送过一次，当前策略不重复提醒"
 		default:
-			item.QueueReason = "尚未到再次通知时间"
+			item.QueueReason = "还没到下次提醒时间"
 		}
 		result.ConsumerItems = append(result.ConsumerItems, item)
 	}
@@ -383,6 +383,10 @@ func pointerTextValue(value *string) string {
 		return ""
 	}
 	return strings.TrimSpace(*value)
+}
+
+func incidentUsesStateChangeCooldown(incident AlertIncident) bool {
+	return incident.EventType == "account.routing_degraded"
 }
 
 func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, outcomes []AlertDeliveryOutcome) error {
@@ -418,6 +422,13 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 		if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET delivery_status=?,last_error=?
 			WHERE incident_key=?`, deliveryStatus, lastError, outcome.IncidentKey); err != nil {
 			return err
+		}
+		if outcome.Success {
+			if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='closed'
+				WHERE incident_key=? AND event_type IN ('account.multiplier_increased','account.multiplier_decreased')`,
+				outcome.IncidentKey); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

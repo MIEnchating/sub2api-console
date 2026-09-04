@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -542,6 +543,7 @@ var advancedRules = map[string]map[string]advancedRule{
 		"enabled": {kind: "bool"}, "budget": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"gate_floor": {kind: "number", minimum: 0, maximum: 100}, "price_exp": {kind: "positive_number", maximum: 100},
 		"speed_exp": {kind: "positive_number", maximum: 100}, "balanced_price_ratio": {kind: "ratio"},
+		"performance_min_samples": {kind: "int", minimum: 1, maximum: 200}, "speed_advantage_cap": {kind: "number", minimum: 1, maximum: 100},
 		"min_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000}, "max_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000},
 	},
 	"manual_priority": {
@@ -573,7 +575,8 @@ var advancedRules = map[string]map[string]advancedRule{
 		"enabled": {kind: "bool"}, "hard_fatal": {kind: "bool"}, "http_degrade_only": {kind: "bool"}, "latency_degrade_only": {kind: "bool"},
 		"http_window": {kind: "int", minimum: 1, maximum: 10000}, "http_failures": {kind: "int", minimum: 1, maximum: 10000},
 		"http_score_below": {kind: "number", minimum: 0, maximum: 100}, "latency_window": {kind: "int", minimum: 1, maximum: 10000},
-		"latency_occurrences": {kind: "int", minimum: 1, maximum: 10000}, "latency_ttfb_ms": {kind: "int", minimum: 1, maximum: 3_600_000},
+		"transient_consecutive_failures": {kind: "int", minimum: 1, maximum: 10000},
+		"latency_occurrences":            {kind: "int", minimum: 1, maximum: 10000}, "latency_ttfb_ms": {kind: "int", minimum: 1, maximum: 3_600_000},
 		"max_switch_per_round": {kind: "int", minimum: 1, maximum: 10000}, "fused_cooldown_seconds": {kind: "int", minimum: 0, maximum: 86400},
 		"instant_status_codes": {kind: "status_codes"}, "min_pool_size": {kind: "int", minimum: 0, maximum: 10000},
 		"min_pool_score": {kind: "number", minimum: 0, maximum: 100},
@@ -603,6 +606,11 @@ var advancedRules = map[string]map[string]advancedRule{
 	"upstream_multiplier": {
 		"interval_seconds": {kind: "int", minimum: 30, maximum: 86400},
 	},
+	"account_rate_sync": {
+		"interval_seconds": {kind: "int", minimum: 30, maximum: 86400},
+		"batch_size":       {kind: "int", minimum: 0, maximum: 100000},
+		"batch_percent":    {kind: "int", minimum: 0, maximum: 100},
+	},
 	"price_management": {
 		"enabled": {kind: "bool"}, "profit_margin": {kind: "number", minimum: 0, maximum: 0.99},
 		"exchange_group_sets": {kind: "string_groups"}, "exchange_group_set_names": {kind: "strings"},
@@ -613,7 +621,8 @@ var advancedRules = map[string]map[string]advancedRule{
 		"concurrency": {kind: "int", minimum: 1, maximum: 16}, "verification": {kind: "bool"},
 	},
 	"classify": {
-		"fatal_patterns": {kind: "strings"}, "gateway_status_codes": {kind: "status_codes"},
+		"client_error_status_codes": {kind: "status_codes"},
+		"fatal_patterns":            {kind: "strings"}, "gateway_status_codes": {kind: "status_codes"},
 	},
 }
 
@@ -634,6 +643,13 @@ func validateAdvancedSection(section string, values map[string]any) (map[string]
 			return nil, err
 		}
 		result[field] = normalized
+	}
+	if section == "account_rate_sync" {
+		batchSize, _ := result["batch_size"].(int64)
+		batchPercent, _ := result["batch_percent"].(int64)
+		if batchSize > 0 && batchPercent > 0 {
+			return nil, errors.New("账号倍率同步每轮只能配置固定数量或比例之一")
+		}
 	}
 	return result, nil
 }
@@ -721,8 +737,12 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 		}
 		result := make([]any, 0, len(items))
 		seen := map[int]struct{}{}
+		minimum, maximum := 100, 599
+		if path == "classify.client_error_status_codes" {
+			minimum, maximum = 400, 499
+		}
 		for _, item := range items {
-			code, err := boundedInteger(path, item, 100, 599)
+			code, err := boundedInteger(path, item, minimum, maximum)
 			if err != nil {
 				return nil, err
 			}
@@ -810,6 +830,7 @@ var advancedPolicyCoreFields = map[string]map[string]struct{}{
 	"scaling":             {},
 	"cleanup":             {},
 	"upstream_multiplier": {},
+	"account_rate_sync":   {},
 	"price_management":    {},
 	"writeback":           {},
 	"classify":            {},

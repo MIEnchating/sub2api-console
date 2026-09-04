@@ -73,7 +73,7 @@ start_frontend() {
     "$frontend_image" >/dev/null
 
   attempts=0
-  until docker exec "$frontend_container" wget -q -O /dev/null http://127.0.0.1/; do
+  until docker exec "$frontend_container" wget -q -T 5 -O /dev/null http://127.0.0.1/; do
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 20 ]; then
       docker logs "$frontend_container" >&2 || true
@@ -100,7 +100,7 @@ start_api() {
     "$helper_image" -g 'daemon off;' >/dev/null
 
   attempts=0
-  until docker exec "$api_container" wget -q -O /dev/null http://127.0.0.1:8080/api/proxy-test; do
+  until docker exec "$api_container" wget -q -T 5 -O /dev/null http://127.0.0.1:8080/api/proxy-test; do
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 20 ]; then
       docker logs "$api_container" >&2 || true
@@ -113,7 +113,7 @@ start_api() {
 proxy_request() {
   forwarded_for="$1"
   forwarded_proto="$2"
-  docker exec "$client_container" wget -q -S -O /dev/null \
+  docker exec "$client_container" wget -q -T 5 -S -O /dev/null \
     --header "X-Forwarded-For: $forwarded_for" \
     --header "X-Forwarded-Proto: $forwarded_proto" \
     "http://${frontend_container}/api/proxy-test" 2>&1

@@ -34,6 +34,7 @@ type Repository interface {
 	RevenueCatalog(context.Context) (business.RevenueCatalog, error)
 	ValidateNewAPIQuotaUnit(context.Context, string, float64, time.Time, time.Time) error
 	SyncPricingAccountGroups(context.Context, map[string][]string, string) (business.PricingSyncResult, error)
+	PricingChangeRecords(context.Context, int) ([]business.PricingChangeRecord, error)
 	CreatePricingBackup(context.Context, string, string) (business.PricingBackup, error)
 	PricingBackups(context.Context) ([]business.PricingBackup, error)
 	PricingBackup(context.Context, string) (business.PricingBackup, error)
@@ -160,6 +161,10 @@ func (s *Service) CreateBackup(ctx context.Context, name, actor string) (busines
 
 func (s *Service) Backups(ctx context.Context) ([]business.PricingBackup, error) {
 	return s.repository.PricingBackups(ctx)
+}
+
+func (s *Service) Changes(ctx context.Context) ([]business.PricingChangeRecord, error) {
+	return s.repository.PricingChangeRecords(ctx, 100)
 }
 
 func (s *Service) DeleteBackup(ctx context.Context, backupID string) error {
@@ -856,11 +861,31 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	}
 	sort.Slice(result.Items, func(i, j int) bool { return numericLess(result.Items[i].AccountID, result.Items[j].AccountID) })
 	if result.Changed > 0 {
-		local, syncErr := s.repository.SyncPricingAccountGroups(ctx, syncedGroups, actor)
-		release()
-		if syncErr != nil {
-			return result, fmt.Errorf("远程分组已更新，但本地目录同步失败：%w", syncErr)
+		var local business.PricingSyncResult
+		var syncErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			local, syncErr = s.repository.SyncPricingAccountGroups(ctx, syncedGroups, actor)
+			if syncErr == nil {
+				break
+			}
+			if attempt < 2 {
+				select {
+				case <-ctx.Done():
+					break
+				case <-time.After(time.Duration(attempt+1) * 250 * time.Millisecond):
+				}
+			}
 		}
+		if syncErr != nil {
+			rollbackErr := rollbackPricingRemoteGroups(ctx, client, result.Items)
+			release()
+			if rollbackErr != nil {
+				return result, errors.Join(fmt.Errorf("远程分组已更新，但本地目录同步失败：%w", syncErr), fmt.Errorf("远程分组补偿回滚失败：%w", rollbackErr))
+			}
+			result.RemoteWrite = false
+			return result, fmt.Errorf("本地目录同步失败，远程分组已回滚：%w", syncErr)
+		}
+		release()
 		result.LocalSync = &local
 	} else {
 		release()
@@ -869,6 +894,35 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		return result, fmt.Errorf("%d 个账号分组调整失败", result.Failed)
 	}
 	return result, nil
+}
+
+func rollbackPricingRemoteGroups(ctx context.Context, client *adminclient.Client, items []ItemResult) error {
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	var result error
+	for _, item := range items {
+		if !item.Changed || item.Error != nil || item.Skipped {
+			continue
+		}
+		ids := make([]int64, len(item.Before))
+		valid := true
+		for index, value := range item.Before {
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || parsed <= 0 {
+				valid = false
+				result = errors.Join(result, fmt.Errorf("账号 %s 原分组 ID 无效", item.AccountID))
+				break
+			}
+			ids[index] = parsed
+		}
+		if !valid {
+			continue
+		}
+		if _, err := client.UpdateAccountGroups(rollbackCtx, item.AccountID, ids); err != nil {
+			result = errors.Join(result, fmt.Errorf("账号 %s：%w", item.AccountID, err))
+		}
+	}
+	return result
 }
 
 func (s *Service) acquirePlanMutation(ctx context.Context, decisions []Decision) (context.Context, func(), error) {

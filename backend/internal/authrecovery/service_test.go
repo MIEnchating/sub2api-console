@@ -57,12 +57,39 @@ func (r *recoveryRepository) PersistAuthRecoveryOutcomes(_ context.Context, valu
 }
 
 type recoveryPrivate struct {
-	mu         sync.Mutex
-	record     *configstore.AuthRecord
-	records    map[string]configstore.AuthRecord
-	vault      map[string]configstore.VaultEntry
-	vaultReads []string
-	saved      bool
+	mu          sync.Mutex
+	record      *configstore.AuthRecord
+	records     map[string]configstore.AuthRecord
+	vault       map[string]configstore.VaultEntry
+	vaultReads  []string
+	saved       bool
+	preferences map[string]configstore.AuthRecoveryPreference
+}
+
+func (s *recoveryPrivate) AuthRecoveryPreference(_ context.Context, host string) (*configstore.AuthRecoveryPreference, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, found := s.preferences[configstore.CanonicalHost(host)]
+	if !found {
+		return nil, nil
+	}
+	copy := value
+	return &copy, nil
+}
+
+func (s *recoveryPrivate) SaveAuthRecoveryPreference(_ context.Context, value configstore.AuthRecoveryPreference) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.preferences == nil {
+		s.preferences = map[string]configstore.AuthRecoveryPreference{}
+	}
+	if value.VaultEntry == nil {
+		if current, found := s.preferences[configstore.CanonicalHost(value.Host)]; found {
+			value.VaultEntry = current.VaultEntry
+		}
+	}
+	s.preferences[configstore.CanonicalHost(value.Host)] = value
+	return nil
 }
 
 func (s *recoveryPrivate) AuthRecord(_ context.Context, host string) (*configstore.AuthRecord, error) {
@@ -121,14 +148,19 @@ func (s *recoveryPrivate) VaultEntry(_ context.Context, entry string) (*configst
 }
 
 type recoveryAuthenticator struct {
-	refresh func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error)
-	login   func(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error)
+	refresh      func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error)
+	login        func(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error)
+	loginOptions []upstreamauth.LoginOptions
 }
 
 func (a *recoveryAuthenticator) Refresh(ctx context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
 	return a.refresh(ctx, record)
 }
 func (a *recoveryAuthenticator) Login(ctx context.Context, record configstore.AuthRecord, entry configstore.VaultEntry) (configstore.AuthRecord, error) {
+	return a.login(ctx, record, entry)
+}
+func (a *recoveryAuthenticator) LoginWithOptions(ctx context.Context, record configstore.AuthRecord, entry configstore.VaultEntry, options upstreamauth.LoginOptions) (configstore.AuthRecord, error) {
+	a.loginOptions = append(a.loginOptions, options)
 	return a.login(ctx, record, entry)
 }
 
@@ -308,7 +340,7 @@ func TestRecoveryUsesRefreshBeforeVaultAndCommitsBeforeBalanceRead(t *testing.T)
 	}}
 	tasks := &recoveryTasks{done: make(chan taskstore.Task, 2)}
 	service := New(repository, private, auth, &recoveryConfigurator{}, balance, tasks)
-	if _, err := service.Enqueue(context.Background(), "api.example", "selected", "tester"); err != nil {
+	if _, err := service.Enqueue(context.Background(), "api.example", "selected", false, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	var task taskstore.Task
@@ -351,7 +383,7 @@ func TestRecoveryDoesNotRestoreCredentialsAfterCanonicalUpstreamDelete(t *testin
 	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
 	outcomes := make(chan business.AuthRecoveryOutcome, 1)
 	go func() {
-		outcomes <- service.recover(context.Background(), record, "")
+		outcomes <- service.recover(context.Background(), record, "", false)
 	}()
 	<-refreshStarted
 
@@ -413,7 +445,7 @@ func TestRecoveryCorrectsStoredPlatformAfterVerifiedPublicFingerprint(t *testing
 		BaseURL: "https://api.example", Host: "api.example", UpstreamType: &platform, TypeDetected: true,
 	}})
 
-	outcome := service.recover(context.Background(), *private.record, "selected")
+	outcome := service.recover(context.Background(), *private.record, "selected", false)
 	if !outcome.Success || configurator.committed == nil {
 		t.Fatalf("outcome=%#v committed=%#v", outcome, configurator.committed)
 	}
@@ -447,7 +479,7 @@ func TestRecoveryUsesOnlyExplicitlySelectedVaultEntryAfterRefreshFailure(t *test
 		},
 	}
 	service := New(&recoveryRepository{}, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 2)})
-	if _, err := service.Enqueue(context.Background(), "api.example", "selected", "tester"); err != nil {
+	if _, err := service.Enqueue(context.Background(), "api.example", "selected", false, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -486,7 +518,7 @@ func TestRecoveryCreatesMissingPrivateRecordFromBusinessHostAfterVerifiedVaultLo
 	}
 	tasks := &recoveryTasks{done: make(chan taskstore.Task, 2)}
 	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, tasks)
-	if _, err := service.Enqueue(context.Background(), "api.example", "selected", "tester"); err != nil {
+	if _, err := service.Enqueue(context.Background(), "api.example", "selected", false, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -520,7 +552,7 @@ func TestRecoveryDoesNotCreateMissingPrivateRecordWhenVaultLoginFails(t *testing
 	}
 	tasks := &recoveryTasks{done: make(chan taskstore.Task, 2)}
 	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, tasks)
-	if _, err := service.Enqueue(context.Background(), "api.example", "selected", "tester"); err != nil {
+	if _, err := service.Enqueue(context.Background(), "api.example", "selected", false, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -543,7 +575,7 @@ func TestRecoveryRejectsHostMissingFromPrivateAndBusinessStores(t *testing.T) {
 		&recoveryAuthenticator{}, &recoveryConfigurator{}, &recoveryBalance{},
 		&recoveryTasks{done: make(chan taskstore.Task, 1)},
 	)
-	_, err := service.Enqueue(context.Background(), "missing.example", "selected", "tester")
+	_, err := service.Enqueue(context.Background(), "missing.example", "selected", false, "tester")
 	if err == nil || !strings.Contains(err.Error(), "上游 Host 不存在") {
 		t.Fatalf("expected missing host error, got %v", err)
 	}
@@ -613,13 +645,17 @@ func TestManualVerificationBuildsPlatformCredentialPatchAndReturnsBalance(t *tes
 	service := New(&recoveryRepository{}, private, &recoveryAuthenticator{}, configurator, balance, &recoveryTasks{done: make(chan taskstore.Task, 1)})
 	result, err := service.VerifyManual(context.Background(), ManualInput{
 		Host: "api.example", AuthMode: &mode, AdminKey: &adminKey, UserID: &userID,
-		Present: map[string]bool{"auth_mode": true, "admin_key": true, "user_id": true},
+		AcceptLoginAgreement: true,
+		Present:              map[string]bool{"auth_mode": true, "admin_key": true, "user_id": true},
 	}, "tester")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !result.Verified || result.BalanceSync.Status != "succeeded" || configurator.input.AdminKey == nil || *configurator.input.AdminKey != "admin" {
 		t.Fatalf("result=%#v input=%#v", result, configurator.input)
+	}
+	if !configurator.input.AcceptLoginAgreement {
+		t.Fatal("explicit login agreement consent was not passed to the configurator")
 	}
 	if _, present := configurator.input.Headers["Authorization"]; present || configurator.input.Headers["X-Site"] != "custom" {
 		t.Fatalf("stale bearer header survived: %#v", configurator.input.Headers)
@@ -712,7 +748,7 @@ func TestRecoveryTaskDoesNotExposeCredentialInFailure(t *testing.T) {
 		return configstore.AuthRecord{}, errors.New("unused")
 	}}
 	service := New(&recoveryRepository{}, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, tasks)
-	if _, err := service.Enqueue(context.Background(), "api.example", "", "tester"); err != nil {
+	if _, err := service.Enqueue(context.Background(), "api.example", "", false, "tester"); err != nil {
 		t.Fatal(err)
 	}
 	var task taskstore.Task
@@ -747,7 +783,7 @@ func TestImageCaptchaWaitsForInputThenCompletesParentTask(t *testing.T) {
 	captcha := &recoveryCaptcha{}
 	repository, balance := &recoveryRepository{}, &recoveryBalance{}
 	service := New(repository, private, auth, &recoveryConfigurator{}, balance, tasks, captcha)
-	queued, err := service.Enqueue(context.Background(), "api.example", "selected", "tester")
+	queued, err := service.Enqueue(context.Background(), "api.example", "selected", false, "tester")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,6 +808,67 @@ func TestImageCaptchaWaitsForInputThenCompletesParentTask(t *testing.T) {
 	}
 	if len(repository.outcomes) != 1 || !repository.outcomes[0].Success || balance.calls != 1 {
 		t.Fatalf("projection or balance sync missing: outcomes=%#v calls=%d", repository.outcomes, balance.calls)
+	}
+}
+
+func TestRecoveryWithoutExplicitEntryUsesLastSuccessfulVaultEntry(t *testing.T) {
+	refresh := "expired"
+	entry := "Primary"
+	record := configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api",
+		AuthMode: "sub2api_user_token", RefreshToken: &refresh,
+	}
+	private := &recoveryPrivate{
+		record: &record,
+		vault:  map[string]configstore.VaultEntry{entry: {Entry: entry}},
+		preferences: map[string]configstore.AuthRecoveryPreference{
+			"api.example": {Host: "api.example", AuthMode: "sub2api_user_login", RecoveryMethod: "vault", VaultEntry: &entry},
+		},
+	}
+	auth := &recoveryAuthenticator{
+		refresh: func(context.Context, configstore.AuthRecord) (configstore.AuthRecord, error) {
+			return configstore.AuthRecord{}, errors.New("refresh expired")
+		},
+		login: func(_ context.Context, current configstore.AuthRecord, _ configstore.VaultEntry) (configstore.AuthRecord, error) {
+			current.AuthMode = "sub2api_user_login"
+			return current, nil
+		},
+	}
+	service := New(&recoveryRepository{}, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	outcome := service.recover(context.Background(), record, "", false)
+	if !outcome.Success || outcome.AuthMethod == nil || *outcome.AuthMethod != "sub2api_user_login" || len(private.vaultReads) != 2 || private.vaultReads[0] != entry || private.vaultReads[1] != entry {
+		t.Fatalf("outcome=%#v vaultReads=%#v", outcome, private.vaultReads)
+	}
+	preference := private.preferences["api.example"]
+	if preference.RecoveryMethod != "vault" || preference.VaultEntry == nil || *preference.VaultEntry != entry {
+		t.Fatalf("preference=%#v", preference)
+	}
+}
+
+func TestRecoverInvalidDeduplicatesHostsAndRecordsSuccessfulMethods(t *testing.T) {
+	refresh := "refresh"
+	private := &recoveryPrivate{records: map[string]configstore.AuthRecord{
+		"one.example": {Host: "one.example", BaseURL: "https://one.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RefreshToken: &refresh},
+		"two.example": {Host: "two.example", BaseURL: "https://two.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RefreshToken: &refresh},
+	}}
+	auth := &recoveryAuthenticator{
+		refresh: func(_ context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
+			return record, nil
+		},
+		login: func(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error) {
+			return configstore.AuthRecord{}, errors.New("unexpected login")
+		},
+	}
+	repository := &recoveryRepository{}
+	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	summary, err := service.RecoverInvalid(context.Background(), []string{"one.example", "ONE.EXAMPLE", "two.example"}, "自动巡检")
+	if err != nil || summary.Hosts != 2 || summary.Recovered != 2 || len(repository.outcomes) != 2 {
+		t.Fatalf("summary=%#v outcomes=%#v err=%v", summary, repository.outcomes, err)
+	}
+	for _, outcome := range repository.outcomes {
+		if outcome.AuthMethod == nil || *outcome.AuthMethod != "sub2api_user_token" || outcome.RefreshKind == nil || *outcome.RefreshKind != "refresh_token" {
+			t.Fatalf("outcome=%#v", outcome)
+		}
 	}
 }
 

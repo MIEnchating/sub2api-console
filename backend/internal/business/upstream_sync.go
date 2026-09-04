@@ -52,6 +52,7 @@ type UpstreamSyncWrite struct {
 	KeyID            *string
 	AuthRecovered    bool
 	AuthenticationOK bool
+	AuthMethod       string
 }
 
 type UpstreamSyncWriteResult struct {
@@ -237,8 +238,13 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		metadata["auth_checked_at"] = now
 		metadata["auth_verified_at"] = now
 		metadata["auth_error"] = nil
+		if method := strings.TrimSpace(value.AuthMethod); method != "" {
+			metadata["last_auth_success_method"] = method
+			metadata["last_auth_success_at"] = now
+		}
 		if value.AuthRecovered {
 			metadata["auth_recovered_at"] = now
+			metadata["last_auth_recovery_method"] = "refresh_token"
 		}
 	}
 	encoded, err := json.Marshal(metadata)

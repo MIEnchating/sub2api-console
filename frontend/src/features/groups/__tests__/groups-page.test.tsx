@@ -73,6 +73,7 @@ describe("分组管理页面", () => {
 
     expect(navItems.find((item) => item.id === "groups")?.label).toBe("分组管理");
     expect(markup).toContain("分组管理");
+    expect(markup).toContain('aria-label="刷新分组"');
     expect(markup).toContain(">状态</");
     expect(markup).toContain(">平台</");
     expect(markup).not.toContain(">调度未知</th>");

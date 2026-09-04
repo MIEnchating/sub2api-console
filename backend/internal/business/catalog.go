@@ -17,23 +17,26 @@ import (
 )
 
 type UpstreamHost struct {
-	UpstreamID     string   `json:"upstream_id"`
-	Host           string   `json:"host"`
-	Hosts          []string `json:"hosts"`
-	BaseURL        string   `json:"base_url"`
-	AccountBaseURL string   `json:"account_base_url"`
-	Name           string   `json:"name"`
-	UpstreamType   string   `json:"upstream_type"`
-	AccountCount   int64    `json:"account_count"`
-	GroupCount     int64    `json:"group_count"`
-	AuthStatus     string   `json:"auth_status"`
-	RawBalance     *string  `json:"raw_balance"`
-	Balance        *string  `json:"balance"`
-	DisplayBalance *string  `json:"display_balance"`
-	BalanceUnit    *string  `json:"balance_unit"`
-	RechargeRate   string   `json:"recharge_rate"`
-	BalanceStatus  string   `json:"balance_status"`
-	CheckedAt      *string  `json:"checked_at"`
+	UpstreamID             string   `json:"upstream_id"`
+	Host                   string   `json:"host"`
+	Hosts                  []string `json:"hosts"`
+	BaseURL                string   `json:"base_url"`
+	AccountBaseURL         string   `json:"account_base_url"`
+	Name                   string   `json:"name"`
+	UpstreamType           string   `json:"upstream_type"`
+	AccountCount           int64    `json:"account_count"`
+	GroupCount             int64    `json:"group_count"`
+	AuthStatus             string   `json:"auth_status"`
+	RawBalance             *string  `json:"raw_balance"`
+	Balance                *string  `json:"balance"`
+	DisplayBalance         *string  `json:"display_balance"`
+	BalanceUnit            *string  `json:"balance_unit"`
+	RechargeRate           string   `json:"recharge_rate"`
+	BalanceStatus          string   `json:"balance_status"`
+	CheckedAt              *string  `json:"checked_at"`
+	LastAuthSuccessMethod  *string  `json:"last_auth_success_method"`
+	LastAuthRecoveryMethod *string  `json:"last_auth_recovery_method"`
+	LastAuthSuccessAt      *string  `json:"last_auth_success_at"`
 }
 
 type UpstreamSummary struct {
@@ -73,6 +76,14 @@ type UpstreamBoundAccount struct {
 	LocalGroups     []LocalOnboardingGroup `json:"local_groups"`
 	UpstreamKeyID   string                 `json:"upstream_key_id"`
 	UpstreamKeyName string                 `json:"upstream_key_name"`
+}
+
+func optionalMetadataText(metadata map[string]any, key string) *string {
+	value := strings.TrimSpace(stringValue(metadata[key]))
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 type GroupPolicyOverride struct {
@@ -195,6 +206,9 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 		}
 		item.BalanceUnit = &unit
 		item.CheckedAt = nullString(checkedAt)
+		item.LastAuthSuccessMethod = optionalMetadataText(metadata, "last_auth_success_method")
+		item.LastAuthRecoveryMethod = optionalMetadataText(metadata, "last_auth_recovery_method")
+		item.LastAuthSuccessAt = optionalMetadataText(metadata, "last_auth_success_at")
 		item.AccountCount = accountCounts[item.UpstreamID]
 		item.GroupCount = groupCounts[item.Host]
 		if metadataErr != nil {

@@ -92,3 +92,11 @@ func TestLoadRejectsWeakSetupToken(t *testing.T) {
 		t.Fatalf("weak setup token was accepted: %v", err)
 	}
 }
+
+func TestLoadRejectsWeakAdminToken(t *testing.T) {
+	t.Setenv("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN", "short-token")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN") {
+		t.Fatalf("weak admin token was accepted: %v", err)
+	}
+}

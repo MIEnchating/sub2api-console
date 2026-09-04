@@ -12,6 +12,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 )
 
 type observingVerifier struct {
@@ -915,11 +916,17 @@ func (*passVerifier) Login(_ context.Context, record configstore.AuthRecord, _ c
 
 type capturingLoginVerifier struct {
 	credential configstore.VaultEntry
+	options    []upstreamauth.LoginOptions
 }
 
 func (*capturingLoginVerifier) Verify(context.Context, configstore.AuthRecord) error { return nil }
 func (v *capturingLoginVerifier) Login(_ context.Context, record configstore.AuthRecord, credential configstore.VaultEntry) (configstore.AuthRecord, error) {
 	v.credential = credential
+	return record, nil
+}
+func (v *capturingLoginVerifier) LoginWithOptions(_ context.Context, record configstore.AuthRecord, credential configstore.VaultEntry, options upstreamauth.LoginOptions) (configstore.AuthRecord, error) {
+	v.credential = credential
+	v.options = append(v.options, options)
 	return record, nil
 }
 
@@ -992,13 +999,17 @@ func TestExplicitHeadersAreAppliedToSelectedVaultLoginCandidate(t *testing.T) {
 	_, err := service.ConfigureAuthRecord(context.Background(), Input{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi", AuthMode: "newapi_user_login", RechargeRate: "1",
 		Entry: &entry, Headers: map[string]string{"Authorization": "Bearer gateway", "X-CF-Access": "signed"},
-		Present: map[string]bool{"entry": true, "headers": true},
+		AcceptLoginAgreement: true,
+		Present:              map[string]bool{"entry": true, "headers": true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if verifier.credential.Headers["Authorization"] != "Bearer gateway" || verifier.credential.Headers["X-CF-Access"] != "signed" {
 		t.Fatalf("explicit headers did not reach vault login: %#v", verifier.credential.Headers)
+	}
+	if len(verifier.options) != 1 || !verifier.options[0].AcceptLoginAgreement {
+		t.Fatalf("login agreement consent did not reach verifier: %#v", verifier.options)
 	}
 }
 

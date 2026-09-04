@@ -98,17 +98,82 @@ export type NewAPIRemoteGroup = {
 
 export type NewAPIModelPrice = {
   model: string;
+  model_price?: string;
   input_ratio: string;
   completion_ratio: string;
+  input_price?: string;
+  completion_price?: string;
+  cache_create_price?: string;
+  cache_read_price?: string;
+  billing_mode?: string;
+  billing_expr?: string;
+  cache_ratio?: string;
+  create_cache_ratio?: string;
+  create_cache_1h_ratio?: string;
+  image_ratio?: string;
+  audio_ratio?: string;
+  audio_completion_ratio?: string;
+};
+
+export type NewAPIToolPrice = {
+  tool: string;
+  price: string;
+};
+
+export type Sub2APIModelPrice = {
+  model: string;
+  input_price: string;
+  output_price: string;
+  image_input_price?: string;
+  image_output_price?: string;
+  provider?: string;
+  mode?: string;
+  input_ratio?: string;
+  model_ratio: string;
+  completion_ratio: string;
+  cache_write_price?: string;
+  cache_write_1h_price?: string;
+  cache_read_price?: string;
+  cache_ratio?: string;
+  create_cache_ratio?: string;
+  create_cache_1h_ratio?: string;
+  image_ratio?: string;
+  long_context_threshold?: number;
+  long_context_threshold_inclusive?: boolean;
+  long_context_input_price?: string;
+  long_context_output_price?: string;
+  long_context_cache_write_price?: string;
+  long_context_cache_write_1h_price?: string;
+  long_context_cache_read_price?: string;
+};
+
+export type RemoteModelPricingSource = {
+  source_url: string;
+  content: string;
+  fetched_at: string;
+  size_bytes: number;
+  sha256: string;
+};
+
+type NewAPIUpstreamPriceCatalog = {
+  host: string;
+  name: string;
+  upstream_type: string;
+  models: NewAPIModelPrice[];
 };
 
 export type NewAPIRemoteSnapshot = {
   groups: NewAPIRemoteGroup[];
   models: NewAPIModelPrice[];
+  unset_models: NewAPIModelPrice[];
+  tool_prices: NewAPIToolPrice[];
   references: NewAPIModelPrice[];
+  newapi_models?: NewAPIModelPrice[];
+  sub2api_models?: Sub2APIModelPrice[];
+  upstream_prices?: NewAPIUpstreamPriceCatalog[];
   differences: Array<{
     model: string;
-    kind: "missing_in_newapi" | "only_in_newapi" | "ratio_mismatch";
+    kind: "missing_in_model_plaza" | "missing_in_platform" | "ratio_mismatch";
     configured: NewAPIModelPrice | null;
     reference: NewAPIModelPrice | null;
   }>;
@@ -228,6 +293,9 @@ type UpstreamHost = {
   recharge_rate: string;
   balance_status: string;
   checked_at: string | null;
+  last_auth_success_method?: string | null;
+  last_auth_recovery_method?: string | null;
+  last_auth_success_at?: string | null;
 };
 
 export type UpstreamSummary = {
@@ -420,6 +488,9 @@ export type PolicyUpdatePayload = Partial<PolicyUpdate> & {
 export type AutoInspectionConfig = {
   enabled: boolean;
   interval_seconds: number;
+  account_rate_sync_interval_seconds?: number;
+  account_rate_sync_batch_size?: number;
+  account_rate_sync_batch_percent?: number;
 };
 
 type InspectionRoundSummary = {
@@ -428,6 +499,7 @@ type InspectionRoundSummary = {
   samples: number;
   fused: number;
   recovered: number;
+  auth_recovered?: number;
   applied: number;
   cleaned_up: number;
   alerts: number;
@@ -582,6 +654,15 @@ export type GroupAllocation = {
   channels: GroupAllocationChannel[];
 };
 
+export type GroupProbeModels = {
+  group_id: string;
+  group_name: string;
+  models: string[];
+  account_count: number;
+  accounts_with_models: number;
+  complete: boolean;
+};
+
 export type PricingConfig = {
   enabled: boolean;
   profit_margin: number;
@@ -631,6 +712,27 @@ export type PricingBackup = {
   actor: string;
   account_count: number;
   created_at: string;
+};
+
+export type PricingChangeGroup = {
+  id: string;
+  name: string;
+};
+
+export type PricingAccountChange = {
+  account_id: string;
+  account_name: string;
+  before: PricingChangeGroup[];
+  after: PricingChangeGroup[];
+};
+
+export type PricingChangeRecord = {
+  id: number;
+  actor: string;
+  created_at: string;
+  account_count?: number;
+  group_link_count?: number;
+  changes: PricingAccountChange[] | null;
 };
 
 export type RevenueRow = {
@@ -902,18 +1004,7 @@ export type UsageRecord = {
 };
 
 export type SystemLogSearchQuery = {
-  timeRange: "5m" | "30m" | "1h" | "6h" | "24h" | "7d" | "30d";
-  startTime: string;
-  endTime: string;
-  host: string;
-  level: string;
   requestId: string;
-  clientRequestId: string;
-  apiKeyId: string;
-  accountId: string;
-  platform: string;
-  model: string;
-  keyword: string;
   page: number;
   pageSize: number;
 };
@@ -968,6 +1059,8 @@ export type AlertPolicy = {
   configuration_enabled: boolean;
   auth_enabled: boolean;
   rate_sync_enabled: boolean;
+  multiplier_increase_enabled: boolean;
+  multiplier_decrease_enabled: boolean;
   balance_enabled: boolean;
   probe_enabled: boolean;
   routing_breaker_enabled: boolean;
@@ -1181,6 +1274,14 @@ export const api = {
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/refresh`,
       { method: "POST" },
     ),
+  managementModelPrices: (platformId: string) =>
+    request<{ models: Sub2APIModelPrice[] }>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/management-model-prices`,
+    ),
+  remoteModelPricingSource: (platformId: string) =>
+    request<RemoteModelPricingSource>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/remote-model-prices/raw`,
+    ),
   saveNewAPIGroupBindings: (platformId: string, bindings: NewAPIGroupBindingUpdate[]) =>
     request<NewAPIGroupBinding[]>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/group-bindings`,
@@ -1315,6 +1416,7 @@ export const api = {
       }>;
     }>("/api/policy/restore-control", { method: "POST" }),
   pricing: () => request<PricingSnapshot>("/api/pricing"),
+  pricingChanges: () => request<PricingChangeRecord[]>("/api/pricing/changes"),
   updatePricingConfig: (payload: PricingConfig) =>
     request<PricingSnapshot>("/api/pricing/config", {
       method: "PUT",
@@ -1396,6 +1498,8 @@ export const api = {
   accounts: () => request<AccountStatus[]>("/api/accounts"),
   groupAllocation: (groupId: string) =>
     request<GroupAllocation>(`/api/groups/${encodeURIComponent(groupId)}/allocation`),
+  groupProbeModels: (groupId: string) =>
+    request<GroupProbeModels>(`/api/groups/${encodeURIComponent(groupId)}/models`),
   syncManagement: () => request<Task>("/api/management/sync", { method: "POST" }),
   syncAccountRates: (accountIds: string[]) =>
     request<Task>("/api/management/accounts/rates/sync", {
@@ -1606,6 +1710,7 @@ export const api = {
     username?: string;
     password?: string;
     save_to_vault?: boolean;
+    accept_login_agreement?: boolean;
     entry?: string;
     headers?: Record<string, string>;
   }) =>
@@ -1631,10 +1736,19 @@ export const api = {
       { method: "DELETE" },
     );
   },
-  runAuthRecovery: (host: string, entry: string) =>
+  runAuthRecovery: (host: string, entry: string, acceptLoginAgreement?: boolean) =>
     request<Task>("/api/auth-recovery/run", {
       method: "POST",
-      body: JSON.stringify({ host, entry }),
+      body: JSON.stringify({
+        host,
+        entry,
+        ...(acceptLoginAgreement ? { accept_login_agreement: true } : {}),
+      }),
+    }),
+  runAuthRecoveryBatch: (hosts: string[]) =>
+    request<Task>("/api/auth-recovery/run-batch", {
+      method: "POST",
+      body: JSON.stringify({ hosts }),
     }),
   submitAuthCaptcha: (challengeId: string, captchaCode: string) =>
     request<CaptchaRecoveryResult>("/api/auth-recovery/captcha/submit", {
@@ -1665,18 +1779,7 @@ export const api = {
     request<RequestTrace>(`/api/usage/trace/${encodeURIComponent(requestId)}`),
   systemLogs: (params: SystemLogSearchQuery) => {
     const query = new URLSearchParams({
-      time_range: params.timeRange,
-      start_time: params.startTime,
-      end_time: params.endTime,
-      host: params.host,
-      level: params.level,
       request_id: params.requestId,
-      client_request_id: params.clientRequestId,
-      api_key_id: params.apiKeyId,
-      account_id: params.accountId,
-      platform: params.platform,
-      model: params.model,
-      q: params.keyword,
       page: String(params.page),
       page_size: String(params.pageSize),
     });
@@ -1728,5 +1831,10 @@ export const api = {
     request<ProbeResult>("/api/onboarding/probe", {
       method: "POST",
       body: JSON.stringify({ host, group_id: groupId, model }),
+    }),
+  cancelOnboardingProbe: (host: string, groupId: string) =>
+    request<{ cancelled: boolean }>("/api/onboarding/probe/cancel", {
+      method: "POST",
+      body: JSON.stringify({ host, group_id: groupId }),
     }),
 };

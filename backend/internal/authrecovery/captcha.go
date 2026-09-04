@@ -72,6 +72,8 @@ type CaptchaResult struct {
 	Stored          bool    `json:"stored"`
 	InteractionKind string  `json:"interaction_kind"`
 	ParentTaskID    *string `json:"-"`
+	AuthMode        string  `json:"-"`
+	VaultEntry      *string `json:"-"`
 }
 
 type storedChallenge struct {
@@ -298,10 +300,12 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 	m.mu.Lock()
 	delete(m.items, challengeID)
 	m.mu.Unlock()
+	vaultEntry := strings.TrimSpace(credential.Entry)
 	return CaptchaResult{
 		Success: true, Host: challenge.public.Host, ProfileStatus: "verified", Balance: nil,
 		Concurrency: nil, Keys: len(catalog.Keys), Groups: len(catalog.Groups), Stored: true,
 		InteractionKind: "image_captcha_ocr", ParentTaskID: challenge.parentTaskID,
+		AuthMode: verified.AuthMode, VaultEntry: &vaultEntry,
 	}, nil
 }
 

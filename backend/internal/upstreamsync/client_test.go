@@ -7,12 +7,30 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
+
+type networkFailureRoundTripper struct{}
+
+func (networkFailureRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: request.Method, URL: request.URL.String(), Err: errors.New("connection refused")}
+}
+
+func TestReaderDoesNotExposeInternalNetworkErrorType(t *testing.T) {
+	reader := NewReader(&http.Client{Transport: networkFailureRoundTripper{}})
+	_, _, err := reader.request(context.Background(), configstore.AuthRecord{
+		BaseURL: "https://api.example", Headers: map[string]string{}, Cookies: map[string]string{},
+	}, "/api/user/self", nil, false)
+
+	if err == nil || err.Error() != "上游网络请求失败" {
+		t.Fatalf("err=%v", err)
+	}
+}
 
 func TestReaderNormalizesNewAPINamedGroupsKeysAndBalanceWithoutFloat64(t *testing.T) {
 	var tokenPages int

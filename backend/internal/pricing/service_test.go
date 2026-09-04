@@ -924,6 +924,7 @@ type fakeRepository struct {
 	syncedGroups map[string][]string
 	backups      []business.PricingBackup
 	protections  map[string]business.AccountMutationProtection
+	changes      []business.PricingChangeRecord
 }
 
 func (repository *fakeRepository) AccountMutationProtection(_ context.Context, accountID string) (business.AccountMutationProtection, error) {
@@ -942,6 +943,10 @@ func (repository *fakeRepository) UpdatePolicy(_ context.Context, patch map[stri
 
 func (repository *fakeRepository) PricingCatalog(context.Context) (business.PricingCatalog, error) {
 	return repository.catalog, nil
+}
+
+func (repository *fakeRepository) PricingChangeRecords(_ context.Context, _ int) ([]business.PricingChangeRecord, error) {
+	return repository.changes, nil
 }
 
 func (repository *fakeRepository) RevenueCatalog(context.Context) (business.RevenueCatalog, error) {

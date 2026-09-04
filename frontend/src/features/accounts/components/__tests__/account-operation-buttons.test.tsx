@@ -62,34 +62,28 @@ function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
 describe("account operation buttons", () => {
   it("matches the channel pool operations without a multiplier threshold breaker", () => {
     const result = markup();
-    for (const label of [
-      "探活测试",
-      "暂停调度",
-      "手动熔断",
-      "同步账号倍率",
-      "设置人工优先位",
-      "查看并编辑账号",
-      "删除账号及上游 Key",
-    ]) {
+    for (const label of ["探活测试", "暂停调度", "手动熔断"]) {
       expect(result).toContain(label);
     }
-    expect(result).toContain("grid-cols-4");
-    expect(result).toContain("w-[9.5rem]");
+    expect(result).toContain('aria-label="更多账号操作"');
+    expect(result).toContain("lucide-ellipsis");
+    expect(result).toContain("flex");
+    expect(result).not.toContain("grid-cols-4");
+    expect(result).not.toContain("w-[9.5rem]");
     expect(result).toContain("lucide-activity");
     expect(result).not.toContain("lucide-scan-search");
     expect(result).not.toContain("排除账号");
     expect(result).not.toContain("倍率超阈值");
-    expect(result.match(/border-destructive\/40/g)).toHaveLength(2);
+    expect(result.match(/border-destructive\/40/g)).toHaveLength(1);
     expect(result).toContain("bg-destructive/10");
     expect(result).toContain("hover:bg-destructive/20");
   });
 
   it("shows an adjustment action for an assigned manual priority account", () => {
     const result = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
-    expect(result).toContain("调整人工优先位");
+    expect(result).toContain('aria-label="更多账号操作"');
     expect(result.match(/disabled/g)?.length).toBeGreaterThanOrEqual(4);
-    expect(result).toMatch(/disabled=""[^>]*aria-label="查看并编辑账号"/);
-    expect(result).not.toMatch(/disabled=""[^>]*aria-label="删除账号及上游 Key"/);
+    expect(result).not.toContain('aria-label="同步账号倍率"');
   });
 
   it("always enables cost sync for a manual account", () => {
@@ -122,7 +116,7 @@ describe("account operation buttons", () => {
     );
     const fused = markup({ health: "fused", routing_state: "fused", schedulable: false });
     expect(fused).toContain("解除熔断");
-    expect(fused.match(/border-destructive\/40/g)).toHaveLength(1);
+    expect(fused.match(/border-destructive\/40/g) ?? []).toHaveLength(0);
   });
 
   it("does not offer pause again when a policy already stopped scheduling", () => {
@@ -156,8 +150,7 @@ describe("account operation buttons", () => {
   it("keeps read-only rate sync available for an excluded account", () => {
     const result = markup({ health: "excluded", routing_state: "excluded", schedulable: false });
     expect(result).toContain("恢复管控");
-    expect(result).toContain("查看并编辑账号");
-    expect(result).toContain("同步账号倍率");
+    expect(result).toContain('aria-label="更多账号操作"');
     expect(result).not.toContain("探活测试");
     expect(result).not.toContain("手动熔断");
   });

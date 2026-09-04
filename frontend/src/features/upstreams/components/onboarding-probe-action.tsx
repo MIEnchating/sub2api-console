@@ -13,10 +13,14 @@ export function OnboardingProbeAction(props: {
   target: OnboardingProbeTarget | null;
   groupName: string;
   pending: boolean;
+  disabled?: boolean;
+  disabledReason?: string | null;
   onProbe: () => void;
 }) {
-  const available = props.target !== null;
-  const label = available ? "探活测试" : "当前不可探活";
+  const disabledReason = props.disabledReason?.trim();
+  const available = props.target !== null && !props.disabled;
+  let label = available ? "探活测试" : "当前不可探活";
+  if (!available && disabledReason) label = `当前不可探活：${disabledReason}`;
   return (
     <Tooltip>
       <TooltipTrigger render={<span className="inline-flex" />}>

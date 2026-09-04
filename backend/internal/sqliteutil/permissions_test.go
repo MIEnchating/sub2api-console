@@ -34,3 +34,20 @@ func TestPrepareAndSecureRestrictDatabaseAndSidecarPermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareDoesNotChangeExistingParentDirectoryPermissions(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "shared")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := Prepare(filepath.Join(directory, "console.sqlite3")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Fatalf("existing parent mode=%#o, want %#o", info.Mode().Perm(), os.FileMode(0o750))
+	}
+}

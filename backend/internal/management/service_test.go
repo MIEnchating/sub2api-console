@@ -53,6 +53,18 @@ type deferredManagementRunner struct {
 	run func(context.Context)
 }
 
+func TestPreserveAutomaticInspectionKeepsQueuedMaintenanceLowPriority(t *testing.T) {
+	automatic := mutationguard.WithAutomaticInspection(context.Background())
+	child := preserveAutomaticInspection(context.Background(), mutationguard.IsAutomaticInspection(automatic))
+	if !mutationguard.IsAutomaticInspection(child) {
+		t.Fatal("queued maintenance lost the automatic inspection marker")
+	}
+	manual := preserveAutomaticInspection(context.Background(), false)
+	if mutationguard.IsAutomaticInspection(manual) {
+		t.Fatal("manual maintenance unexpectedly inherited the automatic marker")
+	}
+}
+
 func (runner *deferredManagementRunner) Go(run func(context.Context)) error {
 	runner.run = run
 	return nil
@@ -141,6 +153,22 @@ type captureRepository struct {
 	afterBoundRead           func([]string)
 }
 
+type leaseCaptureRepository struct {
+	*captureRepository
+}
+
+func (*leaseCaptureRepository) AcquireMutationLease(context.Context, string, []string, time.Time, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (*leaseCaptureRepository) RenewMutationLease(context.Context, string, []string, time.Time, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (*leaseCaptureRepository) ReleaseMutationLease(context.Context, string, []string) error {
+	return nil
+}
+
 type protectedCaptureRepository struct {
 	*captureRepository
 	mu          sync.Mutex
@@ -189,6 +217,22 @@ func TestEnqueueAllAccountRateSyncQueuesEveryBoundAccount(t *testing.T) {
 	defer tasks.mu.Unlock()
 	if len(tasks.values) == 0 || tasks.values[0].Operation != "account-rate-sync" || tasks.values[0].Result["requested"] != 2 {
 		t.Fatalf("queued tasks = %#v", tasks.values)
+	}
+}
+
+func TestSelectAccountRateBatchSupportsCountPercentAndRotation(t *testing.T) {
+	ids := []string{"11", "12", "13", "14", "15"}
+	selected, cursor := selectAccountRateBatch(ids, 2, 0, 0)
+	if !reflect.DeepEqual(selected, []string{"11", "12"}) || cursor != 2 {
+		t.Fatalf("count batch=%#v cursor=%d", selected, cursor)
+	}
+	selected, cursor = selectAccountRateBatch(ids, 0, 40, cursor)
+	if !reflect.DeepEqual(selected, []string{"13", "14"}) || cursor != 4 {
+		t.Fatalf("percent batch=%#v cursor=%d", selected, cursor)
+	}
+	selected, _ = selectAccountRateBatch(ids, 0, 0, cursor)
+	if !reflect.DeepEqual(selected, []string{"15", "11", "12", "13", "14"}) {
+		t.Fatalf("rotated full batch=%#v", selected)
 	}
 }
 
@@ -1451,6 +1495,44 @@ func TestAccountRateSyncReleasesBatchResourcesBeforeAccountWrites(t *testing.T) 
 	}
 }
 
+func TestAccountRateSyncUsesLiveContextAfterReleasingBatchLease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v1/admin/accounts/upstream-billing-probe/batch":
+			_, _ = w.Write([]byte(`{"data":{"results":[{"account_id":11,"snapshot":{"status":"ok","data":{"resolved_rate_multiplier":0.6}}}]}}`))
+		case "/api/v1/admin/accounts":
+			_, _ = w.Write([]byte(`{"data":{"items":[{"id":11,"name":"Relay-0.1","rate_multiplier":0.1}],"total":1}}`))
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	base := &captureRepository{maintenance: []business.BoundAccountMaintenance{{
+		AccountID: "11", AccountName: "Relay-0.1", UpstreamHost: "upstream.example",
+		CurrentMultiplier: "0.1", RechargeRate: "10", NamingSiteName: "Relay",
+		NamingBaseURL: "https://upstream.example",
+	}}}
+	repository := &leaseCaptureRepository{captureRepository: base}
+	captured := &captureRateWriter{}
+	writer := &guardedCaptureRateWriter{
+		captureRateWriter:    captured,
+		repository:           repository,
+		requireOuterReleased: true,
+	}
+	service := New(staticTarget{value: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 1,
+	}}, repository, &memoryTasks{}, writer)
+
+	result, err := service.syncAccountRates(context.Background(), []string{"11"}, "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["updated"] != 1 || result["failed"] != 0 || captured.calls != 1 {
+		t.Fatalf("rate write used a released lease context: result=%#v calls=%d", result, captured.calls)
+	}
+}
+
 func TestAccountRateObservationRechecksProtectionAfterAcquiringAccountLease(t *testing.T) {
 	probeSeen := make(chan struct{}, 1)
 	var accountCatalogReads atomic.Int32
@@ -1984,11 +2066,11 @@ func TestAccountRateSyncReportsUnboundAccountWithItsStoredNameWithoutReadingRemo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["failed"] != 1 || requests != 0 {
+	if result["failed"] != 0 || result["missing"] != 1 || requests != 0 {
 		t.Fatalf("result=%#v requests=%d", result, requests)
 	}
 	items := result["items"].([]map[string]any)
-	if len(items) != 1 || items[0]["account_name"] != "Existing Account-0.15" {
+	if len(items) != 1 || items[0]["account_name"] != "Existing Account-0.15" || items[0]["status"] != "未绑定" {
 		t.Fatalf("items=%#v", items)
 	}
 }
@@ -2023,6 +2105,34 @@ func TestAccountRateSyncReadsNewAPIStableTokensAndLoadsEachHostOnce(t *testing.T
 	}
 	if result["updated"] != 2 || result["failed"] != 0 || reader.calls != 1 || writer.values["11"] != "0.15" || writer.values["12"] != "0.15" {
 		t.Fatalf("result=%#v calls=%d values=%#v", result, reader.calls, writer.values)
+	}
+}
+
+func TestAccountRateSyncReusesInspectionCatalogSnapshot(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"items":[{"id":11,"name":"alpha","rate_multiplier":0.15}],"total":1}}`))
+	}))
+	defer server.Close()
+	repository := &captureRepository{maintenance: []business.BoundAccountMaintenance{{
+		AccountID: "11", AccountName: "alpha", UpstreamHost: "api.example", UpstreamType: "newapi",
+		UpstreamKeyID: "101", UpstreamGroupID: "pro", RechargeRate: "2", CurrentMultiplier: "0.15",
+	}}}
+	rate := "0.3"
+	group := "pro"
+	reader := &captureCatalogReader{err: errors.New("catalog should not be read when snapshot is supplied")}
+	writer := &captureRateWriter{}
+	service := New(targetWithAuth{
+		staticTarget: staticTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 1}},
+		record:       configstore.AuthRecord{Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi"},
+	}, repository, &memoryTasks{}, writer)
+	service.UseUpstreamCatalogReader(reader)
+
+	result, err := service.SyncAllAccountRatesWithCatalog(context.Background(), "auto-inspection", map[string]business.UpstreamCatalogSnapshot{
+		"api.example": {Groups: []business.UpstreamCatalogGroup{{GroupID: group, Name: group, RawRate: &rate}}, Keys: []business.UpstreamCatalogKey{{KeyID: "101", UpstreamGroup: &group}}},
+	})
+	if err != nil || result["failed"] != 0 || result["updated"] != 1 || reader.calls != 0 || writer.values["11"] != "0.15" {
+		t.Fatalf("result=%#v reader_calls=%d values=%#v err=%v", result, reader.calls, writer.values, err)
 	}
 }
 

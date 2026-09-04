@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { GroupStatus } from "@/api";
 
 import {
+  accountPlatformLabel,
   accountTypeLabel,
   accountTypeOptions,
   accountTypeValue,
@@ -46,6 +47,10 @@ describe("account type dictionary", () => {
 });
 
 describe("group platform dictionary", () => {
+  it("displays the OpenCode platform label for onboarding candidates", () => {
+    expect(accountPlatformLabel("opencode")).toBe("OpenCode");
+  });
+
   it.each([
     ["anthropic", "Anthropic"],
     ["openai", "OpenAI"],
@@ -55,6 +60,7 @@ describe("group platform dictionary", () => {
     ["kimi", "Kimi"],
     ["zhipu", "Zhipu GLM"],
     ["deepseek", "DeepSeek"],
+    ["opencode", "OpenCode"],
     ["composite", "Composite"],
   ])("displays Sub2API platform %s as %s", (platform, label) => {
     expect(groupPlatformSummary({ ...group, platform })).toBe(label);

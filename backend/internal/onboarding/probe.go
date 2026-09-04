@@ -28,6 +28,7 @@ const (
 	onboardingProbeResponseLimit = 4 << 20
 	probeCleanupTimeout          = 20 * time.Second
 	probeReconcileInterval       = 250 * time.Millisecond
+	probeSessionTTL              = 5 * time.Minute
 )
 
 type ProbeResult struct {
@@ -49,9 +50,12 @@ type probeCredential struct {
 	candidate business.OnboardingCandidate
 	key       upstreamsync.CreatedKey
 	temporary bool
+	expiresAt time.Time
 }
 
 func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]string, error) {
+	s.beginProbeModels(host, groupID)
+	defer s.endProbeModels(host, groupID)
 	guardedCtx, release, err := mutationguard.Acquire(
 		ctx, s.repository, mutationguard.Upstream(host), mutationguard.UpstreamKeyCatalog(host),
 	)
@@ -59,23 +63,46 @@ func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]stri
 		return nil, err
 	}
 	defer s.releaseProbeMutation(release, host)
-	credential, err := s.acquireProbeCredential(guardedCtx, host, groupID)
+	if s.consumeProbeCancellation(host, groupID) {
+		return nil, errors.New("探活已取消")
+	}
+	credential, found := s.probeSession(host, groupID)
+	if !found {
+		credential, err = s.acquireProbeCredential(guardedCtx, host, groupID)
+	}
 	if err != nil {
 		return nil, err
 	}
 	models, requestErr := fetchProbeModels(guardedCtx, credential.auth.BaseURL, credential.key.Secret)
-	cleanupErr := s.cleanupProbeCredential(credential)
+	var cleanupErr error
+	if requestErr != nil && credential.temporary {
+		s.removeProbeSession(host, groupID)
+		s.clearProbeCancellation(host, groupID)
+		cleanupErr = s.cleanupProbeCredential(credential)
+	}
 	if requestErr != nil {
 		if cleanupErr != nil {
 			return nil, fmt.Errorf("%v；临时测试 Key 清理失败：%w", requestErr, cleanupErr)
 		}
 		return nil, requestErr
 	}
-	if cleanupErr != nil {
-		return nil, fmt.Errorf("模型读取完成，但临时测试 Key 清理失败：%w", cleanupErr)
-	}
 	if len(models) == 0 {
+		if credential.temporary {
+			s.removeProbeSession(host, groupID)
+			s.clearProbeCancellation(host, groupID)
+			if err := s.cleanupProbeCredential(credential); err != nil {
+				return nil, fmt.Errorf("上游模型接口未返回可选择的模型；临时测试 Key 清理失败：%w", err)
+			}
+		}
 		return nil, errors.New("上游模型接口未返回可选择的模型")
+	}
+	if credential.temporary {
+		if !s.saveProbeSessionUnlessCanceled(host, groupID, credential) {
+			if err := s.cleanupProbeCredential(credential); err != nil {
+				return nil, fmt.Errorf("探活已取消；临时测试 Key 清理失败：%w", err)
+			}
+			return nil, errors.New("探活已取消")
+		}
 	}
 	return models, nil
 }
@@ -92,7 +119,10 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string) (Probe
 		return ProbeResult{}, err
 	}
 	defer s.releaseProbeMutation(release, host)
-	credential, err := s.acquireProbeCredential(guardedCtx, host, groupID)
+	credential, fromSession := s.takeProbeSession(host, groupID)
+	if !fromSession {
+		credential, err = s.acquireProbeCredential(guardedCtx, host, groupID)
+	}
 	if err != nil {
 		return ProbeResult{}, err
 	}
@@ -109,6 +139,146 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string) (Probe
 		return result, fmt.Errorf("探活请求完成，但临时测试 Key 清理失败：%w", cleanupErr)
 	}
 	return result, nil
+}
+
+// CancelProbe releases a temporary Key retained between model discovery and
+// the probe request. It is safe to call when no probe session exists.
+func (s *Service) CancelProbe(ctx context.Context, host, groupID string) error {
+	key := s.probeSessionKey(host, groupID)
+	s.probeMu.Lock()
+	active := s.probeActive[key]
+	s.probeMu.Unlock()
+	if !active {
+		// Wait for a concurrent Probe request to finish before taking its session.
+		// This keeps cancellation from racing with the second probe phase.
+		if _, found := s.probeSession(host, groupID); !found {
+			return nil
+		}
+	} else {
+		s.probeMu.Lock()
+		s.probeCanceled[key] = true
+		s.probeMu.Unlock()
+	}
+	guardedCtx, release, err := mutationguard.Acquire(
+		ctx, s.repository, mutationguard.Upstream(host), mutationguard.UpstreamKeyCatalog(host),
+	)
+	if err != nil {
+		return err
+	}
+	defer s.releaseProbeMutation(release, host)
+	credential, found := s.takeProbeSession(host, groupID)
+	if !found || !credential.temporary {
+		return nil
+	}
+	return s.cleanupProbeCredentialWithContext(guardedCtx, credential)
+}
+
+func (s *Service) probeSessionKey(host, groupID string) string {
+	return configstore.CanonicalHost(host) + "\x00" + strings.TrimSpace(groupID)
+}
+
+func (s *Service) saveProbeSessionUnlessCanceled(host, groupID string, credential probeCredential) bool {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	key := s.probeSessionKey(host, groupID)
+	if s.probeCanceled[key] {
+		delete(s.probeCanceled, key)
+		return false
+	}
+	if s.probeSessions == nil {
+		s.probeSessions = map[string]probeCredential{}
+	}
+	s.probeSessions[key] = credential
+	if credential.temporary && !credential.expiresAt.IsZero() {
+		delay := time.Until(credential.expiresAt)
+		time.AfterFunc(max(delay, 0), func() { s.expireProbeSession(key, credential) })
+	}
+	return true
+}
+
+func (s *Service) expireProbeSession(key string, expected probeCredential) {
+	s.probeMu.Lock()
+	current, found := s.probeSessions[key]
+	if !found || current.key.KeyID != expected.key.KeyID || !current.expiresAt.Equal(expected.expiresAt) {
+		s.probeMu.Unlock()
+		return
+	}
+	delete(s.probeSessions, key)
+	s.probeMu.Unlock()
+	if err := s.cleanupProbeCredential(current); err != nil {
+		slog.Error("过期探活 Key 清理失败", "host", current.auth.Host, "key_id", current.key.KeyID, "error", redact.Secrets(err.Error()))
+	}
+}
+
+func (s *Service) takeProbeSession(host, groupID string) (probeCredential, bool) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	credential, found := s.probeSessions[s.probeSessionKey(host, groupID)]
+	if found {
+		delete(s.probeSessions, s.probeSessionKey(host, groupID))
+	}
+	return credential, found
+}
+
+func (s *Service) probeSession(host, groupID string) (probeCredential, bool) {
+	s.probeMu.Lock()
+	key := s.probeSessionKey(host, groupID)
+	credential, found := s.probeSessions[key]
+	if found && credential.temporary && !credential.expiresAt.IsZero() && time.Now().After(credential.expiresAt) {
+		delete(s.probeSessions, key)
+		s.probeMu.Unlock()
+		go func() {
+			if err := s.cleanupProbeCredential(credential); err != nil {
+				slog.Error("过期探活 Key 清理失败", "host", credential.auth.Host, "key_id", credential.key.KeyID, "error", redact.Secrets(err.Error()))
+			}
+		}()
+		return probeCredential{}, false
+	}
+	s.probeMu.Unlock()
+	return credential, found
+}
+
+func (s *Service) removeProbeSession(host, groupID string) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	delete(s.probeSessions, s.probeSessionKey(host, groupID))
+}
+
+func (s *Service) beginProbeModels(host, groupID string) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	if s.probeActive == nil {
+		s.probeActive = map[string]bool{}
+	}
+	if s.probeCanceled == nil {
+		s.probeCanceled = map[string]bool{}
+	}
+	s.probeActive[s.probeSessionKey(host, groupID)] = true
+}
+
+func (s *Service) endProbeModels(host, groupID string) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	key := s.probeSessionKey(host, groupID)
+	delete(s.probeActive, key)
+	delete(s.probeCanceled, key)
+}
+
+func (s *Service) consumeProbeCancellation(host, groupID string) bool {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	key := s.probeSessionKey(host, groupID)
+	if !s.probeCanceled[key] {
+		return false
+	}
+	delete(s.probeCanceled, key)
+	return true
+}
+
+func (s *Service) clearProbeCancellation(host, groupID string) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	delete(s.probeCanceled, s.probeSessionKey(host, groupID))
 }
 
 func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID string) (probeCredential, error) {
@@ -173,10 +343,15 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 		return probeCredential{}, fmt.Errorf("临时测试 Key 创建失败：%w", err)
 	}
 	credential.temporary = true
+	credential.expiresAt = time.Now().Add(probeSessionTTL)
 	return credential, nil
 }
 
 func (s *Service) cleanupProbeCredential(credential probeCredential) error {
+	return s.cleanupProbeCredentialWithContext(context.Background(), credential)
+}
+
+func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, credential probeCredential) error {
 	if !credential.temporary {
 		return nil
 	}
@@ -184,7 +359,7 @@ func (s *Service) cleanupProbeCredential(credential probeCredential) error {
 	if !ok {
 		return errors.New("上游客户端不支持删除 Key")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), probeCleanupTimeout)
+	ctx, cancel := context.WithTimeout(parent, probeCleanupTimeout)
 	defer cancel()
 	return deleter.DeleteKey(ctx, credential.auth, credential.key.KeyID)
 }

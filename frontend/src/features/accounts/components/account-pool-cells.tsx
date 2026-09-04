@@ -18,14 +18,33 @@ function latencySeconds(value: number | null): string {
   return `${secondsFormatter.format(value / 1000)}s`;
 }
 
+function healthScoreValue(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 export function AccountHealthCell(props: { account: AccountStatus }) {
+  const account = props.account;
   return (
-    <AccountHealthScore
-      score={props.account.health_score}
-      shortScore={props.account.short_score}
-      longScore={props.account.long_score}
-      sampleCount={props.account.sample_count}
-    />
+    <Tooltip>
+      <TooltipTrigger
+        render={<div className="inline-flex" tabIndex={0} aria-label="查看健康分评分构成" />}
+      >
+        <AccountHealthScore
+          score={account.health_score}
+          shortScore={account.short_score}
+          longScore={account.long_score}
+          sampleCount={account.sample_count}
+        />
+      </TooltipTrigger>
+      <TooltipContent className="grid gap-1.5 text-xs">
+        <strong>评分构成</strong>
+        <span>综合健康分：{healthScoreValue(account.health_score)}</span>
+        <span>短期评分：{healthScoreValue(account.short_score)}</span>
+        <span>长期评分：{healthScoreValue(account.long_score)}</span>
+        <span>样本数：{account.sample_count}</span>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -321,15 +340,12 @@ function accountSchedulingStopReason(
   return null;
 }
 
-function AccountStateDetail(props: { children: string; tone?: "default" | "danger" }) {
+function AccountStateDetail(props: { children: string; tone?: "default" | "warning" | "danger" }) {
+  let toneClass = "text-muted-foreground";
+  if (props.tone === "danger") toneClass = "text-destructive";
+  if (props.tone === "warning") toneClass = "text-warning";
   return (
-    <TableOverflowTooltip
-      content={props.children}
-      className={cn(
-        "max-w-48 text-xs",
-        props.tone === "danger" ? "text-destructive" : "text-muted-foreground",
-      )}
-    >
+    <TableOverflowTooltip content={props.children} className={cn("max-w-48 text-xs", toneClass)}>
       {props.children}
     </TableOverflowTooltip>
   );
@@ -372,9 +388,13 @@ export function AccountStateCell(props: { account: AccountStatus }) {
       ) : (
         badge
       )}
-      {stateReason ? <AccountStateDetail>{stateReason}</AccountStateDetail> : null}
+      {stateReason ? (
+        <AccountStateDetail tone={state.value === "degraded" ? "warning" : "default"}>
+          {stateReason}
+        </AccountStateDetail>
+      ) : null}
       {errorMessage && errorMessage !== stateReason ? (
-        <AccountStateDetail>{errorMessage}</AccountStateDetail>
+        <AccountStateDetail tone="danger">{errorMessage}</AccountStateDetail>
       ) : null}
       {stopMessage ? <AccountStateDetail tone="danger">{stopMessage}</AccountStateDetail> : null}
     </div>

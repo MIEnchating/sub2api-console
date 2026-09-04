@@ -290,6 +290,34 @@ func TestProbeAlertsKeepAccountGroupsIndependent(t *testing.T) {
 	assertAlertStatus(t, store, "console:probe:41:pro", "firing")
 }
 
+func TestProbeAlertCauseShowsActualRetryCount(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	policy := DefaultAlertPolicy()
+	policy.ProbeFailureStreak = 1
+	if _, err := store.UpdateAlertPolicy(ctx, alertPolicyDocument(policy)); err != nil {
+		t.Fatal(err)
+	}
+	reason := `API returned 503: {"error":{"message":"Service temporarily unavailable"}}`
+	if _, err := store.PersistProbeSamples(ctx, []ProbeSample{{
+		AccountID: "99", GroupName: "codex-特价", Result: "失败", Attempts: 4,
+		FailureReason: &reason, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EvaluateAlertIncidents(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var causeCode string
+	if err := store.db.QueryRow(`SELECT cause_code FROM alert_incidents
+		WHERE incident_key='console:probe:99:codex-特价'`).Scan(&causeCode); err != nil {
+		t.Fatal(err)
+	}
+	if causeCode != "PROBE:已重试 3 次；"+reason {
+		t.Fatalf("probe retry count is missing from cause: %q", causeCode)
+	}
+}
+
 func TestProbeAlertWaitsForConsecutiveRecoveryEvidence(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

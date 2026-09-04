@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -184,6 +186,9 @@ func (s *Store) RecordAccountOperation(ctx context.Context, operation AccountOpe
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err
 	}
+	if err := s.insertMultiplierChangeIncident(ctx, tx, operation); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -257,7 +262,77 @@ func (s *Store) commitAccountMutation(
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err
 	}
+	if err := s.insertMultiplierChangeIncident(ctx, tx, operation); err != nil {
+		return err
+	}
 	return tx.Commit()
+}
+
+func (s *Store) insertMultiplierChangeIncident(ctx context.Context, tx *sql.Tx, operation AccountOperation) error {
+	if operation.OperationType != "account.sync" || operation.State != "succeeded" ||
+		!operation.RemoteConfirmed || !operation.ReadbackConfirmed {
+		return nil
+	}
+	before, beforeText, beforeOK := accountOperationMultiplier(operation.Before)
+	after, afterText, afterOK := accountOperationMultiplier(operation.After)
+	if !beforeOK || !afterOK {
+		return nil
+	}
+	direction := before.Cmp(after)
+	if direction == 0 {
+		return nil
+	}
+	document, err := s.readPolicyDocument(ctx, tx, "alert-policy")
+	if err != nil {
+		return err
+	}
+	policy := DefaultAlertPolicy()
+	if document != nil {
+		policy, err = normalizeAlertPolicy(document, true)
+		if err != nil {
+			return err
+		}
+	}
+	if !policy.Enabled {
+		return nil
+	}
+	eventType := "account.multiplier_increased"
+	causeCode := "MULTIPLIER_INCREASED:"
+	enabled := policy.MultiplierIncreaseEnabled
+	if direction > 0 {
+		eventType = "account.multiplier_decreased"
+		causeCode = "MULTIPLIER_DECREASED:"
+		enabled = policy.MultiplierDecreaseEnabled
+	}
+	if !enabled {
+		return nil
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = tx.ExecContext(ctx, `INSERT INTO alert_incidents(
+		incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at,delivery_status,last_error
+	) VALUES(?,?,'account',?,?,'firing',?,?,'未配置渠道',NULL) ON CONFLICT(incident_key) DO NOTHING`,
+		"console:multiplier-change:"+operation.OperationID, eventType, operation.ObjectID,
+		causeCode+beforeText+" -> "+afterText, now, now)
+	return err
+}
+
+func accountOperationMultiplier(value any) (*big.Rat, string, bool) {
+	fields, ok := value.(map[string]any)
+	if !ok {
+		return nil, "", false
+	}
+	raw, found := fields["rate_multiplier"]
+	if !found {
+		raw, found = fields["multiplier"]
+	}
+	if !found || raw == nil {
+		return nil, "", false
+	}
+	rate, ok := new(big.Rat).SetString(strings.TrimSpace(fmt.Sprint(raw)))
+	if !ok || rate.Sign() <= 0 {
+		return nil, "", false
+	}
+	return rate, decimalRatText(rate), true
 }
 
 func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOperation) error {

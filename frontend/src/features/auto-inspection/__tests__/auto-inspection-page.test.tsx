@@ -387,11 +387,13 @@ describe("自动巡检页面", () => {
     const markup = renderPage();
 
     expect(markup).toContain("自动巡检");
+    expect(markup).toContain('aria-label="刷新自动巡检"');
     expect(markup).toContain("巡检服务");
     expect(markup).toContain("这里只控制后台服务与心跳");
     expect(markup).toContain("各任务执行周期统一在调度策略中配置");
     expect(markup).toContain('aria-label="启用自动巡检"');
     expect(markup).toContain('aria-label="调度心跳周期"');
+    expect(markup).not.toContain('aria-label="倍率同步周期"');
     expect(markup).toContain('min="15"');
     expect(markup).toContain('max="86400"');
     expect(markup).toContain(">秒<");
@@ -450,13 +452,24 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("本轮仅检查任务是否到期，未执行其他操作");
   });
 
+  it("清空调度心跳后保留空值并延迟到保存时校验", () => {
+    const markup = renderPage({
+      ...status,
+      interval_seconds: null,
+    } as unknown as AutoInspectionStatus);
+    const inputPosition = markup.indexOf('aria-label="调度心跳周期"');
+    const inputStart = markup.lastIndexOf("<input", inputPosition);
+    const inputEnd = markup.indexOf(">", inputStart);
+
+    expect(markup.slice(inputStart, inputEnd)).not.toContain('value="15"');
+    expect(markup).not.toContain("调度心跳必须为 15 到 86400 秒");
+  });
+
   it("在宽屏固定工作区内分别滚动任务队列和心跳记录", () => {
     const markup = renderPage();
 
     expect(markup).toContain('data-testid="auto-inspection-layout"');
-    expect(markup).toContain(
-      "flex h-full min-h-0 w-full flex-col gap-3 overflow-y-auto overscroll-contain",
-    );
+    expect(markup).toContain("flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden");
     expect(markup).toContain('data-testid="auto-inspection-overview"');
     expect(markup).toContain("grid shrink-0 items-stretch gap-3");
     expect(markup).toContain("xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]");
@@ -468,7 +481,7 @@ describe("自动巡检页面", () => {
     expect(markup).not.toContain("2xl:grid-cols-8");
     expect(markup).not.toContain("grid grid-cols-2 divide-x divide-y");
     expect(markup).toContain('data-testid="auto-inspection-workspace"');
-    expect(markup).toContain("min-[1700px]:min-h-80 min-[1700px]:flex-1");
+    expect(markup).toContain("min-h-0 flex-1 grid items-start gap-3 overflow-y-auto");
     expect(markup).toContain("min-[1700px]:grid-cols-[minmax(38rem,0.95fr)_minmax(0,1.55fr)]");
     expect(markup).toContain('data-testid="auto-inspection-queue-scroll-area"');
     expect(markup).toContain('data-testid="auto-inspection-heartbeat-table"');
@@ -502,6 +515,9 @@ describe("自动巡检页面", () => {
       expect(markup).toContain('data-slot="queue-operations"');
       expect(markup.match(/data-slot="queue-operation"/g)).toHaveLength(7);
       expect(markup).toContain('data-sequence="1"');
+      expect(markup).toContain("主巡检任务");
+      expect(markup).toContain("主巡检步骤");
+      expect(markup).toContain("独立定时任务");
       expect(markup).toContain("本轮执行");
       expect(markup).toContain("查看任务详情");
     } finally {
@@ -513,20 +529,23 @@ describe("自动巡检页面", () => {
     const details = renderToStaticMarkup(<AutoInspectionQueueDetails item={status.queue[0]} />);
 
     expect(details).toContain("任务概况");
+    expect(details).toContain("主巡检任务");
     expect(details).toContain("执行计划");
     expect(details).toContain(
       "包含到期操作：上游数据同步、账号倍率与名称同步、真实流量同步、主动探测、调度计算、自动执行、告警检测",
     );
     expect(details.match(/data-slot="queue-detail-operation"/g)).toHaveLength(7);
     expect(details).toContain("上游数据同步");
+    expect(details).toContain("主巡检步骤");
     expect(details).toContain("同步上游分组目录和该上游全部账号共享的余额");
     expect(details).toContain("账号倍率与名称同步");
+    expect(details).toContain("独立定时任务");
     expect(details).toContain("每2分钟");
     expect(details).toContain("本轮执行");
     expect(details).toContain("2 个账号");
   });
 
-  it("显示已完成耗时并为执行中任务提供实时计时", () => {
+  it("用紧凑步骤行显示已完成耗时并为执行中任务提供实时计时", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-26T08:00:42Z"));
 
     try {
@@ -547,10 +566,14 @@ describe("自动巡检页面", () => {
       expect(markup).not.toContain('data-slot="operation-timing-list"');
       expect(markup).not.toContain('data-slot="heartbeat-step"');
       expect(details).toContain('data-slot="operation-timing-list"');
-      expect(details).toContain('data-slot="heartbeat-step"');
-      expect(details).toContain('data-slot="heartbeat-timeline-connector"');
-      expect(details.match(/data-slot="heartbeat-step-card"/g)).toHaveLength(6);
-      expect(details.match(/data-slot="heartbeat-step-time"/g)).toHaveLength(6);
+      expect(details).toContain("主巡检步骤");
+      expect(details).toContain("总耗时（并行不累加）");
+      expect(details.match(/data-slot="heartbeat-step-row"/g)).toHaveLength(5);
+      expect(details).not.toContain('data-slot="heartbeat-step-card"');
+      expect(details).not.toContain('data-slot="heartbeat-step-marker"');
+      expect(details).not.toContain('data-slot="heartbeat-timeline-connector"');
+      expect(details).not.toContain("以下步骤在同一个主巡检任务中执行");
+      expect(details).not.toContain("第 1 步");
       expect(details).not.toContain("耗时占比");
       expect(details).toContain("1分12秒");
       expect(details).toContain("14秒");
@@ -562,17 +585,77 @@ describe("自动巡检页面", () => {
       expect(details).not.toContain("证据采集");
       expect(details).toContain("上游：共 5 个，成功 3 个，失败 2 个");
       expect(details).toContain("同步内容：上游目录、共享余额");
+      expect(details).toContain("主巡检 · 上游数据同步内容");
       expect(details).toContain(
         "检查 30 个绑定账号，更新 6 个、无需更新 22 个、缺失 1 个、失败 1 个",
       );
       expect(details.match(/>并行</g)).toHaveLength(2);
+      expect(details).not.toContain("本项耗时");
+      expect(details).not.toContain("结束时间");
       expect(details).not.toContain("余额：已同步");
       expect(details).toContain("监控 30 个账号，新增 120 条流量样本、8 条探测样本");
       expect(details).toContain("计算 30 个账号、4 个分组，新增熔断 2 个、恢复 1 个、降级 3 个");
       expect(details).toContain("发现 5 项异常");
+      expect(details).toContain("独立定时任务");
+      expect(details).toContain("账号倍率与名称同步");
+      expect(details).toContain("独立执行");
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("默认折叠心跳关联任务和大量上游 Host 明细", () => {
+    const manyHosts = Array.from({ length: 50 }, (_, index) => ({
+      host: `host-${index + 1}.example`,
+      status: index < 47 ? "succeeded" : "failed",
+      key_count: index < 47 ? index + 1 : 0,
+    }));
+    const heartbeatTask: Task = {
+      ...inspectionTask,
+      result: {
+        ...inspectionTask.result,
+        upstream_sync: {
+          total: 50,
+          succeeded: 47,
+          auth_failed: 0,
+          failed: 3,
+          account_total: 100,
+          account_rate_succeeded: 94,
+          account_rate_failed: 6,
+          hosts: manyHosts,
+        },
+      },
+    };
+    const upstreamTask: Task = {
+      ...inspectionTask,
+      id: "upstream-sync-20260826",
+      operation: "upstream-sync",
+      result: { succeeded: 47, auth_failed: 0, failed: 3, items: [] },
+    };
+    const accountRateTask: Task = {
+      ...inspectionTask,
+      id: "account-rate-20260826",
+      operation: "account-rate-sync",
+      result: { updated: 6, unchanged: 22, skipped: 0, missing: 1, failed: 1, items: [] },
+    };
+
+    const details = renderToStaticMarkup(
+      <AutoInspectionHeartbeatDetails
+        record={status.heartbeat_history[2]}
+        task={heartbeatTask}
+        upstreamSyncTask={upstreamTask}
+        accountRateSyncTask={accountRateTask}
+      />,
+    );
+
+    expect(details).toContain('data-slot="heartbeat-upstream-task-details"');
+    expect(details).toContain('data-slot="heartbeat-upstream-host-details"');
+    expect(details).toContain('data-slot="heartbeat-rate-task-details"');
+    expect(details).not.toMatch(
+      /data-slot="heartbeat-(?:upstream-task|upstream-host|rate-task)-details"[^>]* open/,
+    );
+    expect(details).toContain("50 个 Host · 成功 47 · 失败 3");
+    expect(details.match(/data-slot="heartbeat-upstream-host-row"/g)).toHaveLength(50);
   });
 
   it("执行中的心跳详情显示当前任务进度和后续排队任务", () => {
@@ -586,6 +669,7 @@ describe("自动巡检页面", () => {
     );
 
     expect(details).toContain("任务执行队列");
+    expect(details).toContain("主巡检任务");
     expect(details).toContain("正在并行同步上游数据、读取真实请求记录并执行主动探测");
     expect(details).toContain("35%");
     expect(details).toContain("已完成");
@@ -593,12 +677,41 @@ describe("自动巡检页面", () => {
     expect(details.match(/data-state="queued"/g)).toHaveLength(4);
     expect(details).toContain("排队中");
     expect(details).toContain("上游数据同步");
+    expect(details).toContain("主巡检步骤");
     expect(details).toContain("账号倍率与名称同步");
+    expect(details).toContain("独立定时任务");
     expect(details).toContain("真实流量同步");
     expect(details).toContain("主动探测");
     expect(details).toContain("调度计算");
     expect(details).toContain("自动执行");
     expect(details).toContain("告警检测");
+  });
+
+  it("独立倍率任务加载后显示独立状态和任务 ID", () => {
+    const accountRateTask: Task = {
+      ...inspectionTask,
+      id: "account-rate-20260826",
+      operation: "account-rate-sync",
+      status: "queued",
+      progress: 0,
+      message: "等待执行账号倍率与名称同步",
+      result: {},
+    };
+
+    const details = renderToStaticMarkup(
+      <AutoInspectionHeartbeatDetails
+        record={status.heartbeat_history[2]}
+        task={inspectionTask}
+        accountRateSyncTask={accountRateTask}
+      />,
+    );
+
+    expect(details).toContain('data-slot="independent-scheduled-task"');
+    expect(details).toContain("独立定时任务");
+    expect(details).toContain("账号倍率与名称同步");
+    expect(details).toContain("排队中");
+    expect(details).toContain("account-rate-20260826");
+    expect(details).toContain("等待执行账号倍率与名称同步");
   });
 
   it("巡检服务区不重复显示错误并由心跳记录提供详情入口", () => {
@@ -625,11 +738,10 @@ describe("自动巡检页面", () => {
     expect(details).toContain("巡检概况");
     expect(details).toContain("失败原因");
     expect(details).toContain("上游同步部分失败：鉴权 2，其他 1");
-    expect(details).toContain("执行时间线");
+    expect(details).toContain("主巡检步骤");
     expect(details).toContain("上游数据同步");
     expect(details).toContain("告警检测");
-    expect(details).toContain('data-slot="heartbeat-step-marker"');
-    expect(details).toContain("relative flex items-center justify-center");
+    expect(details).toContain('data-slot="heartbeat-step-row"');
     expect(details).not.toContain("任务 ID");
     expect(details).not.toContain("耗时占比");
   });
@@ -715,6 +827,26 @@ describe("自动巡检页面", () => {
     expect(markup).not.toContain("合并巡检");
     expect(markup).not.toContain(">当前心跳<");
     expect(markup).not.toContain(">最近一次心跳<");
+  });
+
+  it("自动巡检让位时显示取消原因而不是失败原因", () => {
+    const record: AutoInspectionStatus["heartbeat_history"][number] = {
+      ...status.heartbeat_history[2],
+      status: "cancelled",
+      error: null,
+    };
+    const task: Task = {
+      ...inspectionTask,
+      result: { ...inspectionTask.result, cancel_reason: "自动巡检已让位于手工操作" },
+    };
+
+    const details = renderToStaticMarkup(
+      <AutoInspectionHeartbeatDetails record={record} task={task} />,
+    );
+
+    expect(details).toContain("取消原因");
+    expect(details).toContain("自动巡检已让位于手工操作");
+    expect(details).not.toContain("失败原因");
   });
 
   it("用直白文案说明尚未安排到本轮的任务和操作", () => {

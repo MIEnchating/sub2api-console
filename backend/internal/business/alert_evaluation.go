@@ -73,7 +73,8 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 			}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents WHERE status IN ('firing','suppressed')`)
+	rows, err := tx.QueryContext(ctx, `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents
+		WHERE status IN ('firing','suppressed') AND event_type NOT IN ('account.multiplier_increased','account.multiplier_decreased')`)
 	if err != nil {
 		return AlertEvidenceResult{}, err
 	}
@@ -186,6 +187,10 @@ func alertRuleEnabled(policy AlertPolicy, eventType, causeCode string) bool {
 		return policy.AuthEnabled
 	case "upstream.rate_sync":
 		return policy.RateSyncEnabled
+	case "account.multiplier_increased":
+		return policy.MultiplierIncreaseEnabled
+	case "account.multiplier_decreased":
+		return policy.MultiplierDecreaseEnabled
 	case "upstream.balance":
 		return policy.BalanceEnabled
 	case "account.probe":
@@ -690,7 +695,7 @@ func (s *Store) probeEvidence(
 	limit int,
 	cutoff time.Time,
 ) (int, int, int, string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at FROM health_samples INDEXED BY ix_health_samples_probe_recent
+	rows, err := s.db.QueryContext(ctx, `SELECT result,failure_reason,observed_at,attempts FROM health_samples INDEXED BY ix_health_samples_probe_recent
 		WHERE account_id=? AND group_name=? AND LOWER(REPLACE(source,'_','-')) IN ('active-probe','probe')
 		AND LOWER(TRIM(result)) IN ('通过','passed','pass','success','succeeded','healthy','ok',
 			'失败','failed','error','timeout','超时','probe failed','unhealthy','管理 api 异常')
@@ -704,7 +709,8 @@ func (s *Store) probeEvidence(
 	streakComplete := false
 	for rows.Next() {
 		var result, failureReason, observedAt sql.NullString
-		if err := rows.Scan(&result, &failureReason, &observedAt); err != nil {
+		var attempts sql.NullInt64
+		if err := rows.Scan(&result, &failureReason, &observedAt, &attempts); err != nil {
 			return 0, 0, 0, "", err
 		}
 		observed, parseErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(observedAt.String))
@@ -715,8 +721,8 @@ func (s *Store) probeEvidence(
 		kind := "failure"
 		if valueIn(strings.ToLower(strings.TrimSpace(result.String)), "通过", "passed", "pass", "success", "succeeded", "healthy", "ok") {
 			kind = "success"
-		} else if latestReason == "" && failureReason.Valid {
-			latestReason = strings.TrimSpace(failureReason.String)
+		} else if latestReason == "" && (failureReason.Valid || attempts.Int64 > 1) {
+			latestReason = probeFailureDetail(failureReason.String, attempts.Int64)
 		}
 		if latestKind == "" {
 			latestKind = kind
@@ -737,6 +743,19 @@ func (s *Store) probeEvidence(
 		return 0, 0, 0, "", err
 	}
 	return count, failureStreak, recoveryStreak, latestReason, nil
+}
+
+func probeFailureDetail(reason string, attempts int64) string {
+	reason = strings.TrimSpace(reason)
+	retryCount := attempts - 1
+	if retryCount <= 0 {
+		return reason
+	}
+	retryDetail := fmt.Sprintf("已重试 %d 次", retryCount)
+	if reason == "" {
+		return retryDetail
+	}
+	return retryDetail + "；" + reason
 }
 
 func (s *Store) probeAlertEvidenceMaxAge(ctx context.Context) (time.Duration, error) {

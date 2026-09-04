@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+const defaultClientPageSize = 20;
+
 export function getClientPage<T>(items: readonly T[], requestedPage: number, pageSize: number) {
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   const currentPage = Math.max(1, Math.min(requestedPage, totalPages));
@@ -7,7 +9,10 @@ export function getClientPage<T>(items: readonly T[], requestedPage: number, pag
   return { currentPage, totalPages, visibleItems };
 }
 
-export function useClientPagination<T>(items: readonly T[], initialPageSize = 20) {
+export function useClientPagination<T>(
+  items: readonly T[],
+  initialPageSize = defaultClientPageSize,
+) {
   const [pageSize, setStoredPageSize] = useState(initialPageSize);
   const [requestedPage, setCurrentPage] = useState(1);
   const page = getClientPage(items, requestedPage, pageSize);

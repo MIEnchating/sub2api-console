@@ -112,6 +112,35 @@ func TestSyncPricingAccountGroupsUpdatesOnlyConfirmedLocalMemberships(t *testing
 	if err := store.db.QueryRowContext(ctx, `SELECT event_type FROM runtime_events WHERE source_id=?`, result.EventID).Scan(&eventType); err != nil || eventType != "pricing.groups.synced" {
 		t.Fatalf("pricing sync event=%q err=%v", eventType, err)
 	}
+	records, err := store.PricingChangeRecords(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != result.EventID || records[0].Actor != "operator" || len(records[0].Changes) != 1 {
+		t.Fatalf("pricing change records=%#v", records)
+	}
+	change := records[0].Changes[0]
+	if change.AccountID != "41" || change.AccountName != "local-account" ||
+		!reflect.DeepEqual(change.Before, []PricingChangeGroup{{ID: "6", Name: "标准"}, {ID: "9", Name: "外部分组"}}) ||
+		!reflect.DeepEqual(change.After, []PricingChangeGroup{{ID: "6", Name: "标准"}, {ID: "7", Name: "低价"}}) {
+		t.Fatalf("pricing account change=%#v", change)
+	}
+}
+
+func TestPricingChangeRecordsKeepLegacyAggregateEvents(t *testing.T) {
+	store := openPricingCatalogStore(t)
+	if _, err := store.db.Exec(`INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
+		VALUES(-20,'pricing.groups.synced','2026-09-03T08:00:00Z','succeeded','旧价格同步','{"actor":"scheduler","accounts":2,"group_links":3}')`); err != nil {
+		t.Fatal(err)
+	}
+
+	records, err := store.PricingChangeRecords(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Actor != "scheduler" || records[0].AccountCount != 2 || records[0].GroupLinkCount != 3 || records[0].Changes == nil || len(records[0].Changes) != 0 {
+		t.Fatalf("legacy aggregate event was not preserved: %#v", records)
+	}
 }
 
 func TestPricingBackupCapturesStableAccountGroupMemberships(t *testing.T) {

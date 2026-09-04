@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api, type TrafficRankingSort } from "@/api";
@@ -10,10 +9,10 @@ import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
+import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { SearchField } from "@/components/data-table/search-field";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -23,7 +22,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 
 import {
@@ -106,22 +104,11 @@ export function TrafficRankingPage() {
         description=""
         action={
           <PageActions>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="icon-sm"
-                    aria-label="刷新流量排行"
-                    disabled={ranking.isFetching}
-                    onClick={() => void ranking.refetch()}
-                  />
-                }
-              >
-                <RefreshCw className={ranking.isFetching ? "animate-spin" : undefined} />
-              </TooltipTrigger>
-              <TooltipContent>刷新流量排行</TooltipContent>
-            </Tooltip>
+            <RefreshButton
+              pending={ranking.isFetching}
+              ariaLabel="刷新流量排行"
+              onClick={() => void ranking.refetch()}
+            />
           </PageActions>
         }
       />

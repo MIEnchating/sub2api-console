@@ -10,14 +10,7 @@ import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
@@ -320,7 +313,6 @@ export function OverviewPage(props: OverviewPageProps) {
       <Card className="mt-3 gap-0">
         <CardHeader>
           <CardTitle>分组健康矩阵</CardTitle>
-          <CardDescription>按当前可调度渠道汇总各分组健康状态。</CardDescription>
           <CardAction>
             <Button variant="outline" onClick={props.onOpenGroups}>
               分组管理 <ArrowRight />

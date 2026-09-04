@@ -86,6 +86,8 @@ type accountRateProbe struct {
 	err                  error
 }
 
+var errAccountRateBindingMissing = errors.New("未找到该账号的有效上游绑定")
+
 type accountRateWriteSkippedError struct {
 	reason string
 }
@@ -93,14 +95,16 @@ type accountRateWriteSkippedError struct {
 func (err *accountRateWriteSkippedError) Error() string { return err.reason }
 
 type Service struct {
-	targets    TargetStore
-	repository Repository
-	tasks      TaskStore
-	taskRunner taskrunner.Runner
-	rateWriter AccountRateWriter
-	upstreams  UpstreamCatalogReader
-	resolver   UpstreamAuthResolver
-	timeout    time.Duration
+	targets         TargetStore
+	repository      Repository
+	tasks           TaskStore
+	taskRunner      taskrunner.Runner
+	rateWriter      AccountRateWriter
+	upstreams       UpstreamCatalogReader
+	resolver        UpstreamAuthResolver
+	timeout         time.Duration
+	rateBatchMu     sync.Mutex
+	rateBatchCursor int
 }
 
 func (s *Service) UseUpstreamCatalogReader(reader UpstreamCatalogReader) {
@@ -328,6 +332,58 @@ func (s *Service) EnqueueAllAccountRateSync(ctx context.Context, actor string) (
 	return task.ID, nil
 }
 
+// EnqueueAccountRateSyncBatch queues a bounded slice for scheduled inspection.
+// A rotating cursor prevents the same leading accounts from being selected on
+// every heartbeat.
+func (s *Service) EnqueueAccountRateSyncBatch(ctx context.Context, batchSize, batchPercent int, actor string) (string, error) {
+	allowed, err := s.automaticRateSyncAllowed(ctx)
+	if err != nil || !allowed {
+		return "", err
+	}
+	bound, err := s.repository.BoundAccountsForMaintenance(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("读取上游绑定账号失败：%w", err)
+	}
+	accountIDs := uniqueMaintenanceAccountIDs(bound)
+	if len(accountIDs) == 0 {
+		return "", nil
+	}
+	s.rateBatchMu.Lock()
+	selected, nextCursor := selectAccountRateBatch(accountIDs, batchSize, batchPercent, s.rateBatchCursor)
+	s.rateBatchCursor = nextCursor
+	s.rateBatchMu.Unlock()
+	task, err := s.EnqueueAccountRateSync(ctx, selected, actor)
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+func selectAccountRateBatch(accountIDs []string, batchSize, batchPercent, cursor int) ([]string, int) {
+	if len(accountIDs) == 0 {
+		return nil, 0
+	}
+	if batchSize < 1 {
+		if batchPercent > 0 {
+			batchSize = (len(accountIDs)*batchPercent + 99) / 100
+		} else {
+			batchSize = len(accountIDs)
+		}
+	}
+	if batchSize > len(accountIDs) {
+		batchSize = len(accountIDs)
+	}
+	start := cursor % len(accountIDs)
+	if start < 0 {
+		start = 0
+	}
+	selected := make([]string, 0, batchSize)
+	for index := 0; index < batchSize; index++ {
+		selected = append(selected, accountIDs[(start+index)%len(accountIDs)])
+	}
+	return selected, (start + batchSize) % len(accountIDs)
+}
+
 func (s *Service) automaticRateSyncAllowed(ctx context.Context) (bool, error) {
 	reader, ok := s.repository.(interface {
 		Mode(context.Context) (string, error)
@@ -375,7 +431,13 @@ func uniqueMaintenanceAccountIDs(bound []business.BoundAccountMaintenance) []str
 }
 
 func (s *Service) SyncAllAccountRates(ctx context.Context, actor string) (map[string]any, error) {
-	return s.syncAccountRates(ctx, nil, actor)
+	return s.syncAccountRatesWithCatalog(ctx, nil, actor, nil)
+}
+
+// SyncAllAccountRatesWithCatalog reuses catalog snapshots collected earlier in
+// the same inspection round. Hosts missing from snapshots are read live.
+func (s *Service) SyncAllAccountRatesWithCatalog(ctx context.Context, actor string, catalogs map[string]business.UpstreamCatalogSnapshot) (map[string]any, error) {
+	return s.syncAccountRatesWithCatalog(ctx, nil, actor, catalogs)
 }
 
 func (s *Service) EnqueueAccountNameRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
@@ -391,6 +453,7 @@ func (s *Service) EnqueueMissingBindingCleanup(ctx context.Context, accountIDs [
 }
 
 func (s *Service) enqueueMaintenance(ctx context.Context, operation, message string, accountIDs []string, actor string) (taskstore.Task, error) {
+	automatic := mutationguard.IsAutomaticInspection(ctx)
 	var expectedTarget configstore.TargetSettings
 	var targetErr error
 	if operation != "account-upstream-host-repair" {
@@ -411,6 +474,9 @@ func (s *Service) enqueueMaintenance(ctx context.Context, operation, message str
 		return taskstore.Task{}, err
 	}
 	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+		// Task runners use a process-level context, so explicitly preserve the
+		// lower-priority marker when an automatic inspection queues maintenance.
+		parent = preserveAutomaticInspection(parent, automatic)
 		if operation != "account-upstream-host-repair" && targetErr == nil {
 			parent = targetguard.Expect(parent, expectedTarget)
 		}
@@ -420,6 +486,13 @@ func (s *Service) enqueueMaintenance(ctx context.Context, operation, message str
 		return taskstore.Task{}, err
 	}
 	return task, nil
+}
+
+func preserveAutomaticInspection(ctx context.Context, automatic bool) context.Context {
+	if automatic {
+		return mutationguard.WithAutomaticInspection(ctx)
+	}
+	return ctx
 }
 
 func (s *Service) executeMaintenanceContext(parent context.Context, task taskstore.Task, operation string, accountIDs []string, actor string) {
@@ -1265,6 +1338,10 @@ func managementDefaultBaseURL(row map[string]any) (string, string, bool) {
 }
 
 func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, actor string) (map[string]any, error) {
+	return s.syncAccountRatesWithCatalog(ctx, accountIDs, actor, nil)
+}
+
+func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []string, actor string, catalogSnapshots map[string]business.UpstreamCatalogSnapshot) (map[string]any, error) {
 	if s.rateWriter == nil {
 		return nil, errors.New("账号倍率写回服务尚未就绪")
 	}
@@ -1312,6 +1389,10 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 	loads := map[string]*catalogLoad{}
 	var loadsMu sync.Mutex
 	loadCatalog := func(run context.Context, host string) (business.UpstreamCatalogSnapshot, bool, error) {
+		host = configstore.CanonicalHost(host)
+		if snapshot, found := catalogSnapshots[host]; found {
+			return snapshot, false, nil
+		}
 		loadsMu.Lock()
 		if existing := loads[host]; existing != nil {
 			loadsMu.Unlock()
@@ -1368,7 +1449,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		bindings := byID[accountID]
 		switch len(bindings) {
 		case 0:
-			upstreamRates[index].err = errors.New("未找到该账号的有效上游绑定")
+			upstreamRates[index].err = errAccountRateBindingMissing
 		case 1:
 			upstreamRates[index].account = bindings[0]
 			if bindings[0].ManualPriority && !bindings[0].SyncBalanceMultiplier {
@@ -1478,6 +1559,7 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 		}
 	}
 	var client *adminclient.Client
+	writeCtx := ctx
 	var releaseManagement func()
 	managementGuarded := false
 	releaseManagementGuard := func() {
@@ -1670,6 +1752,11 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 				} else {
 					item["observation_source"] = "live"
 				}
+				if errors.Is(probe.err, errAccountRateBindingMissing) {
+					item["status"] = "未绑定"
+					results[index] = rateResult{item: item, missing: true}
+					continue
+				}
 				if probe.err != nil {
 					item["status"], item["error"] = "上游探测失败", probe.err.Error()
 					var httpError *adminclient.HTTPError
@@ -1720,9 +1807,9 @@ func (s *Service) syncAccountRates(ctx context.Context, accountIDs []string, act
 				var writeErr error
 				rateSourceHost := account.RateSourceHost()
 				if probe.manualMultiplierOnly {
-					writeResult, writeErr = s.rateWriter.SyncAccountMultiplierIfCurrent(ctx, accountID, probe.multiplier, actor, rateSourceHost, checkCurrent)
+					writeResult, writeErr = s.rateWriter.SyncAccountMultiplierIfCurrent(writeCtx, accountID, probe.multiplier, actor, rateSourceHost, checkCurrent)
 				} else {
-					writeResult, writeErr = s.rateWriter.SyncAccountRateIfCurrent(ctx, accountID, expectedName, probe.multiplier, actor, rateSourceHost, checkCurrent)
+					writeResult, writeErr = s.rateWriter.SyncAccountRateIfCurrent(writeCtx, accountID, expectedName, probe.multiplier, actor, rateSourceHost, checkCurrent)
 				}
 				if writeErr != nil {
 					var skipped *accountRateWriteSkippedError

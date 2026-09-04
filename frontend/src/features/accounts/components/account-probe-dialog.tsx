@@ -63,6 +63,7 @@ export function AccountProbeDialog(props: {
   const [result, setResult] = useState<ProbeResult | null>(null);
   const loadedTargetKey = useRef<string | null>(null);
   const modelLoadInFlight = useRef(false);
+  const modelLoadStarted = useRef(false);
   const loadModels = useMutation({
     mutationFn: () => api.onboardingProbeModels(props.target.host, props.target.groupId),
     onSuccess: (response) => {
@@ -87,6 +88,9 @@ export function AccountProbeDialog(props: {
       props.onCompleted?.();
     },
   });
+  const cancelProbe = useMutation({
+    mutationFn: () => api.cancelOnboardingProbe(props.target.host, props.target.groupId),
+  });
   function startModelLoad() {
     if (modelLoadInFlight.current) return;
     modelLoadInFlight.current = true;
@@ -98,17 +102,20 @@ export function AccountProbeDialog(props: {
     if (!props.open) {
       loadedTargetKey.current = null;
       modelLoadInFlight.current = false;
+      modelLoadStarted.current = false;
       setModels([]);
       setModelsLoading(false);
       setResult(null);
       setSelectedModel(noModelSelected);
       loadModels.reset();
       runProbe.reset();
+      cancelProbe.reset();
       return;
     }
     const targetKey = `${props.target.host}\u0000${props.target.groupId}`;
     if (!shouldLoadProbeModels(props.open, loadedTargetKey.current, targetKey)) return;
     loadedTargetKey.current = targetKey;
+    modelLoadStarted.current = true;
     setModels([]);
     setResult(null);
     setSelectedModel(noModelSelected);
@@ -120,9 +127,15 @@ export function AccountProbeDialog(props: {
   const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
   const selectDisabled = Boolean(props.pending) || runProbe.isPending;
   const runDisabled = selectDisabled || modelsLoading || selectedModel === noModelSelected;
+  function closeProbe() {
+    if (modelLoadStarted.current && !runProbe.isPending) {
+      cancelProbe.mutate();
+    }
+    props.onOpenChange(false);
+  }
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog open={props.open} onOpenChange={(open) => !open && closeProbe()}>
       <DialogContent
         width={accountProbeDialogLayout.width}
         height={accountProbeDialogLayout.height}
@@ -199,7 +212,7 @@ export function AccountProbeDialog(props: {
           runDisabled={runDisabled}
           probePending={runProbe.isPending}
           hasResult={result !== null}
-          onClose={() => props.onOpenChange(false)}
+          onClose={closeProbe}
           onRun={() => runProbe.mutate()}
         />
       </DialogContent>

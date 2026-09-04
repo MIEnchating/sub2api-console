@@ -85,7 +85,7 @@ describe("模型检测结果", () => {
       />,
     );
 
-    expect(markup).toContain("2 个账号模型组合");
+    expect(markup).not.toContain("2 个账号模型组合");
     expect(markup).toContain("Sol 账号");
     expect(markup).toContain("Claude 账号");
     expect(markup).toContain("符合 Sol 行为");
@@ -123,8 +123,8 @@ describe("模型检测结果", () => {
     expect(markup).not.toContain("无法判定");
   });
 
-  it("默认每页展示十条并显示完整结果总数", () => {
-    const tests = Array.from({ length: 12 }, (_, index) => ({
+  it("默认每页展示二十条并显示完整结果总数", () => {
+    const tests = Array.from({ length: 22 }, (_, index) => ({
       account_id: `${index + 1}`,
       account_name: `分页账号 ${index + 1}`,
       checker: "sol",
@@ -136,10 +136,10 @@ describe("模型检测结果", () => {
     }));
     const markup = renderToStaticMarkup(<ModelCheckResult task={task(tests)} />);
 
-    expect(markup).toContain("12 个账号模型组合");
-    expect(markup).toContain("分页账号 10");
-    expect(markup).not.toContain("分页账号 11");
-    expect(markup).toContain(">12</span>");
+    expect(markup).not.toContain("12 个账号模型组合");
+    expect(markup).toContain("分页账号 20");
+    expect(markup).not.toContain("分页账号 21");
+    expect(markup).toContain(">22</span>");
     expect(markup).toContain('aria-label="转到第 2 页"');
   });
 });

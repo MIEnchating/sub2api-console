@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { api, type RevenueReport, type RevenueRow, type Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { DatePicker } from "@/components/date-picker";
 import { PageActions } from "@/components/page-actions";
@@ -317,49 +318,24 @@ export function RevenueAnalysisPage() {
           </div>
         ) : report ? (
           <div className="flex min-h-0 flex-1 flex-col gap-3">
-            <SegmentedControl aria-label="收益分析视图">
-              {(
-                [
-                  ["details", "账号明细"],
-                  ["summary", "金额统计"],
-                  ["issues", "上游读取问题"],
-                ] as const
-              ).map(([id, label]) => (
-                <SegmentedControlItem key={id} selected={view === id} onClick={() => setView(id)}>
-                  {label}
-                </SegmentedControlItem>
-              ))}
-            </SegmentedControl>
+            <TableFilterToolbar aria-label="收益分析视图">
+              <SegmentedControl>
+                {(
+                  [
+                    ["details", "账号明细"],
+                    ["summary", "金额统计"],
+                    ["issues", "上游读取问题"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <SegmentedControlItem key={id} selected={view === id} onClick={() => setView(id)}>
+                    {label}
+                  </SegmentedControlItem>
+                ))}
+              </SegmentedControl>
+            </TableFilterToolbar>
             {view === "details" ? <RevenueDetails rows={report.rows} /> : null}
             {view === "summary" ? <RevenueSummaryTable report={report} /> : null}
-            {view === "issues" ? (
-              <DataTablePanel className="flex-1">
-                <Table containerClassName="min-h-0 flex-1 overflow-auto">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-64">Host</TableHead>
-                      <TableHead>原因</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {report.issues.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={2} className="text-muted-foreground h-24 text-center">
-                          没有上游读取问题
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      report.issues.map((issue) => (
-                        <TableRow key={`${issue.host}:${issue.reason}`}>
-                          <TableCell className="font-medium">{issue.host}</TableCell>
-                          <TableCell>{issue.reason}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </DataTablePanel>
-            ) : null}
+            {view === "issues" ? <RevenueIssuesTable issues={report.issues} /> : null}
           </div>
         ) : latest.isLoading ? (
           <div className="flex min-h-0 flex-1 items-center justify-center">
@@ -372,5 +348,48 @@ export function RevenueAnalysisPage() {
         )}
       </div>
     </PageLayout>
+  );
+}
+
+function RevenueIssuesTable({ issues }: { issues: RevenueReport["issues"] }) {
+  const pagination = useClientPagination(issues);
+  return (
+    <DataTablePanel className="flex-1">
+      <Table containerClassName="min-h-0 flex-1 overflow-auto">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-64">Host</TableHead>
+            <TableHead>原因</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {issues.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={2} className="text-muted-foreground h-24 text-center">
+                没有上游读取问题
+              </TableCell>
+            </TableRow>
+          ) : (
+            pagination.visibleItems.map((issue) => (
+              <TableRow key={`${issue.host}:${issue.reason}`}>
+                <TableCell className="font-medium">{issue.host}</TableCell>
+                <TableCell>{issue.reason}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      {issues.length > 0 ? (
+        <DataTablePagination
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={issues.length}
+          pageSize={pagination.pageSize}
+          pageSizes={[10, 20, 50, 100]}
+          onPageChange={pagination.setCurrentPage}
+          onPageSizeChange={pagination.setPageSize}
+        />
+      ) : null}
+    </DataTablePanel>
   );
 }

@@ -1,5 +1,7 @@
 import type { UpstreamGroupChange } from "@/api";
 import { DataTablePanel } from "@/components/data-table/table-panel";
+import { DataTablePagination } from "@/components/data-table/pagination";
+import { useClientPagination } from "@/hooks/use-client-pagination";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -17,8 +19,9 @@ function changedAtText(value: string): string {
 }
 
 export function UpstreamGroupHistory(props: { rows: UpstreamGroupChange[] }) {
+  const pagination = useClientPagination(props.rows);
   return (
-    <DataTablePanel className="h-full">
+    <DataTablePanel className="h-full flex-1">
       <Table className="min-w-[640px]" containerClassName="min-h-0 flex-1 overflow-auto">
         <TableHeader>
           <TableRow>
@@ -35,7 +38,7 @@ export function UpstreamGroupHistory(props: { rows: UpstreamGroupChange[] }) {
               </TableCell>
             </TableRow>
           ) : (
-            props.rows.map((row) => (
+            pagination.visibleItems.map((row) => (
               <TableRow key={row.id}>
                 <TableCell className="text-muted-foreground tabular-nums">
                   {changedAtText(row.changed_at)}
@@ -54,6 +57,17 @@ export function UpstreamGroupHistory(props: { rows: UpstreamGroupChange[] }) {
           )}
         </TableBody>
       </Table>
+      {props.rows.length > 0 ? (
+        <DataTablePagination
+          currentPage={pagination.currentPage}
+          totalPages={pagination.totalPages}
+          totalItems={props.rows.length}
+          pageSize={pagination.pageSize}
+          pageSizes={[10, 20, 50, 100]}
+          onPageChange={pagination.setCurrentPage}
+          onPageSizeChange={pagination.setPageSize}
+        />
+      ) : null}
     </DataTablePanel>
   );
 }

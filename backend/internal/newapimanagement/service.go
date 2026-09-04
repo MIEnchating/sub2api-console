@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -24,6 +28,10 @@ import (
 
 const maximumResponseBytes = 4 << 20
 
+const defaultSub2APIPricingURL = "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json"
+
+var remoteLongContextPricePattern = regexp.MustCompile(`^(input|output)_cost_per_token_above_(\d+)k_tokens$`)
+
 type PrivateStore interface {
 	NewAPIPlatforms(context.Context) ([]configstore.NewAPIPlatformSummary, error)
 	NewAPIPlatform(context.Context, string) (*configstore.NewAPIPlatform, error)
@@ -33,6 +41,11 @@ type PrivateStore interface {
 	VaultEntry(context.Context, string) (*configstore.VaultEntry, error)
 	UpstreamKeySecret(context.Context, string, string, string) (*configstore.UpstreamKeySecret, error)
 	SaveUpstreamKeySecret(context.Context, configstore.UpstreamKeySecret) error
+}
+
+type upstreamAuthReader interface {
+	AuthRecordIndex(context.Context) ([]configstore.AuthRecordSummary, error)
+	AuthRecord(context.Context, string) (*configstore.AuthRecord, error)
 }
 
 type Repository interface {
@@ -51,11 +64,16 @@ type Authenticator interface {
 }
 
 type Service struct {
-	private    PrivateStore
-	repository Repository
-	client     *http.Client
-	keys       KeyManager
-	auth       Authenticator
+	private      PrivateStore
+	repository   Repository
+	client       *http.Client
+	keys         KeyManager
+	auth         Authenticator
+	managementMu sync.Mutex
+	pricingMu    sync.Mutex
+	pricingAt    time.Time
+	pricing      []Sub2APIModelPrice
+	pricingRaw   RemotePricingSource
 }
 
 type Workspace struct {
@@ -80,17 +98,87 @@ type RemoteGroup struct {
 }
 
 type ModelPrice struct {
-	Model           string `json:"model"`
-	InputRatio      string `json:"input_ratio"`
-	CompletionRatio string `json:"completion_ratio"`
+	Model                string `json:"model"`
+	ModelPrice           string `json:"model_price,omitempty"`
+	InputRatio           string `json:"input_ratio"`
+	CompletionRatio      string `json:"completion_ratio"`
+	InputPrice           string `json:"input_price,omitempty"`
+	CompletionPrice      string `json:"completion_price,omitempty"`
+	CacheCreatePrice     string `json:"cache_create_price,omitempty"`
+	CacheReadPrice       string `json:"cache_read_price,omitempty"`
+	BillingMode          string `json:"billing_mode,omitempty"`
+	BillingExpr          string `json:"billing_expr,omitempty"`
+	CacheRatio           string `json:"cache_ratio,omitempty"`
+	CreateCacheRatio     string `json:"create_cache_ratio,omitempty"`
+	CreateCache1hRatio   string `json:"create_cache_1h_ratio,omitempty"`
+	ImageRatio           string `json:"image_ratio,omitempty"`
+	AudioRatio           string `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio string `json:"audio_completion_ratio,omitempty"`
+}
+
+type ToolPrice struct {
+	Tool  string `json:"tool"`
+	Price string `json:"price"`
+}
+
+// Sub2APIModelPrice is one entry from Sub2API's loaded billing catalog and its
+// corresponding New API ratios. InputPrice/OutputPrice are USD per token.
+type Sub2APIModelPrice struct {
+	Model                         string `json:"model"`
+	InputPrice                    string `json:"input_price"`
+	OutputPrice                   string `json:"output_price"`
+	ImageInputPrice               string `json:"image_input_price,omitempty"`
+	ImageOutputPrice              string `json:"image_output_price,omitempty"`
+	Provider                      string `json:"provider,omitempty"`
+	Mode                          string `json:"mode,omitempty"`
+	CacheWritePrice               string `json:"cache_write_price,omitempty"`
+	CacheWrite1hPrice             string `json:"cache_write_1h_price,omitempty"`
+	CacheReadPrice                string `json:"cache_read_price,omitempty"`
+	ModelRatio                    string `json:"model_ratio"`
+	CompletionRatio               string `json:"completion_ratio"`
+	CacheRatio                    string `json:"cache_ratio,omitempty"`
+	CreateCacheRatio              string `json:"create_cache_ratio,omitempty"`
+	CreateCache1hRatio            string `json:"create_cache_1h_ratio,omitempty"`
+	ImageRatio                    string `json:"image_ratio,omitempty"`
+	LongContextThreshold          int    `json:"long_context_threshold,omitempty"`
+	LongContextThresholdInclusive bool   `json:"long_context_threshold_inclusive,omitempty"`
+	LongContextInputPrice         string `json:"long_context_input_price,omitempty"`
+	LongContextOutputPrice        string `json:"long_context_output_price,omitempty"`
+	LongContextCacheWritePrice    string `json:"long_context_cache_write_price,omitempty"`
+	LongContextCacheWrite1hPrice  string `json:"long_context_cache_write_1h_price,omitempty"`
+	LongContextCacheReadPrice     string `json:"long_context_cache_read_price,omitempty"`
+}
+
+type RemotePricingSource struct {
+	SourceURL string `json:"source_url"`
+	Content   string `json:"content"`
+	FetchedAt string `json:"fetched_at"`
+	SizeBytes int    `json:"size_bytes"`
+	SHA256    string `json:"sha256"`
 }
 
 type RemoteSnapshot struct {
-	Groups      []RemoteGroup     `json:"groups"`
-	Models      []ModelPrice      `json:"models"`
-	References  []ModelPrice      `json:"references"`
-	Differences []PriceDifference `json:"differences"`
-	FetchedAt   string            `json:"fetched_at"`
+	Groups      []RemoteGroup `json:"groups"`
+	Models      []ModelPrice  `json:"models"`
+	UnsetModels []ModelPrice  `json:"unset_models"`
+	ToolPrices  []ToolPrice   `json:"tool_prices"`
+	References  []ModelPrice  `json:"references"`
+	// NewAPIModels and References are retained for response compatibility. Both
+	// are derived from the selected New API site's managed options; neither is
+	// populated from the public model-plaza endpoint.
+	NewAPIModels []ModelPrice `json:"newapi_models"`
+	// Sub2APIModels is the locally maintained Sub2API model-price catalog.
+	Sub2APIModels  []Sub2APIModelPrice    `json:"sub2api_models"`
+	UpstreamPrices []UpstreamPriceCatalog `json:"upstream_prices,omitempty"`
+	Differences    []PriceDifference      `json:"differences"`
+	FetchedAt      string                 `json:"fetched_at"`
+}
+
+type UpstreamPriceCatalog struct {
+	Host         string       `json:"host"`
+	Name         string       `json:"name"`
+	UpstreamType string       `json:"upstream_type"`
+	Models       []ModelPrice `json:"models"`
 }
 
 type PriceDifference struct {
@@ -143,16 +231,31 @@ type ChannelEndpoint struct {
 }
 
 type ModelPriceInput struct {
-	Model           string `json:"model"`
-	InputRatio      string `json:"input_ratio"`
-	CompletionRatio string `json:"completion_ratio"`
+	Model                string `json:"model"`
+	ModelPrice           string `json:"model_price,omitempty"`
+	InputRatio           string `json:"input_ratio"`
+	CompletionRatio      string `json:"completion_ratio"`
+	BillingMode          string `json:"billing_mode,omitempty"`
+	BillingExpr          string `json:"billing_expr,omitempty"`
+	CacheRatio           string `json:"cache_ratio,omitempty"`
+	CreateCacheRatio     string `json:"create_cache_ratio,omitempty"`
+	ImageRatio           string `json:"image_ratio,omitempty"`
+	AudioRatio           string `json:"audio_ratio,omitempty"`
+	AudioCompletionRatio string `json:"audio_completion_ratio,omitempty"`
 }
 
 func New(private PrivateStore, repository Repository, client *http.Client, keys KeyManager, auth Authenticator) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &Service{private: private, repository: repository, client: client, keys: keys, auth: auth}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	if clientCopy.Timeout <= 0 {
+		clientCopy.Timeout = 20 * time.Second
+	}
+	return &Service{private: private, repository: repository, client: &clientCopy, keys: keys, auth: auth}
 }
 
 func (s *Service) Workspace(ctx context.Context, platformID string) (Workspace, error) {
@@ -196,8 +299,11 @@ func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (config
 		if err != nil {
 			return configstore.NewAPIPlatformSummary{}, err
 		}
-		if current != nil {
+		if current != nil && sameOriginBaseURL(current.BaseURL, item.BaseURL) {
 			item.AdminKey = current.AdminKey
+			if strings.TrimSpace(item.UserID) == "" {
+				item.UserID = current.UserID
+			}
 		}
 	}
 	if _, err := configstore.ValidateBaseURL(item.BaseURL); err != nil {
@@ -210,11 +316,28 @@ func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (config
 }
 
 func (s *Service) DeletePlatform(ctx context.Context, platformID string) (bool, error) {
-	deleted, err := s.private.DeleteNewAPIPlatform(ctx, platformID)
-	if err != nil || !deleted {
-		return deleted, err
+	platformID = strings.TrimSpace(platformID)
+	if platformID == "" {
+		return false, errors.New("New API 平台 ID 不能为空")
 	}
-	return true, s.repository.DeleteNewAPIGroupBindings(ctx, platformID)
+	bindings, err := s.repository.NewAPIGroupBindings(ctx, platformID)
+	if err != nil {
+		return false, err
+	}
+	// Remove dependent local state first so a failed platform delete cannot
+	// leave bindings pointing at a non-existent platform.
+	if err := s.repository.DeleteNewAPIGroupBindings(ctx, platformID); err != nil {
+		return false, fmt.Errorf("New API 分组绑定清理失败：%w", err)
+	}
+	deleted, deleteErr := s.private.DeleteNewAPIPlatform(ctx, platformID)
+	if deleteErr != nil || !deleted {
+		rollbackErr := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, bindings)
+		if deleteErr != nil {
+			return false, errors.Join(deleteErr, rollbackErr)
+		}
+		return false, rollbackErr
+	}
+	return true, nil
 }
 
 func (s *Service) Refresh(ctx context.Context, platformID string) (RemoteSnapshot, error) {
@@ -230,21 +353,214 @@ func (s *Service) Refresh(ctx context.Context, platformID string) (RemoteSnapsho
 	if err != nil {
 		return RemoteSnapshot{}, err
 	}
-	models, err := decodeModels(options["ModelRatio"], options["CompletionRatio"])
+	models, err := decodeConfiguredModels(options)
 	if err != nil {
 		return RemoteSnapshot{}, err
 	}
-	references := []ModelPrice{}
-	if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/pricing", nil); requestErr == nil {
-		references = decodePricingCatalog(payload)
+	configuredModels := models
+	enabledModelNames := []string{}
+	if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/channel/models_enabled", nil); requestErr == nil {
+		enabledModelNames = decodeModelNames(payload)
 	}
+	unsetModels := findUnsetModelPrices(configuredModels, enabledModelNames)
+
+	// Retain the public pricing catalog for the separate comparison view. It
+	// must not affect the three model-pricing categories above.
+	pricingCatalog := []ModelPrice{}
+	if payload, requestErr := s.request(ctx, *platform, http.MethodGet, "/api/pricing", nil); requestErr == nil {
+		pricingCatalog = decodePricingCatalog(payload)
+	}
+	references := mergeModelPriceRows(configuredModels, unsetModels)
+	// Compare configured ratios against the remote pricing catalog. The
+	// configured+unset projection is useful for display, but comparing it with
+	// itself can never reveal a mismatch.
+	differences := compareCatalogPrices(configuredModels, pricingCatalog)
+	toolPrices := decodeToolPrices(options["tool_price_setting.prices"])
 	return RemoteSnapshot{
-		Groups: groups, Models: models, References: references, Differences: comparePrices(models, references),
+		Groups: groups, Models: configuredModels, UnsetModels: unsetModels, ToolPrices: toolPrices,
+		References: references, NewAPIModels: pricingCatalog,
+		UpstreamPrices: s.readUpstreamPriceCatalogs(ctx), Differences: differences,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 
+func sameOriginBaseURL(left, right string) bool {
+	leftURL, leftErr := url.Parse(strings.TrimRight(strings.TrimSpace(left), "/"))
+	rightURL, rightErr := url.Parse(strings.TrimRight(strings.TrimSpace(right), "/"))
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return strings.EqualFold(leftURL.Scheme, rightURL.Scheme) && strings.EqualFold(leftURL.Host, rightURL.Host) && leftURL.Path == rightURL.Path
+}
+
+// ManagementModelPrices reads Sub2API's default remote billing catalog. The
+// catalog is cached in the Console process so opening the preview does not
+// repeatedly download the same JSON file.
+func (s *Service) ManagementModelPrices(ctx context.Context, platformID string) ([]Sub2APIModelPrice, error) {
+	if _, err := s.requirePlatform(ctx, platformID); err != nil {
+		return nil, err
+	}
+	s.pricingMu.Lock()
+	defer s.pricingMu.Unlock()
+	if err := s.ensureRemotePricingCacheLocked(ctx); err != nil {
+		return nil, err
+	}
+	return append([]Sub2APIModelPrice(nil), s.pricing...), nil
+}
+
+func (s *Service) RemoteModelPricingSource(ctx context.Context, platformID string) (RemotePricingSource, error) {
+	if _, err := s.requirePlatform(ctx, platformID); err != nil {
+		return RemotePricingSource{}, err
+	}
+	s.pricingMu.Lock()
+	defer s.pricingMu.Unlock()
+	if err := s.ensureRemotePricingCacheLocked(ctx); err != nil {
+		return RemotePricingSource{}, err
+	}
+	return s.pricingRaw, nil
+}
+
+func (s *Service) ensureRemotePricingCacheLocked(ctx context.Context) error {
+	if len(s.pricing) > 0 && s.pricingRaw.Content != "" && time.Since(s.pricingAt) < 24*time.Hour {
+		return nil
+	}
+	prices, raw, err := s.fetchRemotePricingCatalog(ctx)
+	if err != nil {
+		return err
+	}
+	fetchedAt := time.Now().UTC()
+	s.pricing = prices
+	s.pricingAt = fetchedAt
+	s.pricingRaw = buildRemotePricingSource(raw, fetchedAt)
+	return nil
+}
+
+func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) []UpstreamPriceCatalog {
+	reader, ok := s.private.(upstreamAuthReader)
+	if !ok {
+		return nil
+	}
+	index, err := reader.AuthRecordIndex(ctx)
+	if err != nil {
+		return nil
+	}
+	jobs := make(chan configstore.AuthRecordSummary)
+	items := make(chan UpstreamPriceCatalog, len(index))
+	workers := min(4, len(index))
+	var wait sync.WaitGroup
+	for range workers {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for summary := range jobs {
+				record, err := reader.AuthRecord(ctx, summary.Host)
+				if err != nil || record == nil {
+					continue
+				}
+				models, err := s.fetchUpstreamPriceCatalog(ctx, *record)
+				if err == nil && len(models) > 0 {
+					items <- UpstreamPriceCatalog{Host: summary.Host, Name: summary.Host, UpstreamType: record.UpstreamType, Models: models}
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, summary := range index {
+			select {
+			case jobs <- summary:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() { wait.Wait(); close(items) }()
+	result := make([]UpstreamPriceCatalog, 0, len(index))
+	for item := range items {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Host < result[j].Host })
+	return result
+}
+
+func (s *Service) fetchUpstreamPriceCatalog(ctx context.Context, record configstore.AuthRecord) ([]ModelPrice, error) {
+	path := "/api/v1/model-plaza"
+	if strings.EqualFold(record.UpstreamType, "newapi") || strings.EqualFold(record.UpstreamType, "oneapi") {
+		path = "/api/pricing"
+	}
+	payload, err := s.requestUpstream(ctx, record, path)
+	if err != nil {
+		return nil, err
+	}
+	if path == "/api/v1/model-plaza" {
+		return sub2APIModelRatios(decodeSub2APIModelPlaza(payload)), nil
+	}
+	return decodePricingCatalog(payload), nil
+}
+
+func (s *Service) requestUpstream(ctx context.Context, record configstore.AuthRecord, path string) (any, error) {
+	base, err := configstore.ValidateBaseURL(record.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	for key, value := range record.Headers {
+		req.Header.Set(key, value)
+	}
+	if req.Header.Get("Authorization") == "" {
+		var token *string
+		if record.AuthMode == "newapi_admin_key" {
+			token = record.AdminKey
+		} else {
+			token = record.AccessToken
+		}
+		if token != nil && strings.TrimSpace(*token) != "" {
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*token))
+		}
+	}
+	if record.UserID != nil {
+		req.Header.Set("New-Api-User", strings.TrimSpace(*record.UserID))
+	}
+	for key, value := range record.Cookies {
+		req.AddCookie(&http.Cookie{Name: key, Value: value})
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maximumResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maximumResponseBytes {
+		return nil, errors.New("上游价格响应超过大小限制")
+	}
+	var payload any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return nil, err
+	}
+	if err := ensureJSONEOF(dec); err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("上游价格获取失败（HTTP %d）", resp.StatusCode)
+	}
+	if err := responseBusinessError(payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
 func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []GroupBindingInput) ([]business.NewAPIGroupBinding, error) {
+	s.managementMu.Lock()
+	defer s.managementMu.Unlock()
 	platform, err := s.requirePlatform(ctx, platformID)
 	if err != nil {
 		return nil, err
@@ -257,6 +573,10 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 	for _, group := range localGroups {
 		localByID[group.ID] = group
 	}
+	previous, err := s.repository.NewAPIGroupBindings(ctx, platformID)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]business.NewAPIGroupBinding, 0, len(inputs))
 	for _, input := range inputs {
 		if _, found := localByID[strings.TrimSpace(input.Sub2APIGroupID)]; !found {
@@ -264,10 +584,14 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 		}
 		items = append(items, business.NewAPIGroupBinding{PlatformID: platformID, NewAPIGroupID: input.NewAPIGroupID, NewAPIGroupName: input.NewAPIGroupName, Sub2APIGroupID: input.Sub2APIGroupID, SyncRatio: input.SyncRatio})
 	}
-	if err := s.syncGroupRatios(ctx, *platform, items, localByID); err != nil {
+	if err := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, items); err != nil {
 		return nil, err
 	}
-	if err := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, items); err != nil {
+	if err := s.syncGroupRatios(ctx, *platform, items, localByID); err != nil {
+		rollbackErr := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, previous)
+		if rollbackErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("本地分组绑定回滚失败：%w", rollbackErr))
+		}
 		return nil, err
 	}
 	return s.repository.NewAPIGroupBindings(ctx, platformID)
@@ -676,6 +1000,8 @@ func channelModelIDs(payload any) []string {
 }
 
 func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs []ModelPriceInput) (RemoteSnapshot, error) {
+	s.managementMu.Lock()
+	defer s.managementMu.Unlock()
 	platform, err := s.requirePlatform(ctx, platformID)
 	if err != nil {
 		return RemoteSnapshot{}, err
@@ -684,27 +1010,97 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 	if err != nil {
 		return RemoteSnapshot{}, err
 	}
-	modelRatios, err := decodeDecimalMap(options["ModelRatio"])
-	if err != nil {
-		return RemoteSnapshot{}, errors.New("New API 当前模型倍率不可读")
+	numericKeys := []string{
+		"ModelPrice", "ModelRatio", "CompletionRatio", "CacheRatio", "CreateCacheRatio",
+		"ImageRatio", "AudioRatio", "AudioCompletionRatio",
 	}
-	completionRatios, err := decodeDecimalMap(options["CompletionRatio"])
+	numericOptions := make(map[string]map[string]string, len(numericKeys))
+	for _, key := range numericKeys {
+		values, decodeErr := decodeDecimalMap(options[key])
+		if decodeErr != nil {
+			return RemoteSnapshot{}, fmt.Errorf("New API 当前 %s 配置不可读", key)
+		}
+		numericOptions[key] = values
+	}
+	billingModes, err := decodeStringMap(options["billing_setting.billing_mode"])
 	if err != nil {
-		return RemoteSnapshot{}, errors.New("New API 当前补全倍率不可读")
+		return RemoteSnapshot{}, errors.New("New API 当前计费模式配置不可读")
+	}
+	billingExprs, err := decodeStringMap(options["billing_setting.billing_expr"])
+	if err != nil {
+		return RemoteSnapshot{}, errors.New("New API 当前计费表达式配置不可读")
 	}
 	for _, input := range inputs {
 		model := strings.TrimSpace(input.Model)
-		if model == "" || !validDecimal(input.InputRatio) || !validDecimal(input.CompletionRatio) {
-			return RemoteSnapshot{}, errors.New("模型价格包含空模型或无效倍率")
+		if model == "" || len(model) > 256 {
+			return RemoteSnapshot{}, errors.New("模型价格包含空模型或过长模型名称")
 		}
-		modelRatios[model] = strings.TrimSpace(input.InputRatio)
-		completionRatios[model] = strings.TrimSpace(input.CompletionRatio)
+		for _, key := range numericKeys {
+			delete(numericOptions[key], model)
+		}
+		delete(billingModes, model)
+		delete(billingExprs, model)
+
+		if strings.TrimSpace(input.ModelPrice) != "" {
+			if strings.TrimSpace(input.BillingMode) != "" || strings.TrimSpace(input.BillingExpr) != "" {
+				return RemoteSnapshot{}, fmt.Errorf("%s 不能同时使用固定价格和计费表达式", model)
+			}
+			if !validDecimal(input.ModelPrice) {
+				return RemoteSnapshot{}, errors.New("模型价格包含无效固定价格")
+			}
+			numericOptions["ModelPrice"][model] = strings.TrimSpace(input.ModelPrice)
+			continue
+		}
+		if !validDecimal(input.InputRatio) || !validDecimal(input.CompletionRatio) {
+			return RemoteSnapshot{}, errors.New("模型价格包含无效输入或输出价格")
+		}
+		numericOptions["ModelRatio"][model] = strings.TrimSpace(input.InputRatio)
+		numericOptions["CompletionRatio"][model] = strings.TrimSpace(input.CompletionRatio)
+		optionalValues := map[string]string{
+			"CacheRatio": input.CacheRatio, "CreateCacheRatio": input.CreateCacheRatio,
+			"ImageRatio": input.ImageRatio, "AudioRatio": input.AudioRatio,
+			"AudioCompletionRatio": input.AudioCompletionRatio,
+		}
+		for key, raw := range optionalValues {
+			value := strings.TrimSpace(raw)
+			if value == "" {
+				continue
+			}
+			if !validDecimal(value) {
+				return RemoteSnapshot{}, fmt.Errorf("%s 的 %s 配置无效", model, key)
+			}
+			numericOptions[key][model] = value
+		}
+
+		billingMode := strings.TrimSpace(input.BillingMode)
+		billingExpr := strings.TrimSpace(input.BillingExpr)
+		if billingMode == "" && billingExpr != "" {
+			return RemoteSnapshot{}, fmt.Errorf("%s 缺少计费模式", model)
+		}
+		if billingMode != "" {
+			if billingMode != "tiered_expr" {
+				return RemoteSnapshot{}, fmt.Errorf("%s 的计费模式不受支持", model)
+			}
+			if billingExpr == "" || len(billingExpr) > 16384 {
+				return RemoteSnapshot{}, fmt.Errorf("%s 的计费表达式无效", model)
+			}
+			billingModes[model] = billingMode
+			billingExprs[model] = billingExpr
+		}
 	}
-	if err := s.writeOption(ctx, *platform, "ModelRatio", modelRatios); err != nil {
-		return RemoteSnapshot{}, err
+	writtenKeys := make([]string, 0, len(numericKeys)+2)
+	for _, key := range numericKeys {
+		if err := s.writeOption(ctx, *platform, key, numericOptions[key]); err != nil {
+			return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
+		}
+		writtenKeys = append(writtenKeys, key)
 	}
-	if err := s.writeOption(ctx, *platform, "CompletionRatio", completionRatios); err != nil {
-		return RemoteSnapshot{}, err
+	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_mode", billingModes); err != nil {
+		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
+	}
+	writtenKeys = append(writtenKeys, "billing_setting.billing_mode")
+	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_expr", billingExprs); err != nil {
+		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 	}
 	return s.Refresh(ctx, platformID)
 }
@@ -784,8 +1180,38 @@ func (s *Service) writeOption(ctx context.Context, platform configstore.NewAPIPl
 	return err
 }
 
+func (s *Service) writeStringOption(ctx context.Context, platform configstore.NewAPIPlatform, key string, value map[string]string) error {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = s.request(ctx, platform, http.MethodPut, "/api/option/", map[string]any{"key": key, "value": string(encoded)})
+	return err
+}
+
+func (s *Service) rollbackOptions(ctx context.Context, platform configstore.NewAPIPlatform, previous map[string]string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	var result error
+	for index := len(keys) - 1; index >= 0; index-- {
+		key := keys[index]
+		_, err := s.request(rollbackCtx, platform, http.MethodPut, "/api/option/", map[string]any{"key": key, "value": previous[key]})
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("%s 回滚失败：%w", key, err))
+		}
+	}
+	return result
+}
+
 func (s *Service) request(ctx context.Context, platform configstore.NewAPIPlatform, method, path string, body map[string]any) (any, error) {
-	base, err := url.Parse(platform.BaseURL)
+	validatedBase, err := configstore.ValidateBaseURL(platform.BaseURL)
+	if err != nil {
+		return nil, errors.New("New API 平台地址无效")
+	}
+	base, err := url.Parse(validatedBase)
 	if err != nil {
 		return nil, errors.New("New API 平台地址无效")
 	}
@@ -821,13 +1247,16 @@ func (s *Service) request(ctx context.Context, platform configstore.NewAPIPlatfo
 	if len(bytes.TrimSpace(raw)) > 0 && json.Unmarshal(raw, &payload) != nil {
 		return nil, fmt.Errorf("New API 返回不可读内容（HTTP %d）", response.StatusCode)
 	}
+	if len(bytes.TrimSpace(raw)) == 0 && response.StatusCode >= 200 && response.StatusCode < 300 {
+		return nil, errors.New("New API 返回空内容")
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("New API 请求失败（HTTP %d%s）", response.StatusCode, remoteDetail(payload))
 	}
+	if err := responseBusinessError(payload); err != nil {
+		return nil, err
+	}
 	if object, ok := payload.(map[string]any); ok {
-		if success, present := object["success"].(bool); present && !success {
-			return nil, fmt.Errorf("New API 拒绝操作%s", remoteDetail(payload))
-		}
 		if data, present := object["data"]; present {
 			return data, nil
 		}
@@ -897,6 +1326,212 @@ func decodeModels(modelRaw, completionRaw string) ([]ModelPrice, error) {
 	return result, nil
 }
 
+func decodeConfiguredModels(options map[string]string) ([]ModelPrice, error) {
+	keys := []string{"ModelPrice", "ModelRatio", "CompletionRatio", "CacheRatio", "CreateCacheRatio", "ImageRatio", "AudioRatio", "AudioCompletionRatio"}
+	values := make(map[string]map[string]string, len(keys))
+	billingModes, err := decodeStringMap(options["billing_setting.billing_mode"])
+	if err != nil {
+		return nil, errors.New("New API 计费模式配置不可读")
+	}
+	billingExprs, err := decodeStringMap(options["billing_setting.billing_expr"])
+	if err != nil {
+		return nil, errors.New("New API 计费表达式配置不可读")
+	}
+	modelNames := map[string]struct{}{}
+	for _, key := range keys {
+		decoded, err := decodeDecimalMap(options[key])
+		if err != nil {
+			return nil, fmt.Errorf("New API %s 配置不可读", key)
+		}
+		values[key] = decoded
+		for model := range decoded {
+			modelNames[model] = struct{}{}
+		}
+	}
+	for model := range billingModes {
+		modelNames[model] = struct{}{}
+	}
+	for model := range billingExprs {
+		modelNames[model] = struct{}{}
+	}
+	createCache1hRatios, err := decodeDecimalMap(options["CreateCache1hRatio"])
+	if err != nil {
+		return nil, errors.New("New API CreateCache1hRatio 配置不可读")
+	}
+	models := make([]ModelPrice, 0, len(modelNames))
+	for modelName := range modelNames {
+		completion := values["CompletionRatio"][modelName]
+		billingMode := billingModes[modelName]
+		if billingMode == "tiered_expr" {
+			billingMode = "tiered_expr"
+		} else if billingMode == "per_second" {
+			billingMode = "per-second"
+		} else if values["ModelPrice"][modelName] != "" {
+			billingMode = "per-request"
+		} else {
+			billingMode = "per-token"
+		}
+		models = append(models, ModelPrice{
+			Model: modelName, ModelPrice: values["ModelPrice"][modelName], InputRatio: values["ModelRatio"][modelName], CompletionRatio: completion,
+			InputPrice: ratioToTokenPrice(values["ModelRatio"][modelName]), CompletionPrice: multiplyDecimal(ratioToTokenPrice(values["ModelRatio"][modelName]), completion),
+			CacheCreatePrice: multiplyDecimal(ratioToTokenPrice(values["ModelRatio"][modelName]), values["CreateCacheRatio"][modelName]),
+			CacheReadPrice:   multiplyDecimal(ratioToTokenPrice(values["ModelRatio"][modelName]), values["CacheRatio"][modelName]),
+			BillingMode:      billingMode, BillingExpr: billingExprs[modelName],
+			CacheRatio: values["CacheRatio"][modelName], CreateCacheRatio: values["CreateCacheRatio"][modelName], CreateCache1hRatio: createCache1hRatios[modelName],
+			ImageRatio: values["ImageRatio"][modelName], AudioRatio: values["AudioRatio"][modelName], AudioCompletionRatio: values["AudioCompletionRatio"][modelName],
+		})
+	}
+	sort.Slice(models, func(left, right int) bool { return models[left].Model < models[right].Model })
+	return models, nil
+}
+
+func findUnsetModelPrices(configured []ModelPrice, candidateNames []string) []ModelPrice {
+	configuredByModel := make(map[string]ModelPrice, len(configured))
+	for _, item := range configured {
+		configuredByModel[item.Model] = item
+	}
+	result := make([]ModelPrice, 0)
+	for _, name := range normalizeModels(candidateNames) {
+		item, found := configuredByModel[name]
+		if !found {
+			result = append(result, ModelPrice{Model: name, BillingMode: "per-token"})
+			continue
+		}
+		if item.BillingMode != "tiered_expr" && item.ModelPrice == "" && item.InputRatio == "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func mergeModelPriceRows(groups ...[]ModelPrice) []ModelPrice {
+	byModel := map[string]ModelPrice{}
+	for _, group := range groups {
+		for _, item := range group {
+			if _, found := byModel[item.Model]; !found {
+				byModel[item.Model] = item
+			}
+		}
+	}
+	result := make([]ModelPrice, 0, len(byModel))
+	for _, item := range byModel {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
+	return result
+}
+
+func decodeStringMap(raw string) (map[string]string, error) {
+	result := map[string]string{}
+	if strings.TrimSpace(raw) == "" {
+		return result, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	var values map[string]any
+	if err := decoder.Decode(&values); err != nil || values == nil {
+		return nil, errors.New("配置不是 JSON 对象")
+	}
+	for key, value := range values {
+		if text, ok := value.(string); ok && strings.TrimSpace(key) != "" {
+			result[strings.TrimSpace(key)] = strings.TrimSpace(text)
+		}
+	}
+	return result, nil
+}
+
+func decodeModelNames(payload any) []string {
+	result := []string{}
+	var walk func(any)
+	walk = func(value any) {
+		switch item := value.(type) {
+		case string:
+			result = append(result, item)
+		case []any:
+			for _, nested := range item {
+				walk(nested)
+			}
+		case map[string]any:
+			if data, ok := item["data"]; ok {
+				walk(data)
+			}
+		}
+	}
+	walk(payload)
+	return normalizeModels(result)
+}
+
+var defaultNewAPIToolPrices = []ToolPrice{
+	{Tool: "web_search", Price: "10"},
+	{Tool: "web_search_preview", Price: "10"},
+	{Tool: "web_search_preview:gpt-4o*", Price: "25"},
+	{Tool: "web_search_preview:gpt-4.1*", Price: "25"},
+	{Tool: "web_search_preview:gpt-4o-mini*", Price: "25"},
+	{Tool: "web_search_preview:gpt-4.1-mini*", Price: "25"},
+	{Tool: "file_search", Price: "2.5"},
+	{Tool: "google_search", Price: "14"},
+	{Tool: "image_generation", Price: "150"},
+}
+
+func decodeToolPrices(raw string) []ToolPrice {
+	prices := make(map[string]string, len(defaultNewAPIToolPrices))
+	for _, item := range defaultNewAPIToolPrices {
+		prices[item.Tool] = item.Price
+	}
+	if strings.TrimSpace(raw) != "" {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		overrides := map[string]any{}
+		if decoder.Decode(&overrides) == nil {
+			for tool, value := range overrides {
+				price := firstDecimal(map[string]any{"value": value}, "value")
+				if strings.TrimSpace(tool) != "" && price != "" && validDecimal(price) {
+					prices[tool] = price
+				}
+			}
+		}
+	}
+
+	result := make([]ToolPrice, 0, len(prices))
+	for _, item := range defaultNewAPIToolPrices {
+		result = append(result, ToolPrice{Tool: item.Tool, Price: prices[item.Tool]})
+		delete(prices, item.Tool)
+	}
+	extraTools := make([]string, 0, len(prices))
+	for tool := range prices {
+		extraTools = append(extraTools, tool)
+	}
+	sort.Strings(extraTools)
+	for _, tool := range extraTools {
+		result = append(result, ToolPrice{Tool: tool, Price: prices[tool]})
+	}
+	return result
+}
+
+func ratioToTokenPrice(ratio string) string {
+	if strings.TrimSpace(ratio) == "" || !validDecimal(ratio) {
+		return ""
+	}
+	value, ok := new(big.Rat).SetString(strings.TrimSpace(ratio))
+	if !ok {
+		return ""
+	}
+	// New API's model pricing editor represents token prices per 1M tokens;
+	// its base input price is model ratio × 2.
+	return formatRatio(new(big.Rat).Mul(value, big.NewRat(2, 1)))
+}
+
+func multiplyDecimal(left, right string) string {
+	if left == "" || right == "" || !validDecimal(left) || !validDecimal(right) {
+		return ""
+	}
+	a, okA := new(big.Rat).SetString(left)
+	b, okB := new(big.Rat).SetString(right)
+	if !okA || !okB {
+		return ""
+	}
+	return formatRatio(new(big.Rat).Mul(a, b))
+}
+
 func decodePricingCatalog(payload any) []ModelPrice {
 	rows := []any{}
 	switch value := payload.(type) {
@@ -919,64 +1554,479 @@ func decodePricingCatalog(payload any) []ModelPrice {
 		}
 		model := firstText(item, "model", "model_name", "name")
 		input := firstDecimal(item, "model_ratio", "input_ratio", "ratio")
+		inputPrice := firstDecimal(item, "input_price")
 		completion := firstDecimal(item, "completion_ratio", "output_ratio")
+		fixedPrice := firstDecimal(item, "model_price", "price")
 		if completion == "" {
 			completion = "1"
 		}
-		if model == "" || input == "" || !validDecimal(input) || !validDecimal(completion) {
+		if model == "" || (input == "" && fixedPrice == "" && inputPrice == "") || (input != "" && !validDecimal(input)) || (inputPrice != "" && !validDecimal(inputPrice)) || !validDecimal(completion) {
 			continue
 		}
 		if _, duplicate := seen[model]; duplicate {
 			continue
 		}
 		seen[model] = struct{}{}
-		result = append(result, ModelPrice{Model: model, InputRatio: input, CompletionRatio: completion})
+		if inputPrice == "" {
+			inputPrice = ratioToTokenPrice(input)
+		}
+		completionPrice := firstDecimal(item, "output_price", "completion_price")
+		if completionPrice == "" {
+			completionPrice = multiplyDecimal(inputPrice, completion)
+		}
+		cacheRatio := firstDecimal(item, "cache_ratio", "cache_read_ratio")
+		createCacheRatio := firstDecimal(item, "create_cache_ratio", "cache_write_ratio")
+		result = append(result, ModelPrice{
+			Model: model, ModelPrice: fixedPrice, InputRatio: input, CompletionRatio: completion,
+			InputPrice: inputPrice, CompletionPrice: completionPrice,
+			CacheCreatePrice: multiplyDecimal(inputPrice, createCacheRatio), CacheReadPrice: multiplyDecimal(inputPrice, cacheRatio),
+			BillingMode: firstText(item, "billing_mode"), BillingExpr: firstText(item, "billing_expr"),
+			CacheRatio:           cacheRatio,
+			CreateCacheRatio:     firstDecimal(item, "create_cache_ratio", "cache_write_ratio"),
+			CreateCache1hRatio:   firstDecimal(item, "create_cache_1h_ratio", "cache_write_1h_ratio"),
+			ImageRatio:           firstDecimal(item, "image_ratio", "image_input_ratio"),
+			AudioRatio:           firstDecimal(item, "audio_ratio", "audio_input_ratio"),
+			AudioCompletionRatio: firstDecimal(item, "audio_completion_ratio", "audio_output_ratio"),
+		})
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
 	return result
 }
 
-func comparePrices(configured, references []ModelPrice) []PriceDifference {
-	configuredByModel := make(map[string]ModelPrice, len(configured))
-	referenceByModel := make(map[string]ModelPrice, len(references))
-	models := map[string]struct{}{}
-	for _, item := range configured {
-		configuredByModel[item.Model] = item
-		models[item.Model] = struct{}{}
+func (s *Service) requestSub2APIModelPlaza(ctx context.Context, rawBaseURL string) (any, error) {
+	base, err := configstore.ValidateBaseURL(rawBaseURL)
+	if err != nil {
+		return nil, errors.New("Sub2API 管理平台地址无效")
 	}
-	for _, item := range references {
-		referenceByModel[item.Model] = item
-		models[item.Model] = struct{}{}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/model-plaza", nil)
+	if err != nil {
+		return nil, err
 	}
-	result := []PriceDifference{}
-	for model := range models {
-		configuredItem, hasConfigured := configuredByModel[model]
-		referenceItem, hasReference := referenceByModel[model]
-		kind := ""
-		switch {
-		case !hasConfigured:
-			kind = "missing_in_newapi"
-		case !hasReference:
-			kind = "only_in_newapi"
-		case configuredItem.InputRatio != referenceItem.InputRatio || configuredItem.CompletionRatio != referenceItem.CompletionRatio:
-			kind = "ratio_mismatch"
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "Sub2API-Console/0.1")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maximumResponseBytes {
+		return nil, errors.New("Sub2API 模型广场响应超过大小限制")
+	}
+	var payload any
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil, fmt.Errorf("Sub2API 模型广场响应不可读（HTTP %d）", response.StatusCode)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("Sub2API 模型广场获取失败（HTTP %d%s）", response.StatusCode, remoteDetail(payload))
+	}
+	if object, ok := payload.(map[string]any); ok {
+		if success, present := object["success"].(bool); present && !success {
+			return nil, fmt.Errorf("Sub2API 模型广场拒绝访问%s", remoteDetail(payload))
 		}
-		if kind == "" {
+	}
+	return payload, nil
+}
+
+func (s *Service) fetchRemotePricingCatalog(ctx context.Context) ([]Sub2APIModelPrice, []byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, defaultSub2APIPricingURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "Sub2API-Console/0.1")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return nil, nil, fmt.Errorf("请求 Sub2API 远程价卡失败：%w", err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(raw) > maximumResponseBytes {
+		return nil, nil, errors.New("Sub2API 远程价卡响应超过大小限制")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, nil, fmt.Errorf("Sub2API 远程价卡获取失败（HTTP %d）", response.StatusCode)
+	}
+	prices, err := decodeSub2APIPricingJSON(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("Sub2API 远程价卡解析失败：%w", err)
+	}
+	return prices, raw, nil
+}
+
+func buildRemotePricingSource(raw []byte, fetchedAt time.Time) RemotePricingSource {
+	digest := sha256.Sum256(raw)
+	return RemotePricingSource{
+		SourceURL: defaultSub2APIPricingURL,
+		Content:   string(raw),
+		FetchedAt: fetchedAt.UTC().Format(time.RFC3339Nano),
+		SizeBytes: len(raw),
+		SHA256:    hex.EncodeToString(digest[:]),
+	}
+}
+
+func decodeSub2APIModelPlaza(payload any) []Sub2APIModelPrice {
+	root, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if data, found := root["data"].(map[string]any); found {
+		root = data
+	}
+	groups, ok := root["groups"].([]any)
+	if !ok {
+		return nil
+	}
+	byModel := map[string]Sub2APIModelPrice{}
+	for _, rawGroup := range groups {
+		group, ok := rawGroup.(map[string]any)
+		if !ok {
 			continue
 		}
-		difference := PriceDifference{Model: model, Kind: kind}
-		if hasConfigured {
-			copy := configuredItem
-			difference.Configured = &copy
+		models, ok := group["models"].([]any)
+		if !ok {
+			continue
 		}
-		if hasReference {
-			copy := referenceItem
-			difference.Reference = &copy
+		for _, rawModel := range models {
+			model, ok := rawModel.(map[string]any)
+			if !ok {
+				continue
+			}
+			name := firstText(model, "name", "model", "model_name")
+			pricing, _ := model["official_pricing"].(map[string]any)
+			if pricing == nil {
+				pricing, _ = model["pricing"].(map[string]any)
+			}
+			input := firstDecimal(pricing, "input_price")
+			output := firstDecimal(pricing, "output_price")
+			if name == "" || input == "" || output == "" || !validDecimal(input) || !validDecimal(output) {
+				continue
+			}
+			modelRatio, completionRatio, ok := sub2APIRatios(input, output)
+			if !ok {
+				continue
+			}
+			item := Sub2APIModelPrice{Model: name, InputPrice: input, OutputPrice: output, ModelRatio: modelRatio, CompletionRatio: completionRatio}
+			item.CacheWritePrice = firstDecimal(pricing, "cache_write_price")
+			item.CacheWrite1hPrice = firstDecimal(pricing, "cache_write_1h_price")
+			item.CacheReadPrice = firstDecimal(pricing, "cache_read_price")
+			item.CacheRatio = priceRatio(input, item.CacheReadPrice)
+			item.CreateCacheRatio = priceRatio(input, item.CacheWritePrice)
+			item.CreateCache1hRatio = priceRatio(input, item.CacheWrite1hPrice)
+			if _, exists := byModel[name]; !exists {
+				byModel[name] = item
+			}
 		}
-		result = append(result, difference)
+	}
+	result := make([]Sub2APIModelPrice, 0, len(byModel))
+	for _, item := range byModel {
+		result = append(result, item)
 	}
 	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
 	return result
+}
+
+func decodeSub2APIPricingJSON(raw []byte) ([]Sub2APIModelPrice, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var entries map[string]any
+	if err := decoder.Decode(&entries); err != nil {
+		return nil, err
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
+	result := make([]Sub2APIModelPrice, 0, len(entries))
+	for name, rawEntry := range entries {
+		if name == "sample_spec" {
+			continue
+		}
+		entry, ok := rawEntry.(map[string]any)
+		if !ok {
+			continue
+		}
+		input := firstDecimal(entry, "input_cost_per_token")
+		output := firstDecimal(entry, "output_cost_per_token")
+		imageInput := firstDecimal(entry, "input_cost_per_image_token")
+		imageOutputPerToken := firstDecimal(entry, "output_cost_per_image_token")
+		imageOutput := firstDecimal(entry, "output_cost_per_image")
+		if imageOutput == "" {
+			imageOutput = imageOutputPerToken
+		}
+		if input == "" && output == "" && imageInput == "" && imageOutput == "" {
+			continue
+		}
+		item := Sub2APIModelPrice{
+			Model: name, InputPrice: input, OutputPrice: output,
+			ImageInputPrice: imageInput, ImageOutputPrice: imageOutput,
+			Provider: firstText(entry, "litellm_provider"), Mode: firstText(entry, "mode"),
+			CacheWritePrice:   firstDecimal(entry, "cache_creation_input_token_cost"),
+			CacheWrite1hPrice: firstDecimal(entry, "cache_creation_input_token_cost_above_1hr"),
+			CacheReadPrice:    firstDecimal(entry, "cache_read_input_token_cost"),
+		}
+		ratioOutput := output
+		if ratioOutput == "" {
+			ratioOutput = imageOutputPerToken
+		}
+		if input != "" && validDecimal(input) {
+			if ratioOutput == "" {
+				ratioOutput = "0"
+			}
+			item.ModelRatio, item.CompletionRatio, _ = sub2APIRatios(input, ratioOutput)
+			item.CacheRatio = priceRatio(input, item.CacheReadPrice)
+			item.CreateCacheRatio = priceRatio(input, item.CacheWritePrice)
+			item.CreateCache1hRatio = priceRatio(input, item.CacheWrite1hPrice)
+			item.ImageRatio = priceRatio(input, imageInput)
+		}
+		applyRemoteLongContextPrices(entry, &item)
+		result = append(result, item)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
+	return result, nil
+}
+
+func applyRemoteLongContextPrices(entry map[string]any, item *Sub2APIModelPrice) {
+	type tierPrices struct {
+		input  string
+		output string
+	}
+	tiers := map[int]tierPrices{}
+	for key := range entry {
+		match := remoteLongContextPricePattern.FindStringSubmatch(key)
+		if match == nil {
+			continue
+		}
+		thousands, err := strconv.Atoi(match[2])
+		value := firstDecimal(entry, key)
+		if err != nil || thousands <= 0 || !positiveDecimal(value) {
+			continue
+		}
+		threshold := thousands * 1000
+		prices := tiers[threshold]
+		if match[1] == "input" {
+			prices.input = value
+		} else {
+			prices.output = value
+		}
+		tiers[threshold] = prices
+	}
+	threshold := 0
+	for candidate := range tiers {
+		if threshold == 0 || candidate < threshold {
+			threshold = candidate
+		}
+	}
+	if threshold == 0 {
+		return
+	}
+	prices := tiers[threshold]
+	inputMultiplier := priceRatio(item.InputPrice, prices.input)
+	outputMultiplier := priceRatio(item.OutputPrice, prices.output)
+	if prices.input == "" {
+		prices.input = item.InputPrice
+	}
+	if prices.output == "" {
+		prices.output = item.OutputPrice
+	}
+	if inputMultiplier == "" {
+		inputMultiplier = "1"
+	}
+	if outputMultiplier == "" {
+		outputMultiplier = "1"
+	}
+	if inputMultiplier == "1" && outputMultiplier == "1" {
+		return
+	}
+	item.LongContextThreshold = threshold
+	item.LongContextThresholdInclusive = strings.EqualFold(item.Provider, "xai")
+	item.LongContextInputPrice = prices.input
+	item.LongContextOutputPrice = prices.output
+	item.LongContextCacheWritePrice = remoteTierPrice(
+		item.CacheWritePrice,
+		inputMultiplier,
+	)
+	item.LongContextCacheWrite1hPrice = remoteTierPrice(
+		item.CacheWrite1hPrice,
+		inputMultiplier,
+	)
+	item.LongContextCacheReadPrice = remoteTierPrice(
+		item.CacheReadPrice,
+		inputMultiplier,
+	)
+}
+
+func remoteTierPrice(basePrice, multiplier string) string {
+	// Sub2API bills cache long-context usage as the base cache price multiplied
+	// by the input long-context multiplier. The raw *_above_* cache field is an
+	// integrity signal only and remains available through the raw-source view.
+	return multiplyDecimal(basePrice, multiplier)
+}
+
+func positiveDecimal(value string) bool {
+	number, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	return ok && number.Sign() > 0
+}
+
+func sub2APIRatios(inputPrice, outputPrice string) (string, string, bool) {
+	input, ok := new(big.Rat).SetString(strings.TrimSpace(inputPrice))
+	if !ok || input.Sign() < 0 {
+		return "", "", false
+	}
+	output, ok := new(big.Rat).SetString(strings.TrimSpace(outputPrice))
+	if !ok || output.Sign() < 0 {
+		return "", "", false
+	}
+	if input.Sign() == 0 {
+		if output.Sign() > 0 {
+			return "", "", false
+		}
+		return "0", "1", true
+	}
+	modelRatio := new(big.Rat).Mul(input, big.NewRat(500000, 1))
+	completionRatio := new(big.Rat).Quo(output, input)
+	return formatRatio(modelRatio), formatRatio(completionRatio), true
+}
+
+func priceRatio(basePrice, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	base, ok := new(big.Rat).SetString(strings.TrimSpace(basePrice))
+	if !ok || base.Sign() <= 0 {
+		return ""
+	}
+	amount, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	if !ok || amount.Sign() < 0 {
+		return ""
+	}
+	return formatRatio(new(big.Rat).Quo(amount, base))
+}
+
+func formatRatio(value *big.Rat) string {
+	text := value.FloatString(12)
+	text = strings.TrimRight(strings.TrimRight(text, "0"), ".")
+	if text == "" || text == "-0" {
+		return "0"
+	}
+	return text
+}
+
+func sub2APIModelRatios(models []Sub2APIModelPrice) []ModelPrice {
+	result := make([]ModelPrice, 0, len(models))
+	for _, model := range models {
+		result = append(result, ModelPrice{
+			Model: model.Model, InputRatio: model.ModelRatio, CompletionRatio: model.CompletionRatio,
+			CacheRatio: model.CacheRatio, CreateCacheRatio: model.CreateCacheRatio,
+			CreateCache1hRatio: model.CreateCache1hRatio,
+		})
+	}
+	return result
+}
+
+func comparePrices(configured, references []ModelPrice) []PriceDifference {
+	referenceByModel := make(map[string]ModelPrice, len(references))
+	for _, item := range references {
+		referenceByModel[item.Model] = item
+	}
+	result := make([]PriceDifference, 0)
+	for _, configuredItem := range configured {
+		referenceItem, hasReference := referenceByModel[configuredItem.Model]
+		if !hasReference {
+			copy := configuredItem
+			result = append(result, PriceDifference{
+				Model: configuredItem.Model, Kind: "missing_in_model_plaza", Configured: &copy,
+			})
+			continue
+		}
+		if samePrice(configuredItem, referenceItem) {
+			continue
+		}
+		configuredCopy, referenceCopy := configuredItem, referenceItem
+		result = append(result, PriceDifference{
+			Model: configuredItem.Model, Kind: "ratio_mismatch", Configured: &configuredCopy, Reference: &referenceCopy,
+		})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
+	return result
+}
+
+func mergeModelPrices(catalog, configured []ModelPrice) []ModelPrice {
+	configuredByModel := make(map[string]ModelPrice, len(configured))
+	for _, item := range configured {
+		configuredByModel[item.Model] = item
+	}
+	result := make([]ModelPrice, 0, len(catalog))
+	for _, item := range catalog {
+		if local, found := configuredByModel[item.Model]; found {
+			if local.ModelPrice != "" {
+				item.ModelPrice = local.ModelPrice
+			}
+			if local.InputRatio != "" {
+				item.InputRatio = local.InputRatio
+			}
+			if local.CompletionRatio != "" {
+				item.CompletionRatio = local.CompletionRatio
+			}
+			if local.CacheRatio != "" {
+				item.CacheRatio = local.CacheRatio
+			}
+			if local.CreateCacheRatio != "" {
+				item.CreateCacheRatio = local.CreateCacheRatio
+			}
+			if local.CreateCache1hRatio != "" {
+				item.CreateCache1hRatio = local.CreateCache1hRatio
+			}
+			if local.ImageRatio != "" {
+				item.ImageRatio = local.ImageRatio
+			}
+			if local.AudioRatio != "" {
+				item.AudioRatio = local.AudioRatio
+			}
+			if local.AudioCompletionRatio != "" {
+				item.AudioCompletionRatio = local.AudioCompletionRatio
+			}
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func compareCatalogPrices(configured, references []ModelPrice) []PriceDifference {
+	configuredByModel := make(map[string]ModelPrice, len(configured))
+	for _, item := range configured {
+		configuredByModel[item.Model] = item
+	}
+	result := make([]PriceDifference, 0)
+	for _, reference := range references {
+		configured, found := configuredByModel[reference.Model]
+		if !found {
+			copy := reference
+			result = append(result, PriceDifference{Model: reference.Model, Kind: "missing_in_platform", Reference: &copy})
+			continue
+		}
+		if samePrice(configured, reference) {
+			continue
+		}
+		configuredCopy, referenceCopy := configured, reference
+		result = append(result, PriceDifference{Model: reference.Model, Kind: "ratio_mismatch", Configured: &configuredCopy, Reference: &referenceCopy})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Model < result[right].Model })
+	return result
+}
+
+func samePrice(left, right ModelPrice) bool {
+	return left.ModelPrice == right.ModelPrice && left.InputRatio == right.InputRatio && left.CompletionRatio == right.CompletionRatio &&
+		left.InputPrice == right.InputPrice && left.CompletionPrice == right.CompletionPrice && left.BillingMode == right.BillingMode && left.BillingExpr == right.BillingExpr &&
+		left.CacheCreatePrice == right.CacheCreatePrice && left.CacheReadPrice == right.CacheReadPrice &&
+		left.CacheRatio == right.CacheRatio && left.CreateCacheRatio == right.CreateCacheRatio &&
+		left.CreateCache1hRatio == right.CreateCache1hRatio && left.ImageRatio == right.ImageRatio &&
+		left.AudioRatio == right.AudioRatio && left.AudioCompletionRatio == right.AudioCompletionRatio
 }
 
 func firstText(item map[string]any, keys ...string) string {
@@ -1069,4 +2119,52 @@ func remoteDetail(payload any) string {
 		}
 	}
 	return ""
+}
+
+func ensureJSONEOF(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("响应包含尾随 JSON 数据")
+		}
+		return fmt.Errorf("响应包含无效尾随数据：%w", err)
+	}
+	return nil
+}
+
+func responseBusinessError(payload any) error {
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return nil
+	}
+	if success, present := object["success"].(bool); present && !success {
+		return fmt.Errorf("上游业务请求失败%s", remoteDetail(payload))
+	}
+	if rawCode, present := object["code"]; present {
+		code := strings.TrimSpace(fmt.Sprint(rawCode))
+		if code != "" && code != "0" && !strings.EqualFold(code, "ok") && !strings.EqualFold(code, "success") {
+			return fmt.Errorf("上游业务请求失败（code=%s）%s", redact.Secrets(code), remoteDetail(payload))
+		}
+	}
+	for _, key := range []string{"error", "errors"} {
+		if value, present := object[key]; present && !emptyResponseError(value) {
+			return fmt.Errorf("上游业务请求失败%s", remoteDetail(payload))
+		}
+	}
+	return nil
+}
+
+func emptyResponseError(value any) bool {
+	switch item := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(item) == ""
+	case []any:
+		return len(item) == 0
+	case map[string]any:
+		return len(item) == 0
+	default:
+		return false
+	}
 }

@@ -4,9 +4,16 @@ import { describe, expect, it } from "vitest";
 
 import type { UnifiedLogEntry } from "../../../api";
 import { navItems, viewForPath } from "../../../App";
-import { LogKindFilter, LogChangesTable, LogsFilterToolbar } from "../components/logs-center-page";
+import {
+  LogChangesList,
+  LogDetailsContent,
+  LogStructuredValue,
+  logDetailsDialogWidth,
+} from "../components/log-details-dialog";
+import { LogKindFilter, LogsFilterToolbar } from "../components/logs-center-page";
 import {
   formatLogValue,
+  logDetailLabel,
   logDetailRows,
   logKindLabel,
   logStatusLabel,
@@ -112,14 +119,12 @@ describe("log center contracts", () => {
         eventLevel: "all",
         eventGroup: "all",
         groups: [],
-        fetching: false,
         truncated: false,
         onSearchChange: () => undefined,
         onKindChange: () => undefined,
         onStateChange: () => undefined,
         onEventLevelChange: () => undefined,
         onEventGroupChange: () => undefined,
-        onRefresh: () => undefined,
       }),
     );
 
@@ -128,10 +133,10 @@ describe("log center contracts", () => {
     expect(markup).toContain('aria-label="搜索任务、对象或原因"');
     expect(markup).toContain('aria-label="记录类型"');
     expect(markup).toContain('aria-label="执行结果筛选"');
-    expect(markup).toContain('aria-label="刷新日志"');
+    expect(markup).not.toContain('aria-label="刷新日志"');
     expect(markup).not.toContain('data-slot="select-trigger"');
-    expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
-      markup.indexOf('aria-label="搜索任务、对象或原因"'),
+    expect(markup.indexOf('aria-label="搜索任务、对象或原因"')).toBeLessThan(
+      markup.indexOf('aria-label="记录类型"'),
     );
     expect(markup).not.toContain("条");
   });
@@ -145,14 +150,12 @@ describe("log center contracts", () => {
         eventLevel: "warning",
         eventGroup: "codex",
         groups: [{ name: "codex", id: "7", account_count: 2 } as never],
-        fetching: false,
         truncated: false,
         onSearchChange: () => undefined,
         onKindChange: () => undefined,
         onStateChange: () => undefined,
         onEventLevelChange: () => undefined,
         onEventGroupChange: () => undefined,
-        onRefresh: () => undefined,
       }),
     );
 
@@ -219,23 +222,253 @@ describe("log center contracts", () => {
     ]);
   });
 
-  it("renders remote audits with the complete comparison columns", () => {
+  it("renders remote audits as compact records that remain readable on narrow screens", () => {
     const changes = relatedChanges(entry);
-    const markup = renderToStaticMarkup(createElement(LogChangesTable, { changes }));
+    const markup = renderToStaticMarkup(createElement(LogChangesList, { changes }));
 
-    for (const heading of ["时间", "渠道", "分组", "操作", "变更", "结果"]) {
-      expect(markup).toContain(`>${heading}<`);
-    }
+    expect(markup).toContain('data-slot="log-change-list"');
     expect(markup).toContain("demo");
     expect(markup).toContain("#41");
     expect(markup).toContain("grok");
     expect(markup).toContain("更新账号");
     expect(markup).toContain("负载因子：17 → 4；优先级：100 → 20");
-    expect(markup).toContain("whitespace-nowrap");
-    expect(markup).toContain('data-table-panel=""');
+    expect(markup).toContain("成功");
+    expect(markup).not.toContain("min-w-[72rem]");
+    expect(markup).not.toContain('data-slot="table"');
     expect(markup).not.toContain("update_account");
     expect(markup).not.toContain("load_factor");
     expect(markup).not.toContain("concurrency");
+  });
+
+  it("uses compact type-specific detail sections for every log kind", () => {
+    const taskMarkup = renderToStaticMarkup(createElement(LogDetailsContent, { entry }));
+    const eventEntry = relatedEvents(entry)[0] as UnifiedLogEntry;
+    const eventMarkup = renderToStaticMarkup(
+      createElement(LogDetailsContent, { entry: eventEntry }),
+    );
+    const changeEntry: UnifiedLogEntry = { ...entry, kind: "change", source: "operation_audit" };
+    const changeMarkup = renderToStaticMarkup(
+      createElement(LogDetailsContent, { entry: changeEntry }),
+    );
+
+    expect(taskMarkup).toContain("任务信息");
+    expect(taskMarkup).toContain("关联事件");
+    expect(taskMarkup).toContain("关联远程读写");
+    expect(eventMarkup).toContain("事件信息");
+    expect(eventMarkup).toContain("事件级别");
+    expect(eventMarkup).toContain("信息");
+    expect(changeMarkup).toContain("操作信息");
+    expect(changeMarkup).toContain('data-slot="log-change-list"');
+    expect(logDetailsDialogWidth("task")).toBe("wide");
+    expect(logDetailsDialogWidth("event")).toBe("medium");
+    expect(logDetailsDialogWidth("change")).toBe("wide");
+  });
+
+  it("renders nested task result items as summary metrics and separate records", () => {
+    const result = {
+      updated: 0,
+      failed: 0,
+      fallback: 13,
+      items: [
+        {
+          account_id: "14",
+          account_name: "mdkj-0.1",
+          upstream_host: "mdkj.lol",
+          before: "0.1",
+          after: "0.1",
+          observation_source: "live",
+          readback_confirmed: false,
+          status: "已确认一致",
+        },
+        {
+          account_id: "25",
+          account_name: "Pixel API-0.25",
+          upstream_host: "speed.ai-pixel.online",
+          probe_error: "上游倍率探测失败",
+          status: "只读降级",
+        },
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(LogStructuredValue, { value: result }));
+
+    expect(markup).toContain('data-slot="log-result-summary"');
+    expect(markup).toContain('data-slot="log-result-items"');
+    expect(markup).toContain("降级读取");
+    expect(markup).toContain("mdkj-0.1");
+    expect(markup).toContain("Pixel API-0.25");
+    expect(markup).toContain("变更前");
+    expect(markup).toContain("变更后");
+    expect(markup).toContain("上游倍率探测失败");
+    expect(markup).not.toContain("items：");
+    expect(logDetailsDialogWidth("task", { result })).toBe("wide");
+  });
+
+  it("translates alert delivery fields and source values without leaking dictionary keys", () => {
+    const alertResult = {
+      evaluation_disabled: false,
+      findings: 22,
+      remote_write: false,
+      source: "console-domain-db",
+      delivery: {
+        attempted: 0,
+        batches: 0,
+        configured: true,
+        dry_run: false,
+        failed: 0,
+        sent: 0,
+        skipped: 51,
+        suppressed: 498,
+      },
+    };
+    const markup = renderToStaticMarkup(createElement(LogStructuredValue, { value: alertResult }));
+
+    for (const label of [
+      "尝试发送",
+      "投递批次",
+      "通知已配置",
+      "试运行",
+      "发送成功",
+      "已抑制",
+      "Console 业务数据库",
+    ]) {
+      expect(markup).toContain(label);
+    }
+    for (const raw of [
+      "attempted",
+      "batches",
+      "configured",
+      "dry_run",
+      "sent",
+      "suppressed",
+      "console-domain-db",
+    ]) {
+      expect(markup).not.toContain(`>${raw}<`);
+    }
+  });
+
+  it("provides Chinese labels for current backend task result fields", () => {
+    const taskResultFields = [
+      "abnormal",
+      "account_ids",
+      "account_cost",
+      "account_rate_sync_error",
+      "account_rate_sync_task_id",
+      "actual_cost",
+      "attempted",
+      "attribution_level",
+      "audit_failed",
+      "auth_status",
+      "backup_id",
+      "base_url_failed",
+      "base_url_resolved",
+      "base_url_unavailable",
+      "batches",
+      "bound",
+      "captured_at",
+      "captcha_challenge",
+      "category",
+      "challenge_id",
+      "cleaned",
+      "cleanup_warnings",
+      "combinations",
+      "completed",
+      "configured",
+      "coverage_percent",
+      "current_group_ids",
+      "decisions",
+      "desired_group_ids",
+      "dry_run",
+      "eligible_groups",
+      "exact_model_resolved",
+      "expires_at",
+      "failure_reason",
+      "identity_group",
+      "identity_match_percent",
+      "issues",
+      "latency_p50_ms",
+      "latency_p95_ms",
+      "latency_p99_ms",
+      "local_group_ids",
+      "local_group_names",
+      "local_groups",
+      "local_sync",
+      "management_account_deleted",
+      "management_base_url",
+      "message_ids",
+      "model_count",
+      "model_rewritten",
+      "nearest_outside_model",
+      "observed_at",
+      "outcomes",
+      "parameters_failed",
+      "parameters_repaired",
+      "parameters_skipped",
+      "parameters_unchanged",
+      "probe_error",
+      "report_date",
+      "renamed",
+      "request_model",
+      "requested_rounds",
+      "resolved",
+      "response_models",
+      "results",
+      "revenue",
+      "rows",
+      "saved",
+      "same_standard_percent",
+      "sent",
+      "standard_model",
+      "status_code",
+      "stored",
+      "suppressed",
+      "summaries",
+      "summary",
+      "sync_balance_multiplier",
+      "target_id",
+      "target_type",
+      "temporary_key",
+      "tests",
+      "upstream_base_url",
+      "upstream_cost",
+      "upstream_description",
+      "upstream_group_id",
+      "upstream_group_name",
+      "upstream_key_deleted",
+      "upstream_key_count",
+      "upstream_key_name",
+      "upstream_raw_cost",
+      "upstream_type",
+      "usable_rounds",
+      "verified",
+    ];
+
+    for (const field of taskResultFields) {
+      expect(logDetailLabel(field), field).toMatch(/[\u3400-\u9fff]/);
+    }
+  });
+
+  it("translates current backend enum values according to their field context", () => {
+    const enumValues: Array<[string, string, string]> = [
+      ["source", "console-domain-db", "Console 业务数据库"],
+      ["observation_source", "last_successful", "最近一次成功倍率"],
+      ["checker", "claude", "Claude 检测器"],
+      ["protocol", "anthropic-messages", "Anthropic Messages 协议"],
+      ["verdict", "SOL_CONSISTENT", "与 Sol 特征一致"],
+      ["verdict", "LUNA_LIKE", "更接近 Luna"],
+      ["target_type", "c2c", "私聊"],
+      ["target_type", "group", "群聊"],
+      ["target_type", "channel", "频道"],
+      ["interaction_kind", "image_captcha_ocr", "图片验证码识别"],
+      ["code", "recovered_by_refresh", "刷新令牌恢复成功"],
+      ["code", "browser_challenge_required", "需要浏览器验证"],
+      ["attribution_level", "key", "按上游 Key 精确归因"],
+      ["attribution_level", "unavailable", "无法精确归因"],
+      ["stage", "quick", "快速检测"],
+    ];
+
+    for (const [key, value, expected] of enumValues) {
+      expect(formatLogValue(value, key), `${key}=${value}`).toBe(expected);
+    }
   });
 
   it("describes boolean scheduling changes in plain language", () => {

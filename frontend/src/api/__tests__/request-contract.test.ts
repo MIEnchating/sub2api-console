@@ -524,7 +524,7 @@ describe("system log search contract", () => {
     vi.unstubAllGlobals();
   });
 
-  it("forwards the same search conditions as the Sub2API management platform", async () => {
+  it("forwards only request_id and pagination parameters", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ items: [], total: 0, page: 2, page_size: 20 }), {
         status: 200,
@@ -534,18 +534,7 @@ describe("system log search contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.systemLogs({
-      timeRange: "6h",
-      startTime: "",
-      endTime: "",
-      host: "node-1",
-      level: "info",
       requestId: "req-42",
-      clientRequestId: "client-42",
-      apiKeyId: "8",
-      accountId: "42",
-      platform: "openai",
-      model: "gpt-5",
-      keyword: "completed",
       page: 2,
       pageSize: 20,
     });
@@ -553,21 +542,11 @@ describe("system log search contract", () => {
     const url = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://console.local");
     expect(url.pathname).toBe("/api/ops/system-logs");
     expect(Object.fromEntries(url.searchParams)).toMatchObject({
-      time_range: "6h",
-      host: "node-1",
-      level: "info",
       request_id: "req-42",
-      client_request_id: "client-42",
-      api_key_id: "8",
-      account_id: "42",
-      platform: "openai",
-      model: "gpt-5",
-      q: "completed",
       page: "2",
       page_size: "20",
     });
-    expect(url.searchParams.has("component")).toBe(false);
-    expect(url.searchParams.has("user_id")).toBe(false);
+    expect([...url.searchParams.keys()]).toEqual(["request_id", "page", "page_size"]);
   });
 });
 
@@ -652,6 +631,7 @@ describe("onboarding request contract", () => {
         upstream_type: "sub2api",
         local_group_ids: [3, 5],
         upstream_group_id: "group-a",
+        platform: "openai",
         account_ids: ["77"],
       },
       {
@@ -668,6 +648,7 @@ describe("onboarding request contract", () => {
     const items = JSON.parse(String(request.body)).items;
     expect(items).toHaveLength(2);
     expect(items[0].local_group_ids).toEqual([3, 5]);
+    expect(items[0].platform).toBe("openai");
     expect(items[0].account_ids).toEqual(["77"]);
   });
 
@@ -908,11 +889,18 @@ describe("account field request contract", () => {
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ cancelled: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
       );
     vi.stubGlobal("fetch", fetchMock);
 
     await api.onboardingProbeModels("api.example", "6");
     await api.runOnboardingProbe("api.example", "6", "gpt-5.2");
+    await api.cancelOnboardingProbe("api.example", "6");
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/onboarding/probe/models");
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
@@ -924,6 +912,11 @@ describe("account field request contract", () => {
       host: "api.example",
       group_id: "6",
       model: "gpt-5.2",
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/onboarding/probe/cancel");
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      host: "api.example",
+      group_id: "6",
     });
   });
 
@@ -976,6 +969,20 @@ describe("group allocation request contract", () => {
     await api.groupAllocation("6");
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/groups/6/allocation");
+  });
+
+  it("reads probe models through the stable group ID endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ group_id: "6", models: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.groupProbeModels("6");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/groups/6/models");
   });
 });
 
@@ -1270,7 +1277,8 @@ describe("password vault request contracts", () => {
       username: "user",
       password: "secret",
     });
-    await api.runAuthRecovery("api.example.test", "operator");
+    await api.runAuthRecovery("api.example.test", "operator", true);
+    await api.runAuthRecoveryBatch(["api.example.test", "backup.example.test"]);
 
     expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       entry: "operator",
@@ -1280,6 +1288,11 @@ describe("password vault request contracts", () => {
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       host: "api.example.test",
       entry: "operator",
+      accept_login_agreement: true,
+    });
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/auth-recovery/run-batch");
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      hosts: ["api.example.test", "backup.example.test"],
     });
   });
 });
@@ -1327,6 +1340,23 @@ describe("New API management request contracts", () => {
         },
       ],
     });
+  });
+
+  it("通过受控后端接口读取远程价卡原始文件", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ content: "{}" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.remoteModelPricingSource("production/main");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/newapi/platforms/production%2Fmain/remote-model-prices/raw",
+    );
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).credentials).toBe("include");
   });
 
   it("keeps the Sub2API service key inside the channel creation request", async () => {

@@ -11,6 +11,7 @@ var compositeAccountPlatforms = map[string]struct{}{
 	"kimi":        {},
 	"zhipu":       {},
 	"deepseek":    {},
+	"opencode":    {},
 }
 
 func NormalizePlatform(value string) string {

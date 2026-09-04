@@ -115,6 +115,10 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			hosts_json TEXT NOT NULL DEFAULT '[]', headers_json TEXT NOT NULL DEFAULT '{}',
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS auth_recovery_preferences (
+			host TEXT PRIMARY KEY, auth_mode TEXT NOT NULL, recovery_method TEXT NOT NULL,
+			vault_entry TEXT, succeeded_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS upstream_key_secrets (
 			host TEXT NOT NULL, key_id TEXT NOT NULL, group_id TEXT NOT NULL,
 			secret TEXT NOT NULL, updated_at TEXT NOT NULL,

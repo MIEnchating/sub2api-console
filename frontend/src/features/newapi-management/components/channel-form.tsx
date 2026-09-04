@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
-import { KeyRound, LoaderCircle } from "lucide-react";
+import { Check, KeyRound, LoaderCircle } from "lucide-react";
 
 import type {
   NewAPIChannelKey,
@@ -58,6 +58,75 @@ type Props = {
 function requestErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return "从上游获取模型失败";
+}
+
+export function NewAPIChannelSteps(props: { configurationReady: boolean }) {
+  return (
+    <div className="bg-muted/20 border-b px-4 py-4 sm:px-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">添加 Sub2API 渠道</h2>
+        <span className="text-muted-foreground text-xs tabular-nums">
+          步骤 {props.configurationReady ? "2" : "1"} / 2
+        </span>
+      </div>
+      <ol
+        className="mx-auto mt-4 grid max-w-2xl grid-cols-[minmax(0,1fr)_minmax(2rem,6rem)_minmax(0,1fr)] items-start"
+        aria-label="添加渠道步骤"
+      >
+        <li
+          data-channel-step="credentials"
+          data-state={props.configurationReady ? "complete" : "current"}
+          aria-current={props.configurationReady ? undefined : "step"}
+          className={cn(
+            "col-start-1 row-start-1 grid min-w-0 justify-items-center gap-1.5 text-center text-xs font-medium",
+            props.configurationReady ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          <span
+            className={cn(
+              "flex size-7 items-center justify-center rounded-full border tabular-nums",
+              props.configurationReady
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-primary bg-primary text-primary-foreground",
+            )}
+            aria-hidden="true"
+          >
+            {props.configurationReady ? <Check className="size-3.5" /> : 1}
+          </span>
+          <span>创建密钥</span>
+        </li>
+        <li
+          className={cn(
+            "col-start-2 row-start-1 mt-3 h-px w-full",
+            props.configurationReady ? "bg-primary" : "bg-border",
+          )}
+          aria-hidden="true"
+        />
+        <li
+          data-channel-step="configuration"
+          data-state={props.configurationReady ? "current" : "upcoming"}
+          aria-current={props.configurationReady ? "step" : undefined}
+          className={cn(
+            "col-start-3 row-start-1 grid min-w-0 justify-items-center gap-1.5 text-center text-xs font-medium",
+            props.configurationReady ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          <span
+            className={cn(
+              "flex size-7 items-center justify-center rounded-full border tabular-nums",
+              props.configurationReady
+                ? "border-primary bg-primary text-primary-foreground"
+                : "bg-background",
+            )}
+            aria-hidden="true"
+          >
+            2
+          </span>
+          <span>配置渠道</span>
+        </li>
+      </ol>
+    </div>
+  );
 }
 
 export function NewAPIChannelForm(props: Props) {
@@ -205,30 +274,11 @@ export function NewAPIChannelForm(props: Props) {
   }
 
   return (
-    <Card className="gap-0">
-      <div className="border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">添加 Sub2API 渠道</h2>
-        <ol className="mt-3 grid grid-cols-2 gap-2" aria-label="添加渠道步骤">
-          {["1. 创建密钥", "2. 配置渠道"].map((label, index) => {
-            const active = createdKey ? index === 1 : index === 0;
-            return (
-              <li
-                key={label}
-                aria-current={active ? "step" : undefined}
-                className={cn(
-                  "border-b-2 pb-2 text-xs font-medium",
-                  active ? "border-primary text-foreground" : "border-border text-muted-foreground",
-                )}
-              >
-                {label}
-              </li>
-            );
-          })}
-        </ol>
-      </div>
+    <Card className="w-full gap-0">
+      <NewAPIChannelSteps configurationReady={createdKey !== null} />
 
       {createdKey ? (
-        <form className="grid gap-5 p-4" onSubmit={channelForm.handleSubmit(submit)}>
+        <form className="grid gap-0" onSubmit={channelForm.handleSubmit(submit)}>
           <Controller
             control={channelForm.control}
             name="newapi_groups"
@@ -263,154 +313,168 @@ export function NewAPIChannelForm(props: Props) {
         </form>
       ) : (
         <form
-          className="grid gap-5 p-4"
+          className="grid gap-0"
           onSubmit={(event) => {
             event.preventDefault();
             void createKey();
           }}
         >
-          <div className="grid gap-1.5 text-sm">
-            <span className="font-medium">普通账号</span>
-            <SegmentedControl className="grid w-full grid-cols-2" aria-label="账号来源">
-              <SegmentedControlItem
-                type="button"
-                selected={credentialSource === "vault"}
-                onClick={() => {
-                  keyForm.setValue("credential_source", "vault");
-                  keyForm.clearErrors(["username", "password"]);
-                }}
-              >
-                密码箱账号
-              </SegmentedControlItem>
-              <SegmentedControlItem
-                type="button"
-                selected={credentialSource === "custom"}
-                onClick={() => {
-                  keyForm.setValue("credential_source", "custom");
-                  keyForm.clearErrors("vault_entry");
-                }}
-              >
-                自定义账号密码
-              </SegmentedControlItem>
-            </SegmentedControl>
-          </div>
-
-          {credentialSource === "vault" ? (
-            <div className="grid gap-1.5 text-sm">
-              <label className="font-medium" htmlFor="newapi-channel-vault-entry">
-                密码箱账号
-              </label>
-              <Controller
-                control={keyForm.control}
-                name="vault_entry"
-                render={({ field }) => (
-                  <Select
-                    value={field.value || null}
-                    itemToStringLabel={(value) => value}
-                    onValueChange={(value) => field.onChange(value ?? "")}
-                  >
-                    <SelectTrigger
-                      id="newapi-channel-vault-entry"
-                      aria-label="密码箱账号"
-                      aria-invalid={Boolean(keyForm.formState.errors.vault_entry)}
-                      disabled={vaultOptions.length === 0}
-                    >
-                      <SelectValue
-                        placeholder={vaultOptions.length === 0 ? "暂无可用账号" : "选择账号"}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {vaultOptions.map((entry) => (
-                        <SelectItem key={entry.entry} value={entry.entry}>
-                          {entry.entry}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              />
-              {keyForm.formState.errors.vault_entry ? (
-                <span className="text-destructive text-xs">
-                  {keyForm.formState.errors.vault_entry.message}
-                </span>
-              ) : null}
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
+          <div
+            data-channel-credentials-layout=""
+            className="grid min-w-0 divide-y lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0"
+          >
+            <fieldset className="grid min-w-0 content-start gap-4 p-4 sm:p-5">
+              <legend className="sr-only">账号凭据</legend>
               <div className="grid gap-1.5 text-sm">
-                <label className="font-medium" htmlFor="newapi-channel-username">
-                  登录邮箱
-                </label>
-                <Input
-                  id="newapi-channel-username"
-                  type="email"
-                  autoComplete="username"
-                  aria-invalid={Boolean(keyForm.formState.errors.username)}
-                  {...keyForm.register("username")}
-                />
-                {keyForm.formState.errors.username ? (
-                  <span className="text-destructive text-xs">
-                    {keyForm.formState.errors.username.message}
-                  </span>
-                ) : null}
-              </div>
-              <div className="grid gap-1.5 text-sm">
-                <label className="font-medium" htmlFor="newapi-channel-password">
-                  密码
-                </label>
-                <Input
-                  id="newapi-channel-password"
-                  type="password"
-                  autoComplete="current-password"
-                  aria-invalid={Boolean(keyForm.formState.errors.password)}
-                  {...keyForm.register("password")}
-                />
-                {keyForm.formState.errors.password ? (
-                  <span className="text-destructive text-xs">
-                    {keyForm.formState.errors.password.message}
-                  </span>
-                ) : null}
-              </div>
-            </div>
-          )}
-
-          <div className="grid gap-1.5 text-sm">
-            <label className="font-medium" htmlFor="newapi-channel-sub2api-group">
-              Sub2API 分组
-            </label>
-            <Controller
-              control={keyForm.control}
-              name="sub2api_group_id"
-              render={({ field }) => (
-                <Select
-                  value={field.value || null}
-                  itemToStringLabel={(value) => groupNames.get(value) ?? value}
-                  onValueChange={(value) => field.onChange(value ?? "")}
+                <span className="font-medium">普通账号</span>
+                <SegmentedControl
+                  className="grid w-full grid-cols-2 sm:max-w-lg"
+                  aria-label="账号来源"
                 >
-                  <SelectTrigger
-                    id="newapi-channel-sub2api-group"
-                    aria-label="Sub2API 分组"
-                    aria-invalid={Boolean(keyForm.formState.errors.sub2api_group_id)}
+                  <SegmentedControlItem
+                    type="button"
+                    selected={credentialSource === "vault"}
+                    onClick={() => {
+                      keyForm.setValue("credential_source", "vault");
+                      keyForm.clearErrors(["username", "password"]);
+                    }}
                   >
-                    <SelectValue placeholder="选择分组" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {props.groups.map((group) => (
-                      <SelectItem key={group.id} value={group.id}>
-                        {group.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                    密码箱账号
+                  </SegmentedControlItem>
+                  <SegmentedControlItem
+                    type="button"
+                    selected={credentialSource === "custom"}
+                    onClick={() => {
+                      keyForm.setValue("credential_source", "custom");
+                      keyForm.clearErrors("vault_entry");
+                    }}
+                  >
+                    自定义账号密码
+                  </SegmentedControlItem>
+                </SegmentedControl>
+              </div>
+
+              {credentialSource === "vault" ? (
+                <div className="grid gap-1.5 text-sm sm:max-w-lg">
+                  <label className="font-medium" htmlFor="newapi-channel-vault-entry">
+                    密码箱账号
+                  </label>
+                  <Controller
+                    control={keyForm.control}
+                    name="vault_entry"
+                    render={({ field }) => (
+                      <Select
+                        value={field.value || null}
+                        itemToStringLabel={(value) => value}
+                        onValueChange={(value) => field.onChange(value ?? "")}
+                      >
+                        <SelectTrigger
+                          id="newapi-channel-vault-entry"
+                          aria-label="密码箱账号"
+                          aria-invalid={Boolean(keyForm.formState.errors.vault_entry)}
+                          disabled={vaultOptions.length === 0}
+                        >
+                          <SelectValue
+                            placeholder={vaultOptions.length === 0 ? "暂无可用账号" : "选择账号"}
+                          />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {vaultOptions.map((entry) => (
+                            <SelectItem key={entry.entry} value={entry.entry}>
+                              {entry.entry}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                  {keyForm.formState.errors.vault_entry ? (
+                    <span className="text-destructive text-xs">
+                      {keyForm.formState.errors.vault_entry.message}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="grid min-w-0 gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5 text-sm">
+                    <label className="font-medium" htmlFor="newapi-channel-username">
+                      登录邮箱
+                    </label>
+                    <Input
+                      id="newapi-channel-username"
+                      type="email"
+                      autoComplete="username"
+                      aria-invalid={Boolean(keyForm.formState.errors.username)}
+                      {...keyForm.register("username")}
+                    />
+                    {keyForm.formState.errors.username ? (
+                      <span className="text-destructive text-xs">
+                        {keyForm.formState.errors.username.message}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-1.5 text-sm">
+                    <label className="font-medium" htmlFor="newapi-channel-password">
+                      密码
+                    </label>
+                    <Input
+                      id="newapi-channel-password"
+                      type="password"
+                      autoComplete="current-password"
+                      aria-invalid={Boolean(keyForm.formState.errors.password)}
+                      {...keyForm.register("password")}
+                    />
+                    {keyForm.formState.errors.password ? (
+                      <span className="text-destructive text-xs">
+                        {keyForm.formState.errors.password.message}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
               )}
-            />
-            {keyForm.formState.errors.sub2api_group_id ? (
-              <span className="text-destructive text-xs">
-                {keyForm.formState.errors.sub2api_group_id.message}
-              </span>
-            ) : null}
+            </fieldset>
+
+            <fieldset className="bg-muted/10 grid min-w-0 content-start gap-4 p-4 sm:p-5">
+              <legend className="sr-only">渠道归属</legend>
+              <div className="grid gap-1.5 text-sm">
+                <label className="font-medium" htmlFor="newapi-channel-sub2api-group">
+                  Sub2API 分组
+                </label>
+                <Controller
+                  control={keyForm.control}
+                  name="sub2api_group_id"
+                  render={({ field }) => (
+                    <Select
+                      value={field.value || null}
+                      itemToStringLabel={(value) => groupNames.get(value) ?? value}
+                      onValueChange={(value) => field.onChange(value ?? "")}
+                    >
+                      <SelectTrigger
+                        id="newapi-channel-sub2api-group"
+                        aria-label="Sub2API 分组"
+                        aria-invalid={Boolean(keyForm.formState.errors.sub2api_group_id)}
+                      >
+                        <SelectValue placeholder="选择分组" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {props.groups.map((group) => (
+                          <SelectItem key={group.id} value={group.id}>
+                            {group.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                />
+                {keyForm.formState.errors.sub2api_group_id ? (
+                  <span className="text-destructive text-xs">
+                    {keyForm.formState.errors.sub2api_group_id.message}
+                  </span>
+                ) : null}
+              </div>
+            </fieldset>
           </div>
-          <div className="flex justify-end">
+          <div className="bg-muted/20 flex justify-end border-t px-4 py-3 sm:px-5">
             <Button
               type="submit"
               disabled={

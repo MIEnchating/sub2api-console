@@ -27,6 +27,7 @@ const compositeAccountPlatforms = new Set([
   "kimi",
   "zhipu",
   "deepseek",
+  "opencode",
 ]);
 
 function normalizeOnboardingPlatform(value: string | null | undefined): string {
@@ -56,6 +57,10 @@ export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
     if (!upstreamPlatform) return platforms.length > 0;
     return platforms.some((platform) => accountPlatformCanJoinGroup(upstreamPlatform, platform));
   });
+}
+
+export function isCompositeOnboardingPlatform(value: string | null | undefined): boolean {
+  return normalizeOnboardingPlatform(value) === "composite";
 }
 
 export function adjacentOnboardingUpstreams(
@@ -106,6 +111,21 @@ export function parseOnboardingBaseUrl(value: string): OnboardingBaseUrlFields {
   return {
     baseUrlProtocol: trimmed.toLowerCase().startsWith("http://") ? "http" : "https",
     baseUrl: trimmed.replace(/^https?:\/\//i, ""),
+  };
+}
+
+export function normalizeOnboardingBaseUrlInput(
+  value: string,
+  selectedProtocol: OnboardingBaseUrlFields["baseUrlProtocol"],
+): OnboardingBaseUrlFields {
+  const protocolMatch = value.match(/^\s*(https?):\/\//i);
+  if (!protocolMatch) {
+    return { baseUrlProtocol: selectedProtocol, baseUrl: value };
+  }
+  const parsedProtocol = protocolMatch[1].toLowerCase();
+  return {
+    baseUrlProtocol: parsedProtocol === "http" ? "http" : "https",
+    baseUrl: value.slice(protocolMatch[0].length),
   };
 }
 

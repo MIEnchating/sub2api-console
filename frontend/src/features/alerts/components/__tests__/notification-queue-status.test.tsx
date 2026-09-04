@@ -27,7 +27,7 @@ function queueItem(index: number): NotificationQueueItem {
 }
 
 describe("NotificationQueueStatus", () => {
-  it("shows producer and consumer queue counts and worker state", () => {
+  it("combines alert and notification metrics into one queue entry", () => {
     const markup = renderToStaticMarkup(
       <NotificationQueueStatus
         queues={{
@@ -47,29 +47,25 @@ describe("NotificationQueueStatus", () => {
       />,
     );
 
-    for (const label of [
-      "告警生产队列",
-      "告警中",
-      "已恢复",
-      "通知消费队列",
-      "待发送",
-      "发送失败",
-      "消费中",
-    ]) {
+    for (const label of ["告警中", "已恢复", "待发送", "发送失败"]) {
       expect(markup).toContain(label);
     }
     for (const count of ["12", "3", "4", "2"]) expect(markup).toContain(count);
-    expect(markup.match(/>查看</g)).toHaveLength(2);
+    expect(markup.match(/>查看队列</g)).toHaveLength(1);
     expect(markup).toContain('data-testid="notification-queue-overview"');
-    expect(markup).toContain("sm:grid-cols-2 sm:divide-x");
     expect(markup).toContain("grid-cols-[minmax(0,1fr)_auto]");
+    expect(markup).not.toContain("告警生产队列");
+    expect(markup).not.toContain("通知消费队列");
+    expect(markup).not.toContain("告警与通知队列");
+    expect(markup).not.toContain("集中查看告警状态与通知处理进度");
+    expect(markup).not.toContain("消费中");
+    expect(markup).not.toContain("等待任务");
   });
 
   it("adds search and pagination to long queue details", () => {
     const items = Array.from({ length: 25 }, (_, index) => queueItem(index + 1));
     const markup = renderToStaticMarkup(
       <NotificationQueueDetailsList
-        kind="consumer"
         details={{
           producer_firing: [],
           producer_recovered: [],
@@ -87,7 +83,7 @@ describe("NotificationQueueStatus", () => {
     expect(markup).toContain('data-table-panel=""');
   });
 
-  it("shows resolved balance wording for a recovered queue item", () => {
+  it("groups the alert subject, original trigger, state, notification, and labeled times", () => {
     const recoveredBalance: NotificationQueueItem = {
       ...queueItem(1),
       event_type: "upstream.balance",
@@ -99,19 +95,89 @@ describe("NotificationQueueStatus", () => {
     };
     const markup = renderToStaticMarkup(
       <NotificationQueueDetailsList
-        kind="producer"
         details={{
           producer_firing: [],
           producer_recovered: [recoveredBalance],
           consumer_pending: [],
           consumer_failed: [],
-          consumer_items: [],
+          consumer_items: [
+            {
+              ...recoveredBalance,
+              queue_status: "本轮不发送",
+              queue_reason: "恢复通知已发送",
+            },
+          ],
         }}
       />,
     );
 
-    expect(markup).toContain("上游余额恢复");
-    expect(markup).toContain("余额已高于告警阈值 10");
-    expect(markup).not.toContain("上游余额不足");
+    for (const heading of ["告警内容", "当前状态", "通知状态", "时间"]) {
+      expect(markup).toContain(heading);
+    }
+    expect(markup).toContain("上游余额");
+    expect(markup).toContain("触发原因：");
+    expect(markup).toContain("余额已达到或低于告警阈值 10");
+    expect(markup).toContain("已恢复");
+    expect(markup).toContain("本轮无需发送");
+    expect(markup).toContain("恢复通知已发送");
+    expect(markup).toContain("首次发现");
+    expect(markup).toContain("恢复时间");
+    expect(markup).not.toContain("告警与对象");
+    expect(markup).not.toContain("通知处理");
+    expect(markup).not.toContain("通知结果");
+  });
+
+  it("explains suppressed recovery notifications without exposing queue terminology", () => {
+    const recoveredBinding: NotificationQueueItem = {
+      ...queueItem(1),
+      event_type: "account.binding_invalid",
+      cause_code: "BINDING_INVALID",
+      status: "recovered",
+      delivery_status: "恢复通知已关闭",
+      queue_status: "已抑制",
+      queue_reason: "恢复通知开关已关闭",
+    };
+    const markup = renderToStaticMarkup(
+      <NotificationQueueDetailsList
+        details={{
+          producer_firing: [],
+          producer_recovered: [recoveredBinding],
+          consumer_pending: [],
+          consumer_failed: [],
+          consumer_items: [recoveredBinding],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("账号绑定");
+    expect(markup).toContain("绑定的上游或分组已不存在");
+    expect(markup).toContain("无需发送");
+    expect(markup).toContain("恢复通知已关闭");
+    expect(markup).not.toContain("已抑制");
+  });
+
+  it("shows retry intent and attempt count after notification delivery fails", () => {
+    const failedDelivery: NotificationQueueItem = {
+      ...queueItem(1),
+      delivery_status: "failed",
+      delivery_attempts: 3,
+      queue_status: "发送失败，等待重试",
+      queue_reason: "请求超时",
+    };
+    const markup = renderToStaticMarkup(
+      <NotificationQueueDetailsList
+        details={{
+          producer_firing: [failedDelivery],
+          producer_recovered: [],
+          consumer_pending: [failedDelivery],
+          consumer_failed: [failedDelivery],
+          consumer_items: [failedDelivery],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("发送失败，等待重试");
+    expect(markup).toContain("请求超时");
+    expect(markup).toContain("已尝试 3 次");
   });
 });

@@ -221,6 +221,6 @@ describe("account rate sync status", () => {
     expect(markup).toContain("已跳过");
     expect(markup).toContain("1 个");
     expect(markup).toContain("只读降级，已跳过写回");
-    expect(markup).toContain("实时探测失败：上游倍率接口暂时不可用");
+    expect(markup).toContain("实时查询失败：上游倍率接口暂时不可用");
   });
 });

@@ -177,7 +177,7 @@ describe("upstream edit dialog", () => {
     const content = dialogContentClass("wide", "tall", upstreamEditDialogLayout.content);
     expect(content).toContain("overflow-hidden");
     expect(content).toContain("w-[min(64rem,calc(100vw-2rem))]");
-    expect(content).toContain("h-[min(46rem,calc(100svh-2rem))]");
+    expect(content).toContain("max-h-[min(44rem,calc(100svh-2rem))]");
     expect(dialogBodyLayout).toContain("min-w-0");
     expect(dialogBodyLayout).toContain("overflow-y-auto");
     expect(upstreamEditDialogLayout.scrollArea).toContain("overflow-x-clip");

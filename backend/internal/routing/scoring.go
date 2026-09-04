@@ -21,6 +21,7 @@ const (
 	EventRateLimited   Event = "rate_limited_or_exhausted"
 	EventProbeFailed   Event = "probe_failed"
 	EventCredentialBad Event = "credential_invalid"
+	EventClientError   Event = "client_error"
 )
 
 type Sample struct {
@@ -39,6 +40,7 @@ type Classified struct {
 	Failure     bool
 	Gateway     bool
 	RateLimited bool
+	Neutral     bool
 }
 
 type Health struct {
@@ -46,6 +48,7 @@ type Health struct {
 	LongScore          float64
 	HealthScore        float64
 	SampleCount        int
+	NeutralCount       int
 	LatestEvent        Event
 	Fatal              bool
 	FailureStreak      int
@@ -67,6 +70,7 @@ type scoringConfig struct {
 	fatalPatterns []string
 	quotaPatterns []string
 	gatewayCodes  map[int]struct{}
+	clientCodes   map[int]struct{}
 }
 
 var statusPattern = regexp.MustCompile(`\b([45][0-9]{2})\b`)
@@ -89,6 +93,12 @@ var authFailurePatterns = []string{
 	"account not found", "no api key", "no access token", "revoked", "disabled key", "key not found",
 }
 
+var decisiveAuthFailurePatterns = []string{
+	"invalid api key", "invalid_api_key", "invalid key", "invalid token", "unauthorized",
+	"authentication", "authentication_error", "account not found", "no api key", "no access token",
+	"revoked", "disabled key", "key not found",
+}
+
 func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	config, err := parseScoringConfig(policy)
 	if err != nil {
@@ -100,9 +110,24 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	if len(samples) == 0 {
 		return Health{LatestEvent: EventUnknown, Events: []Event{}}, nil
 	}
-	classified := make([]Classified, len(samples))
+	allClassified := make([]Classified, len(samples))
+	classified := make([]Classified, 0, len(samples))
+	effectiveSamples := make([]Sample, 0, len(samples))
+	latestEvent := EventUnknown
 	for index := range samples {
-		classified[index] = classify(samples[index], config)
+		item := classify(samples[index], config)
+		allClassified[index] = item
+		if index == 0 {
+			latestEvent = item.Event
+		}
+		if item.Neutral {
+			continue
+		}
+		classified = append(classified, item)
+		effectiveSamples = append(effectiveSamples, samples[index])
+	}
+	if len(classified) == 0 {
+		return Health{NeutralCount: len(samples), LatestEvent: latestEvent, Events: []Event{}}, nil
 	}
 	shortCount := min(len(classified), config.shortWindow)
 	short := classified[:shortCount]
@@ -130,15 +155,15 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	}
 
 	failureStreak := 0
-	for _, item := range classified {
-		if !item.Failure {
+	for _, item := range allClassified {
+		if item.Neutral || !item.Failure {
 			break
 		}
 		failureStreak++
 	}
 	recoveryStreak := 0
-	for _, item := range classified {
-		if item.Failure {
+	for _, item := range allClassified {
+		if item.Neutral || item.Failure {
 			break
 		}
 		recoveryStreak++
@@ -148,7 +173,7 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 		if item.Failure {
 			continue
 		}
-		if latency := latencyMS(samples[index]); latency != nil {
+		if latency := latencyMS(effectiveSamples[index]); latency != nil {
 			latencies = append(latencies, *latency)
 		}
 	}
@@ -172,7 +197,7 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	}
 	return Health{
 		ShortScore: round4(shortValue), LongScore: round4(longValue), HealthScore: round4(final),
-		SampleCount: len(classified), LatestEvent: classified[0].Event, Fatal: classified[0].Fatal,
+		SampleCount: len(classified), NeutralCount: len(samples) - len(classified), LatestEvent: classified[0].Event, Fatal: classified[0].Fatal,
 		FailureStreak: failureStreak, RecoveryPassStreak: recoveryStreak, P50MS: roundedPointer(p50), P95MS: roundedPointer(p95),
 		Events: events, GatewayFailures: gatewayFailures, RateLimited: rateLimited,
 	}, nil
@@ -196,12 +221,19 @@ func classify(sample Sample, config scoringConfig) Classified {
 	quotaStatus := status == 402 || status == 429
 	quotaText := containsPattern(text, config.quotaPatterns) && !containsPattern(text, authFailurePatterns)
 	quota := !success && (quotaStatus || quotaText)
-	credential := status == 401 || status == 402 || status == 403 || containsPattern(text, config.fatalPatterns)
+	decisiveCredential := status == 401 || containsPattern(text, decisiveAuthFailurePatterns)
+	credential := decisiveCredential || containsPattern(text, config.fatalPatterns)
+	if status == 403 && !decisiveCredential {
+		credential = false
+	}
 	_, gateway := config.gatewayCodes[status]
 	failed := result == "失败" || result == "failed" || result == "error" || result == "timeout" ||
 		result == "超时" || result == "probe failed" || result == "unhealthy" || reason != ""
 	if quota {
 		return Classified{Score: config.eventScores[EventRateLimited], Event: EventRateLimited, Failure: true, RateLimited: true}
+	}
+	if trafficClientError(sample.Source, status, config.clientCodes) && !decisiveCredential {
+		return Classified{Event: EventClientError, Neutral: true}
 	}
 	if credential {
 		return Classified{Score: config.eventScores[EventCredentialBad], Event: EventCredentialBad, Fatal: true, Failure: true}
@@ -234,6 +266,15 @@ func looksLikeNetworkFailure(value string) bool {
 		}
 	}
 	return false
+}
+
+func trafficClientError(source string, status int, allowed map[int]struct{}) bool {
+	normalized := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(source)), "_", "-")
+	if normalized != "traffic" && normalized != "logs" {
+		return false
+	}
+	_, found := allowed[status]
+	return found
 }
 
 func parseScoringConfig(policy map[string]any) (scoringConfig, error) {
@@ -296,10 +337,17 @@ func parseScoringConfig(policy map[string]any) (scoringConfig, error) {
 			gatewayCodes = map[int]struct{}{429: {}, 500: {}, 502: {}, 503: {}, 504: {}}
 		}
 	}
+	clientCodes := map[int]struct{}{400: {}, 403: {}, 404: {}, 405: {}, 409: {}, 413: {}, 415: {}, 422: {}}
+	if raw, present := classifySection["client_error_status_codes"]; present {
+		clientCodes, err = statusCodes(raw)
+		if err != nil {
+			return scoringConfig{}, err
+		}
+	}
 	return scoringConfig{
 		shortWindow: shortWindow, longWindow: longWindow, latestWeight: latestWeight, shortRatio: shortRatio,
 		slowTTFBMS: slowTTFB, eventScores: eventScores,
-		fatalPatterns: fatalPatterns, quotaPatterns: quotaPatterns, gatewayCodes: gatewayCodes,
+		fatalPatterns: fatalPatterns, quotaPatterns: quotaPatterns, gatewayCodes: gatewayCodes, clientCodes: clientCodes,
 	}, nil
 }
 
@@ -360,26 +408,25 @@ func sampleStatus(sample Sample, text string) int {
 }
 
 func latencyMS(sample Sample) *float64 {
+	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
+	if source != "traffic" && source != "logs" {
+		return nil
+	}
+	if sample.Payload != nil {
+		if raw, present := sample.Payload["first_token_ms"]; present {
+			return positiveMilliseconds(raw)
+		}
+	}
 	if sample.LatencyP95 == nil || strings.TrimSpace(*sample.LatencyP95) == "" {
 		return nil
 	}
-	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
 	metric, ok := sample.Payload["latency_metric"].(string)
 	metric = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(metric)), "-", "_")
 	latencySource, _ := sample.Payload["latency_source"].(string)
-	latencySource = strings.ToLower(strings.TrimSpace(latencySource))
-	probe := source == "active-probe" || source == "probe"
-	if probe && (metric == "total_duration" || metric == "request_duration" || latencySource == "account_test.complete_response") {
+	if strings.EqualFold(strings.TrimSpace(latencySource), "operations.duration_ms") {
 		return nil
 	}
-	if probe && ok && metric != "first_token" && metric != "ttfb" {
-		return nil
-	}
-	traffic := source == "traffic" || source == "logs"
-	if traffic && (!ok || (metric != "request_duration" && metric != "first_token" && metric != "ttfb")) {
-		return nil
-	}
-	if !probe && !traffic {
+	if !ok || (metric != "first_token" && metric != "ttfb") {
 		return nil
 	}
 	value, err := strconv.ParseFloat(strings.TrimSpace(*sample.LatencyP95), 64)
@@ -403,11 +450,13 @@ func latencyMS(sample Sample) *float64 {
 			}
 		}
 	}
-	if source == "active-probe" || source == "probe" || source == "traffic" || source == "logs" {
-		return &value
-	}
-	if value <= 100 {
-		value *= 1000
+	return &value
+}
+
+func positiveMilliseconds(raw any) *float64 {
+	value, err := strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(raw)), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
+		return nil
 	}
 	return &value
 }

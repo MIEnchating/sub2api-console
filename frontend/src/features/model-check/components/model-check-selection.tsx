@@ -3,6 +3,7 @@ import { useEffect } from "react";
 
 import type { AccountStatus } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { RefreshButton } from "@/components/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,7 +33,7 @@ export type ModelCheckSelectionProps = {
   modelsLoading: boolean;
   modelsError: string | null;
   rounds: number;
-  timeoutSeconds: number;
+  timeoutSeconds: number | null;
   combinationCount: number;
   selectionError: string | null;
   disabled: boolean;
@@ -45,7 +46,7 @@ export type ModelCheckSelectionProps = {
   onModelsSelectAll: () => void;
   onRefreshModels: () => void;
   onRoundsChange: (value: number) => void;
-  onTimeoutChange: (value: number) => void;
+  onTimeoutChange: (value: number | null) => void;
   onSubmit: () => void;
 };
 
@@ -189,7 +190,7 @@ function accountEmptyState(props: ModelCheckSelectionProps) {
 }
 
 function AccountPanel(props: ModelCheckSelectionProps) {
-  const pagination = useClientPagination(props.accounts, 10);
+  const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
   const selectableAccountCount = props.accounts.filter(
     (account) => account.manual_priority == null,
@@ -428,29 +429,16 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
           >
             全选
           </Button>
-          <Tooltip>
-            <TooltipTrigger render={<span className="inline-flex" />}>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                disabled={
-                  props.disabled || props.selectedAccountIDs.length === 0 || props.modelsLoading
-                }
-                onClick={props.onRefreshModels}
-                aria-label="刷新模型"
-              >
-                <RefreshCw
-                  className={props.modelsLoading ? "animate-spin" : ""}
-                  aria-hidden="true"
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>刷新模型</TooltipContent>
-          </Tooltip>
+          <RefreshButton
+            pending={props.modelsLoading}
+            disabled={props.disabled || props.selectedAccountIDs.length === 0}
+            ariaLabel="刷新模型"
+            onClick={props.onRefreshModels}
+            className="border-0 bg-transparent shadow-none hover:bg-muted"
+          />
         </div>
       </CardHeader>
-      <CardContent className="min-h-0 flex-1 overflow-auto p-0!">
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-0!">
         <ModelList {...props} />
       </CardContent>
       <div className="border-border/70 shrink-0 border-t p-3">
@@ -470,7 +458,7 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
                 type="number"
                 min={5}
                 max={120}
-                value={props.timeoutSeconds}
+                value={props.timeoutSeconds ?? ""}
                 disabled={props.disabled}
                 onChange={(event) => props.onTimeoutChange(event.currentTarget.valueAsNumber)}
                 className="pr-9 pl-8"

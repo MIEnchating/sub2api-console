@@ -16,6 +16,8 @@ type AlertPolicy struct {
 	ConfigurationEnabled      bool     `json:"configuration_enabled"`
 	AuthEnabled               bool     `json:"auth_enabled"`
 	RateSyncEnabled           bool     `json:"rate_sync_enabled"`
+	MultiplierIncreaseEnabled bool     `json:"multiplier_increase_enabled"`
+	MultiplierDecreaseEnabled bool     `json:"multiplier_decrease_enabled"`
 	BalanceEnabled            bool     `json:"balance_enabled"`
 	ProbeEnabled              bool     `json:"probe_enabled"`
 	RoutingBreakerEnabled     bool     `json:"routing_breaker_enabled"`
@@ -40,6 +42,7 @@ type AlertPolicy struct {
 func DefaultAlertPolicy() AlertPolicy {
 	return AlertPolicy{
 		Enabled: true, ConfigurationEnabled: true, AuthEnabled: true, RateSyncEnabled: true,
+		MultiplierIncreaseEnabled: true, MultiplierDecreaseEnabled: true,
 		BalanceEnabled: true, ProbeEnabled: true, BalanceThresholds: []string{"20", "10", "5"},
 		RoutingBreakerEnabled: true, RoutingDegradedEnabled: true, RoutingSurvivorEnabled: true,
 		RoutingDegradedTypes:    append([]string(nil), routingDegradedTypeValues...),
@@ -107,7 +110,7 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 		_, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='closed',last_seen_at=?,delivery_status='告警总开关已关闭',last_error=NULL WHERE status='recovered'`, now)
 		return err
 	}
-	disabledTypes := make([]string, 0, 11)
+	disabledTypes := make([]string, 0, 13)
 	if !policy.ConfigurationEnabled {
 		disabledTypes = append(disabledTypes, "upstream.configuration")
 	}
@@ -116,6 +119,12 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 	}
 	if !policy.RateSyncEnabled {
 		disabledTypes = append(disabledTypes, "upstream.rate_sync")
+	}
+	if !policy.MultiplierIncreaseEnabled {
+		disabledTypes = append(disabledTypes, "account.multiplier_increased")
+	}
+	if !policy.MultiplierDecreaseEnabled {
+		disabledTypes = append(disabledTypes, "account.multiplier_decreased")
 	}
 	if !policy.BalanceEnabled {
 		disabledTypes = append(disabledTypes, "upstream.balance")
@@ -174,6 +183,7 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 
 func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, error) {
 	allowed := valueStringSet("enabled", "configuration_enabled", "auth_enabled", "rate_sync_enabled", "balance_enabled", "probe_enabled",
+		"multiplier_increase_enabled", "multiplier_decrease_enabled",
 		"routing_breaker_enabled", "routing_degraded_enabled", "routing_degraded_types", "routing_survivor_enabled", "group_unavailable_enabled",
 		"group_survivor_enabled", "apply_failure_enabled",
 		"balance_thresholds", "balance_threshold", "probe_failure_streak", "probe_recovery_streak", "probe_groups", "delivery_enabled", "notify_recovery", "recovery_notification_types", "repeat_interval_minutes", "state_change_cooldown_minutes", "merge_threshold")
@@ -197,6 +207,7 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 	delete(document, "balance_threshold")
 	booleanFields := []string{
 		"enabled", "configuration_enabled", "auth_enabled", "rate_sync_enabled", "balance_enabled", "probe_enabled",
+		"multiplier_increase_enabled", "multiplier_decrease_enabled",
 		"routing_breaker_enabled", "routing_degraded_enabled", "routing_survivor_enabled", "group_unavailable_enabled",
 		"group_survivor_enabled", "apply_failure_enabled", "delivery_enabled", "notify_recovery",
 	}
@@ -274,6 +285,7 @@ func normalizeAlertPolicy(raw map[string]any, mergeDefaults bool) (AlertPolicy, 
 	return AlertPolicy{
 		Enabled: booleans["enabled"], ConfigurationEnabled: booleans["configuration_enabled"], AuthEnabled: booleans["auth_enabled"],
 		RateSyncEnabled: booleans["rate_sync_enabled"], BalanceEnabled: booleans["balance_enabled"], ProbeEnabled: booleans["probe_enabled"],
+		MultiplierIncreaseEnabled: booleans["multiplier_increase_enabled"], MultiplierDecreaseEnabled: booleans["multiplier_decrease_enabled"],
 		RoutingBreakerEnabled: booleans["routing_breaker_enabled"], RoutingDegradedEnabled: booleans["routing_degraded_enabled"],
 		RoutingDegradedTypes:   routingDegradedTypes,
 		RoutingSurvivorEnabled: booleans["routing_survivor_enabled"], GroupUnavailableEnabled: booleans["group_unavailable_enabled"],
@@ -319,6 +331,7 @@ func alertPolicyDocument(policy AlertPolicy) map[string]any {
 	return map[string]any{
 		"enabled": policy.Enabled, "configuration_enabled": policy.ConfigurationEnabled, "auth_enabled": policy.AuthEnabled,
 		"rate_sync_enabled": policy.RateSyncEnabled, "balance_enabled": policy.BalanceEnabled, "probe_enabled": policy.ProbeEnabled,
+		"multiplier_increase_enabled": policy.MultiplierIncreaseEnabled, "multiplier_decrease_enabled": policy.MultiplierDecreaseEnabled,
 		"routing_breaker_enabled": policy.RoutingBreakerEnabled, "routing_degraded_enabled": policy.RoutingDegradedEnabled,
 		"routing_degraded_types":   stringSliceValues(policy.RoutingDegradedTypes),
 		"routing_survivor_enabled": policy.RoutingSurvivorEnabled, "group_unavailable_enabled": policy.GroupUnavailableEnabled,

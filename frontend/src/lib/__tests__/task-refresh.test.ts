@@ -67,6 +67,7 @@ describe("terminal task refresh contract", () => {
     const keys = terminalRefreshKeys("pricing", { status: "failed" } as never);
 
     expect(keys).toContainEqual(["pricing"]);
+    expect(keys).toContainEqual(["pricing-changes"]);
     expect(keys).toContainEqual(["accounts"]);
     expect(keys).toContainEqual(["groups"]);
   });

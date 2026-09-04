@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import type { Task } from "@/api";
 import { Dialog } from "@/components/ui/dialog";
+import { dialogContentClass } from "@/components/ui/dialog";
 import {
+  keyCleanupDialogLayout,
+  keyCleanupDialogWidth,
   keyCleanupResultItems,
   OnboardingKeyCleanupDialogContent,
 } from "../onboarding-key-cleanup-dialog";
@@ -63,5 +66,49 @@ describe("OnboardingKeyCleanupDialog", () => {
       { keyId: "17", name: "unused", status: "deleted", reason: null },
       { keyId: "18", name: "newly-bound", status: "skipped", reason: "已建立绑定" },
     ]);
+  });
+
+  it("uses a compact adaptive dialog when the scan has no rows", () => {
+    expect(keyCleanupDialogWidth({ host: "api.example", keys: [] }, null)).toBe("medium");
+    expect(
+      keyCleanupDialogWidth(
+        {
+          host: "api.example",
+          keys: [{ key_id: "17", name: "unused", group_id: "6", status: "active" }],
+        },
+        null,
+      ),
+    ).toBe("wide");
+    const className = dialogContentClass(
+      "medium",
+      keyCleanupDialogLayout.height,
+      keyCleanupDialogLayout.content,
+    );
+    expect(className).toContain("max-h-[calc(100svh-2rem)]");
+    expect(className).not.toContain("h-[min(42rem");
+  });
+
+  it("removes the destructive zero-count action from the empty state", () => {
+    const markup = renderToStaticMarkup(
+      <Dialog open>
+        <OnboardingKeyCleanupDialogContent
+          open
+          preview={{ host: "api.example", keys: [] }}
+          previewPending={false}
+          previewError={null}
+          task={null}
+          taskPending={false}
+          taskError={null}
+          onOpenChange={() => undefined}
+          onRefresh={() => undefined}
+          onConfirm={() => undefined}
+          onComplete={() => undefined}
+        />
+      </Dialog>,
+    );
+
+    expect(markup).toContain("关闭");
+    expect(markup).toContain('aria-label="刷新扫描结果"');
+    expect(markup).not.toContain("确认删除 0 个 Key");
   });
 });
