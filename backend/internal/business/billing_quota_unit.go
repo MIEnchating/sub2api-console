@@ -5,8 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
-	"strconv"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -14,9 +13,10 @@ import (
 // ValidateNewAPIQuotaUnit records the live unit and proves that the report
 // window has no known unit change. A first observation establishes the unit
 // baseline; later conflicting observations still fail closed.
-func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit float64, start, end time.Time) error {
+func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, rawUnit string, start, end time.Time) error {
 	host = canonicalHost(host)
-	if host == "" || math.IsNaN(unit) || math.IsInf(unit, 0) || unit <= 0 || !end.After(start) {
+	unit, unitErr := positiveQuotaUnit(rawUnit)
+	if host == "" || unitErr != nil || !end.After(start) {
 		return errors.New("NewAPI quota_per_unit 校验参数无效")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -27,7 +27,7 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit f
 	if err := seedQuotaUnitFromUpstreamMetadata(ctx, tx, host, start); err != nil {
 		return err
 	}
-	unitText := strconv.FormatFloat(unit, 'g', -1, 64)
+	unitText := quotaUnitText(unit)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO billing_quota_unit_observations(host,observed_at,quota_per_unit)
 		VALUES(?,?,?) ON CONFLICT(host,observed_at) DO UPDATE SET quota_per_unit=excluded.quota_per_unit`, host, now, unitText); err != nil {
@@ -56,7 +56,7 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit f
 				rows.Close()
 				return parseErr
 			}
-			if observed != unit {
+			if observed.Cmp(unit) != 0 {
 				validationErr = fmt.Errorf("NewAPI quota_per_unit 当前值 %s 与已知历史值 %s 不一致", unitText, observedText)
 				break
 			}
@@ -74,7 +74,7 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit f
 		if parseErr != nil {
 			return parseErr
 		}
-		if baseline != unit {
+		if baseline.Cmp(unit) != 0 {
 			validationErr = fmt.Errorf("NewAPI quota_per_unit 当前值 %s 与报告日前基线 %s 不一致", unitText, baselineText)
 		} else {
 			rows, queryErr := tx.QueryContext(ctx, `SELECT quota_per_unit FROM billing_quota_unit_observations
@@ -95,7 +95,7 @@ func (s *Store) ValidateNewAPIQuotaUnit(ctx context.Context, host string, unit f
 					rows.Close()
 					return parseErr
 				}
-				if observed != baseline {
+				if observed.Cmp(baseline) != 0 {
 					validationErr = errors.New("NewAPI quota_per_unit 在报告窗口内存在已知变更")
 					break
 				}
@@ -144,10 +144,18 @@ func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *sql.Tx, host str
 	return err
 }
 
-func positiveQuotaUnit(raw string) (float64, error) {
-	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value <= 0 {
-		return 0, errors.New("已保存的 NewAPI quota_per_unit 历史值无效")
+func positiveQuotaUnit(raw string) (*big.Rat, error) {
+	value, ok := new(big.Rat).SetString(strings.TrimSpace(raw))
+	if !ok || value.Sign() <= 0 {
+		return nil, errors.New("已保存的 NewAPI quota_per_unit 历史值无效")
 	}
 	return value, nil
+}
+
+func quotaUnitText(value *big.Rat) string {
+	text := strings.TrimRight(strings.TrimRight(value.FloatString(28), "0"), ".")
+	if text == "" {
+		return "0"
+	}
+	return text
 }

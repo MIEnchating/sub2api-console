@@ -7,7 +7,8 @@ export function SegmentedControl(props: React.ComponentProps<"div">) {
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     props.onKeyDown?.(event);
     if (event.defaultPrevented || props.role !== "tablist") return;
-    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
+      return;
     const tabs = Array.from(
       event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'),
     );
@@ -18,7 +19,8 @@ export function SegmentedControl(props: React.ComponentProps<"div">) {
     let nextIndex = currentIndex;
     if (event.key === "Home") nextIndex = 0;
     else if (event.key === "End") nextIndex = tabs.length - 1;
-    else if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowRight" || event.key === "ArrowDown")
+      nextIndex = (currentIndex + 1) % tabs.length;
     else nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
     tabs[nextIndex]?.focus();
     tabs[nextIndex]?.click();
@@ -48,7 +50,8 @@ export function SegmentedControlItem(
       data-slot="segmented-control-item"
       size="sm"
       variant={selected ? "secondary" : "ghost"}
-      aria-pressed={selected}
+      aria-pressed={props.role === "tab" ? undefined : selected}
+      aria-selected={props.role === "tab" ? selected : props["aria-selected"]}
       tabIndex={props.role === "tab" ? (selected ? 0 : -1) : props.tabIndex}
       className={cn("h-7", selected && "bg-background shadow-xs", className)}
     />

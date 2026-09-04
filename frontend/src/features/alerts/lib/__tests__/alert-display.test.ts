@@ -36,6 +36,11 @@ describe("alert display labels", () => {
     expect(alertDeliveryLabel("已发送", alert.delivery_attempts)).toBe("通知已发送 1 次");
   });
 
+  it("keeps uncertain notification commits visible for manual confirmation", () => {
+    expect(alertDeliveryLabel("commit_unknown")).toBe("发送结果待人工确认");
+    expect(alertDeliveryLabel("发送结果待人工确认")).toBe("发送结果待人工确认");
+  });
+
   it("uses a neutral subject label independent of the current alert state", () => {
     expect(alertSubjectLabel("account.binding_invalid")).toBe("账号绑定");
     expect(alertSubjectLabel("upstream.balance")).toBe("上游余额");

@@ -3,7 +3,6 @@ package business
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -263,6 +262,9 @@ CREATE INDEX IF NOT EXISTS ix_usage_records_account_recent ON usage_records(
 CREATE INDEX IF NOT EXISTS ix_usage_records_source_account_recent ON usage_records(
  LOWER(REPLACE(source,'_','-')),account_id,COALESCE(observed_at,'') DESC,id DESC
 );
+CREATE INDEX IF NOT EXISTS ix_usage_records_traffic_window ON usage_records(
+ LOWER(source),observed_at,account_id,request_id,id
+);
 CREATE TABLE IF NOT EXISTS operational_snapshots (
  namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,observed_at TEXT,updated_at TEXT NOT NULL,
  origin TEXT NOT NULL DEFAULT 'console',PRIMARY KEY(namespace,state_key)
@@ -281,43 +283,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 ) WHERE upstream_id<>'' AND local_group_ids_json<>'';
 `
 
+const businessSchemaVersion = 1
+
 func (s *Store) ensureSchema(ctx context.Context) error {
-	if err := s.ensureLegacyOnboardingPendingColumns(ctx); err != nil {
+	fresh, err := databaseHasNoApplicationTables(ctx, s.db)
+	if err != nil {
 		return err
+	}
+	if !fresh {
+		if err := validateBusinessSchema(ctx, s.db); err != nil {
+			return fmt.Errorf("业务数据库结构不是当前版本；本系统仅支持使用当前版本创建的全新数据库: %w", err)
+		}
 	}
 	if _, err := s.db.ExecContext(ctx, businessSchema); err != nil {
 		return err
 	}
-	if err := s.ensureRoutingBaselineColumns(ctx); err != nil {
-		return err
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", businessSchemaVersion)); err != nil {
+		return fmt.Errorf("记录业务数据库版本失败: %w", err)
 	}
-	var accountMultiplierColumns int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name='multiplier'`).Scan(&accountMultiplierColumns); err != nil {
-		return err
-	}
-	if accountMultiplierColumns == 1 {
-		if _, err := s.db.ExecContext(ctx, `UPDATE account_groups
-			SET group_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)
-			WHERE group_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)`); err != nil {
-			return fmt.Errorf("归一账号分组成本失败: %w", err)
-		}
-		var bindingLocalRateColumns int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('bindings') WHERE name='local_rate'`).Scan(&bindingLocalRateColumns); err != nil {
-			return err
-		}
-		if bindingLocalRateColumns == 1 {
-			if _, err := s.db.ExecContext(ctx, `UPDATE bindings
-				SET local_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)
-				WHERE EXISTS(SELECT 1 FROM accounts a WHERE a.id=bindings.local_account_id)
-				 AND local_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)`); err != nil {
-				return fmt.Errorf("归一账号绑定成本失败: %w", err)
-			}
-		}
-	}
-	if err := s.ensureManualPriorityBalanceSyncColumn(ctx); err != nil {
-		return err
-	}
-	if err := s.migrateRemovedRuntimeModes(ctx); err != nil {
+	if err := s.normalizeAccountCosts(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureUpstreamIdentities(ctx); err != nil {
@@ -326,210 +310,120 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	return s.ensureStableUpstreamRelations(ctx)
 }
 
-func (s *Store) ensureRoutingBaselineColumns(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
+func databaseHasNoApplicationTables(ctx context.Context, db *sql.DB) (bool, error) {
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema
+		WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&count); err != nil {
+		return false, err
 	}
-	defer tx.Rollback()
-
-	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(routing_baselines)`)
-	if err != nil {
-		return err
-	}
-	columns := map[string]struct{}{}
-	for rows.Next() {
-		var id, notNull, primaryKey int
-		var name, dataType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		columns[name] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-
-	definitions := []struct {
-		name string
-		sql  string
-	}{
-		{"target_fingerprint", `ALTER TABLE routing_baselines ADD COLUMN target_fingerprint TEXT NOT NULL DEFAULT ''`},
-		{"ownership_version", `ALTER TABLE routing_baselines ADD COLUMN ownership_version INTEGER NOT NULL DEFAULT 1`},
-		{"managed_schedulable", `ALTER TABLE routing_baselines ADD COLUMN managed_schedulable INTEGER`},
-		{"managed_priority", `ALTER TABLE routing_baselines ADD COLUMN managed_priority INTEGER`},
-		{"managed_load_factor", `ALTER TABLE routing_baselines ADD COLUMN managed_load_factor TEXT`},
-		{"managed_concurrency", `ALTER TABLE routing_baselines ADD COLUMN managed_concurrency INTEGER`},
-		{"managed_status", `ALTER TABLE routing_baselines ADD COLUMN managed_status TEXT`},
-	}
-	for _, definition := range definitions {
-		if _, found := columns[definition.name]; found {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, definition.sql); err != nil {
-			return fmt.Errorf("补充调度基线字段 %s 失败: %w", definition.name, err)
-		}
-	}
-	var alertRecoveryColumns int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('alert_incidents')
-		WHERE name IN ('event_type','cause_code','last_seen_at','last_error')`).Scan(&alertRecoveryColumns); err != nil {
-		return err
-	}
-	if alertRecoveryColumns != 4 {
-		return tx.Commit()
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `UPDATE alert_deliveries SET status='transition',updated_at=?
-		WHERE incident_key IN (
-			SELECT incident_key FROM alert_incidents WHERE status='firing'
-			AND event_type='routing.apply_failure'
-			AND cause_code LIKE 'APPLY_FAILED:%table routing_baselines has no column named target_fingerprint%'
-		)`, now); err != nil {
-		return fmt.Errorf("更新调度基线迁移恢复通知失败: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='recovered',last_seen_at=?,last_error=NULL
-		WHERE status='firing' AND event_type='routing.apply_failure'
-		AND cause_code LIKE 'APPLY_FAILED:%table routing_baselines has no column named target_fingerprint%'`, now); err != nil {
-		return fmt.Errorf("恢复调度基线缺列告警失败: %w", err)
-	}
-	return tx.Commit()
+	return count == 0, nil
 }
 
-func (s *Store) ensureLegacyOnboardingPendingColumns(ctx context.Context) error {
-	var tableExists bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM sqlite_master WHERE type='table' AND name='onboarding_pending'
-	)`).Scan(&tableExists); err != nil {
+func validateBusinessSchema(ctx context.Context, current *sql.DB) error {
+	var version int
+	if err := current.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if !tableExists {
-		return nil
+	if version != 0 && version != businessSchemaVersion {
+		return fmt.Errorf("schema version=%d, expected=%d", version, businessSchemaVersion)
 	}
-	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(onboarding_pending)`)
+	expected, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		return err
 	}
-	columns := map[string]struct{}{}
-	for rows.Next() {
-		var id, notNull, primaryKey int
-		var name, dataType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		columns[name] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+	defer expected.Close()
+	if _, err := expected.ExecContext(ctx, businessSchema); err != nil {
 		return err
 	}
-	if err := rows.Close(); err != nil {
+	expectedTables, err := schemaTableColumns(ctx, expected)
+	if err != nil {
 		return err
 	}
-	definitions := []struct {
-		name string
-		sql  string
-	}{
-		{"upstream_id", `ALTER TABLE onboarding_pending ADD COLUMN upstream_id TEXT NOT NULL DEFAULT ''`},
-		{"upstream_account_id", `ALTER TABLE onboarding_pending ADD COLUMN upstream_account_id TEXT NOT NULL DEFAULT ''`},
-		{"local_group_ids_json", `ALTER TABLE onboarding_pending ADD COLUMN local_group_ids_json TEXT NOT NULL DEFAULT ''`},
-		{"intent_hash", `ALTER TABLE onboarding_pending ADD COLUMN intent_hash TEXT NOT NULL DEFAULT ''`},
-		{"key_commit_unknown", `ALTER TABLE onboarding_pending ADD COLUMN key_commit_unknown INTEGER NOT NULL DEFAULT 0`},
-		{"account_commit_unknown", `ALTER TABLE onboarding_pending ADD COLUMN account_commit_unknown INTEGER NOT NULL DEFAULT 0`},
+	currentTables, err := schemaTableColumns(ctx, current)
+	if err != nil {
+		return err
 	}
-	for _, definition := range definitions {
-		if _, found := columns[definition.name]; found {
-			continue
+	if len(currentTables) != len(expectedTables) {
+		return fmt.Errorf("table count=%d, expected=%d", len(currentTables), len(expectedTables))
+	}
+	for table, expectedColumns := range expectedTables {
+		currentColumns, found := currentTables[table]
+		if !found {
+			return fmt.Errorf("missing table %s", table)
 		}
-		if _, err := s.db.ExecContext(ctx, definition.sql); err != nil {
-			return fmt.Errorf("补充待处理账号字段 %s 失败: %w", definition.name, err)
+		if len(currentColumns) != len(expectedColumns) {
+			return fmt.Errorf("table %s has %d columns, expected %d", table, len(currentColumns), len(expectedColumns))
+		}
+		for index := range expectedColumns {
+			if currentColumns[index] != expectedColumns[index] {
+				return fmt.Errorf("table %s column %d=%s, expected=%s", table, index, currentColumns[index], expectedColumns[index])
+			}
 		}
 	}
 	return nil
 }
 
-func (s *Store) ensureManualPriorityBalanceSyncColumn(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+func schemaTableColumns(ctx context.Context, db *sql.DB) (map[string][]string, error) {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_schema
+		WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer tx.Rollback()
-
-	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(manual_priority_accounts)`)
-	if err != nil {
-		return err
-	}
-	found := false
+	defer rows.Close()
+	tables := make([]string, 0)
 	for rows.Next() {
-		var id, notNull, primaryKey int
-		var name, dataType string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return err
+		var table string
+		if err := rows.Scan(&table); err != nil {
+			return nil, err
 		}
-		if name == "sync_balance_multiplier" {
-			found = true
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return err
+		tables = append(tables, table)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	if !found {
-		if _, err := tx.ExecContext(ctx, `ALTER TABLE manual_priority_accounts
-			ADD COLUMN sync_balance_multiplier INTEGER NOT NULL DEFAULT 0
-			CHECK(sync_balance_multiplier IN (0,1))`); err != nil {
-			return fmt.Errorf("补充人工优先位余额与倍率同步字段失败: %w", err)
+	result := make(map[string][]string, len(tables))
+	for _, table := range tables {
+		columnRows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, table)
+		if err != nil {
+			return nil, err
 		}
+		columns := make([]string, 0)
+		for columnRows.Next() {
+			var column string
+			if err := columnRows.Scan(&column); err != nil {
+				_ = columnRows.Close()
+				return nil, err
+			}
+			columns = append(columns, column)
+		}
+		if err := columnRows.Err(); err != nil {
+			_ = columnRows.Close()
+			return nil, err
+		}
+		if err := columnRows.Close(); err != nil {
+			return nil, err
+		}
+		result[table] = columns
 	}
-	return tx.Commit()
+	return result, nil
 }
 
-func (s *Store) migrateRemovedRuntimeModes(ctx context.Context) error {
+func (s *Store) normalizeAccountCosts(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-
-	var raw string
-	err = tx.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return tx.Commit()
+	if _, err := tx.ExecContext(ctx, `UPDATE account_groups
+		SET group_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)
+		WHERE group_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=account_groups.account_id)`); err != nil {
+		return fmt.Errorf("归一账号分组成本失败: %w", err)
 	}
-	if err != nil {
-		return err
-	}
-	var value map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &value); err != nil || value == nil {
-		return tx.Commit()
-	}
-	var mode string
-	if err := json.Unmarshal(value["mode"], &mode); err != nil || mode != "调度模式" {
-		return tx.Commit()
-	}
-	value["mode"] = json.RawMessage(`"` + runtimepolicy.Monitoring + `"`)
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `UPDATE app_state SET value_json=?,updated_at=? WHERE key='config'`, string(encoded), now); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO app_state(key,value_json,updated_at)
-		VALUES('routing-decision-epoch','{}',?) ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at`, now); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `UPDATE bindings
+		SET local_rate=(SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)
+		WHERE EXISTS(SELECT 1 FROM accounts a WHERE a.id=bindings.local_account_id)
+		 AND local_rate IS NOT (SELECT a.multiplier FROM accounts a WHERE a.id=bindings.local_account_id)`); err != nil {
+		return fmt.Errorf("归一账号绑定成本失败: %w", err)
 	}
 	return tx.Commit()
 }

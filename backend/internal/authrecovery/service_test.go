@@ -31,8 +31,10 @@ func TestSafeReasonTruncatesAtValidUTF8Boundary(t *testing.T) {
 }
 
 type recoveryRepository struct {
-	outcomes []business.AuthRecoveryOutcome
-	seeds    map[string]business.UpstreamAuthSeed
+	outcomes  []business.AuthRecoveryOutcome
+	seeds     map[string]business.UpstreamAuthSeed
+	persists  int
+	onPersist func()
 }
 
 func (r *recoveryRepository) UpstreamAuthSeed(_ context.Context, host string) (*business.UpstreamAuthSeed, error) {
@@ -45,6 +47,10 @@ func (r *recoveryRepository) UpstreamAuthSeed(_ context.Context, host string) (*
 
 func (r *recoveryRepository) PersistAuthRecoveryOutcomes(_ context.Context, values []business.AuthRecoveryOutcome, _ string) (business.AuthRecoverySummary, error) {
 	r.outcomes = append([]business.AuthRecoveryOutcome{}, values...)
+	r.persists++
+	if r.onPersist != nil {
+		r.onPersist()
+	}
 	summary := business.AuthRecoverySummary{Hosts: len(values)}
 	for _, item := range values {
 		if item.Success {
@@ -54,6 +60,35 @@ func (r *recoveryRepository) PersistAuthRecoveryOutcomes(_ context.Context, valu
 		}
 	}
 	return summary, nil
+}
+
+func TestBatchRecoveryPersistsEachCompletedHostBeforeCancellation(t *testing.T) {
+	refresh := "refresh"
+	records := []configstore.AuthRecord{
+		{Host: "one.example", BaseURL: "https://one.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RefreshToken: &refresh},
+		{Host: "two.example", BaseURL: "https://two.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RefreshToken: &refresh},
+	}
+	private := &recoveryPrivate{records: map[string]configstore.AuthRecord{
+		"one.example": records[0], "two.example": records[1],
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	repository := &recoveryRepository{onPersist: cancel}
+	auth := &recoveryAuthenticator{
+		refresh: func(_ context.Context, record configstore.AuthRecord) (configstore.AuthRecord, error) {
+			return record, nil
+		},
+		login: func(context.Context, configstore.AuthRecord, configstore.VaultEntry) (configstore.AuthRecord, error) {
+			return configstore.AuthRecord{}, errors.New("unexpected login")
+		},
+	}
+	service := New(repository, private, auth, &recoveryConfigurator{}, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	result, err := service.recoverRecords(ctx, records, "tester")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation", err)
+	}
+	if repository.persists != 1 || len(repository.outcomes) != 1 || len(result.Outcomes) != 1 || result.Summary.Recovered != 1 {
+		t.Fatalf("result=%#v persists=%d durable=%#v", result, repository.persists, repository.outcomes)
+	}
 }
 
 type recoveryPrivate struct {

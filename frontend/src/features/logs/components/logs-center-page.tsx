@@ -68,10 +68,11 @@ export function LogKindFilter(props: {
         return (
           <SegmentedControlItem
             key={option}
+            id={`logs-kind-tab-${option}`}
             type="button"
             role="tab"
             selected={selected}
-            aria-selected={selected}
+            aria-controls="logs-results-panel"
             onClick={() => props.onChange(option)}
           >
             {logKindLabel(option)}
@@ -269,7 +270,13 @@ export function LogsCenterPage() {
             setPage(1);
           }}
         />
-        <DataTablePanel className="flex-1" data-testid="logs-table-shell">
+        <DataTablePanel
+          id="logs-results-panel"
+          role="tabpanel"
+          aria-labelledby={`logs-kind-tab-${kind}`}
+          className="flex-1"
+          data-testid="logs-table-shell"
+        >
           <div className="min-h-0 flex-1 overflow-hidden" data-testid="logs-table-scroll-region">
             <Table
               containerClassName="h-full min-h-0 overflow-auto overscroll-contain"

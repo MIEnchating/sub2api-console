@@ -23,7 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { SegmentedControl } from "@/components/ui/segmented-control";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { formatModelPriceNumber, modelPriceNumbersEqual } from "../lib/pricing-number";
 import {
@@ -144,220 +144,229 @@ export function NewAPIModelPrices(props: PriceProps) {
         </div>
       </TableFilterToolbar>
       <SegmentedControl role="tablist" aria-label="价格分类">
-        <Button
-          size="sm"
-          variant={tab === "models" ? "secondary" : "ghost"}
+        <SegmentedControlItem
+          id="price-tab-models"
           role="tab"
-          aria-selected={tab === "models"}
+          aria-controls="price-panel-models"
+          selected={tab === "models"}
           onClick={() => setTab("models")}
         >
           模型价格
-        </Button>
-        <Button
-          size="sm"
-          variant={tab === "unset" ? "secondary" : "ghost"}
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          id="price-tab-unset"
           role="tab"
-          aria-selected={tab === "unset"}
+          aria-controls="price-panel-unset"
+          selected={tab === "unset"}
           onClick={() => setTab("unset")}
         >
           未设置模型价格
-        </Button>
-        <Button
-          size="sm"
-          variant={tab === "tools" ? "secondary" : "ghost"}
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          id="price-tab-tools"
           role="tab"
-          aria-selected={tab === "tools"}
+          aria-controls="price-panel-tools"
+          selected={tab === "tools"}
           onClick={() => setTab("tools")}
         >
           工具价格
-        </Button>
-        <Button
-          size="sm"
-          variant={tab === "remote" ? "secondary" : "ghost"}
+        </SegmentedControlItem>
+        <SegmentedControlItem
+          id="price-tab-remote"
           role="tab"
-          aria-selected={tab === "remote"}
+          aria-controls="price-panel-remote"
+          selected={tab === "remote"}
           onClick={() => showRemotePrices("")}
         >
           远程模型价格
-        </Button>
+        </SegmentedControlItem>
       </SegmentedControl>
-      {tab === "remote" ? (
-        <RemoteModelPricesTable
-          key={remoteSearch}
-          prices={filteredRemotePrices}
-          pending={props.managementPricesPending ?? false}
-          error={props.managementPricesError ?? ""}
-          filtered={remoteSearch !== ""}
-          writingModel={props.writingManagementPrice}
-          onWritePrice={props.onWriteManagementPrice}
-        />
-      ) : null}
-      {tab === "tools" ? <ToolPricesTable prices={props.toolPrices ?? []} /> : null}
-      {(tab === "models" || tab === "unset") && activeRows.length === 0 ? (
-        <div className="text-muted-foreground flex min-h-52 flex-col items-center justify-center gap-2 px-6 text-sm">
-          <CircleDollarSign className="size-8 opacity-45" aria-hidden="true" />
-          <span>{tab === "unset" ? "没有未设置价格的模型" : "尚未读取到模型价格"}</span>
-        </div>
-      ) : null}
-      {(tab === "models" || tab === "unset") && activeRows.length > 0 ? (
-        <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="min-w-52">模型</TableHead>
-                <TableHead className="w-40 text-right">输入价格</TableHead>
-                <TableHead className="w-40 text-right">输出价格</TableHead>
-                <TableHead className="w-40 text-right">缓存创建</TableHead>
-                <TableHead className="w-40 text-right">缓存读取</TableHead>
-                {tab === "models" ? <TableHead className="w-28">状态</TableHead> : null}
-                <TableHead className="w-28 text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {pagination.visibleItems.map((row) => {
-                const prices = modelPriceColumnValues(row.configured);
-                const tiers = row.configured.billing_expr
-                  ? expressionPriceTiers(row.configured.billing_expr)
-                  : [];
-                const showTiers = tiers.length > 1;
-                const comparisonStatus =
-                  comparisonRequested && props.managementPrices
-                    ? newAPIPriceComparisonStatus(row.configured, props.managementPrices)
-                    : null;
-                return (
-                  <TableRow key={row.model}>
-                    <TableCell className="align-top font-mono text-xs font-medium">
-                      <div
-                        className={
+      <div
+        id={`price-panel-${tab}`}
+        role="tabpanel"
+        aria-labelledby={`price-tab-${tab}`}
+        className="contents"
+      >
+        {tab === "remote" ? (
+          <RemoteModelPricesTable
+            key={remoteSearch}
+            prices={filteredRemotePrices}
+            pending={props.managementPricesPending ?? false}
+            error={props.managementPricesError ?? ""}
+            filtered={remoteSearch !== ""}
+            writingModel={props.writingManagementPrice}
+            onWritePrice={props.onWriteManagementPrice}
+          />
+        ) : null}
+        {tab === "tools" ? <ToolPricesTable prices={props.toolPrices ?? []} /> : null}
+        {(tab === "models" || tab === "unset") && activeRows.length === 0 ? (
+          <div className="text-muted-foreground flex min-h-52 flex-col items-center justify-center gap-2 px-6 text-sm">
+            <CircleDollarSign className="size-8 opacity-45" aria-hidden="true" />
+            <span>{tab === "unset" ? "没有未设置价格的模型" : "尚未读取到模型价格"}</span>
+          </div>
+        ) : null}
+        {(tab === "models" || tab === "unset") && activeRows.length > 0 ? (
+          <DataTablePanel className="flex-1">
+            <Table containerClassName="min-h-0 flex-1 overflow-auto">
+              <TableHeader className="sticky top-0 z-10 bg-background">
+                <TableRow>
+                  <TableHead className="min-w-52">模型</TableHead>
+                  <TableHead className="w-40 text-right">输入价格</TableHead>
+                  <TableHead className="w-40 text-right">输出价格</TableHead>
+                  <TableHead className="w-40 text-right">缓存创建</TableHead>
+                  <TableHead className="w-40 text-right">缓存读取</TableHead>
+                  {tab === "models" ? <TableHead className="w-28">状态</TableHead> : null}
+                  <TableHead className="w-28 text-right">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pagination.visibleItems.map((row) => {
+                  const prices = modelPriceColumnValues(row.configured);
+                  const tiers = row.configured.billing_expr
+                    ? expressionPriceTiers(row.configured.billing_expr)
+                    : [];
+                  const showTiers = tiers.length > 1;
+                  const comparisonStatus =
+                    comparisonRequested && props.managementPrices
+                      ? newAPIPriceComparisonStatus(row.configured, props.managementPrices)
+                      : null;
+                  return (
+                    <TableRow key={row.model}>
+                      <TableCell className="align-top font-mono text-xs font-medium">
+                        <div
+                          className={
+                            showTiers
+                              ? "grid grid-cols-[minmax(0,1fr)_minmax(7rem,10rem)] items-start gap-5"
+                              : "flex min-h-5 items-baseline gap-2"
+                          }
+                        >
+                          <div className="min-w-0">
+                            <TableOverflowTooltip content={row.model}>
+                              {row.model}
+                            </TableOverflowTooltip>
+                            <div className="text-muted-foreground mt-1 font-sans text-[11px] font-normal">
+                              {showTiers
+                                ? `阶梯计费 · ${tiers.length} 档`
+                                : billingModeLabel(row.configured)}
+                            </div>
+                          </div>
+                          {showTiers ? <TierLabels tiers={tiers} /> : null}
+                        </div>
+                      </TableCell>
+                      <TableCell
+                        className="align-top text-right font-mono text-xs"
+                        aria-label={
                           showTiers
-                            ? "grid grid-cols-[minmax(0,1fr)_minmax(7rem,10rem)] items-start gap-5"
-                            : "flex min-h-5 items-baseline gap-2"
+                            ? `${row.model} 输入价格：${tierPriceLabel(tiers, "input")}`
+                            : `${row.model} 输入价格：${prices.input || "未设置"}`
                         }
                       >
-                        <div className="min-w-0">
-                          <TableOverflowTooltip content={row.model}>
-                            {row.model}
-                          </TableOverflowTooltip>
-                          <div className="text-muted-foreground mt-1 font-sans text-[11px] font-normal">
-                            {showTiers
-                              ? `阶梯计费 · ${tiers.length} 档`
-                              : billingModeLabel(row.configured)}
-                          </div>
-                        </div>
-                        {showTiers ? <TierLabels tiers={tiers} /> : null}
-                      </div>
-                    </TableCell>
-                    <TableCell
-                      className="align-top text-right font-mono text-xs"
-                      aria-label={
-                        showTiers
-                          ? `${row.model} 输入价格：${tierPriceLabel(tiers, "input")}`
-                          : `${row.model} 输入价格：${prices.input || "未设置"}`
-                      }
-                    >
-                      {showTiers ? (
-                        <TierPriceValues tiers={tiers} field="input" />
-                      ) : (
-                        prices.input || "-"
-                      )}
-                    </TableCell>
-                    <TableCell
-                      className="align-top text-right font-mono text-xs"
-                      aria-label={
-                        showTiers
-                          ? `${row.model} 输出价格：${tierPriceLabel(tiers, "output")}`
-                          : `${row.model} 输出价格：${prices.output || "未设置"}`
-                      }
-                    >
-                      {showTiers ? (
-                        <TierPriceValues tiers={tiers} field="output" />
-                      ) : (
-                        prices.output || "-"
-                      )}
-                    </TableCell>
-                    <TableCell
-                      className="align-top text-right font-mono text-xs"
-                      aria-label={`${row.model} 缓存创建价格：${
-                        showTiers ? tierCacheCreatePriceLabel(tiers) : cacheCreatePriceLabel(prices)
-                      }`}
-                    >
-                      {showTiers ? (
-                        <TierCacheCreatePrices tiers={tiers} />
-                      ) : (
-                        <CacheCreatePrices prices={prices} />
-                      )}
-                    </TableCell>
-                    <TableCell
-                      className="align-top text-right font-mono text-xs"
-                      aria-label={
-                        showTiers
-                          ? `${row.model} 缓存读取价格：${tierPriceLabel(tiers, "cacheRead")}`
-                          : `${row.model} 缓存读取价格：${prices.cacheRead || "未设置"}`
-                      }
-                    >
-                      {showTiers ? (
-                        <TierPriceValues tiers={tiers} field="cacheRead" />
-                      ) : (
-                        prices.cacheRead || "-"
-                      )}
-                    </TableCell>
-                    {tab === "models" ? (
-                      <TableCell className="align-top">
-                        <ModelPriceComparisonStatus
-                          configured={row.configured}
-                          remotePrices={props.managementPrices}
-                          requested={comparisonRequested}
-                          pending={props.managementPricesPending ?? false}
-                          error={props.managementPricesError ?? ""}
-                        />
+                        {showTiers ? (
+                          <TierPriceValues tiers={tiers} field="input" />
+                        ) : (
+                          prices.input || "-"
+                        )}
                       </TableCell>
-                    ) : null}
-                    <TableCell className="align-top text-right">
-                      {tab === "unset" ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => showRemotePrices(row.model)}
-                        >
-                          <Search aria-hidden="true" />
-                          查询
-                        </Button>
+                      <TableCell
+                        className="align-top text-right font-mono text-xs"
+                        aria-label={
+                          showTiers
+                            ? `${row.model} 输出价格：${tierPriceLabel(tiers, "output")}`
+                            : `${row.model} 输出价格：${prices.output || "未设置"}`
+                        }
+                      >
+                        {showTiers ? (
+                          <TierPriceValues tiers={tiers} field="output" />
+                        ) : (
+                          prices.output || "-"
+                        )}
+                      </TableCell>
+                      <TableCell
+                        className="align-top text-right font-mono text-xs"
+                        aria-label={`${row.model} 缓存创建价格：${
+                          showTiers
+                            ? tierCacheCreatePriceLabel(tiers)
+                            : cacheCreatePriceLabel(prices)
+                        }`}
+                      >
+                        {showTiers ? (
+                          <TierCacheCreatePrices tiers={tiers} />
+                        ) : (
+                          <CacheCreatePrices prices={prices} />
+                        )}
+                      </TableCell>
+                      <TableCell
+                        className="align-top text-right font-mono text-xs"
+                        aria-label={
+                          showTiers
+                            ? `${row.model} 缓存读取价格：${tierPriceLabel(tiers, "cacheRead")}`
+                            : `${row.model} 缓存读取价格：${prices.cacheRead || "未设置"}`
+                        }
+                      >
+                        {showTiers ? (
+                          <TierPriceValues tiers={tiers} field="cacheRead" />
+                        ) : (
+                          prices.cacheRead || "-"
+                        )}
+                      </TableCell>
+                      {tab === "models" ? (
+                        <TableCell className="align-top">
+                          <ModelPriceComparisonStatus
+                            configured={row.configured}
+                            remotePrices={props.managementPrices}
+                            requested={comparisonRequested}
+                            pending={props.managementPricesPending ?? false}
+                            error={props.managementPricesError ?? ""}
+                          />
+                        </TableCell>
                       ) : null}
-                      {tab === "models" && comparisonStatus === "mismatched" ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            const remote = props.managementPrices?.find(
-                              (price) => price.model === row.model,
-                            );
-                            if (remote) {
-                              setDifferenceSelection({ configured: row.configured, remote });
-                            }
-                          }}
-                        >
-                          查看差异
-                        </Button>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-          <DataTablePagination
-            currentPage={pagination.currentPage}
-            totalPages={pagination.totalPages}
-            totalItems={filteredRows.length}
-            pageSize={pagination.pageSize}
-            pageSizes={[10, 20, 50, 100]}
-            onPageChange={pagination.setCurrentPage}
-            onPageSizeChange={pagination.setPageSize}
-          />
-        </DataTablePanel>
-      ) : null}
+                      <TableCell className="align-top text-right">
+                        {tab === "unset" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => showRemotePrices(row.model)}
+                          >
+                            <Search aria-hidden="true" />
+                            查询
+                          </Button>
+                        ) : null}
+                        {tab === "models" && comparisonStatus === "mismatched" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              const remote = props.managementPrices?.find(
+                                (price) => price.model === row.model,
+                              );
+                              if (remote) {
+                                setDifferenceSelection({ configured: row.configured, remote });
+                              }
+                            }}
+                          >
+                            查看差异
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+            <DataTablePagination
+              currentPage={pagination.currentPage}
+              totalPages={pagination.totalPages}
+              totalItems={filteredRows.length}
+              pageSize={pagination.pageSize}
+              pageSizes={[10, 20, 50, 100]}
+              onPageChange={pagination.setCurrentPage}
+              onPageSizeChange={pagination.setPageSize}
+            />
+          </DataTablePanel>
+        ) : null}
+      </div>
       <ModelPriceDifferenceDialog
         selection={differenceSelection}
         onOpenChange={(open) => {

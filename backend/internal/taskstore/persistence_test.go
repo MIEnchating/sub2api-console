@@ -2,7 +2,9 @@ package taskstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +42,30 @@ func TestSaveFinalRetriesTransientPersistenceFailures(t *testing.T) {
 	}
 	if saver.calls != 3 {
 		t.Fatalf("calls=%d", saver.calls)
+	}
+}
+
+func TestSaveFinalTruncatesOversizedArrayAndPersistsTerminalTask(t *testing.T) {
+	saver := &capturedSaver{}
+	items := make([]any, 5000)
+	for index := range items {
+		items[index] = map[string]any{"index": index, "detail": strings.Repeat("x", 2000)}
+	}
+	task := Task{ID: "task-large", Status: "succeeded", Result: map[string]any{"items": items}}
+	if err := SaveFinal(context.Background(), saver, task); err != nil {
+		t.Fatal(err)
+	}
+	if len(saver.tasks) != 1 || saver.tasks[0].Result["truncated"] != true {
+		t.Fatalf("oversized terminal task was not truncated: %#v", saver.tasks)
+	}
+	total, totalOK := saver.tasks[0].Result["total"].(int)
+	retained, retainedOK := saver.tasks[0].Result["retained"].(int)
+	if !totalOK || !retainedOK || total != 5000 || retained >= total {
+		t.Fatalf("truncation metadata is invalid: total=%#v retained=%#v", saver.tasks[0].Result["total"], saver.tasks[0].Result["retained"])
+	}
+	encoded, err := json.Marshal(saver.tasks[0].Result)
+	if err != nil || len(encoded) > maximumTaskResultBytes {
+		t.Fatalf("bounded result bytes=%d err=%v", len(encoded), err)
 	}
 }
 

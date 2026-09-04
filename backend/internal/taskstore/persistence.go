@@ -1,7 +1,9 @@
 package taskstore
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +18,7 @@ type Saver interface {
 }
 
 func SaveFinal(ctx context.Context, saver Saver, task Task) error {
+	task.Result = boundedTaskResult(task.Result, maximumTaskResultBytes)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var lastErr error
@@ -37,6 +40,80 @@ func SaveFinal(ctx context.Context, saver Saver, task Task) error {
 		}
 	}
 	return fmt.Errorf("最终任务状态保存失败（已重试 3 次）：%w", lastErr)
+}
+
+type truncationStat struct {
+	Path     string `json:"path"`
+	Total    int    `json:"total"`
+	Retained int    `json:"retained"`
+}
+
+func boundedTaskResult(result map[string]any, maximum int) map[string]any {
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded) <= maximum {
+		return result
+	}
+	for capPerArray := 1000; capPerArray >= 0; capPerArray /= 2 {
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.UseNumber()
+		var candidate map[string]any
+		if err := decoder.Decode(&candidate); err != nil {
+			break
+		}
+		stats := make([]truncationStat, 0)
+		truncateTaskArrays(candidate, "$", capPerArray, &stats)
+		total, retained := 0, 0
+		for _, stat := range stats {
+			total += stat.Total
+			retained += stat.Retained
+		}
+		candidate["truncated"] = true
+		candidate["total"] = total
+		candidate["retained"] = retained
+		candidate["truncation"] = stats
+		if bounded, marshalErr := json.Marshal(candidate); marshalErr == nil && len(bounded) <= maximum {
+			return candidate
+		}
+		if capPerArray == 0 {
+			break
+		}
+	}
+	fallback := map[string]any{
+		"truncated": true, "total": 0, "retained": 0,
+		"truncation": []truncationStat{}, "detail": "任务结果超过持久化上限，明细未保留",
+	}
+	for _, key := range []string{"error", "summary", "host", "account_id", "request_id", "run_key"} {
+		if text, ok := result[key].(string); ok && len(text) <= 4096 {
+			fallback[key] = text
+		}
+	}
+	return fallback
+}
+
+func truncateTaskArrays(value any, path string, capPerArray int, stats *[]truncationStat) {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			childPath := path + "." + key
+			if values, ok := child.([]any); ok {
+				total := len(values)
+				retained := min(total, capPerArray)
+				if retained < total {
+					item[key] = values[:retained]
+					*stats = append(*stats, truncationStat{Path: childPath, Total: total, Retained: retained})
+				}
+				for index := 0; index < retained; index++ {
+					truncateTaskArrays(values[index], fmt.Sprintf("%s[%d]", childPath, index), capPerArray, stats)
+				}
+				continue
+			}
+			truncateTaskArrays(child, childPath, capPerArray, stats)
+		}
+	case []any:
+		for index := 0; index < min(len(item), capPerArray); index++ {
+			truncateTaskArrays(item[index], fmt.Sprintf("%s[%d]", path, index), capPerArray, stats)
+		}
+	}
 }
 
 func PersistFinal(saver Saver, task Task) {

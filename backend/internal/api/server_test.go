@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
@@ -29,6 +31,7 @@ import (
 	consolelogs "github.com/MIEnchating/sub2api-console/backend/internal/logs"
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/newapimanagement"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notification"
 	"github.com/MIEnchating/sub2api-console/backend/internal/notificationtarget"
 	"github.com/MIEnchating/sub2api-console/backend/internal/onboarding"
@@ -40,6 +43,93 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
+
+func TestWriteErrorDoesNotExposeInternalFailureDetails(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/private", nil)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = request
+	writeError(context, http.StatusBadGateway, "dial /srv/private.sqlite3: token=secret")
+	if recorder.Code != http.StatusBadGateway || strings.Contains(recorder.Body.String(), "private.sqlite3") || strings.Contains(recorder.Body.String(), "secret") {
+		t.Fatalf("internal detail leaked: %d %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"code":"upstream_error"`) || !strings.Contains(recorder.Body.String(), "检查连接配置后重试") {
+		t.Fatalf("public error contract missing: %s", recorder.Body.String())
+	}
+}
+
+func TestWriteErrorUsesStableInfrastructureCodesAndHidesDetails(t *testing.T) {
+	for name, item := range map[string]struct {
+		status int
+		code   string
+	}{
+		"unavailable": {status: http.StatusServiceUnavailable, code: "service_unavailable"},
+		"timeout":     {status: http.StatusGatewayTimeout, code: "upstream_timeout"},
+		"internal":    {status: http.StatusInternalServerError, code: "internal_error"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/private", nil)
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = request
+
+			writeError(context, item.status, "database /srv/private.sqlite3 token=secret")
+
+			if recorder.Code != item.status || !strings.Contains(recorder.Body.String(), `"code":"`+item.code+`"`) ||
+				strings.Contains(recorder.Body.String(), "private.sqlite3") || strings.Contains(recorder.Body.String(), "secret") {
+				t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestSSEConnectionSlotsRejectConnectionsBeyondTheBound(t *testing.T) {
+	if taskSSEPollInterval < time.Second {
+		t.Fatalf("task SSE polling interval is too aggressive: %s", taskSSEPollInterval)
+	}
+	server := &Server{sseSlots: make(chan struct{}, maximumSSEConnections)}
+	for range maximumSSEConnections {
+		if !server.acquireSSESlot() {
+			t.Fatal("connection was rejected before the configured limit")
+		}
+	}
+	if server.acquireSSESlot() {
+		t.Fatal("connection beyond the configured limit was accepted")
+	}
+	server.releaseSSESlot()
+	if !server.acquireSSESlot() {
+		t.Fatal("released connection slot was not reusable")
+	}
+}
+
+func TestWriteNewAPIErrorMapsDomainKindsAndTimeouts(t *testing.T) {
+	for name, item := range map[string]struct {
+		err    error
+		status int
+		code   string
+	}{
+		"validation": {err: &newapimanagement.ServiceError{Kind: newapimanagement.ErrorValidation, Err: errors.New("invalid")}, status: http.StatusUnprocessableEntity, code: "validation_error"},
+		"not found":  {err: &newapimanagement.ServiceError{Kind: newapimanagement.ErrorNotFound, Err: errors.New("missing")}, status: http.StatusNotFound, code: "not_found"},
+		"conflict":   {err: &newapimanagement.ServiceError{Kind: newapimanagement.ErrorConflict, Err: errors.New("conflict")}, status: http.StatusConflict, code: "conflict"},
+		"unavailable": {err: &newapimanagement.ServiceError{Kind: newapimanagement.ErrorUnavailable, Err: errors.New("offline")}, status: http.StatusServiceUnavailable,
+			code: "service_unavailable"},
+		"upstream": {err: &newapimanagement.ServiceError{Kind: newapimanagement.ErrorUpstream, Err: errors.New("remote")}, status: http.StatusBadGateway, code: "upstream_error"},
+		"timeout":  {err: context.DeadlineExceeded, status: http.StatusGatewayTimeout, code: "upstream_timeout"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/newapi/platforms", nil)
+			ginContext, _ := gin.CreateTestContext(recorder)
+			ginContext.Request = request
+
+			writeNewAPIError(ginContext, item.err, http.StatusInternalServerError)
+
+			if recorder.Code != item.status || !strings.Contains(recorder.Body.String(), `"code":"`+item.code+`"`) {
+				t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
 
 type fakeBusiness struct {
 	bootstrapError       error
@@ -451,13 +541,20 @@ type fieldsCall struct {
 	actor     string
 }
 
+type settingsCall struct {
+	accountID string
+	input     accountops.SettingsInput
+	actor     string
+}
+
 type fakeAccountTasks struct {
-	task         taskstore.Task
-	err          error
-	controlCalls *[]string
-	fieldsCalls  *[]fieldsCall
-	manualCalls  *[]string
-	clearCalls   *[]string
+	task          taskstore.Task
+	err           error
+	controlCalls  *[]string
+	fieldsCalls   *[]fieldsCall
+	settingsCalls *[]settingsCall
+	manualCalls   *[]string
+	clearCalls    *[]string
 }
 
 type accountDeleteCall struct {
@@ -698,6 +795,13 @@ func (tasks fakeProbeTasks) Enqueue(_ context.Context, request probe.Request, ac
 func (tasks fakeAccountTasks) EnqueueFields(_ context.Context, accountID string, patch accountops.FieldPatch, actor string) (taskstore.Task, error) {
 	if tasks.fieldsCalls != nil {
 		*tasks.fieldsCalls = append(*tasks.fieldsCalls, fieldsCall{accountID: accountID, patch: patch, actor: actor})
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) EnqueueSettings(_ context.Context, accountID string, input accountops.SettingsInput, actor string) (taskstore.Task, error) {
+	if tasks.settingsCalls != nil {
+		*tasks.settingsCalls = append(*tasks.settingsCalls, settingsCall{accountID: accountID, input: input, actor: actor})
 	}
 	return tasks.task, tasks.err
 }
@@ -1794,6 +1898,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 		CreatedAt: now, UpdatedAt: now,
 	}
 	fieldsCalls := []fieldsCall{}
+	settingsCalls := []settingsCall{}
 	accountID := "41"
 	accountName := "alpha"
 	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
@@ -1802,7 +1907,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
 		mode: "完全模式", accountDetail: account,
 	}, Dependencies{AccountTasks: fakeAccountTasks{
-		task: task, fieldsCalls: &fieldsCalls,
+		task: task, fieldsCalls: &fieldsCalls, settingsCalls: &settingsCalls,
 	}})
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
@@ -1830,6 +1935,19 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	})
 	if invalidBaseURL.Code != http.StatusUnprocessableEntity || len(fieldsCalls) != 1 {
 		t.Fatalf("invalid Base URL accepted: %d %s", invalidBaseURL.Code, invalidBaseURL.Body.String())
+	}
+
+	settings := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/settings", map[string]any{
+		"priority": 120, "load_factor": "2.5", "concurrency": 8, "test_model": "gpt-5.2", "paused": true, "excluded": false,
+	})
+	if settings.Code != http.StatusOK || len(settingsCalls) != 1 {
+		t.Fatalf("unexpected settings response: %d %s calls=%#v", settings.Code, settings.Body.String(), settingsCalls)
+	}
+	settingsInput := settingsCalls[0].input
+	if settingsCalls[0].accountID != "41" || settingsInput.Priority != 120 || settingsInput.LoadFactor != "2.5" ||
+		settingsInput.Concurrency != 8 || settingsInput.TestModel == nil || *settingsInput.TestModel != "gpt-5.2" ||
+		!settingsInput.Paused || settingsInput.Excluded {
+		t.Fatalf("settings contract=%#v", settingsCalls[0])
 	}
 
 	models := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/41/models", nil)
@@ -2913,7 +3031,7 @@ func TestRequestTraceAndAlertRoutesUseCurrentServicesAndBoundedLimits(t *testing
 	if alerts.Code != http.StatusOK || !strings.Contains(alerts.Body.String(), `"incident_key":"probe:41"`) {
 		t.Fatalf("alerts=%d %s", alerts.Code, alerts.Body.String())
 	}
-	invalidLimit := authenticatedRequest(t, router, http.MethodGet, "/api/alerts?limit=100001", nil)
+	invalidLimit := authenticatedRequest(t, router, http.MethodGet, "/api/alerts?limit=1001", nil)
 	if invalidLimit.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid alert limit=%d %s", invalidLimit.Code, invalidLimit.Body.String())
 	}
@@ -2958,7 +3076,8 @@ func TestRequestTraceTimeoutReturnsGatewayTimeout(t *testing.T) {
 	}, Dependencies{RequestTrace: fakeTraceReader{err: context.DeadlineExceeded}})
 
 	response := authenticatedRequest(t, router, http.MethodGet, "/api/usage/trace/req-timeout", nil)
-	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), "请求追踪超时") {
+	if response.Code != http.StatusGatewayTimeout || !strings.Contains(response.Body.String(), `"code":"upstream_timeout"`) ||
+		!strings.Contains(response.Body.String(), "上游服务请求超时") {
 		t.Fatalf("trace timeout=%d %s", response.Code, response.Body.String())
 	}
 }

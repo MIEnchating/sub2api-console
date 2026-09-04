@@ -69,6 +69,14 @@ type firstAccountSnapshotRepository struct {
 	calls        atomic.Int32
 }
 
+type failingSettingsRepository struct {
+	*business.Store
+}
+
+func (repository *failingSettingsRepository) CommitAccountSettings(context.Context, string, string, business.AccountSettingsUpdate) error {
+	return errors.New("injected local commit failure")
+}
+
 func (repository *firstAccountSnapshotRepository) Account(ctx context.Context, accountID string) (*business.AccountDetail, error) {
 	detail, err := repository.Store.Account(ctx, accountID)
 	if err != nil || repository.calls.Add(1) != 1 {
@@ -192,6 +200,52 @@ func TestManualPriorityCannotOvertakeInFlightFieldProtectionCheck(t *testing.T) 
 	}
 	if fieldErr != nil {
 		t.Fatalf("in-flight field sync failed after releasing account lock: %v", fieldErr)
+	}
+}
+
+func TestAccountSettingsRollsBackRemoteFieldsWhenLocalAtomicCommitFails(t *testing.T) {
+	store, _, _ := accountRepository(t)
+	repository := &failingSettingsRepository{Store: store}
+	state := map[string]any{
+		"id": "41", "name": "alpha", "priority": int64(10), "load_factor": "2",
+		"concurrency": int64(3), "schedulable": true,
+	}
+	putCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodPut {
+			putCalls++
+			var body map[string]any
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			priority, _ := strconv.ParseInt(fmt.Sprint(body["priority"]), 10, 64)
+			concurrency, _ := strconv.ParseInt(fmt.Sprint(body["concurrency"]), 10, 64)
+			state["priority"] = priority
+			state["load_factor"] = fmt.Sprint(body["load_factor"])
+			state["concurrency"] = concurrency
+			state["schedulable"] = body["schedulable"]
+			_, _ = io.WriteString(writer, `{"success":true}`)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"data": state})
+	}))
+	defer server.Close()
+	service := New(&testTarget{value: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2,
+	}}, repository, nil)
+	model := "gpt-5.2"
+	_, err := service.applySettings(context.Background(), "41", SettingsInput{
+		Priority: 20, LoadFactor: "4", Concurrency: 6, TestModel: &model, Paused: true, Excluded: true,
+	}, "operator")
+	if err == nil || !strings.Contains(err.Error(), "本地原子提交失败") {
+		t.Fatalf("expected local commit failure, got %v", err)
+	}
+	if putCalls != 2 || state["priority"] != int64(10) || state["load_factor"] != "2" ||
+		state["concurrency"] != int64(3) || state["schedulable"] != true {
+		t.Fatalf("remote rollback failed: calls=%d state=%#v", putCalls, state)
 	}
 }
 

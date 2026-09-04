@@ -70,7 +70,7 @@ func TestQQBotCanonicalNullMessageIDDoesNotReviveLegacyID(t *testing.T) {
 	outcomes := sender.Send(context.Background(), configstore.NotificationSettings{
 		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
 	}, []string{"test"})
-	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].Detail != "QQBot 发送响应缺少消息 ID" {
+	if len(outcomes) != 1 || outcomes[0].Success || !outcomes[0].CommitUnknown || outcomes[0].Detail != "QQBot 发送响应缺少消息 ID" {
 		t.Fatalf("unexpected outcome: %#v", outcomes)
 	}
 }
@@ -100,7 +100,7 @@ func TestQQBotSenderRejectsOversizedResponse(t *testing.T) {
 		AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
 	}, []string{"test"})
 
-	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].Detail != "QQBot 响应过大" {
+	if len(outcomes) != 1 || outcomes[0].Success || outcomes[0].CommitUnknown || outcomes[0].Detail != "QQBot 响应过大" {
 		t.Fatalf("oversized response was accepted: %#v", outcomes)
 	}
 }
@@ -848,7 +848,7 @@ func TestAlertDeliverySendsRelatedRoutingIncidentsOnceAndFinalizesBoth(t *testin
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`DELETE FROM alert_incidents;
-		INSERT INTO accounts(id,name) VALUES('323','鲨鱼辣椒-0.8');
+		INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('323','鲨鱼辣椒-0.8','{}','now');
 		INSERT INTO alert_incidents VALUES
 		('console:routing:survivor:323:A-CCMAX(特价渠道)','account.routing_survivor','account','323','ROUTING_SURVIVOR:凭据失效','recovered','2026-08-30T12:00:00Z','2026-08-30T12:59:53Z',NULL,NULL),
 		('console:routing:group-survivor:A-CCMAX(特价渠道)','group.routing_survivor','group','A-CCMAX(特价渠道)','GROUP_SURVIVOR_ONLY','recovered','2026-08-30T12:00:00Z','2026-08-30T12:59:53Z',NULL,NULL)`); err != nil {
@@ -1273,21 +1273,26 @@ func (s *concurrentWriteSender) Send(_ context.Context, _ configstore.Notificati
 func createAlertDatabase(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "alerts.sqlite3")
+	repository, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.Bootstrap(context.Background()); err != nil {
+		_ = repository.Close()
+		t.Fatal(err)
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
 	database, err := sql.Open("sqlite", "file:"+path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	statements := []string{
-		`CREATE TABLE app_state(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
-		`INSERT INTO app_state(key,value_json,updated_at) VALUES('config','{"keys":[],"mode":"完全模式"}','now')`,
-		`CREATE TABLE policy_nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,node_type TEXT NOT NULL,scalar_value TEXT,updated_at TEXT NOT NULL)`,
-		`CREATE TABLE operational_snapshots(namespace TEXT NOT NULL,state_key TEXT NOT NULL,value_json TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(namespace,state_key))`,
-		`CREATE TABLE accounts(id TEXT PRIMARY KEY,name TEXT NOT NULL)`,
-		`INSERT INTO operational_snapshots VALUES('sub2api','sub2api-notify-rules.json','{"enabled":true,"channels":[{"type":"qqbot","enabled":true}]}','now')`,
-		`CREATE TABLE alert_incidents(incident_key TEXT PRIMARY KEY,event_type TEXT NOT NULL,object_kind TEXT NOT NULL,object_id TEXT NOT NULL,cause_code TEXT NOT NULL,status TEXT NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,delivery_status TEXT,last_error TEXT)`,
+		`INSERT INTO operational_snapshots(namespace,state_key,value_json,updated_at)
+		 VALUES('sub2api','sub2api-notify-rules.json','{"enabled":true,"channels":[{"type":"qqbot","enabled":true}]}','now')`,
 		`INSERT INTO alert_incidents VALUES('incident-1','upstream.auth','host','first.example','AUTH','firing','2026-08-26T08:00:00Z','2026-08-26T08:00:00Z',NULL,NULL)`,
 		`INSERT INTO alert_incidents VALUES('incident-2','upstream.balance','host','second.example','BALANCE:5','firing','2026-08-26T08:00:01Z','2026-08-26T08:00:01Z',NULL,NULL)`,
-		`CREATE TABLE alert_deliveries(incident_key TEXT NOT NULL,channel_key TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,last_error TEXT,delivered_at TEXT,updated_at TEXT NOT NULL,PRIMARY KEY(incident_key,channel_key))`,
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement); err != nil {

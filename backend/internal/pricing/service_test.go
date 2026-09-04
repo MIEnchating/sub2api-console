@@ -515,6 +515,47 @@ func TestApplyPlanDoesNotProjectAccountWhenReadbackFails(t *testing.T) {
 	}
 }
 
+func TestApplyPlanRollsBackRemoteGroupsWhenLocalProjectionKeepsFailing(t *testing.T) {
+	updates := make([][]int64, 0, 2)
+	currentGroups := []int64{6}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(response, `{"success":true,"data":`+accountJSON("41", "0.4", currentGroups)+`}`)
+		case http.MethodPut:
+			var payload struct {
+				GroupIDs []int64 `json:"group_ids"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Fatal(err)
+			}
+			updates = append(updates, append([]int64(nil), payload.GroupIDs...))
+			currentGroups = append([]int64(nil), payload.GroupIDs...)
+			_, _ = io.WriteString(response, `{"success":true,"data":{"id":41}}`)
+		default:
+			http.Error(response, "unexpected request", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer server.Close()
+	repository := &fakeRepository{syncErr: errors.New("local commit unavailable")}
+	service := New(repository, &fakeTargets{settings: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2,
+	}}, nil)
+	decision := Decision{AccountID: "41", CurrentGroupIDs: []string{"6"}, DesiredGroupIDs: []string{"7"}, Changed: true}
+
+	result, err := service.applyPlan(context.Background(), plan{snapshot: Snapshot{
+		Accounts: 1, Changes: 1, Decisions: []Decision{decision},
+	}}, Config{WriteConcurrency: 1}, "scheduler")
+
+	if err == nil || !strings.Contains(err.Error(), "远程分组已回滚") {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	if result.RemoteWrite || repository.syncCalls != 3 || !reflect.DeepEqual(updates, [][]int64{{7}, {6}}) {
+		t.Fatalf("remote_write=%t sync_calls=%d updates=%#v", result.RemoteWrite, repository.syncCalls, updates)
+	}
+}
+
 func TestRestoreBackupUpdatesExistingAccountsAndSkipsManualPriority(t *testing.T) {
 	accountGroups := map[string][]int64{}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -922,6 +963,7 @@ type fakeRepository struct {
 	revenue      business.RevenueCatalog
 	syncCalls    int
 	syncedGroups map[string][]string
+	syncErr      error
 	backups      []business.PricingBackup
 	protections  map[string]business.AccountMutationProtection
 	changes      []business.PricingChangeRecord
@@ -953,14 +995,14 @@ func (repository *fakeRepository) RevenueCatalog(context.Context) (business.Reve
 	return repository.revenue, nil
 }
 
-func (repository *fakeRepository) ValidateNewAPIQuotaUnit(context.Context, string, float64, time.Time, time.Time) error {
+func (repository *fakeRepository) ValidateNewAPIQuotaUnit(context.Context, string, string, time.Time, time.Time) error {
 	return nil
 }
 
 func (repository *fakeRepository) SyncPricingAccountGroups(_ context.Context, groups map[string][]string, _ string) (business.PricingSyncResult, error) {
 	repository.syncCalls++
 	repository.syncedGroups = groups
-	return business.PricingSyncResult{Accounts: len(groups)}, nil
+	return business.PricingSyncResult{Accounts: len(groups)}, repository.syncErr
 }
 
 func (repository *fakeRepository) CreatePricingBackup(_ context.Context, name, actor string) (business.PricingBackup, error) {

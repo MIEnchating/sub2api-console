@@ -30,6 +30,7 @@ const (
 
 type Repository interface {
 	PrepareAlertDelivery(context.Context, string, bool) (business.AlertDeliveryPlan, error)
+	BeginAlertDelivery(context.Context, string, []business.AlertIncident) error
 	FinalizeAlertDelivery(context.Context, string, []business.AlertDeliveryOutcome) error
 	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
 }
@@ -43,9 +44,10 @@ type BatchSender interface {
 }
 
 type SendOutcome struct {
-	Success   bool
-	Detail    string
-	MessageID *string
+	Success       bool
+	CommitUnknown bool
+	Detail        string
+	MessageID     *string
 }
 
 type Service struct {
@@ -150,6 +152,9 @@ func (s *Service) Deliver(ctx context.Context, dryRun bool) (business.AlertDeliv
 		return result, nil
 	}
 	batches := NotificationBatches(plan.Pending, plan.MergeThreshold)
+	if err := s.repository.BeginAlertDelivery(ctx, channelKey, plan.Pending); err != nil {
+		return business.AlertDeliveryResult{}, err
+	}
 	messages := make([]string, len(batches))
 	for index := range batches {
 		messages[index] = batches[index].Message
@@ -165,7 +170,7 @@ func (s *Service) Deliver(ctx context.Context, dryRun bool) (business.AlertDeliv
 	if len(batchOutcomes) != len(batches) {
 		batchOutcomes = make([]SendOutcome, len(batches))
 		for index := range batchOutcomes {
-			batchOutcomes[index] = SendOutcome{Detail: "QQBot 批次响应数量不一致"}
+			batchOutcomes[index] = SendOutcome{CommitUnknown: true, Detail: "QQBot 批次响应数量不一致，发送结果待人工确认"}
 		}
 	}
 	outcomes := make([]business.AlertDeliveryOutcome, 0, len(plan.Pending))
@@ -177,16 +182,18 @@ func (s *Service) Deliver(ctx context.Context, dryRun bool) (business.AlertDeliv
 		for _, incident := range batch.Incidents {
 			outcomes = append(outcomes, business.AlertDeliveryOutcome{
 				IncidentKey: incident.IncidentKey, Success: outcome.Success,
-				Detail: outcome.Detail, MessageID: outcome.MessageID,
+				CommitUnknown: outcome.CommitUnknown, Detail: outcome.Detail, MessageID: outcome.MessageID,
 			})
 			if outcome.Success {
 				result.Sent++
+			} else if outcome.CommitUnknown {
+				result.Uncertain++
 			} else {
 				result.Failed++
 			}
 		}
 	}
-	result.Attempted = result.Sent + result.Failed
+	result.Attempted = result.Sent + result.Failed + result.Uncertain
 	result.Batches = len(batches)
 	if err := s.repository.FinalizeAlertDelivery(ctx, channelKey, outcomes); err != nil {
 		return business.AlertDeliveryResult{}, err
@@ -892,6 +899,12 @@ type QQBotSender struct {
 	client *http.Client
 }
 
+type qqBotCommitUnknownError struct {
+	detail string
+}
+
+func (err *qqBotCommitUnknownError) Error() string { return err.detail }
+
 func NewQQBotSender(client *http.Client) *QQBotSender {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
@@ -931,7 +944,8 @@ func (s *QQBotSender) Send(
 		}
 		response, err := s.postJSON(ctx, endpoint, payload, map[string]string{"Authorization": "QQBot " + accessToken})
 		if err != nil {
-			result = append(result, SendOutcome{Detail: err.Error()})
+			var unknown *qqBotCommitUnknownError
+			result = append(result, SendOutcome{CommitUnknown: errors.As(err, &unknown), Detail: err.Error()})
 			continue
 		}
 		messageID, idPresent := response["id"]
@@ -939,7 +953,7 @@ func (s *QQBotSender) Send(
 			messageID = response["message_id"]
 		}
 		if messageID == nil || strings.TrimSpace(fmt.Sprint(messageID)) == "" {
-			result = append(result, SendOutcome{Detail: "QQBot 发送响应缺少消息 ID"})
+			result = append(result, SendOutcome{CommitUnknown: true, Detail: "QQBot 发送响应缺少消息 ID"})
 			continue
 		}
 		id := fmt.Sprint(messageID)
@@ -977,15 +991,15 @@ func (s *QQBotSender) postJSON(ctx context.Context, endpoint string, payload any
 	}
 	response, err := s.client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("QQBot 网络请求失败：%T", err)
+		return nil, &qqBotCommitUnknownError{detail: fmt.Sprintf("QQBot 网络请求失败：%T", err)}
 	}
 	defer response.Body.Close()
 	limited, readErr := io.ReadAll(io.LimitReader(response.Body, maximumQQBotResponseSize+1))
 	if readErr != nil {
-		return nil, errors.New("QQBot 响应读取失败")
+		return nil, &qqBotCommitUnknownError{detail: "QQBot 响应读取失败"}
 	}
 	if len(limited) > maximumQQBotResponseSize {
-		return nil, errors.New("QQBot 响应过大")
+		return nil, &qqBotCommitUnknownError{detail: "QQBot 响应过大"}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		detail := redactSecrets(strings.ReplaceAll(string(limited), "\n", " "))
@@ -996,7 +1010,7 @@ func (s *QQBotSender) postJSON(ctx context.Context, endpoint string, payload any
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(limited, &decoded); err != nil || decoded == nil {
-		return nil, errors.New("QQBot 响应不可解析")
+		return nil, &qqBotCommitUnknownError{detail: "QQBot 响应不可解析"}
 	}
 	return decoded, nil
 }

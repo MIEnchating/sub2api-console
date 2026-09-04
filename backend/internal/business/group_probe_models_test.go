@@ -12,9 +12,10 @@ func TestGroupProbeModelsReturnsModelsSharedByAccountsWithSyncedCatalogs(t *test
 		`UPDATE accounts SET metadata_json='{"known_models":["gpt-5.2","gpt-4.1","gpt-5.2"]}' WHERE id='41'`,
 		`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES
 			('43','second','{"known_models":["claude-sonnet-4-6","gpt-4.1"]}','now'),
-			('44','not-synced','{}','now')`,
+			('44','not-synced','{}','now'),
+			('45','legacy-name-only','{"known_models":["wrong-model"]}','now')`,
 		`INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES
-			('43','codex','1','0.1'),('44','codex','1','0.1')`,
+			('43','codex','1','0.1'),('44','codex','1','0.1'),('45','codex',NULL,'0.1')`,
 	}
 	for _, statement := range statements {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {

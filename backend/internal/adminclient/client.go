@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -134,8 +133,8 @@ type AccountUpstreamMultiplierResult struct {
 }
 
 type UsageTotals struct {
-	AccountCost float64
-	ActualCost  float64
+	AccountCost string
+	ActualCost  string
 }
 
 func New(config Config, transport http.RoundTripper) (*Client, error) {
@@ -217,32 +216,34 @@ func (c *Client) AccountUsageTotals(ctx context.Context, accountID, date, timezo
 	if err != nil {
 		return UsageTotals{}, err
 	}
-	accountCost, err := finiteJSONNumber(data["total_account_cost"])
+	accountCost, err := exactJSONDecimal(data["total_account_cost"])
 	if err != nil {
 		return UsageTotals{}, errors.New("账号计费统计未返回有效 total_account_cost")
 	}
-	actualCost, err := finiteJSONNumber(data["total_actual_cost"])
+	actualCost, err := exactJSONDecimal(data["total_actual_cost"])
 	if err != nil {
 		return UsageTotals{}, errors.New("账号计费统计未返回有效 total_actual_cost")
 	}
 	return UsageTotals{AccountCost: accountCost, ActualCost: actualCost}, nil
 }
 
-func finiteJSONNumber(value any) (float64, error) {
-	var parsed float64
-	var err error
+func exactJSONDecimal(value any) (string, error) {
+	var text string
 	switch raw := value.(type) {
 	case json.Number:
-		parsed, err = raw.Float64()
+		text = raw.String()
 	case float64:
-		parsed = raw
+		text = strconv.FormatFloat(raw, 'g', -1, 64)
+	case string:
+		text = strings.TrimSpace(raw)
 	default:
-		return 0, errors.New("数值字段类型无效")
+		return "", errors.New("数值字段类型无效")
 	}
-	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-		return 0, errors.New("数值字段不是有限数值")
+	parsed, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return "", errors.New("数值字段不是有限十进制数")
 	}
-	return parsed, nil
+	return normalizedDecimal(parsed), nil
 }
 
 // UpdateAccount returns the complete account object supplied by Sub2API's

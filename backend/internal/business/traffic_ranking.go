@@ -1,9 +1,11 @@
 package business
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"math"
 	"sort"
 	"strconv"
@@ -59,9 +61,40 @@ type TrafficRankingRow struct {
 
 type trafficRankingAccumulator struct {
 	row           TrafficRankingRow
-	latencies     []float64
+	latencies     latencySampleMaxHeap
+	latencySum    float64
+	latencyCount  int
 	activeBuckets map[string]struct{}
 	latest        time.Time
+}
+
+type latencySample struct {
+	score uint64
+	value float64
+}
+
+type latencySampleMaxHeap []latencySample
+
+func (values latencySampleMaxHeap) Len() int { return len(values) }
+
+func (values latencySampleMaxHeap) Less(left, right int) bool {
+	return values[left].score > values[right].score
+}
+
+func (values latencySampleMaxHeap) Swap(left, right int) {
+	values[left], values[right] = values[right], values[left]
+}
+
+func (values *latencySampleMaxHeap) Push(value any) {
+	*values = append(*values, value.(latencySample))
+}
+
+func (values *latencySampleMaxHeap) Pop() any {
+	previous := *values
+	last := len(previous) - 1
+	value := previous[last]
+	*values = previous[:last]
+	return value
 }
 
 func (s *Store) TrafficRanking(ctx context.Context, query TrafficRankingQuery) (TrafficRanking, error) {
@@ -176,15 +209,18 @@ func (s *Store) accumulateTrafficRanking(
 	bucketDuration time.Duration,
 	accounts map[string]*trafficRankingAccumulator,
 ) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
-		FROM usage_records WHERE LOWER(REPLACE(source,'_','-'))='traffic'
-		AND observed_at>=? AND observed_at<=? ORDER BY observed_at,id`,
+	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (
+		SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
+			ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
+		FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
+	)
+	SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
+	FROM ranked WHERE request_rank=1 ORDER BY observed_at`,
 		query.StartAt.Format(time.RFC3339Nano), query.EndAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	seenRequests := map[string]struct{}{}
 	for rows.Next() {
 		var requestID, accountID string
 		var isError *bool
@@ -201,11 +237,6 @@ func (s *Store) accumulateTrafficRanking(
 		if err != nil || observedAt.Before(query.StartAt) || observedAt.After(query.EndAt) {
 			continue
 		}
-		requestKey := accountID + "\x00" + requestID
-		if _, duplicate := seenRequests[requestKey]; duplicate {
-			continue
-		}
-		seenRequests[requestKey] = struct{}{}
 		account.row.Requests++
 		if isError != nil && !*isError {
 			account.row.Successful++
@@ -225,9 +256,9 @@ func (s *Store) accumulateTrafficRanking(
 		if latency != nil {
 			value, parseErr := strconv.ParseFloat(strings.TrimSpace(*latency), 64)
 			if parseErr == nil && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 {
-				if len(account.latencies) < trafficRankingLatencySampleLimit {
-					account.latencies = append(account.latencies, value)
-				}
+				account.latencySum += value
+				account.latencyCount++
+				addTrafficLatencySample(account, accountID, requestID, value)
 			}
 		}
 		bucketAt := observedAt.UTC().Truncate(bucketDuration)
@@ -247,20 +278,37 @@ func finalizeTrafficRankingAccount(account *trafficRankingAccumulator) {
 		account.row.SuccessRate, account.row.StabilityScore = &rate, &stability
 	}
 	if len(account.latencies) > 0 {
-		sort.Float64s(account.latencies)
-		total := 0.0
-		for _, value := range account.latencies {
-			total += value
+		values := make([]float64, len(account.latencies))
+		for index, sample := range account.latencies {
+			values[index] = sample.value
 		}
-		average := roundTrafficMetric(total / float64(len(account.latencies)))
-		p95Index := int(math.Ceil(float64(len(account.latencies))*0.95)) - 1
-		p95 := roundTrafficMetric(account.latencies[max(0, p95Index)])
+		sort.Float64s(values)
+		average := roundTrafficMetric(account.latencySum / float64(account.latencyCount))
+		p95Index := int(math.Ceil(float64(len(values))*0.95)) - 1
+		p95 := roundTrafficMetric(values[max(0, p95Index)])
 		account.row.AverageLatency, account.row.P95Latency = &average, &p95
 	}
 	if !account.latest.IsZero() {
 		latest := account.latest.Format(time.RFC3339Nano)
 		account.row.LatestAt = &latest
 	}
+}
+
+func addTrafficLatencySample(account *trafficRankingAccumulator, accountID, requestID string, value float64) {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(accountID))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(requestID))
+	sample := latencySample{score: hasher.Sum64(), value: value}
+	if len(account.latencies) < trafficRankingLatencySampleLimit {
+		heap.Push(&account.latencies, sample)
+		return
+	}
+	if sample.score >= account.latencies[0].score {
+		return
+	}
+	heap.Pop(&account.latencies)
+	heap.Push(&account.latencies, sample)
 }
 
 func trafficRankingBucket(duration time.Duration) (string, time.Duration) {

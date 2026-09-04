@@ -36,6 +36,8 @@ jobs:
         run: bun run typecheck
       - name: Lint
         run: bun run lint
+      - name: Dead code
+        run: bun run deadcode
       - name: Test
         run: bun run test
       - name: Production build

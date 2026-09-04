@@ -45,7 +45,7 @@ describe("revenue analysis", () => {
       result: {
         report_date: "2026-08-29",
         timezone: "Asia/Shanghai",
-        tolerance: 2,
+        tolerance: "2.000000",
         rows: [],
         summaries: [],
         issues: [],
@@ -75,9 +75,10 @@ describe("revenue analysis", () => {
     expect(markup).not.toContain("尚未生成核算结果");
   });
 
-  it("uses the previous local calendar day by default", () => {
-    expect(defaultRevenueDate(new Date(2026, 7, 30, 1, 0, 0))).toBe("2026-08-29");
-    expect(defaultRevenueDate(new Date(2026, 0, 1, 1, 0, 0))).toBe("2025-12-31");
+  it("uses the previous Asia/Shanghai calendar day across its UTC midnight boundary", () => {
+    expect(defaultRevenueDate(new Date("2026-08-29T15:30:00Z"))).toBe("2026-08-28");
+    expect(defaultRevenueDate(new Date("2026-08-29T16:30:00Z"))).toBe("2026-08-29");
+    expect(defaultRevenueDate(new Date("2025-12-31T16:30:00Z"))).toBe("2025-12-31");
     expect(revenueDateValue("2026-08-29")?.getDate()).toBe(29);
     expect(revenueDateValue("2026-02-30")).toBeUndefined();
   });
@@ -93,7 +94,7 @@ describe("revenue analysis", () => {
       result: {
         report_date: "2026-08-29",
         timezone: "Asia/Shanghai",
-        tolerance: 2,
+        tolerance: "2.000000",
         rows: [],
         summaries: [],
         issues: [],
@@ -109,6 +110,63 @@ describe("revenue analysis", () => {
     expect(revenueReportFromTask(task)?.report_date).toBe("2026-08-29");
     expect(revenueReportFromTask({ ...task, status: "running" })).toBeNull();
     expect(revenueReportFromTask({ ...task, result: { report_date: "2026-08-29" } })).toBeNull();
+    expect(revenueReportFromTask({ ...task, result: { ...task.result, tolerance: 2 } })).toBeNull();
+  });
+
+  it("renders exact decimal strings without converting large amounts through Number", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    queryClient.setQueryData(["pricing-revenue-latest"], {
+      id: "latest-revenue",
+      skill: "sub2api-billing-reconciliation",
+      operation: "revenue-calculation",
+      status: "succeeded",
+      progress: 100,
+      message: "done",
+      result: {
+        report_date: "2026-08-29",
+        timezone: "Asia/Shanghai",
+        tolerance: "2.000000",
+        rows: [
+          {
+            account_id: "41",
+            account_name: "alpha",
+            local_group: "codex",
+            upstream_host: "api.example",
+            upstream_key_name: "alpha-key",
+            account_cost: "9007199254740993.126000",
+            actual_cost: "1.005000",
+            upstream_raw_cost: "0.000000",
+            recharge_rate: "0.100000",
+            upstream_cost: "0.000000",
+            difference: "-0.005000",
+            revenue: "1.005000",
+            category: "计费异常",
+            note: "",
+            attribution_level: "key",
+          },
+        ],
+        summaries: [],
+        issues: [],
+        comparable: 1,
+        unavailable: 0,
+        abnormal: 1,
+        generated_at: "2026-08-30T00:00:00Z",
+      },
+      created_at: "2026-08-30T00:00:00Z",
+      updated_at: "2026-08-30T00:00:01Z",
+    } satisfies Task);
+
+    const markup = renderToStaticMarkup(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(RevenueAnalysisPage),
+      ),
+    );
+
+    expect(markup).toContain("$9007199254740993.13");
+    expect(markup).toContain("÷0.1");
+    expect(markup).toContain("亏损 $0.01");
   });
 
   it("centers the progress track and percentage in the page body while calculation is running", () => {

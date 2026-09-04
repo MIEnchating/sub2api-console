@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,7 +36,7 @@ func (reader blockingRevenueUsageReader) ReadSub2APIKeyUsage(ctx context.Context
 	}
 	select {
 	case <-reader.release:
-		return upstreamsync.KeyUsageObservation{Cost: 1}, nil
+		return upstreamsync.KeyUsageObservation{Cost: "1"}, nil
 	case <-ctx.Done():
 		return upstreamsync.KeyUsageObservation{}, ctx.Err()
 	}
@@ -73,26 +72,25 @@ func TestBuildRevenueRowUsesActualCostForRevenueAndAccountCostForDifference(t *t
 		}},
 	}
 	row := buildRevenueRow(account, localUsageResult{totals: adminclient.UsageTotals{
-		AccountCost: 8, ActualCost: 10,
+		AccountCost: "8", ActualCost: "10",
 	}}, map[string]upstreamsync.KeyUsageObservation{
-		revenueKey("api.example", "91"): {Cost: 6},
+		revenueKey("api.example", "91"): {Cost: "6"},
 	}, map[string]struct{}{})
-	if row.Category != "计费异常" || row.UpstreamCost == nil || *row.UpstreamCost != 3 || row.Difference == nil || *row.Difference != 5 || row.Revenue == nil || *row.Revenue != 7 {
+	if row.Category != "计费异常" || row.UpstreamCost == nil || *row.UpstreamCost != "3.000000" || row.Difference == nil || *row.Difference != "5.000000" || row.Revenue == nil || *row.Revenue != "7.000000" {
 		t.Fatalf("row=%#v", row)
 	}
 }
 
-func TestBuildRevenueRowUsesDecimalDivisionAndKeepsNumericJSONContract(t *testing.T) {
+func TestBuildRevenueRowUsesDecimalDivisionAndKeepsDecimalStringJSONContract(t *testing.T) {
 	account := business.RevenueAccount{ID: "41", Bindings: []business.RevenueBinding{{
 		AuthHost: "api.example", UpstreamKeyID: "91", RechargeRate: "0.1",
 	}}}
-	first, second := 0.1, 0.2
 	row := buildRevenueRow(account, localUsageResult{totals: adminclient.UsageTotals{
-		AccountCost: 3, ActualCost: 3,
+		AccountCost: "3", ActualCost: "3",
 	}}, map[string]upstreamsync.KeyUsageObservation{
-		revenueKey("api.example", "91"): {Cost: first + second},
+		revenueKey("api.example", "91"): {Cost: "0.3"},
 	}, map[string]struct{}{})
-	if row.Category != "正常" || row.UpstreamCost == nil || *row.UpstreamCost != 3 || row.Difference == nil || *row.Difference != 0 {
+	if row.Category != "正常" || row.UpstreamCost == nil || *row.UpstreamCost != "3.000000" || row.Difference == nil || *row.Difference != "0.000000" {
 		t.Fatalf("row=%#v", row)
 	}
 	encoded, err := json.Marshal(row)
@@ -103,8 +101,8 @@ func TestBuildRevenueRowUsesDecimalDivisionAndKeepsNumericJSONContract(t *testin
 	if err := json.Unmarshal(encoded, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := payload["upstream_cost"].(float64); !ok {
-		t.Fatalf("upstream_cost stopped being a JSON number: %s", encoded)
+	if value, ok := payload["upstream_cost"].(string); !ok || value != "3.000000" {
+		t.Fatalf("upstream_cost is not an exact decimal string: %s", encoded)
 	}
 }
 
@@ -112,13 +110,12 @@ func TestBuildRevenueRowTreatsDecimalTwoDollarBoundaryAsNormal(t *testing.T) {
 	account := business.RevenueAccount{ID: "41", Bindings: []business.RevenueBinding{{
 		AuthHost: "api.example", UpstreamKeyID: "91", RechargeRate: "1",
 	}}}
-	base, increment := 2.1, 0.2
 	row := buildRevenueRow(account, localUsageResult{totals: adminclient.UsageTotals{
-		AccountCost: base + increment, ActualCost: base + increment,
+		AccountCost: "2.3", ActualCost: "2.3",
 	}}, map[string]upstreamsync.KeyUsageObservation{
-		revenueKey("api.example", "91"): {Cost: 0.3},
+		revenueKey("api.example", "91"): {Cost: "0.3"},
 	}, map[string]struct{}{})
-	if row.Category != "正常" || row.Difference == nil || *row.Difference != 2 {
+	if row.Category != "正常" || row.Difference == nil || *row.Difference != "2.000000" {
 		t.Fatalf("two-dollar boundary was not exact: %#v", row)
 	}
 }
@@ -128,11 +125,11 @@ func TestBuildRevenueRowTreatsAmountAboveTwoDollarBoundaryAsAbnormal(t *testing.
 		AuthHost: "api.example", UpstreamKeyID: "91", RechargeRate: "1",
 	}}}
 	row := buildRevenueRow(account, localUsageResult{totals: adminclient.UsageTotals{
-		AccountCost: 2.000001, ActualCost: 2.000001,
+		AccountCost: "2.000001", ActualCost: "2.000001",
 	}}, map[string]upstreamsync.KeyUsageObservation{
-		revenueKey("api.example", "91"): {Cost: 0},
+		revenueKey("api.example", "91"): {Cost: "0"},
 	}, map[string]struct{}{})
-	if row.Category != "计费异常" || row.Difference == nil || *row.Difference != 2.000001 {
+	if row.Category != "计费异常" || row.Difference == nil || *row.Difference != "2.000001" {
 		t.Fatalf("amount above two-dollar boundary was not abnormal: %#v", row)
 	}
 }
@@ -142,7 +139,7 @@ func TestBuildRevenueRowKeepsSharedStableKeyUnavailable(t *testing.T) {
 		AuthHost: "api.example", UpstreamKeyID: "91", RechargeRate: "1",
 	}}}
 	row := buildRevenueRow(account, localUsageResult{totals: adminclient.UsageTotals{}},
-		map[string]upstreamsync.KeyUsageObservation{revenueKey("api.example", "91"): {Cost: 1}},
+		map[string]upstreamsync.KeyUsageObservation{revenueKey("api.example", "91"): {Cost: "1"}},
 		map[string]struct{}{revenueKey("api.example", "91"): {}},
 	)
 	if row.Category != "无法核对" || row.Revenue != nil || row.AttributionLevel != "unavailable" {
@@ -173,25 +170,25 @@ func TestRevenueWindowDefaultsToPreviousCompletedShanghaiDay(t *testing.T) {
 }
 
 func TestSummarizeRevenueIncludesOnlyExactRows(t *testing.T) {
-	value := func(v float64) *float64 { return &v }
+	value := func(v string) *string { return &v }
 	rows := []RevenueRow{
-		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value(4), ActualCost: value(5), UpstreamRawCost: value(3), UpstreamCost: value(2), Difference: value(2), Revenue: value(3)},
-		{LocalGroup: "codex", AttributionLevel: "unavailable", AccountCost: value(99)},
+		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value("4.000000"), ActualCost: value("5.000000"), UpstreamRawCost: value("3.000000"), UpstreamCost: value("2.000000"), Difference: value("2.000000"), Revenue: value("3.000000")},
+		{LocalGroup: "codex", AttributionLevel: "unavailable", AccountCost: value("99.000000")},
 	}
 	summaries := summarizeRevenue(rows)
-	if len(summaries) != 2 || summaries[0].Accounts != 1 || math.Abs(summaries[1].Revenue-3) > 1e-9 {
+	if len(summaries) != 2 || summaries[0].Accounts != 1 || summaries[1].Revenue != "3.000000" {
 		t.Fatalf("summaries=%#v", summaries)
 	}
 }
 
 func TestSummarizeRevenueDoesNotExposeBinaryFloatAccumulation(t *testing.T) {
-	value := func(v float64) *float64 { return &v }
+	value := func(v string) *string { return &v }
 	rows := []RevenueRow{
-		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value(0.1), ActualCost: value(0.1), UpstreamRawCost: value(0.1), UpstreamCost: value(0.1), Difference: value(0.1), Revenue: value(0.1)},
-		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value(0.2), ActualCost: value(0.2), UpstreamRawCost: value(0.2), UpstreamCost: value(0.2), Difference: value(0.2), Revenue: value(0.2)},
+		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value("0.100000"), ActualCost: value("0.100000"), UpstreamRawCost: value("0.100000"), UpstreamCost: value("0.100000"), Difference: value("0.100000"), Revenue: value("0.100000")},
+		{LocalGroup: "codex", AttributionLevel: "key", AccountCost: value("0.200000"), ActualCost: value("0.200000"), UpstreamRawCost: value("0.200000"), UpstreamCost: value("0.200000"), Difference: value("0.200000"), Revenue: value("0.200000")},
 	}
 	summaries := summarizeRevenue(rows)
-	if len(summaries) != 2 || summaries[0].AccountCost != 0.3 || summaries[1].AccountCost != 0.3 {
+	if len(summaries) != 2 || summaries[0].AccountCost != "0.300000" || summaries[1].AccountCost != "0.300000" {
 		t.Fatalf("summaries expose binary accumulation: %#v", summaries)
 	}
 }
@@ -220,12 +217,12 @@ func TestCalculateRevenueReadsLocalAUAndStableUpstreamKey(t *testing.T) {
 		}},
 	}
 	service := New(repository, targets, nil)
-	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: 6}}}
+	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: "6"}}}
 	report, err := service.CalculateRevenue(context.Background(), RevenueRequest{Date: "2020-01-01"}, "tester")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Comparable != 1 || report.Abnormal != 1 || len(report.Summaries) != 2 || report.Rows[0].Revenue == nil || *report.Rows[0].Revenue != 7 {
+	if report.Comparable != 1 || report.Abnormal != 1 || len(report.Summaries) != 2 || report.Rows[0].Revenue == nil || *report.Rows[0].Revenue != "7.000000" {
 		t.Fatalf("report=%#v", report)
 	}
 }
@@ -250,7 +247,7 @@ func TestCalculateRevenueReturnsCanceledContextInsteadOfUnavailableReport(t *tes
 		}},
 	}
 	service := New(repository, targets, nil)
-	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: 1}}}
+	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: "1"}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -267,12 +264,12 @@ func TestFetchRevenueHostKeepsSuccessfulSub2APIKeysWhenSiblingReadFails(t *testi
 		AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{},
 	}}}
 	service := New(&fakeRepository{}, targets, nil)
-	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: 1}}}
+	service.usage = fakeRevenueUsageReader{sub2api: map[string]upstreamsync.KeyUsageObservation{"91": {Cost: "1"}}}
 	result := service.fetchRevenueHost(context.Background(), targets, "api.example", []business.RevenueBinding{
 		{AuthHost: "api.example", UpstreamKeyID: "91"},
 		{AuthHost: "api.example", UpstreamKeyID: "92"},
 	}, "2020-01-01", time.Unix(1, 0), time.Unix(2, 0), "tester")
-	if result.issue == "" || result.values["91"].Cost != 1 {
+	if result.issue == "" || result.values["91"].Cost != "1" {
 		t.Fatalf("result=%#v", result)
 	}
 }

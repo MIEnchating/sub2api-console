@@ -82,11 +82,11 @@ func TestAccountUsageTotalsUsesExactClosedDateAndKeepsAUSemantics(t *testing.T) 
 		if request.URL.Path != "/api/v1/admin/usage/stats" || request.URL.Query().Get("account_id") != "41" || request.URL.Query().Get("start_date") != "2026-08-29" || request.URL.Query().Get("end_date") != "2026-08-29" || request.URL.Query().Get("timezone") != "Asia/Shanghai" {
 			t.Fatalf("request=%s?%s", request.URL.Path, request.URL.RawQuery)
 		}
-		writeJSON(w, `{"code":0,"data":{"total_account_cost":8.25,"total_actual_cost":10.5}}`)
+		writeJSON(w, `{"code":0,"data":{"total_account_cost":9007199254740993.123456,"total_actual_cost":10.500001}}`)
 	})
 	defer server.Close()
 	totals, err := client.AccountUsageTotals(context.Background(), "41", "2026-08-29", "Asia/Shanghai")
-	if err != nil || totals.AccountCost != 8.25 || totals.ActualCost != 10.5 {
+	if err != nil || totals.AccountCost != "9007199254740993.123456" || totals.ActualCost != "10.500001" {
 		t.Fatalf("totals=%#v err=%v", totals, err)
 	}
 }

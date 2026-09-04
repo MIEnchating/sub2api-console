@@ -38,9 +38,11 @@ describe("global focus policy", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("explicitly disables the component library initial focus on every popup surface", () => {
+  it("keeps dialog initial focus enabled while non-modal searchable popups opt out", () => {
+    expect(readFileSync(join(sourceRoot, "components/ui/dialog.tsx"), "utf8")).not.toContain(
+      "initialFocus={false}",
+    );
     const surfaces = [
-      "components/ui/dialog.tsx",
       "components/ui/sheet.tsx",
       "components/ui/combobox.tsx",
       "components/data-table/filter-menu.tsx",

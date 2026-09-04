@@ -32,7 +32,7 @@ type Repository interface {
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
 	PricingCatalog(context.Context) (business.PricingCatalog, error)
 	RevenueCatalog(context.Context) (business.RevenueCatalog, error)
-	ValidateNewAPIQuotaUnit(context.Context, string, float64, time.Time, time.Time) error
+	ValidateNewAPIQuotaUnit(context.Context, string, string, time.Time, time.Time) error
 	SyncPricingAccountGroups(context.Context, map[string][]string, string) (business.PricingSyncResult, error)
 	PricingChangeRecords(context.Context, int) ([]business.PricingChangeRecord, error)
 	CreatePricingBackup(context.Context, string, string) (business.PricingBackup, error)

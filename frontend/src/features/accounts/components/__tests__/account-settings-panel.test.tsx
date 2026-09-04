@@ -7,7 +7,6 @@ import { accountDetailDialogLayout } from "../account-detail-dialog";
 import {
   AccountSettingsPanel,
   accountTestModelOptions,
-  accountSettingControlActions,
   waitForAccountSettingTasks,
 } from "../account-settings-panel";
 
@@ -126,15 +125,6 @@ describe("账号设置面板", () => {
 });
 
 describe("账号设置保存流程", () => {
-  it("同时修改排除和暂停时保留两个控制动作", () => {
-    expect(
-      accountSettingControlActions(
-        { excluded: false, paused: false },
-        { excluded: true, paused: true },
-      ),
-    ).toEqual(["exclude", "pause"]);
-  });
-
   it("等待排队任务完成后才返回", async () => {
     const queued = { id: "task-1", status: "queued" } as Task;
     const succeeded = { ...queued, status: "succeeded", message: "完成" } as Task;

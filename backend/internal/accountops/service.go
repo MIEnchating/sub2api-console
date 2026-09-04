@@ -48,6 +48,10 @@ type manualPriorityRepository interface {
 	CommitManualPriorityRelease(context.Context, business.ManualPriorityRelease, string, business.AccountOperation) error
 }
 
+type accountSettingsRepository interface {
+	CommitAccountSettings(context.Context, string, string, business.AccountSettingsUpdate) error
+}
+
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 }
@@ -69,6 +73,15 @@ type FieldPatch struct {
 	BaseURL             *string
 	NotesPresent        bool
 	Notes               *string
+}
+
+type SettingsInput struct {
+	Priority    int64
+	LoadFactor  string
+	Concurrency int64
+	TestModel   *string
+	Paused      bool
+	Excluded    bool
 }
 
 type OperationError struct {
@@ -546,6 +559,172 @@ func (s *Service) EnqueueFields(ctx context.Context, accountID string, patch Fie
 	return s.enqueue(ctx, "sub2api-account-sync", "account-fields-sync", "账号字段同步已排队", func(run context.Context) (map[string]any, error) {
 		return s.SyncFields(targetguard.Expect(run, expectedTarget), accountID, patch, actor)
 	})
+}
+
+func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input SettingsInput, actor string) (taskstore.Task, error) {
+	if !stableID(accountID) {
+		return taskstore.Task{}, errors.New("账号必须使用有效的稳定 ID")
+	}
+	if input.Priority < 1 || input.Priority > 10_000_000 {
+		return taskstore.Task{}, errors.New("优先级必须是 1 到 10000000 之间的整数")
+	}
+	loadFactor, err := decimalAtLeastOne(input.LoadFactor)
+	if err != nil {
+		return taskstore.Task{}, errors.New("负载因子必须大于或等于 1")
+	}
+	input.LoadFactor = loadFactor
+	if input.Concurrency < 1 || input.Concurrency > 10_000_000 {
+		return taskstore.Task{}, errors.New("并发上限必须是 1 到 10000000 之间的整数")
+	}
+	if input.TestModel != nil {
+		model := strings.TrimSpace(*input.TestModel)
+		if len(model) > 256 {
+			return taskstore.Task{}, errors.New("探测模型长度不能超过 256")
+		}
+		input.TestModel = &model
+	}
+	if _, ok := s.repository.(accountSettingsRepository); !ok {
+		return taskstore.Task{}, errors.New("账号设置服务尚未就绪")
+	}
+	mode, local, err := s.localAccount(ctx, accountID)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	if mode != runtimepolicy.Full {
+		return taskstore.Task{}, errors.New("账号设置需要完全模式")
+	}
+	if local.ManualPriority != nil {
+		return taskstore.Task{}, errors.New("账号处于人工优先位，平台设置已禁用；请先取消人工优先位")
+	}
+	expectedTarget, err := s.targets.TargetSettings(ctx)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	return s.enqueue(ctx, "sub2api-account-settings", "account-settings", "账号设置已排队", func(run context.Context) (map[string]any, error) {
+		return s.applySettings(targetguard.Expect(run, expectedTarget), accountID, input, actor)
+	})
+}
+
+func (s *Service) applySettings(ctx context.Context, accountID string, input SettingsInput, actor string) (map[string]any, error) {
+	repository, ok := s.repository.(accountSettingsRepository)
+	if !ok {
+		return nil, errors.New("账号设置服务尚未就绪")
+	}
+	ctx, releaseMutation, err := s.acquireAccountMutation(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMutation()
+	mode, local, err := s.localAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if mode != runtimepolicy.Full || local.ManualPriority != nil {
+		return nil, errors.New("账号设置执行条件已变化，请刷新后重试")
+	}
+	ctx, err = targetguard.Bind(ctx, s.targets)
+	if err != nil {
+		return nil, err
+	}
+	client, err := s.adminClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	before, err := client.Account(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	rollbackBody, err := accountSettingsRollbackBody(before)
+	if err != nil {
+		return nil, err
+	}
+	body := map[string]any{
+		"priority": input.Priority, "load_factor": json.Number(input.LoadFactor),
+		"concurrency": input.Concurrency, "schedulable": !input.Paused,
+	}
+	if _, err := client.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
+		return nil, &OperationError{Message: err.Error()}
+	}
+	rollback := func(cause error) error {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		_, rollbackErr := client.Mutate(rollbackCtx, http.MethodPut, "/admin/accounts/"+accountID, rollbackBody)
+		if rollbackErr != nil {
+			return fmt.Errorf("%w；账号设置远端回滚失败：%v", cause, rollbackErr)
+		}
+		return cause
+	}
+	after, err := client.Account(ctx, accountID)
+	if err != nil {
+		return nil, rollback(fmt.Errorf("账号设置写入后读回失败：%w", err))
+	}
+	patch := FieldPatch{
+		PriorityPresent: true, Priority: &input.Priority, LoadFactorPresent: true, LoadFactor: &input.LoadFactor,
+		ConcurrencyPresent: true, Concurrency: &input.Concurrency,
+	}
+	if err := verifyFieldReadback(after, nil, &input.Priority, &input.LoadFactor, &input.Concurrency, nil, nil, patch); err != nil {
+		return nil, rollback(err)
+	}
+	schedulable, err := accountSchedulable(after)
+	if err != nil || schedulable != !input.Paused {
+		if err == nil {
+			err = errors.New("账号可调度状态读回不一致")
+		}
+		return nil, rollback(err)
+	}
+	operationID, err := operationID("account-settings")
+	if err != nil {
+		return nil, rollback(err)
+	}
+	field := "priority,load_factor,concurrency,schedulable,test_model,excluded"
+	beforeValues := map[string]any{
+		"priority": rollbackBody["priority"], "load_factor": rollbackBody["load_factor"],
+		"concurrency": rollbackBody["concurrency"], "schedulable": rollbackBody["schedulable"],
+		"test_model": local.TestModel,
+	}
+	afterValues := map[string]any{
+		"priority": input.Priority, "load_factor": input.LoadFactor, "concurrency": input.Concurrency,
+		"schedulable": !input.Paused, "test_model": input.TestModel, "excluded": input.Excluded,
+	}
+	operation := business.AccountOperation{
+		OperationID: operationID, OperationType: "account.settings", State: "succeeded", Phase: "readback",
+		Actor: actor, RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: accountID,
+		ObjectName: &local.Name, GroupNames: []string{}, FieldName: &field, Before: beforeValues,
+		After: afterValues, Writeback: true,
+	}
+	if err := repository.CommitAccountSettings(ctx, accountID, actor, business.AccountSettingsUpdate{
+		Priority: input.Priority, LoadFactor: input.LoadFactor, Concurrency: input.Concurrency,
+		TestModel: input.TestModel, Paused: input.Paused, Excluded: input.Excluded, Operation: operation,
+	}); err != nil {
+		return nil, rollback(fmt.Errorf("远端设置已写入，但本地原子提交失败：%w", err))
+	}
+	return map[string]any{
+		"operation_id": operationID, "account_id": accountID, "before": beforeValues,
+		"after": afterValues, "remote_write": true, "readback_confirmed": true,
+	}, nil
+}
+
+func accountSettingsRollbackBody(account map[string]any) (map[string]any, error) {
+	priority, err := readbackInteger(account["priority"])
+	if err != nil || priority < 1 {
+		return nil, errors.New("账号原优先级不可读")
+	}
+	loadFactor, err := decimal(fmt.Sprint(account["load_factor"]))
+	if err != nil {
+		return nil, errors.New("账号原负载因子不可读")
+	}
+	concurrency, err := readbackInteger(account["concurrency"])
+	if err != nil || concurrency < 1 {
+		return nil, errors.New("账号原并发上限不可读")
+	}
+	schedulable, err := accountSchedulable(account)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"priority": priority, "load_factor": json.Number(loadFactor),
+		"concurrency": concurrency, "schedulable": schedulable,
+	}, nil
 }
 
 func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {

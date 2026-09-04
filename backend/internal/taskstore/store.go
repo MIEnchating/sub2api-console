@@ -21,8 +21,9 @@ var (
 )
 
 const (
-	taskRunKeySQL = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.run_key') AS TEXT) END`
-	taskObjectSQL = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
+	maximumTaskResultBytes = 4 << 20
+	taskRunKeySQL          = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.run_key') AS TEXT) END`
+	taskObjectSQL          = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
 		json_extract(result_json,'$.host'),json_extract(result_json,'$.account_name'),
 		json_extract(result_json,'$.account_id'),json_extract(result_json,'$.object_label')
 	) AS TEXT) END`
@@ -110,6 +111,9 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 	encoded, err := json.Marshal(task.Result)
 	if err != nil {
 		return fmt.Errorf("任务结果无法严格 JSON 序列化：%w", err)
+	}
+	if len(encoded) > maximumTaskResultBytes {
+		return fmt.Errorf("任务结果不能超过 %d MiB", maximumTaskResultBytes>>20)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

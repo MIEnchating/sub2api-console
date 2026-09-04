@@ -17,6 +17,122 @@ var accountControlFields = map[string]string{
 	"fuse": "manual_fused_account_ids", "recover": "manual_fused_account_ids",
 }
 
+type AccountSettingsUpdate struct {
+	Priority    int64
+	LoadFactor  string
+	Concurrency int64
+	TestModel   *string
+	Paused      bool
+	Excluded    bool
+	Operation   AccountOperation
+}
+
+func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor string, update AccountSettingsUpdate) error {
+	if !positiveNumericID(accountID) {
+		return errors.New("账号必须使用有效的稳定 ID")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var name, metadataRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT name,metadata_json FROM accounts WHERE id=?`, accountID).Scan(&name, &metadataRaw); err != nil {
+		return err
+	}
+	document, err := s.readPolicyDocument(ctx, tx, "control-plane")
+	if err != nil {
+		return err
+	}
+	if document == nil {
+		return errors.New("控制面策略记录不存在")
+	}
+	scope, _ := document["scope"].(map[string]any)
+	scope = copyObject(scope)
+	setAccountScopeValue(scope, "paused_account_ids", accountID, update.Paused)
+	setAccountScopeValue(scope, "excluded_account_ids", accountID, update.Excluded)
+	document["scope"] = scope
+	models, _ := document["account_test_models"].(map[string]any)
+	models = copyObject(models)
+	if update.TestModel == nil || strings.TrimSpace(*update.TestModel) == "" {
+		delete(models, accountID)
+	} else {
+		model := strings.TrimSpace(*update.TestModel)
+		if len(model) > 256 {
+			return errors.New("探测模型长度不能超过 256")
+		}
+		models[accountID] = model
+	}
+	document["account_test_models"] = models
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.writePolicyDocument(ctx, tx, "control-plane", document, now); err != nil {
+		return err
+	}
+	routingState, pausedReason := "unknown", any(nil)
+	if update.Paused {
+		routingState, pausedReason = "paused", "人工暂停"
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET priority=?,load_factor=?,concurrency=?,schedulable=?,
+		paused=?,paused_reason=?,routing_state=?,updated_at=? WHERE id=?`, update.Priority, update.LoadFactor,
+		update.Concurrency, !update.Paused, update.Paused, pausedReason, routingState, now, accountID); err != nil {
+		return err
+	}
+	if update.Paused {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO paused_accounts(account_id,reason,enabled,updated_at)
+			VALUES(?,'人工暂停',1,?) ON CONFLICT(account_id) DO UPDATE SET
+			reason='人工暂停',enabled=1,updated_at=excluded.updated_at`, accountID, now); err != nil {
+			return err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM paused_accounts WHERE account_id=?`, accountID); err != nil {
+			return err
+		}
+		metadata, err := clearedRoutingRuntimeMetadata(metadataRaw, accountID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET metadata_json=?,updated_at=? WHERE id=?`, metadata, now, accountID); err != nil {
+			return err
+		}
+	}
+	update.Operation.ObjectID = accountID
+	update.Operation.ObjectName = &name
+	if err := insertAccountOperation(ctx, tx, update.Operation); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{
+		"account_id": accountID, "account_name": name, "actor": actor, "paused": update.Paused,
+		"excluded": update.Excluded, "test_model": update.TestModel,
+	})
+	if err != nil {
+		return err
+	}
+	var minimum sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM runtime_events WHERE source_id < 0`).Scan(&minimum); err != nil {
+		return err
+	}
+	sourceID := int64(-1)
+	if minimum.Valid && minimum.Int64 <= -1 {
+		sourceID = minimum.Int64 - 1
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
+		VALUES(?,?,?,?,?,?)`, sourceID, "account.settings", now, "succeeded",
+		fmt.Sprintf("账号 %s（%s）设置已更新", name, accountID), string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func setAccountScopeValue(scope map[string]any, field, accountID string, enabled bool) {
+	values := controlAccountIDs(scope[field])
+	if enabled {
+		values[accountID] = struct{}{}
+	} else {
+		delete(values, accountID)
+	}
+	scope[field] = sortedControlAccountIDs(values)
+}
+
 func (s *Store) SetAccountScopeControl(ctx context.Context, accountID, action, actor string) (PolicySnapshot, error) {
 	if action != "exclude" && action != "include" {
 		return PolicySnapshot{}, errors.New("账号受管范围只允许 exclude 或 include")

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"net/url"
 	"strconv"
 	"strings"
@@ -15,13 +16,13 @@ import (
 )
 
 type KeyUsageObservation struct {
-	Cost   float64
+	Cost   string
 	Source string
 }
 
 type NewAPIUsageObservations struct {
 	Keys         map[string]KeyUsageObservation
-	QuotaPerUnit float64
+	QuotaPerUnit string
 }
 
 func (r *Reader) ReadSub2APIKeyUsage(
@@ -50,8 +51,9 @@ func (r *Reader) ReadSub2APIKeyUsage(
 	if !present {
 		return KeyUsageObservation{}, errors.New("Sub2API Key 计费未返回 total_actual_cost")
 	}
-	cost, err := finiteNumber(raw)
-	if err != nil || cost < 0 {
+	cost, err := decimalText(raw)
+	parsedCost, parsed := new(big.Rat).SetString(cost)
+	if err != nil || !parsed || parsedCost.Sign() < 0 {
 		return KeyUsageObservation{}, errors.New("Sub2API Key 计费金额无效")
 	}
 	return KeyUsageObservation{Cost: cost, Source: "sub2api-key-stats"}, nil
@@ -75,8 +77,9 @@ func (r *Reader) ReadNewAPIKeyUsage(
 	if err != nil {
 		return NewAPIUsageObservations{}, err
 	}
-	quotaPerUnit, err := finiteNumber(status["quota_per_unit"])
-	if err != nil || quotaPerUnit <= 0 {
+	quotaPerUnitText, err := decimalText(status["quota_per_unit"])
+	quotaPerUnitRat, parsed := new(big.Rat).SetString(quotaPerUnitText)
+	if err != nil || !parsed || quotaPerUnitRat.Sign() <= 0 {
 		return NewAPIUsageObservations{}, errors.New("NewAPI quota_per_unit 缺失或无效")
 	}
 	if enabled, present := strictBool(status["enable_data_export"]); present && !enabled {
@@ -96,23 +99,28 @@ func (r *Reader) ReadNewAPIKeyUsage(
 	if err != nil {
 		return NewAPIUsageObservations{}, err
 	}
-	totals := make(map[string]float64)
+	totals := make(map[string]*big.Rat)
 	for _, row := range rows {
-		quota, quotaErr := finiteNumber(row["quota"])
+		quotaText, quotaErr := decimalText(row["quota"])
+		quota, quotaOK := new(big.Rat).SetString(quotaText)
 		tokenID, tokenErr := strictInteger(row["token_id"])
-		if quotaErr != nil || quota < 0 {
+		if quotaErr != nil || !quotaOK || quota.Sign() < 0 {
 			return NewAPIUsageObservations{}, errors.New("NewAPI Token 消费聚合包含无效 quota")
 		}
 		if tokenErr != nil || tokenID <= 0 {
 			return NewAPIUsageObservations{}, errors.New("NewAPI Token 消费聚合缺少稳定 Token ID")
 		}
-		totals[strconv.Itoa(tokenID)] += quota
+		key := strconv.Itoa(tokenID)
+		if totals[key] == nil {
+			totals[key] = new(big.Rat)
+		}
+		totals[key].Add(totals[key], quota)
 	}
 	result := make(map[string]KeyUsageObservation, len(totals))
 	for tokenID, quota := range totals {
-		result[tokenID] = KeyUsageObservation{Cost: quota / quotaPerUnit, Source: "newapi-token-flow"}
+		result[tokenID] = KeyUsageObservation{Cost: ratText(new(big.Rat).Quo(quota, quotaPerUnitRat)), Source: "newapi-token-flow"}
 	}
-	return NewAPIUsageObservations{Keys: result, QuotaPerUnit: quotaPerUnit}, nil
+	return NewAPIUsageObservations{Keys: result, QuotaPerUnit: quotaPerUnitText}, nil
 }
 
 func newAPIFlowRows(payload any) ([]map[string]any, error) {

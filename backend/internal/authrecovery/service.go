@@ -550,29 +550,36 @@ func (s *Service) executeBatch(parent context.Context, task taskstore.Task, reco
 
 func (s *Service) recoverRecords(ctx context.Context, records []configstore.AuthRecord, actor string) (BatchResult, error) {
 	outcomes := make([]business.AuthRecoveryOutcome, 0, len(records))
-	originals := make(map[string]configstore.AuthRecord, len(records))
-	for _, record := range records {
-		if current, err := s.private.AuthRecord(ctx, record.Host); err == nil && current != nil {
-			originals[record.Host] = cloneAuthRecord(*current)
-		}
-	}
+	summary := business.AuthRecoverySummary{}
 	for _, record := range records {
 		if err := ctx.Err(); err != nil {
-			return BatchResult{Outcomes: outcomes}, err
+			return BatchResult{Summary: summary, Outcomes: outcomes}, err
 		}
-		outcomes = append(outcomes, s.recover(ctx, record, "", false))
-	}
-	summary, err := s.repository.PersistAuthRecoveryOutcomes(ctx, outcomes, actor)
-	if err != nil && len(originals) > 0 {
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-		defer cancel()
-		for host, original := range originals {
-			if rollbackErr := s.private.SaveAuthRecord(rollbackCtx, original, allAuthFields()); rollbackErr != nil {
-				err = errors.Join(err, fmt.Errorf("上游 %s 鉴权回滚失败：%w", host, rollbackErr))
+		original, originalErr := s.private.AuthRecord(ctx, record.Host)
+		if originalErr != nil {
+			return BatchResult{Summary: summary, Outcomes: outcomes}, originalErr
+		}
+		outcome := s.recover(ctx, record, "", false)
+		outcomes = append(outcomes, outcome)
+		// Persist after every host. A cancellation or process restart can then
+		// recover the exact completed prefix instead of losing the whole batch.
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		persisted, persistErr := s.repository.PersistAuthRecoveryOutcomes(persistCtx, outcomes, actor)
+		cancel()
+		if persistErr != nil {
+			if original != nil {
+				rollbackCtx, rollbackCancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+				rollbackErr := s.private.SaveAuthRecord(rollbackCtx, cloneAuthRecord(*original), allAuthFields())
+				rollbackCancel()
+				if rollbackErr != nil {
+					persistErr = errors.Join(persistErr, fmt.Errorf("上游 %s 鉴权回滚失败：%w", record.Host, rollbackErr))
+				}
 			}
+			return BatchResult{Summary: summary, Outcomes: outcomes}, persistErr
 		}
+		summary = persisted
 	}
-	return BatchResult{Summary: summary, Outcomes: outcomes}, err
+	return BatchResult{Summary: summary, Outcomes: outcomes}, nil
 }
 
 func (s *Service) recoveryRecords(ctx context.Context, hosts []string) ([]configstore.AuthRecord, error) {

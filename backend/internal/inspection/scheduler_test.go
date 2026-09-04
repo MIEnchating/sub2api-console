@@ -2,7 +2,6 @@ package inspection
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
-	_ "modernc.org/sqlite"
 )
 
 type blockingExecutor struct {
@@ -979,30 +977,13 @@ func TestClearHistoryRemovesCompletedHeartbeatsAndResetsSummary(t *testing.T) {
 func openInspectionRepository(t *testing.T) *business.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "inspection.sqlite3")
-	database, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := []string{
-		`CREATE TABLE app_state(key TEXT PRIMARY KEY,value_json TEXT NOT NULL,updated_at TEXT NOT NULL)`,
-		`INSERT INTO app_state(key,value_json,updated_at) VALUES('config','{"keys":[],"mode":"完全模式"}','now')`,
-		`CREATE TABLE policy_nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,policy_key TEXT NOT NULL,parent_id INTEGER,key_name TEXT,list_index INTEGER,node_type TEXT NOT NULL,scalar_value TEXT,updated_at TEXT NOT NULL)`,
-		`CREATE UNIQUE INDEX ux_policy_nodes_root ON policy_nodes(policy_key) WHERE parent_id IS NULL`,
-		`CREATE TABLE scheduler_leases(lease_name TEXT PRIMARY KEY,owner_id TEXT NOT NULL,owner_pid INTEGER NOT NULL,owner_host TEXT NOT NULL,checked_at TEXT NOT NULL,acquired_at TEXT NOT NULL,renewed_at TEXT NOT NULL,expires_at TEXT NOT NULL)`,
-	}
-	for _, statement := range statements {
-		if _, err := database.Exec(statement); err != nil {
-			database.Close()
-			t.Fatalf("fixture statement failed: %v\n%s", err, statement)
-		}
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
 	repository, err := business.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { repository.Close() })
+	if _, err := repository.SetMode(context.Background(), "完全模式"); err != nil {
+		t.Fatal(err)
+	}
 	return repository
 }

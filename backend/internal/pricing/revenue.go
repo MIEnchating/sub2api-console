@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"math/big"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,32 +32,32 @@ type RevenueRequest struct {
 }
 
 type RevenueRow struct {
-	AccountID        string   `json:"account_id"`
-	AccountName      string   `json:"account_name"`
-	LocalGroup       string   `json:"local_group"`
-	UpstreamHost     string   `json:"upstream_host"`
-	UpstreamKeyName  string   `json:"upstream_key_name"`
-	AccountCost      *float64 `json:"account_cost"`
-	ActualCost       *float64 `json:"actual_cost"`
-	UpstreamRawCost  *float64 `json:"upstream_raw_cost"`
-	RechargeRate     *float64 `json:"recharge_rate"`
-	UpstreamCost     *float64 `json:"upstream_cost"`
-	Difference       *float64 `json:"difference"`
-	Revenue          *float64 `json:"revenue"`
-	Category         string   `json:"category"`
-	Note             string   `json:"note"`
-	AttributionLevel string   `json:"attribution_level"`
+	AccountID        string  `json:"account_id"`
+	AccountName      string  `json:"account_name"`
+	LocalGroup       string  `json:"local_group"`
+	UpstreamHost     string  `json:"upstream_host"`
+	UpstreamKeyName  string  `json:"upstream_key_name"`
+	AccountCost      *string `json:"account_cost"`
+	ActualCost       *string `json:"actual_cost"`
+	UpstreamRawCost  *string `json:"upstream_raw_cost"`
+	RechargeRate     *string `json:"recharge_rate"`
+	UpstreamCost     *string `json:"upstream_cost"`
+	Difference       *string `json:"difference"`
+	Revenue          *string `json:"revenue"`
+	Category         string  `json:"category"`
+	Note             string  `json:"note"`
+	AttributionLevel string  `json:"attribution_level"`
 }
 
 type RevenueSummary struct {
-	Group        string  `json:"group"`
-	Accounts     int     `json:"accounts"`
-	AccountCost  float64 `json:"account_cost"`
-	ActualCost   float64 `json:"actual_cost"`
-	UpstreamRaw  float64 `json:"upstream_raw_cost"`
-	UpstreamCost float64 `json:"upstream_cost"`
-	Difference   float64 `json:"difference"`
-	Revenue      float64 `json:"revenue"`
+	Group        string `json:"group"`
+	Accounts     int    `json:"accounts"`
+	AccountCost  string `json:"account_cost"`
+	ActualCost   string `json:"actual_cost"`
+	UpstreamRaw  string `json:"upstream_raw_cost"`
+	UpstreamCost string `json:"upstream_cost"`
+	Difference   string `json:"difference"`
+	Revenue      string `json:"revenue"`
 }
 
 type RevenueIssue struct {
@@ -70,7 +68,7 @@ type RevenueIssue struct {
 type RevenueReport struct {
 	ReportDate  string           `json:"report_date"`
 	Timezone    string           `json:"timezone"`
-	Tolerance   float64          `json:"tolerance"`
+	Tolerance   string           `json:"tolerance"`
 	Rows        []RevenueRow     `json:"rows"`
 	Summaries   []RevenueSummary `json:"summaries"`
 	Issues      []RevenueIssue   `json:"issues"`
@@ -202,7 +200,7 @@ func (s *Service) CalculateRevenue(ctx context.Context, request RevenueRequest, 
 	}
 	shared := sharedRevenueKeys(catalog.Accounts)
 	report := RevenueReport{
-		ReportDate: date, Timezone: revenueTimezone, Tolerance: float64(revenueTolerance),
+		ReportDate: date, Timezone: revenueTimezone, Tolerance: big.NewRat(revenueTolerance, 1).FloatString(revenueDecimalScale),
 		Rows: []RevenueRow{}, Summaries: []RevenueSummary{}, Issues: issues,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
@@ -388,7 +386,7 @@ func (s *Service) fetchRevenueHost(
 				keyID := strings.TrimSpace(binding.UpstreamKeyID)
 				if keyID != "" {
 					if _, found := result.values[keyID]; !found {
-						result.values[keyID] = upstreamsync.KeyUsageObservation{Cost: 0, Source: "newapi-token-flow"}
+						result.values[keyID] = upstreamsync.KeyUsageObservation{Cost: "0", Source: "newapi-token-flow"}
 					}
 				}
 			}
@@ -518,8 +516,8 @@ func buildRevenueRow(
 		if !accountCostOK || !actualCostOK {
 			local.err = errors.New("本地计费金额无效")
 		} else {
-			row.AccountCost = revenueFloat(accountCost)
-			row.ActualCost = revenueFloat(actualCost)
+			row.AccountCost = revenueDecimal(accountCost)
+			row.ActualCost = revenueDecimal(actualCost)
 		}
 	}
 	if len(account.Bindings) == 0 {
@@ -564,11 +562,11 @@ func buildRevenueRow(
 	converted := new(big.Rat).Quo(upstreamRawCost, recharge)
 	difference := new(big.Rat).Sub(accountCost, converted)
 	revenue := new(big.Rat).Sub(actualCost, converted)
-	row.UpstreamRawCost = revenueFloat(upstreamRawCost)
-	row.RechargeRate = revenueFloat(recharge)
-	row.UpstreamCost = revenueFloat(converted)
-	row.Difference = revenueFloat(difference)
-	row.Revenue = revenueFloat(revenue)
+	row.UpstreamRawCost = revenueDecimal(upstreamRawCost)
+	row.RechargeRate = revenueDecimal(recharge)
+	row.UpstreamCost = revenueDecimal(converted)
+	row.Difference = revenueDecimal(difference)
+	row.Revenue = revenueDecimal(revenue)
 	if row.UpstreamRawCost == nil || row.RechargeRate == nil || row.UpstreamCost == nil || row.Difference == nil || row.Revenue == nil {
 		row.Note = "计费金额超出可核算范围"
 		return row
@@ -667,12 +665,12 @@ func (summary *revenueSummaryAmounts) response(group string) RevenueSummary {
 	return RevenueSummary{
 		Group:        group,
 		Accounts:     summary.accounts,
-		AccountCost:  revenueFloatValue(summary.accountCost),
-		ActualCost:   revenueFloatValue(summary.actualCost),
-		UpstreamRaw:  revenueFloatValue(summary.upstreamRawCost),
-		UpstreamCost: revenueFloatValue(summary.upstreamCost),
-		Difference:   revenueFloatValue(summary.difference),
-		Revenue:      revenueFloatValue(summary.revenue),
+		AccountCost:  revenueDecimalValue(summary.accountCost),
+		ActualCost:   revenueDecimalValue(summary.actualCost),
+		UpstreamRaw:  revenueDecimalValue(summary.upstreamRawCost),
+		UpstreamCost: revenueDecimalValue(summary.upstreamCost),
+		Difference:   revenueDecimalValue(summary.difference),
+		Revenue:      revenueDecimalValue(summary.revenue),
 	}
 }
 
@@ -680,12 +678,12 @@ func revenueAmountsFromRow(row RevenueRow) (revenueAmounts, bool) {
 	if row.AttributionLevel != "key" || row.AccountCost == nil || row.ActualCost == nil || row.UpstreamRawCost == nil || row.UpstreamCost == nil || row.Difference == nil || row.Revenue == nil {
 		return revenueAmounts{}, false
 	}
-	accountCost, accountCostOK := revenueAmount(*row.AccountCost)
-	actualCost, actualCostOK := revenueAmount(*row.ActualCost)
-	upstreamRawCost, upstreamRawCostOK := revenueAmount(*row.UpstreamRawCost)
-	upstreamCost, upstreamCostOK := revenueAmount(*row.UpstreamCost)
-	difference, differenceOK := revenueAmount(*row.Difference)
-	revenue, revenueOK := revenueAmount(*row.Revenue)
+	accountCost, accountCostOK := new(big.Rat).SetString(*row.AccountCost)
+	actualCost, actualCostOK := new(big.Rat).SetString(*row.ActualCost)
+	upstreamRawCost, upstreamRawCostOK := new(big.Rat).SetString(*row.UpstreamRawCost)
+	upstreamCost, upstreamCostOK := new(big.Rat).SetString(*row.UpstreamCost)
+	difference, differenceOK := new(big.Rat).SetString(*row.Difference)
+	revenue, revenueOK := new(big.Rat).SetString(*row.Revenue)
 	if !accountCostOK || !actualCostOK || !upstreamRawCostOK || !upstreamCostOK || !differenceOK || !revenueOK {
 		return revenueAmounts{}, false
 	}
@@ -719,16 +717,11 @@ func revenueKey(host, keyID string) string {
 	return configstore.CanonicalHost(host) + "\x00" + strings.TrimSpace(keyID)
 }
 
-func revenueAmount(value float64) (*big.Rat, bool) {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return nil, false
-	}
-	parsed, ok := new(big.Rat).SetString(strconv.FormatFloat(value, 'g', -1, 64))
+func revenueAmount(value string) (*big.Rat, bool) {
+	parsed, ok := new(big.Rat).SetString(strings.TrimSpace(value))
 	if !ok {
 		return nil, false
 	}
-	// Upstream DTOs currently expose numbers, so normalize their binary float
-	// representation to the report's established six-decimal money scale.
 	return new(big.Rat).SetString(parsed.FloatString(revenueDecimalScale))
 }
 
@@ -737,26 +730,19 @@ func positiveRevenueDecimal(raw string) (*big.Rat, bool) {
 	return value, ok && value.Sign() > 0
 }
 
-func revenueFloat(value *big.Rat) *float64 {
+func revenueDecimal(value *big.Rat) *string {
 	if value == nil {
 		return nil
 	}
-	result, err := strconv.ParseFloat(value.FloatString(revenueDecimalScale), 64)
-	if err != nil || math.IsNaN(result) || math.IsInf(result, 0) {
-		return nil
-	}
-	if result == 0 {
-		result = 0 // Do not expose negative zero in the JSON response.
+	result := value.FloatString(revenueDecimalScale)
+	if strings.HasPrefix(result, "-0.") && new(big.Rat).Set(value).Sign() == 0 {
+		result = strings.TrimPrefix(result, "-")
 	}
 	return &result
 }
 
-func revenueFloatValue(value *big.Rat) float64 {
-	result, _ := strconv.ParseFloat(value.FloatString(revenueDecimalScale), 64)
-	if result == 0 {
-		return 0
-	}
-	return result
+func revenueDecimalValue(value *big.Rat) string {
+	return value.FloatString(revenueDecimalScale)
 }
 
 func localRevenueNote(err error, fallback string) string {

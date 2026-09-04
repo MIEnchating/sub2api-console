@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,17 +25,33 @@ import (
 type keyManagerStub struct {
 	created       upstreamsync.CreatedKey
 	createErr     error
+	createCalls   int
 	createRecord  configstore.AuthRecord
 	createName    string
 	createGroupID string
 	revealRecord  configstore.AuthRecord
 	revealKeyID   string
 	revealGroupID string
+	reconcileErr  error
 }
 
 func (stub *keyManagerStub) CreateKeyWithVerification(_ context.Context, record configstore.AuthRecord, name, groupID string, _ bool) (upstreamsync.CreatedKey, error) {
+	stub.createCalls++
 	stub.createRecord, stub.createName, stub.createGroupID = record, name, groupID
 	return stub.created, stub.createErr
+}
+
+func (stub *keyManagerStub) ReconcileCreatedKey(_ context.Context, _ configstore.AuthRecord, name, groupID string) (upstreamsync.CreatedKey, bool, error) {
+	if stub.reconcileErr != nil {
+		return upstreamsync.CreatedKey{}, false, stub.reconcileErr
+	}
+	if stub.createCalls == 0 {
+		return upstreamsync.CreatedKey{}, false, nil
+	}
+	result := stub.created
+	result.Name = name
+	result.GroupID = groupID
+	return result, true, nil
 }
 
 func (stub *keyManagerStub) RevealKey(_ context.Context, record configstore.AuthRecord, keyID, groupID string) (upstreamsync.CreatedKey, error) {
@@ -155,7 +172,10 @@ func (stub *repositoryStub) ReplaceNewAPIGroupBindings(_ context.Context, _ stri
 	return nil
 }
 
-func (stub *repositoryStub) DeleteNewAPIGroupBindings(context.Context, string) error { return nil }
+func (stub *repositoryStub) DeleteNewAPIGroupBindings(context.Context, string) error {
+	stub.bindings = nil
+	return nil
+}
 
 func TestRefreshReadsAuthenticatedOptionsAsPriceSource(t *testing.T) {
 	t.Helper()
@@ -627,6 +647,111 @@ func TestSaveModelPricesWritesTieredExpressionAndReturnsReadback(t *testing.T) {
 	}
 }
 
+func TestSaveModelPricesRollsBackEarlierOptionsWhenLaterWriteFails(t *testing.T) {
+	options := map[string]string{
+		"ModelPrice":                   `{}`,
+		"ModelRatio":                   `{}`,
+		"CompletionRatio":              `{}`,
+		"CacheRatio":                   `{}`,
+		"CreateCacheRatio":             `{}`,
+		"ImageRatio":                   `{}`,
+		"AudioRatio":                   `{}`,
+		"AudioCompletionRatio":         `{}`,
+		"billing_setting.billing_mode": `{}`,
+		"billing_setting.billing_expr": `{}`,
+	}
+	putCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": options})
+			return
+		}
+		putCalls++
+		var input struct {
+			Key   string `json:"key"`
+			Value string `json:"value"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if putCalls == 2 {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": false, "error": "write failed"})
+			return
+		}
+		options[input.Key] = input.Value
+		_ = json.NewEncoder(writer).Encode(map[string]any{"success": true})
+	}))
+	defer server.Close()
+	service := New(&privateStub{platform: configstore.NewAPIPlatform{
+		ID: "platform-1", BaseURL: server.URL, AdminKey: "admin", UserID: "1",
+	}}, &repositoryStub{}, server.Client(), nil, nil)
+
+	_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{
+		Model: "fixed-model", ModelPrice: "3.5",
+	}})
+
+	if err == nil {
+		t.Fatal("later option failure was accepted")
+	}
+	if putCalls != 3 || options["ModelPrice"] != `{}` {
+		t.Fatalf("put_calls=%d options=%#v", putCalls, options)
+	}
+}
+
+func TestSaveModelPricesSerializesConcurrentReadModifyWriteOperations(t *testing.T) {
+	options := map[string]string{
+		"ModelPrice": `{}`, "ModelRatio": `{}`, "CompletionRatio": `{}`, "CacheRatio": `{}`,
+		"CreateCacheRatio": `{}`, "ImageRatio": `{}`, "AudioRatio": `{}`, "AudioCompletionRatio": `{}`,
+		"billing_setting.billing_mode": `{}`, "billing_setting.billing_expr": `{}`,
+	}
+	firstEntered := make(chan struct{})
+	secondEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var requestMu sync.Mutex
+	getCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requestMu.Lock()
+		getCalls++
+		call := getCalls
+		requestMu.Unlock()
+		if call == 1 {
+			close(firstEntered)
+			<-releaseFirst
+		} else if call == 2 {
+			close(secondEntered)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": options})
+	}))
+	defer server.Close()
+	service := New(&privateStub{platform: configstore.NewAPIPlatform{
+		ID: "platform-1", BaseURL: server.URL, AdminKey: "admin", UserID: "1",
+	}}, &repositoryStub{}, server.Client(), nil, nil)
+	results := make(chan error, 2)
+	go func() {
+		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: ""}})
+		results <- err
+	}()
+	<-firstEntered
+	go func() {
+		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: ""}})
+		results <- err
+	}()
+	select {
+	case <-secondEntered:
+		t.Fatal("second read-modify-write operation entered before the first completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseFirst)
+	for range 2 {
+		if err := <-results; err == nil {
+			t.Fatal("invalid model input was accepted")
+		}
+	}
+}
+
 func TestDecodeConfiguredModelsIncludesAllPriceDimensions(t *testing.T) {
 	models, err := decodeConfiguredModels(map[string]string{
 		"ModelRatio":           `{"gpt-5":1}`,
@@ -767,6 +892,38 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 	}
 }
 
+func TestSaveBindingsRestoresPreviousLocalBindingsWhenRatioSyncFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]string{"GroupRatio": `{"vip":1}`}})
+			return
+		}
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"success": false, "error": "write failed"})
+	}))
+	defer server.Close()
+	ratio := "0.35"
+	previous := []business.NewAPIGroupBinding{{
+		PlatformID: "platform-1", NewAPIGroupID: "old", NewAPIGroupName: "旧分组", Sub2APIGroupID: "6",
+	}}
+	repository := &repositoryStub{
+		groups:   []business.NewAPILocalGroup{{ID: "6", Name: "低价", Ratio: &ratio}},
+		bindings: append([]business.NewAPIGroupBinding(nil), previous...),
+	}
+	service := New(&privateStub{platform: configstore.NewAPIPlatform{
+		ID: "platform-1", BaseURL: server.URL, AdminKey: "key", UserID: "1",
+	}}, repository, server.Client(), nil, nil)
+
+	_, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", SyncRatio: true,
+	}})
+
+	if err == nil || !reflect.DeepEqual(repository.bindings, previous) {
+		t.Fatalf("bindings=%#v err=%v", repository.bindings, err)
+	}
+}
+
 func TestSavePlatformRejectsASecondMainPlatform(t *testing.T) {
 	private := &privateStub{platform: configstore.NewAPIPlatform{ID: "primary", Name: "主平台"}}
 	service := New(private, &repositoryStub{}, nil, nil, nil)
@@ -776,6 +933,19 @@ func TestSavePlatformRejectsASecondMainPlatform(t *testing.T) {
 	})
 	if err == nil || err.Error() != "New API 只允许配置一个主平台" {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDeletePlatformRemovesDependentGroupBindings(t *testing.T) {
+	repository := &repositoryStub{bindings: []business.NewAPIGroupBinding{{
+		PlatformID: "platform-1", NewAPIGroupID: "vip", Sub2APIGroupID: "6",
+	}}}
+	service := New(&privateStub{platform: configstore.NewAPIPlatform{ID: "platform-1"}}, repository, nil, nil, nil)
+
+	deleted, err := service.DeletePlatform(context.Background(), "platform-1")
+
+	if err != nil || !deleted || len(repository.bindings) != 0 {
+		t.Fatalf("deleted=%t bindings=%#v err=%v", deleted, repository.bindings, err)
 	}
 }
 
@@ -877,8 +1047,15 @@ func TestCreateChannelKeyUsesOfficialSub2APIUserEndpoints(t *testing.T) {
 			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": map[string]any{"id": 9}})
 		case "/api/v1/keys":
-			if request.Method != http.MethodPost || request.Header.Get("Authorization") != "Bearer user-jwt" || request.Header.Get("X-API-Key") != "" {
+			if request.Header.Get("Authorization") != "Bearer user-jwt" || request.Header.Get("X-API-Key") != "" {
 				t.Fatalf("key request headers=%#v", request.Header)
+			}
+			if request.Method == http.MethodGet {
+				_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "data": []any{}})
+				return
+			}
+			if request.Method != http.MethodPost {
+				t.Fatalf("key request method=%s", request.Method)
 			}
 			var body struct {
 				Name    string `json:"name"`
@@ -935,7 +1112,7 @@ func TestCreateChannelKeyUsesOfficialSub2APIUserEndpoints(t *testing.T) {
 	if !reflect.DeepEqual(created.Endpoints, wantEndpoints) {
 		t.Fatalf("endpoints=%#v want=%#v", created.Endpoints, wantEndpoints)
 	}
-	wantPaths := []string{"POST /api/v1/auth/login", "GET /api/v1/user/profile", "POST /api/v1/keys", "GET /api/v1/settings/public"}
+	wantPaths := []string{"POST /api/v1/auth/login", "GET /api/v1/user/profile", "GET /api/v1/keys", "POST /api/v1/keys", "GET /api/v1/settings/public"}
 	if !reflect.DeepEqual(paths, wantPaths) {
 		t.Fatalf("paths=%#v want=%#v", paths, wantPaths)
 	}
@@ -997,6 +1174,7 @@ func TestCreateChannelKeyRejectsMissingCredentialAndLoginFailure(t *testing.T) {
 
 func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 	var created map[string]any
+	createCalls := 0
 	newAPI := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		switch {
@@ -1005,10 +1183,17 @@ func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 				"GroupRatio": `{"default":1,"vip":2}`,
 			}})
 		case request.Method == http.MethodPost && request.URL.Path == "/api/channel/":
+			createCalls++
 			if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
 				t.Fatal(err)
 			}
 			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 12}})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/channel/":
+			items := []any{}
+			if created != nil {
+				items = append(items, created["channel"])
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"items": items}})
 		default:
 			http.NotFound(writer, request)
 		}
@@ -1024,20 +1209,105 @@ func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 	}
 	keys := &keyManagerStub{created: upstreamsync.CreatedKey{KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key"}}
 	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, newAPI.Client(), keys, nil)
-	_, err := service.CreateChannel(context.Background(), "platform-1", ChannelInput{
+	input := ChannelInput{
 		Sub2APIGroupID: "6", KeyID: "key-7", BaseURL: "https://edge.example/v1", Models: []string{"gpt-5.2"},
 		NewAPIGroups: []string{"vip", "default"},
-	})
+	}
+	_, err := service.CreateChannel(context.Background(), "platform-1", input)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateChannel(context.Background(), "platform-1", input); err != nil {
 		t.Fatal(err)
 	}
 	channel, ok := created["channel"].(map[string]any)
 	if !ok {
 		t.Fatalf("request missing channel wrapper: %#v", created)
 	}
-	if created["mode"] != "single" || channel["type"] != float64(59) || channel["name"] != "标准" ||
+	name, _ := channel["name"].(string)
+	if created["mode"] != "single" || channel["type"] != float64(59) || !strings.HasPrefix(name, "NewAPI-标准-console-") ||
 		channel["base_url"] != "https://edge.example/v1" || channel["key"] != "sub2api-user-key" ||
 		channel["models"] != "gpt-5.2" || channel["group"] != "default,vip" {
 		t.Fatalf("unexpected create request: %#v", created)
+	}
+	if createCalls != 1 {
+		t.Fatalf("idempotent retry issued %d create requests", createCalls)
+	}
+}
+
+func TestCreateChannelReconcilesAfterResponseConnectionBreaks(t *testing.T) {
+	var created map[string]any
+	createCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/option/":
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]string{"GroupRatio": `{"default":1}`}})
+		case request.Method == http.MethodGet && request.URL.Path == "/api/channel/":
+			items := []any{}
+			if created != nil {
+				items = append(items, created["channel"])
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"items": items}})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/channel/":
+			createCalls++
+			if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
+				t.Fatal(err)
+			}
+			connection, buffer, err := writer.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = fmt.Fprint(buffer, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 200\r\n\r\n{\"success\":true")
+			_ = buffer.Flush()
+			_ = connection.Close()
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: server.URL, AdminKey: "admin", UserID: "1"},
+		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
+		storedSecret: &configstore.UpstreamKeySecret{
+			Host: "sub2api.example", KeyID: "key-7", GroupID: "6", Secret: "sub2api-user-key",
+		},
+	}
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, server.Client(), nil, nil)
+
+	result, err := service.CreateChannel(context.Background(), "platform-1", ChannelInput{
+		Sub2APIGroupID: "6", KeyID: "key-7", BaseURL: "https://edge.example/v1", Models: []string{"gpt-5.2"},
+		NewAPIGroups: []string{"default"},
+	})
+
+	if err != nil || createCalls != 1 || !strings.HasPrefix(fmt.Sprint(result["name"]), "NewAPI-标准-console-") {
+		t.Fatalf("result=%#v create_calls=%d err=%v", result, createCalls, err)
+	}
+}
+
+func TestCreateChannelKeyReusesStableMarkerOnRetry(t *testing.T) {
+	username, password, token := "operator@example.test", "password", "user-jwt"
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1"},
+		target:   configstore.TargetSettings{BaseURL: "https://sub2api.example"},
+		vaultEntries: map[string]configstore.VaultEntry{
+			"运营账号": {Entry: "运营账号", Username: &username, Password: &password},
+		},
+	}
+	authenticator := &authenticatorStub{result: configstore.AuthRecord{AccessToken: &token}}
+	keys := &keyManagerStub{created: upstreamsync.CreatedKey{KeyID: "17", GroupID: "6", Secret: "secret"}}
+	service := New(private, &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}, nil, keys, authenticator)
+	input := ChannelKeyInput{Sub2APIGroupID: "6", CredentialSource: "vault", VaultEntry: "运营账号"}
+
+	first, err := service.CreateChannelKey(context.Background(), "platform-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.CreateChannelKey(context.Background(), "platform-1", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keys.createCalls != 1 || first.KeyID != second.KeyID || !strings.HasPrefix(keys.createName, "NewAPI-标准-console-") {
+		t.Fatalf("create_calls=%d first=%#v second=%#v marker=%q", keys.createCalls, first, second, keys.createName)
 	}
 }

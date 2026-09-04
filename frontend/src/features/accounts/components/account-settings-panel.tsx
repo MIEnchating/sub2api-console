@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
-import { api, type AccountControlAction, type AccountDetail, type Task } from "@/api";
+import { api, type AccountDetail, type Task } from "@/api";
 import { Button } from "@/components/ui/button";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
@@ -49,8 +49,6 @@ const settingsSchema = z.object({
 
 type AccountSettingsValues = z.infer<typeof settingsSchema>;
 
-type AccountSettingControlState = Pick<AccountSettingsValues, "excluded" | "paused">;
-
 const inheritedTestModelValue = "\u0000inherited-test-model";
 
 export function accountTestModelOptions(models: string[], currentModel: string): string[] {
@@ -58,16 +56,6 @@ export function accountTestModelOptions(models: string[], currentModel: string):
     .map((model) => model.trim())
     .filter((model) => model.length > 0);
   return [...new Set(normalized)].sort((left, right) => left.localeCompare(right));
-}
-
-export function accountSettingControlActions(
-  previous: AccountSettingControlState,
-  next: AccountSettingControlState,
-): AccountControlAction[] {
-  const actions: AccountControlAction[] = [];
-  if (next.excluded !== previous.excluded) actions.push(next.excluded ? "exclude" : "include");
-  if (next.paused !== previous.paused) actions.push(next.paused ? "pause" : "resume");
-  return actions;
 }
 
 function waitForNextTaskPoll(): Promise<void> {
@@ -138,33 +126,15 @@ export function AccountSettingsPanel(props: {
   const save = useMutation({
     mutationFn: async (values: AccountSettingsValues) => {
       if (!detail) throw new Error("账号详情尚未读取完成");
-      const tasks: Task[] = [];
-      const wasExcluded = accountPoolState(detail).value === "excluded";
-      const controls = accountSettingControlActions(
-        { excluded: wasExcluded, paused: detail.paused === true },
-        values,
-      );
-      for (const action of controls.slice(0, values.excluded !== wasExcluded ? 1 : 0)) {
-        tasks.push(await api.setAccountControl(props.accountId, action));
-      }
-      const originalModel = detail.test_model ?? "";
-      if (values.testModel !== originalModel) {
-        await api.setAccountTestModel(props.accountId, values.testModel || null);
-      }
-      const fields: Parameters<typeof api.syncAccount>[1] = {};
-      if (values.priority !== String(detail.priority ?? ""))
-        fields.priority = Number(values.priority);
-      if (values.loadFactor !== (detail.load_factor ?? "")) fields.load_factor = values.loadFactor;
-      if (values.concurrency !== String(detail.concurrency ?? "")) {
-        fields.concurrency = Number(values.concurrency);
-      }
-      if (Object.keys(fields).length > 0) {
-        tasks.push(await api.syncAccount(props.accountId, fields));
-      }
-      for (const action of controls.slice(values.excluded !== wasExcluded ? 1 : 0)) {
-        tasks.push(await api.setAccountControl(props.accountId, action));
-      }
-      return waitForAccountSettingTasks(tasks, api.task);
+      const task = await api.saveAccountSettings(props.accountId, {
+        priority: Number(values.priority),
+        load_factor: values.loadFactor,
+        concurrency: Number(values.concurrency),
+        test_model: values.testModel || null,
+        paused: values.paused,
+        excluded: values.excluded,
+      });
+      return waitForAccountSettingTasks([task], api.task);
     },
     onSuccess: async (tasks) => {
       await Promise.all([

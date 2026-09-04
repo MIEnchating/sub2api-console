@@ -741,13 +741,13 @@ export type RevenueRow = {
   local_group: string;
   upstream_host: string;
   upstream_key_name: string;
-  account_cost: number | null;
-  actual_cost: number | null;
-  upstream_raw_cost: number | null;
-  recharge_rate: number | null;
-  upstream_cost: number | null;
-  difference: number | null;
-  revenue: number | null;
+  account_cost: string | null;
+  actual_cost: string | null;
+  upstream_raw_cost: string | null;
+  recharge_rate: string | null;
+  upstream_cost: string | null;
+  difference: string | null;
+  revenue: string | null;
   category: "计费异常" | "正常" | "无法核对";
   note: string;
   attribution_level: "key" | "unavailable";
@@ -756,18 +756,18 @@ export type RevenueRow = {
 type RevenueSummary = {
   group: string;
   accounts: number;
-  account_cost: number;
-  actual_cost: number;
-  upstream_raw_cost: number;
-  upstream_cost: number;
-  difference: number;
-  revenue: number;
+  account_cost: string;
+  actual_cost: string;
+  upstream_raw_cost: string;
+  upstream_cost: string;
+  difference: string;
+  revenue: string;
 };
 
 export type RevenueReport = {
   report_date: string;
   timezone: string;
-  tolerance: number;
+  tolerance: string;
   rows: RevenueRow[];
   summaries: RevenueSummary[];
   issues: Array<{ host: string; reason: string }>;
@@ -1190,6 +1190,18 @@ const configuredApiBase = import.meta.env.VITE_API_BASE_URL as string | undefine
 const apiBase = configuredApiBase === undefined ? "" : configuredApiBase;
 const apiEndpoint = (path: string) => `${apiBase}${path}`;
 
+export class ApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(message: string, code: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.code = code;
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(apiEndpoint(path), {
     ...init,
@@ -1202,14 +1214,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw new SessionExpiredError();
     }
     const body = (await response.json().catch(() => null)) as {
+      code?: unknown;
       detail?: unknown;
     } | null;
+    const code = typeof body?.code === "string" && body.code !== "" ? body.code : "request_failed";
     if (body !== null && Object.prototype.hasOwnProperty.call(body, "detail")) {
-      if (body.detail === null) throw new Error("空值");
-      if (typeof body.detail === "string") throw new Error(body.detail);
-      throw new Error(JSON.stringify(body.detail));
+      if (body.detail === null) throw new ApiError("空值", code, response.status);
+      if (typeof body.detail === "string") throw new ApiError(body.detail, code, response.status);
+      throw new ApiError(JSON.stringify(body.detail), code, response.status);
     }
-    throw new Error(`请求失败（${response.status}）`);
+    throw new ApiError(`请求失败（${response.status}）`, code, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -1607,6 +1621,21 @@ export const api = {
   ) =>
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/sync`, {
       method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  saveAccountSettings: (
+    accountId: string,
+    payload: {
+      priority: number;
+      load_factor: string;
+      concurrency: number;
+      test_model: string | null;
+      paused: boolean;
+      excluded: boolean;
+    },
+  ) =>
+    request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/settings`, {
+      method: "PUT",
       body: JSON.stringify(payload),
     }),
   setAccountManualPriority: (

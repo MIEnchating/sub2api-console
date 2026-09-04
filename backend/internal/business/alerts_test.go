@@ -77,6 +77,43 @@ func TestSuccessfulMultiplierChangeNotificationClosesTheOneTimeIncident(t *testi
 	}
 }
 
+func TestPreparedNotificationCommitUnknownIsNotAutomaticallyRetried(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO operational_snapshots(
+		namespace,state_key,value_json,updated_at
+	) VALUES('sub2api','sub2api-notify-rules.json',
+		'{"enabled":true,"channels":[{"type":"qqbot","enabled":true}]}','2026-09-04T08:00:00Z');
+		INSERT INTO alert_incidents(
+			incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at
+		) VALUES('auth-unknown','upstream.auth','host','api.example','AUTH','firing','2026-09-04T08:00:00Z','2026-09-04T08:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	channelKey := NotificationChannelKey("qqbot", "target")
+	plan, err := store.PrepareAlertDelivery(ctx, channelKey, true)
+	if err != nil || len(plan.Pending) != 1 {
+		t.Fatalf("initial plan=%#v err=%v", plan, err)
+	}
+	if err := store.BeginAlertDelivery(ctx, channelKey, plan.Pending); err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := store.PrepareAlertDelivery(ctx, channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(retry.Pending) != 0 || retry.Skipped != 1 {
+		t.Fatalf("commit-unknown notification was automatically retried: %#v", retry)
+	}
+	details, err := store.NotificationQueueDetails(ctx, channelKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(details.ConsumerFailed) != 1 || details.ConsumerFailed[0].QueueStatus != "发送结果待人工确认" {
+		t.Fatalf("commit-unknown state is not observable: %#v", details)
+	}
+}
+
 func TestAlertEvaluationLeavesOneTimeMultiplierIncidentPending(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

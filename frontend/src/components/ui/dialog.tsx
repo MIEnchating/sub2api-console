@@ -77,7 +77,7 @@ function DialogOverlay(props: DialogPrimitive.Backdrop.Props) {
 }
 
 function DialogContent(
-  props: Omit<DialogPrimitive.Popup.Props, "initialFocus"> & {
+  props: DialogPrimitive.Popup.Props & {
     showCloseButton?: boolean;
     width?: DialogContentWidth;
     height?: DialogContentHeight;
@@ -97,7 +97,6 @@ function DialogContent(
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         {...popupProps}
-        initialFocus={false}
         className={
           typeof className === "function"
             ? (state) => dialogContentClass(width, height, className(state))

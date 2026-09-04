@@ -119,258 +119,6 @@ func TestOpenEnforcesSingleAccountCostAcrossMemberships(t *testing.T) {
 	}
 }
 
-func TestOpenAddsManualPriorityBalanceSyncColumnToExistingDatabase(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "business.sqlite3")
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	if err := store.Bootstrap(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(
-		id,name,priority,load_factor,concurrency,metadata_json,updated_at
-	) VALUES('41','alpha',20,'5',8,'{}','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.db.ExecContext(ctx, `INSERT INTO manual_priority_accounts(
-		account_id,priority,created_at,updated_at
-	) VALUES('41',3,'now','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	database, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(ctx, `ALTER TABLE manual_priority_accounts DROP COLUMN sync_balance_multiplier`); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	var syncBalanceMultiplier bool
-	if err := reopened.db.QueryRowContext(ctx, `SELECT sync_balance_multiplier
-		FROM manual_priority_accounts WHERE account_id='41'`).Scan(&syncBalanceMultiplier); err != nil {
-		t.Fatal(err)
-	}
-	if syncBalanceMultiplier {
-		t.Fatal("existing manual-priority account unexpectedly enabled balance and multiplier sync")
-	}
-	if _, err := reopened.HostBalanceSyncAllowed(ctx, "api.example"); err != nil {
-		t.Fatalf("host balance policy still fails after reopening: %v", err)
-	}
-	assignment, err := reopened.AssignManualPriority(ctx, "41", 3, "100", 100, true, "operator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !assignment.SyncBalanceMultiplier {
-		t.Fatalf("balance and multiplier sync was not persisted: %#v", assignment)
-	}
-	if err := reopened.db.QueryRowContext(ctx, `SELECT sync_balance_multiplier
-		FROM manual_priority_accounts WHERE account_id='41'`).Scan(&syncBalanceMultiplier); err != nil {
-		t.Fatal(err)
-	}
-	if !syncBalanceMultiplier {
-		t.Fatal("enabled balance and multiplier sync was not stored")
-	}
-}
-
-func TestOpenAddsRoutingBaselineColumnsToExistingDatabase(t *testing.T) {
-	for _, testCase := range []struct {
-		name   string
-		schema string
-	}{
-		{
-			name: "previous schema",
-			schema: `CREATE TABLE routing_baselines (
-				account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,
-				concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
-				ownership_version INTEGER NOT NULL DEFAULT 1,managed_schedulable INTEGER,
-				managed_priority INTEGER,managed_load_factor TEXT,managed_concurrency INTEGER,managed_status TEXT
-			)`,
-		},
-		{
-			name: "partially migrated schema",
-			schema: `CREATE TABLE routing_baselines (
-				account_id TEXT PRIMARY KEY,schedulable INTEGER,priority INTEGER,load_factor TEXT,
-				concurrency INTEGER,status TEXT,captured_at TEXT NOT NULL,
-				managed_priority INTEGER
-			)`,
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "business.sqlite3")
-			database, err := sql.Open("sqlite", "file:"+path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := database.ExecContext(context.Background(), testCase.schema+`;
-				INSERT INTO routing_baselines(account_id,schedulable,priority,load_factor,concurrency,status,captured_at)
-				VALUES('829',1,10,'1',2,'active','old')`); err != nil {
-				t.Fatal(err)
-			}
-			if err := database.Close(); err != nil {
-				t.Fatal(err)
-			}
-
-			store, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
-			columns := map[string]bool{}
-			rows, err := store.db.QueryContext(context.Background(), `PRAGMA table_info(routing_baselines)`)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for rows.Next() {
-				var id, notNull, primaryKey int
-				var name, dataType string
-				var defaultValue sql.NullString
-				if err := rows.Scan(&id, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-					t.Fatal(err)
-				}
-				columns[name] = true
-			}
-			if err := rows.Close(); err != nil {
-				t.Fatal(err)
-			}
-			for _, name := range []string{
-				"target_fingerprint", "ownership_version", "managed_schedulable", "managed_priority",
-				"managed_load_factor", "managed_concurrency", "managed_status",
-			} {
-				if !columns[name] {
-					t.Fatalf("routing baseline column %s was not added", name)
-				}
-			}
-
-			fingerprint := strings.Repeat("ab", 32)
-			priority := int64(20)
-			if err := store.CaptureRoutingBaseline(context.Background(), RoutingBaseline{
-				AccountID: "829", TargetFingerprint: fingerprint, Priority: &priority,
-			}); err != nil {
-				t.Fatalf("routing baseline write still fails after migration: %v", err)
-			}
-			var storedFingerprint string
-			if err := store.db.QueryRowContext(context.Background(), `SELECT target_fingerprint
-				FROM routing_baselines WHERE account_id='829'`).Scan(&storedFingerprint); err != nil {
-				t.Fatal(err)
-			}
-			if storedFingerprint != fingerprint {
-				t.Fatalf("target fingerprint=%q, want %q", storedFingerprint, fingerprint)
-			}
-			if err := store.ensureSchema(context.Background()); err != nil {
-				t.Fatalf("routing baseline migration is not idempotent: %v", err)
-			}
-		})
-	}
-}
-
-func TestOpenRecoversRoutingBaselineMissingColumnAlerts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "business.sqlite3")
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	const incidentKey = "console:routing:apply:829"
-	if _, err := store.db.ExecContext(ctx, `INSERT INTO alert_incidents(
-		incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at
-	) VALUES(?, 'routing.apply_failure','account','829',
-		'APPLY_FAILED:SQL logic error: table routing_baselines has no column named target_fingerprint (1)',
-		'firing','old','old');
-		INSERT INTO alert_deliveries(incident_key,channel_key,status,updated_at)
-		VALUES(?,'qq','delivered','old')`, incidentKey, incidentKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	database, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(ctx, `ALTER TABLE routing_baselines DROP COLUMN target_fingerprint`); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = reopened.Close() })
-	var incidentStatus, deliveryStatus, incidentUpdatedAt, deliveryUpdatedAt string
-	if err := reopened.db.QueryRowContext(ctx, `SELECT i.status,d.status,i.last_seen_at,d.updated_at
-		FROM alert_incidents i JOIN alert_deliveries d ON d.incident_key=i.incident_key
-		WHERE i.incident_key=?`, incidentKey).Scan(
-		&incidentStatus, &deliveryStatus, &incidentUpdatedAt, &deliveryUpdatedAt,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if incidentStatus != "recovered" || deliveryStatus != "transition" {
-		t.Fatalf("incident=%q delivery=%q", incidentStatus, deliveryStatus)
-	}
-	if incidentUpdatedAt == "old" || deliveryUpdatedAt == "old" {
-		t.Fatalf("recovery timestamps were not updated: incident=%q delivery=%q", incidentUpdatedAt, deliveryUpdatedAt)
-	}
-}
-
-func TestOpenAddsStableIdentityColumnsBeforeCreatingOnboardingIndex(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy-onboarding.sqlite3")
-	database, err := sql.Open("sqlite", "file:"+path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.Exec(`CREATE TABLE onboarding_pending (
-		operation_id TEXT PRIMARY KEY,upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,
-		upstream_key_id TEXT NOT NULL,upstream_key_name TEXT,upstream_group_id TEXT NOT NULL,
-		upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,local_group_name TEXT NOT NULL,
-		multiplier TEXT NOT NULL,reason TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL
-	);
-	INSERT INTO onboarding_pending(operation_id,upstream_host,upstream_type,upstream_key_id,
-		upstream_group_id,upstream_group_name,local_group_id,local_group_name,multiplier,reason,created_at,updated_at)
-	VALUES('legacy','api.example','sub2api','91','7','codex','11','codex','0.5','retry','now','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	var upstreamID, upstreamAccountID, localGroupIDs, intentHash string
-	var keyUnknown, accountUnknown bool
-	if err := store.db.QueryRow(`SELECT upstream_id,upstream_account_id,local_group_ids_json,
-		intent_hash,key_commit_unknown,account_commit_unknown FROM onboarding_pending
-		WHERE operation_id='legacy'`).Scan(
-		&upstreamID, &upstreamAccountID, &localGroupIDs, &intentHash, &keyUnknown, &accountUnknown,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if upstreamID != "" || upstreamAccountID != "" || localGroupIDs != "" || intentHash != "" || keyUnknown || accountUnknown {
-		t.Fatalf("legacy defaults changed: upstream=%q account=%q groups=%q intent=%q key=%v account_unknown=%v",
-			upstreamID, upstreamAccountID, localGroupIDs, intentHash, keyUnknown, accountUnknown)
-	}
-}
-
 func TestOpenReservesWriteLockWhenTransactionBegins(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {
@@ -500,46 +248,6 @@ func TestExistingBusinessDatabaseOverviewAndModeAreCompatible(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesRemovedSchedulingModeToMonitoring(t *testing.T) {
-	path := createBusinessDatabase(t, `{"keys":["config/a"],"mode":"调度模式","custom":{"enabled":true,"large_id":9007199254740993}}`)
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	ctx := context.Background()
-
-	snapshot, err := store.RuntimeSnapshot(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.Mode != "监控模式" {
-		t.Fatalf("removed mode was not migrated safely: %#v", snapshot)
-	}
-	var raw string
-	if err := store.db.QueryRowContext(ctx, `SELECT value_json FROM app_state WHERE key='config'`).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var config map[string]any
-	if err := json.Unmarshal([]byte(raw), &config); err != nil {
-		t.Fatal(err)
-	}
-	custom, ok := config["custom"].(map[string]any)
-	if !ok || custom["enabled"] != true {
-		t.Fatalf("mode migration discarded unrelated config: %#v", config)
-	}
-	if !strings.Contains(raw, `"large_id":9007199254740993`) {
-		t.Fatalf("mode migration changed an unrelated numeric value: %s", raw)
-	}
-	var epoch string
-	if err := store.db.QueryRowContext(ctx, `SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'`).Scan(&epoch); err != nil || epoch == "" {
-		t.Fatalf("mode migration did not invalidate old routing decisions: epoch=%q err=%v", epoch, err)
-	}
-	if _, err := store.SetMode(ctx, "调度模式"); err == nil {
-		t.Fatal("removed scheduling mode was still accepted")
-	}
-}
-
 func TestOpenLeavesSupportedRuntimeModesUnchanged(t *testing.T) {
 	for _, mode := range []string{"监控模式", "完全模式"} {
 		t.Run(mode, func(t *testing.T) {
@@ -610,6 +318,39 @@ func TestEmptyBusinessDatabaseCanOpenButIsNotReady(t *testing.T) {
 	ready, err := store.Ready(context.Background())
 	if err != nil || ready {
 		t.Fatalf("ready=%v err=%v", ready, err)
+	}
+}
+
+func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE accounts (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "仅支持使用当前版本创建的全新数据库") {
+		t.Fatalf("legacy schema was not rejected: %v", err)
+	}
+	database, err = sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var accountColumns, appStateTables int
+	if err := database.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('accounts')`).Scan(&accountColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='app_state'`).Scan(&appStateTables); err != nil {
+		t.Fatal(err)
+	}
+	if accountColumns != 1 || appStateTables != 0 {
+		t.Fatalf("legacy schema was modified: account_columns=%d app_state_tables=%d", accountColumns, appStateTables)
 	}
 }
 
@@ -800,21 +541,18 @@ func TestSetProbeEnabledPreservesOtherProbePolicyFields(t *testing.T) {
 func createBusinessDatabase(t *testing.T, configJSON string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "business.sqlite3")
-	database, err := sql.Open("sqlite", "file:"+path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { database.Close() })
+	database := store.db
 	statements := []string{
-		`CREATE TABLE app_state (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-		`CREATE TABLE accounts (id TEXT PRIMARY KEY)`,
-		`INSERT INTO accounts(id) VALUES('1'),('2')`,
-		`CREATE TABLE local_groups (name TEXT PRIMARY KEY)`,
-		`INSERT INTO local_groups(name) VALUES('codex')`,
-		`CREATE TABLE alert_incidents (incident_key TEXT PRIMARY KEY, status TEXT NOT NULL)`,
-		`INSERT INTO alert_incidents(incident_key,status) VALUES('open','firing'),('closed','recovered')`,
-		`CREATE TABLE runtime_events (source_id INTEGER PRIMARY KEY, created_at TEXT NOT NULL)`,
-		`INSERT INTO runtime_events(source_id,created_at) VALUES(1,'2026-08-26T08:00:00+00:00'),(2,'2026-08-26T09:00:00+00:00')`,
+		`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('1','one','{}','now'),('2','two','{}','now')`,
+		`INSERT INTO local_groups(name,updated_at) VALUES('codex','now')`,
+		`INSERT INTO alert_incidents(incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at)
+		 VALUES('open','test','account','1','test','firing','now','now'),('closed','test','account','2','test','recovered','now','now')`,
+		`INSERT INTO runtime_events(source_id,event_type,created_at,status,summary)
+		 VALUES(1,'test','2026-08-26T08:00:00+00:00','succeeded','one'),(2,'test','2026-08-26T09:00:00+00:00','succeeded','two')`,
 	}
 	for _, statement := range statements {
 		if _, err := database.Exec(statement); err != nil {
@@ -825,6 +563,9 @@ func createBusinessDatabase(t *testing.T, configJSON string) string {
 		t.Fatal("invalid test config JSON")
 	}
 	if _, err := database.Exec(`INSERT INTO app_state(key,value_json,updated_at) VALUES('config',?,'now')`, configJSON); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return path

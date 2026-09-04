@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, Outlet, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -176,10 +176,6 @@ import { terminalRefreshKeys, type TaskRefreshScope } from "./lib/task-refresh";
 import { flattenTaskResult } from "./lib/task-result";
 import { MultiSelect } from "./components/multi-select";
 import { FieldLabel } from "./components/field-help-tooltip";
-import { OverviewPage } from "./features/overview/components/overview-page";
-import { AlertPolicyPage } from "./features/alert-policy/components/alert-policy-page";
-import { PricingConfigPage, PricingPage } from "./features/pricing/components/pricing-page";
-import { RevenueAnalysisPage } from "./features/pricing/components/revenue-analysis-page";
 import {
   alertCauseLabel,
   alertDeliveryLabel,
@@ -189,7 +185,6 @@ import {
 } from "./features/alerts/lib/alert-display";
 import { AlertListActions } from "./features/alerts/components/alert-list-actions";
 import { NotificationQueueStatus } from "./features/alerts/components/notification-queue-status";
-import { LogsCenterPage } from "./features/logs/components/logs-center-page";
 import {
   GroupPolicyEditorFields,
   groupPolicyDialogLayout,
@@ -244,9 +239,6 @@ import {
   OnboardingProbeAction,
   type OnboardingProbeTarget,
 } from "./features/upstreams/components/onboarding-probe-action";
-import { VaultPage } from "./features/vault/components/vault-page";
-import { ProfilePage } from "./features/profile/components/profile-page";
-import { NewAPIManagementPage } from "./features/newapi-management/components/newapi-management-page";
 import { AccountStatusFilter } from "./features/accounts/components/account-status-tabs";
 import { AccountSortTableHead } from "./features/accounts/components/account-sort-header";
 import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
@@ -258,8 +250,6 @@ import {
   type ProbeDialogTarget,
 } from "./features/accounts/components/account-probe-dialog";
 import { BaseURLCheckResults } from "./features/accounts/components/base-url-check-results";
-import { ModelCheckPage } from "./features/model-check/components/model-check-page";
-import { TrafficRankingPage } from "./features/traffic-ranking/components/traffic-ranking-page";
 import {
   AccountHealthCell,
   AccountIdentityCell,
@@ -329,8 +319,9 @@ import {
   rechargeRatioLabel,
   sameOnboardingGroupSelection,
 } from "./lib/onboarding-entry";
+import { AppShellContext } from "./app-shell-context";
 
-type View =
+export type View =
   | "overview"
   | "accounts"
   | "upstreams"
@@ -559,6 +550,20 @@ function App() {
     window.addEventListener(sessionExpiredEvent, handleSessionExpired);
     return () => window.removeEventListener(sessionExpiredEvent, handleSessionExpired);
   }, [queryClient]);
+  const setNavigationItemVisibility = useCallback((itemID: View, visible: boolean) => {
+    if (lockedNavigationItemIDs.has(itemID)) return;
+    setHiddenNavigationItemIDs((current) => {
+      const next = new Set(current);
+      if (visible) next.delete(itemID);
+      else next.add(itemID);
+      return next;
+    });
+  }, []);
+  const resetNavigation = useCallback(() => setHiddenNavigationItemIDs(new Set()), []);
+  const shellContext = useMemo(
+    () => ({ hiddenNavigationItemIDs, setNavigationItemVisibility, resetNavigation }),
+    [hiddenNavigationItemIDs, resetNavigation, setNavigationItemVisibility],
+  );
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: api.setupStatus,
@@ -624,15 +629,6 @@ function App() {
     navSections,
     hiddenNavigationItemIDs,
   );
-  function setNavigationItemVisibility(itemID: View, visible: boolean) {
-    if (lockedNavigationItemIDs.has(itemID)) return;
-    setHiddenNavigationItemIDs((current) => {
-      const next = new Set(current);
-      if (visible) next.delete(itemID);
-      else next.add(itemID);
-      return next;
-    });
-  }
   return (
     <>
       <SidebarProvider className="h-svh max-h-svh flex-col overflow-hidden" defaultOpen>
@@ -727,57 +723,9 @@ function App() {
               transition={{ duration: 0.15, ease: [0.33, 1, 0.68, 1] }}
               className="console-page flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden"
             >
-              {activeView === "overview" && (
-                <OverviewPage
-                  onOpenAccounts={() =>
-                    void navigate({
-                      to: "/accounts",
-                    })
-                  }
-                  onOpenEvents={() =>
-                    void navigate({
-                      to: "/logs",
-                      search: { kind: "event" },
-                    })
-                  }
-                  onOpenGroups={() =>
-                    void navigate({
-                      to: "/groups",
-                    })
-                  }
-                />
-              )}
-              {activeView === "accounts" && <AccountsPage />}
-              {activeView === "upstreams" && <UpstreamsPage />}
-              {activeView === "groups" && <GroupsPage />}
-              {activeView === "newapi" && <NewAPIManagementPage view="platform" />}
-              {activeView === "newapi-groups" && <NewAPIManagementPage view="groups" />}
-              {activeView === "newapi-channels" && <NewAPIManagementPage view="channels" />}
-              {activeView === "newapi-prices" && <NewAPIManagementPage view="prices" />}
-              {activeView === "newapi-differences" && <NewAPIManagementPage view="differences" />}
-              {activeView === "pricing" && <PricingPage />}
-              {activeView === "revenue-analysis" && <RevenueAnalysisPage />}
-              {activeView === "pricing-config" && <PricingConfigPage />}
-              {activeView === "auto-inspection" && <AutoInspectionPage />}
-              {activeView === "model-check" && <ModelCheckPage />}
-              {activeView === "traffic" && <TrafficRankingPage />}
-              {activeView === "logs" && <LogsCenterPage />}
-              {activeView === "alerts" && <AlertsPage />}
-              {activeView === "alert-policy" && (
-                <AlertPolicyPage onOpenSettings={() => void navigate({ to: "/config" })} />
-              )}
-              {activeView === "onboarding" && <OnboardingPage />}
-              {activeView === "trace" && <RequestTracePage />}
-              {activeView === "vault" && <VaultPage />}
-              {activeView === "profile" && <ProfilePage />}
-              {activeView === "config" && (
-                <ConfigPage
-                  hiddenNavigationItemIDs={hiddenNavigationItemIDs}
-                  onNavigationItemVisibilityChange={setNavigationItemVisibility}
-                  onResetNavigation={() => setHiddenNavigationItemIDs(new Set())}
-                />
-              )}
-              {activeView === "policy" && <PolicyPage />}
+              <AppShellContext.Provider value={shellContext}>
+                <Outlet />
+              </AppShellContext.Provider>
             </motion.div>
           </SidebarInset>
         </div>
@@ -6101,7 +6049,7 @@ function onboardingProbeTarget(
     name: candidate.group_name,
   };
 }
-function OnboardingPage() {
+export function OnboardingPage() {
   const navigate = useNavigate();
   const onboardingSearch = useSearch({ from: "/onboarding" });
   const entryKind = onboardingEntryKind(onboardingSearch.host, onboardingSearch.group_id);
@@ -8080,7 +8028,7 @@ function OnboardingPage() {
   );
 }
 
-function RequestTracePage() {
+export function RequestTracePage() {
   return (
     <PageLayout fixedContent>
       <PageHeading

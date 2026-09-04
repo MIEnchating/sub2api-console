@@ -46,6 +46,10 @@ func TestTaskHistoryRecoveryAndStrictJSON(t *testing.T) {
 	if err := store.Save(ctx, invalid); err == nil {
 		t.Fatal("non-finite result must be rejected")
 	}
+	oversized := Task{ID: "oversized", Skill: "console", Operation: "inspect", Status: "failed", Progress: 100, Message: "failed", Result: map[string]any{"detail": strings.Repeat("x", maximumTaskResultBytes)}, CreatedAt: now, UpdatedAt: now}
+	if err := store.Save(ctx, oversized); err == nil || !strings.Contains(err.Error(), "任务结果不能超过") {
+		t.Fatalf("oversized result error = %v", err)
+	}
 }
 
 func TestRecoverStaleInterruptedPreservesRecentTasks(t *testing.T) {

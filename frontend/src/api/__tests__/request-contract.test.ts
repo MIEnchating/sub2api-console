@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../../api";
+import { ApiError, api } from "../../api";
 
 describe("API error detail contract", () => {
   afterEach(() => {
@@ -73,6 +73,27 @@ describe("API error detail contract", () => {
       message: "账号或密码错误",
     });
     expect(expired).not.toHaveBeenCalled();
+  });
+
+  it("preserves the stable error code and HTTP status for caller decisions", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ code: "upstream_timeout", detail: "上游请求超时" }), {
+          status: 504,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    const error = await api.setupStatus().catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      code: "upstream_timeout",
+      status: 504,
+      message: "上游请求超时",
+    });
   });
 });
 
@@ -1066,6 +1087,38 @@ describe("account rate sync request contract", () => {
     expect(JSON.parse(String(request.body))).toEqual({
       account_ids: ["11", "12"],
     });
+  });
+});
+
+describe("account settings request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("submits every account setting in one atomic task request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "account-settings-task" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      priority: 120,
+      load_factor: "2.5",
+      concurrency: 8,
+      test_model: "gpt-5.2",
+      paused: true,
+      excluded: false,
+    };
+
+    await api.saveAccountSettings("41", payload);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/41/settings");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("PUT");
+    expect(JSON.parse(String(request.body))).toEqual(payload);
   });
 });
 

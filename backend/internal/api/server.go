@@ -40,6 +40,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
+	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
@@ -187,6 +188,7 @@ type AccountMaintenanceTaskEnqueuer interface {
 type AccountTaskEnqueuer interface {
 	EnqueueControl(context.Context, string, string, string) (taskstore.Task, error)
 	EnqueueFields(context.Context, string, accountops.FieldPatch, string) (taskstore.Task, error)
+	EnqueueSettings(context.Context, string, accountops.SettingsInput, string) (taskstore.Task, error)
 	EnqueueManualPriority(context.Context, string, int64, string, int64, bool, string) (taskstore.Task, error)
 	EnqueueClearManualPriority(context.Context, string, string) (taskstore.Task, error)
 	Models(context.Context, string) ([]string, error)
@@ -323,6 +325,11 @@ type Server struct {
 	now                func() time.Time
 }
 
+const (
+	maximumSSEConnections = 100
+	taskSSEPollInterval   = time.Second
+)
+
 type initializeRequest struct {
 	Username     string `json:"username" binding:"required,min=2,max=80"`
 	Password     string `json:"password" binding:"required,min=10,max=256"`
@@ -396,6 +403,15 @@ type probeSettingsRequest struct {
 type accountDefaultsRequest struct {
 	Concurrency int64 `json:"concurrency" binding:"required,min=1,max=10000000"`
 	Priority    int64 `json:"priority" binding:"required,min=1,max=10000000"`
+}
+
+type accountSettingsRequest struct {
+	Priority    int64   `json:"priority" binding:"required,min=1,max=10000000"`
+	LoadFactor  string  `json:"load_factor" binding:"required,min=1,max=128"`
+	Concurrency int64   `json:"concurrency" binding:"required,min=1,max=10000000"`
+	TestModel   *string `json:"test_model"`
+	Paused      *bool   `json:"paused" binding:"required"`
+	Excluded    *bool   `json:"excluded" binding:"required"`
 }
 
 type newAPIPlatformRequest struct {
@@ -526,7 +542,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		pricing:            services.Pricing,
 		newAPIManagement:   services.NewAPIManagement,
 		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
-		sseSlots:           make(chan struct{}, 100),
+		sseSlots:           make(chan struct{}, maximumSSEConnections),
 		now:                time.Now,
 	}
 	gin.SetMode(gin.ReleaseMode)
@@ -565,6 +581,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
 	authorized.PUT("/accounts/:account_id/test-model", server.setAccountTestModel)
 	authorized.POST("/accounts/:account_id/sync", server.syncAccountFields)
+	authorized.PUT("/accounts/:account_id/settings", server.saveAccountSettings)
 	authorized.PUT("/accounts/:account_id/manual-priority", server.setAccountManualPriority)
 	authorized.DELETE("/accounts/:account_id/manual-priority", server.clearAccountManualPriority)
 	authorized.POST("/management/sync", server.syncManagement)
@@ -1620,6 +1637,49 @@ func (s *Server) syncAccountFields(c *gin.Context) {
 		return
 	}
 	task, err := s.accountTasks.EnqueueFields(c.Request.Context(), accountID, patch, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) saveAccountSettings(c *gin.Context) {
+	accountID := strings.TrimSpace(c.Param("account_id"))
+	if !positiveNumericID(accountID) {
+		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
+		return
+	}
+	var request accountSettingsRequest
+	if err := bindRequestJSON(c, &request); err != nil || request.Paused == nil || request.Excluded == nil {
+		writeError(c, http.StatusUnprocessableEntity, "账号设置参数无效")
+		return
+	}
+	if request.TestModel != nil && utf8.RuneCountInString(*request.TestModel) > 256 {
+		writeError(c, http.StatusUnprocessableEntity, "探测模型不能超过 256 个字符")
+		return
+	}
+	if s.accountTasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号设置任务服务尚未就绪")
+		return
+	}
+	mode, ok := s.accountMutationPreflight(c, accountID, true)
+	if !ok {
+		return
+	}
+	if mode != runtimepolicy.Full {
+		writeError(c, http.StatusConflict, "账号设置需要完全模式")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountTasks.EnqueueSettings(c.Request.Context(), accountID, accountops.SettingsInput{
+		Priority: request.Priority, LoadFactor: request.LoadFactor, Concurrency: request.Concurrency,
+		TestModel: request.TestModel, Paused: *request.Paused, Excluded: *request.Excluded,
+	}, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
@@ -4217,8 +4277,8 @@ func optionalLimitDefault(c *gin.Context, fallback *int) (*int, bool) {
 		return fallback, true
 	}
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
-	if err != nil || value < 0 || value > 100000 {
-		writeError(c, http.StatusUnprocessableEntity, "limit 必须是 0 到 100000 之间的整数")
+	if err != nil || value < 0 || value > 1000 {
+		writeError(c, http.StatusUnprocessableEntity, "limit 必须是 0 到 1000 之间的整数")
 		return nil, false
 	}
 	return &value, true
@@ -4259,7 +4319,7 @@ func (s *Server) saveNewAPIPlatform(c *gin.Context) {
 		ID: request.ID, Name: request.Name, BaseURL: request.BaseURL, AdminKey: request.AdminKey, UserID: request.UserID,
 	})
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -4294,7 +4354,7 @@ func (s *Server) refreshNewAPIPlatform(c *gin.Context) {
 	}
 	result, err := s.newAPIManagement.Refresh(c.Request.Context(), c.Param("platform_id"))
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusBadGateway)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -4307,7 +4367,7 @@ func (s *Server) managementModelPrices(c *gin.Context) {
 	}
 	models, err := s.newAPIManagement.ManagementModelPrices(c.Request.Context(), c.Param("platform_id"))
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusBadGateway)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"models": models})
@@ -4320,7 +4380,7 @@ func (s *Server) remoteModelPricingSource(c *gin.Context) {
 	}
 	source, err := s.newAPIManagement.RemoteModelPricingSource(c.Request.Context(), c.Param("platform_id"))
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusBadGateway)
 		return
 	}
 	c.JSON(http.StatusOK, source)
@@ -4338,7 +4398,7 @@ func (s *Server) saveNewAPIGroupBindings(c *gin.Context) {
 	}
 	result, err := s.newAPIManagement.SaveBindings(c.Request.Context(), c.Param("platform_id"), request.Bindings)
 	if err != nil {
-		writeError(c, http.StatusConflict, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -4359,7 +4419,7 @@ func (s *Server) createNewAPIChannel(c *gin.Context) {
 		NewAPIGroups: request.NewAPIGroups,
 	})
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusCreated, result)
@@ -4380,7 +4440,7 @@ func (s *Server) createNewAPIChannelKey(c *gin.Context) {
 		VaultEntry: request.VaultEntry, Username: request.Username, Password: request.Password,
 	})
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusCreated, result)
@@ -4400,7 +4460,7 @@ func (s *Server) fetchNewAPIChannelModels(c *gin.Context) {
 		Sub2APIGroupID: request.Sub2APIGroupID, KeyID: request.KeyID, BaseURL: request.BaseURL,
 	})
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"models": models})
@@ -4418,7 +4478,7 @@ func (s *Server) saveNewAPIModelPrices(c *gin.Context) {
 	}
 	result, err := s.newAPIManagement.SaveModelPrices(c.Request.Context(), c.Param("platform_id"), request.Prices)
 	if err != nil {
-		writeError(c, http.StatusBadGateway, err.Error())
+		writeNewAPIError(c, err, http.StatusInternalServerError)
 		return
 	}
 	c.JSON(http.StatusOK, result)
@@ -4474,6 +4534,8 @@ func (s *Server) taskEvents(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	controller := http.NewResponseController(c.Writer)
+	_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	if err := writeTaskEvent(c.Writer, task); err != nil {
 		return
 	}
@@ -4483,7 +4545,7 @@ func (s *Server) taskEvents(c *gin.Context) {
 	}
 	// Task state is persisted in SQLite; polling more frequently than once per
 	// second only adds database load and does not improve user-visible latency.
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(taskSSEPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -4497,6 +4559,7 @@ func (s *Server) taskEvents(c *gin.Context) {
 				c.Writer.Flush()
 				return
 			}
+			_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if err := writeTaskEvent(c.Writer, task); err != nil {
 				return
 			}
@@ -4964,7 +5027,46 @@ func normalizedURLOrigin(raw string, originOnly bool) (string, bool) {
 	return parsed.Scheme + "://" + host, true
 }
 
+func writeNewAPIError(c *gin.Context, err error, fallbackStatus int) {
+	status := fallbackStatus
+	if errors.Is(err, context.DeadlineExceeded) {
+		status = http.StatusGatewayTimeout
+	} else {
+		var networkError net.Error
+		if errors.As(err, &networkError) && networkError.Timeout() {
+			status = http.StatusGatewayTimeout
+		} else {
+			switch newapimanagement.KindOf(err) {
+			case newapimanagement.ErrorValidation:
+				status = http.StatusUnprocessableEntity
+			case newapimanagement.ErrorNotFound:
+				status = http.StatusNotFound
+			case newapimanagement.ErrorConflict:
+				status = http.StatusConflict
+			case newapimanagement.ErrorUnavailable:
+				status = http.StatusServiceUnavailable
+			case newapimanagement.ErrorUpstream:
+				status = http.StatusBadGateway
+			}
+		}
+	}
+	writeError(c, status, err.Error())
+}
+
 func writeError(c *gin.Context, status int, detail string) {
+	if status >= http.StatusInternalServerError {
+		slog.Error("API 请求处理失败", "method", c.Request.Method, "path", c.FullPath(), "status", status, "error", redact.Secrets(detail))
+		switch status {
+		case http.StatusBadGateway:
+			detail = "上游服务请求失败，请检查连接配置后重试"
+		case http.StatusServiceUnavailable:
+			detail = "服务暂不可用，请稍后重试"
+		case http.StatusGatewayTimeout:
+			detail = "上游服务请求超时，请稍后重试"
+		default:
+			detail = "服务处理失败，请稍后重试"
+		}
+	}
 	code := "internal_error"
 	switch {
 	case status == http.StatusBadRequest:
@@ -4981,6 +5083,12 @@ func writeError(c *gin.Context, status int, detail string) {
 		code = "validation_error"
 	case status == http.StatusTooManyRequests:
 		code = "rate_limited"
+	case status == http.StatusBadGateway:
+		code = "upstream_error"
+	case status == http.StatusServiceUnavailable:
+		code = "service_unavailable"
+	case status == http.StatusGatewayTimeout:
+		code = "upstream_timeout"
 	case status >= 500:
 		code = "internal_error"
 	}

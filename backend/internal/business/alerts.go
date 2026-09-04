@@ -38,16 +38,18 @@ type AlertDeliveryPlan struct {
 }
 
 type AlertDeliveryOutcome struct {
-	IncidentKey string
-	Success     bool
-	Detail      string
-	MessageID   *string
+	IncidentKey   string
+	Success       bool
+	CommitUnknown bool
+	Detail        string
+	MessageID     *string
 }
 
 type AlertDeliveryResult struct {
 	Attempted  int      `json:"attempted"`
 	Sent       int      `json:"sent"`
 	Failed     int      `json:"failed"`
+	Uncertain  int      `json:"uncertain"`
 	Skipped    int      `json:"skipped"`
 	Suppressed int      `json:"suppressed"`
 	Configured bool     `json:"configured"`
@@ -216,6 +218,10 @@ func (s *Store) PrepareAlertDelivery(
 			plan.Skipped++
 			continue
 		}
+		if found && previous.status == "commit_unknown" {
+			plan.Skipped++
+			continue
+		}
 		plan.Pending = append(plan.Pending, incident)
 	}
 	return plan, nil
@@ -336,6 +342,16 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
+		if found && previous.status == "commit_unknown" {
+			item.QueueStatus = "发送结果待人工确认"
+			item.QueueReason = pointerTextValue(incident.LastError)
+			if item.QueueReason == "" {
+				item.QueueReason = "发送请求可能已被 QQBot 接收，为避免重复通知不会自动重试"
+			}
+			result.ConsumerFailed = append(result.ConsumerFailed, item)
+			result.ConsumerItems = append(result.ConsumerItems, item)
+			continue
+		}
 		if incidentUsesStateChangeCooldown(incident) && found && previous.status == "transition" &&
 			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now) {
 			item.QueueStatus = "账号降级变化冷却中"
@@ -404,7 +420,10 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 		deliveryStatus := "发送失败"
 		var lastError any = outcome.Detail
 		var deliveredAt any
-		if outcome.Success {
+		if outcome.CommitUnknown {
+			status = "commit_unknown"
+			deliveryStatus = "发送结果待人工确认"
+		} else if outcome.Success {
 			status = "sent"
 			deliveryStatus = "已发送"
 			lastError = nil
@@ -413,7 +432,8 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 		if _, err := tx.ExecContext(ctx, `INSERT INTO alert_deliveries(
 			incident_key,channel_key,status,attempts,last_error,delivered_at,updated_at
 		) VALUES(?,?,?,?,?,?,?) ON CONFLICT(incident_key,channel_key) DO UPDATE SET
-			status=excluded.status,attempts=alert_deliveries.attempts+1,last_error=excluded.last_error,
+			status=excluded.status,attempts=CASE WHEN alert_deliveries.status='commit_unknown'
+				THEN alert_deliveries.attempts ELSE alert_deliveries.attempts+1 END,last_error=excluded.last_error,
 			delivered_at=excluded.delivered_at,updated_at=excluded.updated_at`,
 			outcome.IncidentKey, channelKey, status, 1, lastError, deliveredAt, now,
 		); err != nil {
@@ -429,6 +449,33 @@ func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, ou
 				outcome.IncidentKey); err != nil {
 				return err
 			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) BeginAlertDelivery(ctx context.Context, channelKey string, incidents []AlertIncident) error {
+	if len(incidents) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	detail := "发送请求可能已被 QQBot 接收，为避免重复通知不会自动重试"
+	for _, incident := range incidents {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO alert_deliveries(
+			incident_key,channel_key,status,attempts,last_error,updated_at
+		) VALUES(?,?,'commit_unknown',1,?,?) ON CONFLICT(incident_key,channel_key) DO UPDATE SET
+			status='commit_unknown',attempts=alert_deliveries.attempts+1,last_error=excluded.last_error,
+			delivered_at=NULL,updated_at=excluded.updated_at`, incident.IncidentKey, channelKey, detail, now); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET delivery_status='发送结果待人工确认',last_error=?
+			WHERE incident_key=?`, detail, incident.IncidentKey); err != nil {
+			return err
 		}
 	}
 	return tx.Commit()

@@ -37,6 +37,14 @@ describe("query error toast", () => {
     });
   });
 
+  it("does not notify twice when global and local handlers receive the same error", () => {
+    const error = new Error("请求失败 (502)");
+    showQueryErrorToast(error, "请求失败");
+    showQueryErrorToast(error, "局部请求失败");
+
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
   it("does not duplicate the login-expiry notification handled by the session boundary", () => {
     showQueryErrorToast(new SessionExpiredError(), "上游数据读取失败");
 

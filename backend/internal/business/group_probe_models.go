@@ -29,8 +29,8 @@ func (s *Store) GroupProbeModels(ctx context.Context, groupID string) (GroupProb
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT a.metadata_json
 		FROM account_groups ag JOIN accounts a ON a.id=ag.account_id
-		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
-		ORDER BY CAST(a.id AS INTEGER),a.id`, groupID, group.Name)
+		WHERE ag.group_id=?
+		ORDER BY CAST(a.id AS INTEGER),a.id`, groupID)
 	if err != nil {
 		return GroupProbeModels{}, err
 	}

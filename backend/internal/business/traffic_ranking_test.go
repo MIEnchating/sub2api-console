@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,6 +145,80 @@ func TestTrafficRankingCountsSharedRequestOnlyOnceAcrossGroups(t *testing.T) {
 	}
 	if result.TotalRequests != 1 || len(result.Accounts) != 1 || result.Accounts[0].Requests != 1 {
 		t.Fatalf("deduplicated ranking=%#v", result)
+	}
+}
+
+func TestTrafficRankingAverageIncludesRecordsBeyondLatencySampleLimit(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	end := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','sampled','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := tx.PrepareContext(ctx, `INSERT INTO usage_records(
+		request_id,account_id,account_name,is_error,first_token_ms,observed_at,source,payload_json
+	) VALUES(?,?,?,?,?,?,?,?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= trafficRankingLatencySampleLimit; index++ {
+		latency := "1"
+		if index == trafficRankingLatencySampleLimit {
+			latency = "10001"
+		}
+		if _, err := statement.ExecContext(ctx, fmt.Sprintf("request-%05d", index), "41", "sampled", false, latency,
+			end.Add(-time.Hour).Format(time.RFC3339Nano), "traffic", "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := statement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.TrafficRanking(ctx, TrafficRankingQuery{
+		StartAt: end.Add(-6 * time.Hour), EndAt: end, SortBy: TrafficRankingSortLatency,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Accounts) != 1 || result.Accounts[0].AverageLatency == nil || *result.Accounts[0].AverageLatency != 2 {
+		t.Fatalf("ranking=%#v", result.Accounts)
+	}
+}
+
+func TestTrafficRankingWindowQueryUsesBoundedWindowIndex(t *testing.T) {
+	store := openPolicyStore(t)
+	rows, err := store.db.Query(`EXPLAIN QUERY PLAN WITH ranked AS (
+		SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
+			ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
+		FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
+	) SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
+	FROM ranked WHERE request_rank=1 ORDER BY observed_at`, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	plan := ""
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan += detail + "\n"
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "ix_usage_records_traffic_window") {
+		t.Fatalf("traffic window index was not used:\n%s", plan)
 	}
 }
 

@@ -3,7 +3,6 @@ package newapimanagement
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -57,6 +56,7 @@ type Repository interface {
 
 type KeyManager interface {
 	CreateKeyWithVerification(context.Context, configstore.AuthRecord, string, string, bool) (upstreamsync.CreatedKey, error)
+	ReconcileCreatedKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, bool, error)
 }
 
 type Authenticator interface {
@@ -244,6 +244,44 @@ type ModelPriceInput struct {
 	AudioCompletionRatio string `json:"audio_completion_ratio,omitempty"`
 }
 
+type ErrorKind string
+
+const (
+	ErrorValidation  ErrorKind = "validation"
+	ErrorNotFound    ErrorKind = "not_found"
+	ErrorConflict    ErrorKind = "conflict"
+	ErrorUnavailable ErrorKind = "unavailable"
+	ErrorUpstream    ErrorKind = "upstream"
+)
+
+type ServiceError struct {
+	Kind ErrorKind
+	Err  error
+}
+
+func (e *ServiceError) Error() string { return e.Err.Error() }
+
+func (e *ServiceError) Unwrap() error { return e.Err }
+
+func KindOf(err error) ErrorKind {
+	var serviceError *ServiceError
+	if errors.As(err, &serviceError) {
+		return serviceError.Kind
+	}
+	return ""
+}
+
+func serviceError(kind ErrorKind, message string) error {
+	return &ServiceError{Kind: kind, Err: errors.New(message)}
+}
+
+func wrapServiceError(kind ErrorKind, err error) error {
+	if err == nil || KindOf(err) != "" {
+		return err
+	}
+	return &ServiceError{Kind: kind, Err: err}
+}
+
 func New(private PrivateStore, repository Repository, client *http.Client, keys KeyManager, auth Authenticator) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
@@ -290,7 +328,7 @@ func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (config
 		if strings.TrimSpace(input.ID) == "" {
 			input.ID = platforms[0].ID
 		} else if strings.TrimSpace(input.ID) != platforms[0].ID {
-			return configstore.NewAPIPlatformSummary{}, errors.New("New API 只允许配置一个主平台")
+			return configstore.NewAPIPlatformSummary{}, serviceError(ErrorConflict, "New API 只允许配置一个主平台")
 		}
 	}
 	item := configstore.NewAPIPlatform{ID: input.ID, Name: input.Name, BaseURL: input.BaseURL, AdminKey: input.AdminKey, UserID: input.UserID}
@@ -307,7 +345,7 @@ func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (config
 		}
 	}
 	if _, err := configstore.ValidateBaseURL(item.BaseURL); err != nil {
-		return configstore.NewAPIPlatformSummary{}, errors.New("New API 平台地址无效")
+		return configstore.NewAPIPlatformSummary{}, serviceError(ErrorValidation, "New API 平台地址无效")
 	}
 	if err := s.testConnection(ctx, item); err != nil {
 		return configstore.NewAPIPlatformSummary{}, err
@@ -318,7 +356,7 @@ func (s *Service) SavePlatform(ctx context.Context, input PlatformInput) (config
 func (s *Service) DeletePlatform(ctx context.Context, platformID string) (bool, error) {
 	platformID = strings.TrimSpace(platformID)
 	if platformID == "" {
-		return false, errors.New("New API 平台 ID 不能为空")
+		return false, serviceError(ErrorValidation, "New API 平台 ID 不能为空")
 	}
 	bindings, err := s.repository.NewAPIGroupBindings(ctx, platformID)
 	if err != nil {
@@ -580,7 +618,7 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 	items := make([]business.NewAPIGroupBinding, 0, len(inputs))
 	for _, input := range inputs {
 		if _, found := localByID[strings.TrimSpace(input.Sub2APIGroupID)]; !found {
-			return nil, errors.New("分组绑定包含不存在的 Sub2API 分组")
+			return nil, serviceError(ErrorValidation, "分组绑定包含不存在的 Sub2API 分组")
 		}
 		items = append(items, business.NewAPIGroupBinding{PlatformID: platformID, NewAPIGroupID: input.NewAPIGroupID, NewAPIGroupName: input.NewAPIGroupName, Sub2APIGroupID: input.Sub2APIGroupID, SyncRatio: input.SyncRatio})
 	}
@@ -598,6 +636,8 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 }
 
 func (s *Service) CreateChannel(ctx context.Context, platformID string, input ChannelInput) (map[string]any, error) {
+	s.managementMu.Lock()
+	defer s.managementMu.Unlock()
 	platform, err := s.requirePlatform(ctx, platformID)
 	if err != nil {
 		return nil, err
@@ -605,11 +645,11 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	input.KeyID = strings.TrimSpace(input.KeyID)
 	input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
 	if input.KeyID == "" || input.Sub2APIGroupID == "" {
-		return nil, errors.New("Sub2API 分组和密钥 ID 不能为空")
+		return nil, serviceError(ErrorValidation, "Sub2API 分组和密钥 ID 不能为空")
 	}
 	models := normalizeModels(input.Models)
 	if len(models) == 0 {
-		return nil, errors.New("渠道至少需要一个模型")
+		return nil, serviceError(ErrorValidation, "渠道至少需要一个模型")
 	}
 	localGroups, err := s.repository.NewAPILocalGroups(ctx)
 	if err != nil {
@@ -623,7 +663,7 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 		}
 	}
 	if groupName == "" {
-		return nil, errors.New("渠道目标不是已登记的 Sub2API 分组")
+		return nil, serviceError(ErrorValidation, "渠道目标不是已登记的 Sub2API 分组")
 	}
 	newAPIGroups, err := s.validateNewAPIGroups(ctx, *platform, input.NewAPIGroups)
 	if err != nil {
@@ -639,27 +679,37 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	}
 	baseURL, err := configstore.ValidateBaseURL(input.BaseURL)
 	if err != nil {
-		return nil, errors.New("渠道 API 地址无效")
+		return nil, serviceError(ErrorValidation, "渠道 API 地址无效")
+	}
+	channelName := stableOperationName(groupName, "channel", platformID, input.Sub2APIGroupID, input.KeyID, baseURL, strings.Join(models, ","), strings.Join(newAPIGroups, ","))
+	if existing, found, err := s.findChannelByName(ctx, *platform, channelName); err != nil {
+		return nil, fmt.Errorf("New API 渠道幂等对账失败：%w", err)
+	} else if found {
+		return publicChannelResult(existing, channelName), nil
 	}
 	body := map[string]any{
 		"mode": "single",
 		"channel": map[string]any{
-			"type": 59, "name": groupName, "base_url": baseURL, "key": serviceKey,
+			"type": 59, "name": channelName, "base_url": baseURL, "key": serviceKey,
 			"models": strings.Join(models, ","), "group": strings.Join(newAPIGroups, ","), "status": 1,
 		},
 	}
 	payload, err := s.request(ctx, *platform, http.MethodPost, "/api/channel/", body)
 	if err != nil {
-		return nil, err
+		reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		if existing, found, reconcileErr := s.findChannelByName(reconcileCtx, *platform, channelName); reconcileErr == nil && found {
+			return publicChannelResult(existing, channelName), nil
+		}
+		return nil, fmt.Errorf("New API 渠道创建结果不确定（marker %s）：%w", channelName, err)
 	}
 	result, _ := payload.(map[string]any)
-	if result == nil {
-		result = map[string]any{"created": true}
-	}
-	return result, nil
+	return publicChannelResult(result, channelName), nil
 }
 
 func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input ChannelKeyInput) (ChannelKey, error) {
+	s.managementMu.Lock()
+	defer s.managementMu.Unlock()
 	if _, err := s.requirePlatform(ctx, platformID); err != nil {
 		return ChannelKey{}, err
 	}
@@ -669,10 +719,10 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 		return ChannelKey{}, err
 	}
 	if s.keys == nil {
-		return ChannelKey{}, errors.New("Sub2API 密钥管理服务尚未就绪")
+		return ChannelKey{}, serviceError(ErrorUnavailable, "Sub2API 密钥管理服务尚未就绪")
 	}
 	if s.auth == nil {
-		return ChannelKey{}, errors.New("Sub2API 普通账号登录服务尚未就绪")
+		return ChannelKey{}, serviceError(ErrorUnavailable, "Sub2API 普通账号登录服务尚未就绪")
 	}
 	target, err := s.private.TargetSettings(ctx)
 	if err != nil {
@@ -684,17 +734,22 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 	}
 	authenticated, err := s.auth.Login(ctx, sub2APIUserLoginRecord(target), credential)
 	if err != nil {
-		return ChannelKey{}, fmt.Errorf("Sub2API 普通账号登录失败：%w", err)
+		return ChannelKey{}, wrapServiceError(ErrorUpstream, fmt.Errorf("Sub2API 普通账号登录失败：%w", err))
 	}
-	created, err := s.keys.CreateKeyWithVerification(
-		ctx,
-		authenticated,
-		newChannelKeyName(group.Name),
-		group.ID,
-		true,
-	)
+	credentialIdentity := strings.TrimSpace(input.VaultEntry)
+	if strings.TrimSpace(input.CredentialSource) == "custom" {
+		credentialIdentity = strings.TrimSpace(input.Username)
+	}
+	marker := stableOperationName(group.Name, "key", platformID, group.ID, strings.TrimSpace(input.CredentialSource), credentialIdentity)
+	created, found, err := s.keys.ReconcileCreatedKey(ctx, authenticated, marker, group.ID)
 	if err != nil {
-		return ChannelKey{}, err
+		return ChannelKey{}, wrapServiceError(ErrorUpstream, fmt.Errorf("Sub2API 密钥幂等对账失败：%w", err))
+	}
+	if !found {
+		created, err = s.keys.CreateKeyWithVerification(ctx, authenticated, marker, group.ID, true)
+		if err != nil {
+			return ChannelKey{}, wrapServiceError(ErrorUpstream, err)
+		}
 	}
 	if strings.TrimSpace(created.KeyID) == "" || strings.TrimSpace(created.Secret) == "" || created.GroupID != group.ID {
 		return ChannelKey{}, errors.New("Sub2API 密钥创建结果不可读")
@@ -716,28 +771,28 @@ func (s *Service) channelCredential(ctx context.Context, input ChannelKeyInput) 
 	case "vault":
 		entryName := strings.TrimSpace(input.VaultEntry)
 		if entryName == "" {
-			return configstore.VaultEntry{}, errors.New("请选择密码箱账号")
+			return configstore.VaultEntry{}, serviceError(ErrorValidation, "请选择密码箱账号")
 		}
 		entry, err := s.private.VaultEntry(ctx, entryName)
 		if err != nil {
 			return configstore.VaultEntry{}, fmt.Errorf("密码箱账号读取失败：%w", err)
 		}
 		if entry == nil {
-			return configstore.VaultEntry{}, errors.New("所选密码箱账号不存在")
+			return configstore.VaultEntry{}, serviceError(ErrorNotFound, "所选密码箱账号不存在")
 		}
 		if blankText(entry.Username) || blankText(entry.Password) {
-			return configstore.VaultEntry{}, errors.New("所选密码箱账号缺少完整账号或密码")
+			return configstore.VaultEntry{}, serviceError(ErrorValidation, "所选密码箱账号缺少完整账号或密码")
 		}
 		return *entry, nil
 	case "custom":
 		username := strings.TrimSpace(input.Username)
 		password := input.Password
 		if username == "" || strings.TrimSpace(password) == "" {
-			return configstore.VaultEntry{}, errors.New("请输入完整的 Sub2API 账号和密码")
+			return configstore.VaultEntry{}, serviceError(ErrorValidation, "请输入完整的 Sub2API 账号和密码")
 		}
 		return configstore.VaultEntry{Username: &username, Password: &password, Headers: map[string]string{}}, nil
 	default:
-		return configstore.VaultEntry{}, errors.New("请选择密码箱账号或自定义账号密码")
+		return configstore.VaultEntry{}, serviceError(ErrorValidation, "请选择密码箱账号或自定义账号密码")
 	}
 }
 
@@ -752,14 +807,14 @@ func (s *Service) FetchChannelModels(ctx context.Context, platformID string, inp
 	input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
 	input.KeyID = strings.TrimSpace(input.KeyID)
 	if input.Sub2APIGroupID == "" || input.KeyID == "" {
-		return nil, errors.New("请先选择 Sub2API 分组并创建密钥")
+		return nil, serviceError(ErrorValidation, "请先选择 Sub2API 分组并创建密钥")
 	}
 	groups, err := s.repository.NewAPILocalGroups(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !localGroupExists(groups, input.Sub2APIGroupID) {
-		return nil, errors.New("模型获取目标不是已登记的 Sub2API 分组")
+		return nil, serviceError(ErrorValidation, "模型获取目标不是已登记的 Sub2API 分组")
 	}
 	target, err := s.private.TargetSettings(ctx)
 	if err != nil {
@@ -769,7 +824,8 @@ func (s *Service) FetchChannelModels(ctx context.Context, platformID string, inp
 	if err != nil {
 		return nil, err
 	}
-	return s.fetchSub2APIModels(ctx, input.BaseURL, serviceKey)
+	models, err := s.fetchSub2APIModels(ctx, input.BaseURL, serviceKey)
+	return models, wrapServiceError(ErrorUpstream, err)
 }
 
 func (s *Service) channelEndpoints(ctx context.Context, target configstore.TargetSettings) []ChannelEndpoint {
@@ -853,7 +909,7 @@ func decodeChannelEndpoints(settings map[string]any) []ChannelEndpoint {
 
 func (s *Service) localGroup(ctx context.Context, groupID string) (business.NewAPILocalGroup, error) {
 	if groupID == "" {
-		return business.NewAPILocalGroup{}, errors.New("请选择 Sub2API 分组")
+		return business.NewAPILocalGroup{}, serviceError(ErrorValidation, "请选择 Sub2API 分组")
 	}
 	groups, err := s.repository.NewAPILocalGroups(ctx)
 	if err != nil {
@@ -864,7 +920,7 @@ func (s *Service) localGroup(ctx context.Context, groupID string) (business.NewA
 			return group, nil
 		}
 	}
-	return business.NewAPILocalGroup{}, errors.New("密钥目标不是已登记的 Sub2API 分组")
+	return business.NewAPILocalGroup{}, serviceError(ErrorValidation, "密钥目标不是已登记的 Sub2API 分组")
 }
 
 func (s *Service) revealChannelKey(ctx context.Context, target configstore.TargetSettings, keyID, groupID string) (string, error) {
@@ -886,18 +942,76 @@ func sub2APIUserLoginRecord(target configstore.TargetSettings) configstore.AuthR
 	}
 }
 
-func newChannelKeyName(groupName string) string {
-	random := make([]byte, 4)
-	if _, err := rand.Read(random); err != nil {
-		return fmt.Sprintf("NewAPI-%s-%d", strings.TrimSpace(groupName), time.Now().UTC().UnixNano())
+func stableOperationName(groupName, kind string, parts ...string) string {
+	digest := sha256.Sum256([]byte(strings.Join(append([]string{kind}, parts...), "\x00")))
+	name := strings.TrimSpace(groupName)
+	if len([]rune(name)) > 72 {
+		name = string([]rune(name)[:72])
 	}
-	return fmt.Sprintf("NewAPI-%s-%s-%s", strings.TrimSpace(groupName), time.Now().UTC().Format("20060102150405"), hex.EncodeToString(random))
+	return fmt.Sprintf("NewAPI-%s-console-%s", name, hex.EncodeToString(digest[:12]))
+}
+
+func (s *Service) findChannelByName(ctx context.Context, platform configstore.NewAPIPlatform, name string) (map[string]any, bool, error) {
+	var match map[string]any
+	for page := 0; page < 1000; page++ {
+		payload, err := s.request(ctx, platform, http.MethodGet, fmt.Sprintf("/api/channel/?p=%d&page_size=100", page), nil)
+		if err != nil {
+			return nil, false, err
+		}
+		rows := newAPIChannelRows(payload)
+		for _, row := range rows {
+			if firstText(row, "name") != name {
+				continue
+			}
+			if match != nil {
+				return nil, false, errors.New("远端存在多个同 marker 渠道")
+			}
+			match = row
+		}
+		if len(rows) < 100 {
+			return match, match != nil, nil
+		}
+	}
+	return nil, false, errors.New("远端渠道目录超过分页上限")
+}
+
+func newAPIChannelRows(payload any) []map[string]any {
+	var values []any
+	switch item := payload.(type) {
+	case []any:
+		values = item
+	case map[string]any:
+		for _, key := range []string{"items", "channels", "data"} {
+			if rows, ok := item[key].([]any); ok {
+				values = rows
+				break
+			}
+		}
+	}
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if row, ok := value.(map[string]any); ok {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func publicChannelResult(value map[string]any, name string) map[string]any {
+	result := map[string]any{"created": true, "name": name}
+	if value == nil {
+		return result
+	}
+	if id := firstText(value, "id", "channel_id"); id != "" {
+		result["id"] = id
+	}
+	return result
 }
 
 func (s *Service) validateNewAPIGroups(ctx context.Context, platform configstore.NewAPIPlatform, values []string) ([]string, error) {
 	groups := normalizeModels(values)
 	if len(groups) == 0 {
-		return nil, errors.New("渠道至少需要一个 New API 分组")
+		return nil, serviceError(ErrorValidation, "渠道至少需要一个 New API 分组")
 	}
 	options, err := s.readOptions(ctx, platform)
 	if err != nil {
@@ -913,7 +1027,7 @@ func (s *Service) validateNewAPIGroups(ctx context.Context, platform configstore
 	}
 	for _, group := range groups {
 		if _, found := available[group]; !found {
-			return nil, fmt.Errorf("New API 分组 %s 不存在", group)
+			return nil, serviceError(ErrorValidation, fmt.Sprintf("New API 分组 %s 不存在", group))
 		}
 	}
 	return groups, nil
@@ -931,11 +1045,11 @@ func localGroupExists(groups []business.NewAPILocalGroup, groupID string) bool {
 func (s *Service) fetchSub2APIModels(ctx context.Context, baseURL, serviceKey string) ([]string, error) {
 	normalized, err := configstore.ValidateBaseURL(baseURL)
 	if err != nil {
-		return nil, errors.New("Sub2API 管理平台地址无效")
+		return nil, serviceError(ErrorValidation, "Sub2API 管理平台地址无效")
 	}
 	endpoint, err := url.Parse(normalized)
 	if err != nil {
-		return nil, errors.New("Sub2API 管理平台地址无效")
+		return nil, serviceError(ErrorValidation, "Sub2API 管理平台地址无效")
 	}
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1/models"
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -1033,7 +1147,7 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 	for _, input := range inputs {
 		model := strings.TrimSpace(input.Model)
 		if model == "" || len(model) > 256 {
-			return RemoteSnapshot{}, errors.New("模型价格包含空模型或过长模型名称")
+			return RemoteSnapshot{}, serviceError(ErrorValidation, "模型价格包含空模型或过长模型名称")
 		}
 		for _, key := range numericKeys {
 			delete(numericOptions[key], model)
@@ -1043,16 +1157,16 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 
 		if strings.TrimSpace(input.ModelPrice) != "" {
 			if strings.TrimSpace(input.BillingMode) != "" || strings.TrimSpace(input.BillingExpr) != "" {
-				return RemoteSnapshot{}, fmt.Errorf("%s 不能同时使用固定价格和计费表达式", model)
+				return RemoteSnapshot{}, serviceError(ErrorValidation, fmt.Sprintf("%s 不能同时使用固定价格和计费表达式", model))
 			}
 			if !validDecimal(input.ModelPrice) {
-				return RemoteSnapshot{}, errors.New("模型价格包含无效固定价格")
+				return RemoteSnapshot{}, serviceError(ErrorValidation, "模型价格包含无效固定价格")
 			}
 			numericOptions["ModelPrice"][model] = strings.TrimSpace(input.ModelPrice)
 			continue
 		}
 		if !validDecimal(input.InputRatio) || !validDecimal(input.CompletionRatio) {
-			return RemoteSnapshot{}, errors.New("模型价格包含无效输入或输出价格")
+			return RemoteSnapshot{}, serviceError(ErrorValidation, "模型价格包含无效输入或输出价格")
 		}
 		numericOptions["ModelRatio"][model] = strings.TrimSpace(input.InputRatio)
 		numericOptions["CompletionRatio"][model] = strings.TrimSpace(input.CompletionRatio)
@@ -1067,7 +1181,7 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 				continue
 			}
 			if !validDecimal(value) {
-				return RemoteSnapshot{}, fmt.Errorf("%s 的 %s 配置无效", model, key)
+				return RemoteSnapshot{}, serviceError(ErrorValidation, fmt.Sprintf("%s 的 %s 配置无效", model, key))
 			}
 			numericOptions[key][model] = value
 		}
@@ -1075,14 +1189,14 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 		billingMode := strings.TrimSpace(input.BillingMode)
 		billingExpr := strings.TrimSpace(input.BillingExpr)
 		if billingMode == "" && billingExpr != "" {
-			return RemoteSnapshot{}, fmt.Errorf("%s 缺少计费模式", model)
+			return RemoteSnapshot{}, serviceError(ErrorValidation, fmt.Sprintf("%s 缺少计费模式", model))
 		}
 		if billingMode != "" {
 			if billingMode != "tiered_expr" {
-				return RemoteSnapshot{}, fmt.Errorf("%s 的计费模式不受支持", model)
+				return RemoteSnapshot{}, serviceError(ErrorValidation, fmt.Sprintf("%s 的计费模式不受支持", model))
 			}
 			if billingExpr == "" || len(billingExpr) > 16384 {
-				return RemoteSnapshot{}, fmt.Errorf("%s 的计费表达式无效", model)
+				return RemoteSnapshot{}, serviceError(ErrorValidation, fmt.Sprintf("%s 的计费表达式无效", model))
 			}
 			billingModes[model] = billingMode
 			billingExprs[model] = billingExpr
@@ -1111,14 +1225,14 @@ func (s *Service) requirePlatform(ctx context.Context, id string) (*configstore.
 		return nil, err
 	}
 	if platform == nil {
-		return nil, errors.New("New API 平台不存在")
+		return nil, serviceError(ErrorNotFound, "New API 平台不存在")
 	}
 	return platform, nil
 }
 
 func (s *Service) testConnection(ctx context.Context, item configstore.NewAPIPlatform) error {
 	if strings.TrimSpace(item.AdminKey) == "" || strings.TrimSpace(item.UserID) == "" {
-		return errors.New("New API Admin Key 和 User ID 不能为空")
+		return serviceError(ErrorValidation, "New API Admin Key 和 User ID 不能为空")
 	}
 	_, err := s.request(ctx, item, http.MethodGet, "/api/option/", nil)
 	if err != nil {
@@ -1207,6 +1321,11 @@ func (s *Service) rollbackOptions(ctx context.Context, platform configstore.NewA
 }
 
 func (s *Service) request(ctx context.Context, platform configstore.NewAPIPlatform, method, path string, body map[string]any) (any, error) {
+	payload, err := s.requestRaw(ctx, platform, method, path, body)
+	return payload, wrapServiceError(ErrorUpstream, err)
+}
+
+func (s *Service) requestRaw(ctx context.Context, platform configstore.NewAPIPlatform, method, path string, body map[string]any) (any, error) {
 	validatedBase, err := configstore.ValidateBaseURL(platform.BaseURL)
 	if err != nil {
 		return nil, errors.New("New API 平台地址无效")
@@ -1215,7 +1334,12 @@ func (s *Service) request(ctx context.Context, platform configstore.NewAPIPlatfo
 	if err != nil {
 		return nil, errors.New("New API 平台地址无效")
 	}
-	base.Path = strings.TrimRight(base.Path, "/") + path
+	relative, err := url.Parse(path)
+	if err != nil || !strings.HasPrefix(relative.Path, "/") {
+		return nil, errors.New("New API 请求路径无效")
+	}
+	base.Path = strings.TrimRight(base.Path, "/") + relative.Path
+	base.RawQuery = relative.RawQuery
 	var reader io.Reader
 	if body != nil {
 		encoded, encodeErr := json.Marshal(body)

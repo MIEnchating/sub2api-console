@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { fromDate } from "@internationalized/date";
 import { useEffect, useMemo, useState } from "react";
 import { Play } from "lucide-react";
 import { toast } from "sonner";
@@ -29,11 +30,13 @@ import { useClientPagination } from "@/hooks/use-client-pagination";
 
 type RevenueAnalysisView = "details" | "summary" | "issues";
 
+const revenueTimezone = "Asia/Shanghai";
+
 export function defaultRevenueDate(now = new Date()) {
-  const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
+  const date = fromDate(now, revenueTimezone).subtract({ days: 1 });
+  const month = String(date.month).padStart(2, "0");
+  const day = String(date.day).padStart(2, "0");
+  return `${date.year}-${month}-${day}`;
 }
 
 export function revenueDateValue(value: string): Date | undefined {
@@ -63,8 +66,11 @@ export function revenueReportFromTask(task: Task | undefined): RevenueReport | n
   if (
     typeof value.report_date !== "string" ||
     typeof value.timezone !== "string" ||
+    !isRevenueDecimal(value.tolerance) ||
     !Array.isArray(value.rows) ||
+    !value.rows.every(isRevenueRow) ||
     !Array.isArray(value.summaries) ||
+    !value.summaries.every(isRevenueSummary) ||
     !Array.isArray(value.issues)
   ) {
     return null;
@@ -72,19 +78,81 @@ export function revenueReportFromTask(task: Task | undefined): RevenueReport | n
   return value as RevenueReport;
 }
 
-function money(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "-";
-  return `${value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
-function difference(value: number | null) {
-  if (value === null || !Number.isFinite(value)) return "-";
-  if (Math.abs(value) < 0.005) return "$0.00";
-  return `${value < 0 ? "亏损" : "盈余"} $${Math.abs(value).toFixed(2)}`;
+function isRevenueDecimal(value: unknown): value is string {
+  return typeof value === "string" && /^-?\d+\.\d{6}$/.test(value);
 }
 
-function ratio(value: number | null) {
-  return value === null || !Number.isFinite(value) ? "-" : `÷${value}`;
+function isNullableRevenueDecimal(value: unknown): value is string | null {
+  return value === null || isRevenueDecimal(value);
+}
+
+function isRevenueRow(value: unknown): value is RevenueRow {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.account_id === "string" &&
+    typeof value.account_name === "string" &&
+    typeof value.local_group === "string" &&
+    typeof value.upstream_host === "string" &&
+    typeof value.upstream_key_name === "string" &&
+    isNullableRevenueDecimal(value.account_cost) &&
+    isNullableRevenueDecimal(value.actual_cost) &&
+    isNullableRevenueDecimal(value.upstream_raw_cost) &&
+    isNullableRevenueDecimal(value.recharge_rate) &&
+    isNullableRevenueDecimal(value.upstream_cost) &&
+    isNullableRevenueDecimal(value.difference) &&
+    isNullableRevenueDecimal(value.revenue) &&
+    (value.category === "计费异常" || value.category === "正常" || value.category === "无法核对") &&
+    typeof value.note === "string" &&
+    (value.attribution_level === "key" || value.attribution_level === "unavailable")
+  );
+}
+
+function isRevenueSummary(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.group === "string" &&
+    typeof value.accounts === "number" &&
+    isRevenueDecimal(value.account_cost) &&
+    isRevenueDecimal(value.actual_cost) &&
+    isRevenueDecimal(value.upstream_raw_cost) &&
+    isRevenueDecimal(value.upstream_cost) &&
+    isRevenueDecimal(value.difference) &&
+    isRevenueDecimal(value.revenue)
+  );
+}
+
+function decimalCurrency(value: string): { negative: boolean; amount: string } | null {
+  const match = /^(-?)(\d+)\.(\d{6})$/.exec(value);
+  if (!match) return null;
+  let cents = BigInt(match[2]) * 100n + BigInt(match[3].slice(0, 2));
+  if (match[3][2] >= "5") cents += 1n;
+  const amount = `${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
+  return { negative: match[1] === "-" && cents !== 0n, amount };
+}
+
+function money(value: string | null): string {
+  if (value === null) return "-";
+  const formatted = decimalCurrency(value);
+  if (!formatted) return "-";
+  return `${formatted.negative ? "-" : ""}$${formatted.amount}`;
+}
+
+function difference(value: string | null): string {
+  if (value === null) return "-";
+  const formatted = decimalCurrency(value);
+  if (!formatted) return "-";
+  if (formatted.amount === "0.00") return "$0.00";
+  return `${formatted.negative ? "亏损" : "盈余"} $${formatted.amount}`;
+}
+
+function ratio(value: string | null): string {
+  if (value === null || !isRevenueDecimal(value)) return "-";
+  const normalized = value.replace(/\.?(?:0+)$/, "");
+  return `÷${normalized === "-0" ? "0" : normalized}`;
 }
 
 function categoryBadge(category: RevenueRow["category"]) {
