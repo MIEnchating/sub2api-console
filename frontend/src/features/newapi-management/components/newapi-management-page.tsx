@@ -343,9 +343,8 @@ export function NewAPIManagementPage(props: Props) {
       ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {workspace.isLoading ? (
-          <NewAPIRemoteLoading label="正在加载 New API 配置" />
-        ) : selectedPlatform ? (
+        {workspace.isLoading && <NewAPIRemoteLoading label="正在加载 New API 配置" />}
+        {!workspace.isLoading && selectedPlatform && (
           <>
             <div
               className={
@@ -428,7 +427,8 @@ export function NewAPIManagementPage(props: Props) {
               ) : null}
             </div>
           </>
-        ) : (
+        )}
+        {!workspace.isLoading && !selectedPlatform && (
           <div className="text-muted-foreground flex min-h-72 flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-background px-6 text-center text-sm">
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
             <span>尚未配置 New API</span>

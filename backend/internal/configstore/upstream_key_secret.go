@@ -45,7 +45,7 @@ func (s *Store) SaveUpstreamKeySecret(ctx context.Context, value UpstreamKeySecr
 	if value.Host == "" || value.KeyID == "" || value.GroupID == "" || value.Secret == "" {
 		return errors.New("本地 Key 必须包含 Host、Key ID、Group ID 和密钥")
 	}
-	if len(value.KeyID) > 255 || len(value.GroupID) > 255 || len(value.Secret) > 65536 {
+	if textLength(value.KeyID) > 255 || textLength(value.GroupID) > 255 || textLength(value.Secret) > 65536 {
 		return errors.New("本地 Key 字段过长")
 	}
 	value.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

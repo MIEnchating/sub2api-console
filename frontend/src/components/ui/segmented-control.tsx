@@ -44,6 +44,8 @@ export function SegmentedControlItem(
   },
 ) {
   const { selected, className, ...buttonProps } = props;
+  let tabIndex = props.tabIndex;
+  if (props.role === "tab") tabIndex = selected ? 0 : -1;
   return (
     <Button
       {...buttonProps}
@@ -52,7 +54,7 @@ export function SegmentedControlItem(
       variant={selected ? "secondary" : "ghost"}
       aria-pressed={props.role === "tab" ? undefined : selected}
       aria-selected={props.role === "tab" ? selected : props["aria-selected"]}
-      tabIndex={props.role === "tab" ? (selected ? 0 : -1) : props.tabIndex}
+      tabIndex={tabIndex}
       className={cn("h-7", selected && "bg-background shadow-xs", className)}
     />
   );

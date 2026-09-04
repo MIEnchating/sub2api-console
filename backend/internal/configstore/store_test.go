@@ -59,6 +59,19 @@ func TestInitializePersistsCompatibleStatusAndRejectsOverwrite(t *testing.T) {
 	}
 }
 
+func TestInitializeUsesUnicodeCharacterLimits(t *testing.T) {
+	store := openTestStore(t)
+	username := strings.Repeat("界", 80)
+	password := strings.Repeat("密", 10)
+	if err := store.Initialize(context.Background(), username, password, "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatalf("valid Unicode credentials were rejected: %v", err)
+	}
+	authenticated, err := store.Authenticate(context.Background(), username, password)
+	if err != nil || !authenticated {
+		t.Fatalf("authenticated=%v err=%v", authenticated, err)
+	}
+}
+
 func TestInitializePreservesPasswordWhitespace(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

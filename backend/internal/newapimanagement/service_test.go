@@ -567,6 +567,49 @@ func TestSaveModelPricesWritesSupportedFieldsAndClearsConflictingConfiguration(t
 	}
 }
 
+func TestValidDecimalRejectsNonFiniteAndNonDecimalValues(t *testing.T) {
+	for _, value := range []string{"0", "0.125", "1e-6", "1E+6"} {
+		if !validDecimal(value) {
+			t.Fatalf("valid decimal %q was rejected", value)
+		}
+	}
+	for _, value := range []string{"+Inf", "Inf", "NaN", "1/2", "-0.1", "1e1000000", "1e-1000000", "", strings.Repeat("9", 129)} {
+		if validDecimal(value) {
+			t.Fatalf("invalid decimal %q was accepted", value)
+		}
+	}
+}
+
+func TestSaveModelPricesRejectsDuplicateModelsBeforeRemoteWrite(t *testing.T) {
+	putCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet && request.URL.Path == "/api/option/" {
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]string{}})
+			return
+		}
+		putCalls++
+		writer.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"success": false})
+	}))
+	defer server.Close()
+	service := New(&privateStub{platform: configstore.NewAPIPlatform{
+		ID: "platform-1", BaseURL: server.URL, AdminKey: "admin", UserID: "1",
+	}}, &repositoryStub{}, server.Client(), nil, nil)
+
+	_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{
+		{Model: "gpt-5", InputRatio: "1", CompletionRatio: "2"},
+		{Model: " gpt-5 ", InputRatio: "3", CompletionRatio: "4"},
+	})
+
+	if err == nil || KindOf(err) != ErrorValidation {
+		t.Fatalf("error=%v kind=%q", err, KindOf(err))
+	}
+	if putCalls != 0 {
+		t.Fatalf("duplicate model triggered %d remote writes", putCalls)
+	}
+}
+
 func TestSaveModelPricesWritesTieredExpressionAndReturnsReadback(t *testing.T) {
 	options := map[string]string{
 		"ModelPrice":                   `{}`,
@@ -731,12 +774,12 @@ func TestSaveModelPricesSerializesConcurrentReadModifyWriteOperations(t *testing
 	}}, &repositoryStub{}, server.Client(), nil, nil)
 	results := make(chan error, 2)
 	go func() {
-		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: ""}})
+		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: "first", InputRatio: "invalid", CompletionRatio: "1"}})
 		results <- err
 	}()
 	<-firstEntered
 	go func() {
-		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: ""}})
+		_, err := service.SaveModelPrices(context.Background(), "platform-1", []ModelPriceInput{{Model: "second", InputRatio: "invalid", CompletionRatio: "1"}})
 		results <- err
 	}()
 	select {
@@ -889,6 +932,31 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 	}
 	if len(bindings) != 1 || written["key"] != "GroupRatio" || written["value"] != `{"vip":0.35}` {
 		t.Fatalf("bindings=%#v written=%#v", bindings, written)
+	}
+}
+
+func TestSaveBindingsRejectsMalformedAndDuplicateGroupsBeforeWrite(t *testing.T) {
+	valid := GroupBindingInput{
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6",
+	}
+	for name, inputs := range map[string][]GroupBindingInput{
+		"missing New API ID":   {{NewAPIGroupName: "VIP", Sub2APIGroupID: "6"}},
+		"missing New API name": {{NewAPIGroupID: "vip", Sub2APIGroupID: "6"}},
+		"duplicate New API ID": {valid, {NewAPIGroupID: " vip ", NewAPIGroupName: "重复", Sub2APIGroupID: "6"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}
+			service := New(&privateStub{platform: configstore.NewAPIPlatform{ID: "platform-1"}}, repository, nil, nil, nil)
+
+			_, err := service.SaveBindings(context.Background(), "platform-1", inputs)
+
+			if err == nil || KindOf(err) != ErrorValidation {
+				t.Fatalf("error=%v kind=%q", err, KindOf(err))
+			}
+			if len(repository.bindings) != 0 {
+				t.Fatalf("invalid bindings were persisted: %#v", repository.bindings)
+			}
+		})
 	}
 }
 

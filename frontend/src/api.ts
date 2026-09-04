@@ -1,7 +1,6 @@
 import { SessionExpiredError, signalSessionExpired } from "./lib/session-auth";
 
 export type Overview = {
-  database_path: string;
   database_available: boolean;
   account_count: number | null;
   group_count: number | null;
@@ -12,8 +11,6 @@ export type Overview = {
 };
 
 export type RuntimeConfig = {
-  database_path: string;
-  data_database_path: string;
   database_available: boolean;
   data_database_available: boolean;
   mode: string;

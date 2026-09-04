@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -51,9 +52,10 @@ import (
 )
 
 const (
-	sessionCookie       = "sub2api_console_session"
-	sessionTTL          = 12 * time.Hour
-	maximumRequestBytes = 2 << 20
+	sessionCookie        = "sub2api_console_session"
+	sessionTTL           = 12 * time.Hour
+	maximumRequestBytes  = 2 << 20
+	responseWriteTimeout = 60 * time.Second
 )
 
 type Business interface {
@@ -478,7 +480,6 @@ type logCleanupRequest struct {
 }
 
 type overviewResponse struct {
-	DatabasePath      string  `json:"database_path"`
 	DatabaseAvailable bool    `json:"database_available"`
 	AccountCount      int     `json:"account_count"`
 	GroupCount        int     `json:"group_count"`
@@ -489,8 +490,6 @@ type overviewResponse struct {
 }
 
 type runtimeConfigResponse struct {
-	DatabasePath              string   `json:"database_path"`
-	DataDatabasePath          string   `json:"data_database_path"`
 	DatabaseAvailable         bool     `json:"database_available"`
 	DataDatabaseAvailable     bool     `json:"data_database_available"`
 	Mode                      string   `json:"mode"`
@@ -547,7 +546,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	}
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
-	router.Use(gin.Recovery(), limitRequestBody(), server.cors())
+	router.Use(gin.Recovery(), limitRequestBody(), limitResponseWriteTime(), server.cors())
 	api := router.Group("/api")
 	api.GET("/setup/status", server.setupStatus)
 	api.POST("/setup/initialize", server.initialize)
@@ -694,7 +693,28 @@ func limitRequestBody() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maximumRequestBytes)
+		body, err := io.ReadAll(io.LimitReader(c.Request.Body, maximumRequestBytes+1))
+		_ = c.Request.Body.Close()
+		if err != nil {
+			writeError(c, http.StatusBadRequest, "请求体读取失败")
+			c.Abort()
+			return
+		}
+		if len(body) > maximumRequestBytes {
+			writeError(c, http.StatusRequestEntityTooLarge, "请求体不能超过 2 MiB")
+			c.Abort()
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(body))
+		c.Request.ContentLength = int64(len(body))
+		c.Next()
+	}
+}
+
+func limitResponseWriteTime() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		controller := http.NewResponseController(c.Writer)
+		_ = controller.SetWriteDeadline(time.Now().Add(responseWriteTimeout))
 		c.Next()
 	}
 }
@@ -926,7 +946,6 @@ func (s *Server) overview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, overviewResponse{
-		DatabasePath:      s.config.DataDB,
 		DatabaseAvailable: summary.Available,
 		AccountCount:      summary.Accounts,
 		GroupCount:        summary.Groups,
@@ -4749,8 +4768,6 @@ func (s *Server) runtimeConfigFromSnapshot(c *gin.Context, snapshot business.Run
 		errorsFound = append(errorsFound, privateSettings.RequestTimeoutConfigurationError)
 	}
 	c.JSON(http.StatusOK, runtimeConfigResponse{
-		DatabasePath:              s.config.DataDB,
-		DataDatabasePath:          s.config.DataDB,
 		DatabaseAvailable:         snapshot.Available,
 		DataDatabaseAvailable:     true,
 		Mode:                      snapshot.Mode,
@@ -5054,8 +5071,9 @@ func writeNewAPIError(c *gin.Context, err error, fallbackStatus int) {
 }
 
 func writeError(c *gin.Context, status int, detail string) {
+	detail = redact.Secrets(detail)
 	if status >= http.StatusInternalServerError {
-		slog.Error("API 请求处理失败", "method", c.Request.Method, "path", c.FullPath(), "status", status, "error", redact.Secrets(detail))
+		slog.Error("API 请求处理失败", "method", c.Request.Method, "path", c.FullPath(), "status", status, "error", detail)
 		switch status {
 		case http.StatusBadGateway:
 			detail = "上游服务请求失败，请检查连接配置后重试"

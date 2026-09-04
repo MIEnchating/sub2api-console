@@ -161,8 +161,8 @@ function categoryBadge(category: RevenueRow["category"]) {
   return <Badge variant="warning">无法核对</Badge>;
 }
 
-function RevenueDetails({ rows }: { rows: RevenueRow[] }) {
-  const pagination = useClientPagination(rows);
+function RevenueDetails(props: { rows: RevenueRow[] }) {
+  const pagination = useClientPagination(props.rows);
 
   return (
     <DataTablePanel className="flex-1">
@@ -228,7 +228,7 @@ function RevenueDetails({ rows }: { rows: RevenueRow[] }) {
       <DataTablePagination
         currentPage={pagination.currentPage}
         totalPages={pagination.totalPages}
-        totalItems={rows.length}
+        totalItems={props.rows.length}
         pageSize={pagination.pageSize}
         pageSizes={[10, 20, 50, 100]}
         onPageChange={pagination.setCurrentPage}
@@ -238,7 +238,7 @@ function RevenueDetails({ rows }: { rows: RevenueRow[] }) {
   );
 }
 
-function RevenueSummaryTable({ report }: { report: RevenueReport }) {
+function RevenueSummaryTable(props: { report: RevenueReport }) {
   return (
     <DataTablePanel className="flex-1">
       <Table className="min-w-[64rem]" containerClassName="min-h-0 flex-1 overflow-auto">
@@ -255,7 +255,7 @@ function RevenueSummaryTable({ report }: { report: RevenueReport }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {report.summaries.map((row) => (
+          {props.report.summaries.map((row) => (
             <TableRow
               key={row.group}
               className={row.group === "合计" ? "bg-muted/35 font-medium" : undefined}
@@ -378,13 +378,13 @@ export function RevenueAnalysisPage() {
         className="flex h-full min-h-0 flex-col gap-3 overflow-hidden"
         data-testid="revenue-analysis-page"
       >
-        {running ? (
-          <RevenueCalculationProgress progress={task.data?.progress ?? 0} />
-        ) : task.data?.status === "failed" ? (
+        {running && <RevenueCalculationProgress progress={task.data?.progress ?? 0} />}
+        {!running && task.data?.status === "failed" && (
           <div className="flex min-h-0 items-center justify-center text-sm text-destructive">
             {task.data.message}
           </div>
-        ) : report ? (
+        )}
+        {!running && task.data?.status !== "failed" && report && (
           <div className="flex min-h-0 flex-1 flex-col gap-3">
             <TableFilterToolbar aria-label="收益分析视图">
               <SegmentedControl>
@@ -405,11 +405,13 @@ export function RevenueAnalysisPage() {
             {view === "summary" ? <RevenueSummaryTable report={report} /> : null}
             {view === "issues" ? <RevenueIssuesTable issues={report.issues} /> : null}
           </div>
-        ) : latest.isLoading ? (
+        )}
+        {!running && task.data?.status !== "failed" && !report && latest.isLoading && (
           <div className="flex min-h-0 flex-1 items-center justify-center">
             <span className="text-muted-foreground text-sm">正在读取最近一次分析</span>
           </div>
-        ) : (
+        )}
+        {!running && task.data?.status !== "failed" && !report && !latest.isLoading && (
           <div className="text-muted-foreground flex min-h-0 items-center justify-center text-sm">
             尚未生成核算结果
           </div>
@@ -419,8 +421,8 @@ export function RevenueAnalysisPage() {
   );
 }
 
-function RevenueIssuesTable({ issues }: { issues: RevenueReport["issues"] }) {
-  const pagination = useClientPagination(issues);
+function RevenueIssuesTable(props: { issues: RevenueReport["issues"] }) {
+  const pagination = useClientPagination(props.issues);
   return (
     <DataTablePanel className="flex-1">
       <Table containerClassName="min-h-0 flex-1 overflow-auto">
@@ -431,7 +433,7 @@ function RevenueIssuesTable({ issues }: { issues: RevenueReport["issues"] }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {issues.length === 0 ? (
+          {props.issues.length === 0 ? (
             <TableRow>
               <TableCell colSpan={2} className="text-muted-foreground h-24 text-center">
                 没有上游读取问题
@@ -447,11 +449,11 @@ function RevenueIssuesTable({ issues }: { issues: RevenueReport["issues"] }) {
           )}
         </TableBody>
       </Table>
-      {issues.length > 0 ? (
+      {props.issues.length > 0 ? (
         <DataTablePagination
           currentPage={pagination.currentPage}
           totalPages={pagination.totalPages}
-          totalItems={issues.length}
+          totalItems={props.issues.length}
           pageSize={pagination.pageSize}
           pageSizes={[10, 20, 50, 100]}
           onPageChange={pagination.setCurrentPage}

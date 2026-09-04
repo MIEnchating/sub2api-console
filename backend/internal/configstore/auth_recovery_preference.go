@@ -46,7 +46,7 @@ func (s *Store) SaveAuthRecoveryPreference(ctx context.Context, value AuthRecove
 	}
 	if value.VaultEntry != nil {
 		entry := strings.TrimSpace(*value.VaultEntry)
-		if entry == "" || len(entry) > 255 {
+		if entry == "" || textLength(entry) > 255 {
 			return errors.New("鉴权恢复偏好的密码箱项无效")
 		}
 		value.VaultEntry = &entry

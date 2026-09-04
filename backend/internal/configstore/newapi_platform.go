@@ -65,7 +65,7 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 	item.Name = strings.TrimSpace(item.Name)
 	item.UserID = strings.TrimSpace(item.UserID)
 	item.AdminKey = strings.TrimSpace(item.AdminKey)
-	if item.Name == "" || len(item.Name) > 120 {
+	if item.Name == "" || textLength(item.Name) > 120 {
 		return NewAPIPlatformSummary{}, errors.New("New API 平台名称长度必须为 1 到 120 个字符")
 	}
 	baseURL, err := ValidateBaseURL(item.BaseURL)
@@ -73,7 +73,7 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 		return NewAPIPlatformSummary{}, errors.New("New API 平台地址无效")
 	}
 	item.BaseURL = baseURL
-	if item.UserID == "" || len(item.UserID) > 128 {
+	if item.UserID == "" || textLength(item.UserID) > 128 {
 		return NewAPIPlatformSummary{}, errors.New("New API User ID 不能为空")
 	}
 	if item.ID == "" {
@@ -86,7 +86,7 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 	if item.AdminKey == "" && current != nil {
 		item.AdminKey = current.AdminKey
 	}
-	if item.AdminKey == "" || len(item.AdminKey) > 4096 {
+	if item.AdminKey == "" || textLength(item.AdminKey) > 4096 {
 		return NewAPIPlatformSummary{}, errors.New("New API Admin Key 不能为空")
 	}
 	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)

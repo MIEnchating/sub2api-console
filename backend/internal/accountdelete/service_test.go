@@ -158,9 +158,10 @@ func (keys *deleteKeys) DeleteKey(_ context.Context, _ configstore.AuthRecord, k
 }
 
 type deleteAdmin struct {
-	err    error
-	errors map[string]error
-	calls  []string
+	err         error
+	errors      map[string]error
+	calls       []string
+	afterDelete func(string)
 }
 
 func (admin *deleteAdmin) DeleteAccountWithVerification(_ context.Context, accountID string, verification bool) (map[string]any, error) {
@@ -168,6 +169,9 @@ func (admin *deleteAdmin) DeleteAccountWithVerification(_ context.Context, accou
 		return nil, errors.New("verification disabled")
 	}
 	admin.calls = append(admin.calls, accountID)
+	if admin.afterDelete != nil {
+		admin.afterDelete(accountID)
+	}
 	if err := admin.errors[accountID]; err != nil {
 		return nil, err
 	}
@@ -286,6 +290,44 @@ func TestBatchDeleteContinuesAfterOneAccountFails(t *testing.T) {
 	}
 	if strings.Join(admin.calls, ",") != "37,38" || len(repository.deletedIDs) != 1 || repository.deletedIDs[0] != "38" {
 		t.Fatalf("batch did not continue safely: admin=%#v deleted=%#v", admin.calls, repository.deletedIDs)
+	}
+}
+
+func TestBatchDeleteCancellationDoesNotReportAnIncompletePrefixAsSucceeded(t *testing.T) {
+	repository := &deleteRepository{accounts: map[string]*business.AccountDetail{
+		"37": unboundAccount("37", "first"),
+		"38": unboundAccount("38", "second"),
+	}}
+	tasks := &deleteTaskStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	admin := &deleteAdmin{afterDelete: func(accountID string) {
+		if accountID == "37" {
+			cancel()
+		}
+	}}
+	service := New(repository, configuredDeletePrivate(), &deleteKeys{}, tasks)
+	service.adminFactory = func(configstore.TargetSettings) (Admin, error) { return admin, nil }
+	first, err := service.Preview(context.Background(), "37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := service.Preview(context.Background(), "38")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := taskstore.Task{
+		ID: "account-delete-batch-cancel", Skill: "sub2api-account-management", Operation: "account-delete-batch",
+		Status: "queued", Result: map[string]any{}, CreatedAt: "2026-09-04T00:00:00Z", UpdatedAt: "2026-09-04T00:00:00Z",
+	}
+
+	service.executeBatch(ctx, task, []Preview{first, second}, "tester")
+
+	final := tasks.tasks[len(tasks.tasks)-1]
+	if final.Status != "cancelled" || final.Result["cancelled"] != true {
+		t.Fatalf("cancelled batch was reported as complete: %#v", final)
+	}
+	if final.Result["requested"] != 2 || final.Result["succeeded"] != 1 || len(admin.calls) != 1 {
+		t.Fatalf("cancelled batch lost its completed prefix: task=%#v calls=%#v", final, admin.calls)
 	}
 }
 

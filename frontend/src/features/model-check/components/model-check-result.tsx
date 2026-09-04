@@ -171,7 +171,9 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
   const completed = numberValue(props.task.result.completed) ?? props.rows.length;
   const total = numberValue(props.task.result.total) ?? Math.max(completed, 1);
   const phase = textValue(props.task.result.phase) ?? "queued";
-  const activeStep = completed >= total && total > 0 ? 2 : phase === "testing" ? 1 : 0;
+  let activeStep = 0;
+  if (completed >= total && total > 0) activeStep = 2;
+  else if (phase === "testing") activeStep = 1;
   const steps = ["准备账号凭据", "并行执行检测", "汇总检测结果"];
 
   return (
@@ -201,6 +203,19 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
         {steps.map((label, index) => {
           const done = index < activeStep;
           const active = index === activeStep;
+          let stepIcon = (
+            <Circle className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          );
+          if (done) {
+            stepIcon = <Check className="text-primary size-4 shrink-0" aria-hidden="true" />;
+          } else if (active) {
+            stepIcon = (
+              <LoaderCircle
+                className="text-primary size-4 shrink-0 animate-spin"
+                aria-hidden="true"
+              />
+            );
+          }
           return (
             <li
               key={label}
@@ -208,16 +223,7 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
                 active ? "border-primary/40 bg-primary/5" : "bg-muted/20"
               }`}
             >
-              {done ? (
-                <Check className="text-primary size-4 shrink-0" aria-hidden="true" />
-              ) : active ? (
-                <LoaderCircle
-                  className="text-primary size-4 shrink-0 animate-spin"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Circle className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-              )}
+              {stepIcon}
               <span className="truncate text-xs font-medium sm:text-sm">{label}</span>
             </li>
           );

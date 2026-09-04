@@ -44,6 +44,16 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
+type writeDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (recorder *writeDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	recorder.deadline = deadline
+	return nil
+}
+
 func TestWriteErrorDoesNotExposeInternalFailureDetails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/private", nil)
@@ -55,6 +65,19 @@ func TestWriteErrorDoesNotExposeInternalFailureDetails(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"code":"upstream_error"`) || !strings.Contains(recorder.Body.String(), "检查连接配置后重试") {
 		t.Fatalf("public error contract missing: %s", recorder.Body.String())
+	}
+}
+
+func TestRegularAPIResponsesReceiveAWriteDeadline(t *testing.T) {
+	router, _ := testRouter(t, config.Config{}, fakeBusiness{})
+	request := httptest.NewRequest(http.MethodGet, "/api/setup/status", nil)
+	recorder := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	started := time.Now()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.deadline.Before(started.Add(59*time.Second)) || recorder.deadline.After(time.Now().Add(61*time.Second)) {
+		t.Fatalf("regular response write deadline = %s", recorder.deadline)
 	}
 }
 
@@ -80,6 +103,22 @@ func TestWriteErrorUsesStableInfrastructureCodesAndHidesDetails(t *testing.T) {
 				t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestWriteErrorRedactsCredentialsFromClientErrorDetails(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/upstreams", nil)
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = request
+
+	writeError(context, http.StatusConflict, "上游拒绝请求：access_token=top-secret")
+
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"conflict"`) {
+		t.Fatalf("response=%d %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "top-secret") || !strings.Contains(recorder.Body.String(), "access_token") {
+		t.Fatalf("credential was not redacted from client error: %s", recorder.Body.String())
 	}
 }
 
@@ -1381,6 +1420,19 @@ func TestInitializationRejectsUnknownFieldsAndOversizedBodies(t *testing.T) {
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body status = %d body=%s", response.Code, response.Body.String())
 	}
+
+	chunkedBody := strings.NewReader(`{"username":"admin","password":"` + strings.Repeat("x", maximumRequestBytes) + `"}`)
+	chunkedRequest := httptest.NewRequest(http.MethodPost, "/api/setup/initialize", chunkedBody)
+	chunkedRequest.RemoteAddr = "127.0.0.1:1234"
+	chunkedRequest.Host = "127.0.0.1"
+	chunkedRequest.ContentLength = -1
+	chunkedRequest.TransferEncoding = []string{"chunked"}
+	chunkedRequest.Header.Set("Content-Type", "application/json")
+	chunkedResponse := httptest.NewRecorder()
+	router.ServeHTTP(chunkedResponse, chunkedRequest)
+	if chunkedResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked oversized body status = %d body=%s", chunkedResponse.Code, chunkedResponse.Body.String())
+	}
 }
 
 func TestLoginRejectsWrongPasswordAndAcceptsPersistedCredentials(t *testing.T) {
@@ -1482,12 +1534,18 @@ func TestOverviewConfigAndModeContract(t *testing.T) {
 	if overview.Code != http.StatusOK || !strings.Contains(overview.Body.String(), `"account_count":12`) || strings.Contains(overview.Body.String(), "skill_count") {
 		t.Fatalf("unexpected overview: %d %s", overview.Code, overview.Body.String())
 	}
+	if strings.Contains(overview.Body.String(), "database_path") || strings.Contains(overview.Body.String(), cfg.DataDB) {
+		t.Fatalf("overview leaked the private database path: %s", overview.Body.String())
+	}
 	configuration := request(t, router, http.MethodGet, "/api/config", nil, cookie.String())
 	if configuration.Code != http.StatusOK || !strings.Contains(configuration.Body.String(), `"mode":"监控模式"`) ||
 		!strings.Contains(configuration.Body.String(), `"console_username":"op***"`) ||
 		!strings.Contains(configuration.Body.String(), `"account_default_concurrency":10`) ||
 		!strings.Contains(configuration.Body.String(), `"account_default_priority":1`) {
 		t.Fatalf("unexpected config: %d %s", configuration.Code, configuration.Body.String())
+	}
+	if strings.Contains(configuration.Body.String(), "database_path") || strings.Contains(configuration.Body.String(), cfg.DataDB) {
+		t.Fatalf("configuration leaked the private database path: %s", configuration.Body.String())
 	}
 	accountDefaults := request(t, router, http.MethodPost, "/api/config/account-defaults", map[string]any{
 		"concurrency": 24, "priority": 7,

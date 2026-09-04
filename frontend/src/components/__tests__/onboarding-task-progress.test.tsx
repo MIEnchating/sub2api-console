@@ -5,18 +5,16 @@ import { OnboardingTaskProgress } from "../../App";
 import type { Task } from "../../api";
 
 function task(status: Task["status"], operation: string, result: Task["result"]): Task {
+  let message = "批量添加完成：成功 2 个";
+  if (status === "running") message = "正在添加 2/4：GPT Plus → codex";
+  else if (status === "failed") message = "批量添加完成：成功 1 个，失败 1 个";
   return {
     id: "internal-task-id",
     skill: "sub2api-account-onboarding",
     operation,
     status,
     progress: status === "running" ? 55 : 100,
-    message:
-      status === "running"
-        ? "正在添加 2/4：GPT Plus → codex"
-        : status === "failed"
-          ? "批量添加完成：成功 1 个，失败 1 个"
-          : "批量添加完成：成功 2 个",
+    message,
     result,
     created_at: "2026-08-29T00:00:00Z",
     updated_at: "2026-08-29T00:00:01Z",

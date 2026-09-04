@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/sqliteutil"
 	"golang.org/x/crypto/pbkdf2"
@@ -363,13 +364,13 @@ func MaskUsername(username *string) *string {
 func (s *Store) Initialize(ctx context.Context, username string, password string, baseURL string, adminKey string) error {
 	username = strings.TrimSpace(username)
 	adminKey = strings.TrimSpace(adminKey)
-	if len(username) < 2 || len(username) > 80 {
+	if textLength(username) < 2 || textLength(username) > 80 {
 		return errors.New("控制台账号长度必须为 2 到 80 个字符")
 	}
-	if len(password) < 10 || len(password) > 256 {
+	if textLength(password) < 10 || textLength(password) > 256 {
 		return errors.New("控制台密码长度必须为 10 到 256 个字符")
 	}
-	if len(adminKey) > 4096 {
+	if textLength(adminKey) > 4096 {
 		return errors.New("管理密钥无效")
 	}
 	normalizedURL := ""
@@ -506,10 +507,10 @@ func (s *Store) RevokeSession(ctx context.Context, token string) error {
 
 func (s *Store) UpdateCredentials(ctx context.Context, currentPassword string, username string, newPassword *string) (string, error) {
 	username = strings.TrimSpace(username)
-	if len(username) < 2 || len(username) > 80 {
+	if textLength(username) < 2 || textLength(username) > 80 {
 		return "", errors.New("控制台账号长度必须为 2 到 80 个字符")
 	}
-	if newPassword != nil && (len(*newPassword) < 10 || len(*newPassword) > 256) {
+	if newPassword != nil && (textLength(*newPassword) < 10 || textLength(*newPassword) > 256) {
 		return "", errors.New("控制台密码长度必须为 10 到 256 个字符")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -587,7 +588,7 @@ func (s *Store) ConfigureTarget(ctx context.Context, baseURL string, adminKey st
 	if normalizedKey == "" && validTarget(values) {
 		normalizedKey = values["target.admin_key"]
 	}
-	if normalizedKey == "" || len(normalizedKey) > 4096 {
+	if normalizedKey == "" || textLength(normalizedKey) > 4096 {
 		return errors.New("管理密钥无效")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -675,7 +676,8 @@ func ValidateNotificationSettings(appID string, clientSecret string, homeChannel
 	if settings.HomeChannelType != "c2c" && settings.HomeChannelType != "group" && settings.HomeChannelType != "channel" {
 		return NotificationSettings{}, errors.New("QQBot 目标类型只能是 c2c、group 或 channel")
 	}
-	if len(settings.AppID) > 4096 || len(settings.ClientSecret) > 4096 || len(settings.HomeChannel) > 4096 || len(settings.HomeChannelType) > 4096 {
+	if textLength(settings.AppID) > 4096 || textLength(settings.ClientSecret) > 65536 ||
+		textLength(settings.HomeChannel) > 4096 || textLength(settings.HomeChannelType) > 4096 {
 		return NotificationSettings{}, errors.New("QQBot 配置字段过长")
 	}
 	return settings, nil
@@ -855,6 +857,10 @@ func formatTime(value time.Time) string {
 
 func parseTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
+}
+
+func textLength(value string) int {
+	return utf8.RuneCountInString(value)
 }
 
 func unique(values []string) []string {

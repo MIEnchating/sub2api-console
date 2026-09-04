@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -25,11 +26,17 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
-const maximumResponseBytes = 4 << 20
+const (
+	maximumResponseBytes   = 4 << 20
+	maximumDecimalExponent = 1000
+)
 
 const defaultSub2APIPricingURL = "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json"
 
-var remoteLongContextPricePattern = regexp.MustCompile(`^(input|output)_cost_per_token_above_(\d+)k_tokens$`)
+var (
+	remoteLongContextPricePattern = regexp.MustCompile(`^(input|output)_cost_per_token_above_(\d+)k_tokens$`)
+	decimalPricePattern           = regexp.MustCompile(`^\+?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE]([+-]?[0-9]+))?$`)
+)
 
 type PrivateStore interface {
 	NewAPIPlatforms(context.Context) ([]configstore.NewAPIPlatformSummary, error)
@@ -189,9 +196,9 @@ type PriceDifference struct {
 }
 
 type GroupBindingInput struct {
-	NewAPIGroupID   string `json:"newapi_group_id"`
-	NewAPIGroupName string `json:"newapi_group_name"`
-	Sub2APIGroupID  string `json:"sub2api_group_id"`
+	NewAPIGroupID   string `json:"newapi_group_id" binding:"required,min=1,max=128"`
+	NewAPIGroupName string `json:"newapi_group_name" binding:"required,min=1,max=255"`
+	Sub2APIGroupID  string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
 	SyncRatio       bool   `json:"sync_ratio"`
 }
 
@@ -231,17 +238,17 @@ type ChannelEndpoint struct {
 }
 
 type ModelPriceInput struct {
-	Model                string `json:"model"`
-	ModelPrice           string `json:"model_price,omitempty"`
-	InputRatio           string `json:"input_ratio"`
-	CompletionRatio      string `json:"completion_ratio"`
-	BillingMode          string `json:"billing_mode,omitempty"`
-	BillingExpr          string `json:"billing_expr,omitempty"`
-	CacheRatio           string `json:"cache_ratio,omitempty"`
-	CreateCacheRatio     string `json:"create_cache_ratio,omitempty"`
-	ImageRatio           string `json:"image_ratio,omitempty"`
-	AudioRatio           string `json:"audio_ratio,omitempty"`
-	AudioCompletionRatio string `json:"audio_completion_ratio,omitempty"`
+	Model                string `json:"model" binding:"required,min=1,max=256"`
+	ModelPrice           string `json:"model_price,omitempty" binding:"omitempty,max=128"`
+	InputRatio           string `json:"input_ratio" binding:"max=128"`
+	CompletionRatio      string `json:"completion_ratio" binding:"max=128"`
+	BillingMode          string `json:"billing_mode,omitempty" binding:"omitempty,max=64"`
+	BillingExpr          string `json:"billing_expr,omitempty" binding:"omitempty,max=16384"`
+	CacheRatio           string `json:"cache_ratio,omitempty" binding:"omitempty,max=128"`
+	CreateCacheRatio     string `json:"create_cache_ratio,omitempty" binding:"omitempty,max=128"`
+	ImageRatio           string `json:"image_ratio,omitempty" binding:"omitempty,max=128"`
+	AudioRatio           string `json:"audio_ratio,omitempty" binding:"omitempty,max=128"`
+	AudioCompletionRatio string `json:"audio_completion_ratio,omitempty" binding:"omitempty,max=128"`
 }
 
 type ErrorKind string
@@ -616,8 +623,21 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 		return nil, err
 	}
 	items := make([]business.NewAPIGroupBinding, 0, len(inputs))
+	seen := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
-		if _, found := localByID[strings.TrimSpace(input.Sub2APIGroupID)]; !found {
+		input.NewAPIGroupID = strings.TrimSpace(input.NewAPIGroupID)
+		input.NewAPIGroupName = strings.TrimSpace(input.NewAPIGroupName)
+		input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
+		if input.NewAPIGroupID == "" || utf8.RuneCountInString(input.NewAPIGroupID) > 128 ||
+			input.NewAPIGroupName == "" || utf8.RuneCountInString(input.NewAPIGroupName) > 255 ||
+			input.Sub2APIGroupID == "" || utf8.RuneCountInString(input.Sub2APIGroupID) > 128 {
+			return nil, serviceError(ErrorValidation, "分组绑定包含空值或过长字段")
+		}
+		if _, duplicate := seen[input.NewAPIGroupID]; duplicate {
+			return nil, serviceError(ErrorValidation, "同一 New API 分组不能重复绑定")
+		}
+		seen[input.NewAPIGroupID] = struct{}{}
+		if _, found := localByID[input.Sub2APIGroupID]; !found {
 			return nil, serviceError(ErrorValidation, "分组绑定包含不存在的 Sub2API 分组")
 		}
 		items = append(items, business.NewAPIGroupBinding{PlatformID: platformID, NewAPIGroupID: input.NewAPIGroupID, NewAPIGroupName: input.NewAPIGroupName, Sub2APIGroupID: input.Sub2APIGroupID, SyncRatio: input.SyncRatio})
@@ -1120,6 +1140,20 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 	if err != nil {
 		return RemoteSnapshot{}, err
 	}
+	normalizedInputs := append([]ModelPriceInput(nil), inputs...)
+	seenModels := make(map[string]struct{}, len(normalizedInputs))
+	for index := range normalizedInputs {
+		model := strings.TrimSpace(normalizedInputs[index].Model)
+		if model == "" || utf8.RuneCountInString(model) > 256 {
+			return RemoteSnapshot{}, serviceError(ErrorValidation, "模型价格包含空模型或过长模型名称")
+		}
+		if _, duplicate := seenModels[model]; duplicate {
+			return RemoteSnapshot{}, serviceError(ErrorValidation, "同一模型不能在一次价格更新中重复出现")
+		}
+		seenModels[model] = struct{}{}
+		normalizedInputs[index].Model = model
+	}
+	inputs = normalizedInputs
 	options, err := s.readOptions(ctx, *platform)
 	if err != nil {
 		return RemoteSnapshot{}, err
@@ -1145,10 +1179,7 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 		return RemoteSnapshot{}, errors.New("New API 当前计费表达式配置不可读")
 	}
 	for _, input := range inputs {
-		model := strings.TrimSpace(input.Model)
-		if model == "" || len(model) > 256 {
-			return RemoteSnapshot{}, serviceError(ErrorValidation, "模型价格包含空模型或过长模型名称")
-		}
+		model := input.Model
 		for _, key := range numericKeys {
 			delete(numericOptions[key], model)
 		}
@@ -2210,8 +2241,22 @@ func decodeDecimalMap(raw string) (map[string]string, error) {
 }
 
 func validDecimal(value string) bool {
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	return err == nil && parsed >= 0
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	match := decimalPricePattern.FindStringSubmatch(value)
+	if match == nil {
+		return false
+	}
+	if match[1] != "" {
+		exponent, err := strconv.Atoi(match[1])
+		if err != nil || exponent < -maximumDecimalExponent || exponent > maximumDecimalExponent {
+			return false
+		}
+	}
+	parsed, ok := new(big.Rat).SetString(value)
+	return ok && parsed.Sign() >= 0
 }
 
 func normalizeModels(values []string) []string {
@@ -2219,7 +2264,7 @@ func normalizeModels(values []string) []string {
 	seen := map[string]struct{}{}
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == "" || len(value) > 256 {
+		if value == "" || utf8.RuneCountInString(value) > 256 {
 			continue
 		}
 		if _, found := seen[value]; found {

@@ -293,6 +293,9 @@ export function ProbeDialogActions(props: {
   onClose: () => void;
   onRun: () => void;
 }) {
+  let actionLabel = "开始探活";
+  if (props.probePending) actionLabel = "测试中";
+  else if (props.hasResult) actionLabel = "再次探活";
   return (
     <DialogFooter className="min-w-0">
       <Button variant="outline" onClick={props.onClose}>
@@ -300,7 +303,7 @@ export function ProbeDialogActions(props: {
       </Button>
       <Button disabled={props.runDisabled} onClick={props.onRun}>
         {props.probePending ? <LoaderCircle className="animate-spin" /> : <Activity />}
-        {props.probePending ? "测试中" : props.hasResult ? "再次探活" : "开始探活"}
+        {actionLabel}
       </Button>
     </DialogFooter>
   );

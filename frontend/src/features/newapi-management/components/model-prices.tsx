@@ -393,22 +393,25 @@ export function RemoteModelPricesTable(props: {
 
   return (
     <DataTablePanel className="flex min-h-0 flex-1 flex-col">
-      {props.pending ? (
+      {props.pending && (
         <div
           className="text-muted-foreground grid min-h-52 place-items-center text-sm"
           role="status"
         >
           正在获取远程模型价格
         </div>
-      ) : props.error ? (
+      )}
+      {!props.pending && props.error && (
         <div className="text-destructive grid min-h-52 place-items-center px-6 text-center text-sm">
           {props.error}
         </div>
-      ) : props.prices.length === 0 ? (
+      )}
+      {!props.pending && !props.error && props.prices.length === 0 && (
         <div className="text-muted-foreground grid min-h-52 place-items-center px-6 text-center text-sm">
           {props.filtered ? "没有匹配的模型" : "远程价卡未返回模型价格"}
         </div>
-      ) : (
+      )}
+      {!props.pending && !props.error && props.prices.length > 0 && (
         <Table
           containerClassName="min-h-0 flex-1 overflow-auto"
           overflowTooltip={false}

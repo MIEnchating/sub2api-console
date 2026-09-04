@@ -409,23 +409,23 @@ export function NotificationQueueStatus(props: {
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
-            {loading ? (
+            {loading && (
               <DataTablePanel className="h-full overflow-auto">
                 <div className="text-muted-foreground flex min-h-40 items-center justify-center gap-2 text-sm">
                   <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
                   正在读取队列内容
                 </div>
               </DataTablePanel>
-            ) : error ? (
+            )}
+            {!loading && error && (
               <DataTablePanel className="h-full overflow-auto">
                 <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center text-sm">
                   <span className="text-destructive">{error}</span>
                   <RefreshButton ariaLabel="刷新队列内容" onClick={() => void loadQueue()} />
                 </div>
               </DataTablePanel>
-            ) : details ? (
-              <NotificationQueueDetailsList details={details} />
-            ) : null}
+            )}
+            {!loading && !error && details && <NotificationQueueDetailsList details={details} />}
           </DialogBody>
         </DialogContent>
       </Dialog>

@@ -7,11 +7,35 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http/httpguts"
 )
+
+const (
+	maximumCustomHeaderCount      = 100
+	maximumCustomHeaderNameBytes  = 255
+	maximumCustomHeaderValueBytes = 64 << 10
+	maximumCustomHeaderTotalBytes = 128 << 10
+)
+
+var forbiddenCustomHeaders = map[string]struct{}{
+	"Connection":          {},
+	"Content-Length":      {},
+	"Cookie":              {},
+	"Host":                {},
+	"Keep-Alive":          {},
+	"Proxy-Authorization": {},
+	"Proxy-Connection":    {},
+	"Te":                  {},
+	"Trailer":             {},
+	"Transfer-Encoding":   {},
+	"Upgrade":             {},
+}
 
 type AuthRecord struct {
 	Host         string
@@ -218,23 +242,51 @@ func mergeAuthRecord(target *AuthRecord, current AuthRecord, present map[string]
 }
 
 func normalizedHeaders(values map[string]string) (map[string]string, error) {
-	result := map[string]string{}
+	if len(values) > maximumCustomHeaderCount {
+		return nil, errors.New("自定义 Header 数量不能超过 100")
+	}
+	result := make(map[string]string, len(values))
+	totalBytes := 0
 	for key, value := range values {
 		key = strings.TrimSpace(key)
-		if key == "" || strings.EqualFold(key, "cookie") || strings.ContainsAny(key, "\r\n") || strings.ContainsAny(value, "\r\n") {
+		if !httpguts.ValidHeaderFieldName(key) || !httpguts.ValidHeaderFieldValue(value) ||
+			len(key) > maximumCustomHeaderNameBytes || len(value) > maximumCustomHeaderValueBytes {
 			return nil, errors.New("自定义 Header 名称或值无效")
 		}
-		result[key] = value
+		canonicalKey := http.CanonicalHeaderKey(key)
+		if _, forbidden := forbiddenCustomHeaders[canonicalKey]; forbidden {
+			return nil, errors.New("自定义 Header 不能覆盖 HTTP 传输层保留字段")
+		}
+		if _, duplicate := result[canonicalKey]; duplicate {
+			return nil, errors.New("自定义 Header 名称不能重复")
+		}
+		totalBytes += len(canonicalKey) + len(value) + 4
+		if totalBytes > maximumCustomHeaderTotalBytes {
+			return nil, errors.New("自定义 Header 总大小不能超过 128 KiB")
+		}
+		result[canonicalKey] = value
 	}
 	return result, nil
 }
 
 func normalizedCookies(values map[string]string) (map[string]string, error) {
-	result := map[string]string{}
+	if len(values) > maximumCustomHeaderCount {
+		return nil, errors.New("自定义 Cookie 数量不能超过 100")
+	}
+	result := make(map[string]string, len(values))
+	totalBytes := 0
 	for key, value := range values {
 		key = strings.TrimSpace(key)
-		if key == "" || strings.ContainsAny(key, "\r\n;") || strings.ContainsAny(value, "\r\n") {
+		cookie := http.Cookie{Name: key, Value: value}
+		if cookie.Valid() != nil || len(key) > maximumCustomHeaderNameBytes || len(value) > maximumCustomHeaderValueBytes {
 			return nil, errors.New("自定义 Cookie 名称或值无效")
+		}
+		if _, duplicate := result[key]; duplicate {
+			return nil, errors.New("自定义 Cookie 名称不能重复")
+		}
+		totalBytes += len(key) + len(value) + 2
+		if totalBytes > maximumCustomHeaderTotalBytes {
+			return nil, errors.New("自定义 Cookie 总大小不能超过 128 KiB")
 		}
 		result[key] = value
 	}

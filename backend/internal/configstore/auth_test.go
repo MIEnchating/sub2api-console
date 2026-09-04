@@ -2,8 +2,10 @@ package configstore
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -68,6 +70,72 @@ func TestAuthRecordRejectsHeaderInjectionWithoutChangingStoredRecord(t *testing.
 	record, readErr := store.AuthRecord(ctx, "api.example")
 	if readErr != nil || record == nil || record.AuthMode != "sub2api_user_token" {
 		t.Fatalf("failed update changed stored record: record=%#v err=%v", record, readErr)
+	}
+}
+
+func TestNormalizedHeadersRejectsInvalidAmbiguousAndOversizedValues(t *testing.T) {
+	tests := map[string]map[string]string{
+		"invalid field name":   {"Bad Header": "value"},
+		"forbidden field name": {"Host": "attacker.example"},
+		"control character":    {"X-Test": "value\x00suffix"},
+		"duplicate field name": {"X-Test": "one", "x-test": "two"},
+		"oversized field value": {
+			"X-Test": strings.Repeat("a", maximumCustomHeaderValueBytes+1),
+		},
+		"oversized total": {
+			"X-One": strings.Repeat("a", maximumCustomHeaderValueBytes),
+			"X-Two": strings.Repeat("b", maximumCustomHeaderValueBytes),
+		},
+	}
+	many := make(map[string]string, maximumCustomHeaderCount+1)
+	for index := 0; index <= maximumCustomHeaderCount; index++ {
+		many["X-Test-"+strings.Repeat("a", index)] = "value"
+	}
+	tests["too many fields"] = many
+
+	for name, headers := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := normalizedHeaders(headers); err == nil {
+				t.Fatal("invalid headers were accepted")
+			}
+		})
+	}
+}
+
+func TestNormalizedCookiesRejectsInvalidAndOversizedValues(t *testing.T) {
+	tests := map[string]map[string]string{
+		"invalid cookie name":  {"bad name": "value"},
+		"invalid cookie value": {"session": "first; injected=second"},
+		"oversized cookie value": {
+			"session": strings.Repeat("a", maximumCustomHeaderValueBytes+1),
+		},
+		"oversized total": {
+			"first":  strings.Repeat("a", maximumCustomHeaderValueBytes),
+			"second": strings.Repeat("b", maximumCustomHeaderValueBytes),
+		},
+	}
+	many := make(map[string]string, maximumCustomHeaderCount+1)
+	for index := 0; index <= maximumCustomHeaderCount; index++ {
+		many[fmt.Sprintf("cookie_%d", index)] = "value"
+	}
+	tests["too many cookies"] = many
+
+	for name, cookies := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := normalizedCookies(cookies); err == nil {
+				t.Fatal("invalid cookies were accepted")
+			}
+		})
+	}
+}
+
+func TestNormalizedHeadersCanonicalizesValidFieldNames(t *testing.T) {
+	headers, err := normalizedHeaders(map[string]string{"x-custom-header": "中文 value\taccepted"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(headers, map[string]string{"X-Custom-Header": "中文 value\taccepted"}) {
+		t.Fatalf("headers=%#v", headers)
 	}
 }
 

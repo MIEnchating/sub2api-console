@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/gin-gonic/gin v1.11.0
 	golang.org/x/crypto v0.51.0
+	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.45.0
 	modernc.org/sqlite v1.40.1
 )
@@ -38,7 +39,6 @@ require (
 	github.com/ugorji/go/codec v1.3.0 // indirect
 	golang.org/x/arch v0.20.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 	modernc.org/libc v1.66.10 // indirect

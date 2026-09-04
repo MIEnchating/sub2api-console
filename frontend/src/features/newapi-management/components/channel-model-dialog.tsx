@@ -99,21 +99,26 @@ export function NewAPIChannelModelDialog(props: Props) {
             role="list"
             aria-label="上游模型"
           >
-            {props.pending ? (
+            {props.pending && (
               <div className="grid gap-3 p-3" role="status" aria-label="正在从上游获取模型">
                 {Array.from({ length: 7 }, (_, index) => (
                   <Skeleton key={index} className="h-10 w-full" />
                 ))}
               </div>
-            ) : props.error ? (
+            )}
+            {!props.pending && props.error && (
               <div className="text-destructive grid min-h-44 place-items-center p-6 text-center text-sm">
                 {props.error}
               </div>
-            ) : visibleModels.length === 0 ? (
+            )}
+            {!props.pending && !props.error && visibleModels.length === 0 && (
               <div className="text-muted-foreground grid min-h-44 place-items-center p-6 text-center text-sm">
                 {search ? "没有匹配的模型" : "上游未返回模型"}
               </div>
-            ) : (
+            )}
+            {!props.pending &&
+              !props.error &&
+              visibleModels.length > 0 &&
               visibleModels.map((model) => {
                 const checked = props.selected.includes(model);
                 return (
@@ -133,8 +138,7 @@ export function NewAPIChannelModelDialog(props: Props) {
                     <span className="min-w-0 flex-1 break-all font-mono text-xs">{model}</span>
                   </label>
                 );
-              })
-            )}
+              })}
           </div>
         </DialogBody>
         <DialogFooter className="items-center sm:justify-between">

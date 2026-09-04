@@ -48,6 +48,9 @@ export function AccountOperationButtons(props: {
   const resumable = paused || (!policyStopped && props.account.schedulable === false);
   const excluded = state === "excluded";
   const manualControlled = props.account.manual_priority != null;
+  let accountOperationCopy = { scheduling: "暂停调度" };
+  if (resumable) accountOperationCopy = { scheduling: "恢复调度" };
+  else if (policyStopped) accountOperationCopy = { scheduling: "已停止调度" };
   return (
     <div className="ml-auto flex items-center justify-end gap-1">
       {excluded ? (
@@ -69,7 +72,7 @@ export function AccountOperationButtons(props: {
             {props.probePending ? <LoaderCircle className="animate-spin" /> : <Activity />}
           </TableActionButton>
           <TableActionButton
-            label={resumable ? "恢复调度" : policyStopped ? "已停止调度" : "暂停调度"}
+            label={accountOperationCopy.scheduling}
             tone={resumable ? "primary" : "default"}
             disabled={props.pending || policyStopped || manualControlled}
             onClick={() =>

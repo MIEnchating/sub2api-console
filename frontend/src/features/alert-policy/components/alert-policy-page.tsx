@@ -210,11 +210,11 @@ export function AlertPolicyPage(props: AlertPolicyPageProps) {
       />
 
       {policy.error && <QueryErrorToast error={policy.error} fallback="告警策略读取失败" />}
-      {policy.isLoading ? (
-        <LoadingPolicy />
-      ) : !policyReady ? (
+      {policy.isLoading && <LoadingPolicy />}
+      {!policy.isLoading && !policyReady && (
         <PolicyUnavailable isFetching={policy.isFetching} onRetry={() => void policy.refetch()} />
-      ) : (
+      )}
+      {!policy.isLoading && policyReady && (
         <form
           onSubmit={submit}
           data-slot="alert-policy-columns"

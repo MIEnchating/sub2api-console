@@ -105,8 +105,6 @@ const policy: PolicySnapshot = {
 };
 
 const config: RuntimeConfig = {
-  database_path: "/data/sub2api-console.sqlite3",
-  data_database_path: "/data/sub2api-console.sqlite3",
   database_available: true,
   data_database_available: true,
   mode: "完全模式",
@@ -157,12 +155,9 @@ function policySection(markup: string, title: string, nextTitle?: string) {
     : -1;
   const nextCardPosition =
     nextTitlePosition > start ? markup.lastIndexOf('<div data-slot="card"', nextTitlePosition) : -1;
-  const end =
-    nextCardPosition > start
-      ? nextCardPosition
-      : nextTitlePosition > start
-        ? nextTitlePosition
-        : markup.length;
+  let end = markup.length;
+  if (nextCardPosition > start) end = nextCardPosition;
+  else if (nextTitlePosition > start) end = nextTitlePosition;
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return markup.slice(start, end);

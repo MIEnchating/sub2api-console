@@ -319,16 +319,18 @@ export function GroupAllocationDialog(props: Props) {
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="overflow-hidden pr-0">
-          {props.loading ? (
+          {props.loading && (
             <div className={groupAllocationLayout.loading} aria-label="正在读取分组账号调度状态">
               <Skeleton className="h-full w-full" />
               <Skeleton className="h-full min-h-0 w-full" />
             </div>
-          ) : props.error ? (
+          )}
+          {!props.loading && Boolean(props.error) && (
             <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
-          ) : props.allocation ? (
+          )}
+          {!props.loading && !props.error && props.allocation && (
             <GroupAllocationContent allocation={props.allocation} />
-          ) : null}
+          )}
         </DialogBody>
       </DialogContent>
     </Dialog>

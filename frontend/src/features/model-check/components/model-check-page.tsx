@@ -230,6 +230,11 @@ export function ModelCheckPage() {
     ],
   );
   const combinationCount = selectedAccountIDs.length * selectedModels.length;
+  let resultDialogTitle = "正在检测模型";
+  if (task.data?.status === "succeeded") resultDialogTitle = "模型检测结果";
+  else if (task.data?.status === "failed" || task.data?.status === "cancelled") {
+    resultDialogTitle = "模型检测失败";
+  }
   const dialogLayout = modelCheckDialogLayout(task.data);
 
   function toggleAccount(accountID: string, checked: boolean) {
@@ -343,13 +348,7 @@ export function ModelCheckPage() {
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>
-              {task.data?.status === "succeeded"
-                ? "模型检测结果"
-                : task.data?.status === "failed" || task.data?.status === "cancelled"
-                  ? "模型检测失败"
-                  : "正在检测模型"}
-            </DialogTitle>
+            <DialogTitle>{resultDialogTitle}</DialogTitle>
           </DialogHeader>
           <DialogBody className={dialogLayout.resultsReady ? "overflow-hidden pr-0" : undefined}>
             {task.error ? (

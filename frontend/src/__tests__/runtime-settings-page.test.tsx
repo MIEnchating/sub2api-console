@@ -16,8 +16,6 @@ describe("系统设置页面职责", () => {
   it("只展示可操作的系统设置，不重复展示运行状态和 Host 鉴权配置", () => {
     const queryClient = new QueryClient();
     const config: RuntimeConfig = {
-      database_path: "/data/sub2api-console.sqlite3",
-      data_database_path: "/data/sub2api-console.sqlite3",
       database_available: true,
       data_database_available: true,
       mode: "完全模式",
@@ -188,8 +186,6 @@ describe("系统设置页面职责", () => {
   it("commits a saved management target before a follow-up sync fails to start", async () => {
     const queryClient = new QueryClient();
     const saved: RuntimeConfig = {
-      database_path: "/data/sub2api-console.sqlite3",
-      data_database_path: "/data/sub2api-console.sqlite3",
       database_available: true,
       data_database_available: true,
       mode: "完全模式",
@@ -244,8 +240,6 @@ describe("系统设置页面职责", () => {
       defaultOptions: { queries: { enabled: false, retry: false } },
     });
     queryClient.setQueryData<RuntimeConfig>(["config"], {
-      database_path: "/data/sub2api-console.sqlite3",
-      data_database_path: "/data/sub2api-console.sqlite3",
       database_available: true,
       data_database_available: true,
       mode: "完全模式",

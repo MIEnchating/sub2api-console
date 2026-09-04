@@ -114,6 +114,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
   const taskFinished = Boolean(props.task && !taskRunning);
   const resultItems = props.task ? keyCleanupResultItems(props.task) : [];
   const controlsDisabled = props.previewPending || props.taskPending || taskRunning;
+  const closeButtonLabel = keys.length > 0 ? "取消" : "关闭";
 
   return (
     <div data-slot="onboarding-key-cleanup-dialog" className="contents">
@@ -246,14 +247,14 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
         ) : null}
       </DialogBody>
       <DialogFooter>
-        {!props.task ? (
+        {!props.task && (
           <>
             <Button
               variant="outline"
               disabled={controlsDisabled}
               onClick={() => props.onOpenChange(false)}
             >
-              {keys.length > 0 ? "取消" : "关闭"}
+              {closeButtonLabel}
             </Button>
             <RefreshButton
               pending={props.previewPending}
@@ -268,7 +269,8 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
               </Button>
             ) : null}
           </>
-        ) : taskFinished ? (
+        )}
+        {props.task && taskFinished && (
           <Button onClick={props.onComplete}>
             {props.task?.status === "failed" ? (
               <XCircle aria-hidden="true" />
@@ -277,7 +279,8 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
             )}
             完成
           </Button>
-        ) : (
+        )}
+        {props.task && !taskFinished && (
           <Button variant="outline" disabled>
             清理进行中
           </Button>

@@ -7,6 +7,7 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     rules: {
+      "no-nested-ternary": "error",
       "no-restricted-globals": [
         "error",
         { name: "alert", message: "请使用项目 Dialog 或 toast 组件。" },

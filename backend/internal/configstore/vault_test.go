@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,18 @@ func TestVaultEntryUsesExactSelectionAndRedactedIndex(t *testing.T) {
 	}
 	if len(index) != 1 || !index[0].HasUsername || !index[0].HasPassword || !index[0].UsernameIsEmail || len(index[0].HeaderNames) != 1 {
 		t.Fatalf("unexpected redacted index: %#v", index)
+	}
+}
+
+func TestVaultEntryNameUsesUnicodeCharacterLimit(t *testing.T) {
+	store := openTestStore(t)
+	entry := strings.Repeat("凭", 255)
+	if err := store.SaveVaultEntry(context.Background(), VaultEntry{Entry: entry}, nil); err != nil {
+		t.Fatalf("valid Unicode vault entry name was rejected: %v", err)
+	}
+	stored, err := store.VaultEntry(context.Background(), entry)
+	if err != nil || stored == nil || stored.Entry != entry {
+		t.Fatalf("stored=%#v err=%v", stored, err)
 	}
 }
 

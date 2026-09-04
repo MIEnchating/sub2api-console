@@ -137,6 +137,12 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
               pagination.visibleItems.map((account) => {
                 const currentRepairKind = repairKind(account);
                 const presentation = accountBaseURLPresentation(account);
+                let repairLabel = "修复归属";
+                if (props.repairingAccountId === account.id && props.repairing) {
+                  repairLabel = "修复中";
+                } else if (currentRepairKind === "base_url") {
+                  repairLabel = "修复并恢复";
+                }
                 return (
                   <TableRow key={account.id}>
                     <TableCell className="align-top whitespace-normal">
@@ -216,11 +222,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
                             }
                             aria-hidden="true"
                           />
-                          {props.repairingAccountId === account.id && props.repairing
-                            ? "修复中"
-                            : currentRepairKind === "base_url"
-                              ? "修复并恢复"
-                              : "修复归属"}
+                          {repairLabel}
                         </Button>
                       ) : (
                         <span className="text-muted-foreground text-xs">—</span>

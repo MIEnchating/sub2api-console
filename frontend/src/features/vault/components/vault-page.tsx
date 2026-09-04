@@ -357,6 +357,9 @@ export function VaultPage() {
     },
     onError: (error) => notifyOperationError(error, "凭据删除失败"),
   });
+  let saveButtonLabel = "添加凭据";
+  if (save.isPending) saveButtonLabel = "保存中...";
+  else if (editing) saveButtonLabel = "保存修改";
 
   return (
     <PageLayout fixedContent>
@@ -401,9 +404,8 @@ export function VaultPage() {
         </TableFilterToolbar>
 
         <DataTablePanel className="flex-1">
-          {config.error ? (
-            <QueryErrorToast error={config.error} fallback="密码箱读取失败" />
-          ) : config.isLoading ? (
+          {config.error && <QueryErrorToast error={config.error} fallback="密码箱读取失败" />}
+          {!config.error && config.isLoading && (
             <Table containerClassName="min-h-0 flex-1 overflow-auto">
               <TableBody>
                 {Array.from({ length: 4 }, (_, row) => (
@@ -417,7 +419,8 @@ export function VaultPage() {
                 ))}
               </TableBody>
             </Table>
-          ) : entries.length === 0 ? (
+          )}
+          {!config.error && !config.isLoading && entries.length === 0 && (
             <div className="grid min-h-48 place-items-center p-6 text-center">
               <div>
                 <KeyRound className="text-muted-foreground mx-auto mb-3 size-6" />
@@ -427,7 +430,8 @@ export function VaultPage() {
                 </p>
               </div>
             </div>
-          ) : (
+          )}
+          {!config.error && !config.isLoading && entries.length > 0 && (
             <VaultEntryTable
               entries={entries}
               conflictEntries={conflictEntries}
@@ -624,7 +628,7 @@ export function VaultPage() {
               取消
             </Button>
             <Button onClick={submitSave} disabled={save.isPending || !form.entry.trim()}>
-              {save.isPending ? "保存中..." : editing ? "保存修改" : "添加凭据"}
+              {saveButtonLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

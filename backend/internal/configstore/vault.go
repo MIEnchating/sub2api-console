@@ -61,7 +61,7 @@ func (s *Store) VaultEntry(ctx context.Context, entry string) (*VaultEntry, erro
 
 func (s *Store) SaveVaultEntry(ctx context.Context, entry VaultEntry, present map[string]bool) error {
 	entry.Entry = strings.TrimSpace(entry.Entry)
-	if entry.Entry == "" || len(entry.Entry) > 255 {
+	if entry.Entry == "" || textLength(entry.Entry) > 255 {
 		return errors.New("凭据名称长度必须在 1 到 255 之间")
 	}
 	current, err := s.VaultEntry(ctx, entry.Entry)
@@ -191,5 +191,5 @@ func pointerLength(value *string) int {
 	if value == nil {
 		return 0
 	}
-	return len(*value)
+	return textLength(*value)
 }

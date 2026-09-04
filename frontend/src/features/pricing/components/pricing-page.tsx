@@ -997,6 +997,11 @@ export function PricingPreviewTable(props: {
                 const currentGroups = groupIDsLabel(decision.current_group_ids, groupNames);
                 const reason = pricingDecisionReason(decision, props.groups, props.config);
                 const expanded = expandedAccountID === decision.account_id;
+                let statusBadge = <Badge variant="outline">无需调整</Badge>;
+                if (decision.skipped) statusBadge = <Badge variant="warning">无法判定</Badge>;
+                else if (decision.changed) {
+                  statusBadge = <Badge variant="secondary">将调整</Badge>;
+                }
                 return (
                   <Fragment key={decision.account_id}>
                     <TableRow>
@@ -1036,15 +1041,7 @@ export function PricingPreviewTable(props: {
                       <TableCell className="text-muted-foreground align-top whitespace-normal">
                         <span className="break-words text-xs leading-5">{reason}</span>
                       </TableCell>
-                      <TableCell className="align-top">
-                        {decision.skipped ? (
-                          <Badge variant="warning">无法判定</Badge>
-                        ) : decision.changed ? (
-                          <Badge variant="secondary">将调整</Badge>
-                        ) : (
-                          <Badge variant="outline">无需调整</Badge>
-                        )}
-                      </TableCell>
+                      <TableCell className="align-top">{statusBadge}</TableCell>
                       <TableCell className="align-top">
                         <Button
                           type="button"
@@ -1554,13 +1551,13 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       {snapshot.error ? (
         <QueryErrorToast error={snapshot.error} fallback="价格数据读取失败" />
       ) : null}
-      {snapshot.isLoading || !snapshot.data ? (
-        <PricingLoading />
-      ) : props.page === "catalog" ? (
+      {(snapshot.isLoading || !snapshot.data) && <PricingLoading />}
+      {!snapshot.isLoading && snapshot.data && props.page === "catalog" && (
         <div className="flex h-full min-h-0 flex-col" data-testid="pricing-page">
           <PricingCatalogTable groups={snapshot.data.groups} decisions={snapshot.data.decisions} />
         </div>
-      ) : current ? (
+      )}
+      {!snapshot.isLoading && snapshot.data && props.page !== "catalog" && current && (
         <div className="space-y-3" data-testid="pricing-config-page">
           <Card size="sm" data-testid="pricing-settings-panel">
             <CardHeader className="grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -1738,7 +1735,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             </CardContent>
           </Card>
         </div>
-      ) : (
+      )}
+      {!snapshot.isLoading && snapshot.data && props.page !== "catalog" && !current && (
         <PricingLoading />
       )}
       {previewConfig && snapshot.data ? (
@@ -1776,7 +1774,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             <DialogDescription>最近 100 批已完成的账号分组调整。</DialogDescription>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
-            {changes.error ? (
+            {changes.error && (
               <div className="flex h-full min-h-40 flex-col items-center justify-center gap-3">
                 <QueryErrorToast error={changes.error} fallback="价格变更记录读取失败" />
                 <span className="text-muted-foreground text-sm">价格变更记录读取失败</span>
@@ -1786,13 +1784,15 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   onClick={() => void changes.refetch()}
                 />
               </div>
-            ) : changes.isLoading ? (
+            )}
+            {!changes.error && changes.isLoading && (
               <div className="space-y-3" data-testid="pricing-changes-loading">
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-14 w-full" />
                 <Skeleton className="h-14 w-full" />
               </div>
-            ) : (
+            )}
+            {!changes.error && !changes.isLoading && (
               <PricingChangeList records={changes.data ?? []} />
             )}
           </DialogBody>

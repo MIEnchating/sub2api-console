@@ -5,18 +5,16 @@ import { upstreamSyncAuthStatusMeta, UpstreamSyncTaskStatus } from "../../App";
 import type { Task } from "../../api";
 
 function task(status: Task["status"], result: Task["result"]): Task {
+  let message = "上游同步完成";
+  if (status === "running") message = "正在同步上游：已完成 1/4 个 Host";
+  else if (status === "failed") message = "上游同步失败";
   return {
     id: "sync-task",
     skill: "sub2api-upstream-info",
     operation: "upstream-sync",
     status,
     progress: status === "running" ? 20 : 100,
-    message:
-      status === "running"
-        ? "正在同步上游：已完成 1/4 个 Host"
-        : status === "failed"
-          ? "上游同步失败"
-          : "上游同步完成",
+    message,
     result,
     created_at: "2026-08-25T00:00:00Z",
     updated_at: "2026-08-25T00:00:01Z",

@@ -629,6 +629,9 @@ function App() {
     navSections,
     hiddenNavigationItemIDs,
   );
+  let openAlertsLabel: number | string | undefined = overview.data?.open_alerts;
+  if (overview.isError) openAlertsLabel = "错误";
+  else if (overview.isLoading) openAlertsLabel = "…";
   return (
     <>
       <SidebarProvider className="h-svh max-h-svh flex-col overflow-hidden" defaultOpen>
@@ -654,13 +657,7 @@ function App() {
               >
                 <BellRing size={15} />
                 <span className="hidden sm:inline">告警</span>
-                <Badge variant="destructive">
-                  {overview.isError
-                    ? "错误"
-                    : overview.isLoading
-                      ? "…"
-                      : overview.data?.open_alerts}
-                </Badge>
+                <Badge variant="destructive">{openAlertsLabel}</Badge>
               </Button>
               <Tooltip>
                 <TooltipTrigger
@@ -880,6 +877,19 @@ export function SchedulerHeaderControls() {
   let toggleLabel = "启动调度";
   if (toggle.isPending) toggleLabel = "处理中";
   else if (schedulingEnabled) toggleLabel = "取消调度";
+  let statusDotClassName = "bg-muted-foreground/60";
+  if (status.isError) statusDotClassName = "bg-destructive";
+  else if (status.isLoading) statusDotClassName = "animate-pulse bg-muted-foreground";
+  else if (status.data?.running) statusDotClassName = "animate-pulse bg-amber-500";
+  else if (status.data?.enabled) statusDotClassName = "bg-emerald-500";
+  let statusLabel = runtimeLabel;
+  if (status.isError) statusLabel = "状态读取失败";
+  else if (status.isLoading) statusLabel = "读取状态";
+  let statusDescription = "尚未执行巡检";
+  if (status.isError) statusDescription = "自动巡检状态接口暂时不可用";
+  else if (status.data?.last_run_at) {
+    statusDescription = `上次执行：${formatDate(status.data.last_run_at, true)}`;
+  }
   return (
     <div className="flex items-center gap-1" data-testid="scheduler-header-controls">
       <Tooltip>
@@ -891,29 +901,10 @@ export function SchedulerHeaderControls() {
             />
           }
         >
-          <span
-            className={cn(
-              "size-1.5 rounded-full",
-              status.isError
-                ? "bg-destructive"
-                : status.isLoading
-                  ? "animate-pulse bg-muted-foreground"
-                  : status.data?.running
-                    ? "animate-pulse bg-amber-500"
-                    : status.data?.enabled
-                      ? "bg-emerald-500"
-                      : "bg-muted-foreground/60",
-            )}
-          />
-          {status.isError ? "状态读取失败" : status.isLoading ? "读取状态" : runtimeLabel}
+          <span className={cn("size-1.5 rounded-full", statusDotClassName)} />
+          {statusLabel}
         </TooltipTrigger>
-        <TooltipContent>
-          {status.isError
-            ? "自动巡检状态接口暂时不可用"
-            : status.data?.last_run_at
-              ? `上次执行：${formatDate(status.data.last_run_at, true)}`
-              : "尚未执行巡检"}
-        </TooltipContent>
+        <TooltipContent>{statusDescription}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger render={<span className="inline-flex" />}>
@@ -1035,29 +1026,23 @@ export function SchedulerSidebarStatus() {
     refetchInterval: 15_000,
   });
   const trafficState = trafficCollectionState(status.data, status.isError);
+  let inspectionDotClassName = "bg-muted-foreground/50";
+  let inspectionLabel = "自动巡检已暂停";
+  if (status.isError) {
+    inspectionDotClassName = "bg-destructive";
+    inspectionLabel = "自动巡检状态读取失败";
+  } else if (status.data?.enabled) {
+    inspectionDotClassName = "bg-emerald-500";
+    inspectionLabel = "自动巡检中";
+  }
   return (
     <div
       className="border-sidebar-border mt-auto min-w-0 space-y-2 overflow-hidden border-t px-4 py-3 group-data-[collapsible=icon]:hidden"
       data-testid="scheduler-sidebar-status"
     >
       <div className="flex h-4 min-w-0 items-center gap-2 overflow-hidden text-xs whitespace-nowrap">
-        <span
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            status.isError
-              ? "bg-destructive"
-              : status.data?.enabled
-                ? "bg-emerald-500"
-                : "bg-muted-foreground/50",
-          )}
-        />
-        <span className="min-w-0 truncate">
-          {status.isError
-            ? "自动巡检状态读取失败"
-            : status.data?.enabled
-              ? "自动巡检中"
-              : "自动巡检已暂停"}
-        </span>
+        <span className={cn("size-2 shrink-0 rounded-full", inspectionDotClassName)} />
+        <span className="min-w-0 truncate">{inspectionLabel}</span>
       </div>
       <div className="flex h-4 min-w-0 items-center gap-2 overflow-hidden text-xs whitespace-nowrap">
         <span className={cn("size-2 shrink-0 rounded-full", trafficStateDot(trafficState.tone))} />
@@ -2236,6 +2221,21 @@ export function UpstreamsPage() {
   const captchaExpired =
     captchaExpiresAt !== null &&
     (!Number.isFinite(captchaExpiresAt.getTime()) || captchaExpiresAt.getTime() <= captchaClock);
+  let managementTitle = "上游名称修复";
+  let managementStartupMessage = "正在重新读取站点名称";
+  let managementErrorFallback = "上游名称修复启动失败";
+  let managementScope: "balance" | "groups" | "names" = "names";
+  if (managementDialog === "balance") {
+    managementTitle = "同步余额";
+    managementStartupMessage = "正在创建余额同步任务";
+    managementErrorFallback = "余额同步启动失败";
+    managementScope = "balance";
+  } else if (managementDialog === "groups") {
+    managementTitle = "同步分组";
+    managementStartupMessage = "正在创建分组同步任务";
+    managementErrorFallback = "分组同步启动失败";
+    managementScope = "groups";
+  }
   function prepareCaptchaAgain() {
     if (captchaChallenge === null) return;
     cancelCaptcha.mutate(captchaChallenge, {
@@ -2729,40 +2729,18 @@ export function UpstreamsPage() {
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>
-              {managementDialog === "balance"
-                ? "同步余额"
-                : managementDialog === "groups"
-                  ? "同步分组"
-                  : "上游名称修复"}
-            </DialogTitle>
+            <DialogTitle>{managementTitle}</DialogTitle>
           </DialogHeader>
           <DialogBody className={cn(managementTask.data && "overflow-hidden pr-0")}>
             {!managementTask.data &&
               !managementTask.error &&
               !balanceSync.error &&
               !groupSync.error &&
-              !nameRepair.error && (
-                <TaskStartupState
-                  message={
-                    managementDialog === "balance"
-                      ? "正在创建余额同步任务"
-                      : managementDialog === "groups"
-                        ? "正在创建分组同步任务"
-                        : "正在重新读取站点名称"
-                  }
-                />
-              )}
+              !nameRepair.error && <TaskStartupState message={managementStartupMessage} />}
             {(balanceSync.error || groupSync.error || nameRepair.error) && (
               <QueryError
                 error={balanceSync.error ?? groupSync.error ?? nameRepair.error}
-                fallback={
-                  managementDialog === "balance"
-                    ? "余额同步启动失败"
-                    : managementDialog === "groups"
-                      ? "分组同步启动失败"
-                      : "上游名称修复启动失败"
-                }
+                fallback={managementErrorFallback}
                 embedded
               />
             )}
@@ -2770,16 +2748,7 @@ export function UpstreamsPage() {
               <QueryError error={managementTask.error} fallback="同步任务状态读取失败" embedded />
             )}
             {managementTask.data && (
-              <UpstreamSyncTaskStatus
-                task={managementTask.data}
-                scope={
-                  managementDialog === "balance"
-                    ? "balance"
-                    : managementDialog === "groups"
-                      ? "groups"
-                      : "names"
-                }
-              />
+              <UpstreamSyncTaskStatus task={managementTask.data} scope={managementScope} />
             )}
           </DialogBody>
         </DialogContent>
@@ -3014,7 +2983,7 @@ export function UpstreamsPage() {
         >
           <UpstreamGroupDialogHeader view={groupDialogView} onViewChange={setGroupDialogView} />
           <DialogBody className="overflow-hidden pr-0">
-            {groupDialogView === "catalog" ? (
+            {groupDialogView === "catalog" && (
               <DataTablePanel className="h-full">
                 <Table
                   className="min-w-[860px] table-fixed"
@@ -3043,6 +3012,16 @@ export function UpstreamsPage() {
                     )}
                     {!groups.isError &&
                       groupPageRows.map((group) => {
+                        const compatibleGroups = compatibleOnboardingLocalGroups(
+                          group,
+                          localGroupOptions,
+                        );
+                        let bindingDisabledReason = group.unavailable_reason ?? null;
+                        if (compatibleGroups.length === 0) {
+                          bindingDisabledReason = "没有与上游平台一致的本地分组";
+                        } else if (group.bound) {
+                          bindingDisabledReason = null;
+                        }
                         return (
                           <TableRow key={`${group.host}:${group.group_id}`}>
                             <TableCell className="font-medium" tooltipContent={group.name}>
@@ -3067,19 +3046,11 @@ export function UpstreamsPage() {
                                 disabled={
                                   !group.group_id ||
                                   (!group.bound && !group.bindable) ||
-                                  compatibleOnboardingLocalGroups(group, localGroupOptions)
-                                    .length === 0 ||
+                                  compatibleGroups.length === 0 ||
                                   saveGroupBindings.isPending ||
                                   Boolean(groupBindingTaskId)
                                 }
-                                disabledReason={
-                                  compatibleOnboardingLocalGroups(group, localGroupOptions)
-                                    .length === 0
-                                    ? "没有与上游平台一致的本地分组"
-                                    : group.bound
-                                      ? null
-                                      : (group.unavailable_reason ?? null)
-                                }
+                                disabledReason={bindingDisabledReason}
                                 onValueChange={(value) => {
                                   if (!group.group_id) return;
                                   setGroupBindings((current) => ({
@@ -3105,13 +3076,16 @@ export function UpstreamsPage() {
                   />
                 )}
               </DataTablePanel>
-            ) : groupHistory.isLoading ? (
+            )}
+            {groupDialogView !== "catalog" && groupHistory.isLoading && (
               <div className="flex min-h-0 items-center justify-center">
                 <span className="text-muted-foreground text-sm">正在读取变化历史</span>
               </div>
-            ) : groupHistory.isError ? (
+            )}
+            {groupDialogView !== "catalog" && !groupHistory.isLoading && groupHistory.isError && (
               <QueryError error={groupHistory.error} fallback="上游分组变化历史读取失败" embedded />
-            ) : (
+            )}
+            {groupDialogView !== "catalog" && !groupHistory.isLoading && !groupHistory.isError && (
               <UpstreamGroupHistory rows={groupHistory.data ?? []} />
             )}
           </DialogBody>
@@ -3418,6 +3392,9 @@ export function ManualAuthForm(props: {
   ) {
     incomplete = true;
   }
+  let submitLabel = "验证并保存";
+  if (mutation.isPending || props.vaultPending) submitLabel = "正在验证";
+  else if (usesVaultLogin) submitLabel = "开始恢复";
   return (
     <form
       className="mt-5 grid w-full min-w-0 max-w-full gap-4 overflow-x-clip border-t pt-5"
@@ -3481,7 +3458,7 @@ export function ManualAuthForm(props: {
           </SelectContent>
         </Select>
       </FormField>
-      {usesAdminKey ? (
+      {usesAdminKey && (
         <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <FormField label="Admin Key">
             <Input
@@ -3513,7 +3490,8 @@ export function ManualAuthForm(props: {
             />
           </FormField>
         </div>
-      ) : usesSub2ApiToken || usesUserToken ? (
+      )}
+      {!usesAdminKey && (usesSub2ApiToken || usesUserToken) && (
         <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <FormField label="Token">
             <Input
@@ -3549,7 +3527,8 @@ export function ManualAuthForm(props: {
             </FormField>
           ) : null}
         </div>
-      ) : usesVaultLogin ? (
+      )}
+      {!usesAdminKey && !usesSub2ApiToken && !usesUserToken && usesVaultLogin && (
         <FormField label="密码箱密码项">
           <Select
             value={entry}
@@ -3573,65 +3552,70 @@ export function ManualAuthForm(props: {
             <QueryError error={authConfig.error} fallback="密码箱读取失败" embedded />
           ) : null}
         </FormField>
-      ) : usesManualLogin ? (
-        <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <FormField label="用户名">
-            <Input
-              autoComplete="username"
-              value={credentials.username}
-              onChange={(event) =>
-                setCredentials((current) => ({
-                  ...current,
-                  username: event.target.value,
-                }))
-              }
-            />
-          </FormField>
-          <FormField label="密码">
-            <Input
-              type="password"
-              autoComplete="current-password"
-              value={credentials.password}
-              onChange={(event) =>
-                setCredentials((current) => ({
-                  ...current,
-                  password: event.target.value,
-                }))
-              }
-            />
-          </FormField>
-          <div className="flex items-center gap-2 sm:col-span-2">
-            <Switch
-              id="manual-auth-save-to-vault"
-              checked={credentials.saveToVault}
-              onCheckedChange={(checked) =>
-                setCredentials((current) => ({
-                  ...current,
-                  saveToVault: checked,
-                }))
-              }
-              aria-label="登录成功后保存到密码箱"
-            />
-            <label className="cursor-pointer text-sm" htmlFor="manual-auth-save-to-vault">
-              登录成功后自动保存到密码箱
-            </label>
-          </div>
-          {credentials.saveToVault ? (
-            <FormField label="凭据名称（可选）">
+      )}
+      {!usesAdminKey &&
+        !usesSub2ApiToken &&
+        !usesUserToken &&
+        !usesVaultLogin &&
+        usesManualLogin && (
+          <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <FormField label="用户名">
               <Input
-                value={credentials.entry}
+                autoComplete="username"
+                value={credentials.username}
                 onChange={(event) =>
                   setCredentials((current) => ({
                     ...current,
-                    entry: event.target.value,
+                    username: event.target.value,
                   }))
                 }
-                placeholder="默认使用 Host"
               />
             </FormField>
-          ) : null}
-        </div>
-      ) : null}
+            <FormField label="密码">
+              <Input
+                type="password"
+                autoComplete="current-password"
+                value={credentials.password}
+                onChange={(event) =>
+                  setCredentials((current) => ({
+                    ...current,
+                    password: event.target.value,
+                  }))
+                }
+              />
+            </FormField>
+            <div className="flex items-center gap-2 sm:col-span-2">
+              <Switch
+                id="manual-auth-save-to-vault"
+                checked={credentials.saveToVault}
+                onCheckedChange={(checked) =>
+                  setCredentials((current) => ({
+                    ...current,
+                    saveToVault: checked,
+                  }))
+                }
+                aria-label="登录成功后保存到密码箱"
+              />
+              <label className="cursor-pointer text-sm" htmlFor="manual-auth-save-to-vault">
+                登录成功后自动保存到密码箱
+              </label>
+            </div>
+            {credentials.saveToVault ? (
+              <FormField label="凭据名称（可选）">
+                <Input
+                  value={credentials.entry}
+                  onChange={(event) =>
+                    setCredentials((current) => ({
+                      ...current,
+                      entry: event.target.value,
+                    }))
+                  }
+                  placeholder="默认使用 Host"
+                />
+              </FormField>
+            ) : null}
+          </div>
+        )}
       {showsLoginAgreement ? (
         <UpstreamLoginAgreementConsent
           checked={acceptLoginAgreement}
@@ -3671,11 +3655,7 @@ export function ManualAuthForm(props: {
       <div className="flex justify-end">
         <Button type="submit" disabled={mutation.isPending || props.vaultPending || incomplete}>
           <ShieldCheck size={16} />
-          {mutation.isPending || props.vaultPending
-            ? "正在验证"
-            : usesVaultLogin
-              ? "开始恢复"
-              : "验证并保存"}
+          {submitLabel}
         </Button>
       </div>
     </form>
@@ -4027,6 +4007,17 @@ export function AccountsPage() {
     setAccountSort(value);
     pagination.setCurrentPage(1);
   }
+  let maintenanceTitle = "账号命名修复";
+  let maintenanceDescription = `将处理当前筛选结果中的 ${maintenanceAccountIds.length} 个自动管理账号，只处理其中已有绑定的账号。`;
+  if (maintenanceKind === "rate") {
+    maintenanceTitle = "同步账号倍率";
+    maintenanceDescription = `将使用账号凭据向上游探测当前筛选结果中的 ${maintenanceAccountIds.length} 个账号有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`;
+  } else if (maintenanceKind === "revalidate") {
+    maintenanceTitle = "复验账号绑定";
+  } else if (maintenanceKind === "cleanup") {
+    maintenanceTitle = "修复失效绑定";
+    maintenanceDescription = `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`;
+  }
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -4376,22 +4367,8 @@ export function AccountsPage() {
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>
-              {maintenanceKind === "rate"
-                ? "同步账号倍率"
-                : maintenanceKind === "revalidate"
-                  ? "复验账号绑定"
-                  : maintenanceKind === "cleanup"
-                    ? "修复失效绑定"
-                    : "账号命名修复"}
-            </DialogTitle>
-            <DialogDescription>
-              {maintenanceKind === "cleanup"
-                ? `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`
-                : maintenanceKind === "rate"
-                  ? `将使用账号凭据向上游探测当前筛选结果中的 ${maintenanceAccountIds.length} 个账号有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`
-                  : `将处理当前筛选结果中的 ${maintenanceAccountIds.length} 个自动管理账号，只处理其中已有绑定的账号。`}
-            </DialogDescription>
+            <DialogTitle>{maintenanceTitle}</DialogTitle>
+            <DialogDescription>{maintenanceDescription}</DialogDescription>
           </DialogHeader>
           <DialogBody className={cn(maintenanceTask.data && "overflow-hidden pr-0")}>
             {maintenanceKind === "repair" &&
@@ -4784,59 +4761,55 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
       )}
       <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
-          {pagination.visibleItems.map((item) => (
-            <div
-              className="grid gap-2 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
-              key={item.accountId}
-            >
-              <div className="min-w-0">
-                <strong className="block truncate">
-                  {item.accountName || `账号 ${item.accountId}`}
-                </strong>
-                <span className="text-muted-foreground block truncate text-xs">
-                  ID {item.accountId}
-                  {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
-                </span>
-                {item.status === "已同步" &&
-                  item.nameBefore &&
-                  item.nameAfter &&
-                  item.nameBefore !== item.nameAfter && (
+          {pagination.visibleItems.map((item) => {
+            let tone: "success" | "danger" | "neutral" = "neutral";
+            if (item.status === "已同步" || item.status === "已确认一致") tone = "success";
+            else if (item.error) tone = "danger";
+            return (
+              <div
+                className="grid gap-2 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
+                key={item.accountId}
+              >
+                <div className="min-w-0">
+                  <strong className="block truncate">
+                    {item.accountName || `账号 ${item.accountId}`}
+                  </strong>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    ID {item.accountId}
+                    {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
+                  </span>
+                  {item.status === "已同步" &&
+                    item.nameBefore &&
+                    item.nameAfter &&
+                    item.nameBefore !== item.nameAfter && (
+                      <span className="text-muted-foreground mt-1 block truncate text-xs">
+                        名称 {item.nameBefore} → {item.nameAfter}
+                      </span>
+                    )}
+                  {item.upstreamRawMultiplier && item.rechargeRate && item.accountMultiplier && (
                     <span className="text-muted-foreground mt-1 block truncate text-xs">
-                      名称 {item.nameBefore} → {item.nameAfter}
+                      上游原始倍率 {item.upstreamRawMultiplier} ÷ 充值比例 {item.rechargeRate} =
+                      账号成本 {item.accountMultiplier}
                     </span>
                   )}
-                {item.upstreamRawMultiplier && item.rechargeRate && item.accountMultiplier && (
-                  <span className="text-muted-foreground mt-1 block truncate text-xs">
-                    上游原始倍率 {item.upstreamRawMultiplier} ÷ 充值比例 {item.rechargeRate} =
-                    账号成本 {item.accountMultiplier}
-                  </span>
-                )}
+                </div>
+                <span className="text-muted-foreground tabular-nums">
+                  {item.before} → {item.after}
+                </span>
+                <div className="flex items-center gap-2 sm:justify-end">
+                  <StatusPill label={item.status} tone={tone} />
+                  {item.error && (
+                    <span className="text-destructive max-w-64 text-xs">{item.error}</span>
+                  )}
+                  {!item.error && item.probeError && (
+                    <span className="text-muted-foreground max-w-64 text-xs">
+                      实时查询失败：{item.probeError}
+                    </span>
+                  )}
+                </div>
               </div>
-              <span className="text-muted-foreground tabular-nums">
-                {item.before} → {item.after}
-              </span>
-              <div className="flex items-center gap-2 sm:justify-end">
-                <StatusPill
-                  label={item.status}
-                  tone={
-                    item.status === "已同步" || item.status === "已确认一致"
-                      ? "success"
-                      : item.error
-                        ? "danger"
-                        : "neutral"
-                  }
-                />
-                {item.error && (
-                  <span className="text-destructive max-w-64 text-xs">{item.error}</span>
-                )}
-                {!item.error && item.probeError && (
-                  <span className="text-muted-foreground max-w-64 text-xs">
-                    实时查询失败：{item.probeError}
-                  </span>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
           {!items.length && (
             <div className="text-muted-foreground px-3 py-6 text-center text-sm">
               没有倍率同步结果
@@ -4912,42 +4885,38 @@ export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
       )}
       <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
-          {pagination.visibleItems.map((item) => (
-            <div
-              className="grid gap-1 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] sm:items-center"
-              key={item.accountId}
-            >
-              <div className="min-w-0">
-                <strong className="block truncate">
-                  {item.accountName || `账号 ${item.accountId}`}
-                </strong>
-                <span className="text-muted-foreground block truncate text-xs">
-                  ID {item.accountId}
-                  {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
-                </span>
-              </div>
-              <div className="min-w-0 text-xs">
-                {item.before && item.after ? (
-                  <span className="block break-words">
-                    {item.before} → {item.after}
+          {pagination.visibleItems.map((item) => {
+            let tone: "success" | "danger" | "neutral" = "neutral";
+            if (item.status === "已修复" || item.status === "无需修复") tone = "success";
+            else if (item.error || item.status === "管理平台不存在") tone = "danger";
+            return (
+              <div
+                className="grid gap-1 px-3 py-2.5 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] sm:items-center"
+                key={item.accountId}
+              >
+                <div className="min-w-0">
+                  <strong className="block truncate">
+                    {item.accountName || `账号 ${item.accountId}`}
+                  </strong>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    ID {item.accountId}
+                    {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
                   </span>
-                ) : null}
-                {item.error ? (
-                  <span className="text-destructive block break-words">{item.error}</span>
-                ) : null}
+                </div>
+                <div className="min-w-0 text-xs">
+                  {item.before && item.after ? (
+                    <span className="block break-words">
+                      {item.before} → {item.after}
+                    </span>
+                  ) : null}
+                  {item.error ? (
+                    <span className="text-destructive block break-words">{item.error}</span>
+                  ) : null}
+                </div>
+                <StatusPill label={item.status} tone={tone} />
               </div>
-              <StatusPill
-                label={item.status}
-                tone={
-                  item.status === "已修复" || item.status === "无需修复"
-                    ? "success"
-                    : item.error || item.status === "管理平台不存在"
-                      ? "danger"
-                      : "neutral"
-                }
-              />
-            </div>
-          ))}
+            );
+          })}
           {!items.length && (
             <div className="text-muted-foreground px-3 py-6 text-center text-sm">
               当前筛选结果中没有可检查账号
@@ -5922,22 +5891,21 @@ export function AlertsPage() {
               <EmptyRow text="暂无告警" detail="新的鉴权、余额或主动探测异常会出现在这里。" />
             )}
             {!alerts.error &&
-              pageAlerts.map((alert) => (
-                <RunRow
-                  key={alert.incident_key}
-                  status={
-                    alert.status === "firing"
-                      ? "failed"
-                      : alert.status === "suppressed"
-                        ? "suppressed"
-                        : "succeeded"
-                  }
-                  title={`${alertTypeLabel(alert.event_type, alert.status)} · ${alertObjectLabel(alert)}`}
-                  detail={`${alertCauseLabel(alert.cause_code, alert.status)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
-                  state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
-                  icon={<BellRing size={15} />}
-                />
-              ))}
+              pageAlerts.map((alert) => {
+                let status: "failed" | "suppressed" | "succeeded" = "succeeded";
+                if (alert.status === "firing") status = "failed";
+                else if (alert.status === "suppressed") status = "suppressed";
+                return (
+                  <RunRow
+                    key={alert.incident_key}
+                    status={status}
+                    title={`${alertTypeLabel(alert.event_type, alert.status)} · ${alertObjectLabel(alert)}`}
+                    detail={`${alertCauseLabel(alert.cause_code, alert.status)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
+                    state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
+                    icon={<BellRing size={15} />}
+                  />
+                );
+              })}
           </div>
           {!alerts.error && alertRows.length > 0 && (
             <DataTablePagination
@@ -6689,11 +6657,8 @@ export function OnboardingPage() {
         localGroups,
       )
     : [];
-  const displayedCandidates = entryGroupId
-    ? entryCandidate
-      ? [entryCandidate]
-      : []
-    : visibleCandidates;
+  let displayedCandidates = visibleCandidates;
+  if (entryGroupId) displayedCandidates = entryCandidate ? [entryCandidate] : [];
   const displayedBoundAccounts = Array.from(
     new Map(
       displayedCandidates
@@ -6861,6 +6826,12 @@ export function OnboardingPage() {
     selectionCardClass = "mt-3 sm:mt-4";
   }
   const balanceSyncPending = balanceSync.isPending || taskIsPending(balanceTaskId, balanceTask);
+  let onboardingMaintenanceTitle = "修复绑定账号名称";
+  if (onboardingMaintenanceKind === "revalidate") {
+    onboardingMaintenanceTitle = "复验已有绑定";
+  } else if (onboardingMaintenanceKind === "cleanup") {
+    onboardingMaintenanceTitle = "修复失效绑定";
+  }
   return (
     <PageLayout fixedContent={entryKind === "host"}>
       <PageHeading
@@ -7040,7 +7011,7 @@ export function OnboardingPage() {
                     />
                   </FormField>
                 </div>
-                {usesAdminKey ? (
+                {usesAdminKey && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <FormField label="Admin Key">
                       <Input
@@ -7066,7 +7037,8 @@ export function OnboardingPage() {
                       />
                     </FormField>
                   </div>
-                ) : usesSub2ApiToken || usesToken ? (
+                )}
+                {(usesSub2ApiToken || usesToken) && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <FormField label="Token">
                       <Input
@@ -7095,7 +7067,8 @@ export function OnboardingPage() {
                       </FormField>
                     ) : null}
                   </div>
-                ) : usesVaultLogin ? (
+                )}
+                {usesVaultLogin && (
                   <FormField label="密码箱密码项">
                     <Select
                       value={credentials.entry}
@@ -7119,7 +7092,8 @@ export function OnboardingPage() {
                       </SelectContent>
                     </Select>
                   </FormField>
-                ) : usesManualLogin ? (
+                )}
+                {usesManualLogin && (
                   <div className="grid gap-4 sm:grid-cols-2">
                     <FormField label="用户名">
                       <Input
@@ -7176,7 +7150,8 @@ export function OnboardingPage() {
                       </FormField>
                     ) : null}
                   </div>
-                ) : authMode === "custom_headers" ? (
+                )}
+                {authMode === "custom_headers" && (
                   <FormField label="Headers JSON">
                     <Textarea
                       className="min-h-24"
@@ -7190,7 +7165,8 @@ export function OnboardingPage() {
                       placeholder='例如 {"Authorization":"Bearer ..."}'
                     />
                   </FormField>
-                ) : authMode === "cookie" ? (
+                )}
+                {authMode === "cookie" && (
                   <FormField label="Cookies JSON">
                     <Textarea
                       className="min-h-24"
@@ -7204,7 +7180,7 @@ export function OnboardingPage() {
                       placeholder='例如 {"session":"..."}'
                     />
                   </FormField>
-                ) : null}
+                )}
                 {authMode !== "custom_headers" ? (
                   <div className="grid gap-3 border-t pt-4">
                     <div className="flex items-center justify-between gap-3">
@@ -7447,11 +7423,12 @@ export function OnboardingPage() {
                           );
                           const canEdit =
                             (canSelect || alreadyBound) && compatibleLocalGroups.length > 0;
-                          const unavailableReason = canEdit
-                            ? null
-                            : compatibleLocalGroups.length === 0
-                              ? "没有与上游平台一致的本地分组"
-                              : candidateCreationUnavailableReason(candidate);
+                          let unavailableReason: string | null = null;
+                          if (!canEdit && compatibleLocalGroups.length === 0) {
+                            unavailableReason = "没有与上游平台一致的本地分组";
+                          } else if (!canEdit) {
+                            unavailableReason = candidateCreationUnavailableReason(candidate);
+                          }
                           const interactionDisabledReason = onboardingPending
                             ? "账号添加任务进行中"
                             : unavailableReason;
@@ -7852,13 +7829,7 @@ export function OnboardingPage() {
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>
-              {onboardingMaintenanceKind === "revalidate"
-                ? "复验已有绑定"
-                : onboardingMaintenanceKind === "cleanup"
-                  ? "修复失效绑定"
-                  : "修复绑定账号名称"}
-            </DialogTitle>
+            <DialogTitle>{onboardingMaintenanceTitle}</DialogTitle>
             <DialogDescription>
               {onboardingMaintenanceKind === "cleanup"
                 ? `将处理 ${missingBindingTargets.length} 个已确认不存在的账号。`
@@ -8123,6 +8094,21 @@ export function OnboardingTaskProgress(props: { task: Task }) {
   if (pending) title = batch ? "正在批量处理账号绑定" : "正在处理账号绑定";
   if (failed) title = batch && succeeded > 0 ? "部分账号绑定变更失败" : "账号绑定变更失败";
   const bindingUpdate = props.task.result.operation === "account.groups";
+  let iconContainerClassName = "bg-success/10 text-success";
+  let statusIcon = <Check size={16} />;
+  let statusLabel = "成功";
+  let statusTone: "info" | "warning" | "danger" | "success" = "success";
+  if (pending) {
+    iconContainerClassName = "bg-primary/10 text-primary";
+    statusIcon = <RefreshCw className="animate-spin" size={16} />;
+    statusLabel = "进行中";
+    statusTone = "info";
+  } else if (failed) {
+    iconContainerClassName = "bg-destructive/10 text-destructive";
+    statusIcon = <CircleAlert size={16} />;
+    statusLabel = succeeded > 0 ? "部分成功" : "失败";
+    statusTone = succeeded > 0 ? "warning" : "danger";
+  }
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col gap-4", pending && "justify-center")}>
@@ -8130,28 +8116,15 @@ export function OnboardingTaskProgress(props: { task: Task }) {
         <span
           className={cn(
             "flex size-8 shrink-0 items-center justify-center rounded-md",
-            pending
-              ? "bg-primary/10 text-primary"
-              : failed
-                ? "bg-destructive/10 text-destructive"
-                : "bg-success/10 text-success",
+            iconContainerClassName,
           )}
         >
-          {pending ? (
-            <RefreshCw className="animate-spin" size={16} />
-          ) : failed ? (
-            <CircleAlert size={16} />
-          ) : (
-            <Check size={16} />
-          )}
+          {statusIcon}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <strong className="text-sm">{title}</strong>
-            <StatusPill
-              label={pending ? "进行中" : failed ? (succeeded > 0 ? "部分成功" : "失败") : "成功"}
-              tone={pending ? "info" : failed ? (succeeded > 0 ? "warning" : "danger") : "success"}
-            />
+            <StatusPill label={statusLabel} tone={statusTone} />
           </div>
           <p className="text-muted-foreground mt-1 text-xs leading-5">
             {displayTaskMessage(props.task.message)}
@@ -8376,7 +8349,18 @@ function AuthTaskProgress(props: { task: Task }) {
   } else if (balanceResult !== null) {
     balanceText = displayTaskMessage(String(balanceResult.reason ?? "余额读取失败"));
   }
-  const statusText = pending ? "正在恢复鉴权" : succeeded ? "鉴权已恢复" : "鉴权未恢复";
+  let statusText = "鉴权未恢复";
+  let statusLabel = "失败";
+  let statusTone: "info" | "success" | "danger" = "danger";
+  if (pending) {
+    statusText = "正在恢复鉴权";
+    statusLabel = "处理中";
+    statusTone = "info";
+  } else if (succeeded) {
+    statusText = "鉴权已恢复";
+    statusLabel = "成功";
+    statusTone = "success";
+  }
   return (
     <div className="grid gap-3">
       <div className="flex items-center gap-3">
@@ -8403,10 +8387,7 @@ function AuthTaskProgress(props: { task: Task }) {
             </p>
           )}
         </div>
-        <StatusPill
-          label={pending ? "处理中" : succeeded ? "成功" : "失败"}
-          tone={pending ? "info" : succeeded ? "success" : "danger"}
-        />
+        <StatusPill label={statusLabel} tone={statusTone} />
       </div>
     </div>
   );
@@ -8491,6 +8472,18 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
   const deletedAccounts = props.task.result.deleted_accounts;
   const deletedGroups = props.task.result.deleted_groups;
   const reason = String(props.task.result.reason ?? props.task.message ?? "上游删除失败");
+  let statusText = "删除失败";
+  let statusLabel = "失败";
+  let statusTone: "info" | "success" | "danger" = "danger";
+  if (pending) {
+    statusText = "正在删除上游及关联账号";
+    statusLabel = "处理中";
+    statusTone = "info";
+  } else if (succeeded) {
+    statusText = "删除完成";
+    statusLabel = "成功";
+    statusTone = "success";
+  }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="flex items-center gap-3">
@@ -8500,9 +8493,7 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
           <Trash2 className={succeeded ? "text-success" : "text-destructive"} size={17} />
         )}
         <div className="min-w-0 flex-1">
-          <strong className="text-sm">
-            {pending ? "正在删除上游及关联账号" : succeeded ? "删除完成" : "删除失败"}
-          </strong>
+          <strong className="text-sm">{statusText}</strong>
           {!pending && !succeeded && (
             <div className="mt-1 grid gap-1">
               <p className="text-muted-foreground text-sm break-words">
@@ -8517,10 +8508,7 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
             </div>
           )}
         </div>
-        <StatusPill
-          label={pending ? "处理中" : succeeded ? "成功" : "失败"}
-          tone={pending ? "info" : succeeded ? "success" : "danger"}
-        />
+        <StatusPill label={statusLabel} tone={statusTone} />
       </div>
       {succeeded && (
         <div className="divide-y rounded-lg border">
@@ -8554,13 +8542,13 @@ export function BalanceTaskProgress(props: { task: Task }) {
   const missingBalanceText = ["", "未读取", "未返回余额"].includes(balanceStatus.trim())
     ? "上游未返回余额"
     : balanceStatus;
-  const statusText = pending
-    ? "正在同步余额"
-    : failedTask
-      ? "同步失败"
-      : completedWithoutBalance
-        ? missingBalanceText
-        : "同步成功";
+  let statusText = "同步成功";
+  if (pending) statusText = "正在同步余额";
+  else if (failedTask) statusText = "同步失败";
+  else if (completedWithoutBalance) statusText = missingBalanceText;
+  let statusTone: "danger" | "info" | "success" = "success";
+  if (failedTask || completedWithoutBalance) statusTone = "danger";
+  else if (pending) statusTone = "info";
   return (
     <div>
       <div className="flex items-start gap-3">
@@ -8574,10 +8562,7 @@ export function BalanceTaskProgress(props: { task: Task }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <strong className="text-sm">{statusText}</strong>
-            <StatusPill
-              label={statusText}
-              tone={failedTask || completedWithoutBalance ? "danger" : pending ? "info" : "success"}
-            />
+            <StatusPill label={statusText} tone={statusTone} />
           </div>
           {pending && (
             <span className="text-muted-foreground mt-1 block text-xs">正在向上游同步最新余额</span>
@@ -8686,6 +8671,15 @@ export function UpstreamSyncTaskStatus(props: {
   if (failed && failedRows.length === 0) {
     return <TaskFailureDetail reason={String(props.task.result.reason ?? props.task.message)} />;
   }
+  let tableClassName = "min-w-[680px]";
+  let emptyColumnCount = 4;
+  if (scope === "all") {
+    tableClassName = "min-w-[900px]";
+    emptyColumnCount = 5;
+  } else if (scope === "names") {
+    tableClassName = "min-w-[520px]";
+    emptyColumnCount = 3;
+  }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       <div className="grid grid-cols-3 divide-x rounded-lg border">
@@ -8703,16 +8697,7 @@ export function UpstreamSyncTaskStatus(props: {
         />
       </div>
       <DataTablePanel className="flex-1">
-        <Table
-          className={
-            scope === "all"
-              ? "min-w-[900px]"
-              : scope === "names"
-                ? "min-w-[520px]"
-                : "min-w-[680px]"
-          }
-          containerClassName="min-h-0 flex-1 overflow-auto"
-        >
+        <Table className={tableClassName} containerClassName="min-h-0 flex-1 overflow-auto">
           <TableHeader className="sticky top-0 z-10">
             <TableRow>
               <TableHead className={scope === "all" ? "w-[22%]" : "w-[25%]"}>Host</TableHead>
@@ -8730,7 +8715,7 @@ export function UpstreamSyncTaskStatus(props: {
           </TableHeader>
           <TableBody>
             {!visibleRows.length && (
-              <TableMessageRow columns={scope === "all" ? 5 : scope === "names" ? 3 : 4}>
+              <TableMessageRow columns={emptyColumnCount}>
                 <EmptyRow text="当前没有需要同步的上游 Host" />
               </TableMessageRow>
             )}
@@ -9169,13 +9154,9 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   const testNotification = useMutation({
     mutationFn: api.testNotification,
     onSuccess: (result) => {
-      toast.success(
-        result.detail === undefined
-          ? result.sent
-            ? "测试通知已发送"
-            : "测试通知已完成"
-          : explicitValue(result.detail),
-      );
+      let message = result.sent ? "测试通知已发送" : "测试通知已完成";
+      if (result.detail !== undefined) message = explicitValue(result.detail);
+      toast.success(message);
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
@@ -9246,6 +9227,14 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "执行模式切换失败"),
   });
+  let notificationStatusLabel = "未配置";
+  if (notifications.isLoading) notificationStatusLabel = "读取中";
+  else if (notifications.error) notificationStatusLabel = "读取失败";
+  else if (notifications.data?.configured) notificationStatusLabel = "已配置";
+  let logCleanupStatusLabel = "自动清理已关闭";
+  if (logCleanup.isLoading) logCleanupStatusLabel = "读取中";
+  else if (logCleanup.error) logCleanupStatusLabel = "读取失败";
+  else if (logCleanup.data?.enabled) logCleanupStatusLabel = "自动清理已开启";
   if (config.error)
     return (
       <PageLayout>
@@ -9498,15 +9487,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   </CardDescription>
                 </div>
                 <StatusPill
-                  label={
-                    notifications.isLoading
-                      ? "读取中"
-                      : notifications.error
-                        ? "读取失败"
-                        : notifications.data?.configured
-                          ? "已配置"
-                          : "未配置"
-                  }
+                  label={notificationStatusLabel}
                   tone={
                     notifications.data?.configured && !notifications.error ? "success" : "neutral"
                   }
@@ -9781,15 +9762,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   </CardDescription>
                 </div>
                 <StatusPill
-                  label={
-                    logCleanup.isLoading
-                      ? "读取中"
-                      : logCleanup.error
-                        ? "读取失败"
-                        : logCleanup.data?.enabled
-                          ? "自动清理已开启"
-                          : "自动清理已关闭"
-                  }
+                  label={logCleanupStatusLabel}
                   tone={logCleanup.data?.enabled && !logCleanup.error ? "success" : "neutral"}
                 />
               </CardHeader>
@@ -10708,7 +10681,7 @@ export function AutoInspectionHeartbeatDetails(props: {
           </details>
         </section>
       ) : null}
-      {accountRateScheduled ? (
+      {accountRateScheduled && (
         <section
           aria-labelledby="heartbeat-rate-task-title"
           data-slot="independent-scheduled-task"
@@ -10725,7 +10698,7 @@ export function AutoInspectionHeartbeatDetails(props: {
               独立执行
             </span>
           </div>
-          {props.accountRateSyncTask ? (
+          {props.accountRateSyncTask && (
             <details data-slot="heartbeat-rate-task-details" className="rounded-lg border">
               <summary className="text-muted-foreground flex cursor-pointer list-none items-start justify-between gap-3 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
                 <span className="min-w-0 break-all">
@@ -10753,15 +10726,17 @@ export function AutoInspectionHeartbeatDetails(props: {
                 </div>
               </div>
             </details>
-          ) : props.accountRateSyncTaskLoading ? (
+          )}
+          {!props.accountRateSyncTask && props.accountRateSyncTaskLoading && (
             <TaskStartupState message="正在读取独立任务记录" />
-          ) : (
+          )}
+          {!props.accountRateSyncTask && !props.accountRateSyncTaskLoading && (
             <p className="text-muted-foreground text-xs leading-5">
               已排队，独立执行。{inspectionOperationDetail("account_rate_sync", props.task)}
             </p>
           )}
         </section>
-      ) : null}
+      )}
 
       {props.record.error ? (
         <section aria-labelledby="heartbeat-error-title" className="grid gap-2">
@@ -11112,11 +11087,9 @@ function AutoInspectionCard() {
                       <span className="text-muted-foreground text-sm">秒</span>
                     </div>
                   </SettingsControlRow>
-                  {!intervalValid ? (
-                    saveAttempted ? (
-                      <p className="text-destructive text-xs">调度心跳必须为 15 到 86400 秒</p>
-                    ) : null
-                  ) : null}
+                  {!intervalValid && saveAttempted && (
+                    <p className="text-destructive text-xs">调度心跳必须为 15 到 86400 秒</p>
+                  )}
                 </div>
               ) : null}
             </CardContent>
@@ -13293,11 +13266,12 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
             updateManagedGroups(allGroups ? "all" : "selected", allGroups ? [] : stableGroupIDs),
         }}
       >
-        {!selectedMode ? (
+        {!selectedMode && (
           <p className="text-muted-foreground col-span-full text-sm leading-6">
             当前所有分组都参与守护。关闭上方开关可只勾选部分分组。
           </p>
-        ) : props.groups.length ? (
+        )}
+        {selectedMode && props.groups.length > 0 && (
           <div
             className="col-span-full grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
             data-testid="managed-group-options"
@@ -13339,7 +13313,8 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
               );
             })}
           </div>
-        ) : (
+        )}
+        {selectedMode && props.groups.length === 0 && (
           <p className="text-muted-foreground col-span-full text-sm">暂无可选择的分组。</p>
         )}
       </PolicyConfigCard>
@@ -13487,17 +13462,19 @@ function RunRow(props: {
   action?: React.ReactNode;
 }) {
   const failed = props.status === "failed" || props.status === "error" || props.status === "fused";
+  let iconClassName = "bg-muted text-muted-foreground";
+  let badgeVariant: "destructive" | "secondary" | "outline" = "outline";
+  if (failed) {
+    iconClassName = "bg-destructive/10 text-destructive";
+    badgeVariant = "destructive";
+  } else if (props.status === "succeeded" || props.status === "healthy") {
+    iconClassName = "bg-success/10 text-success";
+    if (props.status === "succeeded") badgeVariant = "secondary";
+  }
   return (
     <div className="console-list-row box-border flex min-h-16 items-center gap-3 border-b border-border/70 px-4 py-3 last:border-b-0">
       <span
-        className={cn(
-          "flex size-7 shrink-0 items-center justify-center rounded-md",
-          failed
-            ? "bg-destructive/10 text-destructive"
-            : props.status === "succeeded" || props.status === "healthy"
-              ? "bg-success/10 text-success"
-              : "bg-muted text-muted-foreground",
-        )}
+        className={cn("flex size-7 shrink-0 items-center justify-center rounded-md", iconClassName)}
       >
         {props.icon ?? <Activity size={15} />}
       </span>
@@ -13510,11 +13487,7 @@ function RunRow(props: {
         </span>
       </div>
       {props.state !== undefined && props.state !== null && (
-        <Badge
-          variant={failed ? "destructive" : props.status === "succeeded" ? "secondary" : "outline"}
-        >
-          {displayLabel(props.state)}
-        </Badge>
+        <Badge variant={badgeVariant}>{displayLabel(props.state)}</Badge>
       )}
       {props.action}
     </div>
@@ -13585,7 +13558,9 @@ function QueryError(props: {
 function formatDate(value: string | null | undefined, includeSeconds = false) {
   if (!value) return "未知时间";
   const numeric = /^\d{10,13}$/.test(value) ? Number(value) : null;
-  const date = new Date(numeric === null ? value : value.length === 10 ? numeric * 1000 : numeric);
+  let dateInput: string | number = value;
+  if (numeric !== null) dateInput = value.length === 10 ? numeric * 1000 : numeric;
+  const date = new Date(dateInput);
   return Number.isNaN(date.getTime())
     ? value
     : date.toLocaleString("zh-CN", {

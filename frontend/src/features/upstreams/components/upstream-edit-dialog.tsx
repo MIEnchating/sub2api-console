@@ -384,15 +384,17 @@ export function UpstreamEditDialog(props: Props) {
           <DialogTitle>编辑上游</DialogTitle>
         </DialogHeader>
         <DialogBody className={upstreamEditDialogLayout.scrollArea}>
-          {configuration.isLoading ? (
+          {configuration.isLoading && (
             <div className="grid gap-3" aria-label="正在读取上游配置">
               <Skeleton className="h-8 w-full" />
               <Skeleton className="h-32 w-full" />
               <Skeleton className="h-44 w-full" />
             </div>
-          ) : configuration.error ? (
+          )}
+          {!configuration.isLoading && configuration.error && (
             <QueryErrorToast error={configuration.error} fallback="上游配置读取失败" />
-          ) : (
+          )}
+          {!configuration.isLoading && !configuration.error && (
             <form
               id={upstreamEditFormID}
               className={upstreamEditDialogLayout.form}

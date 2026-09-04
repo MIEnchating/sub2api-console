@@ -365,6 +365,11 @@ func (s *Service) executeBatch(parent context.Context, task taskstore.Task, expe
 	}
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = batchDeleteResult(len(expected), succeeded, failed, items)
+	if len(items) < len(expected) && ctx.Err() != nil {
+		taskstore.MarkCancelled(ctx, &task, "账号批量删除已取消")
+		taskstore.PersistFinal(s.tasks, task)
+		return
+	}
 	switch {
 	case failed == 0:
 		task.Status = "succeeded"

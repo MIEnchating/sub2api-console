@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -34,5 +35,20 @@ func TestNewAPIPlatformIsStoredAsOnePrimaryPlatform(t *testing.T) {
 	}
 	if current, err := store.NewAPIPlatform(ctx, first.ID); err != nil || current != nil {
 		t.Fatalf("old primary still exists: current=%#v err=%v", current, err)
+	}
+}
+
+func TestNewAPIPlatformUsesUnicodeCharacterLimits(t *testing.T) {
+	store := openTestStore(t)
+	name := strings.Repeat("平", 120)
+	userID := strings.Repeat("户", 128)
+	platform, err := store.SaveNewAPIPlatform(context.Background(), NewAPIPlatform{
+		Name: name, BaseURL: "https://newapi.example", AdminKey: "admin-key", UserID: userID,
+	})
+	if err != nil {
+		t.Fatalf("valid Unicode platform fields were rejected: %v", err)
+	}
+	if platform.Name != name || platform.UserID != userID {
+		t.Fatalf("platform=%#v", platform)
 	}
 }

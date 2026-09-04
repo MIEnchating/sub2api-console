@@ -182,7 +182,9 @@ function DetailItem(props: { label: string; value: string; wide?: boolean; mono?
 
 function SystemLogResult(props: { record: UsageRecord }) {
   const log = readableSystemLog(props.record);
-  const statusLabel = log.status ? `HTTP ${log.status}` : props.record.is_error ? "失败" : "已完成";
+  let statusLabel = "已完成";
+  if (log.status) statusLabel = `HTTP ${log.status}`;
+  else if (props.record.is_error) statusLabel = "失败";
   return (
     <article className="grid min-w-0 gap-4 px-4 py-4 sm:px-5">
       <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -274,6 +276,7 @@ export function SystemLogSearchPanel() {
   }
 
   const totalPages = logs.data ? Math.max(1, Math.ceil(logs.data.total / logs.data.page_size)) : 1;
+  const logPage = logs.data;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -305,17 +308,18 @@ export function SystemLogSearchPanel() {
       {logs.isError ? (
         <QueryErrorToast error={logs.error} fallback="Sub2API 系统日志查询失败" />
       ) : null}
-      {submitted ? (
+      {submitted && (
         <DataTablePanel className="mt-3 flex-1 sm:mt-4">
-          {logs.isLoading ? (
+          {logs.isLoading && (
             <div className="text-muted-foreground flex min-h-28 items-center justify-center gap-2 text-sm">
               <RefreshCw className="size-4 animate-spin" />
               正在读取 Sub2API 系统日志
             </div>
-          ) : logs.data?.items.length ? (
+          )}
+          {!logs.isLoading && logPage && logPage.items.length > 0 && (
             <>
               <div className="min-h-0 flex-1 divide-y overflow-y-auto">
-                {logs.data.items.map((record) => (
+                {logPage.items.map((record) => (
                   <SystemLogResult
                     key={`${record.id}:${record.request_id}:${record.observed_at ?? ""}`}
                     record={record}
@@ -323,21 +327,23 @@ export function SystemLogSearchPanel() {
                 ))}
               </div>
               <DataTablePagination
-                currentPage={logs.data.page}
+                currentPage={logPage.page}
                 totalPages={totalPages}
-                totalItems={logs.data.total}
-                pageSize={logs.data.page_size}
+                totalItems={logPage.total}
+                pageSize={logPage.page_size}
                 onPageChange={changePage}
                 onPageSizeChange={changePageSize}
               />
             </>
-          ) : (
+          )}
+          {!logs.isLoading && !logPage?.items.length && (
             <div className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">
               没有匹配的系统日志
             </div>
           )}
         </DataTablePanel>
-      ) : (
+      )}
+      {!submitted && (
         <div
           data-slot="request-trace-placeholder"
           className="text-muted-foreground flex min-h-0 flex-1 flex-col items-center justify-center gap-3"
