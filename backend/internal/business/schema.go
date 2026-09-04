@@ -283,7 +283,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 ) WHERE upstream_id<>'' AND local_group_ids_json<>'';
 `
 
-const businessSchemaVersion = 1
+// Keep the current schema identity monotonic even though fresh installations
+// now create the complete schema directly instead of replaying migrations.
+const businessSchemaVersion = 9
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	fresh, err := databaseHasNoApplicationTables(ctx, s.db)
@@ -343,20 +345,18 @@ func validateBusinessSchema(ctx context.Context, current *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	if len(currentTables) != len(expectedTables) {
-		return fmt.Errorf("table count=%d, expected=%d", len(currentTables), len(expectedTables))
-	}
 	for table, expectedColumns := range expectedTables {
 		currentColumns, found := currentTables[table]
 		if !found {
 			return fmt.Errorf("missing table %s", table)
 		}
-		if len(currentColumns) != len(expectedColumns) {
-			return fmt.Errorf("table %s has %d columns, expected %d", table, len(currentColumns), len(expectedColumns))
+		availableColumns := make(map[string]struct{}, len(currentColumns))
+		for _, column := range currentColumns {
+			availableColumns[column] = struct{}{}
 		}
-		for index := range expectedColumns {
-			if currentColumns[index] != expectedColumns[index] {
-				return fmt.Errorf("table %s column %d=%s, expected=%s", table, index, currentColumns[index], expectedColumns[index])
+		for _, expectedColumn := range expectedColumns {
+			if _, found := availableColumns[expectedColumn]; !found {
+				return fmt.Errorf("table %s missing column %s", table, expectedColumn)
 			}
 		}
 	}

@@ -310,14 +310,64 @@ func TestSetModeStartsNewVisibleRoutingDecisionEpochOnlyWhenModeChanges(t *testi
 }
 
 func TestEmptyBusinessDatabaseCanOpenButIsNotReady(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
 	ready, err := store.Ready(context.Background())
 	if err != nil || ready {
 		t.Fatalf("ready=%v err=%v", ready, err)
+	}
+	var version int
+	if err := store.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	const deployedSchemaVersion = 9
+	if version != deployedSchemaVersion {
+		t.Fatalf("schema version=%d, want deployed baseline %d", version, deployedSchemaVersion)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen current schema: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+}
+
+func TestOpenAcceptsDeployedSchemaVersionWithRetiredTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "business.sqlite3")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TABLE retired_schema_history (version INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen deployed schema with retired table: %v", err)
+	}
+	t.Cleanup(func() { reopened.Close() })
+	var retiredTables int
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='retired_schema_history'`).Scan(&retiredTables); err != nil {
+		t.Fatal(err)
+	}
+	if retiredTables != 1 {
+		t.Fatalf("retired table was modified: count=%d", retiredTables)
 	}
 }
 
