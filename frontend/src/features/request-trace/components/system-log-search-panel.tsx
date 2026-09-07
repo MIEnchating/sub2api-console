@@ -10,6 +10,7 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { TraceAccountActions } from "./trace-account-actions";
 
 function emptySearch(): SystemLogSearchQuery {
   return {
@@ -208,7 +209,13 @@ function SystemLogResult(props: { record: UsageRecord }) {
       <dl className="grid min-w-0 grid-cols-1 gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
         <DetailItem label="请求 ID" value={log.requestId} wide mono />
         <DetailItem label="客户端请求 ID" value={log.clientRequestId} wide mono />
-        <DetailItem label="账号" value={log.account} />
+        <div className="min-w-0 sm:col-span-2 lg:col-span-1">
+          <dt className="text-muted-foreground text-xs">账号</dt>
+          <dd className="mt-1 min-w-0 break-all text-sm font-medium">
+            {log.account}
+            <TraceAccountActions key={log.accountId} accountId={log.accountId} />
+          </dd>
+        </div>
         <DetailItem label="KEY ID" value={log.apiKeyId} />
         <DetailItem label="平台" value={log.platform} />
         <DetailItem label="模型" value={log.model} />

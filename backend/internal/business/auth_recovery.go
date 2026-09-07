@@ -99,11 +99,10 @@ func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRe
 		resolvedHost := item.Host
 		err := tx.QueryRowContext(ctx, `SELECT metadata_json FROM upstreams WHERE host=?`, resolvedHost).Scan(&metadataRaw)
 		if errors.Is(err, sql.ErrNoRows) {
-			alias := "www." + resolvedHost
-			if strings.HasPrefix(resolvedHost, "www.") {
-				alias = strings.TrimPrefix(resolvedHost, "www.")
-			}
-			err = tx.QueryRowContext(ctx, `SELECT host,metadata_json FROM upstreams WHERE host=?`, alias).Scan(&resolvedHost, &metadataRaw)
+			err = tx.QueryRowContext(ctx, `SELECT u.host,u.metadata_json FROM upstream_identity_hosts selected
+				JOIN upstream_identity_hosts canonical ON canonical.upstream_id=selected.upstream_id
+				JOIN upstreams u ON u.host=canonical.host WHERE selected.host=?
+				ORDER BY canonical.is_primary DESC,u.host LIMIT 1`, item.Host).Scan(&resolvedHost, &metadataRaw)
 		}
 		if errors.Is(err, sql.ErrNoRows) {
 			continue

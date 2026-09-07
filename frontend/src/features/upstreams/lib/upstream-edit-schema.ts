@@ -4,6 +4,22 @@ export { parseJsonStringMap as parseStringMap } from "@/lib/json-string-map";
 
 export const upstreamEditSchema = z.object({
   name: z.string().trim().min(1, "请输入上游名称").max(100, "上游名称不能超过 100 个字符"),
+  host: z
+    .string()
+    .trim()
+    .min(1, "请输入上游 Host")
+    .refine(
+      (value) => !value.includes("://") && !/[/\\?#]/.test(value),
+      "请输入纯 Host，可包含端口",
+    )
+    .refine((value) => {
+      try {
+        const parsed = new URL(`https://${value}`);
+        return Boolean(parsed.hostname) && !parsed.username && !parsed.password;
+      } catch {
+        return false;
+      }
+    }, "请输入有效的上游 Host"),
   base_url_protocol: z.enum(["https", "http"]),
   base_url: z
     .string()
@@ -62,12 +78,16 @@ export function parseUpstreamBaseUrl(
 }
 
 export function upstreamConnectionPayload(
-  values: Pick<UpstreamEditValues, "base_url_protocol" | "base_url" | "account_base_url">,
-): { base_url: string; account_base_url: string } {
-  return {
+  values: Pick<UpstreamEditValues, "base_url_protocol" | "base_url" | "account_base_url"> & {
+    host?: string;
+  },
+): { host?: string; base_url: string; account_base_url: string } {
+  const result = {
     base_url: composeUpstreamBaseUrl(values),
     account_base_url: values.account_base_url.trim(),
   };
+  const host = values.host?.trim().toLowerCase();
+  return host ? { ...result, host } : result;
 }
 
 export type AuthModeOption = { value: string; label: string };

@@ -19,6 +19,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 const (
@@ -114,7 +116,7 @@ func (s *Service) EnqueueRevenue(ctx context.Context, request RevenueRequest, ac
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeRevenue(targetguard.Expect(parent, expectedTarget), task, RevenueRequest{Date: date}, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -268,6 +270,9 @@ func fetchLocalRevenueUsage(ctx context.Context, client *adminclient.Client, acc
 		go func() {
 			defer wait.Done()
 			for account := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				totals, err := client.AccountUsageTotals(ctx, account.ID, date, revenueTimezone)
 				values <- struct {
 					id string
@@ -277,10 +282,7 @@ func fetchLocalRevenueUsage(ctx context.Context, client *adminclient.Client, acc
 		}()
 	}
 	go func() {
-		for _, account := range accounts {
-			jobs <- account
-		}
-		close(jobs)
+		_ = taskrunner.Feed(ctx, jobs, accounts)
 		wait.Wait()
 		close(values)
 	}()
@@ -324,15 +326,15 @@ func (s *Service) fetchUpstreamRevenueUsage(
 		go func() {
 			defer wait.Done()
 			for host := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				results <- s.fetchRevenueHost(ctx, authStore, host, bindingsByHost[host], date, start, end, actor)
 			}
 		}()
 	}
 	go func() {
-		for _, host := range hosts {
-			jobs <- host
-		}
-		close(jobs)
+		_ = taskrunner.Feed(ctx, jobs, hosts)
 		wait.Wait()
 		close(results)
 	}()
@@ -457,16 +459,16 @@ func (s *Service) readSub2APIRevenueKeys(
 		go func() {
 			defer wait.Done()
 			for keyID := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				value, err := s.usage.ReadSub2APIKeyUsage(ctx, record, keyID, date, revenueTimezone)
 				results <- readResult{keyID: keyID, value: value, err: err}
 			}
 		}()
 	}
 	go func() {
-		for _, keyID := range keyIDs {
-			jobs <- keyID
-		}
-		close(jobs)
+		_ = taskrunner.Feed(ctx, jobs, keyIDs)
 		wait.Wait()
 		close(results)
 	}()
@@ -718,7 +720,7 @@ func revenueKey(host, keyID string) string {
 }
 
 func revenueAmount(value string) (*big.Rat, bool) {
-	parsed, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	parsed, ok := decimalutil.Parse(value)
 	if !ok {
 		return nil, false
 	}
@@ -726,7 +728,7 @@ func revenueAmount(value string) (*big.Rat, bool) {
 }
 
 func positiveRevenueDecimal(raw string) (*big.Rat, bool) {
-	value, ok := new(big.Rat).SetString(strings.TrimSpace(raw))
+	value, ok := decimalutil.Parse(raw)
 	return value, ok && value.Sign() > 0
 }
 

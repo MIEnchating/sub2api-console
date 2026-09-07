@@ -359,7 +359,8 @@ func (c *Client) AccountUpstreamMultipliers(ctx context.Context, accountIDs []st
 	result := make(map[string]AccountUpstreamMultiplierResult, len(accountIDs))
 	unique := make([]string, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
-		if !stableID(accountID) {
+		_, parseErr := strconv.ParseInt(accountID, 10, 64)
+		if !stableID(accountID) || parseErr != nil {
 			return nil, errors.New("批量上游倍率探测包含无效账号 ID")
 		}
 		if _, exists := result[accountID]; exists {
@@ -569,6 +570,33 @@ func (c *Client) Group(ctx context.Context, groupID string) (map[string]any, err
 	return c.resourceDetail(ctx, "/admin/groups/"+groupID, groupID, "分组")
 }
 
+// UpdateGroupRateMultiplier updates the Sub2API management platform group and
+// confirms the exact value through the stable group ID readback endpoint.
+func (c *Client) UpdateGroupRateMultiplier(ctx context.Context, groupID, multiplier string) (map[string]any, error) {
+	if !stableID(groupID) {
+		return nil, errors.New("分组 ID 必须是稳定正整数")
+	}
+	value, ok := new(big.Rat).SetString(strings.TrimSpace(multiplier))
+	if !ok || value.Sign() <= 0 {
+		return nil, errors.New("分组倍率必须是正数")
+	}
+	normalized := normalizedDecimal(value)
+	if _, err := c.Mutate(ctx, http.MethodPut, "/admin/groups/"+groupID, map[string]any{
+		"rate_multiplier": json.Number(normalized),
+	}); err != nil {
+		return nil, err
+	}
+	group, err := c.Group(ctx, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("分组倍率写后确认失败：%w", err)
+	}
+	readback, err := exactJSONDecimal(group["rate_multiplier"])
+	if err != nil || readback != normalized {
+		return nil, errors.New("分组倍率写后确认不一致")
+	}
+	return group, nil
+}
+
 func (c *Client) resourceDetail(ctx context.Context, path, expectedID, label string) (map[string]any, error) {
 	payload, err := c.request(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
@@ -597,9 +625,13 @@ func (c *Client) RequestDetails(ctx context.Context, accountID string, lookbackM
 	}
 	end := time.Now().UTC()
 	start := end.Add(-time.Duration(lookbackMinutes) * time.Minute)
-	return c.fetchEvidence(ctx, "/admin/ops/requests", "运维请求记录", map[string]string{
+	rows, err := c.fetchEvidence(ctx, "/admin/ops/requests", "运维请求记录", map[string]string{
 		"account_id": accountID, "kind": "all", "start_time": start.Format(time.RFC3339Nano), "end_time": end.Format(time.RFC3339Nano),
 	}, maxSamples, "request_id", 100)
+	if err != nil {
+		return nil, err
+	}
+	return c.enrichRequestLatency(ctx, accountID, start, end, maxSamples, rows)
 }
 
 func (c *Client) RequestTrace(ctx context.Context, requestID string, lookbackMinutes, maxSamples int) ([]map[string]any, error) {
@@ -1010,7 +1042,7 @@ func (c *Client) fetchPaged(ctx context.Context, path, label string) ([]map[stri
 		}
 		for _, item := range pageItems {
 			id := strings.TrimSpace(fmt.Sprint(item["id"]))
-			if id == "" {
+			if !stableID(id) {
 				return nil, &Error{label + "项目缺少稳定 ID"}
 			}
 			if _, ok := seen[id]; ok {
@@ -1264,7 +1296,7 @@ func uniqueStableItems(values []map[string]any, label string) ([]map[string]any,
 	seen := map[string]struct{}{}
 	for _, item := range values {
 		id := strings.TrimSpace(fmt.Sprint(item["id"]))
-		if id == "" {
+		if !stableID(id) {
 			return nil, &Error{label + "项目缺少稳定 ID"}
 		}
 		if _, ok := seen[id]; ok {

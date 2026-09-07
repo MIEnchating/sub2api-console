@@ -18,13 +18,17 @@ describe("DialogContent layout", () => {
     expect(dialogContentLayout).toContain("max-w-[calc(100%-2rem)]");
     expect(dialogContentLayout).not.toContain("w-full");
     expect(dialogContentLayout).not.toContain("sm:max-w-sm");
+    expect(dialogContentLayout).toContain("overflow-y-auto");
+    expect(dialogContentLayout).toContain("overscroll-contain");
   });
 
   it("keeps content dialogs adaptive and reserves stable widths for result dialogs", () => {
     expect(dialogWidthLayouts.content).toBe("");
     expect(dialogWidthLayouts.medium).toContain("32rem");
+    expect(dialogWidthLayouts.progress).toContain("38rem");
     expect(dialogWidthLayouts.wide).toContain("64rem");
     expect(dialogWidthLayouts.table).toContain("90rem");
+    expect(dialogWidthLayouts.progress).toContain("100vw-2rem");
     expect(dialogWidthLayouts.wide).toContain("100vw-2rem");
     expect(dialogWidthLayouts.table).toContain("100vw-2rem");
     expect(dialogHeightLayouts.content).toBe("");
@@ -42,14 +46,15 @@ describe("DialogContent layout", () => {
     expect(dialogContentClass("table", "tall")).toContain("w-[min(90rem,calc(100vw-2rem))]");
     expect(dialogContentClass("table", "tall")).toContain("max-h-[min(44rem,calc(100svh-2rem))]");
     expect(dialogContentClass("table", "tall")).not.toContain("w-fit");
-    expect(operationDialogWidth(false, "table")).toBe("medium");
+    expect(operationDialogWidth(false, "table")).toBe("progress");
     expect(operationDialogWidth(true, "table")).toBe("table");
     expect(operationDialogWidth(true)).toBe("wide");
     expect(operationDialogHeight(false)).toBe("content");
     expect(operationDialogHeight(true)).toBe("adaptive");
-    expect(compactOperationDialogLayout).toEqual({ width: "medium", height: "adaptive" });
-    expect(dialogContentClass("medium", "adaptive")).toContain("max-h-[calc(100svh-2rem)]");
-    expect(dialogContentClass("medium", "adaptive")).not.toContain("h-[min(");
+    expect(compactOperationDialogLayout).toEqual({ width: "progress", height: "adaptive" });
+    expect(dialogContentClass("progress", "adaptive")).toContain("w-[min(38rem,calc(100vw-2rem))]");
+    expect(dialogContentClass("progress", "adaptive")).toContain("max-h-[calc(100svh-2rem)]");
+    expect(dialogContentClass("progress", "adaptive")).not.toContain("h-[min(");
   });
 
   it("keeps complex dialog scrolling inside the shared body region", () => {

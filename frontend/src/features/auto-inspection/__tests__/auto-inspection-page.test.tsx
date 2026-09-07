@@ -389,9 +389,12 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("自动巡检");
     expect(markup).toContain('aria-label="刷新自动巡检"');
     expect(markup).toContain("巡检服务");
-    expect(markup).toContain("这里只控制后台服务与心跳");
-    expect(markup).toContain("各任务执行周期统一在调度策略中配置");
+    expect(markup).not.toContain("这里只控制后台服务与心跳");
+    expect(markup).not.toContain("各任务执行周期统一在调度策略中配置");
     expect(markup).toContain('aria-label="启用自动巡检"');
+    expect(markup).toContain('aria-label="启用自动巡检说明"');
+    expect(markup).toContain('aria-label="调度心跳说明"');
+    expect(markup).not.toContain("每次心跳只检查任务是否到期，不会立即检查全部账号。");
     expect(markup).toContain('aria-label="调度心跳周期"');
     expect(markup).not.toContain('aria-label="倍率同步周期"');
     expect(markup).toContain('min="15"');
@@ -405,23 +408,8 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("保存自动巡检");
     expect(markup).not.toContain('data-slot="card-action"');
     expect(markup.indexOf("保存自动巡检")).toBeLessThan(markup.indexOf('data-slot="page-content"'));
-    expect(markup).toContain('data-testid="last-inspection-summary"');
-    expect(markup).toContain("上一轮概要");
-    expect(markup).toContain("执行时间：08/26 08:00:00");
-    expect(markup).toContain("执行成功");
-    expect(markup).toContain("29.7 秒");
-    expect(markup).toContain("受管账号");
-    expect(markup).toContain(">233<");
-    expect(markup).toContain("主动探测");
-    expect(markup).toContain(">10<");
-    expect(markup).toContain("新增样本");
-    expect(markup).toContain(">112<");
-    expect(markup).toContain("新增熔断");
-    expect(markup).toContain("恢复回池");
-    expect(markup).toContain("自动执行");
-    expect(markup).toContain(">24<");
-    expect(markup).toContain("自动处置");
-    expect(markup).toContain("当前告警");
+    expect(markup).not.toContain('data-testid="last-inspection-summary"');
+    expect(markup).not.toContain("上一轮概要");
     expect(markup).toContain("任务队列");
     expect(markup).toContain("本轮安排");
     expect(markup).toContain("主动探测");
@@ -441,12 +429,13 @@ describe("自动巡检页面", () => {
     );
     expect(markup).not.toContain("合并巡检");
     expect(markup).not.toContain('href="/alert-policy"');
-    expect(markup).toContain("明确展示本轮包含内容");
+    expect(markup).not.toContain("操作到期后组合为一项巡检任务，并明确展示本轮包含内容");
     expect(markup).not.toContain("流量证据刷新");
     expect(markup).not.toContain("告警评估");
     expect(markup).toContain("待执行");
     expect(markup).toContain("心跳记录");
-    expect(markup).toContain("清空记录");
+    expect(markup).not.toContain("清空记录");
+    expect(markup).not.toContain("清空心跳记录");
     expect(markup).toContain("执行中");
     expect(markup).toContain("正在检查到期任务");
     expect(markup).toContain("本轮仅检查任务是否到期，未执行其他操作");
@@ -472,23 +461,23 @@ describe("自动巡检页面", () => {
     expect(markup).toContain("flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden");
     expect(markup).toContain('data-testid="auto-inspection-overview"');
     expect(markup).toContain("grid shrink-0 items-stretch gap-3");
-    expect(markup).toContain("xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]");
+    expect(markup).not.toContain("max-w-3xl");
+    expect(markup).not.toContain("xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]");
     expect(markup).toContain('data-testid="auto-inspection-settings"');
-    expect(markup).toContain('class="grid gap-2.5"');
-    expect(markup).toContain('data-testid="inspection-summary-grid"');
-    expect(markup).toContain("grid grid-cols-2 gap-px border-b");
-    expect(markup).toContain("sm:grid-cols-4");
+    expect(markup).toContain('class="grid gap-2.5 lg:grid-cols-2"');
+    expect(markup).not.toContain('data-testid="inspection-summary-grid"');
     expect(markup).not.toContain("2xl:grid-cols-8");
     expect(markup).not.toContain("grid grid-cols-2 divide-x divide-y");
     expect(markup).toContain('data-testid="auto-inspection-workspace"');
     expect(markup).toContain("min-h-0 flex-1 grid items-start gap-3 overflow-y-auto");
-    expect(markup).toContain("min-[1700px]:grid-cols-[minmax(38rem,0.95fr)_minmax(0,1.55fr)]");
+    expect(markup).toContain("content-start");
+    expect(markup).toContain("xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)]");
     expect(markup).toContain('data-testid="auto-inspection-queue-scroll-area"');
     expect(markup).toContain('data-testid="auto-inspection-heartbeat-table"');
     expect(markup).toContain("max-h-[min(30rem,55vh)]");
     expect(markup).toContain("overflow-y-auto overscroll-contain");
     expect(markup).toMatch(/data-slot="table-container" class="[^"]*overflow-auto[^"]*"/);
-    expect(markup).toContain("min-[1700px]:h-full min-[1700px]:max-h-none");
+    expect(markup).toContain("xl:h-full xl:max-h-none");
     expect(markup).not.toContain("max-h-[42rem]");
     expect(markup).not.toContain("max-w-5xl");
     expect(markup).not.toContain("max-w-7xl");
@@ -698,12 +687,17 @@ describe("自动巡检页面", () => {
       result: {},
     };
 
+    const detailsQueryClient = new QueryClient({
+      defaultOptions: { queries: { enabled: false, retry: false } },
+    });
     const details = renderToStaticMarkup(
-      <AutoInspectionHeartbeatDetails
-        record={status.heartbeat_history[2]}
-        task={inspectionTask}
-        accountRateSyncTask={accountRateTask}
-      />,
+      <QueryClientProvider client={detailsQueryClient}>
+        <AutoInspectionHeartbeatDetails
+          record={status.heartbeat_history[2]}
+          task={inspectionTask}
+          accountRateSyncTask={accountRateTask}
+        />
+      </QueryClientProvider>,
     );
 
     expect(details).toContain('data-slot="independent-scheduled-task"');
@@ -736,7 +730,7 @@ describe("自动巡检页面", () => {
     expect(markup).not.toContain("设置区域不应重复显示这条错误");
     expect(markup).toContain("查看心跳详情");
     expect(details).toContain("巡检概况");
-    expect(details).toContain("失败原因");
+    expect(details).toContain("需处理的失败项");
     expect(details).toContain("上游同步部分失败：鉴权 2，其他 1");
     expect(details).toContain("主巡检步骤");
     expect(details).toContain("上游数据同步");
@@ -746,7 +740,7 @@ describe("自动巡检页面", () => {
     expect(details).not.toContain("耗时占比");
   });
 
-  it("存在账号级失败时将整轮巡检显示为部分失败", () => {
+  it("存在账号级失败时在心跳记录显示部分失败", () => {
     const partial: AutoInspectionStatus = {
       ...status,
       last_status: "partial",
@@ -763,12 +757,60 @@ describe("自动巡检页面", () => {
       <AutoInspectionHeartbeatDetails record={partial.heartbeat_history[0]} />,
     );
 
-    expect(markup).toContain("执行部分失败");
+    expect(markup).not.toContain("执行部分失败");
     expect(markup).toContain("异常信息");
     expect(markup).toContain("text-warning");
     expect(details).toContain("部分失败");
-    expect(details).toContain("部分失败详情");
+    expect(details).toContain("需处理的失败项");
     expect(details).not.toContain("失败原因");
+  });
+
+  it("部分失败时优先显示失败摘要和具体 Host 原因", () => {
+    const partialRecord: AutoInspectionStatus["heartbeat_history"][number] = {
+      ...status.heartbeat_history[2],
+      status: "partial",
+      error: "上游同步部分失败：鉴权 1，其他 1",
+    };
+    const partialTask: Task = {
+      ...inspectionTask,
+      status: "partial",
+      result: {
+        ...inspectionTask.result,
+        upstream_sync: {
+          ...(inspectionTask.result.upstream_sync as Record<string, unknown>),
+          hosts: [
+            { host: "healthy.example", status: "succeeded", key_count: 7 },
+            {
+              host: "expired.example",
+              status: "auth_failed",
+              key_count: 0,
+              reason: "refresh token 已失效",
+            },
+            {
+              host: "unreachable.example",
+              status: "failed",
+              key_count: 0,
+              reason: "连接上游超时",
+            },
+          ],
+        },
+      },
+    };
+
+    const details = renderToStaticMarkup(
+      <AutoInspectionHeartbeatDetails record={partialRecord} task={partialTask} />,
+    );
+    const failurePosition = details.indexOf('data-slot="heartbeat-failure-summary"');
+    const operationsPosition = details.indexOf('aria-labelledby="heartbeat-operations-title"');
+
+    expect(failurePosition).toBeGreaterThan(-1);
+    expect(failurePosition).toBeLessThan(operationsPosition);
+    expect(details).toContain("需处理的失败项");
+    expect(details).toContain("失败 Host（2）");
+    expect(details).toContain("expired.example");
+    expect(details).toContain("refresh token 已失效");
+    expect(details).toContain("unreachable.example");
+    expect(details).toContain("连接上游超时");
   });
 
   it("旧任务按涉及上游回填账号总数而不把 Key 数当账号总数", () => {

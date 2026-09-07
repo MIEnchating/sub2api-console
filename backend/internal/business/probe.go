@@ -12,6 +12,7 @@ import (
 
 type ProbeCandidate struct {
 	AccountID    string
+	AccountName  string
 	GroupName    string
 	GroupID      *string
 	UpstreamType *string
@@ -49,7 +50,7 @@ func (s *Store) ControlPolicy(ctx context.Context) (map[string]any, error) {
 	return document, nil
 }
 
-func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName *string) ([]ProbeCandidate, error) {
+func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName, platform *string) ([]ProbeCandidate, error) {
 	clauses := []string{}
 	arguments := []any{}
 	if accountID != nil {
@@ -61,7 +62,7 @@ func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName *strin
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
 	clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id)")
-	query := `SELECT a.id,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json
+	query := `SELECT a.id,a.name,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
@@ -77,14 +78,25 @@ func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName *strin
 		var item ProbeCandidate
 		var groupID, upstreamType sql.NullString
 		var rawMetadata string
-		if err := rows.Scan(&item.AccountID, &item.GroupName, &groupID, &upstreamType, &rawMetadata); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.AccountName, &item.GroupName, &groupID, &upstreamType, &rawMetadata); err != nil {
 			return nil, err
 		}
 		item.GroupID = nullString(groupID)
 		item.UpstreamType = nullString(upstreamType)
 		item.Metadata, item.MetadataErr = decodeJSONObject(rawMetadata)
 		if item.MetadataErr == nil {
+			if platform != nil {
+				candidatePlatform, ok := item.Metadata["platform"].(string)
+				if !ok || !strings.EqualFold(strings.TrimSpace(candidatePlatform), strings.TrimSpace(*platform)) {
+					continue
+				}
+			}
 			item.KnownModels = metadataStringList(item.Metadata["known_models"])
+			if _, present := item.Metadata["enabled_models"]; present {
+				item.KnownModels = metadataStringList(item.Metadata["enabled_models"])
+			}
+		} else if platform != nil {
+			continue
 		}
 		result = append(result, item)
 	}
@@ -105,9 +117,11 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		if strings.TrimSpace(sample.AccountID) == "" || strings.TrimSpace(sample.GroupName) == "" {
 			return 0, errors.New("探测样本缺少账号或分组")
 		}
-		if _, err := time.Parse(time.RFC3339Nano, sample.ObservedAt); err != nil {
+		observedAt, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err != nil {
 			return 0, errors.New("探测样本时间无效")
 		}
+		sample.ObservedAt = observedAt.UTC().Format(healthSampleTimeLayout)
 		payloadValue := map[string]any{
 			"status_code": sample.StatusCode, "request_model": sample.RequestModel, "actual_model": sample.ActualModel,
 			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
@@ -120,6 +134,10 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		if err != nil {
 			return 0, fmt.Errorf("探测样本无法序列化：%w", err)
 		}
+		evidenceKey := sample.ObservedAt
+		if strings.TrimSpace(sample.RequestModel) != "" {
+			evidenceKey += "|" + strings.ToLower(strings.TrimSpace(sample.RequestModel))
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO health_samples(
 			account_id,group_name,result,latency_p50,latency_p95,latency_p99,sample_count,attempts,
 			failure_reason,observed_at,source,evidence_key,payload_json
@@ -130,7 +148,7 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 			failure_reason=excluded.failure_reason,payload_json=excluded.payload_json`,
 			sample.AccountID, sample.GroupName, sample.Result, sample.LatencyP50, sample.LatencyP95,
 			sample.LatencyP99, sample.SampleCount, sample.Attempts, sample.FailureReason, sample.ObservedAt,
-			"active-probe", sample.ObservedAt, string(payload)); err != nil {
+			"active-probe", evidenceKey, string(payload)); err != nil {
 			return 0, err
 		}
 		if sample.RequestModel != "" && sample.ActualModel != "" && sample.RequestModel != sample.ActualModel {

@@ -69,6 +69,8 @@ type AccountStatus struct {
 	ApplyError                  *string               `json:"apply_error"`
 	DecisionState               *string               `json:"decision_state"`
 	DecisionReason              *string               `json:"decision_reason"`
+	EvidencePending             bool                  `json:"evidence_pending"`
+	Recovery                    *AccountRecovery      `json:"recovery"`
 	LastError                   *string               `json:"last_error"`
 	UpstreamBlock               *string               `json:"upstream_block"`
 	UpstreamBlockReason         *string               `json:"upstream_block_reason"`
@@ -82,6 +84,8 @@ type AccountStatus struct {
 	ShortScore                  *float64              `json:"short_score"`
 	LongScore                   *float64              `json:"long_score"`
 	SampleCount                 int64                 `json:"sample_count"`
+	ShortSampleCount            *int64                `json:"short_sample_count"`
+	LongSampleCount             int64                 `json:"long_sample_count"`
 	RecentResults               []AccountRecentResult `json:"recent_results"`
 	TTFBP50MS                   *float64              `json:"ttfb_p50_ms"`
 	TTFBP95MS                   *float64              `json:"ttfb_p95_ms"`
@@ -113,11 +117,12 @@ type AccountDetail struct {
 	GroupRates map[string]*string `json:"group_rates"`
 	GroupIDs   map[string]*string `json:"group_ids"`
 	Bindings   []AccountBinding   `json:"bindings"`
-	TestModel  *string            `json:"test_model"`
+	TestModels []string           `json:"test_models"`
 }
 
 type accountProjection struct {
 	AccountStatus
+	manualFused  bool
 	metadataRaw  string
 	groupIDs     map[string]*string
 	groupRates   map[string]*string
@@ -125,19 +130,22 @@ type accountProjection struct {
 }
 
 type decisionProjection struct {
-	state     string
-	reason    *string
-	updatedAt *string
-	weight    *float64
+	recovery        *AccountRecovery
+	evidencePending bool
+	state           string
+	reason          *string
+	updatedAt       *string
+	weight          *float64
 }
 
 type evaluationProjection struct {
-	healthScore *float64
-	shortScore  *float64
-	longScore   *float64
-	sampleCount int64
-	p50         *float64
-	p95         *float64
+	healthScore      *float64
+	shortScore       *float64
+	longScore        *float64
+	sampleCount      int64
+	shortSampleCount *int64
+	p50              *float64
+	p95              *float64
 }
 
 type routingApplyView struct {
@@ -194,12 +202,11 @@ func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, 
 	if err != nil {
 		return nil, err
 	}
-	var testModel *string
+	testModels := []string{}
 	if policy, policyErr := s.readPolicyDocument(ctx, s.db, "control-plane"); policyErr == nil && policy != nil {
 		if models, ok := policy["account_test_models"].(map[string]any); ok {
-			if value, ok := models[normalized].(string); ok && strings.TrimSpace(value) != "" {
-				normalizedModel := strings.TrimSpace(value)
-				testModel = &normalizedModel
+			if values, valueErr := normalizeAccountTestModels(models[normalized]); valueErr == nil {
+				testModels = values
 			}
 		}
 	}
@@ -209,7 +216,7 @@ func (s *Store) Account(ctx context.Context, accountID string) (*AccountDetail, 
 		GroupRates:    selected.groupRates,
 		GroupIDs:      selected.groupIDs,
 		Bindings:      bindings,
-		TestModel:     testModel,
+		TestModels:    testModels,
 	}, nil
 }
 
@@ -422,8 +429,15 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	if err != nil {
 		return nil, err
 	}
+	control, err := s.readPolicyDocument(ctx, s.db, "control-plane")
+	if err != nil {
+		return nil, err
+	}
+	scope, _ := control["scope"].(map[string]any)
+	manualFusedIDs := controlAccountIDs(scope["manual_fused_account_ids"])
 	for index := range projections {
 		item := &projections[index]
+		item.manualFused = containsControlID(manualFusedIDs, item.ID)
 		applyAccountCalculations(item, decisions[item.ID], evaluations[item.ID], applyErrors[item.ID], applyView)
 		if mode == runtimepolicy.Monitoring {
 			applyMonitoringHealth(item, excludedIDs, degradeThreshold)
@@ -652,26 +666,46 @@ func (s *Store) loadAccountDecisions(ctx context.Context, accounts map[string]*a
 			state = role.String
 		}
 		var weight *float64
+		var recoveryPayload struct {
+			Recovery *AccountRecovery `json:"recovery"`
+		}
+		if err := json.Unmarshal([]byte(payloadRaw), &recoveryPayload); err != nil {
+			recoveryPayload.Recovery = nil
+		}
+		if recoveryPayload.Recovery != nil && len(recoveryPayload.Recovery.Conditions) == 0 {
+			recoveryPayload.Recovery = nil
+		}
+		// Decisions saved before the structured flag carry the observation in their reason.
+		evidencePending := reason.Valid && reason.String == "短暂异常待确认，保持当前调度位置"
 		if payload, decodeErr := decodeObject(payloadRaw); decodeErr == nil {
 			weight = finiteFloat(payload["weight"])
+			if pending, ok := payload["evidence_pending"].(bool); ok {
+				evidencePending = pending
+			}
 		}
 		result[accountID] = append(result[accountID], decisionProjection{
 			state: state, reason: nullString(reason), updatedAt: nullString(updatedAt), weight: weight,
+			evidencePending: evidencePending,
+			recovery:        recoveryPayload.Recovery,
 		})
 	}
 	return result, rows.Err()
 }
 
 func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]*accountProjection) (map[string][]evaluationProjection, error) {
-	query := `SELECT account_id,group_name,health_score,short_score,long_score,
-		sample_count,ttfb_p50_ms,ttfb_p95_ms,latest_event
-		FROM account_health_evaluations`
+	// Sample counts must come from the same round as the displayed scores.
+	// Old or calculation-only evaluations may not have a matching decision.
+	query := `SELECT e.account_id,e.group_name,e.health_score,e.short_score,e.long_score,
+		e.sample_count,e.ttfb_p50_ms,e.ttfb_p95_ms,e.latest_event,
+		CASE WHEN json_valid(d.payload_json) THEN json_extract(d.payload_json,'$.short_sample_count') END
+		FROM account_health_evaluations e LEFT JOIN routing_decisions d
+		ON d.account_id=e.account_id AND d.group_name=e.group_name AND d.updated_at=e.evaluated_at`
 	arguments := []any{}
 	if accountID, ok := soleProjectionAccountID(accounts); ok {
-		query += ` WHERE account_id=?`
+		query += ` WHERE e.account_id=?`
 		arguments = append(arguments, accountID)
 	}
-	query += ` ORDER BY evaluated_at DESC`
+	query += ` ORDER BY e.evaluated_at DESC`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
@@ -682,8 +716,9 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 		var accountID, groupName string
 		var healthScore, shortScore, longScore, p50, p95 sql.NullFloat64
 		var sampleCount int64
+		var shortSampleCount sql.NullInt64
 		var latestEvent sql.NullString
-		if err := rows.Scan(&accountID, &groupName, &healthScore, &shortScore, &longScore, &sampleCount, &p50, &p95, &latestEvent); err != nil {
+		if err := rows.Scan(&accountID, &groupName, &healthScore, &shortScore, &longScore, &sampleCount, &p50, &p95, &latestEvent, &shortSampleCount); err != nil {
 			return nil, err
 		}
 		account := accounts[accountID]
@@ -697,7 +732,7 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 		}
 		result[accountID] = append(result[accountID], evaluationProjection{
 			healthScore: nullFiniteFloat(healthScore), shortScore: nullFiniteFloat(shortScore),
-			longScore: nullFiniteFloat(longScore), sampleCount: sampleCount,
+			longScore: nullFiniteFloat(longScore), sampleCount: sampleCount, shortSampleCount: nullInt(shortSampleCount),
 			p50: nullFiniteFloat(p50), p95: nullFiniteFloat(p95),
 		})
 	}
@@ -899,6 +934,19 @@ func applyAccountCalculations(
 		item.DecisionState = stringPointer(selectedState)
 		item.DecisionReason = selected.reason
 		item.DesiredHealth = stringPointer(selectedState)
+		item.EvidencePending = selected.evidencePending && (selectedState == AccountStateHealthy || selectedState == AccountStateDegraded)
+		if selectedState == AccountStateFused || selectedState == AccountStateDegraded {
+			item.Recovery = selected.recovery
+		}
+	}
+	// Manual controls are persisted independently of scheduler decisions.
+	if item.manualFused {
+		selectedState = AccountStateFused
+		item.DecisionState = stringPointer(selectedState)
+		item.DecisionReason = stringPointer("人工熔断，等待手动解除")
+		item.EvidencePending = false
+		item.Recovery = nil
+		item.DesiredHealth = stringPointer(selectedState)
 	}
 	currentHealth := AccountStateUnknown
 	if item.RoutingState != nil {
@@ -906,6 +954,9 @@ func applyAccountCalculations(
 	}
 	if currentHealth == AccountStateUnknown && item.HealthStatus != nil {
 		currentHealth = NormalizeAccountState(*item.HealthStatus)
+	}
+	if item.manualFused && item.Schedulable != nil && !*item.Schedulable {
+		currentHealth = AccountStateFused
 	}
 	if metadataState := accountMetadataState(item.metadataRaw); metadataState == AccountStateDisabled {
 		currentHealth = metadataState
@@ -919,10 +970,14 @@ func applyAccountCalculations(
 		effectiveHealth = "excluded"
 	}
 	item.Health = effectiveHealth
+	if effectiveHealth == "paused" || effectiveHealth == "disabled" || effectiveHealth == "excluded" {
+		item.Recovery = nil
+	}
+	item.EvidencePending = item.EvidencePending && (effectiveHealth == AccountStateHealthy || effectiveHealth == AccountStateDegraded)
 	statePending := selectedState != "" && selectedState != effectiveHealth && applyView.fields["schedulable"] &&
 		effectiveHealth != "paused" && effectiveHealth != "disabled" && effectiveHealth != "excluded"
 	item.ApplyPending = selectedState != "" && selectedState != "excluded" &&
-		(statePending || routingTargetMismatch(item, applyView.fields))
+		(statePending || (!item.manualFused && routingTargetMismatch(item, applyView.fields)))
 	if item.ApplyPending {
 		if applyView.automatic {
 			item.ApplyError = stringPointer("尚未应用到 Sub2API")
@@ -932,6 +987,10 @@ func applyAccountCalculations(
 		if applyError.message != "" && (selected == nil || selected.updatedAt == nil || applyError.at == nil || *applyError.at >= *selected.updatedAt) {
 			item.ApplyError = stringPointer(applyError.message)
 		}
+	}
+	if len(evaluations) > 0 {
+		zero := int64(0)
+		item.ShortSampleCount = &zero
 	}
 	scored := make([]evaluationProjection, 0, len(evaluations))
 	for _, evaluation := range evaluations {
@@ -954,6 +1013,8 @@ func applyAccountCalculations(
 	for _, evaluation := range scored {
 		if evaluation.sampleCount > item.SampleCount {
 			item.SampleCount = evaluation.sampleCount
+			item.LongSampleCount = evaluation.sampleCount
+			item.ShortSampleCount = evaluation.shortSampleCount
 		}
 	}
 }
@@ -1009,6 +1070,8 @@ func decimalPointersEqual(left, right *string) bool {
 }
 
 func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}, degradeThreshold float64) {
+	item.EvidencePending = false
+	item.Recovery = nil
 	current := AccountStateUnknown
 	if item.RoutingState != nil {
 		current = NormalizeAccountState(*item.RoutingState)
@@ -1025,6 +1088,9 @@ func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}
 		reason = stringPointer("账号被排除")
 	} else if current == "disabled" {
 		reason = stringPointer("账号已停用")
+	} else if item.manualFused && item.Schedulable != nil && !*item.Schedulable {
+		current = AccountStateFused
+		reason = item.DecisionReason
 	} else if current == "fused" || current == "cost_blocked" || current == "survivor" {
 		reason = item.DecisionReason
 	} else if item.SampleCount == 0 || item.HealthScore == nil {
@@ -1072,6 +1138,9 @@ func decodeObject(raw string) (map[string]any, error) {
 	var value map[string]any
 	if err := decoder.Decode(&value); err != nil || value == nil {
 		return nil, errors.New("JSON 对象无效")
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
 	}
 	return value, nil
 }

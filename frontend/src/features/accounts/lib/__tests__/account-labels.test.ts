@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import type { GroupStatus } from "@/api";
 
 import {
-  accountPlatformLabel,
+  accountMatchesPlatform,
   accountTypeLabel,
   accountTypeOptions,
   accountTypeValue,
+  concreteAccountPlatformOptions,
+  groupPlatformOptions,
   groupPlatformSummary,
 } from "../account-labels";
 
@@ -47,8 +49,27 @@ describe("account type dictionary", () => {
 });
 
 describe("group platform dictionary", () => {
-  it("displays the OpenCode platform label for onboarding candidates", () => {
-    expect(accountPlatformLabel("opencode")).toBe("OpenCode");
+  it("matches the Sub2API account and group platform catalogs", () => {
+    expect(concreteAccountPlatformOptions.map((option) => option.value)).toEqual([
+      "anthropic",
+      "openai",
+      "gemini",
+      "antigravity",
+      "grok",
+      "kimi",
+      "zhipu",
+      "deepseek",
+    ]);
+    expect(groupPlatformOptions.map((option) => option.value)).toEqual([
+      ...concreteAccountPlatformOptions.map((option) => option.value),
+      "composite",
+    ]);
+  });
+
+  it("matches account platform independently from account and upstream types", () => {
+    expect(accountMatchesPlatform({ platform: " OpenAI " }, "openai")).toBe(true);
+    expect(accountMatchesPlatform({ platform: "anthropic" }, "openai")).toBe(false);
+    expect(accountMatchesPlatform({ platform: null }, null)).toBe(true);
   });
 
   it.each([
@@ -60,7 +81,6 @@ describe("group platform dictionary", () => {
     ["kimi", "Kimi"],
     ["zhipu", "Zhipu GLM"],
     ["deepseek", "DeepSeek"],
-    ["opencode", "OpenCode"],
     ["composite", "Composite"],
   ])("displays Sub2API platform %s as %s", (platform, label) => {
     expect(groupPlatformSummary({ ...group, platform })).toBe(label);

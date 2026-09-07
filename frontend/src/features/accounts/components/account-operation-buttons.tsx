@@ -1,149 +1,83 @@
-import {
-  Activity,
-  Ban,
-  LoaderCircle,
-  MoreHorizontal,
-  Pause,
-  Pencil,
-  Pin,
-  Play,
-  RefreshCw,
-  Trash2,
-} from "lucide-react";
+import { useRef, useState } from "react";
+import type { ReactElement } from "react";
 
-import type { AccountControlAction, AccountStatus } from "@/api";
-import { TableActionButton } from "@/components/data-table/table-action-button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { accountPoolState } from "@/features/accounts/lib/account-pool";
-import { cn } from "@/lib/utils";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { AccountOperationControls, type AccountOperationProps } from "./account-operation-controls";
+import { AccountStateCell } from "./account-pool-cells";
 
-const prominentDangerActionClassName =
-  "border-destructive/40 bg-destructive/10 hover:border-destructive/60 hover:bg-destructive/20 focus-visible:border-destructive focus-visible:ring-destructive/30";
-
-export function AccountOperationButtons(props: {
-  account: AccountStatus;
-  pending: boolean;
-  probePending: boolean;
-  onProbe: () => void;
-  onControl: (
-    action: AccountControlAction,
-    label: string,
-    confirmationDescription?: string,
-  ) => void;
-  onRateSync: () => void;
-  onManualPriority: () => void;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const state = accountPoolState(props.account).value;
-  const paused = state === "paused";
-  const fused = state === "fused";
-  const policyStopped = state === "cost_blocked" || fused;
-  const resumable = paused || (!policyStopped && props.account.schedulable === false);
-  const excluded = state === "excluded";
-  const manualControlled = props.account.manual_priority != null;
-  let accountOperationCopy = { scheduling: "暂停调度" };
-  if (resumable) accountOperationCopy = { scheduling: "恢复调度" };
-  else if (policyStopped) accountOperationCopy = { scheduling: "已停止调度" };
+export function AccountOperationButtons(props: AccountOperationProps): ReactElement {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  function closeAndRun(action: () => void): void {
+    setOpen(false);
+    action();
+  }
   return (
-    <div className="ml-auto flex items-center justify-end gap-1">
-      {excluded ? (
-        <TableActionButton
-          label="恢复管控"
-          tone="primary"
-          disabled={props.pending || manualControlled}
-          onClick={() => props.onControl("include", "恢复管控")}
+    <div className="ml-auto flex shrink-0 items-center justify-end gap-1">
+      <AccountOperationControls {...props} />
+      <Dialog open={open} onOpenChange={setOpen}>
+        <Button
+          ref={triggerRef}
+          type="button"
+          variant="outline"
+          size="sm"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
         >
-          <Play />
-        </TableActionButton>
-      ) : (
-        <>
-          <TableActionButton
-            label={props.probePending ? "正在探活" : "探活测试"}
-            disabled={props.pending || props.probePending || manualControlled}
-            onClick={props.onProbe}
-          >
-            {props.probePending ? <LoaderCircle className="animate-spin" /> : <Activity />}
-          </TableActionButton>
-          <TableActionButton
-            label={accountOperationCopy.scheduling}
-            tone={resumable ? "primary" : "default"}
-            disabled={props.pending || policyStopped || manualControlled}
-            onClick={() =>
-              props.onControl(
-                resumable ? "resume" : "pause",
-                resumable ? "恢复调度" : "暂停调度",
-                resumable
-                  ? undefined
-                  : `暂停“${props.account.name}”后，该账号将停止接收流量，但仍会继续监控和计分。`,
-              )
-            }
-          >
-            {resumable ? <Play /> : <Pause />}
-          </TableActionButton>
-          <TableActionButton
-            label={fused ? "解除熔断" : "手动熔断"}
-            tone={fused ? "primary" : "danger"}
-            className={cn(!fused && prominentDangerActionClassName)}
-            disabled={props.pending || paused || manualControlled}
-            onClick={() =>
-              props.onControl(
-                fused ? "recover" : "fuse",
-                fused ? "解除熔断" : "手动熔断",
-                fused
-                  ? undefined
-                  : `熔断“${props.account.name}”后，该账号会停止调度，直到手动解除熔断。`,
-              )
-            }
-          >
-            {fused ? <RefreshCw /> : <Ban />}
-          </TableActionButton>
-        </>
-      )}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-sm"
-              className="data-popup-open:bg-muted"
-              aria-label="更多账号操作"
-              disabled={props.pending}
-            />
-          }
+          状态与处置
+        </Button>
+        <DialogContent
+          width="progress"
+          height="adaptive"
+          initialFocus={titleRef}
+          finalFocus={triggerRef}
+          className="grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
-          <MoreHorizontal className="size-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem disabled={props.pending} onClick={props.onRateSync}>
-            <RefreshCw />
-            同步账号倍率
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={props.pending} onClick={props.onManualPriority}>
-            <Pin />
-            {props.account.manual_priority == null ? "设置人工优先位" : "调整人工优先位"}
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={props.pending || manualControlled} onClick={props.onEdit}>
-            <Pencil />
-            查看并编辑账号
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className="text-destructive focus:text-destructive"
-            disabled={props.pending}
-            onClick={props.onDelete}
-          >
-            <Trash2 />
-            删除账号及上游 Key
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <DialogHeader>
+            <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">
+              状态与处置
+            </DialogTitle>
+            <DialogDescription className="break-words [overflow-wrap:anywhere]">
+              {props.account.name}（#{props.account.id}）
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody role="region" aria-label="账号状态详情" className="grid gap-4 text-left">
+            <AccountStateCell account={props.account} expanded />
+            {props.account.manual_priority != null ? (
+              <p className="text-sm text-muted-foreground">
+                账号处于人工优先位，自动探活与调度处置已禁用。可在更多账号操作中调整人工优先位。
+              </p>
+            ) : null}
+          </DialogBody>
+          <DialogFooter>
+            <div role="group" aria-label="账号常用处置" className="min-w-0">
+              <AccountOperationControls
+                {...props}
+                expanded
+                onProbe={() => closeAndRun(props.onProbe)}
+                onControl={(action, label, description) =>
+                  closeAndRun(() => props.onControl(action, label, description))
+                }
+                onRateSync={() => closeAndRun(props.onRateSync)}
+                onManualPriority={() => closeAndRun(props.onManualPriority)}
+                onEdit={() => closeAndRun(props.onEdit)}
+                onDelete={() => closeAndRun(props.onDelete)}
+              />
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

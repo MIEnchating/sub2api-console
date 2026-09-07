@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
 export const dialogContentLayout =
-  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100svh-2rem)] w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0";
+  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100svh-2rem)] w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0";
 
 export const dialogBodyLayout =
   "min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1";
@@ -15,6 +15,7 @@ export const dialogBodyLayout =
 export const dialogWidthLayouts = {
   content: "",
   medium: "w-[min(32rem,calc(100vw-2rem))]",
+  progress: "w-[min(38rem,calc(100vw-2rem))]",
   wide: "w-[min(64rem,calc(100vw-2rem))]",
   table: "w-[min(90rem,calc(100vw-2rem))]",
 } as const;
@@ -32,7 +33,7 @@ export const dialogHeightLayouts = {
 type DialogContentHeight = keyof typeof dialogHeightLayouts;
 
 export const compactOperationDialogLayout = {
-  width: "medium",
+  width: "progress",
   height: "adaptive",
 } as const;
 
@@ -40,7 +41,7 @@ export function operationDialogWidth(
   hasResults: boolean,
   resultWidth: "wide" | "table" = "wide",
 ): DialogContentWidth {
-  return hasResults ? resultWidth : "medium";
+  return hasResults ? resultWidth : "progress";
 }
 
 export function operationDialogHeight(hasResults: boolean): DialogContentHeight {
@@ -97,10 +98,11 @@ function DialogContent(
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         {...popupProps}
+        data-close-button={showCloseButton}
         className={
           typeof className === "function"
-            ? (state) => dialogContentClass(width, height, className(state))
-            : dialogContentClass(width, height, className)
+            ? (state) => cn("group/dialog", dialogContentClass(width, height, className(state)))
+            : cn("group/dialog", dialogContentClass(width, height, className))
         }
       >
         {children}
@@ -129,7 +131,10 @@ function DialogHeader(props: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       {...props}
-      className={cn("flex flex-col gap-2", props.className)}
+      className={cn(
+        "flex min-w-0 shrink-0 flex-col gap-2 group-data-[close-button=true]/dialog:pr-8",
+        props.className,
+      )}
     />
   );
 }
@@ -152,7 +157,10 @@ function DialogTitle(props: DialogPrimitive.Title.Props) {
     <DialogPrimitive.Title
       data-slot="dialog-title"
       {...props}
-      className={cn("text-base leading-none font-medium", props.className)}
+      className={cn(
+        "min-w-0 text-base leading-snug font-medium [overflow-wrap:anywhere]",
+        props.className,
+      )}
     />
   );
 }
@@ -162,7 +170,10 @@ function DialogDescription(props: DialogPrimitive.Description.Props) {
     <DialogPrimitive.Description
       data-slot="dialog-description"
       {...props}
-      className={cn("text-muted-foreground text-sm", props.className)}
+      className={cn(
+        "text-muted-foreground min-w-0 text-sm [overflow-wrap:anywhere]",
+        props.className,
+      )}
     />
   );
 }

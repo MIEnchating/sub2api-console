@@ -245,6 +245,34 @@ func TestStableIDsAreRequired(t *testing.T) {
 	}
 }
 
+func TestUpdateGroupRateMultiplierWritesSub2APIGroupAndConfirmsReadback(t *testing.T) {
+	rate := "0.35"
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		switch request.Method {
+		case http.MethodPut:
+			var body map[string]json.Number
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil || body["rate_multiplier"].String() != "0.42" {
+				t.Fatalf("body=%#v err=%v", body, err)
+			}
+			rate = "0.42"
+			writeJSON(w, `{"success":true,"data":{"id":6,"rate_multiplier":0.42}}`)
+		case http.MethodGet:
+			writeJSON(w, `{"success":true,"data":{"id":6,"rate_multiplier":`+rate+`}}`)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	defer server.Close()
+
+	group, err := client.UpdateGroupRateMultiplier(context.Background(), "6", "0.42")
+
+	if err != nil || fmt.Sprint(group["rate_multiplier"]) != "0.42" {
+		t.Fatalf("group=%#v err=%v", group, err)
+	}
+}
+
 func TestCreateAccountAcceptsNestedAccountResponseAfterCapturingIdentityBaseline(t *testing.T) {
 	var lists, posts int
 	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
@@ -722,6 +750,48 @@ func TestDeleteAccountCanSkipAbsentReadback(t *testing.T) {
 	}
 }
 
+func TestRequestDetailsEnrichesOfficialOpsRowsFromUsageWithoutAddingSamples(t *testing.T) {
+	var usageCalls int
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/admin/ops/requests":
+			writeJSON(w, `{"data":{"items":[{"account_id":41,"request_id":"success","kind":"success","duration_ms":30000},{"account_id":41,"request_id":"failure","kind":"error","status_code":502}],"total":2}}`)
+		case "/api/v1/admin/usage":
+			usageCalls++
+			query := request.URL.Query()
+			if query.Get("account_id") != "41" || query.Get("timezone") != "UTC" || query.Get("sort_by") != "created_at" || query.Get("sort_order") != "desc" || query.Get("start_date") == "" || query.Get("end_date") == "" {
+				t.Errorf("usage filters=%v", query)
+			}
+			writeJSON(w, `{"data":{"items":[{"id":1,"account_id":42,"request_id":"success","first_token_ms":999},{"id":2,"account_id":41,"request_id":"success","first_token_ms":1250},{"id":3,"account_id":41,"request_id":"failure","first_token_ms":400}],"total":3}}`)
+		default:
+			http.NotFound(w, request)
+		}
+	})
+	defer server.Close()
+	rows, err := client.RequestDetails(context.Background(), "41", 120, 60)
+	if err != nil || len(rows) != 2 || usageCalls != 1 {
+		t.Fatalf("rows=%v err=%v usageCalls=%d", rows, err, usageCalls)
+	}
+	if fmt.Sprint(rows[0]["first_token_ms"]) != "1250" || fmt.Sprint(rows[0]["duration_ms"]) != "30000" || rows[1]["first_token_ms"] != nil || rows[1]["kind"] != "error" {
+		t.Fatalf("usage enrichment mixed identity, outcome or timing: %v", rows)
+	}
+}
+
+func TestRequestDetailsKeepsOpsEvidenceAndReportsUsageFailure(t *testing.T) {
+	client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/api/v1/admin/ops/requests" {
+			writeJSON(w, `{"data":{"items":[{"account_id":41,"request_id":"success","kind":"success"},{"account_id":41,"request_id":"failure","kind":"error","status_code":401}],"total":2}}`)
+			return
+		}
+		http.Error(w, `{"message":"usage unavailable"}`, http.StatusServiceUnavailable)
+	})
+	defer server.Close()
+	rows, err := client.RequestDetails(context.Background(), "41", 120, 60)
+	if len(rows) != 2 || err == nil || !strings.Contains(err.Error(), "首字") || rows[1]["kind"] != "error" {
+		t.Fatalf("partial evidence or error lost: rows=%v err=%v", rows, err)
+	}
+}
+
 func TestRequestTraceUsesOnlyOpsRequests(t *testing.T) {
 	var path string
 	var query string
@@ -1002,4 +1072,51 @@ func (transport *retryTransport) RoundTrip(request *http.Request) (*http.Respons
 		return nil, errors.New("temporary transport failure")
 	}
 	return response(http.StatusOK, `{"data":{"items":[{"id":`+strconv.Itoa(int(call))+`}],"total":1}}`), nil
+}
+
+func TestRequestDetailsUsageEnrichmentHandlesNullInvalidAndPagedValues(t *testing.T) {
+	for _, raw := range []string{"null", "-1", `"NaN"`, `"invalid"`, "0", "6000"} {
+		t.Run(raw, func(t *testing.T) {
+			client, server := testClient(t, 1, func(w http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/api/v1/admin/ops/requests" {
+					writeJSON(w, `{"data":{"items":[{"account_id":41,"request_id":"target","kind":"success","duration_ms":9000}],"total":1}}`)
+					return
+				}
+				if request.URL.Query().Get("page") == "1" {
+					writeJSON(w, `{"data":{"items":[{"id":1,"account_id":42,"request_id":"target","first_token_ms":123}],"total":2}}`)
+					return
+				}
+				writeJSON(w, fmt.Sprintf(`{"data":{"items":[{"id":2,"account_id":41,"request_id":"target","first_token_ms":%s}],"total":2}}`, raw))
+			})
+			defer server.Close()
+			rows, err := client.RequestDetails(context.Background(), "41", 120, 60)
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("rows=%v err=%v", rows, err)
+			}
+			if raw == "0" || raw == "6000" {
+				if fmt.Sprint(rows[0]["first_token_ms"]) != raw {
+					t.Fatalf("first token=%v", rows[0])
+				}
+			} else if rows[0]["first_token_ms"] != nil {
+				t.Fatalf("invalid first token accepted: %v", rows[0])
+			}
+		})
+	}
+}
+
+func TestRequestDetailsSkipsUsageWhenNoSuccessNeedsEnrichment(t *testing.T) {
+	for _, items := range []string{`[]`, `[{"account_id":41,"request_id":"error","kind":"error"}]`, `[{"account_id":41,"request_id":"success","kind":"success","first_token_ms":1000}]`} {
+		t.Run(items, func(t *testing.T) {
+			client, server := testClient(t, 1, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/admin/ops/requests" {
+					t.Errorf("unnecessary request: %s", r.URL.Path)
+				}
+				writeJSON(w, `{"data":{"items":`+items+`,"total":0}}`)
+			})
+			defer server.Close()
+			if _, err := client.RequestDetails(context.Background(), "41", 120, 60); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }

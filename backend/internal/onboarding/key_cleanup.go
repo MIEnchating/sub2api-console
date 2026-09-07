@@ -97,7 +97,7 @@ func (s *Service) EnqueueKeyCleanup(ctx context.Context, host string, keyIDs []s
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeKeyCleanup(parent, task, preview.Host, requested, strings.TrimSpace(actor))
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)

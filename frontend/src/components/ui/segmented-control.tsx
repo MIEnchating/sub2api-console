@@ -7,11 +7,15 @@ export function SegmentedControl(props: React.ComponentProps<"div">) {
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     props.onKeyDown?.(event);
     if (event.defaultPrevented || props.role !== "tablist") return;
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
-      return;
+    const vertical = props["aria-orientation"] === "vertical";
+    const previousKey = vertical ? "ArrowUp" : "ArrowLeft";
+    const nextKey = vertical ? "ArrowDown" : "ArrowRight";
+    if (![previousKey, nextKey, "Home", "End"].includes(event.key)) return;
     const tabs = Array.from(
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'),
-    );
+      event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        '[role="tab"]:not(:disabled):not([aria-disabled="true"])',
+      ),
+    ).filter((tab) => tab.closest('[role="tablist"]') === event.currentTarget);
     const current = (event.target as HTMLElement).closest<HTMLButtonElement>('[role="tab"]');
     const currentIndex = current ? tabs.indexOf(current) : -1;
     if (currentIndex < 0 || tabs.length === 0) return;
@@ -19,8 +23,7 @@ export function SegmentedControl(props: React.ComponentProps<"div">) {
     let nextIndex = currentIndex;
     if (event.key === "Home") nextIndex = 0;
     else if (event.key === "End") nextIndex = tabs.length - 1;
-    else if (event.key === "ArrowRight" || event.key === "ArrowDown")
-      nextIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === nextKey) nextIndex = (currentIndex + 1) % tabs.length;
     else nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
     tabs[nextIndex]?.focus();
     tabs[nextIndex]?.click();
@@ -31,7 +34,7 @@ export function SegmentedControl(props: React.ComponentProps<"div">) {
       onKeyDown={handleKeyDown}
       data-slot="segmented-control"
       className={cn(
-        "bg-muted/40 inline-flex w-fit max-w-full items-center gap-1 rounded-md border p-1",
+        "bg-muted/40 inline-flex w-fit min-w-0 max-w-full items-center gap-1 overflow-x-auto rounded-md border p-1",
         props.className,
       )}
     />

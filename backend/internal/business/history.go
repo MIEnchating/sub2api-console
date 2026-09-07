@@ -115,6 +115,7 @@ type AuditEvent struct {
 	State             string   `json:"state"`
 	Phase             string   `json:"phase"`
 	RequestID         *string  `json:"request_id"`
+	TaskID            *string  `json:"task_id"`
 	Actor             *string  `json:"actor"`
 	Source            *string  `json:"source"`
 	Error             *string  `json:"error"`
@@ -508,7 +509,7 @@ func (s *Store) ClearLogRecords(ctx context.Context, before *time.Time) (LogClea
 }
 
 func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool) ([]AuditEvent, error) {
-	query := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
+	query := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.task_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
 		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name),oa.group_names_json,
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
 		FROM operation_audit oa`
@@ -539,7 +540,7 @@ func (s *Store) AuditEvents(ctx context.Context, limit *int, writebackOnly bool)
 }
 
 func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int) ([]AuditEvent, error) {
-	recent := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
+	recent := `SELECT oa.source_id,oa.operation_id,oa.operation_type,oa.state,oa.phase,oa.request_id,oa.task_id,oa.actor,oa.source,oa.error,oa.remote_confirmed,
 		oa.readback_confirmed,oa.object_type,oa.object_id,COALESCE(NULLIF(oa.object_name,''),a.name) AS object_name,oa.group_names_json,
 		oa.field_name,oa.before_json,oa.after_json,oa.writeback,oa.created_at
 		FROM operation_audit oa INDEXED BY ix_operation_audit_log_recent_v2 LEFT JOIN accounts a ON a.id=oa.object_id
@@ -555,18 +556,18 @@ func (s *Store) SearchAuditEvents(ctx context.Context, search string, limit *int
 		return nil, err
 	}
 	normalized := strings.ToLower(strings.TrimSpace(search))
-	query := `WITH recent AS (` + recent + `) SELECT source_id,operation_id,operation_type,state,phase,request_id,actor,source,error,
+	query := `WITH recent AS (` + recent + `) SELECT source_id,operation_id,operation_type,state,phase,request_id,task_id,actor,source,error,
 		remote_confirmed,readback_confirmed,object_type,object_id,object_name,group_names_json,field_name,before_json,after_json,writeback,created_at
 		FROM recent WHERE instr(lower(CAST(source_id AS TEXT)),?)>0 OR instr(lower(operation_id),?)>0 OR
 		instr(lower(operation_type),?)>0 OR instr(lower(state),?)>0 OR instr(lower(phase),?)>0 OR
-		instr(lower(COALESCE(request_id,'')),?)>0 OR instr(lower(COALESCE(actor,'')),?)>0 OR
+		instr(lower(COALESCE(request_id,'')),?)>0 OR instr(lower(COALESCE(task_id,'')),?)>0 OR instr(lower(COALESCE(actor,'')),?)>0 OR
 		instr(lower(COALESCE(source,'')),?)>0 OR instr(lower(COALESCE(error,'')),?)>0 OR
 		instr(lower(COALESCE(object_id,'')),?)>0 OR instr(lower(COALESCE(object_name,'')),?)>0 OR
 		instr(lower(group_names_json),?)>0 OR instr(lower(COALESCE(field_name,'')),?)>0 OR
 		instr(lower(COALESCE(before_json,'')),?)>0 OR instr(lower(COALESCE(after_json,'')),?)>0 OR
 		instr(lower(created_at),?)>0 ORDER BY created_at DESC,CASE WHEN source_id < 0 THEN 0 ELSE 1 END,
 		CASE WHEN source_id < 0 THEN source_id END ASC,CASE WHEN source_id >= 0 THEN source_id END DESC`
-	for range 16 {
+	for range 17 {
 		arguments = append(arguments, normalized)
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
@@ -581,16 +582,17 @@ func scanAuditEvents(rows *sql.Rows) ([]AuditEvent, error) {
 	result := []AuditEvent{}
 	for rows.Next() {
 		var item AuditEvent
-		var requestID, actor, source, errorText, objectType, objectID, objectName, fieldName sql.NullString
+		var requestID, taskID, actor, source, errorText, objectType, objectID, objectName, fieldName sql.NullString
 		var remote, readback, writeback sql.NullInt64
 		var groupsRaw string
 		var beforeRaw, afterRaw sql.NullString
 		if err := rows.Scan(&item.ID, &item.OperationID, &item.OperationType, &item.State, &item.Phase,
-			&requestID, &actor, &source, &errorText, &remote, &readback, &objectType, &objectID, &objectName,
+			&requestID, &taskID, &actor, &source, &errorText, &remote, &readback, &objectType, &objectID, &objectName,
 			&groupsRaw, &fieldName, &beforeRaw, &afterRaw, &writeback, &item.CreatedAt); err != nil {
 			return nil, err
 		}
-		item.RequestID, item.Actor, item.Source, item.Error = nullString(requestID), nullString(actor), nullString(source), nullString(errorText)
+		item.RequestID, item.TaskID = nullString(requestID), nullString(taskID)
+		item.Actor, item.Source, item.Error = nullString(actor), nullString(source), nullString(errorText)
 		item.RemoteConfirmed, item.ReadbackConfirmed = strictBool(remote), strictBool(readback)
 		item.ObjectType, item.ObjectID, item.ObjectName, item.FieldName = nullString(objectType), nullString(objectID), nullString(objectName), nullString(fieldName)
 		item.GroupNames = decodeStringArray(groupsRaw)

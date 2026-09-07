@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -98,25 +99,35 @@ func testControlOperation(id string) AccountOperation {
 	}
 }
 
-func TestAccountTestModelPersistsAndCanBeCleared(t *testing.T) {
+func TestAccountTestModelsPersistAndCanBeCleared(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','channel-41','{}','now')`); err != nil {
 		t.Fatal(err)
 	}
-	model := " gpt-5.1-codex "
-	if err := store.SetAccountTestModel(ctx, "41", &model, "operator"); err != nil {
+	models := []string{" gpt-5.1-codex ", "claude-sonnet-4", "GPT-5.1-CODEX"}
+	if err := store.SetAccountTestModels(ctx, "41", models, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := store.Account(ctx, "41")
-	if err != nil || detail.TestModel == nil || *detail.TestModel != "gpt-5.1-codex" {
-		t.Fatalf("model=%v err=%v", detail.TestModel, err)
+	if err != nil || !reflect.DeepEqual(detail.TestModels, []string{"gpt-5.1-codex", "claude-sonnet-4"}) {
+		t.Fatalf("models=%v err=%v", detail.TestModels, err)
 	}
-	if err := store.SetAccountTestModel(ctx, "41", nil, "operator"); err != nil {
+	if err := store.SetAccountTestModels(ctx, "41", nil, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	detail, err = store.Account(ctx, "41")
-	if err != nil || detail.TestModel != nil {
-		t.Fatalf("cleared model=%v err=%v", detail.TestModel, err)
+	if err != nil || len(detail.TestModels) != 0 {
+		t.Fatalf("cleared models=%v err=%v", detail.TestModels, err)
+	}
+}
+
+func TestNormalizeAccountTestModelsAcceptsPreviouslyStoredSingleModel(t *testing.T) {
+	models, err := normalizeAccountTestModels(" gpt-5.1-codex ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(models, []string{"gpt-5.1-codex"}) {
+		t.Fatalf("models=%v", models)
 	}
 }

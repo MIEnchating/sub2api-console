@@ -8,6 +8,9 @@ import (
 
 func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 	store := openReadModelFixture(t)
+	if _, err := store.db.Exec(`UPDATE accounts SET metadata_json='{"platform":"openai"}' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.Exec(`UPDATE upstreams SET base_url='https://api.aiyxgaw.com',metadata_json='{"site_name":"New API"}' WHERE host='api.example'`); err != nil {
 		t.Fatal(err)
 	}
@@ -15,7 +18,7 @@ func TestBoundAccountMaintenanceUsesNormalizedSiteName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].ExpectedName != "aiyxgaw-0.1" {
+	if len(rows) != 1 || rows[0].ExpectedName != "aiyxgaw-0.1" || rows[0].Platform != "openai" {
 		t.Fatalf("rows=%#v", rows)
 	}
 }

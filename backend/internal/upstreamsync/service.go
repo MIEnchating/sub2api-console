@@ -142,6 +142,13 @@ type Service struct {
 	workers    int
 }
 
+type upstreamEventContextKey struct{}
+
+type upstreamEventContext struct {
+	batchID string
+	actor   string
+}
+
 func New(repository Repository, private PrivateStore, reader CatalogReader, refresher Refresher, tasks TaskStore, schedulers ...AccountRateSyncScheduler) *Service {
 	service := &Service{repository: repository, private: private, reader: reader, refresher: refresher, tasks: tasks, timeout: 30 * time.Minute, workers: 4}
 	if len(schedulers) > 0 {
@@ -210,6 +217,7 @@ func (s *Service) SyncHost(ctx context.Context, host string, scope Scope, actor 
 	if host == "" {
 		return HostResult{}, errors.New("上游 Host 不能为空")
 	}
+	ctx = withUpstreamEventContext(ctx, "", actor)
 	return s.syncHost(ctx, host, scope, actor), nil
 }
 
@@ -258,7 +266,7 @@ func (s *Service) enqueue(
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(parent, task, hosts, scope, actor, summary)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -274,6 +282,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	ctx = withUpstreamEventContext(ctx, task.ID, actor)
 	result := s.syncHosts(ctx, hosts, scope, actor, func(completed, total int) {
 		progress := 95
 		if total > 0 {
@@ -331,6 +340,13 @@ func (s *Service) syncHosts(ctx context.Context, hosts []string, scope Scope, ac
 	if len(hosts) == 0 {
 		return result
 	}
+	metadata, _ := ctx.Value(upstreamEventContextKey{}).(upstreamEventContext)
+	if metadata.batchID == "" {
+		if batchID, err := taskID(); err == nil {
+			metadata.batchID = batchID
+		}
+	}
+	ctx = withUpstreamEventContext(ctx, metadata.batchID, actor)
 	type job struct{ index int }
 	type outcome struct {
 		index int
@@ -354,6 +370,9 @@ func (s *Service) syncHosts(ctx context.Context, hosts []string, scope Scope, ac
 		go func() {
 			defer wait.Done()
 			for item := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				outcomes <- outcome{index: item.index, value: s.syncHost(ctx, hosts[item.index], scope, actor)}
 			}
 		}()
@@ -502,10 +521,10 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 	} else if recovered {
 		status = business.UpstreamAuthStatusRecovered
 	}
-	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "succeeded", "上游同步完成："+host, map[string]any{
+	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "succeeded", "上游同步完成："+host, upstreamRuntimeEventPayload(ctx, map[string]any{
 		"actor": actorOrConsole(actor), "host": host, "catalog": scope.Catalog, "balance": scope.Balance, "name": scope.Name,
 		"key_id": scope.KeyID, "auth_recovered": recovered, "group_count": persisted.GroupCount, "key_count": persisted.KeyCount,
-	}); eventErr != nil {
+	})); eventErr != nil {
 		slog.Error("上游同步成功事件保存失败", "host", host, "error", eventErr)
 	}
 	return HostResult{
@@ -609,9 +628,9 @@ func (s *Service) failed(ctx context.Context, host string, scope Scope, authenti
 	if authenticationFailure {
 		status, authStatus = "auth_failed", business.UpstreamAuthStatusInvalid
 	}
-	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "failed", "上游同步失败："+host, map[string]any{
+	if _, eventErr := s.repository.RecordRuntimeEvent(ctx, "upstream.sync", "failed", "上游同步失败："+host, upstreamRuntimeEventPayload(ctx, map[string]any{
 		"host": host, "reason": reason, "authentication_failure": authenticationFailure,
-	}); eventErr != nil {
+	})); eventErr != nil {
 		slog.Error("上游同步失败事件保存失败", "host", host, "error", eventErr)
 	}
 	return failedHost(host, status, authStatus, reason)
@@ -733,6 +752,28 @@ func actorOrConsole(value string) string {
 		return value
 	}
 	return "console"
+}
+
+func withUpstreamEventContext(ctx context.Context, batchID, actor string) context.Context {
+	return context.WithValue(ctx, upstreamEventContextKey{}, upstreamEventContext{
+		batchID: strings.TrimSpace(batchID),
+		actor:   actorOrConsole(actor),
+	})
+}
+
+func upstreamRuntimeEventPayload(ctx context.Context, payload map[string]any) map[string]any {
+	result := make(map[string]any, len(payload)+2)
+	for key, value := range payload {
+		result[key] = value
+	}
+	metadata, _ := ctx.Value(upstreamEventContextKey{}).(upstreamEventContext)
+	if metadata.batchID != "" {
+		result["batch_id"] = metadata.batchID
+	}
+	if metadata.actor != "" {
+		result["actor"] = metadata.actor
+	}
+	return result
 }
 
 func taskID() (string, error) {

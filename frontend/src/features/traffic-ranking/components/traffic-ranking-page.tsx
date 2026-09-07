@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type TrafficRankingSort } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
@@ -165,11 +166,7 @@ export function TrafficRankingPage() {
                   </TableHeader>
                   <TableBody>
                     {pagination.visibleItems.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={8} className="text-muted-foreground h-28 text-center">
-                          当前范围没有匹配的账号流量
-                        </TableCell>
-                      </TableRow>
+                      <TableEmptyState columns={8}>当前范围没有匹配的账号流量</TableEmptyState>
                     ) : (
                       pagination.visibleItems.map((row) => {
                         const stability = trafficStabilityLabel(row.stability_score);

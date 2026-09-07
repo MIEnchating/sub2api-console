@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -62,7 +63,11 @@ describe("AccountBatchDeleteTaskStatus", () => {
     task.progress = 50;
     task.message = "批量删除进度：已处理 1/2 个账号";
 
-    const markup = renderToStaticMarkup(<AccountBatchDeleteTaskStatus task={task} />);
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <AccountBatchDeleteTaskStatus task={task} />
+      </QueryClientProvider>,
+    );
 
     expect(markup).toContain("批量删除进度：已处理 1/2 个账号");
     expect(markup).toContain('aria-valuenow="50"');

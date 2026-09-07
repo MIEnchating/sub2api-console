@@ -13,6 +13,7 @@ import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -356,6 +357,7 @@ export function RevenueAnalysisPage() {
         }
         action={
           <PageActions>
+            {taskID && !taskStopsPolling(task.data) ? <TaskCancelButton taskId={taskID} /> : null}
             <DatePicker
               selected={revenueDateValue(date)}
               toDate={revenueDateValue(defaultRevenueDate())}

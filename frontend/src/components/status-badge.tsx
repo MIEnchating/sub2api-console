@@ -30,29 +30,29 @@ export type StatusBadgeProps = Omit<React.HTMLAttributes<HTMLSpanElement>, "chil
 };
 
 export function StatusBadge(props: StatusBadgeProps) {
-  const Icon = props.icon;
+  const { label, icon: Icon, pulse, variant, size, title, className, ...spanProps } = props;
 
   const badge = (
     <span
+      {...spanProps}
       data-slot="status-badge"
       className={cn(
         "inline-flex w-fit max-w-full min-w-0 shrink items-center rounded-4xl font-medium tracking-normal whitespace-nowrap transition-colors",
-        sizeMap[props.size ?? "sm"],
-        textColorMap[props.variant ?? "neutral"],
-        props.pulse && "animate-pulse",
-        props.className,
+        sizeMap[size ?? "sm"],
+        textColorMap[variant ?? "neutral"],
+        pulse && "animate-pulse",
+        className,
       )}
-      aria-label={props["aria-label"]}
     >
-      {Icon && <Icon className="size-3.5 shrink-0" />}
-      <span className="min-w-0 truncate leading-normal">{props.label}</span>
+      {Icon && <Icon className="size-3.5 shrink-0" aria-hidden="true" />}
+      <span className="min-w-0 truncate leading-normal">{label}</span>
     </span>
   );
-  if (!props.title) return badge;
+  if (!title) return badge;
   return (
     <Tooltip>
       <TooltipTrigger render={badge} />
-      <TooltipContent>{props.title}</TooltipContent>
+      <TooltipContent>{title}</TooltipContent>
     </Tooltip>
   );
 }

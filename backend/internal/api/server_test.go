@@ -38,6 +38,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/opstraffic"
 	"github.com/MIEnchating/sub2api-console/backend/internal/pricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
+	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
@@ -187,7 +189,9 @@ type fakeBusiness struct {
 	groupExcludedUpdates *[]bool
 	upstreamSummary      business.UpstreamSummary
 	upstreamGroupRows    []business.UpstreamGroup
+	upstreamGroupAudit   business.UpstreamGroupBindingAudit
 	upstreamGroupHistory []business.UpstreamGroupChange
+	allGroupHistory      []business.UpstreamGroupChange
 	runtimeEventIDs      *[]int64
 	runtimeEventError    error
 	alertPolicy          business.AlertPolicy
@@ -399,7 +403,7 @@ func (f fakeBusiness) UpdatePolicy(_ context.Context, patch map[string]any, acto
 	}
 	return f.policySnapshot, nil
 }
-func (f fakeBusiness) SetAccountTestModel(context.Context, string, *string, string) error {
+func (f fakeBusiness) SetAccountTestModels(context.Context, string, []string, string) error {
 	return nil
 }
 func (f fakeBusiness) UpdateGroupPolicy(_ context.Context, _ string, patch map[string]any, _ string) (business.GroupStatus, error) {
@@ -432,8 +436,14 @@ func (f fakeBusiness) Upstreams(context.Context) (business.UpstreamSummary, erro
 func (f fakeBusiness) UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error) {
 	return f.upstreamGroupRows, nil
 }
+func (f fakeBusiness) UpstreamGroupBindingAudit(context.Context) (business.UpstreamGroupBindingAudit, error) {
+	return f.upstreamGroupAudit, nil
+}
 func (f fakeBusiness) UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error) {
 	return f.upstreamGroupHistory, nil
+}
+func (f fakeBusiness) AllUpstreamGroupHistory(context.Context, int) ([]business.UpstreamGroupChange, error) {
+	return f.allGroupHistory, nil
 }
 func (f fakeBusiness) Events(context.Context, *int) ([]business.RunEvent, error) {
 	return []business.RunEvent{}, nil
@@ -519,6 +529,18 @@ type fakeTaskRepository struct {
 	rows []taskstore.Task
 }
 
+type fakeTaskCanceller struct {
+	cancelled *[]string
+	result    bool
+}
+
+func (f fakeTaskCanceller) CancelTask(taskID string) bool {
+	if f.cancelled != nil {
+		*f.cancelled = append(*f.cancelled, taskID)
+	}
+	return f.result
+}
+
 type sequenceTaskRepository struct {
 	mu    sync.Mutex
 	rows  []taskstore.Task
@@ -592,8 +614,59 @@ type fakeAccountTasks struct {
 	controlCalls  *[]string
 	fieldsCalls   *[]fieldsCall
 	settingsCalls *[]settingsCall
+	poolModeCalls *[][]string
 	manualCalls   *[]string
 	clearCalls    *[]string
+}
+
+type fakeAccountModelSync struct {
+	preview        business.AccountModelSyncPreview
+	settings       business.AccountModelSyncSettings
+	task           taskstore.Task
+	err            error
+	discoveryCalls *[][]string
+	applyCalls     *[]accountops.ModelApplyRequest
+	settingsCalls  *[][]string
+}
+
+func (service fakeAccountModelSync) ModelSyncPreview(_ context.Context, accountIDs []string) (business.AccountModelSyncPreview, error) {
+	if service.discoveryCalls != nil {
+		*service.discoveryCalls = append(*service.discoveryCalls, append([]string{}, accountIDs...))
+	}
+	return service.preview, service.err
+}
+
+func (service fakeAccountModelSync) EnqueueModelDiscovery(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if service.discoveryCalls != nil {
+		*service.discoveryCalls = append(*service.discoveryCalls, append([]string{}, accountIDs...))
+	}
+	return service.task, service.err
+}
+
+func (service fakeAccountModelSync) ModelSyncSettings(context.Context) (business.AccountModelSyncSettings, error) {
+	return service.settings, service.err
+}
+
+func (service fakeAccountModelSync) ConfigureModelSyncSettings(_ context.Context, patterns []string, _ string) (business.AccountModelSyncSettings, error) {
+	if service.settingsCalls != nil {
+		*service.settingsCalls = append(*service.settingsCalls, append([]string{}, patterns...))
+	}
+	return business.AccountModelSyncSettings{BlockedPatterns: append([]string{}, patterns...)}, service.err
+}
+
+func (service fakeAccountModelSync) EnqueueModelApply(_ context.Context, request accountops.ModelApplyRequest) (taskstore.Task, error) {
+	if service.applyCalls != nil {
+		copy := request
+		copy.Accounts = make([]accountops.AccountModelSelection, len(request.Accounts))
+		for index, selection := range request.Accounts {
+			copy.Accounts[index] = accountops.AccountModelSelection{
+				AccountID: selection.AccountID,
+				Models:    append([]string{}, selection.Models...),
+			}
+		}
+		*service.applyCalls = append(*service.applyCalls, copy)
+	}
+	return service.task, service.err
 }
 
 type accountDeleteCall struct {
@@ -669,10 +742,12 @@ type fakeProbeTasks struct {
 }
 
 type fakeModelChecks struct {
-	task     taskstore.Task
-	err      error
-	requests *[]modelcheck.Request
-	statuses []modelcheck.AccountCheckStatus
+	task               taskstore.Task
+	err                error
+	requests           *[]modelcheck.Request
+	statuses           []modelcheck.AccountCheckStatus
+	configuration      modelcheck.ConfigurationView
+	configurationCalls *[]string
 }
 
 func (service fakeModelChecks) Capabilities() modelcheck.Capabilities {
@@ -691,6 +766,38 @@ func (service fakeModelChecks) Enqueue(_ context.Context, request modelcheck.Req
 		*service.requests = append(*service.requests, request)
 	}
 	return service.task, service.err
+}
+
+func (service fakeModelChecks) Configuration() modelcheck.ConfigurationView {
+	return service.configuration
+}
+
+func (service fakeModelChecks) SaveDraft(_ context.Context, request modelcheck.SaveDraftRequest, actor string) (modelcheck.ConfigurationView, error) {
+	if service.configurationCalls != nil {
+		*service.configurationCalls = append(*service.configurationCalls, "save:"+actor+":"+request.ExpectedFingerprint+":"+request.Note)
+	}
+	return service.configuration, service.err
+}
+
+func (service fakeModelChecks) PublishDraft(_ context.Context, request modelcheck.PublishRequest, actor string) (modelcheck.ConfigurationView, error) {
+	if service.configurationCalls != nil {
+		*service.configurationCalls = append(*service.configurationCalls, "publish:"+actor+":"+request.ExpectedFingerprint)
+	}
+	return service.configuration, service.err
+}
+
+func (service fakeModelChecks) DiscardDraft(_ context.Context, request modelcheck.PublishRequest, actor string) (modelcheck.ConfigurationView, error) {
+	if service.configurationCalls != nil {
+		*service.configurationCalls = append(*service.configurationCalls, "discard:"+actor+":"+request.ExpectedFingerprint)
+	}
+	return service.configuration, service.err
+}
+
+func (service fakeModelChecks) RestoreVersion(_ context.Context, request modelcheck.RestoreRequest, actor string) (modelcheck.ConfigurationView, error) {
+	if service.configurationCalls != nil {
+		*service.configurationCalls = append(*service.configurationCalls, "restore:"+actor+":"+request.VersionID+":"+request.ExpectedFingerprint)
+	}
+	return service.configuration, service.err
 }
 
 type upstreamSyncCall struct {
@@ -845,9 +952,16 @@ func (tasks fakeAccountTasks) EnqueueSettings(_ context.Context, accountID strin
 	return tasks.task, tasks.err
 }
 
-func (tasks fakeAccountTasks) EnqueueManualPriority(_ context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
+func (tasks fakeAccountTasks) EnqueuePoolModeSync(_ context.Context, accountIDs []string, _ string) (taskstore.Task, error) {
+	if tasks.poolModeCalls != nil {
+		*tasks.poolModeCalls = append(*tasks.poolModeCalls, append([]string{}, accountIDs...))
+	}
+	return tasks.task, tasks.err
+}
+
+func (tasks fakeAccountTasks) EnqueueManualPriority(_ context.Context, accountID string, priority int64, loadFactor string, concurrency int64, schedulable bool, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
 	if tasks.manualCalls != nil {
-		*tasks.manualCalls = append(*tasks.manualCalls, fmt.Sprintf("%s:%d:%s:%d:%t:%s", accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor))
+		*tasks.manualCalls = append(*tasks.manualCalls, fmt.Sprintf("%s:%d:%s:%d:%t:%t:%s", accountID, priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier, actor))
 	}
 	return tasks.task, tasks.err
 }
@@ -961,7 +1075,7 @@ func (f fakeOnboarding) ProbeModels(context.Context, string, string) ([]string, 
 	return f.models, f.err
 }
 
-func (f fakeOnboarding) Probe(context.Context, string, string, string) (onboarding.ProbeResult, error) {
+func (f fakeOnboarding) Probe(context.Context, string, string, string, ...string) (onboarding.ProbeResult, error) {
 	return f.probe, f.err
 }
 
@@ -1014,6 +1128,19 @@ func (f fakeTaskRepository) Get(_ context.Context, id string) (taskstore.Task, e
 	}
 	return taskstore.Task{}, taskstore.ErrNotFound
 }
+func (f fakeTaskRepository) ListLogSummaries(_ context.Context, limit *int) ([]taskstore.Task, error) {
+	if limit == nil || *limit >= len(f.rows) {
+		return append([]taskstore.Task(nil), f.rows...), nil
+	}
+	return append([]taskstore.Task(nil), f.rows[:*limit]...), nil
+}
+func (f fakeTaskRepository) ListConsoleSummaries(_ context.Context, limit *int) ([]taskstore.Task, error) {
+	rows := consoleTaskRows(f.rows)
+	if limit != nil && *limit < len(rows) {
+		rows = rows[:*limit]
+	}
+	return rows, nil
+}
 func (f fakeTaskRepository) LatestByOperation(_ context.Context, operation, status string) (taskstore.Task, error) {
 	for _, row := range f.rows {
 		if row.Operation == operation && row.Status == status {
@@ -1034,6 +1161,31 @@ func (f *sequenceTaskRepository) Get(_ context.Context, id string) (taskstore.Ta
 	}
 	f.reads++
 	return f.rows[index], nil
+}
+func (f *sequenceTaskRepository) ListLogSummaries(_ context.Context, limit *int) ([]taskstore.Task, error) {
+	if limit == nil || *limit >= len(f.rows) {
+		return append([]taskstore.Task(nil), f.rows...), nil
+	}
+	return append([]taskstore.Task(nil), f.rows[:*limit]...), nil
+}
+func (f *sequenceTaskRepository) ListConsoleSummaries(_ context.Context, limit *int) ([]taskstore.Task, error) {
+	rows := consoleTaskRows(f.rows)
+	if limit != nil && *limit < len(rows) {
+		rows = rows[:*limit]
+	}
+	return rows, nil
+}
+func consoleTaskRows(rows []taskstore.Task) []taskstore.Task {
+	result := make([]taskstore.Task, 0, len(rows))
+	for _, task := range rows {
+		visible, _ := task.Result["system_info"].(bool)
+		platform, _ := task.Result["platform"].(string)
+		model, _ := task.Result["model"].(string)
+		if visible || (task.Operation == "active-probe" && strings.TrimSpace(platform) != "" && strings.TrimSpace(model) != "") {
+			result = append(result, task)
+		}
+	}
+	return result
 }
 func (f *sequenceTaskRepository) LatestByOperation(_ context.Context, operation, status string) (taskstore.Task, error) {
 	for _, row := range f.rows {
@@ -1121,6 +1273,45 @@ func TestInitializationLoginSessionAndLogoutContract(t *testing.T) {
 	}
 	if username != nil {
 		t.Fatal("logout must revoke persisted session")
+	}
+}
+
+func TestEveryNonPublicAPIRouteRejectsUnauthenticatedRequests(t *testing.T) {
+	router, _ := testRouter(t, config.Config{AdminToken: "configured-admin-token"}, fakeBusiness{mode: "完全模式"})
+	publicRoutes := map[string]struct{}{
+		http.MethodGet + " /api/setup/status":      {},
+		http.MethodPost + " /api/setup/initialize": {},
+		http.MethodGet + " /api/auth/session":      {},
+		http.MethodPost + " /api/auth/login":       {},
+		http.MethodPost + " /api/auth/logout":      {},
+	}
+	protectedCount := 0
+	for _, route := range router.(*gin.Engine).Routes() {
+		if !strings.HasPrefix(route.Path, "/api/") {
+			continue
+		}
+		key := route.Method + " " + route.Path
+		if _, public := publicRoutes[key]; public {
+			delete(publicRoutes, key)
+			continue
+		}
+		protectedCount++
+		path := route.Path
+		for _, segment := range strings.Split(route.Path, "/") {
+			if strings.HasPrefix(segment, ":") || strings.HasPrefix(segment, "*") {
+				path = strings.Replace(path, segment, "route-test", 1)
+			}
+		}
+		response := request(t, router, route.Method, path, nil, "")
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s 未登录返回 %d，响应为 %s", key, response.Code, response.Body.String())
+		}
+	}
+	if protectedCount == 0 {
+		t.Fatal("没有枚举到受保护 API 路由")
+	}
+	if len(publicRoutes) != 0 {
+		t.Fatalf("公开 API 白名单包含未注册路由：%#v", publicRoutes)
 	}
 }
 
@@ -1561,6 +1752,36 @@ func TestOverviewConfigAndModeContract(t *testing.T) {
 	if invalidDefaults.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid account defaults response: %d %s", invalidDefaults.Code, invalidDefaults.Body.String())
 	}
+	accountSettings := request(t, router, http.MethodPut, "/api/config/account-settings", map[string]any{
+		"default": map[string]any{
+			"models": []string{"gpt-5.2"}, "concurrency": 32, "load_factor": nil,
+			"priority": 5, "pool_mode": true, "pool_mode_retry_count": 2,
+			"pool_mode_retry_status_codes": []int{429, 503},
+		},
+		"groups": []map[string]any{{
+			"group_id": "6", "models": []string{"claude-sonnet-4-5"}, "concurrency": 8,
+			"load_factor": "12.5", "priority": 2, "pool_mode": false,
+			"pool_mode_retry_count": 1, "pool_mode_retry_status_codes": []int{401, 403},
+		}},
+		"platform_probe_models": map[string]string{
+			"openai": "gpt-5.2", "anthropic": "claude-sonnet-4-5",
+		},
+	}, cookie.String())
+	if accountSettings.Code != http.StatusOK ||
+		!strings.Contains(accountSettings.Body.String(), `"group_id":"6"`) ||
+		!strings.Contains(accountSettings.Body.String(), `"load_factor":"12.5"`) ||
+		!strings.Contains(accountSettings.Body.String(), `"openai":"gpt-5.2"`) {
+		t.Fatalf("unexpected account settings update: %d %s", accountSettings.Code, accountSettings.Body.String())
+	}
+	readAccountSettings := request(t, router, http.MethodGet, "/api/config/account-settings", nil, cookie.String())
+	if readAccountSettings.Code != http.StatusOK || readAccountSettings.Body.String() != accountSettings.Body.String() {
+		t.Fatalf("account settings did not round-trip: update=%s read=%s", accountSettings.Body.String(), readAccountSettings.Body.String())
+	}
+	updatedConfiguration := request(t, router, http.MethodGet, "/api/config", nil, cookie.String())
+	if !strings.Contains(updatedConfiguration.Body.String(), `"account_default_concurrency":32`) ||
+		!strings.Contains(updatedConfiguration.Body.String(), `"account_default_priority":5`) {
+		t.Fatalf("account settings did not update compatibility defaults: %s", updatedConfiguration.Body.String())
+	}
 	updated := request(t, router, http.MethodPost, "/api/config/mode", map[string]any{"mode": "完全模式"}, cookie.String())
 	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"mode":"完全模式"`) {
 		t.Fatalf("unexpected mode update: %d %s", updated.Code, updated.Body.String())
@@ -1957,6 +2178,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	}
 	fieldsCalls := []fieldsCall{}
 	settingsCalls := []settingsCall{}
+	poolModeCalls := [][]string{}
 	accountID := "41"
 	accountName := "alpha"
 	account := &business.AccountDetail{AccountStatus: business.AccountStatus{
@@ -1965,7 +2187,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
 		mode: "完全模式", accountDetail: account,
 	}, Dependencies{AccountTasks: fakeAccountTasks{
-		task: task, fieldsCalls: &fieldsCalls, settingsCalls: &settingsCalls,
+		task: task, fieldsCalls: &fieldsCalls, settingsCalls: &settingsCalls, poolModeCalls: &poolModeCalls,
 	}})
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
@@ -1996,14 +2218,20 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	}
 
 	settings := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/settings", map[string]any{
-		"priority": 120, "load_factor": "2.5", "concurrency": 8, "test_model": "gpt-5.2", "paused": true, "excluded": false,
+		"priority": 120, "load_factor": "2.5", "concurrency": 8, "test_models": []string{"gpt-5.2", "claude-sonnet-4"}, "paused": true, "excluded": false,
 	})
 	if settings.Code != http.StatusOK || len(settingsCalls) != 1 {
 		t.Fatalf("unexpected settings response: %d %s calls=%#v", settings.Code, settings.Body.String(), settingsCalls)
 	}
+	poolMode := authenticatedRequest(t, router, http.MethodPost, "/api/config/account-settings/pool-mode/apply", map[string]any{
+		"account_ids": []string{"41", "42"},
+	})
+	if poolMode.Code != http.StatusOK || len(poolModeCalls) != 1 || !reflect.DeepEqual(poolModeCalls[0], []string{"41", "42"}) {
+		t.Fatalf("pool mode sync=%d %s calls=%#v", poolMode.Code, poolMode.Body.String(), poolModeCalls)
+	}
 	settingsInput := settingsCalls[0].input
 	if settingsCalls[0].accountID != "41" || settingsInput.Priority != 120 || settingsInput.LoadFactor != "2.5" ||
-		settingsInput.Concurrency != 8 || settingsInput.TestModel == nil || *settingsInput.TestModel != "gpt-5.2" ||
+		settingsInput.Concurrency != 8 || !reflect.DeepEqual(settingsInput.TestModels, []string{"gpt-5.2", "claude-sonnet-4"}) ||
 		!settingsInput.Paused || settingsInput.Excluded {
 		t.Fatalf("settings contract=%#v", settingsCalls[0])
 	}
@@ -2012,7 +2240,7 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 	if models.Code != http.StatusOK || !strings.Contains(models.Body.String(), `"gpt-5.1-codex"`) {
 		t.Fatalf("unexpected models response: %d %s", models.Code, models.Body.String())
 	}
-	testModel := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/test-model", map[string]any{"model": "gpt-5.1-codex"})
+	testModel := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/test-models", map[string]any{"models": []string{"gpt-5.1-codex", "claude-sonnet-4"}})
 	if testModel.Code != http.StatusOK || !strings.Contains(testModel.Body.String(), `"saved":true`) {
 		t.Fatalf("unexpected test model response: %d %s", testModel.Code, testModel.Body.String())
 	}
@@ -2036,6 +2264,110 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("retired account route %s status=%d", path, response.Code)
 		}
+	}
+}
+
+func TestAccountModelSyncRoutesPreservePreviewAndApplyContracts(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "model-sync", Skill: "sub2api-account-model-sync", Operation: "account-model-discovery",
+		Status: "queued", Message: "queued", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	discoveryCalls := [][]string{}
+	applyCalls := []accountops.ModelApplyRequest{}
+	settingsCalls := [][]string{}
+	service := fakeAccountModelSync{
+		preview: business.AccountModelSyncPreview{
+			AccountCount: 2, AccountsWithCatalog: 2,
+			BlockedPatterns: []string{"*-image-*"}, BlockedModels: []string{"gpt-image-1"},
+			Models: []business.AccountModelCoverage{{Model: "model-a", AccountCount: 2}, {Model: "model-b", AccountCount: 1}},
+			Accounts: []business.AccountModelSyncAccount{
+				{AccountID: "41", AccountName: "account-a", Models: []string{"model-a"}},
+				{AccountID: "42", AccountName: "account-b", Models: []string{"model-a", "model-b"}},
+			},
+			Fingerprint: strings.Repeat("a", 64),
+		},
+		settings: business.AccountModelSyncSettings{BlockedPatterns: []string{"*-image-*"}},
+		task:     task, discoveryCalls: &discoveryCalls, applyCalls: &applyCalls, settingsCalls: &settingsCalls,
+	}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{}, Dependencies{AccountModelSync: service})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	discovery := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/discover", map[string]any{"account_ids": []string{"41", "42"}})
+	if discovery.Code != http.StatusOK || !strings.Contains(discovery.Body.String(), `"id":"model-sync"`) {
+		t.Fatalf("discovery=%d %s", discovery.Code, discovery.Body.String())
+	}
+	preview := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/preview", map[string]any{"account_ids": []string{"41", "42"}})
+	if preview.Code != http.StatusOK || !strings.Contains(preview.Body.String(), `"model":"model-b"`) {
+		t.Fatalf("preview=%d %s", preview.Code, preview.Body.String())
+	}
+	apply := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts": []map[string]any{
+			{"account_id": "41", "models": []string{"model-a"}},
+			{"account_id": "42", "models": []string{"model-a", "model-b"}},
+		},
+		"probe_models":        []string{"model-a", "model-b"},
+		"catalog_fingerprint": strings.Repeat("a", 64),
+	})
+	if apply.Code != http.StatusOK || len(applyCalls) != 1 {
+		t.Fatalf("apply=%d %s calls=%#v", apply.Code, apply.Body.String(), applyCalls)
+	}
+	if !reflect.DeepEqual(applyCalls[0].Accounts, []accountops.AccountModelSelection{
+		{AccountID: "41", Models: []string{"model-a"}},
+		{AccountID: "42", Models: []string{"model-a", "model-b"}},
+	}) || !slices.Equal(applyCalls[0].ProbeModels, []string{"model-a", "model-b"}) || applyCalls[0].Actor != "console" {
+		t.Fatalf("apply contract=%#v", applyCalls[0])
+	}
+	if len(discoveryCalls) != 2 {
+		t.Fatalf("discovery and preview calls=%#v", discoveryCalls)
+	}
+
+	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts": []map[string]any{{"account_id": "41", "models": []string{"model-a"}}}, "probe_models": []string{"model-a"}, "catalog_fingerprint": "bad",
+	})
+	if invalid.Code != http.StatusUnprocessableEntity || len(applyCalls) != 1 {
+		t.Fatalf("invalid apply=%d %s calls=%#v", invalid.Code, invalid.Body.String(), applyCalls)
+	}
+	invalidProbeModels := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts": []map[string]any{{"account_id": "41", "models": []string{"model-a"}}}, "probe_models": []string{}, "catalog_fingerprint": strings.Repeat("a", 64),
+	})
+	if invalidProbeModels.Code != http.StatusUnprocessableEntity || len(applyCalls) != 1 {
+		t.Fatalf("invalid probe models=%d %s calls=%#v", invalidProbeModels.Code, invalidProbeModels.Body.String(), applyCalls)
+	}
+	legacyProbeModel := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts": []map[string]any{{"account_id": "41", "models": []string{"model-a"}}}, "probe_model": "model-a", "catalog_fingerprint": strings.Repeat("a", 64),
+	})
+	if legacyProbeModel.Code != http.StatusUnprocessableEntity || len(applyCalls) != 1 {
+		t.Fatalf("legacy probe model=%d %s calls=%#v", legacyProbeModel.Code, legacyProbeModel.Body.String(), applyCalls)
+	}
+	settings := authenticatedRequest(t, router, http.MethodGet, "/api/config/model-sync", nil)
+	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), `"blocked_patterns":["*-image-*"]`) {
+		t.Fatalf("model sync settings=%d %s", settings.Code, settings.Body.String())
+	}
+	updatedSettings := authenticatedRequest(t, router, http.MethodPut, "/api/config/model-sync", map[string]any{
+		"blocked_patterns": []string{"claude-*", "gemini-*"},
+	})
+	if updatedSettings.Code != http.StatusOK || !reflect.DeepEqual(settingsCalls, [][]string{{"claude-*", "gemini-*"}}) {
+		t.Fatalf("updated model sync settings=%d %s calls=%#v", updatedSettings.Code, updatedSettings.Body.String(), settingsCalls)
+	}
+}
+
+func TestApplyAccountModelsReturnsStableCodeWhenCatalogChanged(t *testing.T) {
+	service := fakeAccountModelSync{err: accountops.ErrModelCatalogChanged}
+	router, private := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{}, Dependencies{AccountModelSync: service})
+	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	response := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts":            []map[string]any{{"account_id": "41", "models": []string{"model-a"}}},
+		"probe_models":        []string{"model-a"},
+		"catalog_fingerprint": strings.Repeat("a", 64),
+	})
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"model_catalog_changed"`) {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -2250,15 +2582,15 @@ func TestManualPriorityRoutesAssignAndClearWithoutInspection(t *testing.T) {
 	if err := private.Initialize(context.Background(), "operator", "correct password", "https://sub2api.example", "admin-key"); err != nil {
 		t.Fatal(err)
 	}
-	assigned := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 3, "load_factor": "100", "concurrency": 100, "sync_balance_multiplier": true})
-	if assigned.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0] != "41:3:100:100:true:console" {
+	assigned := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 3, "load_factor": "100", "concurrency": 100, "schedulable": true, "sync_balance_multiplier": true})
+	if assigned.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0] != "41:3:100:100:true:true:console" {
 		t.Fatalf("assign response=%d %s calls=%#v", assigned.Code, assigned.Body.String(), manualCalls)
 	}
 	cleared := authenticatedRequest(t, router, http.MethodDelete, "/api/accounts/41/manual-priority", nil)
 	if cleared.Code != http.StatusOK || !strings.Contains(cleared.Body.String(), `"id":"manual-1"`) || len(clearCalls) != 1 || clearCalls[0] != "41:console" {
 		t.Fatalf("clear response=%d %s clear=%#v", cleared.Code, cleared.Body.String(), clearCalls)
 	}
-	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 0, "load_factor": "100", "concurrency": 100, "sync_balance_multiplier": false})
+	invalid := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/manual-priority", map[string]any{"priority": 0, "load_factor": "100", "concurrency": 100, "schedulable": true, "sync_balance_multiplier": false})
 	if invalid.Code != http.StatusUnprocessableEntity || len(manualCalls) != 1 {
 		t.Fatalf("invalid response=%d %s calls=%#v", invalid.Code, invalid.Body.String(), manualCalls)
 	}
@@ -2321,8 +2653,18 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 			Host: "api.example", GroupID: &groupID, Name: "codex", RawRate: &rawRate,
 			EffectiveRate: &rawRate, RechargeRate: &rawRate, KeyPresent: true, Bindable: true,
 		}},
+		upstreamGroupAudit: business.UpstreamGroupBindingAudit{
+			Items: []business.UpstreamGroupBindingAuditItem{{
+				UpstreamID: "up_example", Host: "api.example", GroupID: &groupID, GroupName: "codex",
+				AccountCount: 1, Accounts: []business.UpstreamGroupBindingAuditAccount{{ID: "41"}}, Status: "missing",
+			}},
+			TotalBindings: 1, Missing: 1,
+		},
 		upstreamGroupHistory: []business.UpstreamGroupChange{{
 			ID: 1, UpstreamID: "up_example", GroupID: "7", GroupName: "新分组", ChangeType: "added", ChangedAt: "2026-08-31T00:00:00Z",
+		}},
+		allGroupHistory: []business.UpstreamGroupChange{{
+			ID: 2, UpstreamID: "up_other", GroupID: "8", GroupName: "其他分组", ChangeType: "removed", ChangedAt: "2026-09-01T00:00:00Z",
 		}},
 	})
 
@@ -2347,9 +2689,19 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 	if upstreamGroups.Code != http.StatusOK || !strings.Contains(upstreamGroups.Body.String(), `"bindable":true`) {
 		t.Fatalf("unexpected upstream groups response: %d %s", upstreamGroups.Code, upstreamGroups.Body.String())
 	}
+	audit := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/group-bindings/audit", nil)
+	if audit.Code != http.StatusOK || !strings.Contains(audit.Body.String(), `"missing":1`) ||
+		!strings.Contains(audit.Body.String(), `"accounts":[{"id":"41"`) {
+		t.Fatalf("unexpected upstream group binding audit response: %d %s", audit.Code, audit.Body.String())
+	}
 	history := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/group-history?limit=50", nil)
 	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), `"change_type":"added"`) || !strings.Contains(history.Body.String(), `"group_name":"新分组"`) {
 		t.Fatalf("unexpected upstream group history response: %d %s", history.Code, history.Body.String())
+	}
+	allHistory := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/group-history?limit=500", nil)
+	if allHistory.Code != http.StatusOK || !strings.Contains(allHistory.Body.String(), `"upstream_id":"up_other"`) ||
+		!strings.Contains(allHistory.Body.String(), `"group_name":"其他分组"`) {
+		t.Fatalf("unexpected all upstream group history response: %d %s", allHistory.Code, allHistory.Body.String())
 	}
 	invalid := authenticatedRequest(t, router, http.MethodGet, "/api/upstreams/api.example/groups?include_bound=perhaps", nil)
 	if invalid.Code != http.StatusUnprocessableEntity {
@@ -2955,9 +3307,18 @@ func TestActiveProbeRoutePreservesOptionalFiltersAndRejectsInvalidValues(t *test
 	if calls[0].request.AccountID == nil || *calls[0].request.AccountID != "41" || calls[0].request.GroupName == nil || *calls[0].request.GroupName != "codex" || calls[0].actor != "console" {
 		t.Fatalf("optional filters were not preserved: %#v", calls[0])
 	}
+	platformResponse := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/probe", map[string]any{
+		"platform": " OpenAI ", "model": " gpt-5.6-sol ",
+	})
+	if platformResponse.Code != http.StatusOK || len(calls) != 2 || calls[1].request.Platform == nil ||
+		*calls[1].request.Platform != "OpenAI" || calls[1].request.ProbeModel != "gpt-5.6-sol" {
+		t.Fatalf("platform probe was not preserved: response=%d calls=%#v", platformResponse.Code, calls)
+	}
 
 	invalidBodies := []map[string]any{
 		{"account_id": nil}, {"account_id": "041"}, {"group_name": nil}, {"group_name": " "}, {"unexpected": true},
+		{"platform": "openai"}, {"model": "gpt-5.6-sol"},
+		{"account_id": "41", "platform": "openai", "model": "gpt-5.6-sol"},
 	}
 	for _, body := range invalidBodies {
 		invalid := authenticatedRequest(t, router, http.MethodPost, "/api/inspection/probe", body)
@@ -2965,7 +3326,7 @@ func TestActiveProbeRoutePreservesOptionalFiltersAndRejectsInvalidValues(t *test
 			t.Fatalf("body=%#v status=%d response=%s", body, invalid.Code, invalid.Body.String())
 		}
 	}
-	if len(calls) != 1 {
+	if len(calls) != 2 {
 		t.Fatalf("invalid requests reached probe service: %#v", calls)
 	}
 }
@@ -3004,12 +3365,57 @@ func TestModelCheckRoutesExposeCapabilitiesAndForwardAccountMatrix(t *testing.T)
 	if len(requests[0].AccountIDs) != 2 || len(requests[0].Models) != 2 || requests[0].Rounds != 3 {
 		t.Fatalf("request fields not preserved: %#v", requests[0])
 	}
+	invalidBodies := []map[string]any{
+		{"account_ids": []string{}, "models": []string{"gpt-5.6-sol"}},
+	}
+	for _, body := range invalidBodies {
+		invalid := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", body)
+		if invalid.Code != http.StatusUnprocessableEntity || len(requests) != 1 {
+			t.Fatalf("invalid request reached service: body=%#v status=%d requests=%#v", body, invalid.Code, requests)
+		}
+	}
+}
 
-	invalid := authenticatedRequest(t, router, http.MethodPost, "/api/model-checks", map[string]any{
-		"account_ids": []string{}, "models": []string{"gpt-5.6-sol"},
+func TestModelCheckConfigurationRoutesForwardVersionGuardsAndActor(t *testing.T) {
+	calls := []string{}
+	configuration := modelcheck.ConfigurationView{Active: modelcheck.ConfigurationVersion{
+		ID: "profile-current", Status: "published", Fingerprint: "active-fingerprint",
+	}}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		ModelChecks: fakeModelChecks{configuration: configuration, configurationCalls: &calls},
 	})
-	if invalid.Code != http.StatusUnprocessableEntity || len(requests) != 1 {
-		t.Fatalf("invalid request reached service: status=%d requests=%#v", invalid.Code, requests)
+	read := authenticatedRequest(t, router, http.MethodGet, "/api/model-checks/configuration", nil)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"id":"profile-current"`) {
+		t.Fatalf("read=%d %s", read.Code, read.Body.String())
+	}
+	requests := []struct {
+		method string
+		path   string
+		body   map[string]any
+	}{
+		{http.MethodPut, "/api/model-checks/configuration/draft", map[string]any{
+			"expected_fingerprint": "active-fingerprint", "note": "new", "payload": map[string]any{},
+		}},
+		{http.MethodPost, "/api/model-checks/configuration/publish", map[string]any{"expected_fingerprint": "draft-fingerprint"}},
+		{http.MethodPost, "/api/model-checks/configuration/discard", map[string]any{"expected_fingerprint": "draft-fingerprint"}},
+		{http.MethodPost, "/api/model-checks/configuration/restore", map[string]any{
+			"version_id": "profile-old", "expected_fingerprint": "active-fingerprint", "note": "restore",
+		}},
+	}
+	for _, request := range requests {
+		response := authenticatedRequest(t, router, request.method, request.path, request.body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s response=%d %s", request.path, response.Code, response.Body.String())
+		}
+	}
+	expected := []string{
+		"save:console:active-fingerprint:new",
+		"publish:console:draft-fingerprint",
+		"discard:console:draft-fingerprint",
+		"restore:console:profile-old:active-fingerprint",
+	}
+	if !reflect.DeepEqual(calls, expected) {
+		t.Fatalf("calls=%#v want=%#v", calls, expected)
 	}
 }
 
@@ -3017,12 +3423,26 @@ func TestTaskReadContracts(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	repository := fakeTaskRepository{rows: []taskstore.Task{{
 		ID: "task-1", Skill: "console", Operation: "sync", Status: "running", Progress: 40,
-		Message: "同步中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+		Message: "同步中", Result: map[string]any{"system_info": true}, CreatedAt: now, UpdatedAt: now,
+	}, {
+		ID: "automatic-1", Skill: "sub2api-auto-inspection", Operation: "automatic-inspection", Status: "running", Progress: 40,
+		Message: "自动巡检中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
 	}}}
 	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{Tasks: repository})
 	list := authenticatedRequest(t, router, http.MethodGet, "/api/tasks?limit=1", nil)
-	if list.Code != http.StatusNotFound {
-		t.Fatalf("retired task list status: %d %s", list.Code, list.Body.String())
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"id":"task-1"`) || !strings.Contains(list.Body.String(), `"system_info":true`) || strings.Contains(list.Body.String(), `"result"`) {
+		t.Fatalf("task summary list: %d %s", list.Code, list.Body.String())
+	}
+	if strings.Contains(list.Body.String(), "automatic-1") {
+		t.Fatalf("automatic inspection leaked into console task list: %s", list.Body.String())
+	}
+	invalidList := authenticatedRequest(t, router, http.MethodGet, "/api/tasks?limit=1001", nil)
+	if invalidList.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid task list limit status: %d %s", invalidList.Code, invalidList.Body.String())
+	}
+	overLimit := authenticatedRequest(t, router, http.MethodGet, "/api/tasks?limit=21", nil)
+	if overLimit.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("over-limit task list status: %d %s", overLimit.Code, overLimit.Body.String())
 	}
 	detail := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/task-1", nil)
 	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"progress":40`) {
@@ -3035,6 +3455,204 @@ func TestTaskReadContracts(t *testing.T) {
 	missingEvents := authenticatedRequest(t, router, http.MethodGet, "/api/tasks/missing/events", nil)
 	if missingEvents.Code != http.StatusNotFound || !strings.Contains(missingEvents.Body.String(), taskstore.ErrNotFound.Error()) {
 		t.Fatalf("missing task event stream = %d %s", missingEvents.Code, missingEvents.Body.String())
+	}
+}
+
+type fakeSystemMetrics struct {
+	snapshot systeminfo.Snapshot
+	err      error
+}
+
+func (fake fakeSystemMetrics) Snapshot(context.Context) (systeminfo.Snapshot, error) {
+	return fake.snapshot, fake.err
+}
+
+func TestSystemMetricsContract(t *testing.T) {
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		SystemMetrics: fakeSystemMetrics{snapshot: systeminfo.Snapshot{
+			SampledAt: "2026-09-05T00:00:00Z",
+			CPU:       systeminfo.CPU{UsagePercent: 37.5, LogicalCores: 8},
+			Memory:    systeminfo.Storage{TotalBytes: 1000, UsedBytes: 600, AvailableBytes: 400, UsagePercent: 60},
+			Disk:      systeminfo.Storage{TotalBytes: 2000, UsedBytes: 500, AvailableBytes: 1500, UsagePercent: 25},
+		}},
+	})
+
+	response := authenticatedRequest(t, router, http.MethodGet, "/api/system/metrics", nil)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"usage_percent":37.5`) ||
+		!strings.Contains(response.Body.String(), `"logical_cores":8`) || !strings.Contains(response.Body.String(), `"total_bytes":2000`) {
+		t.Fatalf("unexpected system metrics: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunningTaskCanBeCancelledByStableID(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repository := fakeTaskRepository{rows: []taskstore.Task{{
+		ID: "task-1", Skill: "console", Operation: "sync", Status: "running", Progress: 40,
+		Message: "同步中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}, {
+		ID: "finished", Skill: "console", Operation: "sync", Status: "succeeded", Progress: 100,
+		Message: "已完成", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}}}
+	cancelled := []string{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Tasks: repository, TaskCanceller: fakeTaskCanceller{cancelled: &cancelled, result: true},
+	})
+	response := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/task-1", nil)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"cancelled":true`) || !slices.Equal(cancelled, []string{"task-1"}) {
+		t.Fatalf("cancel response=%d %s calls=%#v", response.Code, response.Body.String(), cancelled)
+	}
+	finished := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/finished", nil)
+	if finished.Code != http.StatusConflict || len(cancelled) != 1 {
+		t.Fatalf("terminal cancel=%d %s calls=%#v", finished.Code, finished.Body.String(), cancelled)
+	}
+	missing := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/missing", nil)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("missing cancel=%d %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestWaitingInputCaptchaTaskCanBeCancelledByTaskID(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repository := fakeTaskRepository{rows: []taskstore.Task{{
+		ID: "captcha-task", Skill: "sub2api-upstream-auth", Operation: "recover-host",
+		Status: "waiting_input", Progress: 90, Message: "等待验证码",
+		Result:    map[string]any{"captcha_challenge": map[string]any{"challenge_id": "challenge-41"}},
+		CreatedAt: now, UpdatedAt: now,
+	}}}
+	cancelledChallenges := []string{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Tasks:         repository,
+		TaskCanceller: fakeTaskCanceller{result: false},
+		AuthRecovery:  fakeAuthRecovery{captchaCancels: &cancelledChallenges},
+	})
+
+	response := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/captcha-task", nil)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"cancelled":true`) {
+		t.Fatalf("cancel response=%d %s", response.Code, response.Body.String())
+	}
+	if !slices.Equal(cancelledChallenges, []string{"challenge-41"}) {
+		t.Fatalf("captcha cancellations=%#v", cancelledChallenges)
+	}
+}
+
+func TestWaitingInputRunningTaskCanBeCancelledByTaskID(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	repository := fakeTaskRepository{rows: []taskstore.Task{{
+		ID: "target-discovery", Skill: "qqbot", Operation: "discover-notification-target",
+		Status: "waiting_input", Progress: 60, Message: "等待目标消息",
+		Result: map[string]any{"target_type": "group"}, CreatedAt: now, UpdatedAt: now,
+	}}}
+	cancelled := []string{}
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Tasks: repository, TaskCanceller: fakeTaskCanceller{cancelled: &cancelled, result: true},
+	})
+
+	response := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/target-discovery", nil)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"cancelled":true`) {
+		t.Fatalf("cancel response=%d %s", response.Code, response.Body.String())
+	}
+	if !slices.Equal(cancelled, []string{"target-discovery"}) {
+		t.Fatalf("task cancellations=%#v", cancelled)
+	}
+}
+
+func TestTaskCancellationStopsRunnerAndPersistsCancelledState(t *testing.T) {
+	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := taskrunner.New(context.Background())
+	t.Cleanup(runner.Cancel)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "live-task", Skill: "console", Operation: "sync", Status: "running", Progress: 40,
+		Message: "同步中", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Save(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	if err := runner.GoTask(task.ID, func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		taskstore.MarkCancelled(ctx, &task, "同步已取消")
+		taskstore.PersistFinal(store, task)
+		close(stopped)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Tasks: store, TaskCanceller: runner,
+	})
+
+	response := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/live-task", nil)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("cancel response=%d %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled task did not stop")
+	}
+	final, err := store.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != "cancelled" || final.Result["cancelled"] != true {
+		t.Fatalf("cancelled task=%#v", final)
+	}
+}
+
+func TestWaitingInputTaskCancellationStopsRunnerAndPersistsCancelledState(t *testing.T) {
+	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	runner := taskrunner.New(context.Background())
+	t.Cleanup(runner.Cancel)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := taskstore.Task{
+		ID: "waiting-task", Skill: "console", Operation: "wait-for-input", Status: "waiting_input", Progress: 60,
+		Message: "等待输入", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Save(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	if err := runner.GoTask(task.ID, func(ctx context.Context) {
+		close(started)
+		<-ctx.Done()
+		taskstore.MarkCancelled(ctx, &task, "等待输入任务已取消")
+		taskstore.PersistFinal(store, task)
+		close(stopped)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	router, _ := testRouterWithDependencies(t, config.Config{AdminToken: "test-token"}, fakeBusiness{mode: "完全模式"}, Dependencies{
+		Tasks: store, TaskCanceller: runner,
+	})
+
+	response := authenticatedRequest(t, router, http.MethodDelete, "/api/tasks/waiting-task", nil)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("cancel response=%d %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled waiting-input task did not stop")
+	}
+	final, err := store.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != "cancelled" || final.Message != "等待输入任务已取消" || final.Result["cancelled"] != true {
+		t.Fatalf("cancelled waiting-input task=%#v", final)
 	}
 }
 

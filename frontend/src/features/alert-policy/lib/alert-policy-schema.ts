@@ -62,7 +62,7 @@ export const alertPolicyFormSchema = z.object({
     .int()
     .min(1, "至少连续成功 1 次")
     .max(100, "最多连续成功 100 次"),
-  probe_groups: z.string(),
+  probe_groups: z.array(z.string()),
   delivery_enabled: z.boolean(),
   notify_recovery: z.boolean(),
   recovery_notification_types: z.array(recoveryNotificationTypeSchema),
@@ -96,7 +96,7 @@ export const defaultAlertPolicyForm: AlertPolicyFormValues = {
   balance_thresholds: [{ value: "20" }, { value: "10" }, { value: "5" }],
   probe_failure_streak: 3,
   probe_recovery_streak: 3,
-  probe_groups: "",
+  probe_groups: [],
   delivery_enabled: true,
   notify_recovery: true,
   recovery_notification_types: ["auth", "balance", "group_unavailable"],

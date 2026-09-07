@@ -228,9 +228,12 @@ func (s *Store) RecordAlertEvaluation(ctx context.Context, startedAt string, evi
 	if evidence.EvaluationDisabled {
 		summary = "告警检测已跳过：告警策略总开关已关闭"
 	}
-	if delivery.Failed > 0 || (delivery.Skipped > 0 && !delivery.Configured && !delivery.Disabled) {
+	if delivery.Failed > 0 || delivery.Uncertain > 0 || (delivery.Skipped > 0 && !delivery.Configured && !delivery.Disabled) {
 		status = "failed"
 		summary = fmt.Sprintf("告警检测完成，通知发送未完成：当前异常 %d 项，发送 %d 项，失败 %d 项，跳过 %d 项", evidence.Findings, delivery.Sent, delivery.Failed, delivery.Skipped+delivery.Suppressed)
+		if delivery.Uncertain > 0 {
+			summary += fmt.Sprintf("，待确认 %d 项；请先核实 QQBot 投递结果", delivery.Uncertain)
+		}
 	}
 	payload := map[string]any{
 		"source": "console-domain-db", "findings": evidence.Findings, "delivery": delivery,

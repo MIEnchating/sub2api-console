@@ -9,6 +9,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 )
 
 type AccountOperation struct {
@@ -36,6 +38,7 @@ func (s *Store) CommitAccountFieldsReadback(
 	priority *int64,
 	loadFactor *string,
 	concurrency *int64,
+	schedulable *bool,
 	multiplier *string,
 	upstreamHost *string,
 	baseURL *string,
@@ -61,6 +64,20 @@ func (s *Store) CommitAccountFieldsReadback(
 		if concurrency != nil {
 			updates = append(updates, "concurrency=?")
 			arguments = append(arguments, *concurrency)
+		}
+		if schedulable != nil {
+			updates = append(updates, "schedulable=?")
+			arguments = append(arguments, boolDatabase(schedulable))
+			var manualPriority bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(
+				SELECT 1 FROM manual_priority_accounts WHERE account_id=?
+			)`, accountID).Scan(&manualPriority); err != nil {
+				return err
+			}
+			if manualPriority {
+				updates = append(updates, "paused=?", "paused_reason=?", "routing_state='manual_priority'")
+				arguments = append(arguments, boolDatabaseValue(!*schedulable), manualPriorityPausedReason(*schedulable))
+			}
 		}
 		if multiplier != nil {
 			updates = append(updates, "multiplier=?")
@@ -116,6 +133,13 @@ func (s *Store) CommitAccountFieldsReadback(
 		}
 		return nil
 	})
+}
+
+func manualPriorityPausedReason(schedulable bool) any {
+	if schedulable {
+		return nil
+	}
+	return "人工调度位暂停"
 }
 
 func (s *Store) CommitAccountGroupsReadback(
@@ -224,6 +248,7 @@ func (s *Store) SaveAccountModels(ctx context.Context, accountID string, models 
 		return errors.New("账号元数据损坏，无法保存可用模型")
 	}
 	metadata["known_models"] = normalized
+	metadata["known_models_synced_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return err
@@ -368,13 +393,17 @@ func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOp
 	if strings.TrimSpace(operation.ObjectID) != "" {
 		objectID = operation.ObjectID
 	}
+	var taskID any
+	if value := taskcontext.ID(ctx); value != "" {
+		taskID = value
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO operation_audit(
-		source_id,operation_id,operation_type,state,phase,request_id,actor,source,error,
+		source_id,operation_id,operation_type,state,phase,request_id,task_id,actor,source,error,
 		remote_confirmed,readback_confirmed,object_type,object_id,object_name,group_names_json,
 		field_name,before_json,after_json,writeback,created_at
-	) VALUES(?,?,?,?,?,NULL,?,?,?,?,?,'account',?,?,?,?,?,?,?,?)`,
+	) VALUES(?,?,?,?,?,NULL,?,?,?,?,?,?,'account',?,?,?,?,?,?,?,?)`,
 		sourceID, operation.OperationID, operation.OperationType, operation.State, operation.Phase,
-		strings.TrimSpace(operation.Actor), "console", managementNullableString(operation.Error),
+		taskID, strings.TrimSpace(operation.Actor), "console", managementNullableString(operation.Error),
 		operation.RemoteConfirmed, operation.ReadbackConfirmed, objectID,
 		managementNullableString(operation.ObjectName), string(groups), managementNullableString(operation.FieldName),
 		before, after, operation.Writeback, time.Now().UTC().Format(time.RFC3339Nano),

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -244,6 +245,92 @@ func TestAccountDefaultsUseSharedDefaultsAndPersistOverrides(t *testing.T) {
 	if _, err := store.ConfigureAccountDefaults(ctx, 0, 1); err == nil {
 		t.Fatal("zero concurrency must be rejected")
 	}
+}
+
+func TestAccountCreationSettingsPersistGroupPoliciesAndKeepLegacyDefaultsInSync(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	loadFactor := "12.5"
+	configured, err := store.ConfigureAccountCreationSettings(ctx, AccountCreationSettings{
+		Default: AccountCreationPolicy{
+			Models: []string{"gpt-5.2", "gpt-5.1-codex", "gpt-5.2"}, Concurrency: 24,
+			Priority: 7, PoolMode: true, PoolModeRetryCount: 2,
+			PoolModeRetryStatusCodes: []int{503, 429, 503},
+		},
+		Groups: []AccountCreationGroupSettings{{
+			GroupID: "6",
+			AccountCreationPolicy: AccountCreationPolicy{
+				Models: []string{"claude-sonnet-4-5"}, Concurrency: 8, LoadFactor: &loadFactor,
+				Priority: 2, PoolMode: false, PoolModeRetryCount: 1,
+				PoolModeRetryStatusCodes: []int{401, 403},
+			},
+		}},
+		PlatformProbeModels: map[string]string{
+			" OpenAI ": " gpt-5.2 ", "anthropic": " claude-sonnet-4-5 ",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(configured.Default.Models, ",") != "gpt-5.1-codex,gpt-5.2" ||
+		strings.Join(intStrings(configured.Default.PoolModeRetryStatusCodes), ",") != "429,503" ||
+		configured.PlatformProbeModels["openai"] != "gpt-5.2" {
+		t.Fatalf("normalized defaults=%#v", configured.Default)
+	}
+	loaded, err := store.AccountCreationSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := ResolveAccountCreationPolicy(loaded, "6")
+	if group.LoadFactor == nil || *group.LoadFactor != "12.5" || group.Concurrency != 8 || group.PoolMode {
+		t.Fatalf("group policy=%#v", group)
+	}
+	fallback := ResolveAccountCreationPolicy(loaded, "99")
+	if fallback.Concurrency != 24 || fallback.Priority != 7 || !fallback.PoolMode {
+		t.Fatalf("fallback policy=%#v", fallback)
+	}
+	defaults, err := store.AccountDefaults(ctx)
+	if err != nil || defaults.Concurrency != 24 || defaults.Priority != 7 {
+		t.Fatalf("legacy defaults=%#v err=%v", defaults, err)
+	}
+}
+
+func TestAccountCreationSettingsRejectInvalidGroupAndPoolValues(t *testing.T) {
+	store := openTestStore(t)
+	base := defaultAccountCreationPolicy(AccountDefaultsSettings{Concurrency: 10, Priority: 1})
+	fractionLoadFactor := "2/1"
+	for name, settings := range map[string]AccountCreationSettings{
+		"unstable group id": {Default: base, Groups: []AccountCreationGroupSettings{{GroupID: "01", AccountCreationPolicy: base}}},
+		"fraction load factor": {Default: AccountCreationPolicy{
+			Models: []string{}, Concurrency: 10, LoadFactor: &fractionLoadFactor, Priority: 1,
+			PoolModeRetryCount: 1, PoolModeRetryStatusCodes: []int{429},
+		}},
+		"invalid retry count": {Default: AccountCreationPolicy{
+			Models: []string{}, Concurrency: 10, Priority: 1, PoolModeRetryCount: 11,
+			PoolModeRetryStatusCodes: []int{429},
+		}},
+		"invalid retry status": {Default: AccountCreationPolicy{
+			Models: []string{}, Concurrency: 10, Priority: 1, PoolModeRetryCount: 1,
+			PoolModeRetryStatusCodes: []int{99},
+		}},
+		"blank platform probe model": {
+			Default: base, PlatformProbeModels: map[string]string{"openai": "  "},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := store.ConfigureAccountCreationSettings(context.Background(), settings); err == nil {
+				t.Fatal("invalid account creation settings were accepted")
+			}
+		})
+	}
+}
+
+func intStrings(values []int) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, strconv.Itoa(value))
+	}
+	return result
 }
 
 func TestNotificationConfigurationStoresSecretsPrivatelyAndReturnsOnlyPublicStatus(t *testing.T) {

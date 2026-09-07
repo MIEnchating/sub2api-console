@@ -170,11 +170,18 @@ func pageFromSnapshot(query Query, snapshot *logSnapshot) Page {
 		}
 		filtered = append(filtered, entry)
 	}
-	sort.SliceStable(filtered, func(i, j int) bool { return timestamp(filtered[i].OccurredAt).After(timestamp(filtered[j].OccurredAt)) })
+	filtered = aggregateEventEntries(filtered)
+	sort.SliceStable(filtered, func(i, j int) bool {
+		left, right := timestamp(filtered[i].OccurredAt), timestamp(filtered[j].OccurredAt)
+		if left.Equal(right) {
+			return filtered[i].ID < filtered[j].ID
+		}
+		return left.After(right)
+	})
 	total := len(filtered)
-	start := (query.Page - 1) * query.PageSize
-	if start > total {
-		start = total
+	start := total
+	if query.Page-1 <= total/query.PageSize {
+		start = (query.Page - 1) * query.PageSize
 	}
 	end := start + query.PageSize
 	if end > total {
@@ -377,7 +384,12 @@ func (s *Service) loadSnapshot(ctx context.Context, useTaskSummaries bool, taskS
 	for idx, event := range events {
 		eventEntries[idx] = eventEntry(event)
 		runKey := stringValue(event.Payload["run_key"])
-		if parent := index[runKey]; parent != nil && runKey != "" {
+		taskID := stringValue(event.Payload["task_id"])
+		parent := index[runKey]
+		if parent == nil {
+			parent = index[taskID]
+		}
+		if parent != nil && (runKey != "" || taskID != "") {
 			attach(parent, "events", eventEntries[idx])
 			linkedEvents[eventEntries[idx].ID] = struct{}{}
 		}
@@ -407,7 +419,8 @@ func taskEntry(task taskstore.Task) Entry {
 	}
 	return Entry{ID: "task:" + task.ID, Kind: "task", OccurredAt: task.UpdatedAt, Title: task.Operation, Summary: task.Message,
 		Status: task.Status, ObjectLabel: object, Source: "task", SourceID: task.ID, Details: map[string]any{
-			"skill": task.Skill, "operation": task.Operation, "progress": task.Progress, "created_at": task.CreatedAt, "result": task.Result,
+			"task_id": task.ID, "skill": task.Skill, "operation": task.Operation, "progress": task.Progress,
+			"created_at": task.CreatedAt, "result": task.Result,
 		}}
 }
 
@@ -450,6 +463,161 @@ func eventEntry(event business.RunEvent) Entry {
 		Details: map[string]any{"event_type": event.EventType, "payload": event.Payload}}
 }
 
+type eventGroup struct {
+	key     string
+	title   string
+	entries []Entry
+}
+
+func aggregateEventEntries(entries []Entry) []Entry {
+	grouped := make(map[string]*eventGroup)
+	groupOrder := make([]string, 0)
+	result := make([]Entry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Kind != "event" {
+			result = append(result, entry)
+			continue
+		}
+		key, title := eventGroupIdentity(entry)
+		if key == "" {
+			result = append(result, entry)
+			continue
+		}
+		group := grouped[key]
+		if group == nil {
+			group = &eventGroup{key: key, title: title}
+			grouped[key] = group
+			groupOrder = append(groupOrder, key)
+		}
+		group.entries = append(group.entries, entry)
+	}
+	for _, key := range groupOrder {
+		group := grouped[key]
+		if len(group.entries) == 1 {
+			result = append(result, group.entries[0])
+			continue
+		}
+		result = append(result, aggregateEventGroup(*group))
+	}
+	return result
+}
+
+func eventGroupIdentity(entry Entry) (string, string) {
+	payload, _ := entry.Details["payload"].(map[string]any)
+	title := eventGroupTitle(entry.Title)
+	for _, field := range []string{"task_id", "batch_id", "operation_id", "run_key", "request_id"} {
+		if value := stringValue(payload[field]); value != "" {
+			return "explicit:" + field + ":" + value + ":" + title, title
+		}
+	}
+	return "", ""
+}
+
+func eventGroupTitle(title string) string {
+	switch strings.TrimSpace(title) {
+	case "routing.applied", "routing.apply_failed":
+		return "routing.writeback.batch"
+	default:
+		return title
+	}
+}
+
+func aggregateEventGroup(group eventGroup) Entry {
+	latest := group.entries[0]
+	actors := map[string]struct{}{}
+	objects := map[string]struct{}{}
+	objectKind := "对象"
+	succeeded, failed, warning, active := 0, 0, 0, 0
+	for _, entry := range group.entries {
+		if timestamp(entry.OccurredAt).After(timestamp(latest.OccurredAt)) {
+			latest = entry
+		}
+		if entry.Actor != nil && strings.TrimSpace(*entry.Actor) != "" {
+			actors[strings.TrimSpace(*entry.Actor)] = struct{}{}
+		}
+		payload, _ := entry.Details["payload"].(map[string]any)
+		if accountID := stringValue(payload["account_id"]); accountID != "" {
+			objects[accountID] = struct{}{}
+			objectKind = "账号"
+		} else if host := stringValue(payload["host"]); host != "" {
+			objects[host] = struct{}{}
+			if objectKind != "账号" {
+				objectKind = "上游"
+			}
+		} else if objectID := firstMapText(payload, "object_id", "upstream_id"); objectID != "" {
+			objects[objectID] = struct{}{}
+		}
+		switch normalizedState(entry.Status) {
+		case "failed":
+			failed++
+		case "warning":
+			warning++
+		case "active":
+			active++
+		default:
+			succeeded++
+		}
+	}
+	objectCount := len(objects)
+	if objectCount == 0 {
+		objectCount = len(group.entries)
+	}
+	status := "succeeded"
+	if failed == len(group.entries) {
+		status = "failed"
+	} else if failed > 0 {
+		status = "partial"
+	} else if warning > 0 {
+		status = "warning"
+	} else if active > 0 {
+		status = "running"
+	}
+	var actor *string
+	if len(actors) == 1 {
+		for value := range actors {
+			copy := value
+			actor = &copy
+		}
+	}
+	objectLabel := fmt.Sprintf("%d 个%s", objectCount, objectKind)
+	details := map[string]any{
+		"event_type": group.title, "total": len(group.entries), "succeeded": succeeded,
+		"failed": failed, "warning": warning, "events": group.entries,
+	}
+	return Entry{
+		ID: "event-group:" + group.key, Kind: "event", OccurredAt: latest.OccurredAt,
+		Title: group.title, Summary: eventGroupSummary(objectLabel, succeeded, failed, warning, active),
+		Status: status, Actor: actor, ObjectLabel: &objectLabel, Source: "runtime_event",
+		SourceID: group.key, RelatedCount: len(group.entries), Details: details,
+	}
+}
+
+func eventGroupSummary(objectLabel string, succeeded, failed, warning, active int) string {
+	parts := make([]string, 0, 4)
+	if succeeded > 0 {
+		parts = append(parts, fmt.Sprintf("成功 %d", succeeded))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("失败 %d", failed))
+	}
+	if warning > 0 {
+		parts = append(parts, fmt.Sprintf("警告 %d", warning))
+	}
+	if active > 0 {
+		parts = append(parts, fmt.Sprintf("处理中 %d", active))
+	}
+	return "共 " + objectLabel + "：" + strings.Join(parts, "，")
+}
+
+func firstMapText(values map[string]any, fields ...string) string {
+	for _, field := range fields {
+		if value := stringValue(values[field]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func changeEntries(rows []business.AuditEvent) []Entry {
 	groups := map[string][]business.AuditEvent{}
 	for _, row := range rows {
@@ -460,7 +628,7 @@ func changeEntries(rows []business.AuditEvent) []Entry {
 		groups[key] = append(groups[key], row)
 	}
 	result := make([]Entry, 0, len(groups))
-	for operationID, changes := range groups {
+	for groupID, changes := range groups {
 		sort.SliceStable(changes, func(i, j int) bool { return timestamp(changes[i].CreatedAt).After(timestamp(changes[j].CreatedAt)) })
 		first := changes[0]
 		failed := false
@@ -499,24 +667,27 @@ func changeEntries(rows []business.AuditEvent) []Entry {
 		if failed {
 			status = "failed"
 		}
-		result = append(result, Entry{ID: "change:" + operationID, Kind: "change", OccurredAt: first.CreatedAt,
+		sourceID := groupID
+		details := map[string]any{
+			"operation_type": first.OperationType, "phase": first.Phase,
+			"request_id": first.RequestID, "source": first.Source, "changes": changes,
+		}
+		if first.TaskID != nil && strings.TrimSpace(*first.TaskID) != "" {
+			sourceID = strings.TrimSpace(*first.TaskID)
+			details["task_id"] = sourceID
+		} else {
+			details["operation_id"] = first.OperationID
+		}
+		result = append(result, Entry{ID: "change:" + groupID, Kind: "change", OccurredAt: first.CreatedAt,
 			Title: title, Summary: summary, Status: status, Actor: first.Actor, ObjectLabel: object,
-			Source: "operation_audit", SourceID: operationID, RelatedCount: len(changes), Details: map[string]any{
-				"operation_id": operationID, "operation_type": first.OperationType, "phase": first.Phase,
-				"request_id": first.RequestID, "source": first.Source, "changes": changes,
-			}})
+			Source: "operation_audit", SourceID: sourceID, RelatedCount: len(changes), Details: details})
 	}
 	return result
 }
 
 func auditGroupKey(row business.AuditEvent) string {
-	if !row.Writeback && row.RemoteConfirmed != nil && !*row.RemoteConfirmed &&
-		row.ReadbackConfirmed != nil && *row.ReadbackConfirmed &&
-		(row.OperationType == "routing.writeback" || row.OperationType == "account.scheduling") {
-		// One inspection can read hundreds of accounts. Keep the audit useful without
-		// turning every confirmed no-op readback into a separate table row.
-		bucket := timestamp(row.CreatedAt).UTC().Truncate(time.Second).Format(time.RFC3339)
-		return "readback:" + row.OperationType + ":" + pointerText(row.Actor, "system") + ":" + bucket
+	if row.TaskID != nil && strings.TrimSpace(*row.TaskID) != "" {
+		return "task:" + strings.TrimSpace(*row.TaskID) + ":" + strings.TrimSpace(row.OperationType)
 	}
 	if row.OperationID != "" {
 		return row.OperationID

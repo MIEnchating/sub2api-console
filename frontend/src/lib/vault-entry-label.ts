@@ -10,25 +10,30 @@ export function vaultEntryLabel(item: VaultEntryLabelInput): string {
 }
 
 function normalizeHost(value: string): string {
-  const normalized = value
+  return value
     .trim()
     .toLowerCase()
     .replace(/^https?:\/\//, "")
     .replace(/\/$/, "");
-  return normalized.startsWith("www.") ? normalized.slice(4) : normalized;
 }
 
-function vaultEntryMatchesHost(item: VaultEntryIndex, host: string | null | undefined): boolean {
-  if (!host) return false;
-  const normalizedHost = normalizeHost(host);
-  return item.hosts.some((itemHost) => normalizeHost(itemHost) === normalizedHost);
+function vaultEntryHostRank(item: VaultEntryIndex, normalizedHost: string): number {
+  const hosts = item.hosts.map(normalizeHost);
+  if (normalizedHost && hosts.includes(normalizedHost)) return 0;
+  const alias = normalizedHost.replace(/^www\./, "");
+  if (alias && hosts.some((host) => host.replace(/^www\./, "") === alias)) return 1;
+  return item.hosts.length === 0 ? 2 : 3;
 }
 
 export function defaultVaultEntryForHost(
   entries: VaultEntryIndex[],
   host: string | null | undefined,
 ): string {
-  return entries.find((item) => vaultEntryMatchesHost(item, host))?.entry ?? "";
+  if (!host) return "";
+  const normalizedHost = normalizeHost(host);
+  const exact = entries.find((item) => vaultEntryHostRank(item, normalizedHost) === 0);
+  if (exact) return exact.entry;
+  return entries.find((item) => vaultEntryHostRank(item, normalizedHost) === 1)?.entry ?? "";
 }
 
 /** List every usable entry, placing entries associated with the current Host first. */
@@ -52,14 +57,8 @@ export function vaultEntriesForHost(
   const usable = [...unique.values()];
   if (!host) return usable;
   const normalizedHost = normalizeHost(host);
-  const rank = (item: VaultEntryIndex): number => {
-    const matched = vaultEntryMatchesHost(item, normalizedHost);
-    if (matched) return 0;
-    if (item.hosts.length === 0) return 1;
-    return 2;
-  };
   return usable
-    .map((item, index) => ({ item, index, rank: rank(item) }))
+    .map((item, index) => ({ item, index, rank: vaultEntryHostRank(item, normalizedHost) }))
     .sort((left, right) => left.rank - right.rank || left.index - right.index)
     .map(({ item }) => item);
 }

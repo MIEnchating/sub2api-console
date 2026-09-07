@@ -84,6 +84,38 @@ func TestPortConflictDoesNotRecoverTasksOwnedByRunningInstance(t *testing.T) {
 	}
 }
 
+func TestStartupRecoveryImmediatelyFinishesFreshInterruptedTasks(t *testing.T) {
+	store, err := taskstore.Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, status := range []string{"queued", "running", "waiting_input"} {
+		if err := store.Save(ctx, taskstore.Task{
+			ID: "fresh-" + status, Skill: "test", Operation: "test", Status: status,
+			Progress: 10, Message: "未完成", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	recovered, err := recoverInterruptedTasks(ctx, store)
+	if err != nil || recovered != 3 {
+		t.Fatalf("recovered=%d err=%v", recovered, err)
+	}
+	for _, status := range []string{"queued", "running", "waiting_input"} {
+		task, err := store.Get(ctx, "fresh-"+status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status != "failed" || task.Result["interrupted"] != true {
+			t.Fatalf("task %s was not recovered immediately: %#v", status, task)
+		}
+	}
+}
+
 func TestTrustedProxySocketRejectsOccupiedPathsAndReplacesStaleSocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "proxy", "api.sock")
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {

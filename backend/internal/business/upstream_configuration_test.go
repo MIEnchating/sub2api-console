@@ -42,6 +42,54 @@ func TestCreateUpstreamConfigurationWaitsForIdentityCatalogLease(t *testing.T) {
 	}
 }
 
+func TestRenameUpstreamHostMovesBusinessReferencesAndKeepsIdentity(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "rename-host.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	name := "Pixel API"
+	created, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+		Host: "speed.ai-pixel.online", Name: &name, BaseURL: "https://ai-pixel.online",
+		AccountBaseURL: "https://ai-pixel.online", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RechargeRate: "1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstream_groups(host,group_id,name,status,updated_at)
+		VALUES('speed.ai-pixel.online','25','codex','active','now');
+		INSERT INTO upstream_keys(host,key_id,name,updated_at) VALUES('speed.ai-pixel.online','key-1','key','now');
+		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,updated_at)
+		VALUES('41','speed.ai-pixel.online','key-1','key','codex','now');
+		INSERT INTO accounts(id,name,upstream_host,updated_at) VALUES('41','Pixel API-0.25','speed.ai-pixel.online','now');
+		INSERT INTO recharge_rates(host,recharge_rate,note,updated_at)
+		VALUES('ai-pixel.online','9','orphan','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RenameUpstreamHost(ctx, "speed.ai-pixel.online", "ai-pixel.online"); err != nil {
+		t.Fatal(err)
+	}
+	var host, groupHost, keyHost, bindingHost, accountHost, identityID, rate, note string
+	if err := store.db.QueryRowContext(ctx, `SELECT
+		(SELECT host FROM upstreams WHERE host='ai-pixel.online'),
+		(SELECT host FROM upstream_groups WHERE group_id='25'),
+		(SELECT host FROM upstream_keys WHERE key_id='key-1'),
+		(SELECT upstream_host FROM bindings WHERE local_account_id='41'),
+		(SELECT upstream_host FROM accounts WHERE id='41'),
+		(SELECT upstream_id FROM upstream_identity_hosts WHERE host='ai-pixel.online'),
+		(SELECT recharge_rate FROM recharge_rates WHERE host='ai-pixel.online'),
+		(SELECT note FROM recharge_rates WHERE host='ai-pixel.online')`).Scan(&host, &groupHost, &keyHost, &bindingHost, &accountHost, &identityID, &rate, &note); err != nil {
+		t.Fatal(err)
+	}
+	if host != "ai-pixel.online" || groupHost != host || keyHost != host || bindingHost != host || accountHost != host || identityID != created.UpstreamID || rate != "1" || note != "console-upstream-create" {
+		t.Fatalf("migrated references host=%q group=%q key=%q binding=%q account=%q identity=%q rate=%q note=%q want identity=%q", host, groupHost, keyHost, bindingHost, accountHost, identityID, rate, note, created.UpstreamID)
+	}
+}
+
 func TestUpstreamConfigurationCreateAndRateRecalculationUseDecimalText(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "business.sqlite3"))
 	if err != nil {

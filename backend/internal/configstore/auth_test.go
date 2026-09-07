@@ -46,6 +46,50 @@ func TestAuthRecordPartialUpdatePreservesOmittedSecretsAndClearsExplicitNull(t *
 	}
 }
 
+func TestRenameAuthRecordMovesRecoverySecretsAndVaultHost(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "rename-auth.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	host := "speed.ai-pixel.online"
+	token := "token"
+	if err := store.SaveAuthRecord(ctx, AuthRecord{Host: host, BaseURL: "https://ai-pixel.online", UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveVaultEntry(ctx, VaultEntry{Entry: "pixel", Hosts: []string{host}}, map[string]bool{"hosts": true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO auth_recovery_preferences(host,auth_mode,recovery_method,succeeded_at)
+		VALUES('speed.ai-pixel.online','sub2api_user_token','manual','now');
+		INSERT INTO upstream_key_secrets(host,key_id,group_id,secret,updated_at)
+		VALUES('speed.ai-pixel.online','key-1','25','secret','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RenameAuthRecord(ctx, host, "ai-pixel.online"); err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.AuthRecord(ctx, "ai-pixel.online")
+	if err != nil || record == nil || record.Host != "ai-pixel.online" || record.BaseURL != "https://ai-pixel.online" {
+		t.Fatalf("record=%#v err=%v", record, err)
+	}
+	entry, err := store.VaultEntry(ctx, "pixel")
+	if err != nil || entry == nil || len(entry.Hosts) != 1 || entry.Hosts[0] != "ai-pixel.online" {
+		t.Fatalf("entry=%#v err=%v", entry, err)
+	}
+	var preferenceHost, secretHost string
+	if err := store.db.QueryRowContext(ctx, `SELECT host FROM auth_recovery_preferences LIMIT 1`).Scan(&preferenceHost); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT host FROM upstream_key_secrets LIMIT 1`).Scan(&secretHost); err != nil {
+		t.Fatal(err)
+	}
+	if preferenceHost != "ai-pixel.online" || secretHost != "ai-pixel.online" {
+		t.Fatalf("preference=%q secret=%q", preferenceHost, secretHost)
+	}
+}
+
 func TestAuthRecordRejectsHeaderInjectionWithoutChangingStoredRecord(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "config.sqlite3"))
 	if err != nil {

@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type PolicyGroupStrategy struct {
@@ -26,6 +29,7 @@ type PolicyGroupStrategy struct {
 }
 
 type PolicySnapshot struct {
+	Revision               string                `json:"revision"`
 	Available              bool                  `json:"available"`
 	Source                 string                `json:"source"`
 	Mode                   string                `json:"mode"`
@@ -46,8 +50,9 @@ type PolicySnapshot struct {
 }
 
 var policyPatchFields = map[string]struct{}{
-	"mode":            {},
-	"global_strategy": {}, "missing_rate_fallback": {}, "change_threshold": {}, "cooldown_seconds": {},
+	"expected_revision": {},
+	"mode":              {},
+	"global_strategy":   {}, "missing_rate_fallback": {}, "change_threshold": {}, "cooldown_seconds": {},
 	"auto_apply": {}, "excluded_group_ids": {},
 	"traffic_enabled": {}, "probe_interval_seconds": {}, "probe_model": {},
 	"traffic_lookback_minutes": {}, "max_samples_per_account": {}, "advanced_policy": {}, "group_strategies": {},
@@ -74,6 +79,15 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 			return PolicySnapshot{}, fmt.Errorf("策略更新包含未知字段：%s", field)
 		}
 	}
+	expectedRevision := ""
+	if rawRevision, present := patch["expected_revision"]; present {
+		var ok bool
+		expectedRevision, ok = rawRevision.(string)
+		if !ok || strings.TrimSpace(expectedRevision) == "" {
+			return PolicySnapshot{}, fmt.Errorf("策略版本必须是非空字符串，请刷新策略后重试")
+		}
+		delete(patch, "expected_revision")
+	}
 	runtimeMode := ""
 	if rawMode, present := patch["mode"]; present {
 		parsedMode, ok := rawMode.(string)
@@ -94,6 +108,15 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	}
 	if current == nil {
 		return PolicySnapshot{}, fmt.Errorf("控制面策略记录不存在，无法执行局部更新")
+	}
+	if expectedRevision != "" {
+		revision, err := policyRevision(current)
+		if err != nil {
+			return PolicySnapshot{}, err
+		}
+		if revision != expectedRevision {
+			return PolicySnapshot{}, ErrPolicyRevisionConflict
+		}
 	}
 	updated, touchedGroupIDs, globalStrategy, err := normalizePolicyPatch(ctx, tx, current, patch)
 	if err != nil {
@@ -250,7 +273,7 @@ func normalizePolicyPatch(ctx context.Context, tx *sql.Tx, current, patch map[st
 		return nil, nil, "", err
 	}
 	threshold := strings.TrimSpace(fmt.Sprint(thresholdRaw))
-	ratio, ok := new(big.Rat).SetString(threshold)
+	ratio, ok := decimalutil.Parse(threshold)
 	if !ok || ratio.Sign() <= 0 || ratio.Cmp(big.NewRat(1, 1)) > 0 {
 		return nil, nil, "", fmt.Errorf("策略字段 change_threshold 必须是大于 0 且不超过 1 的十进制数")
 	}
@@ -557,7 +580,8 @@ var advancedRules = map[string]map[string]advancedRule{
 		"paused_account_ids": {kind: "strings"}, "excluded_account_ids": {kind: "strings"}, "manual_fused_account_ids": {kind: "strings"},
 	},
 	"probe": {
-		"enabled": {kind: "bool"}, "timeout_seconds": {kind: "int", minimum: 1, maximum: 86400},
+		"freshness_seconds": {kind: "int", minimum: 1, maximum: 86400},
+		"enabled":           {kind: "bool"}, "timeout_seconds": {kind: "int", minimum: 1, maximum: 86400},
 		"concurrency": {kind: "int", minimum: 1, maximum: 32}, "prompt": {kind: "string", maxLength: 10000},
 		"skip_when_traffic_fresh": {kind: "bool"}, "traffic_fresh_seconds": {kind: "int", minimum: 1, maximum: 86400},
 		"retry_enabled": {kind: "bool"}, "retry_source": {kind: "enum", allowed: valueStringSet("fixed", "sub2api_pool")},
@@ -567,7 +591,8 @@ var advancedRules = map[string]map[string]advancedRule{
 		"refresh_seconds": {kind: "int", minimum: 1, maximum: 86400},
 	},
 	"scoring": {
-		"short_window": {kind: "int", minimum: 1, maximum: 10000}, "long_window": {kind: "int", minimum: 1, maximum: 100000},
+		"history_window_minutes": {kind: "int", minimum: 1, maximum: 10080},
+		"short_window":           {kind: "int", minimum: 1, maximum: 10000}, "long_window": {kind: "int", minimum: 1, maximum: 100000},
 		"latest_weight": {kind: "ratio"}, "short_ratio": {kind: "ratio"},
 		"slow_ttfb_ms": {kind: "int", minimum: 1, maximum: 3_600_000}, "event_scores": {kind: "event_scores"},
 	},
@@ -746,6 +771,9 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 			if err != nil {
 				return nil, err
 			}
+			if code == http.StatusTooManyRequests && (path == "breaker.instant_status_codes" || path == "cleanup.trigger_status_codes") {
+				return nil, fmt.Errorf("高级策略字段 %s 不能包含 429；限流由 Sub2API 按重置时间恢复", path)
+			}
 			if _, found := seen[code]; found {
 				continue
 			}
@@ -853,7 +881,12 @@ func (s *Store) PolicySnapshot(ctx context.Context) (PolicySnapshot, error) {
 			AdvancedPolicy: map[string]any{}, ConfigurationErrors: []string{"control-plane"},
 		}, nil
 	}
+	revision, err := policyRevision(document)
+	if err != nil {
+		return PolicySnapshot{}, err
+	}
 	result := PolicySnapshot{
+		Revision:  revision,
 		Available: true, Source: "当前控制面策略", Mode: runtime.Mode, GroupStrategies: []PolicyGroupStrategy{},
 		AdvancedPolicy: map[string]any{}, ConfigurationErrors: []string{},
 	}

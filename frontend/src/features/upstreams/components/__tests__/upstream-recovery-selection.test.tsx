@@ -69,8 +69,7 @@ describe("UpstreamRecoverySelectionToolbar", () => {
       />,
     );
 
-    expect(markup).toContain("Token + 刷新 Token");
-    expect(markup).toContain("刷新 Token");
+    expect(markup).toContain("Token · 恢复：刷新 Token");
     expect(markup).toContain("密码箱项不可用");
     expect(markup).toContain("已恢复");
     expect(markup).toContain("未恢复");

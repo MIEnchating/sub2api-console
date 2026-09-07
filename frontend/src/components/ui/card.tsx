@@ -31,7 +31,7 @@ function Card({
       data-card-hover="false"
       data-size={size}
       className={cn(
-        "group/card bg-card text-card-foreground ring-border flex flex-col overflow-hidden rounded-[8px] text-sm ring-1 *:[img:first-child]:rounded-t-[8px] *:[img:last-child]:rounded-b-[8px]",
+        "group/card bg-card text-card-foreground ring-border flex min-w-0 flex-col overflow-hidden rounded-[8px] text-sm ring-1 *:[img:first-child]:rounded-t-[8px] *:[img:last-child]:rounded-b-[8px]",
         className,
       )}
       {...props}
@@ -44,7 +44,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header border-border/70 grid auto-rows-min items-start gap-1 border-b px-4 py-3 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-2.5 has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto]",
+        "group/card-header @container/card-header border-border/70 grid min-w-0 auto-rows-min items-start gap-1 border-b px-4 py-3 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-2.5 has-data-[slot=card-action]:grid-cols-[minmax(0,1fr)_auto] has-data-[slot=card-description]:grid-rows-[auto_auto]",
         className,
       )}
       {...props}
@@ -57,7 +57,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-title"
       className={cn(
-        "text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",
+        "min-w-0 text-base leading-snug font-medium [overflow-wrap:anywhere] group-data-[size=sm]/card:text-sm",
         className,
       )}
       {...props}
@@ -69,7 +69,7 @@ function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-description"
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground min-w-0 text-sm [overflow-wrap:anywhere]", className)}
       {...props}
     />
   );
@@ -90,7 +90,7 @@ function CardContent({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-content"
       className={cn(
-        "px-4 py-4 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-3",
+        "min-w-0 px-4 py-4 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-3",
         className,
       )}
       {...props}

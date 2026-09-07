@@ -85,7 +85,6 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND rd.updated_at>=COALESCE(
 			(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
 		LEFT JOIN account_health_evaluations he ON he.account_id=a.id
-			AND LOWER(TRIM(he.group_name))=LOWER(TRIM(ag.group_name))
 		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
 		ORDER BY a.name,a.id`, groupID, group.Name)
 	if err != nil {

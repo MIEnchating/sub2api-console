@@ -1,4 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -10,164 +13,237 @@ import {
   saveTargetWithOptionalSync,
   targetFormFromConfig,
 } from "../App";
-import type { NotificationStatus, RuntimeConfig, Task } from "../api";
+import type { AutoInspectionStatus, NotificationStatus, RuntimeConfig, Task } from "../api";
+import type { ConfigTab } from "../features/config/constants";
+
+const runtimeConfigFixture: RuntimeConfig = {
+  database_available: true,
+  data_database_available: true,
+  mode: "完全模式",
+  config_keys: [],
+  secret_values_hidden: true,
+  probes_enabled: true,
+  account_default_concurrency: 10,
+  account_default_priority: 1,
+  admin_base_url: "https://sub2api.example.test",
+  request_timeout_seconds: 60,
+  initialized: true,
+  target_configured: true,
+  console_username: "admin",
+  configuration_errors: [],
+};
+
+const notificationStatusFixture: NotificationStatus = {
+  configured: true,
+  app_id: "configured-app",
+  client_secret_configured: true,
+  home_channel: "configured-target",
+  channel_type: "c2c",
+  destination_configured: true,
+  configuration_errors: [],
+  queues: {
+    producer_firing: 2,
+    producer_recovered: 1,
+    consumer_pending: 1,
+    consumer_failed: 0,
+    consumer_active: false,
+  },
+};
+
+const autoInspectionStatusFixture: AutoInspectionStatus = {
+  enabled: true,
+  interval_seconds: 15,
+  running: false,
+  monitoring_configured: true,
+  monitoring_enabled: true,
+  monitoring_checked_at: "2026-09-05T14:40:25Z",
+  last_run_duration_ms: 29_681,
+  last_summary: {
+    channels: 233,
+    probed: 10,
+    samples: 112,
+    fused: 2,
+    recovered: 1,
+    applied: 24,
+    cleaned_up: 0,
+    alerts: 3,
+  },
+  last_run_at: "2026-09-05T14:40:25Z",
+  next_run_at: "2026-09-05T14:40:40Z",
+  last_status: "succeeded",
+  last_error: null,
+  last_task_id: "inspection-1",
+  queue: [],
+  heartbeat_history: [],
+};
+
+function configuredQueryClient() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { enabled: false, retry: false } },
+  });
+  queryClient.setQueryData(["config"], runtimeConfigFixture);
+  queryClient.setQueryData(["notification-status"], notificationStatusFixture);
+  queryClient.setQueryData(["auto-inspection"], autoInspectionStatusFixture);
+  queryClient.setQueryData(["account-creation-settings"], {
+    default: {
+      models: ["model-a"],
+      concurrency: 10,
+      load_factor: null,
+      priority: 1,
+      pool_mode: false,
+      pool_mode_retry_count: 2,
+      pool_mode_retry_status_codes: [429],
+    },
+    groups: [],
+    platform_probe_models: {},
+  });
+  queryClient.setQueryData(["account-model-sync-settings"], {
+    blocked_patterns: ["claude-*", "*-image-*"],
+  });
+  queryClient.setQueryData(["log-cleanup"], {
+    enabled: false,
+    retention_days: 30,
+    last_run_at: null,
+    next_run_at: null,
+  });
+  return queryClient;
+}
+
+function configMarkup(activeTab: ConfigTab) {
+  return renderToStaticMarkup(
+    <QueryClientProvider client={configuredQueryClient()}>
+      <ConfigPage activeTab={activeTab} />
+    </QueryClientProvider>,
+  );
+}
+
+function InteractiveConfigPage() {
+  const [activeTab, setActiveTab] = useState<ConfigTab>("connection");
+  return <ConfigPage activeTab={activeTab} onTabChange={setActiveTab} />;
+}
 
 describe("系统设置页面职责", () => {
-  it("只展示可操作的系统设置，不重复展示运行状态和 Host 鉴权配置", () => {
-    const queryClient = new QueryClient();
-    const config: RuntimeConfig = {
-      database_available: true,
-      data_database_available: true,
-      mode: "完全模式",
-      config_keys: [],
-      secret_values_hidden: true,
-      probes_enabled: true,
-      account_default_concurrency: 10,
-      account_default_priority: 1,
-      admin_base_url: "https://sub2api.example.test",
-      request_timeout_seconds: 60,
-      initialized: true,
-      target_configured: true,
-      console_username: "admin",
-      configuration_errors: [],
-    };
-    const notifications: NotificationStatus = {
-      configured: true,
-      app_id: "configured-app",
-      client_secret_configured: true,
-      home_channel: "configured-target",
-      channel_type: "c2c",
-      destination_configured: true,
-      configuration_errors: [],
-      queues: {
-        producer_firing: 2,
-        producer_recovered: 1,
-        consumer_pending: 1,
-        consumer_failed: 0,
-        consumer_active: false,
-      },
-    };
+  it("默认只挂载连接设置，并提供适配移动端的四个页签", () => {
+    const connectionMarkup = configMarkup("connection");
 
-    queryClient.setQueryData(["config"], config);
-    queryClient.setQueryData(["notification-status"], notifications);
-    queryClient.setQueryData(["log-cleanup"], {
-      enabled: false,
-      retention_days: 30,
-      last_run_at: null,
-      next_run_at: null,
-    });
+    expect(connectionMarkup).toContain("系统设置");
+    expect(connectionMarkup).toContain('aria-label="刷新系统设置"');
+    const pageShell = connectionMarkup.match(
+      /<div[^>]*data-testid="system-settings-page"[^>]*>/,
+    )?.[0];
+    expect(pageShell).toContain("w-full");
+    expect(pageShell).not.toContain("max-w-");
+    expect(connectionMarkup).toContain('data-slot="page-content"');
+    expect(connectionMarkup).toContain("min-h-0 flex-1 overflow-hidden");
+    expect(connectionMarkup).toContain('role="tablist"');
+    expect(connectionMarkup).toContain('aria-label="系统设置分类"');
+    expect(connectionMarkup).toContain('data-testid="system-settings-tabs"');
+    expect(connectionMarkup).toContain("sticky top-0");
+    expect(connectionMarkup).toContain("grid w-full grid-cols-2 sm:grid-cols-4");
+    expect(connectionMarkup).toContain("flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden");
+    expect(connectionMarkup.match(/role="tab"/g)).toHaveLength(4);
+    expect(connectionMarkup).toContain("连接设置");
+    expect(connectionMarkup).toContain("账号设置");
+    expect(connectionMarkup).toContain("通知设置");
+    expect(connectionMarkup).toContain("界面与日志");
+    expect(connectionMarkup).toMatch(
+      /<button(?=[^>]*id="config-tab-connection")(?=[^>]*aria-selected="true")[^>]*>/,
+    );
+    expect(connectionMarkup).toContain('id="config-panel-connection"');
+    expect(connectionMarkup).toContain('aria-labelledby="config-tab-connection"');
+    expect(connectionMarkup).toContain("overflow-y-auto overscroll-contain");
+    expect(connectionMarkup).not.toContain("max-w-4xl");
+    expect(connectionMarkup).toContain('data-testid="connection-settings-layout"');
+    expect(connectionMarkup).toContain("xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.75fr)]");
+    expect(connectionMarkup.match(/data-slot="card"[^>]*data-size="sm"/g)).toHaveLength(2);
+    expect(connectionMarkup).toContain('data-testid="runtime-controls"');
+    expect(connectionMarkup).toContain("Sub2API 连接");
+    expect(connectionMarkup).toContain("执行模式");
+    expect(connectionMarkup).toMatch(
+      /<div(?=[^>]*data-testid="last-inspection-summary")(?=[^>]*class="[^"]*h-full[^"]*")[^>]*>/,
+    );
+    expect(connectionMarkup).toContain("上一轮概要");
+    expect(connectionMarkup).toContain("执行时间：09/05 14:40:25");
+    expect(connectionMarkup).toContain("执行成功");
+    expect(connectionMarkup).toContain("29.7 秒");
+    expect(connectionMarkup).toMatch(
+      /<button(?=[^>]*aria-label="完全模式：)(?=[^>]*aria-pressed="true")[^>]*>/,
+    );
+    expect(connectionMarkup).not.toContain('data-testid="account-creation-settings-card"');
+    expect(connectionMarkup).not.toContain("QQBot 通知接入");
+    expect(connectionMarkup).not.toContain("菜单设置");
+    expect(connectionMarkup).not.toContain("日志保留");
+  });
 
-    const markup = renderToStaticMarkup(
+  it("每个页签只挂载所属设置内容", () => {
+    const accountMarkup = configMarkup("accounts");
+    const notificationMarkup = configMarkup("notifications");
+    const interfaceMarkup = configMarkup("interface");
+
+    expect(accountMarkup).toContain('data-testid="account-creation-settings-card"');
+    expect(accountMarkup).toContain('data-testid="model-sync-settings-card"');
+    expect(accountMarkup).toContain('data-testid="account-settings-layout"');
+    expect(accountMarkup).toContain("xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)]");
+    expect(accountMarkup).toContain("全局屏蔽模型");
+    expect(accountMarkup).toContain("claude-*");
+    expect(accountMarkup).toContain("账号模型");
+    expect(accountMarkup).toContain("并发上限");
+    expect(accountMarkup).toContain("负载因子");
+    expect(accountMarkup).toContain("池模式");
+    expect(accountMarkup).not.toContain("Sub2API 连接");
+    expect(accountMarkup).not.toContain("QQBot 通知接入");
+
+    expect(notificationMarkup).toContain("QQBot 通知接入");
+    expect(notificationMarkup).toContain('data-testid="notification-credentials"');
+    expect(notificationMarkup).toContain('data-testid="notification-destination"');
+    expect(notificationMarkup).toContain('value="configured-app"');
+    expect(notificationMarkup).toContain('value="configured-target"');
+    expect(notificationMarkup).not.toContain('data-testid="account-creation-settings-card"');
+    expect(notificationMarkup).not.toContain("菜单设置");
+
+    expect(interfaceMarkup).toContain("xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]");
+    expect(interfaceMarkup).toContain("菜单设置");
+    expect(interfaceMarkup).toContain("当前显示 23 / 23 个菜单入口");
+    expect(interfaceMarkup).toContain('aria-label="在菜单中显示账号管理"');
+    expect(interfaceMarkup).toContain('aria-label="系统设置说明"');
+    expect(interfaceMarkup).not.toContain("/config · 始终显示");
+    expect(interfaceMarkup).toContain("日志保留");
+    expect(interfaceMarkup).toContain("定时清理");
+    expect(interfaceMarkup).toContain('aria-label="定时清理说明"');
+    expect(interfaceMarkup).not.toContain("每天检查并删除超过保留期的日志");
+    expect(interfaceMarkup).toContain('aria-label="日志保留天数"');
+    expect(interfaceMarkup).toContain("立即按期限清理");
+    expect(interfaceMarkup).toContain("sm:grid-cols-2 lg:grid-cols-3");
+    expect(interfaceMarkup.match(/data-slot="card"[^>]*data-size="sm"/g)).toHaveLength(2);
+    expect(interfaceMarkup).not.toContain("Sub2API 连接");
+    expect(interfaceMarkup).not.toContain("QQBot 通知接入");
+    expect(notificationMarkup).not.toContain("max-w-5xl");
+  });
+
+  it("点击和方向键会切换页签及对应面板", async () => {
+    const user = userEvent.setup();
+    const queryClient = configuredQueryClient();
+    render(
       <QueryClientProvider client={queryClient}>
-        <ConfigPage />
+        <InteractiveConfigPage />
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("系统设置");
-    expect(markup).toContain('aria-label="刷新系统设置"');
-    const pageShell = markup.match(/<div[^>]*data-testid="system-settings-page"[^>]*>/)?.[0];
-    expect(pageShell).toContain('class="w-full space-y-4"');
-    expect(markup).not.toContain("max-w-7xl");
-    expect(markup).toContain('data-testid="system-settings-flow"');
-    expect(markup).toContain("grid items-start gap-4 xl:grid-cols-2");
-    expect(markup).toContain('data-testid="system-settings-flow-primary"');
-    expect(markup).toContain('data-testid="system-settings-flow-secondary"');
-    expect(markup.match(/grid min-w-0 content-start gap-4/g)).toHaveLength(2);
-    expect(markup).not.toContain("xl:row-span-2");
-    expect(markup.match(/data-slot="card"[^>]*data-size="sm"/g)).toHaveLength(5);
-    expect(markup).toContain('data-testid="runtime-controls"');
-    expect(markup).not.toContain("运行控制");
-    expect(markup).toContain("执行模式");
-    expect(markup).toContain('aria-label="执行模式"');
-    expect(markup).toContain("监控模式");
-    expect(markup).toContain("完全模式");
-    expect(markup).toMatch(
-      /<button(?=[^>]*aria-label="完全模式：)(?=[^>]*aria-pressed="true")[^>]*>/,
-    );
-    expect(markup).toContain("菜单设置");
-    expect(markup).toContain("当前显示 22 / 22 个菜单入口");
-    expect(markup).toContain('aria-label="在菜单中显示账号管理"');
-    expect(markup).toContain("/config · 始终显示");
-    expect(markup).toContain("Sub2API 连接");
-    expect(markup).not.toContain("运行状态");
-    expect(markup).toContain("自动巡检");
-    expect(markup).not.toContain('data-testid="auto-inspection-controls"');
-    expect(markup).not.toContain("真实流量采集");
-    expect(markup).not.toContain("页面数据更新");
-    expect(markup).not.toContain("上一轮概要");
-    expect(markup).not.toContain('data-testid="last-inspection-summary"');
-    expect(markup).toContain("已配置，留空则不修改");
-    expect(markup).toContain("请求超时（秒）");
-    expect(markup).toContain("保存并测试同步");
-    expect(markup).toContain("账号创建默认值");
-    expect(markup).toContain('aria-label="平台接入与账号默认值"');
-    expect(markup).toContain('aria-label="菜单与数据维护"');
-    const primaryColumnStart = markup.indexOf('data-testid="system-settings-flow-primary"');
-    const secondaryColumnStart = markup.indexOf('data-testid="system-settings-flow-secondary"');
-    const primaryColumn = markup.slice(primaryColumnStart, secondaryColumnStart);
-    const secondaryColumn = markup.slice(secondaryColumnStart);
-    const connectionCardStart = primaryColumn.indexOf("Sub2API 连接");
-    const accountDefaultsCardStart = primaryColumn.indexOf("账号创建默认值");
-    const connectionCard = primaryColumn.slice(connectionCardStart, accountDefaultsCardStart);
-    expect(connectionCard).toContain('data-testid="runtime-controls"');
-    expect(connectionCard).toContain("执行模式");
-    expect(primaryColumn.indexOf("Sub2API 连接")).toBeLessThan(
-      primaryColumn.indexOf("账号创建默认值"),
-    );
-    expect(primaryColumn.indexOf("账号创建默认值")).toBeLessThan(
-      primaryColumn.indexOf("QQBot 通知接入"),
-    );
-    expect(primaryColumn).not.toContain("菜单设置");
-    expect(primaryColumn).not.toContain("日志保留");
-    expect(secondaryColumn.indexOf("菜单设置")).toBeLessThan(secondaryColumn.indexOf("日志保留"));
-    expect(secondaryColumn).not.toContain("账号创建默认值");
-    expect(markup).toContain("默认并发");
-    expect(markup).toContain("默认优先级");
-    expect(markup).toContain("保存默认参数");
-    expect(markup).not.toContain("divide-border/70 divide-y rounded-lg border px-3");
-    expect(markup).not.toContain("first:pt-0 last:pb-0");
-    expect(markup).toContain("QQBot 通知接入");
-    expect(markup).not.toContain("告警生产者队列");
-    expect(markup).not.toContain("通知消费者队列");
-    expect(markup).not.toContain('data-testid="notification-queues"');
-    expect(markup).toContain('data-testid="notification-credentials"');
-    expect(markup).toContain("grid items-start gap-x-5 gap-y-4 sm:grid-cols-2");
-    expect(markup).toContain('data-testid="notification-destination"');
-    expect(markup).toContain("sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]");
-    expect(markup).toContain("border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4");
-    expect(markup).toContain('aria-label="App ID说明"');
-    expect(markup).toContain('aria-label="Client Secret说明"');
-    expect(markup).toContain('placeholder="输入 user_openid"');
-    expect(markup).toContain('aria-label="目标 ID说明"');
-    expect(markup).toContain("连接获取");
-    expect(markup).not.toContain("本控制台目前只负责发送通知");
-    expect(markup).toContain('value="configured-app"');
-    expect(markup).toContain('value="configured-target"');
-    expect(markup.match(/placeholder="已配置，留空则不修改"/g)).toHaveLength(2);
-    expect(markup).not.toContain("secret-value");
-    expect(markup).toContain("日志保留");
-    expect(markup).toContain("定时清理");
-    expect(markup).toContain('aria-label="日志保留天数"');
-    expect(markup).toContain('aria-label="日志保留天数说明"');
-    expect(markup).not.toContain("允许 1–3650 天");
-    expect(markup).toContain("立即按期限清理");
-    expect(markup.match(/flex items-start justify-between gap-3/g)).toHaveLength(3);
-    const cleanupLabel = markup.match(
-      /<label[^>]*for="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>定时清理<\/span>/,
-    );
-    expect(cleanupLabel?.[1]).toBeTruthy();
-    expect(markup).toContain(`id="${cleanupLabel?.[1]}"`);
-    expect(markup).not.toContain("运行环境");
-    expect(markup).not.toContain("目标盈利比例");
-    expect(markup).not.toContain("全局默认策略");
-    expect(markup).not.toContain("余额告警阈值");
-    expect(markup).not.toContain("数据库状态");
-    expect(markup).not.toContain("控制台初始化");
-    expect(markup).not.toContain("数据目录");
-    expect(markup).not.toContain("重新读取");
-    expect(markup).not.toContain("主动探测已关闭");
-    expect(markup).not.toContain("鉴权恢复配置");
-    expect(markup).not.toContain("保存授权记录");
+    const connectionTab = screen.getByRole("tab", { name: "连接设置" });
+    expect(connectionTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAccessibleName("连接设置");
+    expect(screen.getByText("Sub2API 连接")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "通知设置" }));
+    expect(screen.getByRole("tab", { name: "通知设置" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAccessibleName("通知设置");
+    expect(screen.getByText("QQBot 通知接入")).toBeInTheDocument();
+    expect(screen.queryByText("Sub2API 连接")).not.toBeInTheDocument();
+
+    connectionTab.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "账号设置" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "账号设置" })).toBeInTheDocument();
   });
 
   it("maps the persisted Sub2API address and timeout back into the form", () => {
@@ -265,7 +341,7 @@ describe("系统设置页面职责", () => {
 
     const markup = renderToStaticMarkup(
       <QueryClientProvider client={queryClient}>
-        <ConfigPage />
+        <ConfigPage activeTab="interface" />
       </QueryClientProvider>,
     );
 

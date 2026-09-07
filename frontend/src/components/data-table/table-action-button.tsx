@@ -8,6 +8,7 @@ type TableActionTone = "default" | "primary" | "danger";
 
 export function TableActionButton(props: {
   label: string;
+  ariaLabel?: string;
   children: ReactNode;
   onClick?: MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
@@ -22,7 +23,7 @@ export function TableActionButton(props: {
             type="button"
             variant="outline"
             size="icon-sm"
-            aria-label={props.label}
+            aria-label={props.ariaLabel ?? props.label}
             disabled={props.disabled}
             onClick={props.onClick}
             className={cn(

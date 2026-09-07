@@ -53,8 +53,13 @@ export function RawPricingSourceContent(props: RawPricingSourceContentProps) {
   }
 
   return (
-    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
       <div className="grid gap-2 lg:grid-cols-2">
+        {props.source.warning || props.error ? (
+          <p role="status" className="text-destructive text-xs lg:col-span-2">
+            {props.source.warning || props.error}
+          </p>
+        ) : null}
         <SourceMetadata label="来源 URL" value={props.source.source_url} />
         <SourceMetadata
           label="后端抓取时间"

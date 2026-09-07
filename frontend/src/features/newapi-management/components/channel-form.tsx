@@ -186,6 +186,7 @@ export function NewAPIChannelForm(props: Props) {
   }, [keyForm, props.sub2APIBaseURL, selectedVaultEntry, vaultOptions]);
 
   function clearModels() {
+    setModelError("");
     channelForm.setValue("models", [], { shouldDirty: true });
     setFetchedModels([]);
     setDraftModels([]);
@@ -231,7 +232,6 @@ export function NewAPIChannelForm(props: Props) {
   async function fetchModels() {
     const valid = await channelForm.trigger(["sub2api_group_id", "key_id", "base_url"]);
     if (!valid || !createdKey) return;
-    clearModels();
     setModelError("");
     setModelDialogOpen(true);
     try {
@@ -241,13 +241,21 @@ export function NewAPIChannelForm(props: Props) {
         base_url: selectedBaseURL,
       });
       setFetchedModels(models);
-      setDraftModels(models);
+      setDraftModels(
+        fetchedModels.length > 0 ? draftModels.filter((model) => models.includes(model)) : models,
+      );
+      channelForm.setValue(
+        "models",
+        channelForm.getValues("models").filter((model) => models.includes(model)),
+        { shouldValidate: true },
+      );
     } catch (error) {
       setModelError(requestErrorMessage(error));
     }
   }
 
   async function submit(values: NewAPIChannelValues) {
+    if (props.fetchingModels || modelError) return;
     try {
       await props.onSubmit({
         sub2api_group_id: values.sub2api_group_id,
@@ -292,7 +300,7 @@ export function NewAPIChannelForm(props: Props) {
                 newAPIGroupOptions={newAPIGroupOptions}
                 selectedGroups={field.value}
                 selectedModelCount={selectedModels.length}
-                modelError={channelForm.formState.errors.models?.message}
+                modelError={modelError || channelForm.formState.errors.models?.message}
                 baseURLError={channelForm.formState.errors.base_url?.message}
                 groupError={channelForm.formState.errors.newapi_groups?.message}
                 pending={props.pending}

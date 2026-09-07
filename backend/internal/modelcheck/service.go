@@ -80,20 +80,27 @@ type selectedAccount struct {
 }
 
 type preparedRun struct {
-	request  Request
-	accounts []selectedAccount
+	request            Request
+	accounts           []selectedAccount
+	claudeProfiles     map[string]claudeProfile
+	solProfile         solProfile
+	profileVersion     string
+	profileFingerprint string
 }
 
 type Service struct {
-	tasks          TaskStore
-	credentials    CredentialStore
-	accounts       AccountCatalog
-	keys           KeyRevealer
-	resolver       UpstreamAuthResolver
-	claudeProfiles map[string]claudeProfile
-	solProfile     solProfile
-	taskRunner     taskrunner.Runner
-	taskTimeout    time.Duration
+	tasks             TaskStore
+	credentials       CredentialStore
+	accounts          AccountCatalog
+	keys              KeyRevealer
+	resolver          UpstreamAuthResolver
+	profilesMu        sync.RWMutex
+	claudeProfiles    map[string]claudeProfile
+	solProfile        solProfile
+	configuration     configurationState
+	profileRepository configurationRepository
+	taskRunner        taskrunner.Runner
+	taskTimeout       time.Duration
 }
 
 func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, keys KeyRevealer) (*Service, error) {
@@ -108,10 +115,31 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 	if err != nil {
 		return nil, err
 	}
-	return &Service{
+	service := &Service{
 		tasks: tasks, credentials: credentials, accounts: accounts, keys: keys,
 		claudeProfiles: claudeProfiles, solProfile: sol, taskTimeout: 30 * time.Minute,
-	}, nil
+	}
+	service.configuration = newBuiltinConfiguration(claudeProfiles, sol)
+	if repository, ok := accounts.(configurationRepository); ok {
+		service.profileRepository = repository
+		raw, loadErr := repository.LoadModelCheckConfiguration(context.Background())
+		if loadErr != nil {
+			return nil, fmt.Errorf("模型检测画像配置读取失败: %w", loadErr)
+		}
+		if len(raw) > 0 {
+			state, decodeErr := decodeConfigurationState(raw)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			activeClaude, activeSol, profileErr := profilesFromDefinitions(state.Active.Payload)
+			if profileErr != nil {
+				return nil, fmt.Errorf("模型检测已发布画像无效: %w", profileErr)
+			}
+			service.configuration = state
+			service.claudeProfiles, service.solProfile = activeClaude, activeSol
+		}
+	}
+	return service, nil
 }
 
 func (s *Service) UseUpstreamAuthResolver(resolver UpstreamAuthResolver) {
@@ -121,6 +149,8 @@ func (s *Service) UseUpstreamAuthResolver(resolver UpstreamAuthResolver) {
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
 func (s *Service) Capabilities() Capabilities {
+	s.profilesMu.RLock()
+	defer s.profilesMu.RUnlock()
 	standards := make([]string, 0, len(s.claudeProfiles))
 	for standard := range s.claudeProfiles {
 		standards = append(standards, standard)
@@ -173,15 +203,16 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 		ID: id, Skill: "sub2api-model-check", Operation: "account-model-behavior-check",
 		Status: "queued", Progress: 0, Message: "账号模型检测已排队",
 		Result: map[string]any{
-			"account_ids": request.AccountIDs, "phase": "queued", "completed": 0,
-			"total": len(request.AccountIDs) * len(request.Models), "tests": []map[string]any{},
+			"account_ids": prepared.request.AccountIDs, "phase": "queued", "completed": 0,
+			"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 			"credentials_persisted": false,
 		}, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}
@@ -189,6 +220,12 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 }
 
 func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, error) {
+	s.profilesMu.RLock()
+	claudeProfiles := s.claudeProfiles
+	solProfile := s.solProfile
+	profileVersion := s.configuration.Active.ID
+	profileFingerprint := s.configuration.Active.Fingerprint
+	s.profilesMu.RUnlock()
 	request.AccountIDs = normalizedUnique(request.AccountIDs)
 	request.Models = normalizedUnique(request.Models)
 	if len(request.AccountIDs) == 0 || len(request.AccountIDs) > 20 {
@@ -206,7 +243,7 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		}
 	}
 	for _, model := range request.Models {
-		if utf8.RuneCountInString(model) > 256 || s.checkerForModel(model) == "" {
+		if utf8.RuneCountInString(model) > 256 || checkerForModel(model, claudeProfiles, solProfile) == "" {
 			return preparedRun{}, fmt.Errorf("模型 %s 暂无行为检测画像", model)
 		}
 	}
@@ -245,14 +282,24 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		}
 		selected = append(selected, directAccountSelection(row, detail))
 	}
-	return preparedRun{request: request, accounts: selected}, nil
+	return preparedRun{
+		request: request, accounts: selected,
+		claudeProfiles: claudeProfiles, solProfile: solProfile,
+		profileVersion: profileVersion, profileFingerprint: profileFingerprint,
+	}, nil
 }
 
 func (s *Service) checkerForModel(model string) string {
-	if inferClaudeStandard(model, s.claudeProfiles) != "" {
+	s.profilesMu.RLock()
+	defer s.profilesMu.RUnlock()
+	return checkerForModel(model, s.claudeProfiles, s.solProfile)
+}
+
+func checkerForModel(model string, claudeProfiles map[string]claudeProfile, solProfile solProfile) string {
+	if inferClaudeStandard(model, claudeProfiles) != "" {
 		return "claude"
 	}
-	for _, candidate := range s.solProfile.Models {
+	for _, candidate := range solProfile.Models {
 		if model == candidate {
 			return "sol"
 		}
@@ -267,6 +314,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	task.Result = map[string]any{
 		"account_ids": prepared.request.AccountIDs, "phase": "credentials", "completed": 0,
 		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+		"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 		"credentials_persisted": false,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -294,6 +342,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	task.Result = map[string]any{
 		"account_ids": prepared.request.AccountIDs, "phase": "testing", "completed": 0,
 		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+		"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 		"credentials_persisted": credentialsPersisted,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -322,6 +371,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		go func() {
 			defer workerGroup.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				current := combinations[index]
 				credential := credentials[current.account.ID]
 				input := targetRequest{
@@ -333,10 +385,10 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 				var runErr error
 				if credential.err != nil {
 					runErr = credential.err
-				} else if s.checkerForModel(current.model) == "claude" {
-					result, runErr = runClaudeCheck(ctx, directBundleSender{client: client, credential: credential.value}, s.claudeProfiles, input)
+				} else if checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
+					result, runErr = runClaudeCheck(ctx, directBundleSender{client: client, credential: credential.value}, prepared.claudeProfiles, input)
 				} else {
-					result, runErr = runSolCheck(ctx, directBundleSender{client: client, credential: credential.value}, s.solProfile, input)
+					result, runErr = runSolCheck(ctx, directBundleSender{client: client, credential: credential.value}, prepared.solProfile, input)
 				}
 				if runErr != nil {
 					result = map[string]any{
@@ -375,6 +427,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		task.Result = map[string]any{
 			"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
 			"phase": "testing", "tests": completedResults,
+			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 			"credentials_persisted": credentialsPersisted,
 		}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -396,6 +449,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		"accounts":    len(prepared.accounts), "models": len(prepared.request.Models),
 		"combinations": len(combinations), "summary": summary, "tests": results,
 		"phase": "completed", "completed": len(combinations), "total": len(combinations),
+		"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 		"remote_write": false, "credentials_persisted": credentialsPersisted,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -403,7 +457,10 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) acquirePreparedAccounts(ctx context.Context, expected []selectedAccount) (context.Context, func() error, error) {
+func (s *Service) acquirePreparedAccounts(
+	ctx context.Context,
+	expected []selectedAccount,
+) (context.Context, func() error, error) {
 	resources := make([]string, 0, len(expected)*2)
 	for _, account := range expected {
 		resources = append(resources, mutationguard.Account(account.ID))
@@ -440,10 +497,14 @@ func (s *Service) acquirePreparedAccounts(ctx context.Context, expected []select
 }
 
 func (s *Service) finishFailed(ctx context.Context, task taskstore.Task, accountIDs []string, err error) {
+	profileVersion := task.Result["profile_version"]
+	profileFingerprint := task.Result["profile_fingerprint"]
 	task.Status, task.Progress = "failed", 100
 	task.Message = "账号模型检测失败：" + err.Error()
 	task.Result = map[string]any{
-		"account_ids": accountIDs, "error": err.Error(), "credentials_persisted": false,
+		"account_ids": accountIDs,
+		"error":       err.Error(), "credentials_persisted": false,
+		"profile_version": profileVersion, "profile_fingerprint": profileFingerprint,
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.MarkCancelled(ctx, &task, "账号模型检测已取消")
@@ -465,6 +526,9 @@ func (s *Service) resolveCredentials(ctx context.Context, accounts []selectedAcc
 		go func() {
 			defer workers.Done()
 			for account := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				value, err := s.resolveCredential(ctx, account)
 				resultsMu.Lock()
 				results[account.ID] = credentialResolution{value: value, err: err}
@@ -472,10 +536,7 @@ func (s *Service) resolveCredentials(ctx context.Context, accounts []selectedAcc
 			}
 		}()
 	}
-	for _, account := range accounts {
-		jobs <- account
-	}
-	close(jobs)
+	_ = taskrunner.Feed(ctx, jobs, accounts)
 	workers.Wait()
 	return results
 }

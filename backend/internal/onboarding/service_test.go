@@ -123,6 +123,12 @@ func (runner *retainedTaskRunner) Go(run func(context.Context)) error {
 	return nil
 }
 
+func (runner *retainedTaskRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *retainedTaskRunner) CancelTask(string) bool { return false }
+
 func (keys *probeKeys) CreateKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error) {
 	keys.creates++
 	return upstreamsync.CreatedKey{KeyID: "91", Name: "console-probe", GroupID: "6", Secret: "probe-secret"}, nil
@@ -427,6 +433,77 @@ func TestOnboardCreatesAccountWithSynchronizedModelWhitelist(t *testing.T) {
 	knownModels, _ := detail.Metadata["known_models"].([]any)
 	if len(knownModels) != 2 || knownModels[0] != "gpt-5.1-codex" || knownModels[1] != "gpt-5.2" {
 		t.Fatalf("known models=%#v", detail.Metadata["known_models"])
+	}
+}
+
+func TestOnboardAppliesAccountCreationSettingsForTheSelectedLocalGroup(t *testing.T) {
+	var previewCalls int
+	var createdBody map[string]any
+	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts":
+			_, _ = writer.Write([]byte(`{"data":{"items":[],"total":0}}`))
+		case isModelPreviewRequest(request):
+			previewCalls++
+			writeModelPreviewResponse(writer)
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v1/admin/accounts":
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&createdBody); err != nil {
+				t.Fatal(err)
+			}
+			createdBody["id"] = json.Number("77")
+			_ = json.NewEncoder(writer).Encode(map[string]any{"data": createdBody})
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer admin.Close()
+
+	repository, private, databasePath := onboardingFixture(t, admin.URL)
+	loadFactor := "18.5"
+	_, err := private.ConfigureAccountCreationSettings(context.Background(), configstore.AccountCreationSettings{
+		Default: configstore.AccountCreationPolicy{
+			Models: []string{}, Concurrency: 10, Priority: 1, PoolModeRetryCount: 3,
+			PoolModeRetryStatusCodes: []int{401, 403, 429},
+		},
+		Groups: []configstore.AccountCreationGroupSettings{{
+			GroupID: "3",
+			AccountCreationPolicy: configstore.AccountCreationPolicy{
+				Models: []string{"gpt-5.2", "gpt-5.1-codex"}, Concurrency: 36,
+				LoadFactor: &loadFactor, Priority: 4, PoolMode: true, PoolModeRetryCount: 2,
+				PoolModeRetryStatusCodes: []int{429, 503},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).Onboard(
+		context.Background(),
+		Request{
+			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
+			UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previewCalls != 0 {
+		t.Fatalf("configured models must skip automatic preview: calls=%d", previewCalls)
+	}
+	credentials, _ := createdBody["credentials"].(map[string]any)
+	mapping, _ := credentials["model_mapping"].(map[string]any)
+	codes, _ := credentials["pool_mode_retry_status_codes"].([]any)
+	if len(mapping) != 2 || mapping["gpt-5.1-codex"] != "gpt-5.1-codex" ||
+		createdBody["concurrency"] != json.Number("36") || createdBody["priority"] != json.Number("4") ||
+		createdBody["load_factor"] != json.Number("18.5") || credentials["pool_mode"] != true ||
+		credentials["pool_mode_retry_count"] != json.Number("2") || len(codes) != 2 {
+		t.Fatalf("created account settings not applied: body=%#v", createdBody)
+	}
+	if result["model_count"] != 2 || result["pool_mode"] != true {
+		t.Fatalf("result=%#v", result)
 	}
 }
 
@@ -765,22 +842,20 @@ func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
 	}
 }
 
-func TestAccountPlatformDerivesOpenCodeFromCompositeCatalogGroup(t *testing.T) {
+func TestAccountPlatformDoesNotDeriveProtocolFromOpenCodeGroupName(t *testing.T) {
 	composite := "composite"
-	resolved, err := accountPlatform(
+	_, err := accountPlatform(
 		Request{},
 		business.OnboardingCandidate{GroupName: "OPENCODE", Platform: &composite},
 		[]business.LocalOnboardingGroup{{Name: "国产-平价", Platform: &composite}},
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved != "opencode" {
-		t.Fatalf("resolved platform = %q, want opencode", resolved)
+	if err == nil || !strings.Contains(err.Error(), "无法确定具体账号协议") {
+		t.Fatalf("err=%v", err)
 	}
 }
 
 func TestOnboardResumesLegacyCompositeIntentWithConcretePlatformAndExistingKey(t *testing.T) {
+	openAI := "openai"
 	var previewCalls, accountPosts int
 	admin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -793,8 +868,8 @@ func TestOnboardResumesLegacyCompositeIntentWithConcretePlatformAndExistingKey(t
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			if body["platform"] != "opencode" {
-				t.Errorf("preview platform = %#v, want opencode", body["platform"])
+			if body["platform"] != "openai" {
+				t.Errorf("preview platform = %#v, want openai", body["platform"])
 				writer.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -835,7 +910,8 @@ func TestOnboardResumesLegacyCompositeIntentWithConcretePlatformAndExistingKey(t
 	service := New(repository, private, keys, nil)
 	request := Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
-		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		UpstreamGroupID: "6", Platform: &openAI, PlatformPresent: true,
+		Schedulable: false, Actor: "operator",
 	}
 	validated, err := service.validate(context.Background(), request)
 	if err != nil {

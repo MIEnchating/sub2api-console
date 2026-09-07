@@ -30,6 +30,18 @@ type captchaStore struct {
 	savedVault []configstore.VaultEntry
 }
 
+type captchaCommitBlockingStore struct {
+	*captchaStore
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *captchaCommitBlockingStore) SaveAuthRecord(ctx context.Context, record configstore.AuthRecord, fields map[string]bool) error {
+	close(s.started)
+	<-s.release
+	return s.captchaStore.SaveAuthRecord(ctx, record, fields)
+}
+
 func (s *captchaStore) AuthRecord(context.Context, string) (*configstore.AuthRecord, error) {
 	if s.record == nil {
 		return nil, nil
@@ -71,6 +83,22 @@ func (v *captchaVerifier) Verify(_ context.Context, record configstore.AuthRecor
 type captchaCatalog struct {
 	read int
 	err  error
+}
+
+type captchaBlockingTransport struct {
+	base    http.RoundTripper
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (transport *captchaBlockingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path != "/api/v1/auth/login" {
+		return transport.base.RoundTrip(request)
+	}
+	close(transport.started)
+	<-request.Context().Done()
+	close(transport.stopped)
+	return nil, request.Context().Err()
 }
 
 type captchaLeaseRepository struct {
@@ -248,6 +276,120 @@ func TestCaptchaSubmitDoesNotCommitWhenCatalogReadbackFails(t *testing.T) {
 	}
 	if len(store.saved) != 0 {
 		t.Fatalf("credentials were committed before complete readback: %#v", store.saved)
+	}
+}
+
+func TestCaptchaCancelStopsInflightLoginBeforeCredentialCommit(t *testing.T) {
+	publicKey := captchaPublicKey(t)
+	loginStarted := make(chan struct{})
+	loginStopped := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/settings/public":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"turnstile_enabled":false}}`)
+		case "/api/v1/auth/credential-key":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"algorithm":"RSA-OAEP-256+A256GCM","key_id":"key-1","public_key":"`+publicKey+`","server_time":1724457600}}`)
+		case "/api/v1/auth/captcha":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"captcha_id":"captcha-1","image_data":"`+base64.StdEncoding.EncodeToString([]byte("png-test"))+`"}}`)
+		case "/api/v1/auth/login":
+			t.Fatal("login request bypassed the blocking transport")
+		}
+	}))
+	defer server.Close()
+	username, password := "operator@example.test", "secret"
+	store := &captchaStore{
+		record: &configstore.AuthRecord{Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", Headers: map[string]string{}, Cookies: map[string]string{}},
+		entry:  &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password},
+	}
+	client := *server.Client()
+	client.Transport = &captchaBlockingTransport{
+		base: client.Transport, started: loginStarted, stopped: loginStopped,
+	}
+	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, &client)
+	parentTaskID := "parent-task"
+	challenge, err := manager.Prepare(context.Background(), *store.record, "selected", &parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitDone := make(chan error, 1)
+	go func() {
+		_, submitErr := manager.Submit(context.Background(), challenge.ChallengeID, "AB12")
+		submitDone <- submitErr
+	}()
+	select {
+	case <-loginStarted:
+	case <-time.After(time.Second):
+		t.Fatal("captcha login did not start")
+	}
+	cancellation := manager.Cancel(challenge.ChallengeID)
+	if cancellation == nil || cancellation.ParentTaskID == nil || *cancellation.ParentTaskID != parentTaskID {
+		t.Fatalf("cancellation=%#v", cancellation)
+	}
+	if cancellation.CredentialsPersisted == nil || *cancellation.CredentialsPersisted {
+		t.Fatalf("pre-commit cancellation persistence=%v, want false", cancellation.CredentialsPersisted)
+	}
+	select {
+	case <-loginStopped:
+	case <-time.After(time.Second):
+		t.Fatal("cancelling captcha did not stop the upstream request")
+	}
+	if submitErr := <-submitDone; !errors.Is(submitErr, context.Canceled) {
+		t.Fatalf("Submit error=%v, want context cancellation", submitErr)
+	}
+	if len(store.saved) != 0 {
+		t.Fatalf("cancelled captcha committed credentials: %#v", store.saved)
+	}
+}
+
+func TestCaptchaCancelDuringCredentialCommitReportsPersistenceUnknown(t *testing.T) {
+	publicKey := captchaPublicKey(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v1/settings/public":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"turnstile_enabled":false}}`)
+		case "/api/v1/auth/credential-key":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"algorithm":"RSA-OAEP-256+A256GCM","key_id":"key-1","public_key":"`+publicKey+`","server_time":1724457600}}`)
+		case "/api/v1/auth/captcha":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"captcha_id":"captcha-1","image_data":"`+base64.StdEncoding.EncodeToString([]byte("png-test"))+`"}}`)
+		case "/api/v1/auth/login":
+			writeCaptchaJSON(writer, `{"code":0,"data":{"access_token":"fresh-token"}}`)
+		default:
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	username, password := "operator@example.test", "secret"
+	baseStore := &captchaStore{
+		record: &configstore.AuthRecord{Host: "api.example.test", BaseURL: server.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", Headers: map[string]string{}, Cookies: map[string]string{}},
+		entry:  &configstore.VaultEntry{Entry: "selected", Username: &username, Password: &password, Headers: map[string]string{}},
+	}
+	store := &captchaCommitBlockingStore{captchaStore: baseStore, started: make(chan struct{}), release: make(chan struct{})}
+	manager := NewCaptchaManager(store, &captchaVerifier{}, &captchaCatalog{}, server.Client())
+	parentTaskID := "parent-task"
+	challenge, err := manager.Prepare(context.Background(), *baseStore.record, "selected", &parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	submitDone := make(chan error, 1)
+	go func() {
+		_, submitErr := manager.Submit(context.Background(), challenge.ChallengeID, "AB12")
+		submitDone <- submitErr
+	}()
+	select {
+	case <-store.started:
+	case <-time.After(time.Second):
+		t.Fatal("credential commit did not start")
+	}
+	cancellation := manager.Cancel(challenge.ChallengeID)
+	if cancellation == nil || cancellation.CredentialsPersisted != nil {
+		t.Fatalf("commit cancellation=%#v, want unknown persistence", cancellation)
+	}
+	close(store.release)
+	if submitErr := <-submitDone; !errors.Is(submitErr, context.Canceled) {
+		t.Fatalf("Submit error=%v, want context cancellation", submitErr)
+	}
+	if len(baseStore.saved) != 1 {
+		t.Fatalf("commit boundary did not model a completed late write: %#v", baseStore.saved)
 	}
 }
 

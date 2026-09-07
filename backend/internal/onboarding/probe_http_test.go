@@ -2,6 +2,7 @@ package onboarding
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,5 +68,30 @@ func TestRunGatewayProbeRejectsInvalidSuccessfulResponse(t *testing.T) {
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
 		})
+	}
+}
+
+func TestRunGatewayProbeUsesStreamingAndConsumesSSE(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("accept=%q", request.Header.Get("Accept"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream=%#v body=%#v", body["stream"], body)
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-5.2\"}}\n\n"))
+		_, _ = writer.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n"))
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	result, err := runGatewayProbe(context.Background(), server.URL, "probe-secret", "gpt-5.2", nil, "stream")
+	if err != nil || result.Status != "passed" || result.ActualModel != "gpt-5.2" || result.ResponseText != "ok" {
+		t.Fatalf("result=%#v err=%v", result, err)
 	}
 }

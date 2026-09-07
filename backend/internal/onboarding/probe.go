@@ -1,6 +1,7 @@
 package onboarding
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -36,6 +37,7 @@ type ProbeResult struct {
 	Message      string `json:"message"`
 	RequestModel string `json:"request_model"`
 	ActualModel  string `json:"actual_model"`
+	ResponseText string `json:"response_text,omitempty"`
 	LatencyMS    int64  `json:"latency_ms"`
 	HTTPStatus   int    `json:"http_status"`
 	TemporaryKey bool   `json:"temporary_key"`
@@ -107,7 +109,7 @@ func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]stri
 	return models, nil
 }
 
-func (s *Service) Probe(ctx context.Context, host, groupID, model string) (ProbeResult, error) {
+func (s *Service) Probe(ctx context.Context, host, groupID, model string, modes ...string) (ProbeResult, error) {
 	model = strings.TrimSpace(model)
 	if model == "" || len(model) > 255 {
 		return ProbeResult{}, errors.New("请选择有效的测试模型")
@@ -126,7 +128,7 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string) (Probe
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	result, requestErr := runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform)
+	result, requestErr := runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
 	result.TemporaryKey = credential.temporary
 	cleanupErr := s.cleanupProbeCredential(credential)
 	if requestErr != nil {
@@ -456,20 +458,27 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 	return models, nil
 }
 
-func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platform *string) (ProbeResult, error) {
+func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platform *string, modes ...string) (ProbeResult, error) {
 	started := time.Now()
+	stream := probeStreamMode(modes...)
 	path := "/v1/responses"
-	body := map[string]any{"model": model, "input": "hi", "max_output_tokens": 16, "stream": false}
+	body := map[string]any{"model": model, "input": "hi", "max_output_tokens": 16, "stream": stream}
 	headers := map[string]string{}
+	if stream {
+		headers["Accept"] = "text/event-stream"
+	}
 	if platform != nil {
 		switch strings.ToLower(strings.TrimSpace(*platform)) {
 		case "anthropic", "claude":
 			path = "/v1/messages"
-			body = map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": "hi"}}}
+			body = map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": "hi"}}, "stream": stream}
 			headers["anthropic-version"] = "2023-06-01"
 		case "gemini", "google":
 			path = "/v1beta/models/" + url.PathEscape(model) + ":generateContent"
 			body = map[string]any{"contents": []map[string]any{{"role": "user", "parts": []map[string]string{{"text": "hi"}}}}}
+			if stream {
+				path = "/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse"
+			}
 		}
 	}
 	raw, status, err := gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
@@ -484,12 +493,16 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 		result.Message = err.Error()
 		return result, err
 	}
-	payload, err := decodeGatewayJSON(raw, "上游探活接口")
+	payload, actualModel, responseText, err := decodeGatewayProbeResponse(raw, stream)
 	if err != nil {
 		result.Message = err.Error()
 		return result, err
 	}
-	result.ActualModel = responseModelFromPayload(payload)
+	if actualModel == "" {
+		actualModel = responseModelFromPayload(payload)
+	}
+	result.ActualModel = actualModel
+	result.ResponseText = responseText
 	if err := gatewayBusinessError(payload); err != nil {
 		result.Message = err.Error()
 		return result, err
@@ -502,6 +515,140 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 	result.Status = "passed"
 	result.Message = "上游已返回成功响应"
 	return result, nil
+}
+
+func probeStreamMode(modes ...string) bool {
+	if len(modes) == 0 || strings.TrimSpace(modes[0]) == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(modes[0]), "stream")
+}
+
+func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, error) {
+	if !stream {
+		payload, err := decodeGatewayJSON(raw, "上游探活接口")
+		return payload, "", probeResponseText(payload), err
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(trimmed, "data:") && !strings.Contains(trimmed, "\ndata:") && !strings.Contains(trimmed, "\nevent:") {
+		payload, err := decodeGatewayJSON(raw, "上游探活接口")
+		return payload, responseModelFromPayload(payload), probeResponseText(payload), err
+	}
+
+	var lastPayload any
+	actualModel := ""
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(data))
+		decoder.UseNumber()
+		var event any
+		if err := decoder.Decode(&event); err != nil {
+			continue
+		}
+		lastPayload = event
+		if actualModel == "" {
+			actualModel = responseModelFromPayload(event)
+		}
+		if err := gatewayBusinessError(event); err != nil {
+			return event, actualModel, probeResponseText(event), err
+		}
+		if eventHasProbeContent(event) {
+			return event, actualModel, probeResponseText(event), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, actualModel, "", errors.New("上游探活流读取失败")
+	}
+	if lastPayload != nil {
+		return lastPayload, actualModel, probeResponseText(lastPayload), errors.New("上游探活流未返回有效文本")
+	}
+	// A few compatible gateways ignore stream=true and still return one JSON object.
+	payload, err := decodeGatewayJSON(raw, "上游探活接口")
+	return payload, responseModelFromPayload(payload), probeResponseText(payload), err
+}
+
+func probeResponseText(value any) string {
+	var find func(any) string
+	find = func(item any) string {
+		switch typed := item.(type) {
+		case string:
+			text := strings.TrimSpace(typed)
+			if text == "" {
+				return ""
+			}
+			if len([]rune(text)) > 2000 {
+				return string([]rune(text)[:2000])
+			}
+			return text
+		case []any:
+			for _, child := range typed {
+				if text := find(child); text != "" {
+					return text
+				}
+			}
+		case map[string]any:
+			for _, key := range []string{"output_text", "text", "delta", "content", "parts", "output", "choices", "candidates", "message", "response"} {
+				if child, present := typed[key]; present {
+					if text := find(child); text != "" {
+						return text
+					}
+				}
+			}
+		}
+		return ""
+	}
+	return find(value)
+}
+
+func eventHasProbeContent(value any) bool {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	eventType := strings.ToLower(strings.TrimSpace(fmt.Sprint(object["type"])))
+	if strings.Contains(eventType, "delta") || strings.Contains(eventType, "content_block") {
+		return eventHasProbeText(object)
+	}
+	for _, key := range []string{"choices", "output", "content", "candidates"} {
+		if child, present := object[key]; present && eventHasProbeText(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func eventHasProbeText(value any) bool {
+	switch item := value.(type) {
+	case string:
+		return strings.TrimSpace(item) != ""
+	case []any:
+		for _, child := range item {
+			if eventHasProbeText(child) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, key := range []string{"delta", "text", "output_text", "content", "token", "parts"} {
+			if child, present := item[key]; present && eventHasProbeText(child) {
+				return true
+			}
+		}
+		for _, key := range []string{"choices", "output", "content", "candidates"} {
+			if child, present := item[key]; present && eventHasProbeText(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func gatewayRequest(ctx context.Context, baseURL, secret, method, path string, payload map[string]any, headers map[string]string) ([]byte, int, error) {
@@ -651,7 +798,7 @@ func gatewaySuccessEvidence(payload any) bool {
 	if !ok {
 		return false
 	}
-	for _, key := range []string{"id", "object", "model", "output", "choices", "content", "candidates", "data", "response", "result"} {
+	for _, key := range []string{"id", "object", "model", "output", "choices", "content", "candidates", "data", "response", "result", "delta", "text", "output_text"} {
 		if value, present := object[key]; present && value != nil {
 			return true
 		}

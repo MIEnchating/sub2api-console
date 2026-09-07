@@ -44,6 +44,8 @@ type ManualPriorityRelease struct {
 	LoadFactor       *string
 	Concurrency      int64
 	Schedulable      *bool
+	Paused           *bool
+	PausedReason     *string
 }
 
 func (s *Store) ManualPriorityConfig(ctx context.Context) (ManualPriorityConfig, error) {
@@ -110,10 +112,11 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		return ManualPriorityAssignment{}, errors.New("并发上限必须是 1 到 10000000 之间的整数")
 	}
 	var name string
-	var previousPriority, previousConcurrency sql.NullInt64
-	var previousLoadFactor sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT name,priority,load_factor,concurrency FROM accounts WHERE id=?`, accountID).
-		Scan(&name, &previousPriority, &previousLoadFactor, &previousConcurrency); err != nil {
+	var previousPriority, previousConcurrency, previousSchedulable, previousPaused sql.NullInt64
+	var previousLoadFactor, previousPausedReason sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT name,priority,load_factor,concurrency,schedulable,paused,paused_reason
+		FROM accounts WHERE id=?`, accountID).Scan(&name, &previousPriority, &previousLoadFactor,
+		&previousConcurrency, &previousSchedulable, &previousPaused, &previousPausedReason); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ManualPriorityAssignment{}, errors.New("账号不存在")
 		}
@@ -134,10 +137,12 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO manual_priority_accounts(
-		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,sync_balance_multiplier,created_at,updated_at
-	) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
+		account_id,priority,previous_priority,previous_load_factor,previous_concurrency,previous_schedulable,
+		previous_paused,previous_paused_reason,sync_balance_multiplier,created_at,updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET
 		priority=excluded.priority,sync_balance_multiplier=excluded.sync_balance_multiplier,updated_at=excluded.updated_at`,
 		accountID, priority, nullableInt64(previousPriority), nullString(previousLoadFactor), nullableInt64(previousConcurrency),
+		nullableInt64(previousSchedulable), nullableInt64(previousPaused), nullString(previousPausedReason),
 		boolDatabaseValue(syncBalanceMultiplier), now, now); err != nil {
 		return ManualPriorityAssignment{}, err
 	}
@@ -178,7 +183,7 @@ func (s *Store) RevertManualPriorityReservation(ctx context.Context, accountID, 
 	var name string
 	var schedulable, previousPriority, previousConcurrency sql.NullInt64
 	var previousLoadFactor sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT a.name,a.schedulable,m.previous_priority,m.previous_load_factor,m.previous_concurrency
+	if err := tx.QueryRowContext(ctx, `SELECT a.name,m.previous_schedulable,m.previous_priority,m.previous_load_factor,m.previous_concurrency
 		FROM manual_priority_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.account_id=?`, accountID).
 		Scan(&name, &schedulable, &previousPriority, &previousLoadFactor, &previousConcurrency); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -216,14 +221,14 @@ func (s *Store) ManualPriorityRelease(ctx context.Context, accountID string) (Ma
 		return ManualPriorityRelease{}, errors.New("账号必须使用有效的稳定 ID")
 	}
 	var result ManualPriorityRelease
-	var previousPriority, previousConcurrency, schedulable sql.NullInt64
-	var previousLoadFactor sql.NullString
+	var previousPriority, previousConcurrency, schedulable, paused sql.NullInt64
+	var previousLoadFactor, pausedReason sql.NullString
 	result.AccountID = accountID
 	if err := s.db.QueryRowContext(ctx, `SELECT a.name,m.priority,m.previous_priority,m.previous_load_factor,
-		m.previous_concurrency,a.schedulable FROM manual_priority_accounts m
+		m.previous_concurrency,m.previous_schedulable,m.previous_paused,m.previous_paused_reason FROM manual_priority_accounts m
 		JOIN accounts a ON a.id=m.account_id WHERE m.account_id=?`, accountID).Scan(
 		&result.AccountName, &result.AssignedPriority, &previousPriority, &previousLoadFactor,
-		&previousConcurrency, &schedulable,
+		&previousConcurrency, &schedulable, &paused, &pausedReason,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ManualPriorityRelease{}, errors.New("账号当前不在人工优先位")
@@ -240,6 +245,8 @@ func (s *Store) ManualPriorityRelease(ctx context.Context, accountID string) (Ma
 	result.LoadFactor = nullString(previousLoadFactor)
 	result.Concurrency = previousConcurrency.Int64
 	result.Schedulable = strictNullBool(schedulable)
+	result.Paused = strictNullBool(paused)
+	result.PausedReason = nullString(pausedReason)
 	return result, nil
 }
 
@@ -279,9 +286,11 @@ func (s *Store) CommitManualPriorityRelease(
 	if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected != 1 {
 		return errors.New("人工优先位在远端确认期间已发生变化，请重新操作")
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET priority=?,load_factor=?,concurrency=?,routing_state=NULL,
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=COALESCE(?,schedulable),priority=?,load_factor=?,concurrency=?,
+		paused=COALESCE(?,paused),paused_reason=?,routing_state=NULL,
 		target_priority=NULL,target_load_factor=NULL,target_schedulable=NULL,target_concurrency=NULL,updated_at=? WHERE id=?`,
-		release.Priority, release.LoadFactor, release.Concurrency, now, release.AccountID); err != nil {
+		boolDatabase(release.Schedulable), release.Priority, release.LoadFactor, release.Concurrency,
+		boolDatabase(release.Paused), release.PausedReason, now, release.AccountID); err != nil {
 		return err
 	}
 	if result, err := tx.ExecContext(ctx, `UPDATE policy_nodes SET updated_at=? WHERE policy_key='control-plane'`, now); err != nil {

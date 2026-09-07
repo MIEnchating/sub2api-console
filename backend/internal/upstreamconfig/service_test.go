@@ -658,7 +658,7 @@ func TestCreateVerifiesBeforeBothDatabaseWritesAndReturnsRedactedConfiguration(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if verifier.calls != 1 || result.Host != "api.example" || !result.HasAccessToken || !result.HasRefreshToken || result.Headers["X-Site"] != "one" {
+	if verifier.calls != 1 || result.Host != "api.example" || !result.HasAccessToken || !result.HasRefreshToken || len(result.Headers) != 0 || len(result.HeaderNames) != 1 || result.HeaderNames[0] != "X-Site" {
 		t.Fatalf("unexpected result: %#v calls=%d", result, verifier.calls)
 	}
 	stored, err := private.AuthRecord(context.Background(), "api.example")

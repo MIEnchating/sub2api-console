@@ -501,6 +501,7 @@ func (r *Reader) readRawKeys(ctx context.Context, record configstore.AuthRecord)
 	}
 	result := []map[string]any{}
 	seen := map[string]struct{}{}
+	var declaredTotal *int
 	for page := 1; page <= maximumPages; page++ {
 		query := url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(pageSize)}}
 		payload, err := r.getFallback(ctx, record, paths, query)
@@ -515,8 +516,15 @@ func (r *Reader) readRawKeys(ctx context.Context, record configstore.AuthRecord)
 		if err != nil {
 			return nil, err
 		}
-		if len(rows) == 0 {
-			break
+		total, totalPresent, err := pageTotal(payload)
+		if err != nil {
+			return nil, err
+		}
+		if totalPresent {
+			if declaredTotal != nil && *declaredTotal != total {
+				return nil, errors.New("上游 Key 目录分页总数在读取期间发生变化")
+			}
+			declaredTotal = &total
 		}
 		newIDs := 0
 		for _, row := range rows {
@@ -531,18 +539,22 @@ func (r *Reader) readRawKeys(ctx context.Context, record configstore.AuthRecord)
 			newIDs++
 			result = append(result, cloneObject(row))
 		}
-		if page > 1 && newIDs == 0 {
-			break
+		if declaredTotal != nil {
+			if len(result) == *declaredTotal {
+				return result, nil
+			}
+			if len(result) > *declaredTotal {
+				return nil, errors.New("上游 Key 目录项目数超过声明总数")
+			}
+			if newIDs == 0 {
+				return nil, fmt.Errorf("上游 Key 目录分页不完整：已读取 %d/%d 项", len(result), *declaredTotal)
+			}
 		}
-		total, totalPresent, err := pageTotal(payload)
-		if err != nil {
-			return nil, err
-		}
-		if totalPresent && page*pageSize >= total {
-			break
+		if len(rows) == 0 || (page > 1 && newIDs == 0) {
+			return result, nil
 		}
 	}
-	return result, nil
+	return nil, errors.New("上游 Key 目录分页超过安全上限")
 }
 
 func (r *Reader) getFallback(ctx context.Context, record configstore.AuthRecord, paths []string, query url.Values) (any, error) {
@@ -959,7 +971,7 @@ func keyItems(payload any) ([]map[string]any, error) {
 		}
 		return objectRows(array, "上游 Key 目录")
 	}
-	return []map[string]any{}, nil
+	return nil, errors.New("上游 Key 目录返回对象缺少 items")
 }
 
 func objectRows(values []any, label string) ([]map[string]any, error) {

@@ -53,7 +53,7 @@ function SheetContent({
   side = "right",
   showCloseButton = true,
   ...props
-}: Omit<SheetPrimitive.Popup.Props, "initialFocus"> & {
+}: SheetPrimitive.Popup.Props & {
   side?: "top" | "right" | "bottom" | "left";
   showCloseButton?: boolean;
 }) {
@@ -68,20 +68,20 @@ function SheetContent({
       <SheetPrimitive.Popup
         data-slot="sheet-content"
         data-side={side}
+        data-close-button={showCloseButton}
         className={cn(
-          "bg-background text-foreground fixed z-50 flex flex-col gap-4 overflow-hidden bg-clip-padding text-sm shadow-none transition duration-200 ease-in-out data-ending-style:opacity-0 data-starting-style:opacity-0",
+          "group/sheet bg-background text-foreground fixed z-50 flex min-w-0 flex-col gap-4 overflow-hidden bg-clip-padding text-sm shadow-none transition duration-200 ease-in-out data-ending-style:opacity-0 data-starting-style:opacity-0",
           side === "right" &&
             "inset-y-0 right-0 h-full w-3/4 border-l data-ending-style:translate-x-[2.5rem] data-starting-style:translate-x-[2.5rem] sm:max-w-sm",
           side === "left" &&
             "inset-y-0 left-0 h-full w-3/4 border-r data-ending-style:translate-x-[-2.5rem] data-starting-style:translate-x-[-2.5rem] sm:max-w-sm",
           side === "top" &&
-            "inset-x-0 top-0 h-auto border-b data-ending-style:translate-y-[-2.5rem] data-starting-style:translate-y-[-2.5rem]",
+            "inset-x-0 top-0 h-auto max-h-dvh overflow-y-auto overscroll-contain border-b data-ending-style:translate-y-[-2.5rem] data-starting-style:translate-y-[-2.5rem]",
           side === "bottom" &&
-            "inset-x-0 bottom-0 h-auto border-t data-ending-style:translate-y-[2.5rem] data-starting-style:translate-y-[2.5rem]",
+            "inset-x-0 bottom-0 h-auto max-h-dvh overflow-y-auto overscroll-contain border-t data-ending-style:translate-y-[2.5rem] data-starting-style:translate-y-[2.5rem]",
           className,
         )}
         {...props}
-        initialFocus={false}
       >
         {children}
         {showCloseButton && (
@@ -102,7 +102,10 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-header"
-      className={cn("flex flex-col gap-0.5 p-4", className)}
+      className={cn(
+        "flex min-w-0 shrink-0 flex-col gap-0.5 p-4 group-data-[close-button=true]/sheet:pr-12",
+        className,
+      )}
       {...props}
     />
   );
@@ -112,7 +115,10 @@ function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
   return (
     <SheetPrimitive.Title
       data-slot="sheet-title"
-      className={cn("text-foreground text-base font-medium", className)}
+      className={cn(
+        "text-foreground min-w-0 text-base font-medium [overflow-wrap:anywhere]",
+        className,
+      )}
       {...props}
     />
   );
@@ -122,7 +128,7 @@ function SheetDescription({ className, ...props }: SheetPrimitive.Description.Pr
   return (
     <SheetPrimitive.Description
       data-slot="sheet-description"
-      className={cn("text-muted-foreground text-sm", className)}
+      className={cn("text-muted-foreground min-w-0 text-sm [overflow-wrap:anywhere]", className)}
       {...props}
     />
   );

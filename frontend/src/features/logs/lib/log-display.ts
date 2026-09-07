@@ -75,6 +75,7 @@ const titleLabels: Record<string, string> = {
   "notifications.test": "通知测试",
   "account.control": "账号调度控制",
   "account.test_model": "更新探测模型",
+  "account.test_models": "更新探测模型",
   "group.policy.updated": "更新分组策略",
   "group.policy.cleared": "恢复全局分组策略",
   "routing.degraded": "账号降级",
@@ -212,6 +213,10 @@ const commonValueLabels: Record<string, string> = {
 };
 
 const contextualValueLabels: Record<string, Record<string, string>> = {
+  origin: {
+    "automatic-inspection": "自动巡检",
+    "manual-inspection": "手动巡检",
+  },
   attribution_level: {
     key: "按上游 Key 精确归因",
     unavailable: "无法精确归因",
@@ -362,10 +367,12 @@ const detailLabels: Record<string, string> = {
   ended_at: "结束时间",
   duration_seconds: "耗时",
   event_type: "事件类型",
-  operation_id: "操作标识",
+  operation_id: "原子操作 ID",
+  task_id: "任务 ID",
   operation_type: "操作类型",
   phase: "执行阶段",
   request_id: "请求标识",
+  origin: "触发来源",
   source: "数据来源",
   remote_confirmed: "远程确认",
   readback_confirmed: "读回确认",
@@ -389,10 +396,11 @@ const detailLabels: Record<string, string> = {
   restored: "恢复数量",
   succeeded: "成功数量",
   failed: "失败数量",
+  warning: "警告数量",
   remote_write: "远程写入",
   calculation_only: "仅本地计算",
-  desired: "目标值",
-  effective: "生效值",
+  desired: "写入目标",
+  effective: "实际生效值",
   reason: "原因",
   error: "错误原因",
   status: "状态",
@@ -726,7 +734,8 @@ export function logSourceLabel(source: UnifiedLogEntry["source"]): string {
 
 export function logStatusVariant(status: string): StatusVariant {
   const normalized = status.trim().toLowerCase();
-  if (["failed", "error", "cancelled"].includes(normalized)) return "danger";
+  if (normalized === "cancelled") return "neutral";
+  if (["failed", "error"].includes(normalized)) return "danger";
   if (["warning", "partial", "degraded"].includes(normalized)) return "warning";
   if (["succeeded", "success", "ok"].includes(normalized)) return "success";
   return "info";
@@ -856,6 +865,7 @@ export function relatedEvents(entry: UnifiedLogEntry): UnifiedLogEntry[] {
 
 export type LogChangeRow = {
   id: string;
+  operationId: string;
   object: string;
   objectId: string;
   occurredAt: string;
@@ -928,6 +938,7 @@ export function relatedChanges(entry: UnifiedLogEntry): LogChangeRow[] {
       const status = String(value.state ?? "unknown");
       rows.push({
         id: String(value.id ?? rows.length),
+        operationId: String(value.operation_id ?? ""),
         object: String(value.object_name ?? value.object_id ?? "未记录对象"),
         objectId: String(value.object_id ?? ""),
         occurredAt: String(value.created_at ?? ""),

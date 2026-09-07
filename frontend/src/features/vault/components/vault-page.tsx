@@ -232,6 +232,7 @@ export function VaultPage() {
     queryKey: ["auth-recovery-config"],
     queryFn: api.authRecoveryConfig,
   });
+  const configReady = config.data !== undefined && !config.isError;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<VaultStatusFilter>("all");
   const [editorOpen, setEditorOpen] = useState(false);
@@ -272,6 +273,7 @@ export function VaultPage() {
   }
 
   function openCreate() {
+    if (!configReady) return;
     setEditing(null);
     setForm(emptyVaultForm);
     setHeadersError(null);
@@ -309,10 +311,11 @@ export function VaultPage() {
   });
 
   function submitSave() {
+    if (!configReady) return;
     const identity = { entry: form.entry.trim() };
     if (!identity.entry) return;
     let headers: Record<string, string> | undefined;
-    if (editing === null || touched.has("headers")) {
+    if (editing === null || form.headers.trim() !== "" || cleared.has("headers")) {
       try {
         headers = parseHeaders(form.headers);
       } catch (error) {
@@ -332,10 +335,10 @@ export function VaultPage() {
           }
         : {
             ...identity,
-            ...(touched.has("username")
+            ...(form.username !== "" || cleared.has("username")
               ? { username: cleared.has("username") ? null : form.username }
               : {}),
-            ...(touched.has("password")
+            ...(form.password !== "" || cleared.has("password")
               ? { password: cleared.has("password") ? null : form.password }
               : {}),
             ...(touched.has("hosts") ? { hosts: splitHosts(form.hosts) } : {}),
@@ -374,7 +377,7 @@ export function VaultPage() {
               ariaLabel="刷新密码箱"
               onClick={() => void config.refetch()}
             />
-            <Button onClick={openCreate}>
+            <Button onClick={openCreate} disabled={!configReady}>
               <Plus />
               添加凭据
             </Button>
@@ -627,7 +630,10 @@ export function VaultPage() {
             >
               取消
             </Button>
-            <Button onClick={submitSave} disabled={save.isPending || !form.entry.trim()}>
+            <Button
+              onClick={submitSave}
+              disabled={!configReady || save.isPending || !form.entry.trim()}
+            >
               {saveButtonLabel}
             </Button>
           </DialogFooter>

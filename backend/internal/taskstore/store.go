@@ -18,9 +18,12 @@ import (
 var (
 	ErrNotFound        = errors.New("任务不存在或已过期")
 	ErrOperationActive = errors.New("同类任务正在运行，请等待当前任务完成")
+	ErrTaskTerminal    = errors.New("任务已经结束，不能覆盖最终状态")
 )
 
 const (
+	// Fixed precision UTC timestamps retain chronological order in SQLite's text indexes.
+	storageTimeLayout      = "2006-01-02T15:04:05.000000000Z"
 	maximumTaskResultBytes = 4 << 20
 	taskRunKeySQL          = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.run_key') AS TEXT) END`
 	taskObjectSQL          = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
@@ -35,6 +38,7 @@ const (
 	taskErrorSQL = `CASE WHEN json_valid(result_json) THEN CAST(COALESCE(
 		json_extract(result_json,'$.error'),json_extract(result_json,'$.detail'),json_extract(result_json,'$.summary')
 	) AS TEXT) END`
+	taskSystemInfoSQL = `CASE WHEN json_valid(result_json) THEN CAST(json_extract(result_json,'$.system_info') AS INTEGER) END`
 )
 
 var validStatuses = map[string]struct{}{
@@ -61,7 +65,7 @@ func Open(path string) (*Store, error) {
 	if err := sqliteutil.Prepare(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29")
+	db, err := sql.Open("sqlite", sqliteutil.DSN(path, "_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29"))
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +112,10 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 	if err := validateTask(task); err != nil {
 		return err
 	}
+	createdAt, _ := time.Parse(time.RFC3339Nano, task.CreatedAt)
+	updatedAt, _ := time.Parse(time.RFC3339Nano, task.UpdatedAt)
+	task.CreatedAt = createdAt.UTC().Format(storageTimeLayout)
+	task.UpdatedAt = updatedAt.UTC().Format(storageTimeLayout)
 	encoded, err := json.Marshal(task.Result)
 	if err != nil {
 		return fmt.Errorf("任务结果无法严格 JSON 序列化：%w", err)
@@ -136,11 +144,20 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 			return fmt.Errorf("%w：%s", ErrOperationActive, task.Operation)
 		}
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO tasks(id,skill,operation,status,progress,message,result_json,created_at,updated_at)
+	writeResult, err := tx.ExecContext(ctx, `INSERT INTO tasks(id,skill,operation,status,progress,message,result_json,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
-		status=excluded.status,progress=excluded.progress,message=excluded.message,result_json=excluded.result_json,updated_at=excluded.updated_at`,
-		task.ID, task.Skill, task.Operation, task.Status, task.Progress, task.Message, string(encoded), task.CreatedAt, task.UpdatedAt); err != nil {
+		status=excluded.status,progress=excluded.progress,message=excluded.message,result_json=excluded.result_json,updated_at=excluded.updated_at
+		WHERE tasks.status NOT IN ('succeeded','partial','failed','cancelled') OR tasks.status=excluded.status`,
+		task.ID, task.Skill, task.Operation, task.Status, task.Progress, task.Message, string(encoded), task.CreatedAt, task.UpdatedAt)
+	if err != nil {
 		return err
+	}
+	written, err := writeResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if written == 0 {
+		return fmt.Errorf("%w：%s", ErrTaskTerminal, task.ID)
 	}
 	if !activeTaskStatus(task.Status) {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM active_task_operations WHERE task_id=?`, task.ID); err != nil {
@@ -163,6 +180,8 @@ func activeOperationKey(operation string) string {
 	switch strings.TrimSpace(operation) {
 	case "account-rate-sync":
 		return "account-rate-sync"
+	case "account-model-discovery", "account-model-apply":
+		return "account-model-sync"
 	case "upstream-balances-sync", "upstream-groups-sync", "upstream-name-repair", "upstream-sync":
 		return "upstream-batch-sync"
 	default:
@@ -257,6 +276,36 @@ func (s *Store) ListLogSummaries(ctx context.Context, limit *int) ([]Task, error
 		return nil, err
 	}
 	defer rows.Close()
+	return scanTaskSummaries(rows)
+}
+
+func (s *Store) ListConsoleSummaries(ctx context.Context, limit *int) ([]Task, error) {
+	query := `SELECT id,skill,operation,status,progress,message,` +
+		taskRunKeySQL + `,` + taskObjectSQL +
+		`,created_at,updated_at FROM tasks AS visible
+		WHERE COALESCE(` + taskSystemInfoSQL + `,0)=1 OR (
+			visible.operation='active-probe' AND json_valid(visible.result_json) AND
+			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.platform') AS TEXT),''))<>'' AND
+			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.model') AS TEXT),''))<>''
+		)
+		ORDER BY visible.updated_at DESC`
+	arguments := []any{}
+	if limit != nil {
+		if *limit < 0 || *limit > 100000 {
+			return nil, errors.New("limit 必须在 0 到 100000 之间")
+		}
+		query += ` LIMIT ?`
+		arguments = append(arguments, *limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTaskSummaries(rows)
+}
+
+func scanTaskSummaries(rows *sql.Rows) ([]Task, error) {
 	result := []Task{}
 	for rows.Next() {
 		var task Task
@@ -344,7 +393,7 @@ func (s *Store) RecoverStaleInterrupted(ctx context.Context, maxAge time.Duratio
 }
 
 func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().Format(storageTimeLayout)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -356,7 +405,7 @@ func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) 
 	args := []any{now}
 	if !cutoff.IsZero() {
 		query += ` AND updated_at < ?`
-		args = append(args, cutoff.UTC().Format(time.RFC3339Nano))
+		args = append(args, cutoff.UTC().Format(storageTimeLayout))
 	}
 	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -431,7 +480,7 @@ func (s *Store) ClearLogs(ctx context.Context, before *time.Time) (int64, int64,
 	arguments := []any{}
 	if before != nil {
 		query += ` AND updated_at < ?`
-		arguments = append(arguments, before.UTC().Format(time.RFC3339Nano))
+		arguments = append(arguments, before.UTC().Format(storageTimeLayout))
 	}
 	result, err := s.db.ExecContext(ctx, query, arguments...)
 	if err != nil {

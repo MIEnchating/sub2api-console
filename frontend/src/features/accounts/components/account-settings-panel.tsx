@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { api, type AccountDetail, type Task } from "@/api";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { DialogBody, DialogFooter } from "@/components/ui/dialog";
@@ -99,6 +100,7 @@ export function AccountSettingsPanel(props: {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const form = useForm<AccountSettingsValues>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
@@ -117,7 +119,7 @@ export function AccountSettingsPanel(props: {
       priority: detail.priority == null ? "" : String(detail.priority),
       loadFactor: detail.load_factor ?? "",
       concurrency: detail.concurrency == null ? "" : String(detail.concurrency),
-      testModel: detail.test_model ?? "",
+      testModel: detail.test_models[0] ?? "",
       paused: detail.paused === true,
       excluded: accountPoolState(detail).value === "excluded",
     });
@@ -130,11 +132,16 @@ export function AccountSettingsPanel(props: {
         priority: Number(values.priority),
         load_factor: values.loadFactor,
         concurrency: Number(values.concurrency),
-        test_model: values.testModel || null,
+        test_models: values.testModel ? [values.testModel] : [],
         paused: values.paused,
         excluded: values.excluded,
       });
-      return waitForAccountSettingTasks([task], api.task);
+      setActiveTaskId(task.id);
+      try {
+        return await waitForAccountSettingTasks([task], api.task);
+      } finally {
+        setActiveTaskId(null);
+      }
     },
     onSuccess: async (tasks) => {
       await Promise.all([
@@ -267,7 +274,7 @@ export function AccountSettingsPanel(props: {
               <SettingsSectionHeading
                 id={`${formId}-model`}
                 title="探测模型"
-                description="留空时继承分组或全局默认模型。"
+                description="只使用一个模型进行实际验证；留空时继承分组或全局默认模型。"
               />
               <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                 {modelsLoaded && modelOptions.length > 0 ? (
@@ -339,6 +346,7 @@ export function AccountSettingsPanel(props: {
         ) : null}
       </DialogBody>
       <DialogFooter>
+        {activeTaskId ? <TaskCancelButton taskId={activeTaskId} /> : null}
         <Button type="button" variant="outline" disabled={save.isPending} onClick={props.onCancel}>
           取消
         </Button>
@@ -375,10 +383,7 @@ function SettingsSwitch(props: {
 }) {
   return (
     <div className="hover:bg-muted/35 flex min-h-16 items-center justify-between gap-4 px-3 py-3 transition-colors">
-      <label className="grid min-w-0 cursor-pointer gap-1" htmlFor={props.id}>
-        <span className="font-medium">{props.label}</span>
-        <span className="text-muted-foreground text-xs leading-4">{props.description}</span>
-      </label>
+      <FieldLabel label={props.label} description={props.description} htmlFor={props.id} />
       <Switch
         id={props.id}
         checked={props.checked}

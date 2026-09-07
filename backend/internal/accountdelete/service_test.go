@@ -226,6 +226,12 @@ func (runner *heldDeleteRunner) Go(run func(context.Context)) error {
 	return nil
 }
 
+func (runner *heldDeleteRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *heldDeleteRunner) CancelTask(string) bool { return false }
+
 func unboundAccount(id, name string) *business.AccountDetail {
 	return &business.AccountDetail{
 		AccountStatus: business.AccountStatus{ID: id, Name: name, Groups: []string{"special"}},

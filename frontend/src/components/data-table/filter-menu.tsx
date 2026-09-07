@@ -1,6 +1,6 @@
 import { Popover } from "@base-ui/react/popover";
 import { Check, CirclePlus, Search } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,13 +40,24 @@ function optionMatchesSearch(value: string, label: string, query: string): boole
 }
 
 export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) {
+  const listID = useId();
+  const listRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const options = props.options.filter((option) =>
     optionMatchesSearch(option, displayOptionLabel(props, option), query),
   );
-  const selectedLabel = props.value ? displayOptionLabel(props, props.value) : null;
+  const selectedLabel = props.value !== null ? displayOptionLabel(props, props.value) : null;
+  const visibleActiveIndex = Math.min(activeIndex, options.length - 1);
+  const activeID = visibleActiveIndex >= 0 ? `${listID}-${visibleActiveIndex}` : undefined;
+
+  useEffect(() => {
+    if (!open || !activeID) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-active]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [open, activeID, query, props.value]);
 
   function handleOpenChange(nextOpen: boolean): void {
     setOpen(nextOpen);
@@ -65,13 +76,16 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
   }
 
   function handleSearchKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (!options.length) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIndex((current) => (current + 1) % options.length);
+      setActiveIndex((current) => (Math.min(current, options.length - 1) + 1) % options.length);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((current) => (current - 1 + options.length) % options.length);
+      setActiveIndex(
+        (current) => (Math.min(current, options.length - 1) - 1 + options.length) % options.length,
+      );
     } else if (event.key === "Home") {
       event.preventDefault();
       setActiveIndex(0);
@@ -98,9 +112,9 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
           />
         }
       >
-        <CirclePlus size={16} />
+        <CirclePlus size={16} aria-hidden="true" />
         <span className="min-w-0 truncate">{props.label}</span>
-        {selectedLabel ? (
+        {selectedLabel !== null ? (
           <>
             <span className="bg-border mx-1 h-4 w-px shrink-0" aria-hidden="true" />
             <Badge variant="secondary" className="max-w-36 truncate rounded-sm px-1 font-normal">
@@ -119,10 +133,11 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
         >
           <Popover.Popup
             data-slot="faceted-filter-content"
+            aria-label={`${props.label}筛选`}
             initialFocus={false}
-            className="bg-popover text-popover-foreground w-[min(22rem,calc(100vw-1rem))] min-w-52 rounded-lg border p-1 shadow-lg outline-none"
+            className="bg-popover text-popover-foreground flex max-h-(--available-height) w-[min(22rem,calc(100vw-1rem))] max-w-(--available-width) flex-col overflow-hidden rounded-lg border p-1 shadow-lg outline-none"
           >
-            <div className="relative p-1 pb-0">
+            <div className="relative shrink-0 p-1 pb-0">
               <Search
                 size={16}
                 className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 opacity-60"
@@ -138,11 +153,18 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                 onKeyDown={handleSearchKeyDown}
                 placeholder={props.label}
                 aria-label={`搜索${props.label}`}
+                role="combobox"
+                aria-expanded={open}
+                aria-autocomplete="list"
+                aria-controls={listID}
+                aria-activedescendant={activeID}
                 className={filterMenuSearchInputClassName}
               />
             </div>
             <div
-              className="max-h-72 overflow-x-hidden overflow-y-auto p-1"
+              ref={listRef}
+              id={listID}
+              className="min-h-0 max-h-72 overflow-x-hidden overflow-y-auto overscroll-contain p-1"
               role="listbox"
               aria-label={props.label}
             >
@@ -154,8 +176,10 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                   type="button"
                   data-press-animation="none"
                   role="option"
+                  id={`${listID}-${index}`}
+                  tabIndex={-1}
                   aria-selected={props.value === option}
-                  data-active={activeIndex === index || undefined}
+                  data-active={visibleActiveIndex === index || undefined}
                   className="hover:bg-muted data-[active]:bg-muted flex min-h-8 w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm outline-none"
                   key={option}
                   onMouseEnter={() => setActiveIndex(index)}
@@ -177,16 +201,17 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
                 </button>
               ))}
             </div>
-            {props.value && props.clearable !== false ? (
-              <div className="border-t p-1">
-                <button
+            {props.value !== null && props.clearable !== false ? (
+              <div className="shrink-0 border-t p-1">
+                <Button
                   type="button"
+                  variant="ghost"
                   data-press-animation="none"
-                  className="hover:bg-muted flex h-8 w-full items-center justify-center rounded-sm px-2 text-sm"
+                  className="w-full rounded-sm"
                   onClick={() => props.onValueChange(null)}
                 >
                   清除筛选
-                </button>
+                </Button>
               </div>
             ) : null}
           </Popover.Popup>

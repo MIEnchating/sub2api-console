@@ -18,6 +18,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -331,14 +332,19 @@ type parallelUpstreamStub struct {
 }
 
 type inspectionContextRecorder struct {
-	mu     sync.Mutex
-	values map[string]bool
+	mu      sync.Mutex
+	values  map[string]bool
+	taskIDs map[string]string
 }
 
 func (recorder *inspectionContextRecorder) record(name string, ctx context.Context) {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	recorder.values[name] = mutationguard.IsAutomaticInspection(ctx)
+	if recorder.taskIDs == nil {
+		recorder.taskIDs = map[string]string{}
+	}
+	recorder.taskIDs[name] = taskcontext.ID(ctx)
 }
 
 func (recorder *inspectionContextRecorder) snapshot() map[string]bool {
@@ -349,6 +355,35 @@ func (recorder *inspectionContextRecorder) snapshot() map[string]bool {
 		result[name] = value
 	}
 	return result
+}
+
+func (recorder *inspectionContextRecorder) taskID(name string) string {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.taskIDs[name]
+}
+
+func TestAutomaticInspectionPropagatesCreatedTaskIDToWriteback(t *testing.T) {
+	recorder := &inspectionContextRecorder{values: map[string]bool{}}
+	repository := &runnerRepositoryStub{routingDue: true, mode: runtimepolicy.Full}
+	runner := NewRunner(
+		repository,
+		nil,
+		&evidencePlannerStub{plan: evidence.Plan{RequestedSource: "traffic"}},
+		contextRecordingRouter{recorder: recorder},
+		contextRecordingWriter{recorder: recorder},
+		nil,
+		nil,
+		&countingTaskStore{},
+	)
+
+	result, err := runner.Run(context.Background(), RunRequest{Actor: "自动巡检", Automatic: true})
+	if err != nil || result.TaskID == nil {
+		t.Fatalf("inspection result=%#v err=%v", result, err)
+	}
+	if got := recorder.taskID("writeback"); got != *result.TaskID {
+		t.Fatalf("writeback task ID=%q, want %q", got, *result.TaskID)
+	}
 }
 
 type contextRecordingEvidence struct{ recorder *inspectionContextRecorder }

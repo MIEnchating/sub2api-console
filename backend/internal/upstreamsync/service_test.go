@@ -38,6 +38,7 @@ type syncRepository struct {
 	failureErr     error
 	balanceAllowed *bool
 	accountIDs     map[string][]string
+	eventPayloads  []map[string]any
 }
 
 type captureAccountRateScheduler struct {
@@ -142,6 +143,19 @@ func TestSyncAllNowKeepsUpstreamAndAccountRateCountsSeparate(t *testing.T) {
 	if result.AccountTotal != 8 || result.AccountRateSucceeded != 2 || result.AccountRateFailed != 6 {
 		t.Fatalf("account rate counts=%#v", result)
 	}
+	if len(repository.eventPayloads) != 2 {
+		t.Fatalf("runtime event payloads=%#v", repository.eventPayloads)
+	}
+	firstBatch, _ := repository.eventPayloads[0]["batch_id"].(string)
+	secondBatch, _ := repository.eventPayloads[1]["batch_id"].(string)
+	if firstBatch == "" || firstBatch != secondBatch {
+		t.Fatalf("batch identities do not match: %#v", repository.eventPayloads)
+	}
+	for _, payload := range repository.eventPayloads {
+		if payload["actor"] != "tester" {
+			t.Fatalf("event actor not preserved: %#v", repository.eventPayloads)
+		}
+	}
 }
 
 func TestBalanceSyncSkipsHostsWhoseManualAccountsDisableBalanceSync(t *testing.T) {
@@ -175,8 +189,11 @@ func (r *syncRepository) RecordUpstreamSyncFailure(_ context.Context, host, scop
 	r.failureAuth = append(r.failureAuth, authenticationFailure)
 	return r.failureErr
 }
-func (r *syncRepository) RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error) {
-	return -1, nil
+func (r *syncRepository) RecordRuntimeEvent(_ context.Context, _ string, _ string, _ string, payload map[string]any) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.eventPayloads = append(r.eventPayloads, payload)
+	return int64(len(r.eventPayloads)), nil
 }
 
 type syncPrivate struct {

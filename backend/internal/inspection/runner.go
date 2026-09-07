@@ -20,6 +20,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -444,6 +445,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 		return ExecutionResult{}, err
 	}
 	reportExecutionTask(ctx, task.ID)
+	ctx = taskcontext.WithID(ctx, task.ID)
 	result := r.executeTask(ctx, task, request, plan, now)
 	return result, nil
 }
@@ -461,6 +463,7 @@ func (r *Runner) QueueTask(ctx context.Context, automatic bool) (taskstore.Task,
 
 func (r *Runner) RunTask(ctx context.Context, task taskstore.Task, request RunRequest) ExecutionResult {
 	reportExecutionTask(ctx, task.ID)
+	ctx = taskcontext.WithID(ctx, task.ID)
 	now := r.now().UTC()
 	plan, err := r.plan(ctx, request, now)
 	if err != nil {
@@ -642,11 +645,7 @@ func (r *Runner) enqueueAccountRateSync(
 	}
 	*operations = append(*operations, operationAccountRateSync)
 	if r.rateScheduler != nil {
-		batchSize, batchPercent := 0, 0
-		if request.AutoConfig != nil {
-			batchSize = request.AutoConfig.AccountRateSyncBatchSize
-			batchPercent = request.AutoConfig.AccountRateSyncBatchPercent
-		}
+		batchSize, batchPercent := plan.accountRateBatchSize, plan.accountRateBatchPercent
 		taskID, err := r.rateScheduler.EnqueueAccountRateSyncBatch(ctx, batchSize, batchPercent, request.Actor)
 		if err != nil {
 			if errors.Is(err, taskstore.ErrOperationActive) {
@@ -711,6 +710,9 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		"planned_operations":   plannedOperations,
 		"active_operations":    []string{},
 		"completed_operations": []string{},
+	}
+	if request.Automatic {
+		resultPayload["origin"] = "automatic-inspection"
 	}
 	failures := []string{}
 	partialFailures := []string{}
@@ -1121,10 +1123,14 @@ func newInspectionTask(now time.Time, automatic bool) (taskstore.Task, error) {
 		operation, message = "automatic-inspection", "自动巡检已排队"
 	}
 	formatted := now.UTC().Format(time.RFC3339Nano)
-	return taskstore.Task{
+	task := taskstore.Task{
 		ID: hex.EncodeToString(value), Skill: "sub2api-auto-inspection", Operation: operation,
 		Status: "queued", Progress: 0, Message: message, Result: map[string]any{}, CreatedAt: formatted, UpdatedAt: formatted,
-	}, nil
+	}
+	if automatic {
+		task.Result["origin"] = "automatic-inspection"
+	}
+	return task, nil
 }
 
 func inspectionSection(policy map[string]any, key string) (map[string]any, error) {

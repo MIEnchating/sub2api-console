@@ -51,7 +51,17 @@ const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
 };
 
 export function accountPoolState(account: AccountStatus): AccountPoolStateMeta {
-  return stateMeta[effectiveAccountState(account)];
+  const state = stateMeta[effectiveAccountState(account)];
+  if (state.value === "healthy" && account.evidence_pending) {
+    return { value: state.value, label: "异常待确认", tone: "warning" };
+  }
+  return state;
+}
+
+export function accountSchedulingSwitchLabel(schedulable: boolean | null): string {
+  if (schedulable === true) return "调度开关：已开启";
+  if (schedulable === false) return "调度开关：已关闭";
+  return "调度开关：状态未知，请同步账号";
 }
 
 export function accountPoolCounts(accounts: AccountStatus[]): Record<AccountPoolFilter, number> {

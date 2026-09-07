@@ -40,6 +40,10 @@ jobs:
         run: bun run deadcode
       - name: Test
         run: bun run test
+      - name: Install browser
+        run: bun x playwright install --with-deps chromium
+      - name: Browser regressions
+        run: bun run test:e2e
       - name: Production build
         run: bun run build
 
@@ -59,9 +63,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: Vet
-        run: go vet ./...
+        run: go vet ./... ./internal/pricing/__tests__
       - name: Race tests
-        run: go test -race ./...
+        run: go test -race ./... ./internal/pricing/__tests__
       - name: Build
         run: go build ./...
 

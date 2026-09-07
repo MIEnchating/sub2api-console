@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AccountSelectionToolbar, AccountsPage } from "../../../../App";
-import type { AccountStatus } from "../../../../api";
+import { AccountSelectionToolbar, AccountTaskCancelButton, AccountsPage } from "../../../../App";
+import { api, type AccountStatus } from "../../../../api";
 import { AccountStatusFilter, accountStatusFilterOptions } from "../account-status-tabs";
 
 function account(id = "11"): AccountStatus {
@@ -48,6 +49,10 @@ function account(id = "11"): AccountStatus {
 }
 
 describe("AccountStatusFilter", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("shows the filter name and selected state using the shared faceted style", () => {
     const markup = renderToStaticMarkup(
       <AccountStatusFilter value="degraded" onValueChange={() => {}} />,
@@ -98,6 +103,7 @@ describe("AccountStatusFilter", () => {
     expect(toolbar).not.toContain("排序");
     expect(toolbar).toContain("分组");
     expect(toolbar).toContain("类型");
+    expect(toolbar).toContain("平台");
     expect(toolbar).not.toContain("个账号");
     expect(markup).not.toMatch(/<th[^>]*>分组<\/th>/);
     expect(markup).toContain("调度权重");
@@ -111,7 +117,7 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain('aria-label="按调度参数升序排列"');
     expect(markup.match(/aria-sort="none"/g)).toHaveLength(6);
     expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
-    expect(markup).toContain("min-w-[1540px]");
+    expect(markup).toContain("min-w-[1640px]");
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('aria-label="选择当前页账号"');
     expect(markup).toContain('aria-disabled="true"');
@@ -131,18 +137,33 @@ describe("AccountStatusFilter", () => {
     const actionButton = (label: string) => buttons.find((button) => button.includes(label)) ?? "";
 
     expect(markup).not.toContain("同步全部上游余额");
+    expect(markup).toContain("平台模型探活");
     expect(markup).toContain("配置校验与修复");
     expect(markup).toContain("同步倍率");
+    expect(markup).toContain("同步模型");
     expect(markup).toContain("复验绑定");
     expect(markup).toContain("命名修复");
     expect(markup).not.toContain("选择筛选结果");
     expect(markup).not.toContain("批量删除（");
     expect(markup).not.toContain("批量操作");
-    expect(markup).toContain('aria-label="更多账号操作"');
-    for (const label of ["配置校验与修复", "同步倍率", "复验绑定", "命名修复"]) {
+    expect(markup).toContain("状态与处置");
+    for (const label of ["配置校验与修复", "同步倍率", "同步模型", "复验绑定", "命名修复"]) {
       expect(actionButton(label)).not.toContain(' disabled=""');
     }
     expect(markup).toContain('role="checkbox"');
+  });
+
+  it("从账号管理入口直接打开平台模型探活", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(["accounts"], [account()]);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountsPage />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "平台模型探活" }));
+    expect(screen.getByRole("dialog", { name: "平台模型探活" })).toBeVisible();
   });
 
   it("shows selected account count and destructive action in the floating toolbar", () => {
@@ -151,6 +172,8 @@ describe("AccountStatusFilter", () => {
         selectedCount={3}
         pending={false}
         onClear={vi.fn()}
+        onSyncModels={vi.fn()}
+        onProbe={vi.fn()}
         onDelete={vi.fn()}
       />,
     );
@@ -160,6 +183,7 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain("账号");
     expect(markup).toContain("已选择");
     expect(markup).toContain('aria-label="清空选择"');
+    expect(markup).toContain('aria-label="同步已选择的 3 个账号模型"');
     expect(markup).toContain('aria-label="删除已选择的 3 个账号"');
     expect(markup).toContain("fixed");
   });
@@ -224,5 +248,40 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain('aria-label="选择当前页账号"');
     expect(markup).toContain('aria-label="选择账号 示例账号 11（#11）"');
     expect(markup.match(/role="checkbox"/g)).toHaveLength(2);
+  });
+
+  it("账号探活运行时不增加取消按钮", () => {
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountTaskCancelButton taskId="probe-task-11" pending activeAction="探活测试" />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "取消任务" })).not.toBeInTheDocument();
+  });
+
+  it("同步账号倍率任务提供取消入口，删除任务不显示行内取消", async () => {
+    const cancel = vi.spyOn(api, "cancelTask").mockResolvedValue({ cancelled: true });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <AccountTaskCancelButton taskId="rate-task-11" pending activeAction="同步账号倍率" />
+      </QueryClientProvider>,
+    );
+
+    const cancelButton = screen.getByRole("button", { name: "取消任务" });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("rate-task-11"));
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <AccountTaskCancelButton taskId="delete-task-11" pending activeAction="删除账号" />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "取消任务" })).not.toBeInTheDocument();
   });
 });

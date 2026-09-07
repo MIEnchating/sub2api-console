@@ -64,6 +64,95 @@ type AuthRecordSummary struct {
 	UpdatedAt       string   `json:"updated_at"`
 }
 
+// RenameAuthRecord keeps credentials and recovery metadata attached when an
+// upstream's canonical Host is deliberately changed.
+func (s *Store) RenameAuthRecord(ctx context.Context, oldHost, newHost string) error {
+	oldHost, newHost = CanonicalHost(oldHost), CanonicalHost(newHost)
+	if oldHost == "" || newHost == "" {
+		return errors.New("授权记录 Host 不能为空")
+	}
+	if oldHost == newHost {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM auth_records WHERE host=?)`, newHost).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return errors.New("目标 Host 已存在授权记录，不能自动合并")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE auth_records SET host=? WHERE host=?`, newHost, oldHost); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE auth_recovery_preferences SET host=? WHERE host=?`, newHost, oldHost); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE upstream_key_secrets SET host=? WHERE host=?`, newHost, oldHost); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT entry,hosts_json FROM vault_entries`)
+	if err != nil {
+		return err
+	}
+	type vaultHosts struct{ entry, raw string }
+	updates := []vaultHosts{}
+	for rows.Next() {
+		var item vaultHosts
+		if err := rows.Scan(&item.entry, &item.raw); err != nil {
+			rows.Close()
+			return err
+		}
+		hosts, err := decodeStringList(item.raw)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		changed := false
+		seenHosts := make(map[string]struct{}, len(hosts))
+		for index, host := range hosts {
+			normalized := CanonicalHost(host)
+			if normalized == oldHost {
+				normalized, changed = newHost, true
+			}
+			hosts[index] = normalized
+		}
+		deduplicated := hosts[:0]
+		for _, host := range hosts {
+			if _, found := seenHosts[host]; found {
+				changed = true
+				continue
+			}
+			seenHosts[host] = struct{}{}
+			deduplicated = append(deduplicated, host)
+		}
+		hosts = deduplicated
+		sort.Strings(hosts)
+		if changed {
+			raw, _ := json.Marshal(hosts)
+			item.raw = string(raw)
+			updates = append(updates, item)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE vault_entries SET hosts_json=?,updated_at=? WHERE entry=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.entry); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func CanonicalHost(value string) string {
 	normalized := strings.TrimRight(strings.TrimSpace(value), "/")
 	if strings.Contains(normalized, "://") {

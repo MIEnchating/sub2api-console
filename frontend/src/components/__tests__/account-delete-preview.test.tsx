@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AccountDeletePreviewDetails } from "../../App";
+import { AccountDeletePreviewDetails } from "../../features/accounts/components/account-delete-dialog";
 import type { AccountDeletePreview } from "../../api";
 
 function preview(binding: AccountDeletePreview["binding"]): AccountDeletePreview {

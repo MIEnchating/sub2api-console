@@ -130,4 +130,35 @@ describe("LogsCenterPage layout", () => {
     expect(markup).toMatch(/class="[^"]*w-16[^"]*"[^>]*>操作<\/th>/);
     expect(openingTag(markup, 'data-slot="table"')).toContain("min-w-[920px]");
   });
+
+  it("renders an operation batch as one summary row with its related event count", () => {
+    const markup = renderLogsPage({
+      items: [
+        {
+          id: "event-group:routing-batch-1",
+          kind: "event",
+          occurred_at: "2026-09-05T15:16:55Z",
+          title: "routing.writeback.batch",
+          summary: "共 3 个账号：成功 2，失败 1",
+          status: "partial",
+          actor: "自动巡检",
+          object_label: "3 个账号",
+          source: "runtime_event",
+          source_id: "routing-batch-1",
+          related_count: 3,
+          details: {},
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      counts: { event: 3 },
+      truncated: false,
+    });
+
+    expect(markup).toContain("批量自动执行");
+    expect(markup).toContain("共 3 个账号：成功 2，失败 1 · 关联 3 条");
+    expect(markup).toContain("执行人：自动巡检");
+    expect(markup.match(/>3 个账号<\/span>/g)).toHaveLength(1);
+  });
 });

@@ -27,8 +27,27 @@ func (s *Store) UpstreamGroupHistory(ctx context.Context, host string, limit int
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,upstream_id,group_id,group_name,change_type,changed_at
-		FROM upstream_group_change_events WHERE upstream_id=? ORDER BY changed_at DESC,id DESC LIMIT ?`, upstreamID, limit)
+	return s.readUpstreamGroupHistory(ctx, &upstreamID, limit)
+}
+
+func (s *Store) AllUpstreamGroupHistory(ctx context.Context, limit int) ([]UpstreamGroupChange, error) {
+	if limit < 1 || limit > 500 {
+		return nil, errors.New("limit 必须在 1 到 500 之间")
+	}
+	return s.readUpstreamGroupHistory(ctx, nil, limit)
+}
+
+func (s *Store) readUpstreamGroupHistory(ctx context.Context, upstreamID *string, limit int) ([]UpstreamGroupChange, error) {
+	query := `SELECT id,upstream_id,group_id,group_name,change_type,changed_at
+		FROM upstream_group_change_events`
+	args := []any{}
+	if upstreamID != nil {
+		query += ` WHERE upstream_id=?`
+		args = append(args, *upstreamID)
+	}
+	query += ` ORDER BY changed_at DESC,id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

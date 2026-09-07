@@ -1,8 +1,11 @@
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountStatus } from "@/api";
 import { AccountOperationButtons } from "../account-operation-buttons";
+import { AccountOperationControls } from "../account-operation-controls";
 
 const account: AccountStatus = {
   id: "41",
@@ -45,7 +48,8 @@ const account: AccountStatus = {
 
 function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
   return renderToStaticMarkup(
-    <AccountOperationButtons
+    <AccountOperationControls
+      expanded
       account={{ ...account, ...overrides }}
       pending={probePending}
       probePending={probePending}
@@ -60,9 +64,138 @@ function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
 }
 
 describe("account operation buttons", () => {
+  afterEach(cleanup);
+
+  it("opens complete failure details and common actions from one account entry", async () => {
+    const onProbe = vi.fn();
+    render(
+      <AccountOperationButtons
+        account={{
+          ...account,
+          sub2api_status: "error",
+          sub2api_error: "上游返回 503，请稍后重新探活",
+        }}
+        pending={false}
+        probePending={false}
+        onProbe={onProbe}
+        onControl={vi.fn()}
+        onRateSync={vi.fn()}
+        onManualPriority={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
+    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
+    expect(within(dialog).getByText("最近错误：上游返回 503，请稍后重新探活")).toBeVisible();
+    const details = within(dialog).getByRole("region", { name: "账号状态详情" });
+    expect(details).toHaveClass("min-h-0", "overflow-y-auto");
+    expect(within(details).queryByRole("group", { name: "账号常用处置" })).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "探活测试" }));
+    expect(onProbe).toHaveBeenCalledOnce();
+  });
+
+  it("keeps disposition details readable while probe and control actions are pending", async () => {
+    render(
+      <AccountOperationButtons
+        account={account}
+        pending
+        probePending
+        onProbe={vi.fn()}
+        onControl={vi.fn()}
+        onRateSync={vi.fn()}
+        onManualPriority={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
+    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
+    expect(within(dialog).getByRole("button", { name: "正在探活" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "手动熔断（停止调度）" })).toBeDisabled();
+    expect(within(dialog).queryByRole("button", { name: /取消/ })).not.toBeInTheDocument();
+  });
+
+  it("passes fuse confirmation from the disposition panel to the existing control flow", async () => {
+    const onControl = vi.fn();
+    render(
+      <AccountOperationButtons
+        account={account}
+        pending={false}
+        probePending={false}
+        onProbe={vi.fn()}
+        onControl={onControl}
+        onRateSync={vi.fn()}
+        onManualPriority={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
+    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "手动熔断（停止调度）" }));
+    expect(onControl).toHaveBeenCalledWith(
+      "fuse",
+      "手动熔断",
+      expect.stringContaining("直到手动解除"),
+    );
+  });
+
+  it("opens by keyboard with focus on the explanation title and restores focus on Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <AccountOperationButtons
+        account={account}
+        pending={false}
+        probePending={false}
+        onProbe={vi.fn()}
+        onControl={vi.fn()}
+        onRateSync={vi.fn()}
+        onManualPriority={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "状态与处置" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
+    await waitFor(() =>
+      expect(within(dialog).getByRole("heading", { name: "状态与处置" })).toHaveFocus(),
+    );
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("offers recovery with confirmation for a fused account in the disposition panel", async () => {
+    const onControl = vi.fn();
+    render(
+      <AccountOperationButtons
+        account={{ ...account, health: "fused", schedulable: false }}
+        pending={false}
+        probePending={false}
+        onProbe={vi.fn()}
+        onControl={onControl}
+        onRateSync={vi.fn()}
+        onManualPriority={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
+    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "解除熔断" }));
+    expect(onControl).toHaveBeenCalledWith(
+      "recover",
+      "解除熔断",
+      expect.stringContaining("仍受调度策略约束"),
+    );
+  });
   it("matches the channel pool operations without a multiplier threshold breaker", () => {
     const result = markup();
-    for (const label of ["探活测试", "暂停调度", "手动熔断"]) {
+    for (const label of ["探活测试", "暂停调度", "手动熔断（停止调度）"]) {
       expect(result).toContain(label);
     }
     expect(result).toContain('aria-label="更多账号操作"');
@@ -128,7 +261,7 @@ describe("account operation buttons", () => {
       target_schedulable: false,
     });
 
-    expect(result).toContain('aria-label="已停止调度"');
+    expect(result).not.toContain('aria-label="已停止调度"');
     expect(result).not.toContain('aria-label="暂停调度"');
   });
 

@@ -393,7 +393,7 @@ func TestStrategyQualityUsesNormalizedGroupTerms(t *testing.T) {
 	config := engineConfig{priceExp: 1, speedExp: 1, balancedPriceRatio: .5, gateFloor: 40}
 	cheap := &candidate{rate: cheapRate, health: Health{HealthScore: 100, P95MS: &slow}, strategy: "balanced", state: "healthy"}
 	fastCandidate := &candidate{rate: expensiveRate, health: Health{HealthScore: 100, P95MS: &fast}, strategy: "balanced", state: "healthy"}
-	benchmark := strategyScoreBenchmark([]*candidate{cheap, fastCandidate}, config)
+	benchmark := strategyScoreBenchmark([]*candidate{cheap, fastCandidate})
 	cheapQuality := strategyQuality(cheap, config, benchmark)
 	fastQuality := strategyQuality(fastCandidate, config, benchmark)
 	if math.Abs(cheapQuality-.525) > 0.0001 || math.Abs(fastQuality-.6) > 0.0001 || cheapQuality >= fastQuality {
@@ -408,7 +408,7 @@ func TestStrategyQualityFallsBackFromP95ToP50(t *testing.T) {
 	item := &candidate{
 		rate: rate, health: Health{HealthScore: 100, P50MS: &p50}, strategy: "speed_first", state: "healthy",
 	}
-	benchmark := strategyScoreBenchmark([]*candidate{item}, config)
+	benchmark := strategyScoreBenchmark([]*candidate{item})
 	if quality := strategyQuality(item, config, benchmark); math.Abs(quality-1) > 0.0001 {
 		t.Fatalf("speed score did not use P50 when P95 was absent: %v", quality)
 	}
@@ -1098,7 +1098,7 @@ func TestUnknownErrorsDoNotCountAsGatewayFailures(t *testing.T) {
 	}
 }
 
-func TestSingleTransientGatewayFailureDoesNotChangeRoutingHealthOrState(t *testing.T) {
+func TestSingleTransientGatewayFailureDegradesWithPartialRoutingPenalty(t *testing.T) {
 	schedulable, rate := true, "1"
 	item := &candidate{
 		account: business.RoutingAccount{ID: "41", GroupName: "codex", Schedulable: &schedulable, Metadata: map[string]any{}},
@@ -1112,8 +1112,16 @@ func TestSingleTransientGatewayFailureDoesNotChangeRoutingHealthOrState(t *testi
 	}
 	previous := business.PreviousRoutingDecision{State: "healthy", Payload: map[string]any{"routing_health_score": 100.0}}
 	applyInitialState(item, config, previous, time.Now().UTC())
-	if item.state != "healthy" || !item.schedulable || item.routingHealth != 100 {
-		t.Fatalf("single retryable failure changed routing placement: %#v", item)
+	if item.state != "degraded" || !item.schedulable || item.routingHealth != 62.5 {
+		t.Fatalf("single retryable failure must degrade gently while remaining schedulable: %#v", item)
+	}
+	decision := publicDecision(item, "codex", config, time.Now().UTC())
+	if decisionWrite(decision).Payload["evidence_pending"] != true {
+		t.Fatal("single retryable failure must expose pending evidence for health display")
+	}
+	item.state = "fused"
+	if decisionWrite(publicDecision(item, "codex", config, time.Now().UTC())).Payload["evidence_pending"] != false {
+		t.Fatal("final fused state must supersede pending evidence")
 	}
 }
 
@@ -1206,8 +1214,8 @@ func TestEvidenceSelectionPrefersFreshTrafficAndExpiresOldSamples(t *testing.T) 
 		{Result: "通过", Source: "traffic", ObservedAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano)},
 	}
 	healthRows, performanceRows := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
-	if len(healthRows) != 1 || healthRows[0].Source != "traffic" || len(performanceRows) != 1 || performanceRows[0].Source != "traffic" {
-		t.Fatalf("fresh traffic was not isolated from probe/stale evidence: health=%#v performance=%#v", healthRows, performanceRows)
+	if len(healthRows) != 2 || healthRows[0].Source != "active-probe" || len(performanceRows) != 1 || performanceRows[0].Source != "traffic" {
+		t.Fatalf("new probe missing from health or leaked into performance: health=%#v performance=%#v", healthRows, performanceRows)
 	}
 
 	staleOnly := []business.RoutingSample{{Result: "通过", Source: "traffic", ObservedAt: now.Add(-3 * time.Hour).Format(time.RFC3339Nano)}}
@@ -1217,10 +1225,11 @@ func TestEvidenceSelectionPrefersFreshTrafficAndExpiresOldSamples(t *testing.T) 
 	}
 }
 
-func TestGroupProbeIntervalControlsProbeEvidenceTTL(t *testing.T) {
+func TestGroupProbeIntervalDoesNotChangeProbeEvidenceTTL(t *testing.T) {
 	groupID := "7"
 	config := engineConfig{
-		probeMaxAge: 15 * time.Minute,
+		probeMaxAge:   15 * time.Minute,
+		historyMaxAge: 24 * time.Hour,
 		groupBindings: map[string]any{
 			groupID: map[string]any{"probe_interval_seconds": int64(3600)},
 		},
@@ -1229,8 +1238,8 @@ func TestGroupProbeIntervalControlsProbeEvidenceTTL(t *testing.T) {
 	if err != nil || !enabled {
 		t.Fatalf("group override failed: enabled=%v err=%v", enabled, err)
 	}
-	if groupConfig.probeMaxAge != 3*time.Hour {
-		t.Fatalf("probe evidence ttl=%s want=3h", groupConfig.probeMaxAge)
+	if groupConfig.probeMaxAge != 15*time.Minute || groupConfig.historyMaxAge != 24*time.Hour {
+		t.Fatalf("probe evidence ttl=%s want=15m", groupConfig.probeMaxAge)
 	}
 }
 
@@ -1258,7 +1267,7 @@ func TestOlderFatalProbeDoesNotOverrideNewerTrafficOrProbeSuccess(t *testing.T) 
 	}
 	healthRows, _ := selectRoutingEvidence(rows, now, 2*time.Hour, 15*time.Minute, 60)
 	healthRows = withCriticalProbeEvidence(healthRows, rows, now, 15*time.Minute, testPolicy())
-	if len(healthRows) != 1 || healthRows[0].Source != "traffic" {
+	if len(healthRows) != 2 || healthRows[0].Source != "active-probe" || healthRows[1].Source != "traffic" {
 		t.Fatalf("superseded fatal probe overrode newer evidence: %#v", healthRows)
 	}
 }
@@ -1590,6 +1599,67 @@ func TestCleanupDoesNotRemoveMinimumPoolSurvivor(t *testing.T) {
 	}
 }
 
+func TestHistoricalRateLimitsNeverTriggerAutomaticCleanupAfterRecovery(t *testing.T) {
+	now := time.Date(2026, 9, 5, 23, 50, 30, 0, time.UTC)
+	statusOK := int64(200)
+	statusRateLimited := int64(429)
+	rows := []business.RoutingSample{
+		{AccountID: "41", GroupName: "codex", Result: "通过", Source: "traffic", ObservedAt: now.Format(time.RFC3339), Payload: map[string]any{"status_code": statusOK}},
+		{AccountID: "41", GroupName: "codex", Result: "失败", Source: "traffic", ObservedAt: now.Add(-time.Minute).Format(time.RFC3339), Payload: map[string]any{"status_code": statusRateLimited}},
+		{AccountID: "41", GroupName: "codex", Result: "失败", Source: "traffic", ObservedAt: now.Add(-2 * time.Minute).Format(time.RFC3339), Payload: map[string]any{"status_code": statusRateLimited}},
+	}
+
+	for _, action := range []string{"pause", "disable", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			item := &candidate{
+				account: business.RoutingAccount{ID: "41", GroupName: "codex", Metadata: map[string]any{}},
+				state:   "healthy",
+				health:  Health{LatestEvent: EventHealthy},
+				rows:    rows,
+			}
+			byAccount := map[string][]*candidate{"41": {item}}
+			config := engineConfig{
+				cleanupEnabled: true, cleanupAction: action, cleanupOccurrences: 2, cleanupWindow: 3,
+				cleanupMaxPerRound: 1, cleanupStatusCodes: map[int]struct{}{429: {}},
+			}
+
+			_, events := applyCleanupPolicy(byAccount, config, map[string]time.Time{"41": now.Add(-time.Hour)}, now)
+
+			if item.cleanupAction != nil {
+				t.Fatalf("历史 429 在账号恢复后触发了 %s：%#v", action, *item.cleanupAction)
+			}
+			for _, event := range events {
+				if event.EventType == "cleanup_queued" {
+					t.Fatalf("历史 429 在账号恢复后进入自动处置队列：%#v", event)
+				}
+			}
+		})
+	}
+}
+
+func TestEngineDiscardsRateLimitFromDestructiveStatusCodes(t *testing.T) {
+	policy := routingPolicy()
+	policy["breaker"].(map[string]any)["instant_status_codes"] = []any{int64(402), int64(429)}
+	policy["cleanup"].(map[string]any)["trigger_status_codes"] = []any{int64(401), int64(429)}
+
+	config, err := parseEngineConfig(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := config.instantCodes[429]; found {
+		t.Fatal("429 remained in immediate fuse status codes")
+	}
+	if _, found := config.cleanupStatusCodes[429]; found {
+		t.Fatal("429 remained in automatic cleanup status codes")
+	}
+	if _, found := config.instantCodes[402]; !found {
+		t.Fatal("non-rate-limit immediate fuse status code was discarded")
+	}
+	if _, found := config.cleanupStatusCodes[401]; !found {
+		t.Fatal("non-rate-limit cleanup status code was discarded")
+	}
+}
+
 func cleanupRoutingPolicy(action string, observationMinutes int, maxOne bool) map[string]any {
 	policy := routingPolicy()
 	maxPerRound := int64(5)
@@ -1768,5 +1838,16 @@ func TestFilterAndLimitSamplesAppliesOneWindowAfterSourceSelection(t *testing.T)
 	probeOnly := filterAndLimitSamples(rows, "active_probe", 60)
 	if len(probeOnly) != 8 {
 		t.Fatalf("short probe history=%d, want actual 8", len(probeOnly))
+	}
+}
+
+func TestSlowOccurrencesIncludesMeasuredProbeButNotProbeTotalDuration(t *testing.T) {
+	latency := "16000"
+	rows := []business.RoutingSample{
+		{Result: "通过", Source: "active-probe", LatencyP95: &latency, Payload: map[string]any{"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms"}},
+		{Result: "通过", Source: "active-probe", LatencyP95: &latency, Payload: map[string]any{"latency_metric": "total_duration", "latency_source": "account_test.complete_response", "latency_unit": "ms"}},
+	}
+	if count := slowOccurrences(rows, 10, 15000); count != 1 {
+		t.Fatalf("slow probe count=%d", count)
 	}
 }

@@ -239,7 +239,7 @@ func classify(sample Sample, config scoringConfig) Classified {
 		return Classified{Score: config.eventScores[EventCredentialBad], Event: EventCredentialBad, Fatal: true, Failure: true}
 	}
 	if success {
-		if latency := latencyMS(sample); latency != nil && *latency > float64(config.slowTTFBMS) {
+		if latency := healthLatencyMS(sample); latency != nil && *latency > float64(config.slowTTFBMS) {
 			return Classified{Score: config.eventScores[EventSlow], Event: EventSlow}
 		}
 		return Classified{Score: config.eventScores[EventHealthy], Event: EventHealthy}
@@ -407,11 +407,28 @@ func sampleStatus(sample Sample, text string) int {
 	return 0
 }
 
+// healthLatencyMS also accepts explicitly measured probe first-content latency.
+// Performance percentiles continue to use traffic-only latencyMS.
+func healthLatencyMS(sample Sample) *float64 {
+	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
+	if source == "active-probe" || source == "probe" {
+		if sample.Payload["latency_source"] != "account_test.first_content" {
+			return nil
+		}
+		return measuredFirstTokenMS(sample)
+	}
+	return latencyMS(sample)
+}
+
 func latencyMS(sample Sample) *float64 {
 	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
 	if source != "traffic" && source != "logs" {
 		return nil
 	}
+	return measuredFirstTokenMS(sample)
+}
+
+func measuredFirstTokenMS(sample Sample) *float64 {
 	if sample.Payload != nil {
 		if raw, present := sample.Payload["first_token_ms"]; present {
 			return positiveMilliseconds(raw)

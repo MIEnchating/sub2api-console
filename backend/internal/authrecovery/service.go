@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -82,7 +84,18 @@ type CaptchaFlow interface {
 	Prepare(context.Context, configstore.AuthRecord, string, *string) (CaptchaChallenge, error)
 	PrepareCredential(context.Context, configstore.AuthRecord, configstore.VaultEntry, bool, *string) (CaptchaChallenge, error)
 	Submit(context.Context, string, string) (CaptchaResult, error)
-	Cancel(string) (*CaptchaChallenge, *string)
+	Cancel(string) *CaptchaCancellation
+}
+
+type captchaCompleter interface {
+	Complete(string)
+}
+
+type captchaSubmissionState struct {
+	cancel               context.CancelFunc
+	host                 string
+	parentTaskID         *string
+	credentialsPersisted bool
 }
 
 type mutationRepositoryAware interface {
@@ -146,6 +159,8 @@ type Service struct {
 	tasks         TaskStore
 	taskRunner    taskrunner.Runner
 	captcha       CaptchaFlow
+	captchaMu     sync.Mutex
+	captchaRuns   map[string]*captchaSubmissionState
 	detector      PlatformDetector
 	timeout       time.Duration
 }
@@ -160,6 +175,7 @@ func New(repository Repository, private PrivateStore, authenticator Authenticato
 	service := &Service{
 		repository: repository, private: private, authenticator: authenticator, configurator: configurator,
 		balances: balances, tasks: tasks, timeout: 10 * time.Minute,
+		captchaRuns: map[string]*captchaSubmissionState{},
 	}
 	if len(captcha) > 0 {
 		service.captcha = captcha[0]
@@ -278,7 +294,7 @@ func (s *Service) Enqueue(ctx context.Context, host, entry string, acceptLoginAg
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(parent, task, *record, entry, acceptLoginAgreement, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -304,7 +320,7 @@ func (s *Service) EnqueueBatch(ctx context.Context, hosts []string, actor string
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeBatch(parent, task, records, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -555,10 +571,6 @@ func (s *Service) recoverRecords(ctx context.Context, records []configstore.Auth
 		if err := ctx.Err(); err != nil {
 			return BatchResult{Summary: summary, Outcomes: outcomes}, err
 		}
-		original, originalErr := s.private.AuthRecord(ctx, record.Host)
-		if originalErr != nil {
-			return BatchResult{Summary: summary, Outcomes: outcomes}, originalErr
-		}
 		outcome := s.recover(ctx, record, "", false)
 		outcomes = append(outcomes, outcome)
 		// Persist after every host. A cancellation or process restart can then
@@ -567,14 +579,8 @@ func (s *Service) recoverRecords(ctx context.Context, records []configstore.Auth
 		persisted, persistErr := s.repository.PersistAuthRecoveryOutcomes(persistCtx, outcomes, actor)
 		cancel()
 		if persistErr != nil {
-			if original != nil {
-				rollbackCtx, rollbackCancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-				rollbackErr := s.private.SaveAuthRecord(rollbackCtx, cloneAuthRecord(*original), allAuthFields())
-				rollbackCancel()
-				if rollbackErr != nil {
-					persistErr = errors.Join(persistErr, fmt.Errorf("上游 %s 鉴权回滚失败：%w", record.Host, rollbackErr))
-				}
-			}
+			// Refresh tokens may be single-use. A projection failure must not
+			// replace verified credentials with their now-invalid predecessors.
 			return BatchResult{Summary: summary, Outcomes: outcomes}, persistErr
 		}
 		summary = persisted
@@ -610,25 +616,56 @@ func (s *Service) SubmitCaptcha(ctx context.Context, challengeID, code, actor st
 	if s.captcha == nil {
 		return CaptchaCompletion{}, errors.New("图片验证码恢复服务尚未就绪")
 	}
-	result, err := s.captcha.Submit(ctx, challengeID, code)
+	challengeID = strings.TrimSpace(challengeID)
+	submitCtx, cancel := context.WithCancel(ctx)
+	state := &captchaSubmissionState{cancel: cancel}
+	s.captchaMu.Lock()
+	if s.captchaRuns[challengeID] != nil {
+		s.captchaMu.Unlock()
+		cancel()
+		return CaptchaCompletion{}, errors.New("验证码正在提交，请等待当前复核完成")
+	}
+	s.captchaRuns[challengeID] = state
+	s.captchaMu.Unlock()
+	defer func() {
+		cancel()
+		s.captchaMu.Lock()
+		if s.captchaRuns[challengeID] == state {
+			delete(s.captchaRuns, challengeID)
+		}
+		s.captchaMu.Unlock()
+	}()
+	result, err := s.captcha.Submit(submitCtx, challengeID, code)
 	if err != nil {
 		return CaptchaCompletion{}, err
 	}
-	if err := s.saveRecoveryPreference(ctx, result.Host, result.AuthMode, "vault", result.VaultEntry); err != nil {
+	s.captchaMu.Lock()
+	state.host, state.parentTaskID, state.credentialsPersisted = result.Host, result.ParentTaskID, true
+	s.captchaMu.Unlock()
+	if completer, ok := s.captcha.(captchaCompleter); ok {
+		completer.Complete(challengeID)
+	}
+	if err := submitCtx.Err(); err != nil {
+		return CaptchaCompletion{}, err
+	}
+	if err := s.saveRecoveryPreference(submitCtx, result.Host, result.AuthMode, "vault", result.VaultEntry); err != nil {
 		return CaptchaCompletion{}, fmt.Errorf("验证码鉴权已复核，但最近成功方式保存失败：%w", err)
 	}
 	outcome := successfulOutcome(business.AuthRecoveryOutcome{Host: result.Host, Attempted: true},
 		"recovered_by_image_captcha", "图片验证码登录成功并完成鉴权复核", "vault", result.AuthMode)
 	kind := "image_captcha_ocr"
 	outcome.InteractionKind = &kind
-	projection, err := s.repository.PersistAuthRecoveryOutcomes(ctx, []business.AuthRecoveryOutcome{outcome}, actor)
+	projection, err := s.repository.PersistAuthRecoveryOutcomes(submitCtx, []business.AuthRecoveryOutcome{outcome}, actor)
 	if err != nil {
 		s.finishCaptchaParent(result.ParentTaskID, "failed", "图片验证码已复核，但鉴权结果保存失败", map[string]any{
 			"host": result.Host, "credentials_persisted": true, "error": safeReason(err.Error()),
 		})
 		return CaptchaCompletion{}, err
 	}
-	value, syncErr := s.balances.SyncHost(ctx, result.Host, upstreamsync.Scope{Balance: true}, actor)
+	value, syncErr := s.balances.SyncHost(submitCtx, result.Host, upstreamsync.Scope{Balance: true}, actor)
+	if err := submitCtx.Err(); err != nil {
+		return CaptchaCompletion{}, err
+	}
 	balance := balanceResult(value, syncErr)
 	message := "图片验证码恢复成功，余额读取失败"
 	if balance.Status == "succeeded" {
@@ -645,13 +682,50 @@ func (s *Service) CancelCaptcha(challengeID string) bool {
 	if s.captcha == nil {
 		return false
 	}
-	challenge, parentTaskID := s.captcha.Cancel(challengeID)
-	if challenge == nil {
+	challengeID = strings.TrimSpace(challengeID)
+	cancellation := s.captcha.Cancel(challengeID)
+	s.captchaMu.Lock()
+	state := s.captchaRuns[challengeID]
+	stateHost := ""
+	var stateParentTaskID *string
+	stateCredentialsPersisted := false
+	if state != nil {
+		state.cancel()
+		stateHost = state.host
+		stateParentTaskID = state.parentTaskID
+		stateCredentialsPersisted = state.credentialsPersisted
+	}
+	s.captchaMu.Unlock()
+	if cancellation == nil && state == nil {
 		return false
 	}
-	s.finishCaptchaParent(parentTaskID, "cancelled", "图片验证码恢复已取消", map[string]any{
-		"host": challenge.Host, "cancelled": true, "credentials_persisted": false,
-	})
+	host := ""
+	var parentTaskID *string
+	var credentialsPersisted *bool
+	if cancellation != nil {
+		host = cancellation.Challenge.Host
+		parentTaskID = cancellation.ParentTaskID
+		credentialsPersisted = cancellation.CredentialsPersisted
+	}
+	if state != nil {
+		if stateHost != "" {
+			host = stateHost
+		}
+		if stateParentTaskID != nil {
+			parentTaskID = stateParentTaskID
+		}
+		if stateCredentialsPersisted {
+			value := true
+			credentialsPersisted = &value
+		}
+	}
+	result := map[string]any{"host": host, "cancelled": true, "credentials_persisted": nil}
+	if credentialsPersisted != nil {
+		result["credentials_persisted"] = *credentialsPersisted
+	} else {
+		result["credential_persistence_unknown"] = true
+	}
+	s.finishCaptchaParent(parentTaskID, "cancelled", "图片验证码恢复已取消", result)
 	return true
 }
 
@@ -669,6 +743,9 @@ func (s *Service) finishCaptchaParent(parentTaskID *string, status, message stri
 	if err != nil {
 		return
 	}
+	if task.Status == "succeeded" || task.Status == "partial" || task.Status == "failed" || task.Status == "cancelled" {
+		return
+	}
 	task.Status, task.Progress, task.Message, task.Result = status, 100, message, result
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := taskstore.SaveFinal(ctx, s.tasks, task); err != nil {
@@ -678,7 +755,13 @@ func (s *Service) finishCaptchaParent(parentTaskID *string, status, message stri
 
 func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, entry string, acceptLoginAgreement bool) business.AuthRecoveryOutcome {
 	host := record.Host
+	expected := cloneAuthRecord(record)
 	outcome := business.AuthRecoveryOutcome{Host: host, Attempted: true}
+	stored, err := s.private.AuthRecord(ctx, host)
+	if err != nil {
+		return failedOutcome(outcome, "credential_read_failed", "鉴权配置读取失败："+safeReason(err.Error()), false, nil, nil)
+	}
+	expectedAuthPresent := stored != nil
 	originalType, originalMode := record.UpstreamType, record.AuthMode
 	if detected, err := s.detectRecoveryPlatform(ctx, record); err == nil {
 		record = detected
@@ -688,7 +771,7 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 	if record.RefreshToken != nil && strings.TrimSpace(*record.RefreshToken) != "" {
 		rotated, refreshErr := s.authenticator.Refresh(ctx, record)
 		if refreshErr == nil {
-			if saveErr := s.commitRecoveredAuth(ctx, rotated, classificationChanged); saveErr != nil {
+			if saveErr := s.commitRecoveredAuth(ctx, rotated, expected, expectedAuthPresent, classificationChanged); saveErr != nil {
 				return failedOutcome(outcome, "credential_commit_failed", "refresh 已复核但凭据保存失败："+saveErr.Error(), false, stringPointer("refresh 已复核"), stringPointer("refresh"))
 			}
 			if saveErr := s.saveRecoveryPreference(ctx, host, rotated.AuthMode, "refresh_token", nil); saveErr != nil {
@@ -736,7 +819,7 @@ func (s *Service) recover(ctx context.Context, record configstore.AuthRecord, en
 		}
 		return failedOutcome(outcome, "vault_login_failed", reason, false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
-	if err := s.commitRecoveredAuth(ctx, loggedIn, classificationChanged); err != nil {
+	if err := s.commitRecoveredAuth(ctx, loggedIn, expected, expectedAuthPresent, classificationChanged); err != nil {
 		return failedOutcome(outcome, "credential_commit_failed", "密码箱登录已复核但凭据保存失败："+safeReason(err.Error()), false, optionalPointer(refreshReason), stringPointer("vault"))
 	}
 	if err := s.saveRecoveryPreference(ctx, host, loggedIn.AuthMode, "vault", &entry); err != nil {
@@ -824,16 +907,10 @@ func recoveryModeForPlatform(current, platform string) string {
 	}
 }
 
-func (s *Service) commitRecoveredAuth(ctx context.Context, record configstore.AuthRecord, classificationChanged bool) error {
+func (s *Service) commitRecoveredAuth(ctx context.Context, record, expected configstore.AuthRecord, expectedAuthPresent, classificationChanged bool) error {
 	record.Host = configstore.CanonicalHost(record.Host)
 	if record.Host == "" {
 		return errors.New("鉴权恢复结果缺少 Host")
-	}
-	if classificationChanged {
-		if committer, ok := s.configurator.(recoveredAuthCommitter); ok {
-			return committer.CommitRecoveredAuth(ctx, record)
-		}
-		return errors.New("鉴权已复核，但服务不支持提交平台类型修复")
 	}
 	guarded, release, err := mutationguard.Acquire(ctx, s.repository, mutationguard.Upstream(record.Host))
 	if err != nil {
@@ -848,7 +925,13 @@ func (s *Service) commitRecoveredAuth(ctx context.Context, record configstore.Au
 	if err != nil {
 		return err
 	}
+	if current != nil && !reflect.DeepEqual(cloneAuthRecord(*current), expected) {
+		return errors.New("鉴权复核期间上游配置已变化，请刷新后重新恢复")
+	}
 	if current == nil {
+		if expectedAuthPresent {
+			return errors.New("鉴权复核期间上游鉴权配置已被删除，请刷新后重新恢复")
+		}
 		source, ok := s.repository.(HostMetadataSource)
 		if !ok {
 			return errors.New("鉴权已复核，但无法确认上游仍然存在")
@@ -860,6 +943,15 @@ func (s *Service) commitRecoveredAuth(ctx context.Context, record configstore.Au
 		if seed == nil {
 			return errors.New("鉴权已复核，但上游已被删除")
 		}
+		if seed.BaseURL != expected.BaseURL || !strings.EqualFold(seed.UpstreamType, expected.UpstreamType) {
+			return errors.New("鉴权复核期间上游配置已变化，请刷新后重新恢复")
+		}
+	}
+	if classificationChanged {
+		if committer, ok := s.configurator.(recoveredAuthCommitter); ok {
+			return committer.CommitRecoveredAuth(guarded, record)
+		}
+		return errors.New("鉴权已复核，但服务不支持提交平台类型修复")
 	}
 	return s.private.SaveAuthRecord(guarded, record, allAuthFields())
 }

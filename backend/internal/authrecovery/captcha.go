@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,21 +77,42 @@ type CaptchaResult struct {
 	VaultEntry      *string `json:"-"`
 }
 
+type CaptchaCancellation struct {
+	Challenge            CaptchaChallenge
+	ParentTaskID         *string
+	CredentialsPersisted *bool
+}
+
+type captchaSubmissionPhase uint8
+
+const (
+	captchaBeforeCommit captchaSubmissionPhase = iota
+	captchaCommitInProgress
+	captchaCommitFinished
+)
+
+type captchaSubmission struct {
+	cancel context.CancelFunc
+	phase  captchaSubmissionPhase
+}
+
 type storedChallenge struct {
-	public       CaptchaChallenge
-	record       configstore.AuthRecord
-	baseURL      string
-	entry        string
-	captchaID    string
-	keyID        string
-	publicKey    string
-	serverOffset int64
-	cookies      map[string]string
-	headers      map[string]string
-	expiresAt    time.Time
-	parentTaskID *string
-	credential   configstore.VaultEntry
-	saveToVault  bool
+	public        CaptchaChallenge
+	record        configstore.AuthRecord
+	expectedAuth  *configstore.AuthRecord
+	baseURL       string
+	entry         string
+	captchaID     string
+	keyID         string
+	publicKey     string
+	serverOffset  int64
+	cookies       map[string]string
+	headers       map[string]string
+	expiresAt     time.Time
+	parentTaskID  *string
+	credential    configstore.VaultEntry
+	saveToVault   bool
+	expectedVault *configstore.VaultEntry
 }
 
 type CaptchaManager struct {
@@ -102,7 +124,7 @@ type CaptchaManager struct {
 	mutationRepository any
 	mu                 sync.Mutex
 	items              map[string]storedChallenge
-	inflight           map[string]struct{}
+	inflight           map[string]*captchaSubmission
 }
 
 func (m *CaptchaManager) UseMutationRepository(repository any) {
@@ -120,7 +142,7 @@ func NewCaptchaManager(private CaptchaPrivateStore, verifier CaptchaVerifier, ca
 	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &CaptchaManager{
 		private: private, verifier: verifier, catalog: catalog, http: &copy, now: time.Now,
-		items: map[string]storedChallenge{}, inflight: map[string]struct{}{},
+		items: map[string]storedChallenge{}, inflight: map[string]*captchaSubmission{},
 	}
 }
 
@@ -154,6 +176,25 @@ func (m *CaptchaManager) prepareCredential(ctx context.Context, record configsto
 	}
 	if !configstore.IsEmailUsername(credential.Username) {
 		return CaptchaChallenge{}, errors.New("所选密码箱项的用户名不是有效邮箱，请选择与当前 Host 匹配的密码项")
+	}
+	expectedAuth, err := m.private.AuthRecord(ctx, host)
+	if err != nil {
+		return CaptchaChallenge{}, err
+	}
+	if expectedAuth != nil {
+		snapshot := cloneAuthRecord(*expectedAuth)
+		expectedAuth = &snapshot
+	}
+	var expectedVault *configstore.VaultEntry
+	if saveToVault {
+		expectedVault, err = m.private.VaultEntry(ctx, entry)
+		if err != nil {
+			return CaptchaChallenge{}, err
+		}
+		if expectedVault != nil {
+			snapshot := cloneVaultEntry(*expectedVault)
+			expectedVault = &snapshot
+		}
 	}
 	headers := captchaBrowserIdentityHeaders(record.BaseURL, record.Headers, credential.Headers)
 	cookies := cloneMap(record.Cookies)
@@ -221,6 +262,7 @@ func (m *CaptchaManager) prepareCredential(ctx context.Context, record configsto
 	}
 	stored := storedChallenge{
 		public: public, record: record, baseURL: strings.TrimRight(record.BaseURL, "/"), entry: entry, captchaID: captchaID,
+		expectedAuth: expectedAuth, expectedVault: expectedVault,
 		keyID: keyID, publicKey: publicKey, serverOffset: serverTime - keyRequestTime, cookies: cookies, headers: headers,
 		expiresAt: expires, parentTaskID: parentTaskID, credential: cloneVaultEntry(credential), saveToVault: saveToVault,
 	}
@@ -247,11 +289,16 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 		m.mu.Unlock()
 		return CaptchaResult{}, errors.New("验证码挑战不存在或已过期，请重新准备")
 	}
-	m.inflight[challengeID] = struct{}{}
+	submitCtx, cancel := context.WithCancel(ctx)
+	submission := &captchaSubmission{cancel: cancel, phase: captchaBeforeCommit}
+	m.inflight[challengeID] = submission
 	m.mu.Unlock()
 	defer func() {
+		cancel()
 		m.mu.Lock()
-		delete(m.inflight, challengeID)
+		if m.inflight[challengeID] == submission && submission.phase != captchaCommitFinished {
+			delete(m.inflight, challengeID)
+		}
 		m.mu.Unlock()
 	}()
 	credential := cloneVaultEntry(challenge.credential)
@@ -262,7 +309,7 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 	if err != nil {
 		return CaptchaResult{}, err
 	}
-	payload, err := m.request(ctx, challenge.baseURL, http.MethodPost, "/api/v1/auth/login", challenge.headers, challenge.cookies, map[string]any{
+	payload, err := m.request(submitCtx, challenge.baseURL, http.MethodPost, "/api/v1/auth/login", challenge.headers, challenge.cookies, map[string]any{
 		"captcha_id": challenge.captchaID, "captcha_code": code, "credential_envelope": envelope,
 	})
 	if err != nil {
@@ -287,18 +334,29 @@ func (m *CaptchaManager) Submit(ctx context.Context, challengeID, code string) (
 	verified.AuthMode, verified.AccessToken, verified.RefreshToken = "sub2api_user_token", &token, refresh
 	verified.AdminKey, verified.UserID = nil, nil
 	verified.Headers, verified.Cookies = cloneMap(challenge.headers), cloneMap(challenge.cookies)
-	if err := m.verifier.Verify(ctx, verified); err != nil {
+	if err := m.verifier.Verify(submitCtx, verified); err != nil {
 		return CaptchaResult{}, fmt.Errorf("验证码登录成功但鉴权复核失败：%w", err)
 	}
-	catalog, err := m.catalog.ReadCatalog(ctx, verified)
+	catalog, err := m.catalog.ReadCatalog(submitCtx, verified)
 	if err != nil {
 		return CaptchaResult{}, fmt.Errorf("验证码登录成功但分组目录复核失败：%w", err)
 	}
-	if err := m.commitVerified(ctx, challenge, verified, credential); err != nil {
+	m.mu.Lock()
+	if submitCtx.Err() != nil {
+		m.mu.Unlock()
+		return CaptchaResult{}, submitCtx.Err()
+	}
+	submission.phase = captchaCommitInProgress
+	m.mu.Unlock()
+	if err := m.commitVerified(submitCtx, challenge, verified, credential); err != nil {
 		return CaptchaResult{}, err
 	}
 	m.mu.Lock()
-	delete(m.items, challengeID)
+	submission.phase = captchaCommitFinished
+	if submitCtx.Err() != nil {
+		m.mu.Unlock()
+		return CaptchaResult{}, submitCtx.Err()
+	}
 	m.mu.Unlock()
 	vaultEntry := strings.TrimSpace(credential.Entry)
 	return CaptchaResult{
@@ -338,8 +396,29 @@ func (m *CaptchaManager) commitVerified(
 			return errors.New("验证码登录已复核，但上游已被删除")
 		}
 	}
-	if _, err := m.private.AuthRecord(guarded, host); err != nil {
+	current, err := m.private.AuthRecord(guarded, host)
+	if err != nil {
 		return err
+	}
+	if current != nil {
+		normalized := cloneAuthRecord(*current)
+		current = &normalized
+	}
+	if !reflect.DeepEqual(current, challenge.expectedAuth) {
+		return errors.New("验证码登录已复核，但鉴权配置已变更，请重新准备验证码")
+	}
+	if challenge.saveToVault {
+		currentVault, err := m.private.VaultEntry(guarded, credential.Entry)
+		if err != nil {
+			return err
+		}
+		if currentVault != nil {
+			normalized := cloneVaultEntry(*currentVault)
+			currentVault = &normalized
+		}
+		if !reflect.DeepEqual(currentVault, challenge.expectedVault) {
+			return errors.New("验证码登录已复核，但密码箱项已变更，请重新准备验证码")
+		}
 	}
 	verified.Host = host
 	if err := m.private.SaveAuthRecord(guarded, verified, allAuthFields()); err != nil {
@@ -364,20 +443,46 @@ func allVaultFields() map[string]bool {
 	return map[string]bool{"username": true, "password": true, "hosts": true, "headers": true}
 }
 
-func (m *CaptchaManager) Cancel(challengeID string) (*CaptchaChallenge, *string) {
+func (m *CaptchaManager) Cancel(challengeID string) *CaptchaCancellation {
 	challengeID = strings.TrimSpace(challengeID)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, busy := m.inflight[challengeID]; busy {
-		return nil, nil
-	}
 	challenge, found := m.items[challengeID]
 	if !found {
-		return nil, nil
+		return nil
+	}
+	var credentialsPersisted *bool
+	if submission := m.inflight[challengeID]; submission != nil {
+		switch submission.phase {
+		case captchaBeforeCommit:
+			value := false
+			credentialsPersisted = &value
+		case captchaCommitFinished:
+			value := true
+			credentialsPersisted = &value
+		}
+		submission.cancel()
+	} else {
+		value := false
+		credentialsPersisted = &value
 	}
 	delete(m.items, challengeID)
-	public := challenge.public
-	return &public, challenge.parentTaskID
+	delete(m.inflight, challengeID)
+	return &CaptchaCancellation{
+		Challenge: challenge.public, ParentTaskID: challenge.parentTaskID,
+		CredentialsPersisted: credentialsPersisted,
+	}
+}
+
+func (m *CaptchaManager) Complete(challengeID string) {
+	m.mu.Lock()
+	challengeID = strings.TrimSpace(challengeID)
+	if submission := m.inflight[challengeID]; submission != nil {
+		submission.cancel()
+	}
+	delete(m.items, challengeID)
+	delete(m.inflight, challengeID)
+	m.mu.Unlock()
 }
 
 func (m *CaptchaManager) request(ctx context.Context, baseURL, method, path string, headers, cookies map[string]string, body any) (map[string]any, error) {
@@ -410,6 +515,9 @@ func (m *CaptchaManager) request(ctx context.Context, baseURL, method, path stri
 	}
 	response, err := m.http.Do(request)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("验证码网络请求失败：%T", err)
 	}
 	defer response.Body.Close()

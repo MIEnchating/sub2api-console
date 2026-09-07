@@ -554,6 +554,7 @@ type recordingRoutingRepository struct {
 	mu         sync.Mutex
 	operations []business.AccountOperation
 	events     []string
+	payloads   []map[string]any
 }
 
 func (r *recordingRoutingRepository) RecordAccountOperation(_ context.Context, operation business.AccountOperation) error {
@@ -568,11 +569,12 @@ func (r *recordingRoutingRepository) RecordRuntimeEvent(
 	eventType string,
 	_ string,
 	_ string,
-	_ map[string]any,
+	payload map[string]any,
 ) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, eventType)
+	r.payloads = append(r.payloads, copyMap(payload))
 	return int64(len(r.events)), nil
 }
 
@@ -639,6 +641,18 @@ func TestRecordRuntimeEventPersistsBusinessFailureWhileContextIsActive(t *testin
 
 	if repository.eventCount() != 1 {
 		t.Fatal("active business failure event was not recorded")
+	}
+}
+
+func TestRecordRuntimeEventAddsRoutingBatchIdentity(t *testing.T) {
+	repository := &recordingRoutingRepository{}
+	service := newTestService(repository, nil)
+	ctx := withRoutingEventContext(context.Background(), "routing-batch-1", "自动巡检")
+
+	service.recordRuntimeEvent(ctx, "routing.applied", "succeeded", "applied", map[string]any{"account_id": "41"})
+
+	if len(repository.payloads) != 1 || repository.payloads[0]["batch_id"] != "routing-batch-1" || repository.payloads[0]["actor"] != "自动巡检" {
+		t.Fatalf("routing event batch metadata=%#v", repository.payloads)
 	}
 }
 

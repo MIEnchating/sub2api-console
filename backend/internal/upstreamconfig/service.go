@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/url"
 	"strings"
 	"time"
 
@@ -68,6 +69,14 @@ type Service struct {
 
 type classificationStore interface {
 	UpdateUpstreamClassification(context.Context, string, string, string) error
+}
+
+type hostRenamer interface {
+	RenameUpstreamHost(context.Context, string, string) error
+}
+
+type authHostRenamer interface {
+	RenameAuthRecord(context.Context, string, string) error
 }
 
 type Input struct {
@@ -162,7 +171,6 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		result.BaseURL, result.UpstreamType, result.AuthMode = record.BaseURL, record.UpstreamType, record.AuthMode
 		result.HasAccessToken, result.HasRefreshToken = nonblank(record.AccessToken), nonblank(record.RefreshToken)
 		result.HasAdminKey, result.HasUserID = nonblank(record.AdminKey), nonblank(record.UserID)
-		result.Headers = cloneMap(record.Headers)
 		result.HeaderNames, result.CookieNames = sortedKeys(record.Headers), sortedKeys(record.Cookies)
 	}
 	return result, nil
@@ -225,7 +233,17 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if host == "" {
 		return Configuration{}, inputError(errors.New("上游 Host 不能为空"))
 	}
+	targetHost := host
+	if strings.TrimSpace(input.Host) != "" {
+		targetHost = configstore.CanonicalHost(input.Host)
+	}
+	if targetHost == "" {
+		return Configuration{}, inputError(errors.New("上游 Host 无效"))
+	}
 	resources := []string{}
+	if targetHost != host {
+		resources = append(resources, mutationguard.Upstream(targetHost))
+	}
 	if vault := vaultMutationResource(host, input, false); vault != "" {
 		resources = append(resources, vault)
 	}
@@ -250,22 +268,50 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if err != nil {
 		return Configuration{}, err
 	}
-	record, vaultChange, err := s.prepareVerified(ctx, host, input, existing, false)
+	record, vaultChange, err := s.prepareVerified(ctx, targetHost, input, existing, false)
 	if err != nil {
 		return Configuration{}, inputError(err)
 	}
 	if err := normalizeAccountBaseURL(&input, record.BaseURL); err != nil {
 		return Configuration{}, inputError(err)
 	}
+	migrated := false
+	if targetHost != host {
+		businessRenamer, ok := s.business.(hostRenamer)
+		privateRenamer, privateOK := s.private.(authHostRenamer)
+		if !ok || !privateOK {
+			return Configuration{}, inputError(errors.New("当前存储不支持迁移上游 Host"))
+		}
+		if err := businessRenamer.RenameUpstreamHost(ctx, host, targetHost); err != nil {
+			return Configuration{}, inputError(err)
+		}
+		if err := privateRenamer.RenameAuthRecord(ctx, host, targetHost); err != nil {
+			rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+			defer cancelRollback()
+			return Configuration{}, inputError(errors.Join(err,
+				rollbackFailure("上游 Host", businessRenamer.RenameUpstreamHost(rollbackCtx, targetHost, host))))
+		}
+		migrated = true
+	}
 	writeResult, err := s.commitPrivateAndPublic(ctx, record, input, vaultChange, false)
 	if err != nil {
+		if migrated {
+			rollbackCtx, cancelRollback := detachedOperationContext(ctx)
+			defer cancelRollback()
+			if businessRenamer, ok := s.business.(hostRenamer); ok {
+				err = errors.Join(err, rollbackFailure("上游 Host", businessRenamer.RenameUpstreamHost(rollbackCtx, targetHost, host)))
+			}
+			if privateRenamer, ok := s.private.(authHostRenamer); ok {
+				err = errors.Join(err, rollbackFailure("鉴权 Host", privateRenamer.RenameAuthRecord(rollbackCtx, targetHost, host)))
+			}
+		}
 		return Configuration{}, err
 	}
 	release()
 	var rateSyncTaskID, rateSyncError, baseURLSyncTaskID, baseURLSyncError *string
 	syncHost := configstore.CanonicalHost(writeResult.PrimaryHost)
 	if syncHost == "" {
-		syncHost = host
+		syncHost = targetHost
 	}
 	if s.scheduler != nil && decimalChanged(previous.RechargeRate, writeResult.RechargeRate) {
 		scheduleCtx, cancelSchedule := detachedOperationContext(ctx)
@@ -298,7 +344,7 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	}
 	cancelEvent()
 	readCtx, cancelRead := detachedOperationContext(ctx)
-	result, err := s.Get(readCtx, host)
+	result, err := s.Get(readCtx, targetHost)
 	cancelRead()
 	if err != nil {
 		return Configuration{}, fmt.Errorf("上游配置已保存，但读取保存结果失败：%w", err)
@@ -324,7 +370,14 @@ func decimalChanged(before, after string) bool {
 }
 
 func sameBaseURL(left, right string) bool {
-	return strings.EqualFold(strings.TrimRight(strings.TrimSpace(left), "/"), strings.TrimRight(strings.TrimSpace(right), "/"))
+	leftURL, leftErr := url.Parse(strings.TrimRight(strings.TrimSpace(left), "/"))
+	rightURL, rightErr := url.Parse(strings.TrimRight(strings.TrimSpace(right), "/"))
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	leftURL.Scheme, rightURL.Scheme = strings.ToLower(leftURL.Scheme), strings.ToLower(rightURL.Scheme)
+	leftURL.Host, rightURL.Host = strings.ToLower(leftURL.Host), strings.ToLower(rightURL.Host)
+	return leftURL.String() == rightURL.String()
 }
 
 func (s *Service) ConfigureAuthRecord(ctx context.Context, input Input) (string, error) {

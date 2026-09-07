@@ -8,6 +8,8 @@ import (
 	"math/big"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 // ValidateNewAPIQuotaUnit records the live unit and proves that the report
@@ -145,7 +147,7 @@ func seedQuotaUnitFromUpstreamMetadata(ctx context.Context, tx *sql.Tx, host str
 }
 
 func positiveQuotaUnit(raw string) (*big.Rat, error) {
-	value, ok := new(big.Rat).SetString(strings.TrimSpace(raw))
+	value, ok := decimalutil.Parse(raw)
 	if !ok || value.Sign() <= 0 {
 		return nil, errors.New("已保存的 NewAPI quota_per_unit 历史值无效")
 	}

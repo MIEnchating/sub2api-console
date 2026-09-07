@@ -40,7 +40,7 @@ func (s *ManualService) Enqueue(ctx context.Context, request RunRequest) (taskst
 	if err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, request) }); err != nil {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) { s.execute(parent, task, request) }); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}

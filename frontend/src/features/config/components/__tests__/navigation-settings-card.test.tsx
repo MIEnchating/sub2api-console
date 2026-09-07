@@ -37,7 +37,12 @@ describe("菜单设置卡片", () => {
     expect(markup).toContain("当前显示 2 / 3 个菜单入口");
     expect(markup).toContain("运营管理");
     expect(markup).toContain("系统管理");
+    expect(markup.match(/data-testid="navigation-settings-items"/g)).toHaveLength(2);
+    expect(markup).toContain("sm:grid-cols-2 lg:grid-cols-3");
     expect(markup).toContain('aria-label="在菜单中显示运营总览"');
+    expect(markup).toContain('aria-label="运营总览说明"');
+    expect(markup).toContain('aria-label="账号管理说明"');
+    expect(markup).not.toContain(">/accounts<");
     expect(markup).toMatch(
       /<span(?=[^>]*role="switch")(?=[^>]*aria-label="在菜单中显示账号管理")(?=[^>]*aria-checked="false")[^>]*>/,
     );
@@ -47,7 +52,8 @@ describe("菜单设置卡片", () => {
   it("系统设置固定显示且默认状态不能执行恢复", () => {
     const markup = renderCard(new Set());
 
-    expect(markup).toContain("/config · 始终显示");
+    expect(markup).toContain('aria-label="系统设置说明"');
+    expect(markup).not.toContain("/config · 始终显示");
     expect(markup).toMatch(
       /<span(?=[^>]*role="switch")(?=[^>]*aria-label="在菜单中显示系统设置")(?=[^>]*aria-disabled="true")[^>]*>/,
     );

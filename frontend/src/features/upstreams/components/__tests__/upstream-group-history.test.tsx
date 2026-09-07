@@ -35,4 +35,32 @@ describe("UpstreamGroupHistory", () => {
     expect(markup).toContain("min-h-0 flex-1 overflow-auto");
     expect(markup).toContain('data-table-panel=""');
   });
+
+  it("shows the owning upstream when rendering the top-level change overview", () => {
+    const markup = renderToStaticMarkup(
+      <UpstreamGroupHistory
+        upstreams={[
+          {
+            upstream_id: "up_example",
+            name: "示例上游",
+            host: "api.example.test",
+          },
+        ]}
+        rows={[
+          {
+            id: 2,
+            upstream_id: "up_example",
+            group_id: "7",
+            group_name: "标准组",
+            change_type: "added",
+            changed_at: "2026-08-31T01:00:00Z",
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain(">上游<");
+    expect(markup).toContain("示例上游");
+    expect(markup).toContain("api.example.test");
+  });
 });

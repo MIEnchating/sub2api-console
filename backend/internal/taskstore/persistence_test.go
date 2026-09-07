@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
 type retrySaver struct {
@@ -88,6 +90,21 @@ func TestSaveFinalHonorsCallerCancellation(t *testing.T) {
 	}
 }
 
+func TestPersistLaunchFailureExplainsUnsupportedCancellation(t *testing.T) {
+	saver := &capturedSaver{}
+	task := Task{ID: "task-1", Status: "queued", Message: "任务已排队", Result: map[string]any{}}
+
+	PersistLaunchFailure(saver, task, taskrunner.ErrTaskCancellationUnsupported)
+
+	if len(saver.tasks) != 1 {
+		t.Fatalf("writes=%d", len(saver.tasks))
+	}
+	final := saver.tasks[0]
+	if final.Status != "cancelled" || final.Message != "后台任务执行器不支持取消，任务未启动" || final.Result["cancelled"] != true {
+		t.Fatalf("launch failure task = %#v", final)
+	}
+}
+
 func TestSaveRunningPersistsFailureWhenInitialRunningWriteFails(t *testing.T) {
 	saver := &capturedSaver{failures: 1}
 	task := Task{ID: "task-1", Status: "running", Progress: 10, Message: "running", Result: map[string]any{}}
@@ -130,6 +147,22 @@ func TestMarkCancelledOverridesFailureWithTerminalCancellation(t *testing.T) {
 	}
 }
 
+func TestMarkCancelledTransitionsWaitingInputToCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	task := Task{
+		Status: "waiting_input", Progress: 90, Message: "等待用户输入",
+		Result: map[string]any{"challenge": "pending"},
+	}
+
+	if !MarkCancelled(ctx, &task, "任务已取消") {
+		t.Fatal("expected waiting_input task cancellation")
+	}
+	if task.Status != "cancelled" || task.Progress != 100 || task.Message != "任务已取消" || task.Result["cancelled"] != true {
+		t.Fatalf("cancelled waiting_input task = %#v", task)
+	}
+}
+
 func TestMarkCancelledDoesNotMaskContextFailureCause(t *testing.T) {
 	leaseErr := errors.New("mutation lease lost")
 	ctx, cancel := context.WithCancelCause(context.Background())
@@ -169,26 +202,26 @@ func TestMarkCancelledDoesNotPreserveAnEmptyOperationError(t *testing.T) {
 	}
 }
 
-func TestMarkCancelledPreservesWorkThatAlreadySucceeded(t *testing.T) {
+func TestMarkCancelledOverridesUnpersistedSuccessAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	task := Task{Status: "succeeded", Progress: 100, Message: "complete", Result: map[string]any{"value": true}}
-	if MarkCancelled(ctx, &task, "任务已取消") {
-		t.Fatal("late cancellation overwrote completed work")
+	if !MarkCancelled(ctx, &task, "任务已取消") {
+		t.Fatal("accepted cancellation did not override the unpersisted success state")
 	}
-	if task.Status != "succeeded" || task.Result["value"] != true {
-		t.Fatalf("completed task = %#v", task)
+	if task.Status != "cancelled" || task.Result["cancelled"] != true || task.Result["value"] != true {
+		t.Fatalf("cancelled task = %#v", task)
 	}
 }
 
-func TestMarkCancelledPreservesSucceededTaskAfterContextFailure(t *testing.T) {
+func TestMarkCancelledChangesUnpersistedSuccessToFailureAfterContextFailure(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(errors.New("late lease failure"))
 	task := Task{Status: "succeeded", Progress: 100, Message: "complete", Result: map[string]any{"value": true}}
 	if MarkCancelled(ctx, &task, "任务已取消") {
-		t.Fatal("late context failure changed the cancellation result")
+		t.Fatal("context failure was treated as an ordinary cancellation")
 	}
-	if task.Status != "succeeded" || task.Message != "complete" || task.Result["value"] != true || task.Result["error"] != nil {
-		t.Fatalf("completed task = %#v", task)
+	if task.Status != "failed" || task.Message != "任务执行失败：late lease failure" || task.Result["value"] != true || task.Result["error"] != "late lease failure" {
+		t.Fatalf("failed task = %#v", task)
 	}
 }

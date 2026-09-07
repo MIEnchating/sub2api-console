@@ -23,10 +23,10 @@ describe("terminal task refresh contract", () => {
     expect(terminalRefreshKeys("alerts", { status: "running" } as never)).toEqual([]);
   });
 
-  it("refreshes auth configuration when an upstream task waits for operator input", () => {
-    expect(
-      terminalRefreshKeys("upstream-action", { status: "waiting_input" } as never),
-    ).toContainEqual(["auth-recovery-config"]);
+  it("does not run terminal refreshes while an upstream task waits for operator input", () => {
+    expect(terminalRefreshKeys("upstream-action", { status: "waiting_input" } as never)).toEqual(
+      [],
+    );
   });
 
   it("refreshes live catalogs and logs after upstream and onboarding tasks", () => {

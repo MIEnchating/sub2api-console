@@ -3,7 +3,28 @@ package business
 import (
 	"context"
 	"testing"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 )
+
+func TestAccountOperationPersistsBackgroundTaskID(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := taskcontext.WithID(context.Background(), "inspection-task-42")
+	if err := store.RecordAccountOperation(ctx, AccountOperation{
+		OperationID: "routing-writeback-1", OperationType: "routing.writeback", State: "succeeded", Phase: "readback",
+		Actor: "自动巡检", RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: "41", Writeback: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var taskID string
+	if err := store.db.QueryRowContext(ctx, `SELECT task_id FROM operation_audit WHERE operation_id=?`, "routing-writeback-1").Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	if taskID != "inspection-task-42" {
+		t.Fatalf("task_id=%q", taskID)
+	}
+}
 
 func TestAccountMultiplierChangeAlertsRequireANumericChange(t *testing.T) {
 	store := openPolicyStore(t)
@@ -173,7 +194,7 @@ func TestAccountHostEditPreservesStableBindingIdentity(t *testing.T) {
 		OperationID: "host-41", OperationType: "account.fields.sync", State: "succeeded", Phase: "readback",
 		Actor: "operator", RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: "41", Writeback: true,
 	}
-	if err := store.CommitAccountFieldsReadback(ctx, "41", nil, nil, nil, nil, nil, &host, nil, false, nil, operation); err != nil {
+	if err := store.CommitAccountFieldsReadback(ctx, "41", nil, nil, nil, nil, nil, nil, &host, nil, false, nil, operation); err != nil {
 		t.Fatal(err)
 	}
 	var recordedHost, afterID string

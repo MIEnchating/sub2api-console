@@ -30,7 +30,7 @@ import (
 
 type Repository interface {
 	ControlPolicy(context.Context) (map[string]any, error)
-	ProbeCandidates(context.Context, *string, *string) ([]business.ProbeCandidate, error)
+	ProbeCandidates(context.Context, *string, *string, *string) ([]business.ProbeCandidate, error)
 	PersistProbeSamples(context.Context, []business.ProbeSample) (int, error)
 }
 
@@ -45,13 +45,31 @@ type TaskStore interface {
 type Request struct {
 	AccountID *string
 	GroupName *string
+	// SelectedAccountIDs is an explicit manual batch, independent of scheduler filters.
+	SelectedAccountIDs []string
+	// Platform selects all probe-eligible accounts whose recorded platform is
+	// an exact, case-insensitive match. It must be paired with ProbeModel.
+	Platform *string
 	// Automatic marks requests created by the inspection scheduler. Public API
 	// handlers leave it false so manual probes are not gated by scheduling policy.
 	Automatic bool
 	// AccountIDs is used by the inspection fallback to execute one bounded
-	// probe batch. The public API accepts only AccountID; callers cannot submit
-	// this internal selection directly.
+	// probe batch. Public manual batches use SelectedAccountIDs instead of
+	// this internal selection and its automatic scheduling semantics.
 	AccountIDs []string
+	// OnePerAccount collapses internal maintenance batches to one configured
+	// probe model per account even when an account belongs to multiple groups.
+	OnePerAccount bool
+	// ProbeModel explicitly selects the only model used by an internal batch.
+	// Accounts without this enabled model remain in the result as skipped.
+	ProbeModel string
+	// ProbeModels selects one model per account for an internal batch. It takes
+	// precedence over ProbeModel and keeps account-specific catalogs independent.
+	ProbeModels map[string]string
+	// FreshTrafficCheck lets automatic evidence collection revalidate a queued
+	// account immediately before its outbound probe. Check failures fall back to
+	// probing so monitoring outages do not suppress health evidence.
+	FreshTrafficCheck func(context.Context, string) (bool, error)
 }
 
 type RunSummary struct {
@@ -78,15 +96,17 @@ type RetryConfig struct {
 }
 
 type Target struct {
-	AccountID  string
-	GroupName  string
-	GroupID    *string
-	Model      *string
-	SkipReason *string
+	AccountID   string
+	AccountName string
+	GroupName   string
+	GroupID     *string
+	Model       *string
+	SkipReason  *string
 }
 
 type Result struct {
 	AccountID          string  `json:"account_id"`
+	AccountName        string  `json:"account_name"`
 	GroupName          string  `json:"group_name"`
 	Result             string  `json:"result"`
 	LatencyP50         *string `json:"latency_p50_ms"`
@@ -104,6 +124,7 @@ type Result struct {
 }
 
 type preparedRun struct {
+	request        Request
 	config         Config
 	target         configstore.TargetSettings
 	targets        []Target
@@ -113,6 +134,9 @@ type preparedRun struct {
 type targetOptions struct {
 	applySchedulingPolicy bool
 	allowDisabledProbe    bool
+	probeModel            string
+	probeModels           map[string]string
+	forceProbeModel       bool
 }
 
 type Service struct {
@@ -143,10 +167,19 @@ func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (tasks
 		ID: id, Skill: "sub2api-connectivity-test", Operation: "active-probe", Status: "queued", Progress: 0,
 		Message: "主动探测已排队", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
 	}
+	if prepared.request.Platform != nil {
+		task.Result["platform"] = *prepared.request.Platform
+		task.Result["model"] = prepared.request.ProbeModel
+		task.Result["system_info"] = true
+	}
+	if prepared.request.SelectedAccountIDs != nil {
+		task.Result["account_ids"] = prepared.request.SelectedAccountIDs
+		task.Result["system_info"] = true
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) { s.execute(parent, task, prepared) }); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}
@@ -154,6 +187,42 @@ func (s *Service) Enqueue(ctx context.Context, request Request, _ string) (tasks
 }
 
 func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, error) {
+	selectedIDs, err := manualBatchIDs(request)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	request.SelectedAccountIDs = selectedIDs
+	request.ProbeModel = strings.TrimSpace(request.ProbeModel)
+	if utf8.RuneCountInString(request.ProbeModel) > 256 {
+		return preparedRun{}, errors.New("实际验证模型长度不能超过 256")
+	}
+	normalizedProbeModels := make(map[string]string, len(request.ProbeModels))
+	for rawAccountID, rawModel := range request.ProbeModels {
+		accountID := strings.TrimSpace(rawAccountID)
+		model := strings.TrimSpace(rawModel)
+		if !stablePositiveID(accountID) {
+			return preparedRun{}, errors.New("账号实际验证模型必须使用稳定数字账号 ID")
+		}
+		if model == "" || utf8.RuneCountInString(model) > 256 {
+			return preparedRun{}, errors.New("账号实际验证模型必须是长度不超过 256 的非空字符串")
+		}
+		normalizedProbeModels[accountID] = model
+	}
+	request.ProbeModels = normalizedProbeModels
+	if request.Platform != nil {
+		platform := strings.ToLower(strings.TrimSpace(*request.Platform))
+		if platform == "" || utf8.RuneCountInString(platform) > 64 {
+			return preparedRun{}, errors.New("平台标识不能为空且长度不能超过 64")
+		}
+		if request.AccountID != nil || request.GroupName != nil || len(request.AccountIDs) > 0 || len(request.ProbeModels) > 0 || request.Automatic {
+			return preparedRun{}, errors.New("平台模型探活不能与其他探测范围混用")
+		}
+		if request.ProbeModel == "" {
+			return preparedRun{}, errors.New("平台模型探活必须输入模型")
+		}
+		request.Platform = &platform
+		request.OnePerAccount = true
+	}
 	automatic := request.Automatic || len(request.AccountIDs) > 0
 	recoverySelection := automatic && len(request.AccountIDs) > 0
 	policy, err := s.repository.ControlPolicy(ctx)
@@ -188,16 +257,31 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	} else if err := applyRetryPolicy(&config, policy); err != nil {
 		return preparedRun{}, err
 	}
-	candidates, err := s.repository.ProbeCandidates(ctx, request.AccountID, request.GroupName)
+	candidates, err := s.repository.ProbeCandidates(ctx, request.AccountID, request.GroupName, request.Platform)
 	if err != nil {
 		return preparedRun{}, err
+	}
+	if selectedIDs != nil {
+		candidates, err = selectManualCandidates(candidates, selectedIDs)
+		if err != nil {
+			return preparedRun{}, err
+		}
 	}
 	targets, err := buildTargets(candidates, policy, targetOptions{
 		applySchedulingPolicy: automatic,
 		allowDisabledProbe:    recoverySelection,
+		probeModel:            request.ProbeModel,
+		probeModels:           request.ProbeModels,
+		forceProbeModel:       request.Platform != nil,
 	})
 	if err != nil {
 		return preparedRun{}, err
+	}
+	if request.OnePerAccount {
+		targets = firstProbeTargetPerAccount(targets)
+	}
+	if request.Platform != nil && len(targets) == 0 {
+		return preparedRun{}, fmt.Errorf("平台 %s 下没有可探活账号", *request.Platform)
 	}
 	if len(request.AccountIDs) > 0 {
 		selected := make(map[string]struct{}, len(request.AccountIDs))
@@ -219,14 +303,14 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	executable := false
 	var firstReason string
 	for _, target := range targets {
-		if target.Model != nil {
+		if target.Model != nil && target.SkipReason == nil {
 			executable = true
 		}
 		if firstReason == "" && target.SkipReason != nil {
 			firstReason = *target.SkipReason
 		}
 	}
-	if !executable {
+	if !executable && request.ProbeModel == "" && len(request.ProbeModels) == 0 {
 		if firstReason == "" {
 			firstReason = "没有可执行探测的账号"
 			if automatic {
@@ -239,7 +323,24 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	if err != nil {
 		return preparedRun{}, err
 	}
-	return preparedRun{config: config, target: targetSettings, targets: targets, retryByAccount: retryByAccount}, nil
+	return preparedRun{request: request, config: config, target: targetSettings, targets: targets, retryByAccount: retryByAccount}, nil
+}
+
+func firstProbeTargetPerAccount(targets []Target) []Target {
+	result := make([]Target, 0, len(targets))
+	selected := map[string]int{}
+	for _, target := range targets {
+		index, found := selected[target.AccountID]
+		if found {
+			if result[index].Model == nil && target.Model != nil {
+				result[index] = target
+			}
+			continue
+		}
+		selected[target.AccountID] = len(result)
+		result = append(result, target)
+	}
+	return result
 }
 
 func (s *Service) RunNow(ctx context.Context, request Request) (RunSummary, error) {
@@ -271,6 +372,15 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 			"results":      summary.Results,
 			"remote_write": false, "credentials_persisted": false,
 		}
+	}
+	if prepared.request.Platform != nil {
+		task.Result["platform"] = *prepared.request.Platform
+		task.Result["model"] = prepared.request.ProbeModel
+		task.Result["system_info"] = true
+	}
+	if prepared.request.SelectedAccountIDs != nil {
+		task.Result["account_ids"] = prepared.request.SelectedAccountIDs
+		task.Result["system_info"] = true
 	}
 	taskstore.MarkCancelled(ctx, &task, "主动探测已取消")
 	taskstore.PersistFinal(s.tasks, task)
@@ -349,7 +459,17 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 		go func() {
 			defer group.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				target := prepared.targets[index]
+				if target.SkipReason == nil && prepared.request.FreshTrafficCheck != nil {
+					fresh, checkErr := prepared.request.FreshTrafficCheck(ctx, target.AccountID)
+					if checkErr == nil && fresh {
+						outcomes <- indexedResult{index: index, result: skippedProbeResult(target, "检测到新鲜真实流量，已跳过主动探测")}
+						continue
+					}
+				}
 				retry := prepared.config.Retry
 				if prepared.config.RetrySource == "sub2api_pool" {
 					retry = prepared.retryByAccount[target.AccountID]
@@ -383,6 +503,9 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 	}
 	sort.Slice(results, func(left, right int) bool {
 		if results[left].AccountID == results[right].AccountID {
+			if results[left].GroupName == results[right].GroupName {
+				return results[left].RequestModel < results[right].RequestModel
+			}
 			return results[left].GroupName < results[right].GroupName
 		}
 		return stableNumericLess(results[left].AccountID, results[right].AccountID)
@@ -391,10 +514,10 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 }
 
 func probeTarget(ctx context.Context, client *adminclient.Client, target Target, config Config, retry RetryConfig) Result {
-	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	if target.SkipReason != nil {
-		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "跳过", FailureReason: target.SkipReason, ObservedAt: observed}
+		return skippedProbeResult(target, *target.SkipReason)
 	}
+	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	started := time.Now()
 	var lastStatus *int
 	var firstResponse bool
@@ -425,7 +548,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
 	if firstResponse {
 		latency := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
-		return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
+		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -436,7 +559,18 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
+	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
+}
+
+func skippedProbeResult(target Target, reason string) Result {
+	requestModel := ""
+	if target.Model != nil {
+		requestModel = *target.Model
+	}
+	return Result{
+		AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName,
+		Result: "跳过", FailureReason: &reason, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), RequestModel: requestModel,
+	}
 }
 
 func waitForRetry(ctx context.Context, delay time.Duration) bool {
@@ -836,16 +970,50 @@ func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, o
 				primary = candidate
 			}
 		}
-		target := Target{AccountID: primary.AccountID, GroupName: primary.GroupName, GroupID: primary.GroupID}
+		target := Target{AccountID: primary.AccountID, AccountName: primary.AccountName, GroupName: primary.GroupName, GroupID: primary.GroupID}
 		if primary.MetadataErr != nil {
 			reason := "账号 metadata 配置无效"
 			target.SkipReason = &reason
+			result = append(result, target)
+		} else if accountProbeModel(options, accountID) != "" {
+			model := accountProbeModel(options, accountID)
+			target.Model = &model
+			if !options.forceProbeModel && !containsFold(primary.KnownModels, model) {
+				reason := "所选实际验证模型不在该账号的已启用模型中"
+				target.SkipReason = &reason
+			} else if !options.forceProbeModel {
+				for _, knownModel := range primary.KnownModels {
+					if strings.EqualFold(strings.TrimSpace(knownModel), model) {
+						canonical := strings.TrimSpace(knownModel)
+						target.Model = &canonical
+						break
+					}
+				}
+			}
+			result = append(result, target)
 		} else {
-			target.Model, target.SkipReason = resolveModel(policy, primary.AccountID, primary.GroupID, primary.KnownModels, options)
+			models, reason := resolveModels(policy, primary.AccountID, primary.GroupID, primary.KnownModels, options)
+			if reason != nil {
+				target.SkipReason = reason
+				result = append(result, target)
+				continue
+			}
+			for _, configuredModel := range models {
+				model := configuredModel
+				modelTarget := target
+				modelTarget.Model = &model
+				result = append(result, modelTarget)
+			}
 		}
-		result = append(result, target)
 	}
 	return result, nil
+}
+
+func accountProbeModel(options targetOptions, accountID string) string {
+	if model := strings.TrimSpace(options.probeModels[accountID]); model != "" {
+		return model
+	}
+	return strings.TrimSpace(options.probeModel)
 }
 
 func probeMembershipLess(left, right business.ProbeCandidate) bool {
@@ -940,24 +1108,50 @@ func eligibleScope(candidate business.ProbeCandidate, policy map[string]any) (bo
 	return true, nil
 }
 
-func resolveModel(policy map[string]any, accountID string, groupID *string, knownModels []string, options ...targetOptions) (*string, *string) {
+func resolveModels(policy map[string]any, accountID string, groupID *string, knownModels []string, options ...targetOptions) ([]string, *string) {
 	applySchedulingPolicy := len(options) == 0 || options[0].applySchedulingPolicy
 	allowDisabledProbe := len(options) > 0 && options[0].allowDisabledProbe
 	if !applySchedulingPolicy {
-		return resolveManualModel(knownModels)
+		model, reason := resolveManualModel(knownModels)
+		if model == nil {
+			return nil, reason
+		}
+		return []string{*model}, nil
 	}
 	if rawModels, present := policy["account_test_models"]; present {
 		models, ok := rawModels.(map[string]any)
 		if !ok {
 			return nil, textPointer("账号探测模型配置无效")
 		}
-		if rawModel, found := models[accountID]; found {
-			model, ok := rawModel.(string)
-			if !ok || strings.TrimSpace(model) == "" {
+		if rawAccountModels, found := models[accountID]; found {
+			values := []any{}
+			switch configured := rawAccountModels.(type) {
+			case string:
+				values = []any{configured}
+			case []any:
+				values = configured
+			default:
 				return nil, textPointer("账号探测模型配置无效")
 			}
-			value := strings.TrimSpace(model)
-			return &value, nil
+			if len(values) == 0 || len(values) > 20 {
+				return nil, textPointer("账号探测模型配置无效")
+			}
+			result := make([]string, 0, len(values))
+			seen := map[string]struct{}{}
+			for _, rawModel := range values {
+				model, valid := rawModel.(string)
+				model = strings.TrimSpace(model)
+				if !valid || model == "" || utf8.RuneCountInString(model) > 256 {
+					return nil, textPointer("账号探测模型配置无效")
+				}
+				key := strings.ToLower(model)
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
+				result = append(result, model)
+			}
+			return result, nil
 		}
 	}
 	if groupID != nil && strings.TrimSpace(*groupID) != "" {
@@ -998,7 +1192,7 @@ func resolveModel(policy map[string]any, accountID string, groupID *string, know
 			} else if model, ok := raw.(string); ok {
 				if strings.TrimSpace(model) != "" {
 					value := strings.TrimSpace(model)
-					return &value, nil
+					return []string{value}, nil
 				}
 			} else {
 				return nil, textPointer("分组测试模型配置无效")
@@ -1015,11 +1209,11 @@ func resolveModel(policy map[string]any, accountID string, groupID *string, know
 			return nil, textPointer("默认探测模型配置无效")
 		}
 		if value := strings.TrimSpace(model); value != "" {
-			return &value, nil
+			return []string{value}, nil
 		}
 	}
 	if model := firstKnownModel(knownModels); model != nil {
-		return model, nil
+		return []string{*model}, nil
 	}
 	return nil, textPointer("没有可用探测模型")
 }

@@ -48,12 +48,12 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 				"excluded_account_ids": []any{"42"}, "manual_fused_account_ids": []any{"43"},
 			},
 			"probe": map[string]any{
-				"enabled": false, "timeout_seconds": int64(61), "concurrency": int64(5),
+				"freshness_seconds": int64(1200), "enabled": false, "timeout_seconds": int64(61), "concurrency": int64(5),
 				"prompt": "contract probe", "skip_when_traffic_fresh": false, "traffic_fresh_seconds": int64(181),
 			},
 			"traffic": map[string]any{"refresh_seconds": int64(71)},
 			"scoring": map[string]any{
-				"short_window": int64(11), "long_window": int64(67), "latest_weight": 0.55,
+				"history_window_minutes": int64(720), "short_window": int64(11), "long_window": int64(67), "latest_weight": 0.55,
 				"short_ratio": 0.65, "slow_ttfb_ms": int64(5100),
 				"event_scores": map[string]any{
 					"perfect": 99.5, "slow_ttfb": 64.5, "upstream_unknown": 39.5,
@@ -123,8 +123,8 @@ func TestGuardianPolicyPersistsAndReachesRoutingExecution(t *testing.T) {
 func assertEngineContract(t *testing.T, config engineConfig) {
 	t.Helper()
 	if config.strategy != "speed_first" || config.trafficEnabled ||
-		config.trafficMaxAge != 131*time.Minute || config.probeMaxAge != 933*time.Second ||
-		config.shortWindow != 11 || config.longWindow != 67 || config.breakerEnabled || config.hardFatal ||
+		config.trafficMaxAge != 131*time.Minute || config.probeMaxAge != 1200*time.Second ||
+		config.historyMaxAge != 720*time.Minute || config.shortWindow != 11 || config.longWindow != 67 || config.breakerEnabled || config.hardFatal ||
 		config.httpWindow != 7 || config.httpFailures != 4 || config.transientFailures != 3 || config.httpScoreBelow != 61.5 ||
 		config.latencyWindow != 12 || config.latencyOccurrences != 6 || config.latencyTTFBMS != 16000 ||
 		config.maxSwitch != 2 || config.minPool != 2 || config.minPoolScore != 4.5 ||

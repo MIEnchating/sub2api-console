@@ -1,8 +1,12 @@
+import { GroupBatchDialog } from "./features/groups/components/group-batch-dialog";
+import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
+import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
 import * as React from "react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
+  Ban,
   BellRing,
   BadgeCheck,
   BadgeDollarSign,
@@ -24,6 +28,7 @@ import {
   KeyRound,
   Layers3,
   Link2,
+  ListTodo,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -57,7 +62,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Outlet, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
@@ -67,7 +72,6 @@ import {
   api,
   type AccountControlAction,
   type AccountDeleteBatchPreview,
-  type AccountDeletePreview,
   type AccountStatus,
   type AutoInspectionConfig,
   type AutoInspectionStatus,
@@ -86,6 +90,7 @@ import {
   type Task,
   type UpstreamConfiguration,
   type UpstreamGroup,
+  type UpstreamGroupBindingAudit,
   type UpstreamSummary,
 } from "./api";
 import { Button } from "./components/ui/button";
@@ -94,7 +99,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./com
 import { Checkbox } from "./components/ui/checkbox";
 import { Input } from "./components/ui/input";
 import { Progress } from "./components/ui/progress";
-import { TaskProgressState, TaskStartupState } from "./components/task-startup-state";
+import {
+  TaskCancelButton,
+  TaskProgressState,
+  TaskStartupState,
+} from "./components/task-startup-state";
 import { Textarea } from "./components/ui/textarea";
 import {
   Select,
@@ -170,7 +179,12 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "./components/ui/sidebar";
-import { taskIsPending, taskPollInterval, taskStopsPolling } from "./lib/task-state";
+import {
+  taskIsPending,
+  taskIsTerminal,
+  taskPollInterval,
+  taskStopsPolling,
+} from "./lib/task-state";
 import { useClientPagination } from "./hooks/use-client-pagination";
 import { terminalRefreshKeys, type TaskRefreshScope } from "./lib/task-refresh";
 import { flattenTaskResult } from "./lib/task-result";
@@ -188,6 +202,7 @@ import { NotificationQueueStatus } from "./features/alerts/components/notificati
 import {
   GroupPolicyEditorFields,
   groupPolicyDialogLayout,
+  groupProbeModelDraftValue,
 } from "./features/groups/components/group-policy-editor-fields";
 import type { GroupPolicyOverrideDraft } from "./features/groups/components/group-policy-editor-fields";
 import { captchaChallengeFromTask } from "./lib/captcha-challenge";
@@ -205,6 +220,7 @@ import { cn } from "./lib/utils";
 import { StatusBadge } from "./components/status-badge";
 import { TableFilterToolbar } from "./components/data-table/filter-toolbar";
 import { FilterMenu } from "./components/data-table/filter-menu";
+import { NumberRangeFilter } from "./components/data-table/number-range-filter";
 import { DataTablePagination } from "./components/data-table/pagination";
 import { DataTablePanel } from "./components/data-table/table-panel";
 import { TableActionButton } from "./components/data-table/table-action-button";
@@ -226,15 +242,39 @@ import {
   NavigationSettingsCard,
   type NavigationSettingsSection,
 } from "./features/config/components/navigation-settings-card";
+import { AccountCreationSettingsCard } from "./features/config/components/account-creation-settings-card";
+import { SettingsFooter } from "./features/config/components/settings-footer";
+import { ModelSyncSettingsCard } from "./features/config/components/model-sync-settings-card";
+import { ConfigSectionTabs } from "./features/config/components/config-section-tabs";
+import type { ConfigTab } from "./features/config/constants";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
+import { OnboardingCandidateVisibilityFilter } from "./features/upstreams/components/onboarding-candidate-visibility-filter";
+import {
+  OnboardingBatchActionBar,
+  OnboardingAccountType,
+  OnboardingCandidateIdentity,
+  OnboardingInferredPlatformStatus,
+  OnboardingStepIndicator,
+  OnboardingUpstreamSummary,
+  onboardingSelectionLayout,
+} from "./features/upstreams/components/onboarding-batch-workspace";
 import { UpstreamGroupBindingEditor } from "./features/upstreams/components/upstream-group-binding-editor";
 import { UpstreamGroupHistory } from "./features/upstreams/components/upstream-group-history";
+import {
+  summarizeUpstreamGroupBindings,
+  UpstreamGroupBindingAuditTable,
+  upstreamHasGroupBindingAuditIssue,
+} from "./features/upstreams/components/upstream-group-binding-audit";
 import {
   OnboardingConfirmDialog,
   type OnboardingBindingPreview,
 } from "./features/upstreams/components/onboarding-confirm-dialog";
 import { expandOnboardingCreationRequests } from "./features/upstreams/lib/onboarding-requests";
+import {
+  defaultOnlyShowEnabledOnboardingGroups,
+  filterOnboardingCandidates,
+} from "./features/upstreams/lib/onboarding-candidate-visibility";
 import {
   OnboardingProbeAction,
   type OnboardingProbeTarget,
@@ -243,6 +283,10 @@ import { AccountStatusFilter } from "./features/accounts/components/account-stat
 import { AccountSortTableHead } from "./features/accounts/components/account-sort-header";
 import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
+import {
+  AccountDeleteDialog,
+  accountDeleteActionLabel,
+} from "./features/accounts/components/account-delete-dialog";
 import { AccountDetailDialog } from "./features/accounts/components/account-detail-dialog";
 import { AccountSettingsPanel } from "./features/accounts/components/account-settings-panel";
 import {
@@ -250,11 +294,12 @@ import {
   type ProbeDialogTarget,
 } from "./features/accounts/components/account-probe-dialog";
 import { BaseURLCheckResults } from "./features/accounts/components/base-url-check-results";
+import { AccountModelSyncDialog } from "./features/accounts/components/account-model-sync-dialog";
+import { PlatformProbeDialog } from "./features/accounts/components/platform-probe-dialog";
+import { AccountBatchProbeDialog } from "./features/accounts/components/account-batch-probe-dialog";
 import {
   AccountHealthCell,
   AccountIdentityCell,
-  AccountKeyStatusCell,
-  AccountSub2APIStatusCell,
   AccountLatencyCell,
   AccountRecentResultsCell,
   AccountRoutingParametersCell,
@@ -272,16 +317,17 @@ import {
 import { applyAccountDeletionProgress } from "./features/accounts/lib/account-deletion-progress";
 import { sortAccounts, type AccountSort } from "./features/accounts/lib/account-sort";
 import {
+  accountMatchesPlatform,
   accountPlatformLabel,
   concreteAccountPlatformOptions,
   groupPlatformSummary,
 } from "./features/accounts/lib/account-labels";
 import {
-  authMethodLabel,
   authModesForPlatform,
   defaultAuthModeForPlatform,
   parseStringMap,
 } from "./features/upstreams/lib/upstream-edit-schema";
+import { authMethodSummary } from "./features/upstreams/lib/upstream-auth-labels";
 import { UpstreamRecoverySelectionToolbar } from "./features/upstreams/components/upstream-recovery-selection-toolbar";
 import { upstreamRateLabels } from "./features/upstreams/lib/upstream-rate-labels";
 import {
@@ -294,6 +340,7 @@ import {
   visibleNavigationSections,
   writeHiddenNavigationItemIDs,
 } from "./lib/navigation-preferences";
+import { browserPreferenceStorage } from "./lib/browser-preferences";
 import {
   adjacentOnboardingUpstreams,
   canSubmitOnboarding,
@@ -305,7 +352,10 @@ import {
   candidateHasExistingBinding,
   candidateHasOnboardingChange,
   compatibleOnboardingLocalGroups,
-  isCompositeOnboardingPlatform,
+  inferOnboardingProtocol,
+  onboardingPlatformNeedsProtocol,
+  pendingOnboardingSelectionNeedsProtocol,
+  onboardingProtocolReady,
   composeOnboardingBaseUrl,
   normalizeOnboardingBaseUrlInput,
   normalizeOnboardingHost,
@@ -343,6 +393,7 @@ export type View =
   | "onboarding"
   | "trace"
   | "vault"
+  | "system-info"
   | "profile"
   | "config"
   | "policy";
@@ -373,6 +424,7 @@ export const navItems: Array<{
     | "/onboarding"
     | "/trace"
     | "/vault"
+    | "/system-info"
     | "/profile"
     | "/config"
     | "/policy";
@@ -408,13 +460,13 @@ export const navItems: Array<{
   },
   { id: "trace", label: "请求查询", icon: FileSearch, to: "/trace" },
   { id: "alerts", label: "告警通知", icon: Siren, to: "/alerts" },
-  { id: "newapi", label: "配置", icon: ServerCog, to: "/newapi" },
+  { id: "newapi", label: "平台配置", icon: ServerCog, to: "/newapi" },
   { id: "newapi-groups", label: "分组绑定", icon: Link2, to: "/newapi/groups" },
   { id: "newapi-channels", label: "渠道管理", icon: RadioTower, to: "/newapi/channels" },
   { id: "newapi-prices", label: "模型价格", icon: BadgeDollarSign, to: "/newapi/prices" },
   {
     id: "newapi-differences",
-    label: "价格差异",
+    label: "价格比对",
     icon: GitCompareArrows,
     to: "/newapi/differences",
   },
@@ -436,6 +488,7 @@ export const navItems: Array<{
     icon: ShieldAlert,
     to: "/alert-policy",
   },
+  { id: "system-info", label: "系统信息", icon: ListTodo, to: "/system-info" },
   { id: "vault", label: "密码箱", icon: KeyRound, to: "/vault" },
   { id: "logs", label: "日志中心", icon: ScrollText, to: "/logs" },
   { id: "config", label: "系统设置", icon: Settings, to: "/config" },
@@ -463,7 +516,7 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
     itemIDs: ["newapi", "newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
   },
   { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
-  { label: "系统管理", itemIDs: ["vault", "logs", "config"] },
+  { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
 ];
 
 const navigationItemIDs = navItems.map((item) => item.id);
@@ -501,13 +554,14 @@ const viewByPath: Record<string, View> = {
   "/onboarding": "onboarding",
   "/trace": "trace",
   "/vault": "vault",
+  "/system-info": "system-info",
   "/profile": "profile",
   "/config": "config",
   "/policy": "policy",
 };
 
 export function viewForPath(pathname: string): View {
-  return viewByPath[pathname] ?? "overview";
+  return viewByPath[pathname.replace(/\/+$/, "") || "/"] ?? "overview";
 }
 
 function App() {
@@ -515,41 +569,47 @@ function App() {
   const [loginReason, setLoginReason] = useState<string | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     if (typeof window === "undefined") return "dark";
-    return window.localStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
+    return browserPreferenceStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
   });
   const [hiddenNavigationItemIDs, setHiddenNavigationItemIDs] = useState<Set<View>>(() => {
     if (typeof window === "undefined") return new Set();
-    return readHiddenNavigationItemIDs(window.localStorage, navigationItemIDs, [
+    return readHiddenNavigationItemIDs(browserPreferenceStorage, navigationItemIDs, [
       ...lockedNavigationItemIDs,
     ]);
   });
   const location = useLocation();
   const navigate = useNavigate();
   const shouldReduceMotion = useReducedMotion();
+  const clearSession = useCallback((): void => {
+    void queryClient.cancelQueries();
+    queryClient.removeQueries({
+      predicate: (query) => !["setup-status", "session"].includes(String(query.queryKey[0])),
+    });
+    queryClient.getMutationCache().clear();
+    queryClient.setQueryData(["session"], { authenticated: false, username: null });
+  }, [queryClient]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.style.colorScheme = theme;
-    window.localStorage.setItem("sub2api-console-theme", theme);
+    browserPreferenceStorage.setItem("sub2api-console-theme", theme);
   }, [theme]);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    writeHiddenNavigationItemIDs(window.localStorage, hiddenNavigationItemIDs, navigationItemIDs);
+    writeHiddenNavigationItemIDs(
+      browserPreferenceStorage,
+      hiddenNavigationItemIDs,
+      navigationItemIDs,
+    );
   }, [hiddenNavigationItemIDs]);
   useEffect(() => {
     const handleSessionExpired = () => {
-      queryClient.removeQueries({
-        predicate: (query) => !["setup-status", "session"].includes(String(query.queryKey[0])),
-      });
-      queryClient.setQueryData(["session"], {
-        authenticated: false,
-        username: null,
-      });
+      clearSession();
       setLoginReason(sessionExpiredMessage);
     };
     window.addEventListener(sessionExpiredEvent, handleSessionExpired);
     return () => window.removeEventListener(sessionExpiredEvent, handleSessionExpired);
-  }, [queryClient]);
+  }, [clearSession]);
   const setNavigationItemVisibility = useCallback((itemID: View, visible: boolean) => {
     if (lockedNavigationItemIDs.has(itemID)) return;
     setHiddenNavigationItemIDs((current) => {
@@ -695,7 +755,8 @@ function App() {
                       onClick={async () => {
                         try {
                           await api.logout();
-                          await session.refetch();
+                          clearSession();
+                          setLoginReason(null);
                         } catch (error) {
                           toast.error(error instanceof Error ? error.message : "退出登录失败");
                         }
@@ -892,6 +953,12 @@ export function SchedulerHeaderControls() {
   }
   return (
     <div className="flex items-center gap-1" data-testid="scheduler-header-controls">
+      {syncTaskId && taskIsPending(syncTaskId, syncTask) ? (
+        <TaskCancelButton taskId={syncTaskId} compact />
+      ) : null}
+      {runTaskId && taskIsPending(runTaskId, runTask) ? (
+        <TaskCancelButton taskId={runTaskId} compact />
+      ) : null}
       <Tooltip>
         <TooltipTrigger
           render={
@@ -1099,6 +1166,7 @@ function createSetupSchema(setupTokenRequired: boolean) {
 type SetupForm = z.infer<ReturnType<typeof createSetupSchema>>;
 
 export function SetupPage(props: { status?: SetupStatus; onComplete: () => void }) {
+  const fieldID = React.useId();
   const setupTokenRequired = props.status?.setup_token_required === true;
   const form = useForm<SetupForm>({
     resolver: zodResolver(createSetupSchema(setupTokenRequired)),
@@ -1150,16 +1218,26 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
         </CardHeader>
         <CardContent>
           <form className="grid gap-4" onSubmit={submit}>
-            <FormField label="控制台账号" error={form.formState.errors.username?.message}>
+            <FormField
+              label="控制台账号"
+              htmlFor={`${fieldID}-username`}
+              error={form.formState.errors.username?.message}
+            >
               <Input
+                id={`${fieldID}-username`}
                 autoComplete="username"
                 aria-invalid={Boolean(form.formState.errors.username)}
                 {...form.register("username")}
                 placeholder="例如 operator"
               />
             </FormField>
-            <FormField label="控制台密码" error={form.formState.errors.password?.message}>
+            <FormField
+              label="控制台密码"
+              htmlFor={`${fieldID}-password`}
+              error={form.formState.errors.password?.message}
+            >
               <Input
+                id={`${fieldID}-password`}
                 type="password"
                 autoComplete="new-password"
                 aria-invalid={Boolean(form.formState.errors.password)}
@@ -1169,9 +1247,11 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
             </FormField>
             <FormField
               label="确认控制台密码"
+              htmlFor={`${fieldID}-confirm-password`}
               error={form.formState.errors.confirm_password?.message}
             >
               <Input
+                id={`${fieldID}-confirm-password`}
                 type="password"
                 autoComplete="new-password"
                 aria-invalid={Boolean(form.formState.errors.confirm_password)}
@@ -1179,8 +1259,13 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
               />
             </FormField>
             {setupTokenRequired ? (
-              <FormField label="初始化令牌" error={form.formState.errors.setup_token?.message}>
+              <FormField
+                label="初始化令牌"
+                htmlFor={`${fieldID}-setup-token`}
+                error={form.formState.errors.setup_token?.message}
+              >
                 <Input
+                  id={`${fieldID}-setup-token`}
                   type="password"
                   autoComplete="off"
                   required
@@ -1194,17 +1279,24 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
               <>
                 <FormField
                   label="Admin Base URL"
+                  htmlFor={`${fieldID}-admin-base-url`}
                   error={form.formState.errors.admin_base_url?.message}
                 >
                   <Input
+                    id={`${fieldID}-admin-base-url`}
                     type="url"
                     aria-invalid={Boolean(form.formState.errors.admin_base_url)}
                     {...form.register("admin_base_url")}
                     placeholder="https://sub2api.example.com"
                   />
                 </FormField>
-                <FormField label="Admin Key" error={form.formState.errors.admin_key?.message}>
+                <FormField
+                  label="Admin Key"
+                  htmlFor={`${fieldID}-admin-key`}
+                  error={form.formState.errors.admin_key?.message}
+                >
                   <Input
+                    id={`${fieldID}-admin-key`}
                     type="password"
                     autoComplete="off"
                     aria-invalid={Boolean(form.formState.errors.admin_key)}
@@ -1238,6 +1330,7 @@ const loginSchema = z.object({
 type LoginForm = z.infer<typeof loginSchema>;
 
 export function LoginPage(props: { onLogin: () => void; reason?: string | null }) {
+  const fieldID = React.useId();
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: { username: "", password: "" },
@@ -1283,9 +1376,11 @@ export function LoginPage(props: { onLogin: () => void; reason?: string | null }
             <FormField
               reserveErrorSpace
               label="账号"
+              htmlFor={`${fieldID}-username`}
               error={form.formState.errors.username?.message}
             >
               <Input
+                id={`${fieldID}-username`}
                 autoComplete="username"
                 aria-invalid={Boolean(form.formState.errors.username)}
                 {...form.register("username")}
@@ -1295,9 +1390,11 @@ export function LoginPage(props: { onLogin: () => void; reason?: string | null }
             <FormField
               reserveErrorSpace
               label="密码"
+              htmlFor={`${fieldID}-password`}
               error={form.formState.errors.password?.message}
             >
               <Input
+                id={`${fieldID}-password`}
                 type="password"
                 autoComplete="current-password"
                 aria-invalid={Boolean(form.formState.errors.password)}
@@ -1322,6 +1419,7 @@ export function LoginPage(props: { onLogin: () => void; reason?: string | null }
 
 export function FormField(props: {
   label: string;
+  htmlFor?: string;
   description?: React.ReactNode;
   error?: string;
   children: React.ReactNode;
@@ -1329,7 +1427,7 @@ export function FormField(props: {
 }) {
   return (
     <div className="grid gap-1.5 text-sm font-medium">
-      <FieldLabel label={props.label} description={props.description} />
+      <FieldLabel label={props.label} description={props.description} htmlFor={props.htmlFor} />
       {props.children}
       {props.reserveErrorSpace ? (
         <span
@@ -1358,10 +1456,6 @@ function searchable(values: Array<string | number | null | undefined>, query: st
         .includes(normalizedQuery),
     )
   );
-}
-function explicitValue(value: string | null | undefined, missing = "未设置", empty = "空值") {
-  if (value === null || value === undefined) return missing;
-  return value === "" ? empty : value;
 }
 const strategyLabels: Record<string, string> = {
   balanced: "均衡",
@@ -1735,6 +1829,20 @@ export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
   const accountRateInterval = policyAdvancedValue(value, "account_rate_sync", "interval_seconds");
   const accountRateBatchSize = policyAdvancedValue(value, "account_rate_sync", "batch_size");
   const accountRateBatchPercent = policyAdvancedValue(value, "account_rate_sync", "batch_percent");
+  for (const [section, field, maximum] of [
+    ["probe", "freshness_seconds", 86400],
+    ["scoring", "history_window_minutes", 10080],
+  ] as const) {
+    const configured = policyAdvancedValue(value, section, field);
+    if (
+      configured !== undefined &&
+      (typeof configured !== "number" ||
+        !Number.isInteger(configured) ||
+        configured < 1 ||
+        configured > maximum)
+    )
+      return null;
+  }
   if (value.auto_apply === null || value.excluded_group_ids === null) return null;
   if (policyRelationshipError(value)) return null;
   if (Object.values(value.auto_apply).some((item) => typeof item !== "boolean")) return null;
@@ -1826,6 +1934,7 @@ function policyNumberInput(value: string): number | null {
 }
 export function UpstreamsPage() {
   const navigate = useNavigate();
+  const [groupHistoryOverviewOpen, setGroupHistoryOverviewOpen] = useState(false);
   const upstreams = useQuery({
     queryKey: ["upstreams"],
     queryFn: api.upstreams,
@@ -1835,6 +1944,12 @@ export function UpstreamsPage() {
     queryKey: ["config"],
     queryFn: api.config,
     staleTime: 15_000,
+  });
+  const groupHistoryOverview = useQuery({
+    queryKey: ["upstream-group-history-overview"],
+    queryFn: api.allUpstreamGroupHistory,
+    enabled: groupHistoryOverviewOpen,
+    retry: false,
   });
   const queryClient = useQueryClient();
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
@@ -1870,6 +1985,26 @@ export function UpstreamsPage() {
     onSuccess: (task) => setManagementTaskId(task.id),
     onError: (error) => notifyOperationError(error, "分组同步启动失败"),
   });
+  const [groupAudit, setGroupAudit] = useState<UpstreamGroupBindingAudit | null>(null);
+  const [groupAuditDetailHost, setGroupAuditDetailHost] = useState<string | null>(null);
+  const [onlyGroupAuditIssues, setOnlyGroupAuditIssues] = useState(false);
+  const groupAuditMutation = useMutation({
+    mutationFn: api.upstreamGroupBindingAudit,
+    onSuccess: (result) => {
+      setGroupAudit(result);
+      toast.success("上游分组核对完成");
+    },
+    onError: (error) => notifyOperationError(error, "上游分组核对失败"),
+  });
+  const groupAuditItemsByHost = useMemo(() => {
+    const itemsByHost = new Map<string, UpstreamGroupBindingAudit["items"]>();
+    for (const item of groupAudit?.items ?? []) {
+      const hostItems = itemsByHost.get(item.host);
+      if (hostItems) hostItems.push(item);
+      else itemsByHost.set(item.host, [item]);
+    }
+    return itemsByHost;
+  }, [groupAudit]);
   const nameRepair = useMutation({
     mutationFn: api.repairUpstreamNames,
     onSuccess: (task) => setManagementTaskId(task.id),
@@ -1880,6 +2015,10 @@ export function UpstreamsPage() {
     host: string;
     kind: "auth" | "balance";
   } | null>(null);
+  const manualAuthPending =
+    useIsMutating({
+      mutationKey: ["upstream-manual-auth", actionDialog?.host],
+    }) > 0;
   const actionTask = useQuery({
     queryKey: ["upstream-action", actionTaskId],
     queryFn: () => api.task(actionTaskId!),
@@ -2115,7 +2254,8 @@ export function UpstreamsPage() {
   const data = upstreams.data;
   const minimumBalance = filters.minimumBalance ? Number(filters.minimumBalance) : null;
   const maximumBalance = filters.maximumBalance ? Number(filters.maximumBalance) : null;
-  const hasActiveFilters = Object.values(filters).some((value) => value !== "" && value !== "all");
+  const hasActiveFilters =
+    onlyGroupAuditIssues || Object.values(filters).some((value) => value !== "" && value !== "all");
   const allHosts = upstreams.error
     ? []
     : (data?.hosts.filter((host) => {
@@ -2127,11 +2267,15 @@ export function UpstreamsPage() {
               Number.isFinite(balance) &&
               (minimumBalance === null || balance >= minimumBalance) &&
               (maximumBalance === null || balance <= maximumBalance);
+        const auditMatches =
+          !onlyGroupAuditIssues ||
+          upstreamHasGroupBindingAuditIssue(groupAuditItemsByHost.get(host.host) ?? []);
         return (
           searchable([host.host, host.name], filters.keyword) &&
           (filters.upstreamType === "all" || host.upstream_type === filters.upstreamType) &&
           (filters.authStatus === "all" || host.auth_status === filters.authStatus) &&
-          balanceMatches
+          balanceMatches &&
+          auditMatches
         );
       }) ?? []);
   const hostPagination = useClientPagination(allHosts);
@@ -2155,6 +2299,7 @@ export function UpstreamsPage() {
   function resetFilters() {
     setFilterDraft({ ...emptyUpstreamFilters });
     setFilters({ ...emptyUpstreamFilters });
+    setOnlyGroupAuditIssues(false);
     hostPagination.setCurrentPage(1);
   }
   useEffect(() => {
@@ -2206,12 +2351,17 @@ export function UpstreamsPage() {
     const timer = window.setInterval(() => setCaptchaClock(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [captchaChallenge?.challenge_id]);
-  const actionPending = taskIsPending(actionTaskId, actionTask);
+  const actionPending = manualAuthPending || taskIsPending(actionTaskId, actionTask);
+  const syncPending = syncUpstreams.isPending || taskIsPending(syncTaskId, syncTask);
   const managementPending =
     balanceSync.isPending ||
     groupSync.isPending ||
     nameRepair.isPending ||
     taskIsPending(managementTaskId, managementTask);
+  const groupAuditPending = groupAuditMutation.isPending;
+  const groupAuditDetailItems = groupAuditDetailHost
+    ? (groupAuditItemsByHost.get(groupAuditDetailHost) ?? [])
+    : [];
   const deletePending = deleteUpstream.isPending || taskIsPending(deleteTaskId, deleteTask);
   const batchRecoveryPending =
     batchRecover.isPending || taskIsPending(batchRecoveryTaskId, batchRecoveryTask);
@@ -2263,6 +2413,10 @@ export function UpstreamsPage() {
               ariaLabel="刷新上游列表"
               onClick={() => void upstreams.refetch()}
             />
+            <Button variant="outline" onClick={() => setGroupHistoryOverviewOpen(true)}>
+              <ChartNoAxesColumnIncreasing size={16} />
+              统计变化
+            </Button>
             <Button
               onClick={() =>
                 navigate({
@@ -2320,7 +2474,15 @@ export function UpstreamsPage() {
               同步分组
             </Button>
             <Button
-              disabled={syncUpstreams.isPending || taskIsPending(syncTaskId, syncTask)}
+              variant="outline"
+              disabled={groupAuditPending || !upstreams.data?.hosts.length}
+              onClick={() => groupAuditMutation.mutate()}
+            >
+              <ScanSearch size={16} />
+              {groupAuditPending ? "核对中…" : "核对分组绑定"}
+            </Button>
+            <Button
+              disabled={syncPending}
               onClick={() => {
                 setSyncTaskId(null);
                 syncUpstreams.reset();
@@ -2372,42 +2534,19 @@ export function UpstreamsPage() {
             }
             optionLabel={(value) => upstreamAuthStatusMeta(value).label}
           />
-          <div className="flex items-center gap-1.5">
-            <span className="text-muted-foreground shrink-0 text-sm">余额</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="any"
-              value={filterDraft.minimumBalance}
-              onChange={(event) =>
-                setFilterDraft((current) => ({
-                  ...current,
-                  minimumBalance: event.target.value,
-                }))
-              }
-              placeholder="最低"
-              aria-label="最低余额"
-              className="w-28"
-            />
-            <span className="text-muted-foreground text-sm">至</span>
-            <Input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="any"
-              value={filterDraft.maximumBalance}
-              onChange={(event) =>
-                setFilterDraft((current) => ({
-                  ...current,
-                  maximumBalance: event.target.value,
-                }))
-              }
-              placeholder="最高"
-              aria-label="最高余额"
-              className="w-28"
-            />
-          </div>
+          <NumberRangeFilter
+            label="余额"
+            minimumValue={filterDraft.minimumBalance}
+            maximumValue={filterDraft.maximumBalance}
+            onMinimumValueChange={(minimumBalance) =>
+              setFilterDraft((current) => ({ ...current, minimumBalance }))
+            }
+            onMaximumValueChange={(maximumBalance) =>
+              setFilterDraft((current) => ({ ...current, maximumBalance }))
+            }
+            min={0}
+            step="any"
+          />
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button type="submit">
               <Search size={16} />
@@ -2419,6 +2558,34 @@ export function UpstreamsPage() {
             </Button>
           </div>
         </form>
+        {groupAudit ? (
+          <div
+            className="flex min-w-0 flex-wrap items-center gap-2 text-sm"
+            role="status"
+            aria-label="上游分组核对结果"
+          >
+            <span className="text-muted-foreground">分组绑定核对：</span>
+            <StatusPill label={`存在 ${groupAudit.present}`} tone="success" />
+            <StatusPill
+              label={`缺失 ${groupAudit.missing}`}
+              tone={groupAudit.missing > 0 ? "danger" : "neutral"}
+            />
+            <StatusPill
+              label={`待确认 ${groupAudit.unknown}`}
+              tone={groupAudit.unknown > 0 ? "warning" : "neutral"}
+            />
+            <label className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap">
+              <Checkbox
+                checked={onlyGroupAuditIssues}
+                onCheckedChange={(checked) => {
+                  setOnlyGroupAuditIssues(checked);
+                  hostPagination.setCurrentPage(1);
+                }}
+              />
+              <span>只看缺失/待确认</span>
+            </label>
+          </div>
+        ) : null}
         <DataTablePanel className="flex-1">
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1240px]">
             <TableHeader className="sticky top-0 z-10">
@@ -2445,15 +2612,16 @@ export function UpstreamsPage() {
                 <TableHead className="w-[9%]">类型</TableHead>
                 <TableHead className="w-[6%]">分组</TableHead>
                 <TableHead className="w-[7%]">已绑定</TableHead>
+                <TableHead className="w-[15%]">分组核对</TableHead>
                 <TableHead className="w-[22%]">状态</TableHead>
                 <TableHead className="w-[11%]">余额</TableHead>
                 <TableHead className="w-[12%] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {upstreams.isLoading && <TableLoadingRows columns={8} />}
+              {upstreams.isLoading && <TableLoadingRows columns={9} />}
               {!upstreams.isLoading && !upstreams.error && !hosts.length && (
-                <TableMessageRow columns={8}>
+                <TableMessageRow columns={9}>
                   <EmptyRow
                     text={hasActiveFilters ? "没有匹配的上游 Host" : "当前业务库没有上游 Host"}
                   />
@@ -2464,6 +2632,8 @@ export function UpstreamsPage() {
                 const readingBalance =
                   refreshBalance.isPending && refreshBalance.variables === host.host;
                 const authStatus = upstreamAuthStatusMeta(host.auth_status);
+                const auditedGroups = groupAuditItemsByHost.get(host.host) ?? [];
+                const auditSummary = summarizeUpstreamGroupBindings(auditedGroups);
                 return (
                   <TableRow
                     key={host.host}
@@ -2496,6 +2666,46 @@ export function UpstreamsPage() {
                     <TableCell>{displayUpstreamType(host.upstream_type)}</TableCell>
                     <TableCell>{host.group_count}</TableCell>
                     <TableCell>{host.account_count}</TableCell>
+                    <TableCell>
+                      {groupAudit ? (
+                        <div className="flex items-center gap-1">
+                          <div className="flex min-w-0 flex-wrap gap-1">
+                            {auditSummary.present > 0 ? (
+                              <StatusPill label={`存在 ${auditSummary.present}`} tone="success" />
+                            ) : null}
+                            {auditSummary.missing > 0 ? (
+                              <StatusPill label={`缺失 ${auditSummary.missing}`} tone="danger" />
+                            ) : null}
+                            {auditSummary.unknown > 0 ? (
+                              <StatusPill label={`待确认 ${auditSummary.unknown}`} tone="warning" />
+                            ) : null}
+                            {auditedGroups.length === 0 ? (
+                              <StatusPill label="无绑定" tone="neutral" />
+                            ) : null}
+                          </div>
+                          {auditedGroups.length > 0 ? (
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    aria-label={`查看 ${host.name || host.host} 的分组绑定核对明细`}
+                                    onClick={() => setGroupAuditDetailHost(host.host)}
+                                  />
+                                }
+                              >
+                                <Eye aria-hidden="true" />
+                              </TooltipTrigger>
+                              <TooltipContent>查看关联账号</TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">未检查</span>
+                      )}
+                    </TableCell>
                     <TableCell overflowTooltip={false}>
                       <div
                         data-slot="upstream-auth-status"
@@ -2503,10 +2713,11 @@ export function UpstreamsPage() {
                       >
                         <StatusPill label={authStatus.label} tone={authStatus.tone} />
                         <span className="text-muted-foreground block truncate text-xs">
-                          最近方式：{authMethodLabel(host.last_auth_success_method)}
-                          {host.last_auth_recovery_method
-                            ? ` · ${authRecoveryMethodLabel(host.last_auth_recovery_method)}`
-                            : ""}
+                          最近方式：
+                          {authMethodSummary(
+                            host.last_auth_success_method,
+                            host.last_auth_recovery_method,
+                          )}
                         </span>
                         {host.last_auth_success_at && (
                           <span className="text-muted-foreground block truncate text-xs">
@@ -2657,6 +2868,63 @@ export function UpstreamsPage() {
         onSaved={() => void upstreams.refetch()}
       />
       <Dialog
+        open={groupAuditDetailHost !== null}
+        onOpenChange={(open) => {
+          if (!open) setGroupAuditDetailHost(null);
+        }}
+      >
+        <DialogContent
+          width="table"
+          height="tall"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
+          <DialogHeader>
+            <DialogTitle>分组绑定核对明细</DialogTitle>
+            <DialogDescription>
+              {groupAuditDetailHost}，共 {groupAuditDetailItems.length} 个已绑定上游分组
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody className="overflow-hidden pr-0">
+            <UpstreamGroupBindingAuditTable items={groupAuditDetailItems} />
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={groupHistoryOverviewOpen} onOpenChange={setGroupHistoryOverviewOpen}>
+        <DialogContent
+          width="table"
+          height="tall"
+          className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+        >
+          <DialogHeader>
+            <DialogTitle>上游分组变化</DialogTitle>
+          </DialogHeader>
+          <DialogBody className="overflow-hidden pr-0">
+            {groupHistoryOverview.isLoading ? (
+              <div className="flex h-full min-h-0 items-center justify-center">
+                <span className="text-muted-foreground text-sm">正在读取变化历史</span>
+              </div>
+            ) : null}
+            {!groupHistoryOverview.isLoading && groupHistoryOverview.isError ? (
+              <QueryError
+                error={groupHistoryOverview.error}
+                fallback="上游分组变化历史读取失败"
+                embedded
+              />
+            ) : null}
+            {!groupHistoryOverview.isLoading && !groupHistoryOverview.isError ? (
+              <UpstreamGroupHistory
+                rows={groupHistoryOverview.data ?? []}
+                upstreams={(upstreams.data?.hosts ?? []).map((upstream) => ({
+                  upstream_id: upstream.upstream_id,
+                  name: upstream.name,
+                  host: upstream.host,
+                }))}
+              />
+            ) : null}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+      <Dialog
         open={batchRecoveryDialogOpen}
         onOpenChange={(open) => {
           if (!open && !batchRecoveryPending) {
@@ -2668,6 +2936,7 @@ export function UpstreamsPage() {
       >
         <DialogContent
           {...compactOperationDialogLayout}
+          showCloseButton={!batchRecoveryPending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2726,6 +2995,7 @@ export function UpstreamsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(managementTask.data))}
           height={operationDialogHeight(taskStopsPolling(managementTask.data))}
+          showCloseButton={!managementPending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2756,8 +3026,9 @@ export function UpstreamsPage() {
       <Dialog
         open={syncDialogOpen}
         onOpenChange={(open) => {
+          if (!open && syncPending) return;
           setSyncDialogOpen(open);
-          if (!open && !taskIsPending(syncTaskId, syncTask)) {
+          if (!open) {
             setSyncTaskId(null);
             syncUpstreams.reset();
           }
@@ -2766,6 +3037,7 @@ export function UpstreamsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(syncTask.data))}
           height={operationDialogHeight(taskStopsPolling(syncTask.data))}
+          showCloseButton={!syncPending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2788,7 +3060,7 @@ export function UpstreamsPage() {
       <Dialog
         open={actionDialog !== null && captchaChallenge === null}
         onOpenChange={(open) => {
-          if (!open) {
+          if (!open && !actionPending && !recover.isPending && !refreshBalance.isPending) {
             setActionDialog(null);
             setActionTaskId(null);
             setRecoveryEntry("");
@@ -2800,6 +3072,7 @@ export function UpstreamsPage() {
       >
         <DialogContent
           {...compactOperationDialogLayout}
+          showCloseButton={!actionPending && !recover.isPending && !refreshBalance.isPending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -2875,6 +3148,7 @@ export function UpstreamsPage() {
       >
         <DialogContent
           {...compactOperationDialogLayout}
+          showCloseButton={!deletePending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -3096,19 +3370,22 @@ export function UpstreamsPage() {
                   <span className="text-destructive text-xs">{groupBindingSummary}</span>
                 ) : null}
               </div>
-              <Button
-                disabled={
-                  groupBindingRequests.length === 0 ||
-                  groupBindingRequests.length > 50 ||
-                  invalidGroupBindings.length > 0 ||
-                  saveGroupBindings.isPending ||
-                  Boolean(groupBindingTaskId)
-                }
-                onClick={() => saveGroupBindings.mutate(groupBindingRequests)}
-              >
-                <Save />
-                {groupBindingTaskId ? "保存中" : "保存全部变更"}
-              </Button>
+              <div className="flex justify-end gap-2">
+                {groupBindingTaskId ? <TaskCancelButton taskId={groupBindingTaskId} /> : null}
+                <Button
+                  disabled={
+                    groupBindingRequests.length === 0 ||
+                    groupBindingRequests.length > 50 ||
+                    invalidGroupBindings.length > 0 ||
+                    saveGroupBindings.isPending ||
+                    Boolean(groupBindingTaskId)
+                  }
+                  onClick={() => saveGroupBindings.mutate(groupBindingRequests)}
+                >
+                  <Save />
+                  {groupBindingTaskId ? "保存中" : "保存全部变更"}
+                </Button>
+              </div>
             </DialogFooter>
           ) : null}
         </DialogContent>
@@ -3239,9 +3516,13 @@ export function ManualAuthHeadersEditor(props: {
   error?: string;
   onChange: (value: string) => void;
 }) {
+  const fieldID = React.useId();
   return (
-    <FormField label="Headers JSON" error={props.error}>
+    <FormField label="Headers JSON" htmlFor={fieldID}>
       <Textarea
+        id={fieldID}
+        aria-invalid={Boolean(props.error)}
+        aria-describedby={props.error ? `${fieldID}-error` : undefined}
         autoGrow
         className="min-h-24 min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere]"
         wrap="soft"
@@ -3249,6 +3530,15 @@ export function ManualAuthHeadersEditor(props: {
         onChange={(event) => props.onChange(event.target.value)}
         placeholder='例如 {"Authorization":"Bearer ..."}'
       />
+      {props.error ? (
+        <span
+          id={`${fieldID}-error`}
+          role="alert"
+          className="text-destructive text-xs leading-4 font-normal break-words"
+        >
+          {props.error}
+        </span>
+      ) : null}
     </FormField>
   );
 }
@@ -3296,6 +3586,7 @@ export function ManualAuthForm(props: {
   onVaultRecovery?: (entry: string, acceptLoginAgreement: boolean) => void;
   vaultPending?: boolean;
 }) {
+  const fieldID = React.useId();
   const queryClient = useQueryClient();
   const authConfig = useQuery({
     queryKey: ["auth-recovery-config"],
@@ -3320,6 +3611,7 @@ export function ManualAuthForm(props: {
   const [showCustomHeaders, setShowCustomHeaders] = useState(false);
   const [headerError, setHeaderError] = useState<string | null>(null);
   const mutation = useMutation({
+    mutationKey: ["upstream-manual-auth", props.host],
     mutationFn: api.verifyManualAuth,
     onSuccess: (result) => {
       if (!result.verified) {
@@ -3444,9 +3736,9 @@ export function ManualAuthForm(props: {
       }}
     >
       <strong className="text-sm">选择鉴权方式</strong>
-      <FormField label="鉴权方式">
+      <FormField label="鉴权方式" htmlFor={`${fieldID}-mode`}>
         <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>
-          <SelectTrigger>
+          <SelectTrigger id={`${fieldID}-mode`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -3460,8 +3752,9 @@ export function ManualAuthForm(props: {
       </FormField>
       {usesAdminKey && (
         <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <FormField label="Admin Key">
+          <FormField label="Admin Key" htmlFor={`${fieldID}-admin-key`}>
             <Input
+              id={`${fieldID}-admin-key`}
               type="password"
               autoComplete="off"
               value={credentials.adminKey}
@@ -3477,8 +3770,9 @@ export function ManualAuthForm(props: {
               }
             />
           </FormField>
-          <FormField label="User ID">
+          <FormField label="User ID" htmlFor={`${fieldID}-user-id`}>
             <Input
+              id={`${fieldID}-user-id`}
               autoComplete="off"
               value={credentials.userId}
               onChange={(event) =>
@@ -3493,8 +3787,9 @@ export function ManualAuthForm(props: {
       )}
       {!usesAdminKey && (usesSub2ApiToken || usesUserToken) && (
         <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <FormField label="Token">
+          <FormField label="Token" htmlFor={`${fieldID}-token`}>
             <Input
+              id={`${fieldID}-token`}
               type="password"
               autoComplete="off"
               value={credentials.accessToken}
@@ -3508,8 +3803,9 @@ export function ManualAuthForm(props: {
             />
           </FormField>
           {usesSub2ApiToken ? (
-            <FormField label="刷新 Token">
+            <FormField label="刷新 Token" htmlFor={`${fieldID}-refresh-token`}>
               <Input
+                id={`${fieldID}-refresh-token`}
                 type="password"
                 autoComplete="off"
                 value={credentials.refreshToken}
@@ -3529,7 +3825,7 @@ export function ManualAuthForm(props: {
         </div>
       )}
       {!usesAdminKey && !usesSub2ApiToken && !usesUserToken && usesVaultLogin && (
-        <FormField label="密码箱密码项">
+        <FormField label="密码箱密码项" htmlFor={`${fieldID}-vault-entry`}>
           <Select
             value={entry}
             onValueChange={(value) => {
@@ -3537,7 +3833,7 @@ export function ManualAuthForm(props: {
               setEntry(value);
             }}
           >
-            <SelectTrigger>
+            <SelectTrigger id={`${fieldID}-vault-entry`}>
               <SelectValue placeholder="选择密码箱项" />
             </SelectTrigger>
             <SelectContent className="min-w-[20rem]">
@@ -3559,8 +3855,9 @@ export function ManualAuthForm(props: {
         !usesVaultLogin &&
         usesManualLogin && (
           <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-            <FormField label="用户名">
+            <FormField label="用户名" htmlFor={`${fieldID}-username`}>
               <Input
+                id={`${fieldID}-username`}
                 autoComplete="username"
                 value={credentials.username}
                 onChange={(event) =>
@@ -3571,8 +3868,9 @@ export function ManualAuthForm(props: {
                 }
               />
             </FormField>
-            <FormField label="密码">
+            <FormField label="密码" htmlFor={`${fieldID}-password`}>
               <Input
+                id={`${fieldID}-password`}
                 type="password"
                 autoComplete="current-password"
                 value={credentials.password}
@@ -3601,8 +3899,9 @@ export function ManualAuthForm(props: {
               </label>
             </div>
             {credentials.saveToVault ? (
-              <FormField label="凭据名称（可选）">
+              <FormField label="凭据名称（可选）" htmlFor={`${fieldID}-credential-name`}>
                 <Input
+                  id={`${fieldID}-credential-name`}
                   value={credentials.entry}
                   onChange={(event) =>
                     setCredentials((current) => ({
@@ -3666,6 +3965,8 @@ export function AccountSelectionToolbar(props: {
   selectedCount: number;
   pending: boolean;
   onClear: () => void;
+  onSyncModels: () => void;
+  onProbe: () => void;
   onDelete: () => void;
 }) {
   if (props.selectedCount === 0) return null;
@@ -3724,6 +4025,42 @@ export function AccountSelectionToolbar(props: {
             render={
               <Button
                 type="button"
+                variant="outline"
+                size="icon"
+                className="size-8"
+                aria-label={`探活已选择的 ${props.selectedCount} 个账号`}
+                disabled={props.pending}
+                onClick={props.onProbe}
+              />
+            }
+          >
+            <Activity aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>探活已选择账号</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-8"
+                aria-label={`同步已选择的 ${props.selectedCount} 个账号模型`}
+                disabled={props.pending}
+                onClick={props.onSyncModels}
+              />
+            }
+          >
+            <RefreshCw />
+          </TooltipTrigger>
+          <TooltipContent>同步已选择账号模型</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
                 variant="destructive"
                 size="icon"
                 className="size-8"
@@ -3747,6 +4084,17 @@ export function AccountsPage() {
   const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
   const queryClient = useQueryClient();
   const rows = accounts.data ?? [];
+  const accountPlatforms = useMemo(
+    () =>
+      new Map(
+        (accounts.data ?? []).map((account) => [account.id, account.platform ?? null] as const),
+      ),
+    [accounts.data],
+  );
+  const accountGroups = useMemo(
+    () => new Map((accounts.data ?? []).map((account) => [account.id, account.groups] as const)),
+    [accounts.data],
+  );
   const manualPrioritySection = policy.data?.advanced_policy?.manual_priority;
   const configuredReservedMax =
     manualPrioritySection !== null &&
@@ -3764,6 +4112,7 @@ export function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<AccountPoolFilter>("all");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [platformFilter, setPlatformFilter] = useState<string | null>(null);
   const [accountSort, setAccountSort] = useState<AccountSort>("default");
   const [showManualPriorityAccounts, setShowManualPriorityAccounts] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(() => new Set());
@@ -3779,8 +4128,25 @@ export function AccountsPage() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [batchDeleteAccountIds, setBatchDeleteAccountIds] = useState<string[]>([]);
   const [batchDeleteTaskId, setBatchDeleteTaskId] = useState<string | null>(null);
+  const [modelSyncOpen, setModelSyncOpen] = useState(false);
+  const [modelSyncAccountIds, setModelSyncAccountIds] = useState<string[]>([]);
+  const [platformProbeOpen, setPlatformProbeOpen] = useState(false);
+  const [batchProbeOpen, setBatchProbeOpen] = useState(false);
+  const [batchProbeAccounts, setBatchProbeAccounts] = useState<AccountStatus[]>([]);
+  const [batchProbePending, setBatchProbePending] = useState(false);
   const groupOptions = Array.from(new Set(rows.flatMap((account) => account.groups))).sort((a, b) =>
     a.localeCompare(b),
+  );
+  const platformOptions = Array.from(
+    new Set([
+      ...concreteAccountPlatformOptions.map((option) => option.value),
+      ...rows.flatMap((account) => {
+        const platform = account.platform?.trim().toLowerCase();
+        return platform ? [platform] : [];
+      }),
+    ]),
+  ).sort((left, right) =>
+    (accountPlatformLabel(left) ?? left).localeCompare(accountPlatformLabel(right) ?? right),
   );
   const filteredRows = useMemo(
     () =>
@@ -3811,11 +4177,21 @@ export function AccountsPage() {
             accountMatchesPoolFilter(account, statusFilter) &&
             (!groupFilter || account.groups.includes(groupFilter)) &&
             (!typeFilter ||
-              accountTypeValue(account.account_type ?? account.upstream_type) === typeFilter),
+              accountTypeValue(account.account_type ?? account.upstream_type) === typeFilter) &&
+            accountMatchesPlatform(account, platformFilter),
         ),
         accountSort,
       ),
-    [accountSort, groupFilter, rows, search, showManualPriorityAccounts, statusFilter, typeFilter],
+    [
+      accountSort,
+      groupFilter,
+      platformFilter,
+      rows,
+      search,
+      showManualPriorityAccounts,
+      statusFilter,
+      typeFilter,
+    ],
   );
   const pagination = useClientPagination(filteredRows, 20);
   const pageRows = pagination.visibleItems;
@@ -3829,6 +4205,11 @@ export function AccountsPage() {
   const automaticAccountRows = filteredRows.filter((account) => account.manual_priority == null);
   const automaticAccountIDs = automaticAccountRows.map((account) => account.id);
   const rateSyncAccountIDs = automaticAccountRows.map((account) => account.id);
+  const rateSyncPlatforms = Array.from(
+    new Set(
+      automaticAccountRows.map((account) => accountPlatformLabel(account.platform) ?? "未识别"),
+    ),
+  );
   const allPageSelected =
     pageAccountIds.length > 0 &&
     pageAccountIds.every((accountId) => selectedAccountIds.has(accountId));
@@ -3908,7 +4289,7 @@ export function AccountsPage() {
     });
   }, [baseURLCheckTask.data?.status, queryClient]);
   useEffect(() => {
-    if (!taskStopsPolling(baseURLRepairTask.data)) return;
+    if (baseURLRepairKind === null || !taskStopsPolling(baseURLRepairTask.data)) return;
     void queryClient.invalidateQueries({ queryKey: ["accounts"] });
     if (baseURLRepairTask.data?.status === "succeeded") {
       toast.success(
@@ -3980,7 +4361,12 @@ export function AccountsPage() {
   });
   const maintenancePending =
     maintenanceMutation.isPending || taskIsPending(maintenanceTaskId, maintenanceTask);
-  const batchOperationPending = maintenancePending || baseURLCheckPending || batchDeletePending;
+  const batchOperationPending =
+    maintenancePending ||
+    baseURLCheckPending ||
+    batchDeletePending ||
+    modelSyncOpen ||
+    batchProbePending;
   useEffect(() => {
     if (!taskStopsPolling(maintenanceTask.data)) return;
     void Promise.all([
@@ -4000,6 +4386,11 @@ export function AccountsPage() {
       maintenanceMutation.mutate({ kind, accountIds });
     }
   }
+  function startModelSync(accountIds: string[]) {
+    if (accountIds.length === 0) return;
+    setModelSyncAccountIds([...accountIds]);
+    setModelSyncOpen(true);
+  }
   const maintenanceAccountRows = rows.filter((account) =>
     maintenanceAccountIds.includes(account.id),
   );
@@ -4011,7 +4402,7 @@ export function AccountsPage() {
   let maintenanceDescription = `将处理当前筛选结果中的 ${maintenanceAccountIds.length} 个自动管理账号，只处理其中已有绑定的账号。`;
   if (maintenanceKind === "rate") {
     maintenanceTitle = "同步账号倍率";
-    maintenanceDescription = `将使用账号凭据向上游探测当前筛选结果中的 ${maintenanceAccountIds.length} 个账号有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`;
+    maintenanceDescription = `将按平台（${rateSyncPlatforms.join("、")}）使用账号凭据向上游探测当前筛选结果中的 ${maintenanceAccountIds.length} 个账号有效倍率，按充值比例换算成本并同步派生名称；写后读回一致才更新本地。`;
   } else if (maintenanceKind === "revalidate") {
     maintenanceTitle = "复验账号绑定";
   } else if (maintenanceKind === "cleanup") {
@@ -4023,9 +4414,13 @@ export function AccountsPage() {
       <PageHeading
         eyebrow="ACCOUNTS / MANAGEMENT"
         title="账号管理"
-        description="健康分、最近结果、综合延迟、账号成本和组内分配权重集中查看，可按状态快速定位。"
+        description="健康分、最近结果、真实流量首字延迟、账号成本和组内分配权重集中查看，可按状态快速定位。"
         action={
           <PageActions>
+            <Button variant="default" onClick={() => setPlatformProbeOpen(true)}>
+              <Activity />
+              平台模型探活
+            </Button>
             <RefreshButton
               pending={accounts.isFetching}
               ariaLabel="刷新账号池"
@@ -4046,6 +4441,14 @@ export function AccountsPage() {
             >
               <RefreshCw />
               同步倍率
+            </Button>
+            <Button
+              variant="outline"
+              disabled={batchOperationPending || automaticAccountIDs.length === 0}
+              onClick={() => startModelSync(automaticAccountIDs)}
+            >
+              <RefreshCw />
+              同步模型
             </Button>
             <Button
               variant="outline"
@@ -4096,6 +4499,16 @@ export function AccountsPage() {
             }}
             optionLabel={(value) => accountTypeLabel(value) ?? value}
           />
+          <FilterMenu
+            label="平台"
+            options={platformOptions}
+            value={platformFilter}
+            onValueChange={(value) => {
+              setPlatformFilter(value);
+              pagination.setCurrentPage(1);
+            }}
+            optionLabel={(value) => accountPlatformLabel(value) ?? value}
+          />
           <AccountStatusFilter
             value={statusFilter}
             onValueChange={(value) => {
@@ -4119,7 +4532,7 @@ export function AccountsPage() {
           </div>
         </TableFilterToolbar>
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1540px]">
+          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1432px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
                 <TableHead className="w-10 px-3">
@@ -4136,14 +4549,12 @@ export function AccountsPage() {
                   />
                 </TableHead>
                 <AccountSortTableHead
-                  className="w-64"
+                  className="w-52"
                   label="账号"
                   column="name"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
-                <TableHead className="w-32">Sub2API 状态</TableHead>
-                <TableHead className="w-28">Key 状态</TableHead>
                 <AccountSortTableHead
                   className="w-36"
                   label="健康分"
@@ -4153,14 +4564,14 @@ export function AccountsPage() {
                 />
                 <TableHead className="w-40">最近结果</TableHead>
                 <AccountSortTableHead
-                  className="w-32"
-                  label="综合延迟"
+                  className="w-28"
+                  label="流量首字"
                   column="latency"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
                 <AccountSortTableHead
-                  className="w-28"
+                  className="w-24"
                   label="账号成本"
                   column="cost"
                   value={accountSort}
@@ -4174,23 +4585,23 @@ export function AccountsPage() {
                   onValueChange={changeAccountSort}
                 />
                 <AccountSortTableHead
-                  className="w-48"
+                  className="w-44"
                   label="调度参数"
                   column="priority"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
-                <TableHead className="w-36">状态</TableHead>
-                <TableHead className="w-32 text-right">操作</TableHead>
+                <TableHead className="w-48">状态</TableHead>
+                <TableHead className="w-52 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {accounts.isLoading &&
                 Array.from({ length: 6 }, (_, row) => (
                   <TableRow key={`loading:${row}`}>
-                    <TableCell colSpan={12}>
+                    <TableCell colSpan={10}>
                       <div className="flex items-center gap-3 py-2">
-                        {Array.from({ length: 11 }, (_, column) => (
+                        {Array.from({ length: 9 }, (_, column) => (
                           <Skeleton
                             className={cn("h-4", column === 0 ? "w-44" : "w-20")}
                             key={column}
@@ -4202,10 +4613,14 @@ export function AccountsPage() {
                 ))}
               {!accounts.isLoading && !filteredRows.length && (
                 <TableRow>
-                  <TableCell colSpan={12}>
+                  <TableCell colSpan={10}>
                     <EmptyRow
                       text={
-                        search || statusFilter !== "all" || groupFilter || typeFilter
+                        search ||
+                        statusFilter !== "all" ||
+                        groupFilter ||
+                        typeFilter ||
+                        platformFilter
                           ? "没有匹配的账号"
                           : "当前没有账号"
                       }
@@ -4246,8 +4661,34 @@ export function AccountsPage() {
         selectedCount={selectedAccountIds.size}
         pending={batchOperationPending}
         onClear={() => setSelectedAccountIds(new Set())}
+        onSyncModels={() => startModelSync(selectedAccountIDs)}
+        onProbe={() => {
+          setBatchProbeAccounts([...selectedRows]);
+          setBatchProbeOpen(true);
+        }}
         onDelete={startBatchDelete}
       />
+      <AccountBatchProbeDialog
+        open={batchProbeOpen}
+        accounts={batchProbeAccounts}
+        onOpenChange={setBatchProbeOpen}
+        onPendingChange={setBatchProbePending}
+        onStarted={() => setSelectedAccountIds(new Set())}
+      />
+      <AccountModelSyncDialog
+        open={modelSyncOpen}
+        accountIds={modelSyncAccountIds}
+        accountPlatforms={accountPlatforms}
+        accountGroups={accountGroups}
+        onOpenChange={(open) => {
+          setModelSyncOpen(open);
+          if (!open) setModelSyncAccountIds([]);
+        }}
+        onCompleted={() => setSelectedAccountIds(new Set())}
+      />
+      {platformProbeOpen ? (
+        <PlatformProbeDialog open accounts={rows} onOpenChange={setPlatformProbeOpen} />
+      ) : null}
       <Dialog
         open={baseURLCheckOpen}
         onOpenChange={(open) => {
@@ -4258,6 +4699,7 @@ export function AccountsPage() {
         <DialogContent
           width={operationDialogWidth(baseURLCheckResultsReady, "table")}
           height={operationDialogHeight(baseURLCheckResultsReady)}
+          showCloseButton={!baseURLCheckPending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -4290,6 +4732,7 @@ export function AccountsPage() {
                   baseURLCheckTask.data.message || "正在校验 Base URL 并修复账号参数",
                 )}
                 progress={baseURLCheckTask.data.progress}
+                taskId={baseURLCheckTask.data.id}
               />
             )}
             {baseURLCheckTask.data &&
@@ -4364,6 +4807,7 @@ export function AccountsPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(maintenanceTask.data))}
           height={operationDialogHeight(taskStopsPolling(maintenanceTask.data))}
+          showCloseButton={!maintenancePending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -4450,6 +4894,10 @@ export function AccountsPage() {
                 </div>
               )}
             {maintenanceMutation.isPending && <TaskStartupState message="正在创建账号维护任务" />}
+            {!maintenanceMutation.isPending &&
+              maintenanceTaskId &&
+              !maintenanceTask.data &&
+              !maintenanceTask.error && <TaskStartupState message="正在读取账号维护任务状态" />}
             {maintenanceMutation.error && (
               <QueryError
                 error={maintenanceMutation.error}
@@ -4495,6 +4943,7 @@ export function AccountsPage() {
         <DialogContent
           width="wide"
           height="large"
+          showCloseButton={!batchDeletePending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -4616,18 +5065,38 @@ function accountBatchDeleteItems(task: Task): AccountBatchDeleteItem[] {
   });
 }
 
+function AccountTaskTerminalNotice(props: { task: Task; fallback: string }) {
+  if (props.task.status === "failed") {
+    return (
+      <TaskFailureDetail
+        reason={String(props.task.result.error || props.task.message || props.fallback)}
+      />
+    );
+  }
+  if (props.task.status === "cancelled") {
+    return (
+      <p role="status" className="text-muted-foreground text-sm">
+        {props.task.message || "任务已取消"}
+      </p>
+    );
+  }
+  return null;
+}
+
 export function AccountBatchDeleteTaskStatus(props: { task: Task }) {
   if (!taskStopsPolling(props.task)) {
     return (
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
   const items = accountBatchDeleteItems(props.task);
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 pr-4">
+      <AccountTaskTerminalNotice task={props.task} fallback="批量删除失败" />
       <div className="grid grid-cols-3 divide-x rounded-lg border">
         <ResultSummaryRow
           label="计划删除"
@@ -4686,6 +5155,7 @@ type AccountRateSyncItem = {
   accountId: string;
   accountName: string;
   upstreamHost: string;
+  platform: string;
   status: string;
   upstreamRawMultiplier: string;
   rechargeRate: string;
@@ -4708,6 +5178,7 @@ function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
         accountId: String(item.account_id ?? ""),
         accountName: String(item.account_name ?? ""),
         upstreamHost: String(item.upstream_host ?? ""),
+        platform: String(item.platform ?? ""),
         status: String(item.status ?? "未返回"),
         upstreamRawMultiplier: String(item.upstream_raw_multiplier ?? ""),
         rechargeRate: String(item.recharge_rate ?? ""),
@@ -4724,7 +5195,7 @@ function accountRateSyncItems(task: Task): AccountRateSyncItem[] {
 }
 
 export function AccountRateSyncTaskStatus(props: { task: Task }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const items = accountRateSyncItems(props.task);
   const pagination = useClientPagination(items);
   if (pending) {
@@ -4732,6 +5203,7 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
@@ -4756,9 +5228,7 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
         />
         <ResultSummaryRow label="失败" value={`${syncResultCount(props.task.result.failed)} 个`} />
       </div>
-      {props.task.status === "failed" && items.length === 0 && (
-        <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
-      )}
+      <AccountTaskTerminalNotice task={props.task} fallback="账号倍率同步失败" />
       <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => {
@@ -4776,6 +5246,9 @@ export function AccountRateSyncTaskStatus(props: { task: Task }) {
                   </strong>
                   <span className="text-muted-foreground block truncate text-xs">
                     ID {item.accountId}
+                    {item.platform
+                      ? ` · ${accountPlatformLabel(item.platform) ?? item.platform}`
+                      : " · 平台未识别"}
                     {item.upstreamHost ? ` · ${item.upstreamHost}` : ""}
                   </span>
                   {item.status === "已同步" &&
@@ -4852,7 +5325,7 @@ function accountMaintenanceItems(task: Task): AccountMaintenanceItem[] {
 }
 
 export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const items = accountMaintenanceItems(props.task);
   const pagination = useClientPagination(items);
   if (pending) {
@@ -4860,6 +5333,7 @@ export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
@@ -4880,9 +5354,7 @@ export function AccountDefaultsRepairTaskStatus(props: { task: Task }) {
         />
         <ResultSummaryRow label="失败" value={`${syncResultCount(props.task.result.failed)} 个`} />
       </div>
-      {props.task.status === "failed" && (
-        <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
-      )}
+      <AccountTaskTerminalNotice task={props.task} fallback="账号参数修复失败" />
       <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => {
@@ -4977,7 +5449,7 @@ export function AccountMaintenanceTaskStatus(props: {
   task: Task;
   onCleanupMissing?: (items: AccountMaintenanceItem[]) => void;
 }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const items = accountMaintenanceItems(props.task);
   const pagination = useClientPagination(items);
   const missingItems = items.filter((item) => item.status === "管理平台不存在");
@@ -4986,6 +5458,7 @@ export function AccountMaintenanceTaskStatus(props: {
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
@@ -5006,9 +5479,7 @@ export function AccountMaintenanceTaskStatus(props: {
           value={`${syncResultCount(props.task.result.missing) + syncResultCount(props.task.result.failed)} 个`}
         />
       </div>
-      {props.task.status === "failed" && (
-        <TaskFailureDetail reason={String(props.task.result.error ?? props.task.message)} />
-      )}
+      <AccountTaskTerminalNotice task={props.task} fallback="账号维护失败" />
       <DataTablePanel className="flex-1">
         <div className="min-h-0 flex-1 divide-y overflow-y-auto">
           {pagination.visibleItems.map((item) => (
@@ -5082,55 +5553,6 @@ export function AccountMaintenanceTaskStatus(props: {
   );
 }
 
-export function AccountDeletePreviewDetails(props: { preview: AccountDeletePreview }) {
-  return (
-    <div className="grid gap-4">
-      <div className="rounded-md bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
-        {props.preview.binding
-          ? "将删除管理平台账号、该账号绑定的上游 Key，以及 Console 中对应的绑定和调度记录。"
-          : "该账号没有可确认的上游 Key 绑定；将删除管理平台账号、确认其不存在并清理 Console 本地记录；不会删除任何上游 Key。"}
-      </div>
-      <div className="divide-y rounded-md border text-sm">
-        <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
-          <span className="text-muted-foreground">管理平台账号</span>
-          <strong className="min-w-0 break-words font-medium">
-            {props.preview.account_name}（ID {props.preview.account_id}）
-          </strong>
-        </div>
-        <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
-          <span className="text-muted-foreground">管理目标</span>
-          <span className="min-w-0 break-all font-mono text-xs">
-            {props.preview.management_base_url}
-          </span>
-        </div>
-        {props.preview.binding && (
-          <>
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
-              <span className="text-muted-foreground">上游地址</span>
-              <span className="min-w-0 break-all font-mono text-xs">
-                {props.preview.binding.upstream_host}
-              </span>
-            </div>
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
-              <span className="text-muted-foreground">稳定上游身份</span>
-              <span className="min-w-0 break-all font-mono text-xs">
-                {props.preview.binding.upstream_id}
-              </span>
-            </div>
-            <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-3 px-3 py-2.5">
-              <span className="text-muted-foreground">上游 Key</span>
-              <span className="min-w-0 break-words">
-                {props.preview.binding.upstream_key_name || "未命名 Key"}（ID{" "}
-                <span className="font-mono text-xs">{props.preview.binding.upstream_key_id}</span>）
-              </span>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function AccountRow(props: {
   account: AccountStatus;
   accounts: AccountStatus[];
@@ -5155,12 +5577,6 @@ function AccountRow(props: {
     queryKey: ["account-detail", account.id],
     queryFn: () => api.account(account.id),
     enabled: detailsOpen,
-    retry: false,
-  });
-  const deletePreview = useQuery({
-    queryKey: ["account-delete-preview", account.id],
-    queryFn: () => api.accountDeletePreview(account.id),
-    enabled: deleteOpen && activeAction !== "删除账号",
     retry: false,
   });
   const task = useQuery({
@@ -5194,10 +5610,12 @@ function AccountRow(props: {
     applyAccountDeletionProgress(queryClient, task.data);
     if (task.data?.status === "succeeded") {
       toast.success(`${account.name}：${activeAction}完成`);
+    } else if (task.data?.status === "cancelled") {
+      toast.info(task.data.message || `${account.name}：${activeAction}已取消`);
     } else {
       toast.error(task.data?.message || `${account.name}：${activeAction}失败`);
     }
-    if (activeAction === "删除账号") setDeleteOpen(false);
+    if (activeAction === accountDeleteActionLabel) setDeleteOpen(false);
     setTaskId(null);
     setActiveAction(null);
   }, [account.name, activeAction, task.data]);
@@ -5248,12 +5666,6 @@ function AccountRow(props: {
           <AccountIdentityCell account={account} />
         </TableCell>
         <TableCell className="align-middle">
-          <AccountSub2APIStatusCell account={account} />
-        </TableCell>
-        <TableCell className="align-middle">
-          <AccountKeyStatusCell account={account} />
-        </TableCell>
-        <TableCell className="align-middle">
           <AccountHealthCell account={account} />
         </TableCell>
         <TableCell className="align-middle">
@@ -5285,21 +5697,28 @@ function AccountRow(props: {
           <AccountStateCell account={account} />
         </TableCell>
         <TableCell className="align-middle text-right" overflowTooltip={false}>
-          <AccountOperationButtons
-            account={account}
-            pending={pending || activeAction !== null}
-            probePending={activeAction === "探活测试"}
-            onProbe={() =>
-              void startTask("探活测试", () => api.runActiveProbe({ account_id: account.id }))
-            }
-            onControl={(action, label, confirmation) => void control(action, label, confirmation)}
-            onRateSync={() =>
-              void startTask("同步账号倍率", () => api.syncAccountRates([account.id]))
-            }
-            onManualPriority={() => setManualPriorityOpen(true)}
-            onEdit={() => setDetailsOpen(true)}
-            onDelete={() => setDeleteOpen(true)}
-          />
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
+            <AccountTaskCancelButton
+              taskId={taskId}
+              pending={pending}
+              activeAction={activeAction}
+            />
+            <AccountOperationButtons
+              account={account}
+              pending={pending || activeAction !== null}
+              probePending={activeAction === "探活测试"}
+              onProbe={() =>
+                void startTask("探活测试", () => api.runActiveProbe({ account_id: account.id }))
+              }
+              onControl={(action, label, confirmation) => void control(action, label, confirmation)}
+              onRateSync={() =>
+                void startTask("同步账号倍率", () => api.syncAccountRates([account.id]))
+              }
+              onManualPriority={() => setManualPriorityOpen(true)}
+              onEdit={() => setDetailsOpen(true)}
+              onDelete={() => setDeleteOpen(true)}
+            />
+          </div>
           {task.error && <QueryError error={task.error} fallback="调度任务状态读取失败" />}
         </TableCell>
       </TableRow>
@@ -5323,13 +5742,14 @@ function AccountRow(props: {
         reservedMax={props.reservedMax}
         pending={pending || activeAction !== null}
         onOpenChange={setManualPriorityOpen}
-        onAssign={({ priority, loadFactor, concurrency, syncBalanceMultiplier }) => {
+        onAssign={({ priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier }) => {
           void startTask("设置人工优先位", () =>
             api.setAccountManualPriority(
               account.id,
               priority,
               loadFactor,
               concurrency,
+              schedulable,
               syncBalanceMultiplier,
             ),
           ).then((started) => started && setManualPriorityOpen(false));
@@ -5340,65 +5760,20 @@ function AccountRow(props: {
           );
         }}
       />
-      <Dialog
+      <AccountDeleteDialog
+        accountId={account.id}
         open={deleteOpen}
         onOpenChange={(open) => {
-          if (!pending && activeAction !== "删除账号") setDeleteOpen(open);
+          if (!pending && activeAction !== accountDeleteActionLabel) setDeleteOpen(open);
         }}
-      >
-        <DialogContent width="medium">
-          <DialogHeader>
-            <DialogTitle>
-              {deletePreview.data?.binding === null ? "删除管理平台账号" : "删除账号及上游 Key"}
-            </DialogTitle>
-            <DialogDescription>
-              {deletePreview.data?.binding === null
-                ? "确认后会删除管理平台账号和 Console 本地记录，此操作不可撤销。"
-                : "确认后会按稳定 ID 同时删除两端数据，此操作不可撤销。"}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogBody>
-            {deletePreview.isLoading && (
-              <div className="grid gap-3 py-2" aria-label="正在读取账号删除范围">
-                <Skeleton className="h-5 w-40" />
-                <Skeleton className="h-28 w-full" />
-              </div>
-            )}
-            {deletePreview.error && (
-              <QueryError error={deletePreview.error} fallback="账号删除范围读取失败" embedded />
-            )}
-            {deletePreview.data && activeAction !== "删除账号" && (
-              <div className="grid gap-4">
-                <AccountDeletePreviewDetails preview={deletePreview.data} />
-                <div className="flex justify-end gap-2">
-                  <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-                    取消
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    disabled={pending}
-                    onClick={() =>
-                      void startTask("删除账号", () => api.deleteAccount(deletePreview.data))
-                    }
-                  >
-                    <Trash2 size={16} />
-                    确认删除
-                  </Button>
-                </div>
-              </div>
-            )}
-            {activeAction === "删除账号" && task.data && !taskStopsPolling(task.data) && (
-              <TaskProgressState message={task.data.message} progress={task.data.progress} />
-            )}
-            {activeAction === "删除账号" && !task.data && !task.error && (
-              <TaskStartupState message="正在创建账号删除任务" />
-            )}
-            {activeAction === "删除账号" && task.error && (
-              <QueryError error={task.error} fallback="账号删除任务状态读取失败" embedded />
-            )}
-          </DialogBody>
-        </DialogContent>
-      </Dialog>
+        pending={pending || activeAction !== null}
+        activeAction={activeAction}
+        task={task.data}
+        taskError={task.error}
+        onConfirm={(preview) =>
+          void startTask(accountDeleteActionLabel, () => api.deleteAccount(preview))
+        }
+      />
       <ConfirmActionDialog
         open={confirmAction !== null}
         title={`确认${confirmAction?.label ?? "操作"}`}
@@ -5415,6 +5790,21 @@ function AccountRow(props: {
   );
 }
 
+export function AccountTaskCancelButton(props: {
+  taskId: string | null;
+  pending: boolean;
+  activeAction: string | null;
+}) {
+  if (
+    !props.taskId ||
+    !props.pending ||
+    props.activeAction === "删除账号" ||
+    props.activeAction === "探活测试"
+  )
+    return null;
+  return <TaskCancelButton taskId={props.taskId} compact />;
+}
+
 export function GroupsPage() {
   const groups = useQuery({
     queryKey: ["groups"],
@@ -5422,6 +5812,8 @@ export function GroupsPage() {
     refetchOnMount: "always",
   });
   const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const policyReady = policy.data?.available === true && !policy.isError;
+  const refreshGroups = () => Promise.all([groups.refetch(), policy.refetch()]);
   const queryClient = useQueryClient();
   const [allocationGroup, setAllocationGroup] = useState<GroupStatus | null>(null);
   const [excludeTarget, setExcludeTarget] = useState<GroupStatus | null>(null);
@@ -5446,6 +5838,7 @@ export function GroupsPage() {
       queryClient.invalidateQueries({ queryKey: ["logs"] }),
       queryClient.invalidateQueries({ queryKey: ["overview"] }),
     ]);
+  const batch = useGroupBatchActions(invalidate);
   const updateGroup = useMutation({
     mutationFn: ({ id, value }: { id: string; value: GroupPolicyOverrideUpdate }) =>
       api.updateGroupPolicy(id, value),
@@ -5491,6 +5884,8 @@ export function GroupsPage() {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "分组策略清除失败"),
   });
+  const groupWritePending =
+    batch.pending || updateGroup.isPending || excludeGroup.isPending || clearGroup.isPending;
   const advanced = (policy.data?.advanced_policy ?? {}) as Record<string, unknown>;
   const section = (name: string) => {
     const value = advanced[name];
@@ -5499,7 +5894,7 @@ export function GroupsPage() {
       : {};
   };
   const openEditor = (group: GroupStatus) => {
-    if (!group.id) return;
+    if (!group.id || !policyReady) return;
     const override = group.override ?? {};
     const breaker = section("breaker");
     const weights = section("weights");
@@ -5521,7 +5916,7 @@ export function GroupsPage() {
       probe_interval_seconds:
         override.probe_interval_seconds ??
         Number(probe.interval_seconds ?? policy.data?.probe_interval_seconds ?? 300),
-      probe_model: override.probe_model ?? policy.data?.probe_model ?? null,
+      probe_model: groupProbeModelDraftValue(override.probe_model),
     });
     setEditingGroup(group);
   };
@@ -5543,6 +5938,10 @@ export function GroupsPage() {
   );
   const pagination = useClientPagination(filteredRows);
   const pageRows = pagination.visibleItems;
+  const selectedGroups = rows.filter((group) => group.id && batch.selectedIDs.has(group.id));
+  const pageIDs = pageRows.flatMap((group) => (group.id ? [group.id] : []));
+  const allPageSelected = pageIDs.length > 0 && pageIDs.every((id) => batch.selectedIDs.has(id));
+  const somePageSelected = pageIDs.some((id) => batch.selectedIDs.has(id));
   if (groups.error)
     return (
       <PageLayout>
@@ -5553,9 +5952,9 @@ export function GroupsPage() {
           action={
             <PageActions>
               <RefreshButton
-                pending={groups.isFetching}
+                pending={groups.isFetching || policy.isFetching}
                 ariaLabel="刷新分组"
-                onClick={() => void groups.refetch()}
+                onClick={() => void refreshGroups()}
               />
             </PageActions>
           }
@@ -5572,28 +5971,46 @@ export function GroupsPage() {
         action={
           <PageActions>
             <RefreshButton
-              pending={groups.isFetching}
+              pending={groups.isFetching || policy.isFetching}
               ariaLabel="刷新分组"
-              onClick={() => void groups.refetch()}
+              onClick={() => void refreshGroups()}
             />
           </PageActions>
         }
       />
       <div className="flex h-full min-h-0 flex-col gap-2.5 sm:gap-3">
+        {policy.error && (
+          <QueryError error={policy.error} fallback="全局策略读取失败，请刷新后再编辑分组" />
+        )}
+        {policy.data?.available === false && (
+          <p role="status" className="text-muted-foreground text-sm">
+            全局策略暂不可用，请检查策略配置后再编辑分组。
+          </p>
+        )}
         <TableFilterToolbar aria-label="分组筛选">
           <SearchField
             value={search}
             onChange={(value) => {
               setSearch(value);
+              batch.clearSelection();
               pagination.setCurrentPage(1);
             }}
             placeholder="搜索分组、平台或策略"
           />
         </TableFilterToolbar>
-        <DataTablePanel className="flex-1">
+        <DataTablePanel className={cn("flex-1", selectedGroups.length > 0 && "mb-20")}>
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1160px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allPageSelected}
+                    indeterminate={!allPageSelected && somePageSelected}
+                    disabled={pageIDs.length === 0 || groupWritePending}
+                    aria-label={allPageSelected ? "取消选择当前页分组" : "选择当前页分组"}
+                    onCheckedChange={(checked) => batch.select(pageIDs, checked)}
+                  />
+                </TableHead>
                 <TableHead className="w-[16%]">分组</TableHead>
                 <TableHead className="w-[12%]">平台</TableHead>
                 <TableHead className="w-[8%]">账号数</TableHead>
@@ -5605,14 +6022,27 @@ export function GroupsPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {groups.isLoading && <TableLoadingRows columns={8} />}
+              {groups.isLoading && <TableLoadingRows columns={9} />}
               {!groups.isLoading && !filteredRows.length && (
-                <TableMessageRow columns={8}>
+                <TableMessageRow columns={9}>
                   <EmptyRow text={search ? "没有匹配的分组" : "当前没有分组"} />
                 </TableMessageRow>
               )}
               {pageRows.map((group) => (
-                <TableRow key={group.id || group.name}>
+                <TableRow
+                  key={group.id || group.name}
+                  data-state={group.id && batch.selectedIDs.has(group.id) ? "selected" : undefined}
+                >
+                  <TableCell overflowTooltip={false}>
+                    <Checkbox
+                      checked={Boolean(group.id && batch.selectedIDs.has(group.id))}
+                      disabled={!group.id || groupWritePending}
+                      aria-label={`选择分组 ${group.name}`}
+                      onCheckedChange={(checked) => {
+                        if (group.id) batch.select([group.id], checked);
+                      }}
+                    />
+                  </TableCell>
                   <TableCell className="font-medium">{group.name}</TableCell>
                   <TableCell>
                     <StatusPill
@@ -5650,7 +6080,7 @@ export function GroupsPage() {
                       <TableActionButton
                         label={group.status === "excluded" ? "恢复管控" : "排除分组"}
                         tone={group.status === "excluded" ? "primary" : "danger"}
-                        disabled={!group.id || excludeGroup.isPending}
+                        disabled={!group.id || groupWritePending}
                         onClick={() => {
                           if (!group.id) return;
                           const excluded = group.status !== "excluded";
@@ -5665,14 +6095,19 @@ export function GroupsPage() {
                       </TableActionButton>
                       <TableActionButton
                         label="回落到全局策略"
-                        disabled={!group.id || !group.override || clearGroup.isPending}
+                        disabled={!group.id || !group.override || groupWritePending}
                         onClick={() => group.id && clearGroup.mutate(group.id)}
                       >
                         <RefreshCw />
                       </TableActionButton>
                       <TableActionButton
                         label="编辑分组"
-                        disabled={!group.id || group.status === "excluded"}
+                        disabled={
+                          !group.id ||
+                          group.status === "excluded" ||
+                          !policyReady ||
+                          groupWritePending
+                        }
                         onClick={() => openEditor(group)}
                       >
                         <Pencil />
@@ -5695,6 +6130,14 @@ export function GroupsPage() {
           )}
         </DataTablePanel>
       </div>
+      <GroupSelectionToolbar
+        selectedCount={selectedGroups.length}
+        pending={groupWritePending}
+        disabled={!policyReady}
+        onClear={batch.clearSelection}
+        onAction={(action) => batch.open(action, selectedGroups)}
+      />
+      <GroupBatchDialog batch={batch} />
       <GroupAllocationDialog
         group={allocationGroup}
         allocation={allocation.data}
@@ -6006,8 +6449,9 @@ function onboardingBaseUrl(values: Pick<OnboardingForm, "base_url_protocol" | "h
     baseUrl: values.host,
   });
 }
-function onboardingProbeTarget(
+export function onboardingProbeTarget(
   candidate: OnboardingCandidate | undefined,
+  platform?: string | null,
 ): (OnboardingProbeTarget & ProbeDialogTarget) | null {
   if (!candidate?.group_id) return null;
   return {
@@ -6015,9 +6459,11 @@ function onboardingProbeTarget(
     host: candidate.host,
     groupId: candidate.group_id,
     name: candidate.group_name,
+    platform: platform ?? candidate.platform,
   };
 }
 export function OnboardingPage() {
+  const fieldID = React.useId();
   const navigate = useNavigate();
   const onboardingSearch = useSearch({ from: "/onboarding" });
   const entryKind = onboardingEntryKind(onboardingSearch.host, onboardingSearch.group_id);
@@ -6042,7 +6488,9 @@ export function OnboardingPage() {
   const [verifiedUpstream, setVerifiedUpstream] = useState<UpstreamConfiguration | null>(null);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [batchBindings, setBatchBindings] = useState<Record<string, string[]>>({});
-  const [candidatePlatforms, setCandidatePlatforms] = useState<Record<string, string>>({});
+  const [onlyShowEnabledGroups, setOnlyShowEnabledGroups] = useState(
+    defaultOnlyShowEnabledOnboardingGroups,
+  );
   const [onboardingConfirmation, setOnboardingConfirmation] =
     useState<OnboardingConfirmation | null>(null);
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
@@ -6091,7 +6539,6 @@ export function OnboardingPage() {
     setVerifiedUpstream(null);
     setSelectedGroupId(null);
     setBatchBindings({});
-    setCandidatePlatforms({});
   }, [form, onboardingSearch.host, onboardingSearch.upstream_type]);
   const groups = useQuery({
     queryKey: ["groups"],
@@ -6183,7 +6630,6 @@ export function OnboardingPage() {
       setVerifiedUpstream(context.upstream);
       setSelectedGroupId(null);
       setBatchBindings({});
-      setCandidatePlatforms({});
       setOnboardingConfirmation(null);
       setTaskId(null);
     },
@@ -6416,7 +6862,9 @@ export function OnboardingPage() {
   }
   async function execute() {
     const values = form.getValues();
-    const candidate = visibleCandidates.find((item) => item.group_id === selectedGroupId);
+    const candidate = (entryGroupId ? allCandidates : visibleCandidates).find(
+      (item) => item.group_id === selectedGroupId,
+    );
     const existingBinding = candidate ? candidateHasExistingBinding(candidate) : false;
     if (
       !candidate ||
@@ -6427,16 +6875,16 @@ export function OnboardingPage() {
       toast.error("所选上游分组当前不可用于添加账号");
       return;
     }
-    const selectedPlatform = candidatePlatforms[candidate.group_id];
-    if (isCompositeOnboardingPlatform(candidate.platform) && !selectedPlatform) {
-      toast.error("请先选择账号协议");
-      return;
-    }
     const multiplier = candidate.multiplier;
     const settingsValid = await form.trigger(["concurrency", "priority", "local_group_id"]);
     if (!settingsValid) return;
     const localGroupIDs =
       batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
+    const selectedPlatform = inferOnboardingProtocol(localGroupIDs, localGroups);
+    if (!onboardingProtocolReady(candidate.platform, selectedPlatform)) {
+      toast.error("请选择带明确平台且账号类型一致的本地分组");
+      return;
+    }
     const compatibleLocalGroups = compatibleOnboardingLocalGroups(
       { platform: selectedPlatform ?? candidate.platform },
       localGroups,
@@ -6466,7 +6914,9 @@ export function OnboardingPage() {
       priority: Number(values.priority),
       local_group_ids: localGroupIDs.map(Number),
       upstream_group_id: candidate.group_id,
-      platform: selectedPlatform,
+      platform: onboardingPlatformNeedsProtocol(candidate.platform)
+        ? (selectedPlatform ?? undefined)
+        : undefined,
       account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
       schedulable: false,
     };
@@ -6501,21 +6951,21 @@ export function OnboardingPage() {
   async function executeBatch() {
     const valid = await form.trigger(["concurrency", "priority"]);
     if (!valid) return;
-    if (batchMissingPlatform) {
-      toast.error("请先为复合平台分组选择账号协议");
+    if (batchMissingProtocol) {
+      toast.error("部分本地分组无法唯一确定账号类型，请重新选择");
       return;
     }
     const values = form.getValues();
     const selections = visibleCandidates.flatMap((candidate) => {
       if (!candidate.group_id || !candidate.multiplier) return [];
       const multiplier = candidate.multiplier;
-      const selectedPlatform = candidatePlatforms[candidate.group_id];
-      if (isCompositeOnboardingPlatform(candidate.platform) && !selectedPlatform) return [];
       const existingBinding = candidateHasExistingBinding(candidate);
       if (!candidateCanCreateKey(candidate) && !existingBinding) return [];
       const localGroupIDs =
         batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
       if (localGroupIDs.length === 0) return [];
+      const selectedPlatform = inferOnboardingProtocol(localGroupIDs, localGroups);
+      if (!onboardingProtocolReady(candidate.platform, selectedPlatform)) return [];
       const compatibleLocalGroups = compatibleOnboardingLocalGroups(
         { platform: selectedPlatform ?? candidate.platform },
         localGroups,
@@ -6540,7 +6990,9 @@ export function OnboardingPage() {
         priority: Number(values.priority),
         local_group_ids: localGroupIDs.map(Number),
         upstream_group_id: candidate.group_id,
-        platform: selectedPlatform,
+        platform: onboardingPlatformNeedsProtocol(candidate.platform)
+          ? (selectedPlatform ?? undefined)
+          : undefined,
         account_ids: existingBinding ? candidateBoundAccountIDs(candidate) : undefined,
         schedulable: false,
       } satisfies OnboardingRequest;
@@ -6627,9 +7079,11 @@ export function OnboardingPage() {
   const preparedError = prepareMatchesEntry ? prepare.error : null;
   const preparing = prepareMatchesEntry && prepare.isPending;
   const localGroups = groups.error ? [] : (groups.data?.filter((group) => group.id) ?? []);
-  const visibleCandidates = (preparedData?.candidates ?? []).map((candidate) =>
+  const allCandidates = (preparedData?.candidates ?? []).map((candidate) =>
     candidate.unavailable_reason === "" ? { ...candidate, unavailable_reason: "空值" } : candidate,
   );
+  const visibleCandidates = filterOnboardingCandidates(allCandidates, onlyShowEnabledGroups);
+  const hiddenCandidateCount = allCandidates.length - visibleCandidates.length;
   const candidatePagination = useClientPagination(visibleCandidates);
   useEffect(() => {
     if (!preparedData) return;
@@ -6647,12 +7101,18 @@ export function OnboardingPage() {
     }
   }, [entryGroupId, form, preparedData]);
   const entryCandidate = entryGroupId
-    ? visibleCandidates.find((candidate) => candidate.group_id === entryGroupId)
+    ? allCandidates.find((candidate) => candidate.group_id === entryGroupId)
     : undefined;
+  const entryLocalGroupIDs = entryCandidate?.group_id
+    ? (batchBindings[entryCandidate.group_id] ?? candidateBoundLocalGroupIDs(entryCandidate))
+    : [];
+  const entrySelectedPlatform = entryCandidate?.group_id
+    ? inferOnboardingProtocol(entryLocalGroupIDs, localGroups)
+    : null;
   const entryCompatibleLocalGroups = entryCandidate
     ? compatibleOnboardingLocalGroups(
         {
-          platform: candidatePlatforms[entryCandidate.group_id ?? ""] ?? entryCandidate.platform,
+          platform: entrySelectedPlatform ?? entryCandidate.platform,
         },
         localGroups,
       )
@@ -6670,9 +7130,10 @@ export function OnboardingPage() {
   const entryCandidateAvailable = entryCandidate
     ? candidateCanCreateKey(entryCandidate) || candidateHasExistingBinding(entryCandidate)
     : false;
-  const entryProtocolReady =
-    !isCompositeOnboardingPlatform(entryCandidate?.platform) ||
-    Boolean(entryCandidate?.group_id && candidatePlatforms[entryCandidate.group_id]);
+  const entryProtocolReady = onboardingProtocolReady(
+    entryCandidate?.platform,
+    entrySelectedPlatform,
+  );
   const entryCandidateSelectable =
     entryCandidateAvailable && entryProtocolReady && entryCompatibleLocalGroups.length > 0;
   let entryUnavailableReason: string | null = null;
@@ -6681,13 +7142,16 @@ export function OnboardingPage() {
   } else if (entryCandidate && entryProtocolReady && entryCompatibleLocalGroups.length === 0) {
     entryUnavailableReason = "没有与该上游分组平台一致的本地分组";
   }
-  const entryProbeTarget = onboardingProbeTarget(entryCandidate);
+  const entryProbeTarget = onboardingProbeTarget(
+    entryCandidate,
+    entrySelectedPlatform ?? entryCandidate?.platform,
+  );
   const candidateStats = onboardingCandidateStats(visibleCandidates);
   const batchBindingCount = visibleCandidates.reduce((count, candidate) => {
     if (!candidate.group_id) return count;
-    const selectedPlatform = candidatePlatforms[candidate.group_id];
-    if (isCompositeOnboardingPlatform(candidate.platform) && !selectedPlatform) return count;
     const selected = batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
+    const selectedPlatform = inferOnboardingProtocol(selected, localGroups);
+    if (!onboardingProtocolReady(candidate.platform, selectedPlatform)) return count;
     const compatibleLocalGroups = compatibleOnboardingLocalGroups(
       { platform: selectedPlatform ?? candidate.platform },
       localGroups,
@@ -6703,16 +7167,22 @@ export function OnboardingPage() {
     }
     return candidateCanCreateKey(candidate) ? count + selected.length : count;
   }, 0);
-  const batchMissingPlatform = visibleCandidates.some((candidate) => {
+  const batchMissingProtocol = visibleCandidates.some((candidate) => {
     if (
       !candidate.group_id ||
       (!candidateCanCreateKey(candidate) && !candidateHasExistingBinding(candidate))
     ) {
       return false;
     }
-    if (!isCompositeOnboardingPlatform(candidate.platform)) return false;
     const selected = batchBindings[candidate.group_id] ?? candidateBoundLocalGroupIDs(candidate);
-    return selected.length > 0 && !candidatePlatforms[candidate.group_id];
+    const selectedPlatform = inferOnboardingProtocol(selected, localGroups);
+    const pendingChange = candidateHasOnboardingChange(candidate, selected, "", false);
+    return pendingOnboardingSelectionNeedsProtocol(
+      pendingChange,
+      selected.length,
+      candidate.platform,
+      selectedPlatform,
+    );
   });
   let entrySubmitLabel = "预览添加账号";
   if (onboardingSubmitting || taskIsPending(taskId, task)) {
@@ -6735,7 +7205,6 @@ export function OnboardingPage() {
     setVerifiedUpstream(null);
     setSelectedGroupId(null);
     setBatchBindings({});
-    setCandidatePlatforms({});
     setOnboardingConfirmation(null);
     setProbeTarget(null);
     prepare.reset();
@@ -6806,8 +7275,10 @@ export function OnboardingPage() {
   let entryInteractionDisabledReason = entryUnavailableReason;
   if (onboardingPending) {
     entryInteractionDisabledReason = "账号添加任务进行中";
+  } else if (entryLocalGroupIDs.length === 0) {
+    entryInteractionDisabledReason = "请先选择本地分组";
   } else if (!entryProtocolReady) {
-    entryInteractionDisabledReason = "请先选择账号协议";
+    entryInteractionDisabledReason = "请选择带明确平台的本地分组以确定账号类型";
   }
   const usesAdminKey = authMode === "newapi_admin_key";
   const usesSub2ApiToken = authMode === "sub2api_user_token";
@@ -6819,12 +7290,7 @@ export function OnboardingPage() {
     form.watch("host"),
     { requireEmail: upstreamType === "sub2api" },
   );
-  let selectionCardClass: string | undefined;
-  if (entryKind === "host") {
-    selectionCardClass = "h-full min-h-0";
-  } else if (!entryHost) {
-    selectionCardClass = "mt-3 sm:mt-4";
-  }
+  const selectionLayout = onboardingSelectionLayout(entryKind, Boolean(verifiedUpstream));
   const balanceSyncPending = balanceSync.isPending || taskIsPending(balanceTaskId, balanceTask);
   let onboardingMaintenanceTitle = "修复绑定账号名称";
   if (onboardingMaintenanceKind === "revalidate") {
@@ -6833,327 +7299,339 @@ export function OnboardingPage() {
     onboardingMaintenanceTitle = "修复失效绑定";
   }
   return (
-    <PageLayout fixedContent={entryKind === "host"}>
+    <PageLayout fixedContent={selectionLayout.fixedContent}>
       <PageHeading
         eyebrow="ACCOUNT / ONBOARDING"
         title="账号添加"
         description={onboardingEntryDescription(entryKind)}
         action={onboardingHeadingActions}
       />
-      {!entryHost ? (
-        <div className="mb-3 grid grid-cols-2 overflow-hidden rounded-lg border sm:mb-4">
-          <div
-            className={cn(
-              "flex items-center gap-2 px-3 py-2.5 text-sm",
-              verifiedUpstream ? "bg-success/10 text-success" : "bg-muted/50 font-medium",
-            )}
-          >
-            <span className="flex size-6 items-center justify-center rounded-full border">
-              {verifiedUpstream ? <Check size={14} /> : "1"}
-            </span>
-            添加上游并完成鉴权
-          </div>
-          <div
-            className={cn(
-              "flex items-center gap-2 border-l px-3 py-2.5 text-sm",
-              verifiedUpstream ? "bg-muted/50 font-medium" : "text-muted-foreground",
-            )}
-          >
-            <span className="flex size-6 items-center justify-center rounded-full border">2</span>
-            选择分组并添加账号
-          </div>
-        </div>
-      ) : null}
+      {!entryHost ? <OnboardingStepIndicator completed={Boolean(verifiedUpstream)} /> : null}
 
-      {!entryHost ? (
+      {!entryHost && !verifiedUpstream ? (
         <Card>
           <CardHeader>
             <CardTitle>第一步：添加上游并完成鉴权</CardTitle>
           </CardHeader>
           <CardContent>
-            {verifiedUpstream ? (
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-3">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <strong>{verifiedUpstream.name}</strong>
-                    <StatusPill label={upstreamAuthStatuses.authenticated} tone="success" />
-                    <Badge variant="outline">
-                      {displayUpstreamType(verifiedUpstream.upstream_type)}
-                    </Badge>
-                  </div>
-                  <ExternalUpstreamLink
-                    host={verifiedUpstream.host}
-                    baseUrl={verifiedUpstream.base_url}
-                    label={verifiedUpstream.base_url}
-                    className="mt-1 max-w-full text-xs"
-                  />
-                </div>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setVerifiedUpstream(null);
-                    setSelectedGroupId(null);
-                    prepare.reset();
-                  }}
+            <form
+              className="grid gap-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void completeUpstreamStep();
+              }}
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <FormField
+                  htmlFor={`${fieldID}-host`}
+                  label="上游地址"
+                  error={form.formState.errors.host?.message}
                 >
-                  重新选择
-                </Button>
-              </div>
-            ) : (
-              <form
-                className="grid gap-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void completeUpstreamStep();
-                }}
-              >
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField label="上游地址" error={form.formState.errors.host?.message}>
-                    <div className="grid min-w-0 grid-cols-[6.75rem_minmax(0,1fr)] gap-2">
-                      <Controller
-                        control={form.control}
-                        name="base_url_protocol"
-                        render={({ field }) => (
-                          <Select value={field.value} onValueChange={field.onChange}>
-                            <SelectTrigger className="w-[6.75rem] shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="https">HTTPS</SelectItem>
-                              <SelectItem value="http">HTTP</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                      />
-                      <Controller
-                        control={form.control}
-                        name="host"
-                        render={(controller) => (
-                          <Input
-                            ref={controller.field.ref}
-                            name={controller.field.name}
-                            value={controller.field.value}
-                            onBlur={controller.field.onBlur}
-                            onChange={(event) => updateUpstreamAddress(event.target.value)}
-                            placeholder="sub2api.example.com"
-                          />
-                        )}
-                      />
-                    </div>
-                  </FormField>
-                  <FormField
-                    label="账号 Base URL"
-                    error={form.formState.errors.account_base_url?.message}
-                  >
-                    <Input
-                      {...form.register("account_base_url")}
-                      placeholder={onboardingBaseUrl(form.getValues())}
+                  <div className="grid min-w-0 grid-cols-[6.75rem_minmax(0,1fr)] gap-2">
+                    <Controller
+                      control={form.control}
+                      name="base_url_protocol"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger aria-label="上游地址协议" className="w-[6.75rem] shrink-0">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="https">HTTPS</SelectItem>
+                            <SelectItem value="http">HTTP</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
                     />
-                  </FormField>
-                  <FormField label="名称">
-                    <Input
-                      value={upstreamName}
-                      onChange={(event) => setUpstreamName(event.target.value)}
-                      placeholder="输入地址后自动获取"
-                    />
-                  </FormField>
-                  <FormField label="上游类型">
-                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
-                      <Controller
-                        control={form.control}
-                        name="upstream_type"
-                        render={({ field }) => (
-                          <Select value={field.value} onValueChange={field.onChange}>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {configurableUpstreamTypeOptions.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        )}
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        disabled={detection.isPending || !upstreamAddressValue.trim()}
-                        onClick={() => void runUpstreamDetection()}
-                      >
-                        <ScanSearch className={detection.isPending ? "animate-pulse" : undefined} />
-                        {detection.isPending ? "识别中" : "自动识别"}
-                      </Button>
-                    </div>
-                  </FormField>
-                  <FormField label="鉴权方式">
-                    <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {authModes.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>
-                            {item.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </FormField>
-                  <FormField label="充值比例">
-                    <Input
-                      value={rechargeRate}
-                      onChange={(event) => setRechargeRate(event.target.value)}
-                      inputMode="decimal"
-                      placeholder="1"
-                    />
-                  </FormField>
-                </div>
-                {usesAdminKey && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Admin Key">
-                      <Input
-                        type="password"
-                        value={credentials.adminKey}
-                        onChange={(event) =>
-                          setCredentials((current) => ({
-                            ...current,
-                            adminKey: event.target.value,
-                          }))
-                        }
-                      />
-                    </FormField>
-                    <FormField label="用户 ID">
-                      <Input
-                        value={credentials.userId}
-                        onChange={(event) =>
-                          setCredentials((current) => ({
-                            ...current,
-                            userId: event.target.value,
-                          }))
-                        }
-                      />
-                    </FormField>
-                  </div>
-                )}
-                {(usesSub2ApiToken || usesToken) && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="Token">
-                      <Input
-                        type="password"
-                        value={credentials.accessToken}
-                        onChange={(event) =>
-                          setCredentials((current) => ({
-                            ...current,
-                            accessToken: event.target.value,
-                          }))
-                        }
-                      />
-                    </FormField>
-                    {usesSub2ApiToken ? (
-                      <FormField label="刷新 Token">
+                    <Controller
+                      control={form.control}
+                      name="host"
+                      render={(controller) => (
                         <Input
-                          type="password"
-                          value={credentials.refreshToken}
-                          onChange={(event) =>
-                            setCredentials((current) => ({
-                              ...current,
-                              refreshToken: event.target.value,
-                            }))
-                          }
+                          id={`${fieldID}-host`}
+                          ref={controller.field.ref}
+                          name={controller.field.name}
+                          value={controller.field.value}
+                          onBlur={controller.field.onBlur}
+                          onChange={(event) => updateUpstreamAddress(event.target.value)}
+                          placeholder="sub2api.example.com"
                         />
-                      </FormField>
-                    ) : null}
+                      )}
+                    />
                   </div>
-                )}
-                {usesVaultLogin && (
-                  <FormField label="密码箱密码项">
-                    <Select
-                      value={credentials.entry}
-                      onValueChange={(value) => {
-                        if (!value) return;
+                </FormField>
+                <FormField
+                  htmlFor={`${fieldID}-account-base-url`}
+                  label="账号 Base URL"
+                  error={form.formState.errors.account_base_url?.message}
+                >
+                  <Input
+                    id={`${fieldID}-account-base-url`}
+                    {...form.register("account_base_url")}
+                    placeholder={onboardingBaseUrl(form.getValues())}
+                  />
+                </FormField>
+                <FormField htmlFor={`${fieldID}-name`} label="名称">
+                  <Input
+                    id={`${fieldID}-name`}
+                    value={upstreamName}
+                    onChange={(event) => setUpstreamName(event.target.value)}
+                    placeholder="输入地址后自动获取"
+                  />
+                </FormField>
+                <FormField htmlFor={`${fieldID}-upstream-type`} label="上游类型">
+                  <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+                    <Controller
+                      control={form.control}
+                      name="upstream_type"
+                      render={({ field }) => (
+                        <Select value={field.value} onValueChange={field.onChange}>
+                          <SelectTrigger id={`${fieldID}-upstream-type`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {configurableUpstreamTypeOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={detection.isPending || !upstreamAddressValue.trim()}
+                      onClick={() => void runUpstreamDetection()}
+                    >
+                      <ScanSearch className={detection.isPending ? "animate-pulse" : undefined} />
+                      {detection.isPending ? "识别中" : "自动识别"}
+                    </Button>
+                  </div>
+                </FormField>
+                <FormField htmlFor={`${fieldID}-auth-mode`} label="鉴权方式">
+                  <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>
+                    <SelectTrigger id={`${fieldID}-auth-mode`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {authModes.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+                <FormField htmlFor={`${fieldID}-recharge-rate`} label="充值比例">
+                  <Input
+                    id={`${fieldID}-recharge-rate`}
+                    value={rechargeRate}
+                    onChange={(event) => setRechargeRate(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="1"
+                  />
+                </FormField>
+              </div>
+              {usesAdminKey && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField htmlFor={`${fieldID}-admin-key`} label="Admin Key">
+                    <Input
+                      id={`${fieldID}-admin-key`}
+                      type="password"
+                      value={credentials.adminKey}
+                      onChange={(event) =>
                         setCredentials((current) => ({
                           ...current,
-                          entry: value,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="选择密码箱项" />
-                      </SelectTrigger>
-                      <SelectContent className="min-w-[20rem]">
-                        {vaultOptions.map((item) => (
-                          <SelectItem key={item.entry} value={item.entry}>
-                            {vaultEntryLabel(item)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                          adminKey: event.target.value,
+                        }))
+                      }
+                    />
                   </FormField>
-                )}
-                {usesManualLogin && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <FormField label="用户名">
+                  <FormField htmlFor={`${fieldID}-user-id`} label="用户 ID">
+                    <Input
+                      id={`${fieldID}-user-id`}
+                      value={credentials.userId}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          userId: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                </div>
+              )}
+              {(usesSub2ApiToken || usesToken) && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField htmlFor={`${fieldID}-token`} label="Token">
+                    <Input
+                      id={`${fieldID}-token`}
+                      type="password"
+                      value={credentials.accessToken}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          accessToken: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                  {usesSub2ApiToken ? (
+                    <FormField htmlFor={`${fieldID}-refresh-token`} label="刷新 Token">
                       <Input
-                        autoComplete="username"
-                        value={credentials.username}
-                        onChange={(event) =>
-                          setCredentials((current) => ({
-                            ...current,
-                            username: event.target.value,
-                          }))
-                        }
-                      />
-                    </FormField>
-                    <FormField label="密码">
-                      <Input
+                        id={`${fieldID}-refresh-token`}
                         type="password"
-                        autoComplete="current-password"
-                        value={credentials.password}
+                        value={credentials.refreshToken}
                         onChange={(event) =>
                           setCredentials((current) => ({
                             ...current,
-                            password: event.target.value,
+                            refreshToken: event.target.value,
                           }))
                         }
                       />
                     </FormField>
-                    <div className="flex items-center gap-2 sm:col-span-2">
-                      <Switch
-                        id="onboarding-save-to-vault"
-                        checked={credentials.saveToVault}
-                        onCheckedChange={(checked) =>
+                  ) : null}
+                </div>
+              )}
+              {usesVaultLogin && (
+                <FormField htmlFor={`${fieldID}-vault-entry`} label="密码箱密码项">
+                  <Select
+                    value={credentials.entry}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      setCredentials((current) => ({
+                        ...current,
+                        entry: value,
+                      }));
+                    }}
+                  >
+                    <SelectTrigger id={`${fieldID}-vault-entry`}>
+                      <SelectValue placeholder="选择密码箱项" />
+                    </SelectTrigger>
+                    <SelectContent className="min-w-[20rem]">
+                      {vaultOptions.map((item) => (
+                        <SelectItem key={item.entry} value={item.entry}>
+                          {vaultEntryLabel(item)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              )}
+              {usesManualLogin && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField htmlFor={`${fieldID}-username`} label="用户名">
+                    <Input
+                      id={`${fieldID}-username`}
+                      autoComplete="username"
+                      value={credentials.username}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          username: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                  <FormField htmlFor={`${fieldID}-password`} label="密码">
+                    <Input
+                      id={`${fieldID}-password`}
+                      type="password"
+                      autoComplete="current-password"
+                      value={credentials.password}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          password: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                  <div className="flex items-center gap-2 sm:col-span-2">
+                    <Switch
+                      id="onboarding-save-to-vault"
+                      checked={credentials.saveToVault}
+                      onCheckedChange={(checked) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          saveToVault: checked,
+                        }))
+                      }
+                    />
+                    <label className="cursor-pointer text-sm" htmlFor="onboarding-save-to-vault">
+                      登录成功后保存到密码箱
+                    </label>
+                  </div>
+                  {credentials.saveToVault ? (
+                    <FormField htmlFor={`${fieldID}-vault-name`} label="凭据名称（可选）">
+                      <Input
+                        id={`${fieldID}-vault-name`}
+                        value={credentials.entry}
+                        onChange={(event) =>
                           setCredentials((current) => ({
                             ...current,
-                            saveToVault: checked,
+                            entry: event.target.value,
                           }))
                         }
+                        placeholder="默认使用 Host"
                       />
-                      <label className="cursor-pointer text-sm" htmlFor="onboarding-save-to-vault">
-                        登录成功后保存到密码箱
-                      </label>
-                    </div>
-                    {credentials.saveToVault ? (
-                      <FormField label="凭据名称（可选）">
-                        <Input
-                          value={credentials.entry}
-                          onChange={(event) =>
-                            setCredentials((current) => ({
-                              ...current,
-                              entry: event.target.value,
-                            }))
-                          }
-                          placeholder="默认使用 Host"
-                        />
-                      </FormField>
-                    ) : null}
+                    </FormField>
+                  ) : null}
+                </div>
+              )}
+              {authMode === "custom_headers" && (
+                <FormField htmlFor={`${fieldID}-headers`} label="Headers JSON">
+                  <Textarea
+                    id={`${fieldID}-headers`}
+                    className="min-h-24"
+                    value={credentials.headers}
+                    onChange={(event) =>
+                      setCredentials((current) => ({
+                        ...current,
+                        headers: event.target.value,
+                      }))
+                    }
+                    placeholder='例如 {"Authorization":"Bearer ..."}'
+                  />
+                </FormField>
+              )}
+              {authMode === "cookie" && (
+                <FormField htmlFor={`${fieldID}-cookies`} label="Cookies JSON">
+                  <Textarea
+                    id={`${fieldID}-cookies`}
+                    className="min-h-24"
+                    value={credentials.cookies}
+                    onChange={(event) =>
+                      setCredentials((current) => ({
+                        ...current,
+                        cookies: event.target.value,
+                      }))
+                    }
+                    placeholder='例如 {"session":"..."}'
+                  />
+                </FormField>
+              )}
+              {authMode !== "custom_headers" ? (
+                <div className="grid gap-3 border-t pt-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <label
+                      className="cursor-pointer text-sm font-medium"
+                      htmlFor="onboarding-custom-headers"
+                    >
+                      自定义请求头
+                    </label>
+                    <Switch
+                      id="onboarding-custom-headers"
+                      checked={showCustomHeaders}
+                      onCheckedChange={setShowCustomHeaders}
+                      aria-label="添加自定义请求头"
+                    />
                   </div>
-                )}
-                {authMode === "custom_headers" && (
-                  <FormField label="Headers JSON">
+                  {showCustomHeaders ? (
                     <Textarea
+                      aria-label="自定义请求头 JSON"
                       className="min-h-24"
                       value={credentials.headers}
                       onChange={(event) =>
@@ -7162,83 +7640,51 @@ export function OnboardingPage() {
                           headers: event.target.value,
                         }))
                       }
-                      placeholder='例如 {"Authorization":"Bearer ..."}'
+                      placeholder='例如 {"X-Custom-Header":"value"}'
                     />
-                  </FormField>
-                )}
-                {authMode === "cookie" && (
-                  <FormField label="Cookies JSON">
-                    <Textarea
-                      className="min-h-24"
-                      value={credentials.cookies}
-                      onChange={(event) =>
-                        setCredentials((current) => ({
-                          ...current,
-                          cookies: event.target.value,
-                        }))
-                      }
-                      placeholder='例如 {"session":"..."}'
-                    />
-                  </FormField>
-                )}
-                {authMode !== "custom_headers" ? (
-                  <div className="grid gap-3 border-t pt-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <label
-                        className="cursor-pointer text-sm font-medium"
-                        htmlFor="onboarding-custom-headers"
-                      >
-                        自定义请求头
-                      </label>
-                      <Switch
-                        id="onboarding-custom-headers"
-                        checked={showCustomHeaders}
-                        onCheckedChange={setShowCustomHeaders}
-                        aria-label="添加自定义请求头"
-                      />
-                    </div>
-                    {showCustomHeaders ? (
-                      <Textarea
-                        className="min-h-24"
-                        value={credentials.headers}
-                        onChange={(event) =>
-                          setCredentials((current) => ({
-                            ...current,
-                            headers: event.target.value,
-                          }))
-                        }
-                        placeholder='例如 {"X-Custom-Header":"value"}'
-                      />
-                    ) : null}
-                  </div>
-                ) : null}
-                {authConfig.error && usesVaultLogin ? (
-                  <QueryError error={authConfig.error} fallback="密码箱读取失败" embedded />
-                ) : null}
-                <div className="flex justify-end">
-                  <Button
-                    type="submit"
-                    disabled={
-                      createUpstream.isPending || upstreams.isLoading || detection.isPending
-                    }
-                  >
-                    <ShieldCheck size={16} />
-                    {createUpstream.isPending ? "正在验证" : "添加并验证上游"}
-                  </Button>
+                  ) : null}
                 </div>
-              </form>
-            )}
+              ) : null}
+              {authConfig.error && usesVaultLogin ? (
+                <QueryError error={authConfig.error} fallback="密码箱读取失败" embedded />
+              ) : null}
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  disabled={createUpstream.isPending || upstreams.isLoading || detection.isPending}
+                >
+                  <ShieldCheck size={16} />
+                  {createUpstream.isPending ? "正在验证" : "添加并验证上游"}
+                </Button>
+              </div>
+            </form>
           </CardContent>
         </Card>
       ) : null}
 
       {verifiedUpstream || entryHost ? (
-        <Card className={selectionCardClass}>
+        <Card className={selectionLayout.cardClassName}>
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <CardTitle>{onboardingSelectionTitle(entryKind)}</CardTitle>
               {verifiedUpstream ? (
                 <div className="flex flex-wrap items-center justify-end gap-2">
+                  {!entryHost ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={preparing || onboardingPending}
+                      onClick={() => {
+                        setVerifiedUpstream(null);
+                        setSelectedGroupId(null);
+                        setBatchBindings({});
+                        prepare.reset();
+                      }}
+                    >
+                      <RotateCcw aria-hidden="true" />
+                      更换上游
+                    </Button>
+                  ) : null}
                   {!preparedData ? (
                     <Button
                       onClick={() => prepare.mutate(verifiedUpstream.host)}
@@ -7281,14 +7727,10 @@ export function OnboardingPage() {
               ) : null}
             </div>
           </CardHeader>
-          <CardContent
-            className={
-              entryKind === "host" ? "grid min-h-0 flex-1 gap-4 overflow-hidden" : "grid gap-4"
-            }
-          >
+          <CardContent className={selectionLayout.contentClassName}>
             {(entryConfiguration.isLoading && !verifiedUpstream) || (preparing && !preparedData) ? (
               <OnboardingSelectionSkeleton
-                fillAvailableHeight={entryKind === "host"}
+                fillAvailableHeight={selectionLayout.fixedContent}
                 groupLocked={entryGroupId !== null}
               />
             ) : null}
@@ -7301,34 +7743,28 @@ export function OnboardingPage() {
               </div>
             ) : null}
             {preparedData ? (
-              <div
-                className={
-                  entryKind === "host"
-                    ? "grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden"
-                    : "grid gap-4"
-                }
-              >
-                <div className="grid grid-cols-2 divide-x rounded-lg border lg:grid-cols-6">
-                  <ResultSummaryRow
-                    label="上游"
-                    value={preparedData.upstream.name}
-                    href={preparedData.upstream.base_url}
-                  />
-                  <ResultSummaryRow
-                    label="类型"
-                    value={displayUpstreamType(preparedData.upstream.upstream_type)}
-                  />
-                  <ResultSummaryRow
-                    label="余额"
-                    value={preparedData.upstream.balance ?? "未返回"}
-                  />
-                  <ResultSummaryRow
-                    label="充值比例"
-                    value={rechargeRatioLabel(preparedData.upstream.recharge_rate)}
-                  />
-                  <ResultSummaryRow label="可选分组" value={`${candidateStats.selectable} 个`} />
-                  <ResultSummaryRow label="已绑定分组" value={`${candidateStats.bound} 个`} />
-                </div>
+              <div className={selectionLayout.preparedClassName}>
+                <OnboardingUpstreamSummary
+                  name={preparedData.upstream.name}
+                  baseUrl={preparedData.upstream.base_url}
+                  typeLabel={displayUpstreamType(preparedData.upstream.upstream_type)}
+                  balance={preparedData.upstream.balance ?? "未返回"}
+                  rechargeRatio={rechargeRatioLabel(preparedData.upstream.recharge_rate)}
+                  selectableCount={candidateStats.selectable}
+                  boundCount={candidateStats.bound}
+                  controls={
+                    !entryGroupId ? (
+                      <OnboardingCandidateVisibilityFilter
+                        onlyShowEnabled={onlyShowEnabledGroups}
+                        hiddenCount={hiddenCandidateCount}
+                        onOnlyShowEnabledChange={(checked) => {
+                          setOnlyShowEnabledGroups(checked);
+                          candidatePagination.setCurrentPage(1);
+                        }}
+                      />
+                    ) : undefined
+                  }
+                />
                 {entryGroupId && entryCandidate ? (
                   <div className="grid gap-3">
                     <div className="grid grid-cols-2 divide-x divide-y rounded-lg border lg:grid-cols-4 lg:divide-y-0">
@@ -7385,38 +7821,47 @@ export function OnboardingPage() {
                   />
                 ) : null}
                 {!entryGroupId ? (
-                  <>
+                  <div className={selectionLayout.tablePanelClassName}>
                     <Table
-                      className="min-w-[1120px] table-fixed"
-                      containerClassName={
-                        entryKind === "host"
-                          ? "min-h-0 overflow-auto rounded-lg border"
-                          : "max-h-[32rem] overflow-auto rounded-lg border"
-                      }
+                      className="min-w-[800px] table-fixed"
+                      containerClassName={selectionLayout.tableContainerClassName}
                     >
                       <TableHeader>
                         <TableRow>
-                          <TableHead className="w-[14%]">上游分组</TableHead>
-                          <TableHead className="w-[10%]">平台</TableHead>
-                          <TableHead className="w-[22%]">介绍</TableHead>
+                          <TableHead className="w-[30%]">上游分组</TableHead>
                           <TableHead className="w-[10%]">账号成本</TableHead>
-                          <TableHead className="w-[27%]">本地分组</TableHead>
-                          <TableHead className="w-[9%]">状态</TableHead>
-                          <TableHead className="w-[8%] text-right">操作</TableHead>
+                          <TableHead className="w-[14%]">账号类型</TableHead>
+                          <TableHead className="w-[32%]">本地分组</TableHead>
+                          <TableHead className="w-[14%] text-right">操作</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {!visibleCandidates.length ? (
-                          <TableMessageRow columns={7}>
-                            <EmptyRow text="上游没有返回分组" />
+                          <TableMessageRow columns={5}>
+                            <EmptyRow
+                              text={
+                                allCandidates.length > 0
+                                  ? "没有已启用的上游分组"
+                                  : "上游没有返回分组"
+                              }
+                              detail={
+                                allCandidates.length > 0
+                                  ? "关闭“仅显示启用分组”可查看未启用分组。"
+                                  : undefined
+                              }
+                            />
                           </TableMessageRow>
                         ) : null}
                         {candidatePagination.visibleItems.map((candidate) => {
                           const alreadyBound = candidateHasExistingBinding(candidate);
                           const canSelect = candidateCanCreateKey(candidate);
+                          const selectedLocalGroupIDs = candidate.group_id
+                            ? (batchBindings[candidate.group_id] ??
+                              candidateBoundLocalGroupIDs(candidate))
+                            : [];
                           const selectedPlatform = candidate.group_id
-                            ? candidatePlatforms[candidate.group_id]
-                            : undefined;
+                            ? inferOnboardingProtocol(selectedLocalGroupIDs, localGroups)
+                            : null;
                           const compatibleLocalGroups = compatibleOnboardingLocalGroups(
                             { platform: selectedPlatform ?? candidate.platform },
                             localGroups,
@@ -7424,63 +7869,52 @@ export function OnboardingPage() {
                           const canEdit =
                             (canSelect || alreadyBound) && compatibleLocalGroups.length > 0;
                           let unavailableReason: string | null = null;
-                          if (!canEdit && compatibleLocalGroups.length === 0) {
-                            unavailableReason = "没有与上游平台一致的本地分组";
-                          } else if (!canEdit) {
+                          if (!canSelect && !alreadyBound) {
                             unavailableReason = candidateCreationUnavailableReason(candidate);
+                          } else if (!canEdit && compatibleLocalGroups.length === 0) {
+                            unavailableReason = "没有与上游平台一致的本地分组";
                           }
                           const interactionDisabledReason = onboardingPending
                             ? "账号添加任务进行中"
                             : unavailableReason;
-                          const selectedLocalGroupIDs = candidate.group_id
-                            ? (batchBindings[candidate.group_id] ??
-                              candidateBoundLocalGroupIDs(candidate))
-                            : [];
                           const pendingChange = candidateHasOnboardingChange(
                             candidate,
                             selectedLocalGroupIDs,
                             "",
                             false,
                           );
-                          const candidateProbeTarget = onboardingProbeTarget(candidate);
+                          const candidateProbeTarget = onboardingProbeTarget(
+                            candidate,
+                            selectedPlatform ?? candidate.platform,
+                          );
                           return (
                             <TableRow
                               key={`${candidate.host}:${candidate.group_id}`}
                               data-state={pendingChange ? "selected" : undefined}
                             >
-                              <TableCell className="font-medium">{candidate.group_name}</TableCell>
-                              <TableCell>
-                                {isCompositeOnboardingPlatform(candidate.platform) ? (
-                                  <Select
-                                    value={selectedPlatform ?? ""}
-                                    onValueChange={(value) => {
-                                      if (!candidate.group_id || !value) return;
-                                      setCandidatePlatforms((current) => ({
-                                        ...current,
-                                        [candidate.group_id!]: value,
-                                      }));
-                                    }}
-                                    disabled={(!canSelect && !alreadyBound) || onboardingPending}
-                                  >
-                                    <SelectTrigger className="h-8 min-w-32">
-                                      <SelectValue placeholder="选择账号协议" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {concreteAccountPlatformOptions.map((option) => (
-                                        <SelectItem key={option.value} value={option.value}>
-                                          {option.label}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                ) : (
-                                  (accountPlatformLabel(candidate.platform) ?? "未识别")
-                                )}
-                              </TableCell>
-                              <TableCell tooltipContent={candidate.description ?? "未提供说明"}>
-                                {candidate.description ?? "未提供说明"}
+                              <TableCell overflowTooltip={false}>
+                                <OnboardingCandidateIdentity
+                                  groupName={candidate.group_name}
+                                  platformLabel={accountPlatformLabel(candidate.platform)}
+                                  description={candidate.description}
+                                  status={
+                                    <StatusPill
+                                      label={alreadyBound ? "已绑定" : "未绑定"}
+                                      tone={alreadyBound ? "success" : "neutral"}
+                                    />
+                                  }
+                                />
                               </TableCell>
                               <TableCell>{candidate.multiplier ?? "未计算"}</TableCell>
+                              <TableCell>
+                                <OnboardingAccountType
+                                  required={onboardingPlatformNeedsProtocol(candidate.platform)}
+                                  selectedCount={selectedLocalGroupIDs.length}
+                                  platformLabel={accountPlatformLabel(
+                                    selectedPlatform ?? candidate.platform,
+                                  )}
+                                />
+                              </TableCell>
                               <TableCell overflowTooltip={false}>
                                 <OnboardingGroupBindingSelect
                                   upstreamGroupName={candidate.group_name}
@@ -7498,12 +7932,6 @@ export function OnboardingPage() {
                                       };
                                     });
                                   }}
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <StatusPill
-                                  label={alreadyBound ? "已绑定" : "未绑定"}
-                                  tone={alreadyBound ? "success" : "neutral"}
                                 />
                               </TableCell>
                               <TableCell className="text-right" overflowTooltip={false}>
@@ -7532,86 +7960,68 @@ export function OnboardingPage() {
                         onPageSizeChange={candidatePagination.setPageSize}
                       />
                     ) : null}
-                  </>
+                  </div>
                 ) : null}
                 {entryGroupId && entryCandidateAvailable ? (
                   <>
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      {isCompositeOnboardingPlatform(entryCandidate?.platform) ? (
-                        <FormField label="账号协议">
-                          <Select
-                            value={candidatePlatforms[entryGroupId] ?? ""}
-                            onValueChange={(value) => {
-                              if (!value) return;
-                              setCandidatePlatforms((current) => ({
-                                ...current,
-                                [entryGroupId]: value,
-                              }));
-                            }}
-                            disabled={onboardingPending}
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="选择账号协议" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {concreteAccountPlatformOptions.map((option) => (
-                                <SelectItem key={option.value} value={option.value}>
-                                  {option.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </FormField>
-                      ) : null}
                       <FormField
                         label="本地分组"
                         error={form.formState.errors.local_group_id?.message}
                       >
-                        <OnboardingGroupBindingSelect
-                          upstreamGroupName={entryCandidate?.group_name ?? "当前上游分组"}
-                          upstreamPlatform={
-                            candidatePlatforms[entryGroupId] ?? entryCandidate?.platform ?? null
-                          }
-                          groups={localGroups}
-                          value={
-                            entryGroupId
-                              ? (batchBindings[entryGroupId] ??
-                                candidateBoundLocalGroupIDs(entryCandidate ?? {}))
-                              : []
-                          }
-                          disabled={!selectedGroupId || onboardingPending || !entryProtocolReady}
-                          disabledReason={!entryProtocolReady ? "请先选择账号协议" : null}
-                          onValueChange={(value) => {
-                            if (!entryGroupId) return;
-                            setBatchBindings((current) => ({
-                              ...current,
-                              [entryGroupId]: value,
-                            }));
-                            form.setValue("local_group_id", value[0] ?? "", {
-                              shouldValidate: true,
-                            });
-                            form.setValue(
-                              "target_group",
-                              value
-                                .flatMap((id) => {
-                                  const group = localGroups.find((item) => item.id === id);
-                                  return group ? [group.name] : [];
-                                })
-                                .join("、"),
-                            );
-                          }}
-                        />
+                        <div className="grid gap-1.5">
+                          <OnboardingGroupBindingSelect
+                            upstreamGroupName={entryCandidate?.group_name ?? "当前上游分组"}
+                            upstreamPlatform={
+                              entrySelectedPlatform ?? entryCandidate?.platform ?? null
+                            }
+                            groups={localGroups}
+                            value={entryLocalGroupIDs}
+                            disabled={!selectedGroupId || onboardingPending}
+                            disabledReason={null}
+                            onValueChange={(value) => {
+                              if (!entryGroupId) return;
+                              setBatchBindings((current) => ({
+                                ...current,
+                                [entryGroupId]: value,
+                              }));
+                              form.setValue("local_group_id", value[0] ?? "", {
+                                shouldValidate: true,
+                              });
+                              form.setValue(
+                                "target_group",
+                                value
+                                  .flatMap((id) => {
+                                    const group = localGroups.find((item) => item.id === id);
+                                    return group ? [group.name] : [];
+                                  })
+                                  .join("、"),
+                              );
+                            }}
+                          />
+                          <OnboardingInferredPlatformStatus
+                            required={onboardingPlatformNeedsProtocol(entryCandidate?.platform)}
+                            selectedCount={entryLocalGroupIDs.length}
+                            platformLabel={accountPlatformLabel(entrySelectedPlatform)}
+                          />
+                        </div>
                       </FormField>
-                      <FormField label="账号成本（已换算）">
+                      <FormField htmlFor={`${fieldID}-cost`} label="账号成本（已换算）">
                         <Input
+                          id={`${fieldID}-cost`}
                           value={entryCandidate?.multiplier ?? ""}
                           disabled={!selectedGroupId}
                           readOnly
                           inputMode="decimal"
                         />
                       </FormField>
-                      <FormField label="并发" error={form.formState.errors.concurrency?.message}>
+                      <FormField
+                        htmlFor={`${fieldID}-concurrency`}
+                        label="并发"
+                        error={form.formState.errors.concurrency?.message}
+                      >
                         <Input
+                          id={`${fieldID}-concurrency`}
                           {...form.register("concurrency")}
                           disabled={!selectedGroupId}
                           type="number"
@@ -7620,8 +8030,13 @@ export function OnboardingPage() {
                           inputMode="numeric"
                         />
                       </FormField>
-                      <FormField label="优先级" error={form.formState.errors.priority?.message}>
+                      <FormField
+                        htmlFor={`${fieldID}-priority`}
+                        label="优先级"
+                        error={form.formState.errors.priority?.message}
+                      >
                         <Input
+                          id={`${fieldID}-priority`}
                           {...form.register("priority")}
                           disabled={!selectedGroupId}
                           type="number"
@@ -7630,8 +8045,9 @@ export function OnboardingPage() {
                           inputMode="numeric"
                         />
                       </FormField>
-                      <FormField label="备注">
+                      <FormField htmlFor={`${fieldID}-notes`} label="备注">
                         <Input
+                          id={`${fieldID}-notes`}
                           {...form.register("notes")}
                           disabled={!selectedGroupId}
                           placeholder="添加在规范记录之后"
@@ -7660,55 +8076,56 @@ export function OnboardingPage() {
                   </>
                 ) : null}
                 {!entryGroupId ? (
-                  <div className="flex flex-wrap items-end justify-between gap-3">
-                    <div className="grid min-w-64 flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <FormField label="批量备注（可选）">
-                        <Input
-                          {...form.register("notes")}
-                          disabled={onboardingPending}
-                          placeholder="应用到本批次的所有账号"
-                        />
-                      </FormField>
-                      <FormField label="并发" error={form.formState.errors.concurrency?.message}>
-                        <Input
-                          {...form.register("concurrency")}
-                          disabled={onboardingPending}
-                          type="number"
-                          min={1}
-                          max={10_000_000}
-                          inputMode="numeric"
-                        />
-                      </FormField>
-                      <FormField label="优先级" error={form.formState.errors.priority?.message}>
-                        <Input
-                          {...form.register("priority")}
-                          disabled={onboardingPending}
-                          type="number"
-                          min={1}
-                          max={10_000_000}
-                          inputMode="numeric"
-                        />
-                      </FormField>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-muted-foreground text-sm tabular-nums">
-                        已选择 {batchBindingCount} 个
-                      </span>
-                      <Button
-                        type="button"
-                        disabled={
-                          onboardingPending ||
-                          batchBindingCount === 0 ||
-                          batchBindingCount > 50 ||
-                          batchMissingPlatform
-                        }
-                        onClick={() => void executeBatch()}
-                      >
-                        <Eye size={16} />
-                        {onboardingPending ? "正在提交" : `预览提交 ${batchBindingCount} 项变更`}
-                      </Button>
-                    </div>
-                  </div>
+                  <OnboardingBatchActionBar
+                    controls={
+                      <>
+                        <FormField htmlFor={`${fieldID}-batch-notes`} label="批量备注（可选）">
+                          <Input
+                            id={`${fieldID}-batch-notes`}
+                            {...form.register("notes")}
+                            disabled={onboardingPending}
+                            placeholder="应用到本批次的所有账号"
+                          />
+                        </FormField>
+                        <FormField
+                          htmlFor={`${fieldID}-concurrency`}
+                          label="并发"
+                          error={form.formState.errors.concurrency?.message}
+                        >
+                          <Input
+                            id={`${fieldID}-concurrency`}
+                            {...form.register("concurrency")}
+                            disabled={onboardingPending}
+                            type="number"
+                            min={1}
+                            max={10_000_000}
+                            inputMode="numeric"
+                          />
+                        </FormField>
+                        <FormField
+                          htmlFor={`${fieldID}-priority`}
+                          label="优先级"
+                          error={form.formState.errors.priority?.message}
+                        >
+                          <Input
+                            id={`${fieldID}-priority`}
+                            {...form.register("priority")}
+                            disabled={onboardingPending}
+                            type="number"
+                            min={1}
+                            max={10_000_000}
+                            inputMode="numeric"
+                          />
+                        </FormField>
+                      </>
+                    }
+                    selectedCount={batchBindingCount}
+                    pending={onboardingPending}
+                    disabled={
+                      batchBindingCount === 0 || batchBindingCount > 50 || batchMissingProtocol
+                    }
+                    onSubmit={() => void executeBatch()}
+                  />
                 ) : null}
               </div>
             ) : null}
@@ -7728,7 +8145,7 @@ export function OnboardingPage() {
 
       <OnboardingKeyCleanupDialog
         open={keyCleanupOpen}
-        preview={keyCleanupPreview.isFetching ? null : (keyCleanupPreview.data ?? null)}
+        preview={keyCleanupPreview.data ?? null}
         previewPending={keyCleanupPreview.isFetching}
         previewError={keyCleanupPreview.error}
         task={keyCleanupTask.data ?? null}
@@ -7744,7 +8161,13 @@ export function OnboardingPage() {
         onRefresh={() => void keyCleanupPreview.refetch()}
         onConfirm={() => {
           const preview = keyCleanupPreview.data;
-          if (!preview || preview.keys.length === 0) return;
+          if (
+            !preview ||
+            preview.keys.length === 0 ||
+            keyCleanupPreview.isFetching ||
+            keyCleanupPreview.isError
+          )
+            return;
           keyCleanup.mutate({
             host: preview.host,
             keyIds: preview.keys.map((key) => key.key_id),
@@ -7779,7 +8202,7 @@ export function OnboardingPage() {
           }
         }}
       >
-        <DialogContent width="medium">
+        <DialogContent width="medium" showCloseButton={!balanceSyncPending}>
           <DialogHeader>
             <DialogTitle>同步余额</DialogTitle>
           </DialogHeader>
@@ -7826,6 +8249,7 @@ export function OnboardingPage() {
         <DialogContent
           width={operationDialogWidth(taskStopsPolling(onboardingMaintenanceTask.data))}
           height={operationDialogHeight(taskStopsPolling(onboardingMaintenanceTask.data))}
+          showCloseButton={!onboardingMaintenancePending}
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
           <DialogHeader>
@@ -7923,6 +8347,12 @@ export function OnboardingPage() {
             {onboardingMaintenance.isPending && (
               <TaskStartupState message="正在创建绑定账号维护任务" />
             )}
+            {!onboardingMaintenance.isPending &&
+              onboardingMaintenanceTaskId &&
+              !onboardingMaintenanceTask.data &&
+              !onboardingMaintenanceTask.error && (
+                <TaskStartupState message="正在读取绑定账号维护任务状态" />
+              )}
             {onboardingMaintenance.error && (
               <QueryError
                 error={onboardingMaintenance.error}
@@ -7966,6 +8396,7 @@ export function OnboardingPage() {
         <DialogContent
           width={operationDialogWidth(Boolean(task.data && !onboardingPending))}
           height={operationDialogHeight(Boolean(task.data && !onboardingPending))}
+          showCloseButton={!onboardingPending}
           className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
           <DialogHeader>
@@ -7991,6 +8422,11 @@ export function OnboardingPage() {
                 <Check size={16} />
                 完成
               </Button>
+            </DialogFooter>
+          ) : null}
+          {task.data && onboardingPending ? (
+            <DialogFooter>
+              <TaskCancelButton taskId={task.data.id} />
             </DialogFooter>
           ) : null}
         </DialogContent>
@@ -8080,6 +8516,7 @@ function onboardingTaskItems(task: Task): OnboardingTaskItem[] {
 export function OnboardingTaskProgress(props: { task: Task }) {
   const pending = ["queued", "running", "waiting_input"].includes(props.task.status);
   const failed = props.task.status === "failed";
+  const cancelled = props.task.status === "cancelled";
   const items = onboardingTaskItems(props.task);
   const pagination = useClientPagination(items);
   const batch = props.task.operation === "onboard-batch" || items.length > 0;
@@ -8093,6 +8530,7 @@ export function OnboardingTaskProgress(props: { task: Task }) {
   let title = batch ? "账号批量绑定变更完成" : "账号绑定变更完成";
   if (pending) title = batch ? "正在批量处理账号绑定" : "正在处理账号绑定";
   if (failed) title = batch && succeeded > 0 ? "部分账号绑定变更失败" : "账号绑定变更失败";
+  if (cancelled) title = "账号绑定变更已取消";
   const bindingUpdate = props.task.result.operation === "account.groups";
   let iconContainerClassName = "bg-success/10 text-success";
   let statusIcon = <Check size={16} />;
@@ -8108,6 +8546,11 @@ export function OnboardingTaskProgress(props: { task: Task }) {
     statusIcon = <CircleAlert size={16} />;
     statusLabel = succeeded > 0 ? "部分成功" : "失败";
     statusTone = succeeded > 0 ? "warning" : "danger";
+  } else if (cancelled) {
+    iconContainerClassName = "bg-muted text-muted-foreground";
+    statusIcon = <Ban size={16} />;
+    statusLabel = "已取消";
+    statusTone = "info";
   }
 
   return (
@@ -8198,7 +8641,7 @@ export function OnboardingTaskProgress(props: { task: Task }) {
         </>
       ) : null}
 
-      {!pending && !batch && !failed ? (
+      {!pending && !batch && !failed && !cancelled ? (
         <div className="divide-y rounded-lg border">
           <ResultSummaryRow label="操作" value={bindingUpdate ? "更新已有绑定" : "添加账号"} />
           <ResultSummaryRow
@@ -8242,6 +8685,11 @@ export function OnboardingTaskProgress(props: { task: Task }) {
           <TaskFailureDetail
             reason={String(props.task.result.error ?? props.task.message ?? "账号绑定变更失败")}
           />
+        </div>
+      ) : null}
+      {!pending && !batch && cancelled ? (
+        <div className="text-muted-foreground rounded-lg border p-3 text-sm">
+          {displayTaskMessage(props.task.message)}
         </div>
       ) : null}
     </div>
@@ -8289,6 +8737,7 @@ export function AccountSyncTaskStatus(props: {
   );
 }
 function TaskProgress(props: { task: Task; onClose?: () => void }) {
+  const pending = ["queued", "running", "waiting_input"].includes(props.task.status);
   return (
     <div>
       <div className="flex items-center gap-3">
@@ -8299,11 +8748,12 @@ function TaskProgress(props: { task: Task; onClose?: () => void }) {
             任务 {props.task.id} · {displayLabel(props.task.status)} · {props.task.progress}%
           </span>
         </div>
-        {props.onClose && (
+        {pending ? <TaskCancelButton taskId={props.task.id} /> : null}
+        {!pending && props.onClose ? (
           <Button variant="ghost" size="icon-sm" aria-label="关闭任务结果" onClick={props.onClose}>
             <X size={15} />
           </Button>
-        )}
+        ) : null}
       </div>
       <div className="bg-muted mt-3 h-1 overflow-hidden rounded-full">
         <span
@@ -8316,8 +8766,9 @@ function TaskProgress(props: { task: Task; onClose?: () => void }) {
   );
 }
 function AuthTaskProgress(props: { task: Task }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const succeeded = props.task.status === "succeeded";
+  const cancelled = props.task.status === "cancelled";
   const outcome =
     typeof props.task.result.outcome === "object" &&
     props.task.result.outcome !== null &&
@@ -8360,6 +8811,10 @@ function AuthTaskProgress(props: { task: Task }) {
     statusText = "鉴权已恢复";
     statusLabel = "成功";
     statusTone = "success";
+  } else if (cancelled) {
+    statusText = "鉴权恢复已取消";
+    statusLabel = "已取消";
+    statusTone = "info";
   }
   return (
     <div className="grid gap-3">
@@ -8367,7 +8822,14 @@ function AuthTaskProgress(props: { task: Task }) {
         {pending ? (
           <RefreshCw className="animate-spin text-primary" size={17} />
         ) : (
-          <ShieldCheck className={succeeded ? "text-success" : "text-destructive"} size={17} />
+          <ShieldCheck
+            className={cn(
+              cancelled && "text-muted-foreground",
+              !cancelled && succeeded && "text-success",
+              !cancelled && !succeeded && "text-destructive",
+            )}
+            size={17}
+          />
         )}
         <div className="min-w-0 flex-1">
           <strong className="text-sm">{statusText}</strong>
@@ -8388,18 +8850,20 @@ function AuthTaskProgress(props: { task: Task }) {
           )}
         </div>
         <StatusPill label={statusLabel} tone={statusTone} />
+        {pending ? <TaskCancelButton taskId={props.task.id} /> : null}
       </div>
     </div>
   );
 }
 
 export function BatchAuthTaskProgress(props: { task: Task }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   if (pending) {
     return (
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
@@ -8428,6 +8892,16 @@ export function BatchAuthTaskProgress(props: { task: Task }) {
     : [];
   return (
     <div className="grid gap-4">
+      {props.task.status === "failed" || props.task.status === "cancelled" ? (
+        <div className="grid gap-2" role="status">
+          <strong className="text-sm">
+            {props.task.status === "cancelled" ? "批量鉴权恢复已取消" : "批量鉴权恢复失败"}
+          </strong>
+          <p className="text-muted-foreground text-sm break-words">
+            {displayTaskMessage(props.task.message)}
+          </p>
+        </div>
+      ) : null}
       <div className="grid grid-cols-3 divide-x rounded-lg border">
         <ResultSummaryRow label="总计" value={`${String(summary.hosts ?? outcomes.length)} 个`} />
         <ResultSummaryRow label="成功" value={`${String(summary.recovered ?? 0)} 个`} />
@@ -8445,7 +8919,7 @@ export function BatchAuthTaskProgress(props: { task: Task }) {
                 )}
               >
                 {outcome.success
-                  ? `${authMethodLabel(outcome.authMethod)} · ${authRecoveryMethodLabel(outcome.recoveryMethod)}`
+                  ? authMethodSummary(outcome.authMethod, outcome.recoveryMethod)
                   : displayTaskMessage(outcome.reason)}
               </span>
             </div>
@@ -8460,15 +8934,10 @@ export function BatchAuthTaskProgress(props: { task: Task }) {
   );
 }
 
-function authRecoveryMethodLabel(value: string | undefined): string {
-  if (value === "refresh_token" || value === "refresh") return "刷新 Token";
-  if (value === "vault") return "密码箱";
-  return value ?? "已复核";
-}
-
 export function UpstreamDeleteTaskStatus(props: { task: Task }) {
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const succeeded = props.task.status === "succeeded";
+  const cancelled = props.task.status === "cancelled";
   const deletedAccounts = props.task.result.deleted_accounts;
   const deletedGroups = props.task.result.deleted_groups;
   const reason = String(props.task.result.reason ?? props.task.message ?? "上游删除失败");
@@ -8483,6 +8952,10 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
     statusText = "删除完成";
     statusLabel = "成功";
     statusTone = "success";
+  } else if (cancelled) {
+    statusText = "上游删除已取消";
+    statusLabel = "已取消";
+    statusTone = "info";
   }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -8490,7 +8963,14 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
         {pending ? (
           <RefreshCw className="animate-spin text-primary" size={17} />
         ) : (
-          <Trash2 className={succeeded ? "text-success" : "text-destructive"} size={17} />
+          <Trash2
+            className={cn(
+              cancelled && "text-muted-foreground",
+              !cancelled && succeeded && "text-success",
+              !cancelled && !succeeded && "text-destructive",
+            )}
+            size={17}
+          />
         )}
         <div className="min-w-0 flex-1">
           <strong className="text-sm">{statusText}</strong>
@@ -8509,6 +8989,7 @@ export function UpstreamDeleteTaskStatus(props: { task: Task }) {
           )}
         </div>
         <StatusPill label={statusLabel} tone={statusTone} />
+        {pending ? <TaskCancelButton taskId={props.task.id} /> : null}
       </div>
       {succeeded && (
         <div className="divide-y rounded-lg border">
@@ -8536,18 +9017,21 @@ export function BalanceTaskProgress(props: { task: Task }) {
     hostResult?.balanceStatus ??
     (typeof result.balance_status === "string" ? result.balance_status : "未返回余额");
   const reason = hostResult?.reason ?? String(result.reason ?? props.task.message);
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
+  const cancelled = props.task.status === "cancelled";
   const failedTask = props.task.status === "failed" || hostResult?.status === "failed";
-  const completedWithoutBalance = !pending && !failedTask && balance === null;
+  const completedWithoutBalance = !pending && !cancelled && !failedTask && balance === null;
   const missingBalanceText = ["", "未读取", "未返回余额"].includes(balanceStatus.trim())
     ? "上游未返回余额"
     : balanceStatus;
   let statusText = "同步成功";
   if (pending) statusText = "正在同步余额";
+  else if (cancelled) statusText = "余额同步已取消";
   else if (failedTask) statusText = "同步失败";
   else if (completedWithoutBalance) statusText = missingBalanceText;
   let statusTone: "danger" | "info" | "success" = "success";
   if (failedTask || completedWithoutBalance) statusTone = "danger";
+  else if (cancelled) statusTone = "info";
   else if (pending) statusTone = "info";
   return (
     <div>
@@ -8556,7 +9040,9 @@ export function BalanceTaskProgress(props: { task: Task }) {
           size={17}
           className={cn(
             "mt-0.5 shrink-0",
-            failedTask || completedWithoutBalance ? "text-destructive" : "text-primary",
+            cancelled && "text-muted-foreground",
+            !cancelled && (failedTask || completedWithoutBalance) && "text-destructive",
+            !cancelled && !failedTask && !completedWithoutBalance && "text-primary",
           )}
         />
         <div className="min-w-0 flex-1">
@@ -8568,6 +9054,7 @@ export function BalanceTaskProgress(props: { task: Task }) {
             <span className="text-muted-foreground mt-1 block text-xs">正在向上游同步最新余额</span>
           )}
         </div>
+        {pending ? <TaskCancelButton taskId={props.task.id} /> : null}
       </div>
       {!pending && (
         <div className="mt-4 divide-y rounded-lg border">
@@ -8654,8 +9141,9 @@ export function UpstreamSyncTaskStatus(props: {
   scope?: "all" | "balance" | "groups" | "names";
 }) {
   const scope = props.scope ?? "all";
-  const pending = ["queued", "running"].includes(props.task.status);
+  const pending = !taskIsTerminal(props.task);
   const failed = props.task.status === "failed";
+  const cancelled = props.task.status === "cancelled";
   const rows = upstreamSyncRows(props.task);
   const failedRows = rows.filter((row) => row.status !== "succeeded");
   const visibleRows = failed ? failedRows : rows;
@@ -8665,6 +9153,7 @@ export function UpstreamSyncTaskStatus(props: {
       <TaskProgressState
         message={displayTaskMessage(props.task.message)}
         progress={props.task.progress}
+        taskId={props.task.id}
       />
     );
   }
@@ -8682,6 +9171,14 @@ export function UpstreamSyncTaskStatus(props: {
   }
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
+      {cancelled ? (
+        <div className="grid gap-2" role="status">
+          <strong className="text-sm">上游同步已取消</strong>
+          <p className="text-muted-foreground text-sm break-words">
+            {displayTaskMessage(props.task.message)}
+          </p>
+        </div>
+      ) : null}
       <div className="grid grid-cols-3 divide-x rounded-lg border">
         <ResultSummaryRow
           label="正常"
@@ -8716,7 +9213,9 @@ export function UpstreamSyncTaskStatus(props: {
           <TableBody>
             {!visibleRows.length && (
               <TableMessageRow columns={emptyColumnCount}>
-                <EmptyRow text="当前没有需要同步的上游 Host" />
+                <EmptyRow
+                  text={cancelled ? "取消前未产生同步明细" : "当前没有需要同步的上游 Host"}
+                />
               </TableMessageRow>
             )}
             {pagination.visibleItems.map((row) => (
@@ -8800,24 +9299,17 @@ function SettingsControlRow(props: {
   controlId?: string;
   controlDisabled?: boolean;
 }) {
-  const content = (
-    <>
-      <h3 className="text-sm font-medium">{props.title}</h3>
-      <p className="text-muted-foreground mt-0.5 text-xs leading-4">{props.description}</p>
-    </>
-  );
   return (
     <div className="border-border/70 bg-muted/35 flex min-h-14 flex-col items-stretch justify-between gap-3 rounded-lg border px-3 py-2.5 sm:flex-row sm:items-center sm:gap-4">
-      {props.controlId ? (
-        <label
-          className={cn("min-w-0", props.controlDisabled ? "cursor-not-allowed" : "cursor-pointer")}
-          htmlFor={props.controlId}
-        >
-          {content}
-        </label>
-      ) : (
-        <div className="min-w-0">{content}</div>
-      )}
+      <FieldLabel
+        label={props.title}
+        description={props.description}
+        htmlFor={props.controlId}
+        className={cn(
+          "text-sm",
+          props.controlId && (props.controlDisabled ? "cursor-not-allowed" : "cursor-pointer"),
+        )}
+      />
       <div className="shrink-0 self-end sm:self-center">{props.children}</div>
     </div>
   );
@@ -8959,14 +9451,23 @@ function notificationTargetTaskPresentation(status?: Task["status"]): {
 }
 
 type ConfigPageProps = {
+  activeTab?: ConfigTab;
+  onTabChange?: (tab: ConfigTab) => void;
   hiddenNavigationItemIDs?: ReadonlySet<View>;
   onNavigationItemVisibilityChange?: (itemID: View, visible: boolean) => void;
   onResetNavigation?: () => void;
 };
 
 export function ConfigPage(props: ConfigPageProps = {}) {
+  const activeTab = props.activeTab ?? "connection";
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
+  const autoInspection = useQuery({
+    queryKey: ["auto-inspection"],
+    queryFn: api.autoInspection,
+    enabled: activeTab === "connection",
+    refetchInterval: activeTab === "connection" ? 15_000 : false,
+  });
   const notifications = useQuery({
     queryKey: ["notification-status"],
     queryFn: api.notificationStatus,
@@ -8989,11 +9490,6 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     request_timeout_seconds: "30",
   });
   const [targetEdited, setTargetEdited] = useState(false);
-  const [accountDefaultsEdited, setAccountDefaultsEdited] = useState(false);
-  const [accountDefaultsForm, setAccountDefaultsForm] = useState({
-    concurrency: "10",
-    priority: "1",
-  });
   const [logCleanupEdited, setLogCleanupEdited] = useState(false);
   const [clearLogsOpen, setClearLogsOpen] = useState(false);
   const [logCleanupForm, setLogCleanupForm] = useState({
@@ -9033,18 +9529,6 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     config.data?.admin_base_url,
     config.data?.request_timeout_seconds,
     targetEdited,
-  ]);
-  useEffect(() => {
-    if (!config.data || accountDefaultsEdited) return;
-    setAccountDefaultsForm({
-      concurrency: String(config.data.account_default_concurrency),
-      priority: String(config.data.account_default_priority),
-    });
-  }, [
-    accountDefaultsEdited,
-    config.data,
-    config.data?.account_default_concurrency,
-    config.data?.account_default_priority,
   ]);
   useEffect(() => {
     if (!notifications.data || notificationEdited) return;
@@ -9104,6 +9588,8 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "QQBot 目标获取启动失败"),
   });
+  const notificationTargetBusy =
+    notificationTargetTaskActive || discoverNotificationTarget.isPending;
   const cancelNotificationTargetDiscovery = useMutation({
     mutationFn: () => api.cancelNotificationTargetDiscovery(notificationTargetTaskId!),
     onSuccess: () => void notificationTargetTask.refetch(),
@@ -9154,9 +9640,12 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   const testNotification = useMutation({
     mutationFn: api.testNotification,
     onSuccess: (result) => {
-      let message = result.sent ? "测试通知已发送" : "测试通知已完成";
-      if (result.detail !== undefined) message = explicitValue(result.detail);
-      toast.success(message);
+      const detail = result.detail?.trim();
+      if (result.sent === true) {
+        toast.success(detail || "测试通知已发送");
+      } else {
+        toast.error(detail || "测试通知发送失败，请检查 QQBot 配置后重试");
+      }
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["logs"] }),
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
@@ -9196,24 +9685,6 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "管理目标保存失败"),
   });
-  const saveAccountDefaults = useMutation({
-    mutationFn: () =>
-      api.setAccountDefaults({
-        concurrency: Number(accountDefaultsForm.concurrency),
-        priority: Number(accountDefaultsForm.priority),
-      }),
-    onSuccess: (value) => {
-      queryClient.setQueryData(["config"], value);
-      setAccountDefaultsForm({
-        concurrency: String(value.account_default_concurrency),
-        priority: String(value.account_default_priority),
-      });
-      setAccountDefaultsEdited(false);
-      toast.success("账号创建默认值已保存");
-    },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "账号创建默认值保存失败"),
-  });
   const updateRuntimeMode = useMutation({
     mutationFn: (mode: RuntimeMode) => api.setMode(mode),
     onSuccess: (value) => {
@@ -9237,11 +9708,11 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   else if (logCleanup.data?.enabled) logCleanupStatusLabel = "自动清理已开启";
   if (config.error)
     return (
-      <PageLayout>
+      <PageLayout fixedContent>
         <PageHeading
           eyebrow="SYSTEM / SETTINGS"
           title="系统设置"
-          description="管理全局运行模式、菜单显示、外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
+          description="管理全局运行模式、菜单显示、外部平台接入、分组账号设置和本地日志维护；业务规则分别在对应策略页面配置。"
           action={
             <PageActions>
               <RefreshButton
@@ -9256,11 +9727,11 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       </PageLayout>
     );
   return (
-    <PageLayout>
+    <PageLayout fixedContent>
       <PageHeading
         eyebrow="SYSTEM / SETTINGS"
         title="系统设置"
-        description="管理全局运行模式、菜单显示、外部平台接入、账号创建默认值和本地日志维护；业务规则分别在对应策略页面配置。"
+        description="管理全局运行模式、菜单显示、外部平台接入、分组账号设置和本地日志维护；业务规则分别在对应策略页面配置。"
         action={
           <PageActions>
             <RefreshButton
@@ -9271,7 +9742,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           </PageActions>
         }
       />
-      <div className="w-full space-y-4" data-testid="system-settings-page">
+      <div
+        className="flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden"
+        data-testid="system-settings-page"
+      >
         {config.data?.configuration_errors?.length ? (
           <div className="border-warning/40 bg-warning/10 text-warning rounded-lg border px-3 py-2 text-sm">
             配置存在无效值：{config.data.configuration_errors.join("、")}
@@ -9279,108 +9753,131 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           </div>
         ) : null}
 
-        <div className="grid items-start gap-4 xl:grid-cols-2" data-testid="system-settings-flow">
-          <div
-            className="grid min-w-0 content-start gap-4"
-            data-testid="system-settings-flow-primary"
-            aria-label="平台接入与账号默认值"
-          >
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>Sub2API 连接</CardTitle>
-                <CardDescription>
-                  Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <div data-testid="runtime-controls">
-                  <SettingsControlRow
-                    title="执行模式"
+        <ConfigSectionTabs activeTab={activeTab} onTabChange={props.onTabChange} />
+
+        <div
+          id={`config-panel-${activeTab}`}
+          className={cn(
+            "grid min-h-0 flex-1 min-w-0 auto-rows-[100%] items-stretch gap-4 overflow-y-auto overscroll-contain xl:overflow-hidden",
+            activeTab === "interface" && "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]",
+          )}
+          data-testid="system-settings-panel"
+          role="tabpanel"
+          aria-labelledby={`config-tab-${activeTab}`}
+        >
+          {activeTab === "connection" ? (
+            <div
+              className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.75fr)]"
+              data-testid="connection-settings-layout"
+            >
+              <Card size="sm" className="h-full min-h-0 min-w-0">
+                <CardHeader className="shrink-0">
+                  <CardTitle>Sub2API 连接</CardTitle>
+                  <CardDescription>
+                    Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
+                  </CardDescription>
+                </CardHeader>
+                <CardContent
+                  data-slot="settings-scroll"
+                  className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(0,1fr)_minmax(0,0.4fr)]"
+                >
+                  <div className="lg:col-span-2" data-testid="runtime-controls">
+                    <SettingsControlRow
+                      title="执行模式"
+                      description={
+                        runtimeModeOptions.find((option) => option.value === config.data?.mode)
+                          ?.description ?? "正在读取运行配置"
+                      }
+                    >
+                      <SegmentedControl
+                        className="flex-wrap justify-end"
+                        role="group"
+                        aria-label="执行模式"
+                      >
+                        {runtimeModeOptions.map((option) => (
+                          <Tooltip key={option.value}>
+                            <TooltipTrigger render={<span className="inline-flex" />}>
+                              <SegmentedControlItem
+                                selected={config.data?.mode === option.value}
+                                disabled={config.isLoading || updateRuntimeMode.isPending}
+                                aria-label={`${option.value}：${option.description}`}
+                                onClick={() => {
+                                  if (config.data?.mode !== option.value) {
+                                    updateRuntimeMode.mutate(option.value);
+                                  }
+                                }}
+                              >
+                                {option.value}
+                              </SegmentedControlItem>
+                            </TooltipTrigger>
+                            <TooltipContent>{option.description}</TooltipContent>
+                          </Tooltip>
+                        ))}
+                      </SegmentedControl>
+                    </SettingsControlRow>
+                  </div>
+                  <div className="min-w-0 lg:col-span-2">
+                    <FormField label="Sub2API 地址">
+                      <Input
+                        type="url"
+                        value={targetForm.admin_base_url}
+                        onChange={(event) => {
+                          setTargetEdited(true);
+                          setTargetForm({
+                            ...targetForm,
+                            admin_base_url: event.target.value,
+                          });
+                        }}
+                        placeholder="https://sub2api.example.com"
+                      />
+                    </FormField>
+                  </div>
+                  <FormField
+                    label="Admin API Key"
                     description={
-                      runtimeModeOptions.find((option) => option.value === config.data?.mode)
-                        ?.description ?? "正在读取运行配置"
+                      config.data?.target_configured ? "已配置，留空则不修改。" : undefined
                     }
                   >
-                    <SegmentedControl
-                      className="flex-wrap justify-end"
-                      role="group"
-                      aria-label="执行模式"
-                    >
-                      {runtimeModeOptions.map((option) => (
-                        <Tooltip key={option.value}>
-                          <TooltipTrigger render={<span className="inline-flex" />}>
-                            <SegmentedControlItem
-                              selected={config.data?.mode === option.value}
-                              disabled={config.isLoading || updateRuntimeMode.isPending}
-                              aria-label={`${option.value}：${option.description}`}
-                              onClick={() => {
-                                if (config.data?.mode !== option.value) {
-                                  updateRuntimeMode.mutate(option.value);
-                                }
-                              }}
-                            >
-                              {option.value}
-                            </SegmentedControlItem>
-                          </TooltipTrigger>
-                          <TooltipContent>{option.description}</TooltipContent>
-                        </Tooltip>
-                      ))}
-                    </SegmentedControl>
-                  </SettingsControlRow>
-                </div>
-                <FormField label="Sub2API 地址">
-                  <Input
-                    type="url"
-                    value={targetForm.admin_base_url}
-                    onChange={(event) => {
-                      setTargetEdited(true);
-                      setTargetForm({
-                        ...targetForm,
-                        admin_base_url: event.target.value,
-                      });
-                    }}
-                    placeholder="https://sub2api.example.com"
-                  />
-                </FormField>
-                <FormField
-                  label="Admin API Key"
-                  description={
-                    config.data?.target_configured ? "已配置，留空则不修改。" : undefined
-                  }
-                >
-                  <Input
-                    type="password"
-                    value={targetForm.admin_key}
-                    onChange={(event) => {
-                      setTargetEdited(true);
-                      setTargetForm({
-                        ...targetForm,
-                        admin_key: event.target.value,
-                      });
-                    }}
-                    placeholder={sensitiveFieldPlaceholder(
-                      config.data?.target_configured === true,
-                      "输入 Admin API Key",
-                    )}
-                  />
-                </FormField>
-                <FormField label="请求超时（秒）" description="Admin API 请求超时，允许 1–120 秒。">
-                  <Input
-                    type="number"
-                    min={1}
-                    max={120}
-                    inputMode="numeric"
-                    value={targetForm.request_timeout_seconds}
-                    onChange={(event) => {
-                      setTargetEdited(true);
-                      setTargetForm({
-                        ...targetForm,
-                        request_timeout_seconds: event.target.value,
-                      });
-                    }}
-                  />
-                </FormField>
-                <div className="flex flex-wrap gap-2 pt-1">
+                    <Input
+                      type="password"
+                      value={targetForm.admin_key}
+                      onChange={(event) => {
+                        setTargetEdited(true);
+                        setTargetForm({
+                          ...targetForm,
+                          admin_key: event.target.value,
+                        });
+                      }}
+                      placeholder={sensitiveFieldPlaceholder(
+                        config.data?.target_configured === true,
+                        "输入 Admin API Key",
+                      )}
+                    />
+                  </FormField>
+                  <FormField
+                    label="请求超时（秒）"
+                    description="Admin API 请求超时，允许 1–120 秒。"
+                  >
+                    <Input
+                      type="number"
+                      min={1}
+                      max={120}
+                      inputMode="numeric"
+                      value={targetForm.request_timeout_seconds}
+                      onChange={(event) => {
+                        setTargetEdited(true);
+                        setTargetForm({
+                          ...targetForm,
+                          request_timeout_seconds: event.target.value,
+                        });
+                      }}
+                    />
+                  </FormField>
+                </CardContent>
+                <SettingsFooter>
+                  {managementTaskId && taskIsPending(managementTaskId, managementTask) ? (
+                    <TaskCancelButton taskId={managementTaskId} />
+                  ) : null}
                   <Button
                     onClick={() => saveTarget.mutate(false)}
                     disabled={
@@ -9413,73 +9910,32 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                       ? `测试同步 ${managementTask.data?.progress ?? 0}%`
                       : "保存并测试同步"}
                   </Button>
-                </div>
-              </CardContent>
-            </Card>
+                </SettingsFooter>
+              </Card>
+              <LastInspectionSummaryCard
+                status={autoInspection.data}
+                loading={autoInspection.isLoading}
+                error={autoInspection.error}
+              />
+            </div>
+          ) : null}
 
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>账号创建默认值</CardTitle>
-                <CardDescription>添加账号和参数修复统一使用；单次添加时仍可覆盖</CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <FormField label="默认并发">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10_000_000}
-                      inputMode="numeric"
-                      value={accountDefaultsForm.concurrency}
-                      onChange={(event) => {
-                        setAccountDefaultsEdited(true);
-                        setAccountDefaultsForm({
-                          ...accountDefaultsForm,
-                          concurrency: event.target.value,
-                        });
-                      }}
-                    />
-                  </FormField>
-                  <FormField label="默认优先级">
-                    <Input
-                      type="number"
-                      min={1}
-                      max={10_000_000}
-                      inputMode="numeric"
-                      value={accountDefaultsForm.priority}
-                      onChange={(event) => {
-                        setAccountDefaultsEdited(true);
-                        setAccountDefaultsForm({
-                          ...accountDefaultsForm,
-                          priority: event.target.value,
-                        });
-                      }}
-                    />
-                  </FormField>
-                </div>
-                <div>
-                  <Button
-                    onClick={() => saveAccountDefaults.mutate()}
-                    disabled={
-                      saveAccountDefaults.isPending ||
-                      !accountDefaultsEdited ||
-                      ![accountDefaultsForm.concurrency, accountDefaultsForm.priority].every(
-                        (value) =>
-                          Number.isInteger(Number(value)) &&
-                          Number(value) >= 1 &&
-                          Number(value) <= 10_000_000,
-                      )
-                    }
-                  >
-                    <Save size={16} />
-                    {saveAccountDefaults.isPending ? "保存中…" : "保存默认参数"}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+          {activeTab === "accounts" ? (
+            <div
+              className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)]"
+              data-testid="account-settings-layout"
+            >
+              <AccountCreationSettingsCard
+                fallbackConcurrency={config.data?.account_default_concurrency ?? 10}
+                fallbackPriority={config.data?.account_default_priority ?? 1}
+              />
+              <ModelSyncSettingsCard />
+            </div>
+          ) : null}
 
-            <Card size="sm">
-              <CardHeader className="flex items-start justify-between gap-3">
+          {activeTab === "notifications" ? (
+            <Card size="sm" className="h-full min-h-0 min-w-0">
+              <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
                   <CardTitle>QQBot 通知接入</CardTitle>
                   <CardDescription className="mt-1">
@@ -9493,7 +9949,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   }
                 />
               </CardHeader>
-              <CardContent className="grid gap-5">
+              <CardContent
+                data-slot="settings-scroll"
+                className="grid min-h-0 flex-1 content-start gap-5 overflow-y-auto overscroll-contain"
+              >
                 {notifications.error ? (
                   <QueryError error={notifications.error} fallback="通知状态读取失败" embedded />
                 ) : null}
@@ -9514,7 +9973,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   >
                     <Input
                       value={notificationForm.app_id}
-                      disabled={notificationTargetTaskActive}
+                      disabled={notificationTargetBusy}
                       onChange={(event) => {
                         setNotificationEdited(true);
                         setNotificationForm({
@@ -9539,7 +9998,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                     <Input
                       type="password"
                       value={notificationForm.client_secret}
-                      disabled={notificationTargetTaskActive}
+                      disabled={notificationTargetBusy}
                       onChange={(event) => {
                         setNotificationEdited(true);
                         setNotificationForm({
@@ -9561,7 +10020,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   <FormField label="目标类型">
                     <Select
                       value={notificationForm.home_channel_type}
-                      disabled={notificationTargetTaskActive}
+                      disabled={notificationTargetBusy}
                       onValueChange={(value) => {
                         if (!value) return;
                         setNotificationEdited(true);
@@ -9592,7 +10051,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                     <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                       <Input
                         value={notificationForm.home_channel}
-                        disabled={notificationTargetTaskActive}
+                        disabled={notificationTargetBusy}
                         onChange={(event) => {
                           setNotificationEdited(true);
                           setNotificationForm({
@@ -9703,46 +10162,42 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                     {notifications.data.configuration_errors.join("、")}
                   </p>
                 ) : null}
-                <div className="border-border/70 flex flex-wrap justify-end gap-2 border-t pt-4">
-                  <Button
-                    variant="outline"
-                    onClick={() => testNotification.mutate()}
-                    disabled={
-                      testNotification.isPending ||
-                      notificationTargetTaskActive ||
-                      notifications.error != null ||
-                      !notifications.data?.configured
-                    }
-                  >
-                    <BellRing size={16} />
-                    {testNotification.isPending ? "测试中…" : "测试通知"}
-                  </Button>
-                  <Button
-                    onClick={() => saveNotification.mutate()}
-                    disabled={
-                      saveNotification.isPending ||
-                      notificationTargetTaskActive ||
-                      notifications.isLoading ||
-                      notifications.error != null ||
-                      !notificationForm.app_id.trim() ||
-                      !notificationForm.home_channel.trim() ||
-                      (!notifications.data?.client_secret_configured &&
-                        !notificationForm.client_secret.trim())
-                    }
-                  >
-                    <Save size={16} />
-                    {saveNotification.isPending ? "保存中…" : "保存通知设置"}
-                  </Button>
-                </div>
               </CardContent>
+              <SettingsFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => testNotification.mutate()}
+                  disabled={
+                    testNotification.isPending ||
+                    notificationTargetBusy ||
+                    notifications.error != null ||
+                    !notifications.data?.configured
+                  }
+                >
+                  <BellRing size={16} />
+                  {testNotification.isPending ? "测试中…" : "测试通知"}
+                </Button>
+                <Button
+                  onClick={() => saveNotification.mutate()}
+                  disabled={
+                    saveNotification.isPending ||
+                    notificationTargetBusy ||
+                    notifications.isLoading ||
+                    notifications.error != null ||
+                    !notificationForm.app_id.trim() ||
+                    !notificationForm.home_channel.trim() ||
+                    (!notifications.data?.client_secret_configured &&
+                      !notificationForm.client_secret.trim())
+                  }
+                >
+                  <Save size={16} />
+                  {saveNotification.isPending ? "保存中…" : "保存通知设置"}
+                </Button>
+              </SettingsFooter>
             </Card>
-          </div>
+          ) : null}
 
-          <div
-            className="grid min-w-0 content-start gap-4"
-            data-testid="system-settings-flow-secondary"
-            aria-label="菜单与数据维护"
-          >
+          {activeTab === "interface" ? (
             <NavigationSettingsCard
               sections={navigationSettingsSections}
               hiddenItemIDs={props.hiddenNavigationItemIDs ?? emptyHiddenNavigationItemIDs}
@@ -9752,9 +10207,11 @@ export function ConfigPage(props: ConfigPageProps = {}) {
               }
               onReset={() => props.onResetNavigation?.()}
             />
+          ) : null}
 
-            <Card size="sm">
-              <CardHeader className="flex items-start justify-between gap-3">
+          {activeTab === "interface" ? (
+            <Card size="sm" className="h-full min-h-0 min-w-0">
+              <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
                   <CardTitle>日志保留</CardTitle>
                   <CardDescription className="mt-1">
@@ -9766,7 +10223,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   tone={logCleanup.data?.enabled && !logCleanup.error ? "success" : "neutral"}
                 />
               </CardHeader>
-              <CardContent className="grid gap-3">
+              <CardContent
+                data-slot="settings-scroll"
+                className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto overscroll-contain"
+              >
                 {logCleanup.error ? (
                   <div>
                     <QueryError error={logCleanup.error} fallback="日志清理配置读取失败" embedded />
@@ -9785,14 +10245,14 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                     />
                   </div>
                 ) : null}
-                <div className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
+                <div className="grid gap-x-5 gap-y-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
                   <div className="flex min-w-0 items-center justify-between gap-3">
-                    <label className="min-w-0 cursor-pointer" htmlFor="log-cleanup-enabled">
-                      <span className="block text-sm font-medium">定时清理</span>
-                      <span className="text-muted-foreground block text-xs leading-4">
-                        每天检查并删除超过保留期的日志
-                      </span>
-                    </label>
+                    <FieldLabel
+                      label="定时清理"
+                      description="每天检查并删除超过保留期的日志"
+                      htmlFor="log-cleanup-enabled"
+                      className="cursor-pointer text-sm"
+                    />
                     <Switch
                       id="log-cleanup-enabled"
                       className="shrink-0"
@@ -9810,6 +10270,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                       label="日志保留天数"
                       description="允许 1–3650 天"
                       htmlFor="log-cleanup-retention-days"
+                      className="shrink-0 whitespace-nowrap"
                     />
                     <div className="flex shrink-0 items-center gap-2">
                       <Input
@@ -9845,44 +10306,44 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                           : "开启后立即检查，之后每 24 小时检查一次"}
                       </span>
                     </div>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        data-testid="log-cleanup-clear"
-                        disabled={
-                          clearLogs.isPending ||
-                          !logCleanupReady ||
-                          !Number.isInteger(Number(logCleanupForm.retention_days)) ||
-                          Number(logCleanupForm.retention_days) < 1 ||
-                          Number(logCleanupForm.retention_days) > 3650
-                        }
-                        onClick={() => {
-                          if (logCleanupReady) setClearLogsOpen(true);
-                        }}
-                      >
-                        <Trash2 size={16} />
-                        立即按期限清理
-                      </Button>
-                      <Button
-                        data-testid="log-cleanup-save"
-                        disabled={
-                          saveLogCleanup.isPending ||
-                          !logCleanupReady ||
-                          !Number.isInteger(Number(logCleanupForm.retention_days)) ||
-                          Number(logCleanupForm.retention_days) < 1 ||
-                          Number(logCleanupForm.retention_days) > 3650
-                        }
-                        onClick={() => saveLogCleanup.mutate()}
-                      >
-                        <Save size={16} />
-                        {saveLogCleanup.isPending ? "保存中…" : "保存日志设置"}
-                      </Button>
-                    </div>
                   </div>
                 </div>
               </CardContent>
+              <SettingsFooter>
+                <Button
+                  variant="outline"
+                  data-testid="log-cleanup-clear"
+                  disabled={
+                    clearLogs.isPending ||
+                    !logCleanupReady ||
+                    !Number.isInteger(Number(logCleanupForm.retention_days)) ||
+                    Number(logCleanupForm.retention_days) < 1 ||
+                    Number(logCleanupForm.retention_days) > 3650
+                  }
+                  onClick={() => {
+                    if (logCleanupReady) setClearLogsOpen(true);
+                  }}
+                >
+                  <Trash2 size={16} />
+                  立即按期限清理
+                </Button>
+                <Button
+                  data-testid="log-cleanup-save"
+                  disabled={
+                    saveLogCleanup.isPending ||
+                    !logCleanupReady ||
+                    !Number.isInteger(Number(logCleanupForm.retention_days)) ||
+                    Number(logCleanupForm.retention_days) < 1 ||
+                    Number(logCleanupForm.retention_days) > 3650
+                  }
+                  onClick={() => saveLogCleanup.mutate()}
+                >
+                  <Save size={16} />
+                  {saveLogCleanup.isPending ? "保存中…" : "保存日志设置"}
+                </Button>
+              </SettingsFooter>
             </Card>
-          </div>
+          ) : null}
         </div>
       </div>
       <Dialog
@@ -10016,6 +10477,65 @@ function InspectionSummaryCount(props: { label: string; value: number }) {
   );
 }
 
+function LastInspectionSummaryCard(props: {
+  status?: AutoInspectionStatus;
+  loading: boolean;
+  error: Error | null;
+}) {
+  const lastRunState = props.status ? autoInspectionLastRunState(props.status.last_status) : null;
+
+  return (
+    <Card size="sm" className="h-full" data-testid="last-inspection-summary">
+      <CardHeader className="gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="min-w-0">
+          <CardTitle>上一轮概要</CardTitle>
+          <CardDescription>
+            {props.status?.last_run_at
+              ? `执行时间：${formatDate(props.status.last_run_at, true)}`
+              : "自动巡检完成一轮后会在这里显示汇总"}
+          </CardDescription>
+        </div>
+        {props.status && lastRunState ? (
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <StatusPill label={lastRunState.label} tone={lastRunState.tone} />
+            <span className="text-muted-foreground text-xs">
+              耗时：
+              <strong className="text-foreground font-medium">
+                {props.status.last_run_at
+                  ? formatInspectionRunDuration(props.status.last_run_duration_ms)
+                  : "—"}
+              </strong>
+            </span>
+          </div>
+        ) : null}
+      </CardHeader>
+      {props.error ? (
+        <CardContent>
+          <QueryError error={props.error} fallback="上一轮巡检概要读取失败" embedded />
+        </CardContent>
+      ) : null}
+      {props.loading ? <Skeleton className="m-3 h-20 w-auto" /> : null}
+      {!props.loading && !props.error && props.status?.last_run_at ? (
+        <CardContent className="p-0 group-data-[size=sm]/card:p-0">
+          <div
+            className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4"
+            data-testid="inspection-summary-grid"
+          >
+            <InspectionSummaryCount label="受管账号" value={props.status.last_summary.channels} />
+            <InspectionSummaryCount label="主动探测" value={props.status.last_summary.probed} />
+            <InspectionSummaryCount label="新增样本" value={props.status.last_summary.samples} />
+            <InspectionSummaryCount label="新增熔断" value={props.status.last_summary.fused} />
+            <InspectionSummaryCount label="恢复回池" value={props.status.last_summary.recovered} />
+            <InspectionSummaryCount label="自动执行" value={props.status.last_summary.applied} />
+            <InspectionSummaryCount label="自动处置" value={props.status.last_summary.cleaned_up} />
+            <InspectionSummaryCount label="当前告警" value={props.status.last_summary.alerts} />
+          </div>
+        </CardContent>
+      ) : null}
+    </Card>
+  );
+}
+
 function formatAutoInspectionCountdown(scheduledFor: string | null, clock: number): string {
   if (!scheduledFor) return "等待排期";
   const scheduled = new Date(scheduledFor).getTime();
@@ -10040,6 +10560,7 @@ function autoInspectionHeartbeatState(record: AutoInspectionStatus["heartbeat_hi
   if (record.status === "running") return { label: "执行中", tone: "info" as const };
   if (record.status === "succeeded") return { label: "正常", tone: "success" as const };
   if (record.status === "partial") return { label: "部分失败", tone: "warning" as const };
+  if (record.status === "cancelled") return { label: "已取消", tone: "neutral" as const };
   return { label: "失败", tone: "danger" as const };
 }
 
@@ -10052,9 +10573,14 @@ type InspectionUpstreamSyncSummary = {
   accountRateFailed: number | null;
 };
 
-function inspectionUpstreamHosts(
-  task?: Task,
-): Array<{ host: string; status: string; keyCount: number }> {
+type InspectionUpstreamHost = {
+  host: string;
+  status: string;
+  keyCount: number;
+  reason: string | null;
+};
+
+function inspectionUpstreamHosts(task?: Task): InspectionUpstreamHost[] {
   const result = inspectionTaskResultObject(task, "upstream_sync");
   const raw = result?.hosts;
   if (!Array.isArray(raw)) return [];
@@ -10068,6 +10594,7 @@ function inspectionUpstreamHosts(
         host,
         status: typeof row.status === "string" ? row.status : "未返回",
         keyCount: syncResultCount(row.key_count),
+        reason: typeof row.reason === "string" && row.reason.trim() ? row.reason.trim() : null,
       },
     ];
   });
@@ -10554,6 +11081,75 @@ function autoInspectionOperationSummary(
   return "本轮仅检查任务是否到期，未执行其他操作";
 }
 
+function AutoInspectionFailureSummary(props: {
+  error: string;
+  partiallyFailed: boolean;
+  failedHosts: InspectionUpstreamHost[];
+}) {
+  return (
+    <section
+      aria-labelledby="heartbeat-error-title"
+      data-slot="heartbeat-failure-summary"
+      className={cn(
+        "rounded-lg border border-l-4 p-3",
+        props.partiallyFailed
+          ? "border-warning/40 border-l-warning bg-warning/10"
+          : "border-destructive/30 border-l-destructive bg-destructive/5",
+      )}
+      role="alert"
+    >
+      <div className="flex items-start gap-2.5">
+        <CircleAlert
+          className={cn(
+            "mt-0.5 shrink-0",
+            props.partiallyFailed ? "text-warning" : "text-destructive",
+          )}
+          size={18}
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 id="heartbeat-error-title" className="text-sm font-semibold">
+              需处理的失败项
+            </h3>
+            <span
+              className={cn(
+                "text-xs font-medium",
+                props.partiallyFailed ? "text-warning" : "text-destructive",
+              )}
+            >
+              {props.partiallyFailed ? "部分失败" : "执行失败"}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-6 whitespace-pre-wrap break-words">{props.error}</p>
+          {props.failedHosts.length ? (
+            <div className="border-foreground/10 mt-3 border-t pt-2.5">
+              <p className="text-muted-foreground mb-1.5 text-xs font-medium">
+                失败 Host（{props.failedHosts.length}）
+              </p>
+              <ul className="divide-foreground/10 divide-y">
+                {props.failedHosts.map((host) => (
+                  <li key={host.host} className="grid gap-0.5 py-2 first:pt-0 last:pb-0">
+                    <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                      <span className="min-w-0 break-all text-sm font-medium">{host.host}</span>
+                      <span className="text-destructive shrink-0 text-xs font-medium">
+                        {displayResultValue(host.status)}
+                      </span>
+                    </div>
+                    <p className="text-muted-foreground text-xs leading-5">
+                      {host.reason ?? "未返回具体原因，请查看上游同步任务明细"}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function AutoInspectionHeartbeatDetails(props: {
   record: AutoInspectionStatus["heartbeat_history"][number];
   task?: Task;
@@ -10566,6 +11162,10 @@ export function AutoInspectionHeartbeatDetails(props: {
   const state = autoInspectionHeartbeatState(props.record);
   const upstreamSync = inspectionUpstreamSyncSummary(props.task, props.upstreams);
   const upstreamHosts = inspectionUpstreamHosts(props.task);
+  const orderedUpstreamHosts = [...upstreamHosts].sort(
+    (first, second) => Number(first.status === "succeeded") - Number(second.status === "succeeded"),
+  );
+  const failedUpstreamHosts = orderedUpstreamHosts.filter((host) => host.status !== "succeeded");
   const accountRateResult = inspectionTaskResultObject(props.task, "account_rate_sync");
   const accountRateScheduled =
     props.accountRateSyncTask !== undefined ||
@@ -10607,6 +11207,14 @@ export function AutoInspectionHeartbeatDetails(props: {
           </div>
         </dl>
       </section>
+
+      {props.record.error ? (
+        <AutoInspectionFailureSummary
+          error={props.record.error}
+          partiallyFailed={partiallyFailed}
+          failedHosts={failedUpstreamHosts}
+        />
+      ) : null}
 
       {props.record.status === "running" ? (
         <section aria-labelledby="heartbeat-live-queue-title" className="grid gap-2">
@@ -10654,25 +11262,52 @@ export function AutoInspectionHeartbeatDetails(props: {
           <h3 id="heartbeat-upstream-hosts-title" className="text-sm font-medium">
             主巡检 · 上游数据同步内容
           </h3>
-          <details data-slot="heartbeat-upstream-host-details" className="rounded-lg border">
+          <details
+            data-slot="heartbeat-upstream-host-details"
+            className={cn(
+              "rounded-lg border",
+              failedUpstreamHosts.length && "border-destructive/30",
+            )}
+          >
             <summary className="text-muted-foreground flex cursor-pointer list-none items-start justify-between gap-3 px-3 py-2.5 text-xs [&::-webkit-details-marker]:hidden">
-              <span className="min-w-0">查看 Host 明细</span>
-              <span className="text-foreground min-w-0 text-right font-medium whitespace-normal">
+              <span className="min-w-0">查看全部 Host 明细</span>
+              <span
+                className={cn(
+                  "min-w-0 text-right font-medium whitespace-normal",
+                  failedUpstreamHosts.length ? "text-destructive" : "text-foreground",
+                )}
+              >
                 {upstreamHosts.length} 个 Host · 成功{" "}
                 {upstreamHosts.filter((host) => host.status === "succeeded").length} · 失败{" "}
-                {upstreamHosts.filter((host) => host.status !== "succeeded").length}
+                {failedUpstreamHosts.length}
               </span>
             </summary>
             <div className="border-border/70 max-h-72 divide-y overflow-y-auto border-t text-sm">
-              {upstreamHosts.map((host) => (
+              {orderedUpstreamHosts.map((host) => (
                 <div
                   key={host.host}
                   data-slot="heartbeat-upstream-host-row"
-                  className="flex items-center justify-between gap-3 px-3 py-2"
+                  data-status={host.status}
+                  className={cn(
+                    "flex items-start justify-between gap-3 px-3 py-2",
+                    host.status !== "succeeded" && "bg-destructive/5",
+                  )}
                 >
-                  <span className="truncate">{host.host}</span>
-                  <span className="text-muted-foreground shrink-0 text-xs">
-                    {host.status === "succeeded" ? "同步成功" : displayLabel(host.status)} ·{" "}
+                  <div className="min-w-0">
+                    <span className="block truncate">{host.host}</span>
+                    {host.status !== "succeeded" ? (
+                      <span className="text-muted-foreground mt-0.5 block text-xs leading-5 break-words">
+                        {host.reason ?? "未返回具体原因"}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span
+                    className={cn(
+                      "shrink-0 text-xs",
+                      host.status === "succeeded" ? "text-muted-foreground" : "text-destructive",
+                    )}
+                  >
+                    {host.status === "succeeded" ? "同步成功" : displayResultValue(host.status)} ·{" "}
                     {host.keyCount} 个 Key
                   </span>
                 </div>
@@ -10738,23 +11373,6 @@ export function AutoInspectionHeartbeatDetails(props: {
         </section>
       )}
 
-      {props.record.error ? (
-        <section aria-labelledby="heartbeat-error-title" className="grid gap-2">
-          <h3 id="heartbeat-error-title" className="text-sm font-medium">
-            {partiallyFailed ? "部分失败详情" : "失败原因"}
-          </h3>
-          <div
-            className={cn(
-              "rounded-lg border p-3 text-sm leading-6 whitespace-pre-wrap break-words",
-              partiallyFailed
-                ? "border-warning/40 bg-warning/10 text-warning"
-                : "border-destructive/25 bg-destructive/5 text-destructive",
-            )}
-          >
-            {props.record.error}
-          </div>
-        </section>
-      ) : null}
       {!props.record.error && cancellationReason ? (
         <section aria-labelledby="heartbeat-cancel-title" className="grid gap-2">
           <h3 id="heartbeat-cancel-title" className="text-sm font-medium">
@@ -10908,7 +11526,6 @@ function AutoInspectionCard() {
   });
   const [draft, setDraft] = useState<AutoInspectionDraft | null>(null);
   const syncedConfig = React.useRef<AutoInspectionConfig | null>(null);
-  const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
   const [selectedHeartbeat, setSelectedHeartbeat] = useState<
     AutoInspectionStatus["heartbeat_history"][number] | null
   >(null);
@@ -10958,15 +11575,6 @@ function AutoInspectionCard() {
     },
     onError: (error) =>
       toast.error(error instanceof Error ? error.message : "自动巡检设置保存失败"),
-  });
-  const clearHistory = useMutation({
-    mutationFn: api.clearAutoInspectionHistory,
-    onSuccess: async (result) => {
-      setClearHistoryOpen(false);
-      await status.refetch();
-      toast.success(`已清空 ${result.deleted} 条心跳记录`);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "心跳记录清空失败"),
   });
   useEffect(() => {
     if (status.data) {
@@ -11039,16 +11647,10 @@ function AutoInspectionCard() {
         className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden"
         data-testid="auto-inspection-layout"
       >
-        <div
-          className="grid shrink-0 items-stretch gap-3 xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]"
-          data-testid="auto-inspection-overview"
-        >
+        <div className="grid shrink-0 items-stretch gap-3" data-testid="auto-inspection-overview">
           <Card size="sm">
             <CardHeader>
               <CardTitle>巡检服务</CardTitle>
-              <CardDescription>
-                这里只控制后台服务与心跳；各任务执行周期统一在调度策略中配置
-              </CardDescription>
             </CardHeader>
             <CardContent>
               {status.error && (
@@ -11056,7 +11658,7 @@ function AutoInspectionCard() {
               )}
               {status.isLoading && !current ? <Skeleton className="h-28 w-full" /> : null}
               {current ? (
-                <div className="grid gap-2.5" data-testid="auto-inspection-settings">
+                <div className="grid gap-2.5 lg:grid-cols-2" data-testid="auto-inspection-settings">
                   <PolicySwitchRow
                     label="启用自动巡检"
                     description="开启后由后台持续检查到期任务，不依赖浏览器登录状态。"
@@ -11076,6 +11678,7 @@ function AutoInspectionCard() {
                         max={86400}
                         value={current.interval_seconds ?? ""}
                         aria-label="调度心跳周期"
+                        disabled={save.isPending}
                         onChange={(event) =>
                           setDraft({
                             ...current,
@@ -11094,91 +11697,20 @@ function AutoInspectionCard() {
               ) : null}
             </CardContent>
           </Card>
-
-          <Card size="sm" data-testid="last-inspection-summary">
-            <CardHeader className="gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-              <div className="min-w-0">
-                <CardTitle>上一轮概要</CardTitle>
-                <CardDescription>
-                  {status.data?.last_run_at
-                    ? `执行时间：${formatDate(status.data.last_run_at, true)}`
-                    : "自动巡检完成一轮后会在这里显示汇总"}
-                </CardDescription>
-              </div>
-              {status.data ? (
-                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-                  <StatusPill
-                    label={autoInspectionLastRunState(status.data.last_status).label}
-                    tone={autoInspectionLastRunState(status.data.last_status).tone}
-                  />
-                  <span className="text-muted-foreground text-xs">
-                    耗时：
-                    <strong className="text-foreground font-medium">
-                      {status.data.last_run_at
-                        ? formatInspectionRunDuration(status.data.last_run_duration_ms)
-                        : "—"}
-                    </strong>
-                  </span>
-                </div>
-              ) : null}
-            </CardHeader>
-            {status.isLoading ? <Skeleton className="m-3 h-20 w-auto" /> : null}
-            {!status.isLoading && status.data?.last_run_at ? (
-              <CardContent className="p-0 group-data-[size=sm]/card:p-0">
-                <div
-                  className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4"
-                  data-testid="inspection-summary-grid"
-                >
-                  <InspectionSummaryCount
-                    label="受管账号"
-                    value={status.data.last_summary.channels}
-                  />
-                  <InspectionSummaryCount
-                    label="主动探测"
-                    value={status.data.last_summary.probed}
-                  />
-                  <InspectionSummaryCount
-                    label="新增样本"
-                    value={status.data.last_summary.samples}
-                  />
-                  <InspectionSummaryCount label="新增熔断" value={status.data.last_summary.fused} />
-                  <InspectionSummaryCount
-                    label="恢复回池"
-                    value={status.data.last_summary.recovered}
-                  />
-                  <InspectionSummaryCount
-                    label="自动执行"
-                    value={status.data.last_summary.applied}
-                  />
-                  <InspectionSummaryCount
-                    label="自动处置"
-                    value={status.data.last_summary.cleaned_up}
-                  />
-                  <InspectionSummaryCount
-                    label="当前告警"
-                    value={status.data.last_summary.alerts}
-                  />
-                </div>
-              </CardContent>
-            ) : null}
-          </Card>
         </div>
 
         <div
-          className="min-h-0 flex-1 grid items-start gap-3 overflow-y-auto overscroll-contain min-[1700px]:grid-cols-[minmax(38rem,0.95fr)_minmax(0,1.55fr)] min-[1700px]:items-stretch"
+          className="min-h-0 flex-1 grid items-start gap-3 overflow-y-auto content-start overscroll-contain xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)] xl:items-stretch"
           data-testid="auto-inspection-workspace"
         >
-          <Card size="sm" className="min-w-0 min-[1700px]:min-h-0">
+          <Card size="sm" className="min-w-0 xl:min-h-0">
             <CardHeader>
               <CardTitle>任务队列</CardTitle>
-              <CardDescription>
-                操作到期后组合为一项巡检任务，并明确展示本轮包含内容
-              </CardDescription>
             </CardHeader>
-            <CardContent className="p-0 group-data-[size=sm]/card:p-0 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:overflow-hidden">
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
               <div
                 data-slot="queue-list"
-                className="divide-border/70 max-h-[min(30rem,55vh)] divide-y overflow-y-auto overscroll-contain [scrollbar-gutter:stable] min-[1700px]:h-full min-[1700px]:max-h-none"
+                className="divide-border/70 max-h-[min(30rem,55vh)] divide-y overflow-y-auto overscroll-contain [scrollbar-gutter:stable] xl:h-full xl:max-h-none"
                 data-testid="auto-inspection-queue-scroll-area"
               >
                 {status.isLoading ? <LoadingRows columns={1} rows={4} /> : null}
@@ -11310,27 +11842,14 @@ function AutoInspectionCard() {
             </CardContent>
           </Card>
 
-          <Card size="sm" className="min-w-0 min-[1700px]:min-h-0">
-            <TableFilterToolbar aria-label="心跳记录操作" className="border-b px-3 py-2.5">
-              <Button
-                className="ml-auto"
-                variant="outline"
-                size="sm"
-                disabled={
-                  clearHistory.isPending ||
-                  status.data?.running === true ||
-                  !status.data?.heartbeat_history.length
-                }
-                onClick={() => setClearHistoryOpen(true)}
-              >
-                <Trash2 size={15} />
-                清空记录
-              </Button>
-            </TableFilterToolbar>
-            <CardContent className="p-0 group-data-[size=sm]/card:p-0 min-[1700px]:min-h-0 min-[1700px]:flex-1 min-[1700px]:overflow-hidden">
+          <Card size="sm" className="min-w-0 xl:min-h-0">
+            <CardHeader>
+              <CardTitle>心跳记录</CardTitle>
+            </CardHeader>
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
               <Table
                 className="min-w-[900px]"
-                containerClassName="max-h-[min(30rem,55vh)] overflow-auto overscroll-contain [scrollbar-gutter:stable] min-[1700px]:h-full min-[1700px]:max-h-none"
+                containerClassName="max-h-[min(30rem,55vh)] overflow-auto overscroll-contain [scrollbar-gutter:stable] xl:h-full xl:max-h-none"
                 data-testid="auto-inspection-heartbeat-table"
               >
                 <TableHeader>
@@ -11402,38 +11921,6 @@ function AutoInspectionCard() {
           </Card>
         </div>
       </div>
-      <Dialog
-        open={clearHistoryOpen}
-        onOpenChange={(open) => {
-          if (!clearHistory.isPending) setClearHistoryOpen(open);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>清空心跳记录</DialogTitle>
-            <DialogDescription>
-              将删除全部自动巡检心跳历史，不会修改巡检开关、调度周期或各任务的到期时间。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={clearHistory.isPending}
-              onClick={() => setClearHistoryOpen(false)}
-            >
-              取消
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={clearHistory.isPending}
-              onClick={() => clearHistory.mutate()}
-            >
-              <Trash2 size={15} />
-              {clearHistory.isPending ? "清空中…" : "确认清空"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog
         open={selectedQueueItem !== null}
         onOpenChange={(open) => {
@@ -11552,7 +12039,12 @@ export function PolicyPage() {
   });
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
   const queryClient = useQueryClient();
-  const [draft, setDraft] = useState<PolicyDraft | null>(null);
+  const [draft, setDraftValue] = useState<PolicyDraft | null>(null);
+  const [draftRevision, setDraftRevision] = useState<string | undefined>();
+  function setDraft(value: React.SetStateAction<PolicyDraft | null>): void {
+    if (draft === null && value !== null) setDraftRevision(policy.data?.revision);
+    setDraftValue(value);
+  }
   const [category, setCategory] = useState<"routing" | "health" | "sampling" | "scope">("routing");
   const accounts = useQuery({
     queryKey: ["accounts"],
@@ -11560,13 +12052,14 @@ export function PolicyPage() {
     enabled: category === "scope",
   });
   const [dangerousSaveOpen, setDangerousSaveOpen] = useState(false);
+  const [pendingPolicySave, setPendingPolicySave] = useState<PolicyUpdatePayload | null>(null);
   const [restoreControlOpen, setRestoreControlOpen] = useState(false);
   const [saveAttempted, setSaveAttempted] = useState(false);
   const save = useMutation({
     mutationFn: (payload: PolicyUpdatePayload) => api.updatePolicy(payload),
     onSuccess: (value) => {
       queryClient.setQueryData(["policy"], value);
-      setDraft(policyDraft(value));
+      setDraft(null);
       setSaveAttempted(false);
       void Promise.all([
         queryClient.invalidateQueries({ queryKey: ["config"] }),
@@ -11614,33 +12107,36 @@ export function PolicyPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : "主动探测设置失败"),
   });
   const data = policy.data;
-  useEffect(() => {
-    if (data) {
-      setDraft((current) => current ?? policyDraft(data));
-    }
-  }, [data]);
   const current = policy.error ? null : (draft ?? (data ? policyDraft(data) : null));
   const payload = current ? policyPayload(current) : null;
   const relationshipError = current ? policyRelationshipError(current) : null;
-  const cleanup = payload?.advanced_policy?.cleanup;
-  const cleanupConfig =
-    cleanup !== null && typeof cleanup === "object" && !Array.isArray(cleanup)
-      ? (cleanup as Record<string, unknown>)
-      : null;
-  const destructiveCleanup = cleanupConfig?.enabled === true && cleanupConfig.action === "delete";
   function submitPolicy() {
     setSaveAttempted(true);
-    if (!payload) return;
+    const latest = queryClient.getQueryData<import("./api").PolicySnapshot>(["policy"]) ?? data;
+    const value = draft ?? (latest ? policyDraft(latest) : null);
+    const update = value ? policyPayload(value) : null;
+    if (!update) return;
+    const savePayload: PolicyUpdatePayload = {
+      ...policySettingsPayload(update),
+      expected_revision: draft === null ? latest?.revision : draftRevision,
+    };
+    const cleanup = update.advanced_policy?.cleanup;
+    const cleanupConfig =
+      cleanup !== null && typeof cleanup === "object" && !Array.isArray(cleanup)
+        ? (cleanup as Record<string, unknown>)
+        : null;
+    const destructiveCleanup = cleanupConfig?.enabled === true && cleanupConfig.action === "delete";
     if (destructiveCleanup) {
+      setPendingPolicySave(savePayload);
       setDangerousSaveOpen(true);
       return;
     }
-    save.mutate(policySettingsPayload(payload));
+    save.mutate(savePayload);
   }
   async function refreshPolicy() {
     const result = await policy.refetch();
     if (result.data) {
-      setDraft(policyDraft(result.data));
+      setDraft(null);
     }
   }
   return (
@@ -11917,9 +12413,9 @@ export function PolicyPage() {
               variant="destructive"
               disabled={save.isPending}
               onClick={() => {
-                if (!payload) return;
+                if (!pendingPolicySave) return;
                 setDangerousSaveOpen(false);
-                save.mutate(policySettingsPayload(payload));
+                save.mutate(pendingPolicySave);
               }}
             >
               确认保存
@@ -12109,8 +12605,57 @@ function advancedNumber(value: unknown): string | number {
   return typeof value === "number" || typeof value === "string" ? value : "";
 }
 
-function advancedList(value: unknown): string {
-  return Array.isArray(value) ? value.map(String).join(", ") : "";
+function advancedList(value: unknown, separator = ", "): string {
+  return Array.isArray(value) ? value.map(String).join(separator) : "";
+}
+
+function PolicyListField(props: {
+  label: string;
+  description?: string;
+  value: unknown;
+  onChange: (value: string[] | number[]) => void;
+  numeric?: boolean;
+  multiline?: boolean;
+  placeholder?: string;
+}) {
+  const separator = props.multiline ? "\n" : ", ";
+  const formatted = advancedList(props.value, separator);
+  const lastFormatted = React.useRef(formatted);
+  const [text, setText] = useState(formatted);
+
+  useEffect(() => {
+    if (formatted !== lastFormatted.current) setText(formatted);
+    lastFormatted.current = formatted;
+  }, [formatted]);
+
+  function change(raw: string): void {
+    const items = splitConfigList(raw);
+    const values = props.numeric ? items.map(Number) : items;
+    lastFormatted.current = advancedList(values, separator);
+    setText(raw);
+    props.onChange(values);
+  }
+
+  return (
+    <FormField label={props.label} description={props.description}>
+      {props.multiline ? (
+        <Textarea
+          aria-label={props.label}
+          className="min-h-28"
+          value={text}
+          placeholder={props.placeholder}
+          onChange={(event) => change(event.target.value)}
+        />
+      ) : (
+        <Input
+          aria-label={props.label}
+          value={text}
+          placeholder={props.placeholder}
+          onChange={(event) => change(event.target.value)}
+        />
+      )}
+    </FormField>
+  );
 }
 
 function PolicyNumberField(props: {
@@ -12131,6 +12676,7 @@ function PolicyNumberField(props: {
     >
       <Input
         type="number"
+        aria-label={props.unit ? `${props.label}（${props.unit}）` : props.label}
         step={props.step ?? "1"}
         min={props.min}
         max={props.max}
@@ -12389,21 +12935,14 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
               value={policyAdvancedValue(props.value, "breaker", "fused_cooldown_seconds")}
               onChange={(value) => set("breaker", "fused_cooldown_seconds", value)}
             />
-            <FormField label="见到即熔断的错误码">
-              <Input
-                value={advancedList(
-                  policyAdvancedValue(props.value, "breaker", "instant_status_codes"),
-                )}
-                placeholder="例如 402, 429"
-                onChange={(event) =>
-                  set(
-                    "breaker",
-                    "instant_status_codes",
-                    splitConfigList(event.target.value).map(Number),
-                  )
-                }
-              />
-            </FormField>
+            <PolicyListField
+              label="见到即熔断的错误码"
+              description="429 限流由 Sub2API 根据 rate_limit_reset_at 自动恢复，不会触发熔断。"
+              value={policyAdvancedValue(props.value, "breaker", "instant_status_codes")}
+              placeholder="例如 402"
+              numeric
+              onChange={(values) => set("breaker", "instant_status_codes", values)}
+            />
             <div className="col-span-full grid gap-2 lg:grid-cols-3">
               <PolicySwitchRow
                 label="凭据失效立即熔断"
@@ -12652,21 +13191,14 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             value={policyAdvancedValue(props.value, "cleanup", "max_per_round")}
             onChange={(value) => set("cleanup", "max_per_round", value)}
           />
-          <FormField label="触发处置的错误码">
-            <Input
-              value={advancedList(
-                policyAdvancedValue(props.value, "cleanup", "trigger_status_codes"),
-              )}
-              placeholder="例如 401, 403"
-              onChange={(event) =>
-                set(
-                  "cleanup",
-                  "trigger_status_codes",
-                  splitConfigList(event.target.value).map(Number),
-                )
-              }
-            />
-          </FormField>
+          <PolicyListField
+            label="触发处置的错误码"
+            description="429 限流由 Sub2API 根据 rate_limit_reset_at 自动恢复，不会触发自动处置。"
+            value={policyAdvancedValue(props.value, "cleanup", "trigger_status_codes")}
+            placeholder="例如 401, 403"
+            numeric
+            onChange={(values) => set("cleanup", "trigger_status_codes", values)}
+          />
           <div className="col-span-full grid gap-2 sm:grid-cols-2">
             <PolicySwitchRow
               label="保留分组内最后一个账号"
@@ -12686,7 +13218,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
       {props.section === "routing" ? (
         <PolicyConfigCard
           title="智能扩容"
-          description="负载率达到阈值时小步提高并发，健康状态变差时按步长缩容。"
+          description="已配置并发占全局并发上限的比例达到阈值时小步扩容，健康状态变差时按步长缩容。该比例表示配置容量，不代表实时请求利用率。"
           columns={3}
           switchAction={{
             checked: policyAdvancedValue(props.value, "scaling", "enabled") === true,
@@ -12716,7 +13248,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             onChange={(value) => set("scaling", "max_per_account", value)}
           />
           <PolicyNumberField
-            label="扩容触发负载率"
+            label="扩容触发容量比例"
             min={0.000001}
             max={1}
             step="any"
@@ -12824,7 +13356,21 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             onChange={(value) => set("probe", "concurrency", value)}
           />
           <PolicyNumberField
+            label="当前探针有效期"
+            description="用于确认当前状态、连续失败及恢复条件；不随探测间隔变化。"
+            unit="秒"
+            min={1}
+            max={86400}
+            value={
+              policyAdvancedValue(props.value, "probe", "freshness_seconds") === undefined
+                ? 900
+                : policyAdvancedValue(props.value, "probe", "freshness_seconds")
+            }
+            onChange={(value) => set("probe", "freshness_seconds", value)}
+          />
+          <PolicyNumberField
             label="真实样本新鲜期"
+            description="仅控制有近期真实流量时是否跳过探测，不限制历史评分窗口。"
             unit="秒"
             min={1}
             max={86400}
@@ -12875,21 +13421,13 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
                       value={policyAdvancedValue(props.value, "probe", "retry_count")}
                       onChange={(value) => set("probe", "retry_count", value)}
                     />
-                    <FormField label="触发重试状态码">
-                      <Input
-                        value={advancedList(
-                          policyAdvancedValue(props.value, "probe", "retry_status_codes"),
-                        )}
-                        placeholder="429, 500, 502, 503, 504"
-                        onChange={(event) =>
-                          set(
-                            "probe",
-                            "retry_status_codes",
-                            splitConfigList(event.target.value).map(Number),
-                          )
-                        }
-                      />
-                    </FormField>
+                    <PolicyListField
+                      label="触发重试状态码"
+                      value={policyAdvancedValue(props.value, "probe", "retry_status_codes")}
+                      placeholder="429, 500, 502, 503, 504"
+                      numeric
+                      onChange={(values) => set("probe", "retry_status_codes", values)}
+                    />
                   </div>
                 )}
               </div>
@@ -12972,6 +13510,19 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
           onChange={(value) => set("scoring", "long_window", value)}
         />
         <PolicyNumberField
+          label="评分历史范围"
+          description="在此时间范围内按短期、长期条数取样评分；须有新鲜有效证据，熔断恢复沿用新鲜恢复样本。"
+          unit="分钟"
+          min={1}
+          max={10080}
+          value={
+            policyAdvancedValue(props.value, "scoring", "history_window_minutes") === undefined
+              ? 1440
+              : policyAdvancedValue(props.value, "scoring", "history_window_minutes")
+          }
+          onChange={(value) => set("scoring", "history_window_minutes", value)}
+        />
+        <PolicyNumberField
           label="最新一次权重"
           min={0.000001}
           max={1}
@@ -13036,52 +13587,29 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
         wide
       >
         <div className="col-span-full">
-          <FormField label="致命错误关键字（每行一个）">
-            <Textarea
-              className="min-h-28"
-              value={advancedList(
-                policyAdvancedValue(props.value, "classify", "fatal_patterns"),
-              ).replaceAll(", ", "\n")}
-              onChange={(event) =>
-                set("classify", "fatal_patterns", splitConfigList(event.target.value))
-              }
-            />
-          </FormField>
+          <PolicyListField
+            label="致命错误关键字（每行一个）"
+            value={policyAdvancedValue(props.value, "classify", "fatal_patterns")}
+            multiline
+            onChange={(values) => set("classify", "fatal_patterns", values)}
+          />
         </div>
         <div className="sm:col-span-2">
-          <FormField label="网关错误状态码">
-            <Input
-              value={advancedList(
-                policyAdvancedValue(props.value, "classify", "gateway_status_codes"),
-              )}
-              onChange={(event) =>
-                set(
-                  "classify",
-                  "gateway_status_codes",
-                  splitConfigList(event.target.value).map(Number),
-                )
-              }
-            />
-          </FormField>
+          <PolicyListField
+            label="网关错误状态码"
+            value={policyAdvancedValue(props.value, "classify", "gateway_status_codes")}
+            numeric
+            onChange={(values) => set("classify", "gateway_status_codes", values)}
+          />
         </div>
         <div className="sm:col-span-2">
-          <FormField
+          <PolicyListField
             label="客户端错误状态码"
             description="这些真实请求错误只记录，不影响账号健康或恢复计数"
-          >
-            <Input
-              value={advancedList(
-                policyAdvancedValue(props.value, "classify", "client_error_status_codes"),
-              )}
-              onChange={(event) =>
-                set(
-                  "classify",
-                  "client_error_status_codes",
-                  splitConfigList(event.target.value).map(Number),
-                )
-              }
-            />
-          </FormField>
+            value={policyAdvancedValue(props.value, "classify", "client_error_status_codes")}
+            numeric
+            onChange={(values) => set("classify", "client_error_status_codes", values)}
+          />
         </div>
       </PolicyConfigCard>
     </div>
@@ -13195,12 +13723,16 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
       `${accountTypeLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
   );
   const platformOptions = policyScopeValueOptions(
-    props.accounts.flatMap((account) => {
-      const value = (account.platform ?? account.upstream_type)?.trim().toLocaleLowerCase();
-      return value ? [value] : [];
-    }),
+    [
+      ...concreteAccountPlatformOptions.map((option) => option.value),
+      ...props.accounts.flatMap((account) => {
+        const value = account.platform?.trim().toLocaleLowerCase();
+        return value ? [value] : [];
+      }),
+    ],
     selectedPlatforms,
-    (value, stale) => `${value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+    (value, stale) =>
+      `${accountPlatformLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
   );
   const excludedGroupOptions = policyScopeEntityOptions(
     props.groups.flatMap((group) =>
@@ -13211,7 +13743,9 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
               value: group.id,
               label: [
                 `${group.name}（#${group.id}）`,
-                group.platforms.join("、"),
+                group.platforms
+                  .map((platform) => accountPlatformLabel(platform) ?? platform)
+                  .join("、"),
                 `${group.account_count} 个账号`,
               ]
                 .filter(Boolean)
@@ -13227,7 +13761,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
       value: account.id,
       label: [
         `${account.name}（#${account.id}）`,
-        account.platform ?? account.upstream_type,
+        accountPlatformLabel(account.platform),
         account.groups.length ? account.groups.join("、") : "未分组",
       ]
         .filter(Boolean)
@@ -13279,7 +13813,10 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
             {props.groups.map((group) => {
               const disabled = group.id === null;
               const checked = group.id !== null && selectedIDs.has(group.id);
-              const detail = [group.id ? `#${group.id}` : "缺少稳定 ID", ...group.platforms]
+              const detail = [
+                group.id ? `#${group.id}` : "缺少稳定 ID",
+                ...group.platforms.map((platform) => accountPlatformLabel(platform) ?? platform),
+              ]
                 .filter(Boolean)
                 .join(" · ");
               return (
@@ -13299,10 +13836,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
                       const next = new Set(selectedIDs);
                       if (nextChecked) next.add(group.id);
                       else next.delete(group.id);
-                      updateManagedGroups(
-                        "selected",
-                        stableGroupIDs.filter((id) => next.has(id)),
-                      );
+                      updateManagedGroups("selected", [...next]);
                     }}
                   />
                   <span className="min-w-0">

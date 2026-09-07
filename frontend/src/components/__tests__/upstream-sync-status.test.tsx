@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -21,6 +22,14 @@ function task(status: Task["status"], result: Task["result"]): Task {
   };
 }
 
+function renderStatus(taskValue: Task): string {
+  return renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>
+      <UpstreamSyncTaskStatus task={taskValue} />
+    </QueryClientProvider>,
+  );
+}
+
 describe("upstream synchronization status", () => {
   it("uses the fixed auth dictionary for unknown and unchanged result values", () => {
     expect(upstreamSyncAuthStatusMeta("上游新增状态")).toEqual({
@@ -34,7 +43,7 @@ describe("upstream synchronization status", () => {
   });
 
   it("shows live business progress without exposing task ids", () => {
-    const markup = renderToStaticMarkup(<UpstreamSyncTaskStatus task={task("running", {})} />);
+    const markup = renderStatus(task("running", {}));
 
     expect(markup).toContain("正在同步上游：已完成 1/4 个 Host");
     expect(markup).not.toContain("sync-task");

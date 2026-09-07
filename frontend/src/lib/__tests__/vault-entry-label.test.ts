@@ -106,4 +106,53 @@ describe("vaultEntryLabel", () => {
     ];
     expect(defaultVaultEntryForHost(entries, "www.example.test")).toBe("root-domain-entry");
   });
+
+  it("prefers an explicit www Host binding when root-domain credentials also exist", () => {
+    const entries = [
+      {
+        entry: "root-domain-entry",
+        hosts: ["example.test"],
+        has_username: true,
+        has_password: true,
+        username_is_email: true,
+        header_names: [],
+      },
+      {
+        entry: "www-entry",
+        hosts: ["https://www.example.test/"],
+        has_username: true,
+        has_password: true,
+        username_is_email: true,
+        header_names: [],
+      },
+    ];
+
+    expect(defaultVaultEntryForHost(entries, "WWW.EXAMPLE.TEST")).toBe("www-entry");
+  });
+
+  it("places exact Host credentials before a www alias in the available options", () => {
+    const entries = [
+      {
+        entry: "www-entry",
+        hosts: ["www.example.test"],
+        has_username: true,
+        has_password: true,
+        username_is_email: true,
+        header_names: [],
+      },
+      {
+        entry: "root-domain-entry",
+        hosts: ["example.test"],
+        has_username: true,
+        has_password: true,
+        username_is_email: true,
+        header_names: [],
+      },
+    ];
+
+    expect(vaultEntriesForHost(entries, "example.test").map(vaultEntryLabel)).toEqual([
+      "root-domain-entry",
+      "www-entry",
+    ]);
+  });
 });

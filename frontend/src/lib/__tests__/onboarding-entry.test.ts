@@ -14,12 +14,16 @@ import {
   candidateUsesAccountBaseURL,
   compatibleOnboardingLocalGroups,
   composeOnboardingBaseUrl,
+  inferOnboardingProtocol,
   localGroupSelectionLabel,
   localGroupMultiplierLabel,
   normalizeOnboardingBaseUrlInput,
   normalizeOnboardingHost,
   onboardingCandidateStats,
   onboardingEntryKind,
+  onboardingPlatformNeedsProtocol,
+  onboardingProtocolReady,
+  pendingOnboardingSelectionNeedsProtocol,
   onboardingRequestHost,
   onboardingSelectionTitle,
   onboardingUpstreamRequest,
@@ -41,25 +45,18 @@ describe("onboarding entry workflow", () => {
     expect(compatibleOnboardingLocalGroups(candidate, groups)).toEqual([groups[1]]);
   });
 
-  it.each([
-    "anthropic",
-    "openai",
-    "gemini",
-    "antigravity",
-    "grok",
-    "kimi",
-    "zhipu",
-    "deepseek",
-    "opencode",
-  ])("offers Composite as a target for %s accounts", (platform) => {
-    const groups = [
-      { id: "10", name: "同平台", platform },
-      { id: "11", name: "Composite", platform: "composite" },
-      { id: "12", name: "其他平台", platform: platform === "openai" ? "anthropic" : "openai" },
-    ];
+  it.each(["anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"])(
+    "offers Composite as a target for %s accounts",
+    (platform) => {
+      const groups = [
+        { id: "10", name: "同平台", platform },
+        { id: "11", name: "Composite", platform: "composite" },
+        { id: "12", name: "其他平台", platform: platform === "openai" ? "anthropic" : "openai" },
+      ];
 
-    expect(compatibleOnboardingLocalGroups({ platform }, groups)).toEqual(groups.slice(0, 2));
-  });
+      expect(compatibleOnboardingLocalGroups({ platform }, groups)).toEqual(groups.slice(0, 2));
+    },
+  );
 
   it("offers typed local groups when the upstream catalog omits its platform", () => {
     const groups = [
@@ -70,6 +67,54 @@ describe("onboarding entry workflow", () => {
     ];
 
     expect(compatibleOnboardingLocalGroups({ platform: null }, groups)).toEqual(groups.slice(0, 3));
+    expect(compatibleOnboardingLocalGroups({ platform: "composite" }, groups)).toEqual(
+      groups.slice(0, 3),
+    );
+  });
+
+  it("requires a concrete protocol when the upstream catalog omits its platform", () => {
+    expect(onboardingPlatformNeedsProtocol(null)).toBe(true);
+    expect(onboardingPlatformNeedsProtocol(undefined)).toBe(true);
+  });
+
+  it("requires a concrete protocol for composite and unsupported catalog platforms", () => {
+    expect(onboardingPlatformNeedsProtocol("composite")).toBe(true);
+    expect(onboardingPlatformNeedsProtocol("opencode")).toBe(true);
+    expect(onboardingPlatformNeedsProtocol("unknown-provider")).toBe(true);
+  });
+
+  it("uses recognized concrete catalog platforms without another selection", () => {
+    expect(onboardingPlatformNeedsProtocol("Claude")).toBe(false);
+    expect(onboardingPlatformNeedsProtocol("openai")).toBe(false);
+    expect(onboardingPlatformNeedsProtocol("Zhipu AI")).toBe(false);
+  });
+
+  it("only enables unresolved catalog groups after a concrete protocol is selected", () => {
+    expect(onboardingProtocolReady(null, undefined)).toBe(false);
+    expect(onboardingProtocolReady("composite", "composite")).toBe(false);
+    expect(onboardingProtocolReady("composite", "deepseek")).toBe(true);
+    expect(onboardingProtocolReady("Claude", undefined)).toBe(true);
+  });
+
+  it("infers an unresolved upstream protocol from the selected local group", () => {
+    const groups = [
+      { id: "6", name: "codex-平价", platform: "openai" },
+      { id: "22", name: "Gemini", platform: "gemini" },
+      { id: "27", name: "kiro-旗舰", platform: "anthropic" },
+    ];
+
+    expect(inferOnboardingProtocol(["27"], groups)).toBe("anthropic");
+  });
+
+  it("does not infer a protocol from only composite or conflicting local groups", () => {
+    const groups = [
+      { id: "6", name: "国产-平价", platform: "composite" },
+      { id: "22", name: "Gemini", platform: "gemini" },
+      { id: "27", name: "kiro-旗舰", platform: "anthropic" },
+    ];
+
+    expect(inferOnboardingProtocol(["6"], groups)).toBeNull();
+    expect(inferOnboardingProtocol(["22", "27"], groups)).toBeNull();
   });
 
   it("finds the previous and next upstream in management-list order", () => {
@@ -240,6 +285,12 @@ describe("onboarding entry workflow", () => {
     expect(candidateHasOnboardingChange(candidate, ["6"], "https://other.example/v1", false)).toBe(
       false,
     );
+  });
+
+  it("未变更的已有绑定无法推断协议时不禁用批量预览", () => {
+    expect(pendingOnboardingSelectionNeedsProtocol(false, 1, null, null)).toBe(false);
+    expect(pendingOnboardingSelectionNeedsProtocol(true, 1, null, null)).toBe(true);
+    expect(pendingOnboardingSelectionNeedsProtocol(true, 1, null, "openai")).toBe(false);
   });
 
   it("shows selected local-group multipliers without confusing them with account rates", () => {

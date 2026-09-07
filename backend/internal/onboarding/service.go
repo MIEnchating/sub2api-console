@@ -51,6 +51,10 @@ type PrivateStore interface {
 	SaveUpstreamKeySecret(context.Context, configstore.UpstreamKeySecret) error
 }
 
+type accountCreationSettingsStore interface {
+	AccountCreationSettings(context.Context) (configstore.AccountCreationSettings, error)
+}
+
 type KeyClient interface {
 	CreateKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error)
 	RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error)
@@ -146,7 +150,7 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(targetguard.Expect(parent, expectedTarget), task, request)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -200,7 +204,7 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeBatch(targetguard.Expect(parent, expectedTarget), task, items)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -382,12 +386,27 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err != nil {
 		return map[string]any{"remote_write": false}, fmt.Errorf("账号默认参数读取失败：%w", err)
 	}
-	priority, concurrency := accountCreationParameters(defaults, validated.request)
+	creationPolicy := configstore.AccountCreationPolicy{
+		Models: []string{}, Concurrency: defaults.Concurrency, Priority: defaults.Priority,
+		PoolModeRetryCount: 3, PoolModeRetryStatusCodes: []int{401, 403, 429},
+	}
+	if provider, available := s.private.(accountCreationSettingsStore); available {
+		settings, settingsErr := provider.AccountCreationSettings(ctx)
+		if settingsErr != nil {
+			return map[string]any{"remote_write": false}, fmt.Errorf("分组账号设置读取失败：%w", settingsErr)
+		}
+		creationPolicy = configstore.ResolveAccountCreationPolicy(settings, primaryLocal.ID)
+	}
+	priority, concurrency := accountCreationParameters(configstore.AccountDefaultsSettings{
+		Concurrency: creationPolicy.Concurrency, Priority: creationPolicy.Priority,
+	}, validated.request)
+	creationPolicy.Priority = priority
+	creationPolicy.Concurrency = concurrency
 	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
-	intentHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, platform, accountType, priority, concurrency)
+	intentHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, platform, accountType, priority, concurrency, creationPolicy)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -407,7 +426,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		}
 		if pending.IntentHash != intentHash {
 			legacyCompositeHash, hashErr := onboardingIntentHash(
-				validated, target.BaseURL, accountName, "composite", accountType, priority, concurrency,
+				validated, target.BaseURL, accountName, "composite", accountType, priority, concurrency, creationPolicy,
 			)
 			canUpgrade := hashErr == nil && platform != "composite" && pending.IntentHash == legacyCompositeHash &&
 				strings.TrimSpace(pending.UpstreamKeyID) != "" && strings.TrimSpace(pending.UpstreamAccountID) == "" &&
@@ -519,18 +538,28 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
 	}
-	models, err := client.PreviewAccountModels(ctx, platform, accountType, validated.accountBaseURL, key.Secret)
-	if err != nil {
-		return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
+	models := append([]string{}, creationPolicy.Models...)
+	if len(models) == 0 {
+		models, err = client.PreviewAccountModels(ctx, platform, accountType, validated.accountBaseURL, key.Secret)
+		if err != nil {
+			return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
+		}
+	}
+	credentials := map[string]any{
+		"api_key": key.Secret, "base_url": validated.accountBaseURL, "model_mapping": identityModelMapping(models),
+		"pool_mode":                    creationPolicy.PoolMode,
+		"pool_mode_retry_count":        creationPolicy.PoolModeRetryCount,
+		"pool_mode_retry_status_codes": creationPolicy.PoolModeRetryStatusCodes,
 	}
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
-		"credentials": map[string]any{
-			"api_key": key.Secret, "base_url": validated.accountBaseURL, "model_mapping": identityModelMapping(models),
-		}, "extra": validated.request.Extra,
+		"credentials": credentials, "extra": validated.request.Extra,
 		"rate_multiplier": json.Number(validated.multiplier), "group_ids": localGroupNumericIDs,
 		"concurrency": concurrency, "priority": priority, "schedulable": validated.request.Schedulable,
 		"auto_pause_on_expired": true,
+	}
+	if creationPolicy.LoadFactor != nil {
+		body["load_factor"] = json.Number(*creationPolicy.LoadFactor)
 	}
 	var created map[string]any
 	accountWasUnknown := pending.AccountCommitUnknown
@@ -619,6 +648,8 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	result["readback_confirmed"] = readbackConfirmed
 	result["concurrency"] = concurrency
 	result["priority"] = priority
+	result["load_factor"] = creationPolicy.LoadFactor
+	result["pool_mode"] = creationPolicy.PoolMode
 	result["model_count"] = len(models)
 	return result, nil
 }
@@ -660,27 +691,32 @@ type frozenLocalGroup struct {
 }
 
 type frozenOnboardingIntent struct {
-	UpstreamHost        string             `json:"upstream_host"`
-	UpstreamType        string             `json:"upstream_type"`
-	UpstreamBaseURL     string             `json:"upstream_base_url"`
-	AccountBaseURL      string             `json:"account_base_url"`
-	UpstreamGroupID     string             `json:"upstream_group_id"`
-	UpstreamGroupName   string             `json:"upstream_group_name"`
-	UpstreamDescription string             `json:"upstream_description"`
-	TargetBaseURL       string             `json:"target_base_url"`
-	AccountName         string             `json:"account_name"`
-	AccountType         string             `json:"account_type"`
-	Platform            string             `json:"platform"`
-	Notes               string             `json:"notes"`
-	Extra               map[string]any     `json:"extra"`
-	LocalGroups         []frozenLocalGroup `json:"local_groups"`
-	Multiplier          string             `json:"multiplier"`
-	Priority            int64              `json:"priority"`
-	Concurrency         int64              `json:"concurrency"`
-	Schedulable         bool               `json:"schedulable"`
+	UpstreamHost         string             `json:"upstream_host"`
+	UpstreamType         string             `json:"upstream_type"`
+	UpstreamBaseURL      string             `json:"upstream_base_url"`
+	AccountBaseURL       string             `json:"account_base_url"`
+	UpstreamGroupID      string             `json:"upstream_group_id"`
+	UpstreamGroupName    string             `json:"upstream_group_name"`
+	UpstreamDescription  string             `json:"upstream_description"`
+	TargetBaseURL        string             `json:"target_base_url"`
+	AccountName          string             `json:"account_name"`
+	AccountType          string             `json:"account_type"`
+	Platform             string             `json:"platform"`
+	Notes                string             `json:"notes"`
+	Extra                map[string]any     `json:"extra"`
+	LocalGroups          []frozenLocalGroup `json:"local_groups"`
+	Multiplier           string             `json:"multiplier"`
+	Priority             int64              `json:"priority"`
+	Concurrency          int64              `json:"concurrency"`
+	Models               []string           `json:"models"`
+	LoadFactor           *string            `json:"load_factor"`
+	PoolMode             bool               `json:"pool_mode"`
+	PoolRetryCount       int                `json:"pool_retry_count"`
+	PoolRetryStatusCodes []int              `json:"pool_retry_status_codes"`
+	Schedulable          bool               `json:"schedulable"`
 }
 
-func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64) (string, error) {
+func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (string, error) {
 	locals := make([]frozenLocalGroup, 0, len(validated.locals))
 	for _, local := range validated.locals {
 		locals = append(locals, frozenLocalGroup{ID: local.ID, Name: local.Name})
@@ -694,13 +730,23 @@ func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName
 	if validated.candidate.Description != nil {
 		description = strings.Join(strings.Fields(*validated.candidate.Description), " ")
 	}
+	policy := configstore.AccountCreationPolicy{
+		Models: []string{}, Concurrency: concurrency, Priority: priority,
+		PoolModeRetryCount: 3, PoolModeRetryStatusCodes: []int{401, 403, 429},
+	}
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	intent := frozenOnboardingIntent{
 		UpstreamHost: strings.ToLower(strings.TrimSpace(validated.auth.Host)), UpstreamType: strings.ToLower(strings.TrimSpace(validated.request.UpstreamType)),
 		UpstreamBaseURL: strings.TrimRight(strings.TrimSpace(validated.auth.BaseURL), "/"), UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, UpstreamDescription: description, AccountBaseURL: validated.accountBaseURL,
 		TargetBaseURL: strings.TrimRight(strings.TrimSpace(targetBaseURL), "/"),
 		AccountName:   accountName, AccountType: accountType, Platform: platform, Notes: notes, Extra: validated.request.Extra,
-		LocalGroups: locals, Multiplier: validated.multiplier, Priority: priority, Concurrency: concurrency, Schedulable: validated.request.Schedulable,
+		LocalGroups: locals, Multiplier: validated.multiplier, Priority: priority, Concurrency: concurrency,
+		Models: append([]string{}, policy.Models...), LoadFactor: policy.LoadFactor, PoolMode: policy.PoolMode,
+		PoolRetryCount: policy.PoolModeRetryCount, PoolRetryStatusCodes: append([]int{}, policy.PoolModeRetryStatusCodes...),
+		Schedulable: validated.request.Schedulable,
 	}
 	encoded, err := json.Marshal(intent)
 	if err != nil {

@@ -300,3 +300,64 @@ func TestPersistTrafficSamplesRollsBackWholeBatch(t *testing.T) {
 		t.Fatalf("invalid batch partially committed: count=%d", count)
 	}
 }
+
+func TestPersistTrafficSamplesEnrichesExistingFirstTokenWithoutLosingItOnRetry(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','demo','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	duration := "30000"
+	sample := TrafficSample{AccountID: "41", GroupName: "codex", Result: "通过", EvidenceKey: "request-enrich", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), LatencyP95: &duration,
+		Payload: map[string]any{"duration_ms": "30000", "latency_metric": "request_duration"}}
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{sample}); err != nil {
+		t.Fatal(err)
+	}
+	sample.Payload["first_token_ms"] = "1250"
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{sample}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	var firstToken string
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(json_extract(payload_json,'$.first_token_ms'),'') FROM health_samples WHERE account_id='41' AND evidence_key='request-enrich'`).Scan(&count, &firstToken); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || firstToken != "1250" {
+		t.Fatalf("count=%d firstToken=%q", count, firstToken)
+	}
+	delete(sample.Payload, "first_token_ms")
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{sample}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(payload_json,'$.first_token_ms'),'') FROM health_samples WHERE account_id='41' AND evidence_key='request-enrich'`).Scan(&firstToken); err != nil {
+		t.Fatal(err)
+	}
+	if firstToken != "1250" {
+		t.Fatalf("retry erased first token: %q", firstToken)
+	}
+}
+
+func TestFirstTokenOnlyEnrichmentPreservesExistingTotalDuration(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.Exec(`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','test','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	duration, firstToken := "30000", "1250"
+	sample := TrafficSample{AccountID: "41", GroupName: "codex", Result: "通过", EvidenceKey: "request", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), LatencyP95: &duration, Payload: map[string]any{"latency_metric": "request_duration", "duration_ms": duration}}
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{sample}); err != nil {
+		t.Fatal(err)
+	}
+	sample.LatencyP95 = &firstToken
+	sample.Payload = map[string]any{"latency_metric": "first_token", "first_token_ms": firstToken}
+	if _, err := store.PersistTrafficSamples(ctx, []TrafficSample{sample}); err != nil {
+		t.Fatal(err)
+	}
+	var storedLatency, storedMetric, storedToken string
+	if err := store.db.QueryRow(`SELECT latency_p95,json_extract(payload_json,'$.latency_metric'),json_extract(payload_json,'$.first_token_ms') FROM health_samples WHERE evidence_key='request'`).Scan(&storedLatency, &storedMetric, &storedToken); err != nil {
+		t.Fatal(err)
+	}
+	if storedLatency != duration || storedMetric != "request_duration" || storedToken != firstToken {
+		t.Fatalf("latency=%s metric=%s first=%s", storedLatency, storedMetric, storedToken)
+	}
+}

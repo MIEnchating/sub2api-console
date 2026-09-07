@@ -80,6 +80,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               API 地址
             </label>
             <Select
+              disabled={props.pending || props.fetchingModels}
               value={props.customBaseURL ? customBaseURLValue : props.baseURL || null}
               itemToStringLabel={(value) => {
                 if (value === customBaseURLValue) return "自定义地址";
@@ -114,6 +115,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
             {props.customBaseURL ? (
               <Input
                 aria-label="自定义 API 地址"
+                disabled={props.pending || props.fetchingModels}
                 value={props.baseURL}
                 onChange={(event) => props.onBaseURLChange(event.target.value)}
                 aria-invalid={Boolean(props.baseURLError)}
@@ -173,7 +175,15 @@ export function NewAPIChannelConfigurationStep(props: Props) {
       </div>
 
       <div className="bg-muted/20 flex justify-end border-t px-4 py-3 sm:px-5">
-        <Button type="submit" disabled={props.pending || props.newAPIGroupOptions.length === 0}>
+        <Button
+          type="submit"
+          disabled={
+            props.pending ||
+            props.fetchingModels ||
+            Boolean(props.modelError) ||
+            props.newAPIGroupOptions.length === 0
+          }
+        >
           <RadioTower aria-hidden="true" />
           {props.pending ? "正在添加" : "添加渠道"}
         </Button>

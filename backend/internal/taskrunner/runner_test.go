@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 )
 
 func TestGoWithoutRunnerRejectsNilTask(t *testing.T) {
@@ -23,6 +25,84 @@ func TestGroupGoRejectsNilTask(t *testing.T) {
 	}
 	if err := Go(runner, nil); !errors.Is(err, ErrNilTask) {
 		t.Fatalf("Go(runner, nil) error = %v, want ErrNilTask", err)
+	}
+}
+
+func TestCancelTaskOnlyCancelsSelectedTask(t *testing.T) {
+	runner := New(context.Background())
+	t.Cleanup(runner.Cancel)
+	firstDone := make(chan error, 1)
+	secondDone := make(chan error, 1)
+	if err := runner.GoTask("first", func(ctx context.Context) { <-ctx.Done(); firstDone <- ctx.Err() }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.GoTask("second", func(ctx context.Context) { <-ctx.Done(); secondDone <- ctx.Err() }); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.CancelTask("first") {
+		t.Fatal("registered task was not cancelled")
+	}
+	select {
+	case err := <-firstDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled task error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled task did not stop")
+	}
+	select {
+	case <-secondDone:
+		t.Fatal("cancelling first task stopped second task")
+	default:
+	}
+	if runner.CancelTask("missing") {
+		t.Fatal("missing task reported as cancelled")
+	}
+}
+
+func TestGoTaskCarriesTaskIDInContext(t *testing.T) {
+	runner := New(context.Background())
+	t.Cleanup(runner.Cancel)
+	ready := make(chan string, 1)
+	if err := runner.GoTask("task-context", func(ctx context.Context) {
+		ready <- taskcontext.ID(ctx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case id := <-ready:
+		if id != "task-context" {
+			t.Fatalf("task context id=%q", id)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("task did not run")
+	}
+}
+
+func TestGoTaskRejectsEmptyAndDuplicateIDs(t *testing.T) {
+	runner := New(context.Background())
+	t.Cleanup(runner.Cancel)
+	if err := runner.GoTask(" ", func(context.Context) {}); !errors.Is(err, ErrTaskID) {
+		t.Fatalf("empty task ID error=%v", err)
+	}
+	release := make(chan struct{})
+	if err := runner.GoTask("same", func(context.Context) { <-release }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.GoTask("same", func(context.Context) {}); !errors.Is(err, ErrDuplicateTask) {
+		t.Fatalf("duplicate task ID error=%v", err)
+	}
+	close(release)
+}
+
+type goOnlyRunner struct{}
+
+func (goOnlyRunner) Go(func(context.Context)) error { return nil }
+
+func TestGoTaskRejectsRunnerWithoutCancellationSupport(t *testing.T) {
+	err := GoTask(goOnlyRunner{}, "task-1", func(context.Context) {})
+	if !errors.Is(err, ErrTaskCancellationUnsupported) {
+		t.Fatalf("GoTask error=%v, want ErrTaskCancellationUnsupported", err)
 	}
 }
 

@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -119,5 +120,45 @@ func TestManualPriorityPolicyCannotShrinkBelowOccupiedSlot(t *testing.T) {
 	section, ok := updated.AdvancedPolicy["manual_priority"].(map[string]any)
 	if !ok || section["reserved_max"] != int64(12) {
 		t.Fatalf("updated reserved range is missing: %#v", updated.AdvancedPolicy)
+	}
+}
+
+func TestManualPriorityReleaseRestoresPreviousSchedulingState(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(
+		id,name,schedulable,priority,load_factor,concurrency,paused,paused_reason,metadata_json,updated_at
+	) VALUES('41','alpha',0,20,'5',8,1,'人工暂停','{}','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AssignManualPriority(ctx, "41", 3, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET schedulable=1,priority=3,load_factor='100',
+		concurrency=100,paused=0,paused_reason=NULL WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	release, err := store.ManualPriorityRelease(ctx, "41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Schedulable == nil || *release.Schedulable || release.Paused == nil || !*release.Paused ||
+		release.PausedReason == nil || *release.PausedReason != "人工暂停" {
+		t.Fatalf("release did not preserve scheduling baseline: %#v", release)
+	}
+	if err := store.CommitManualPriorityRelease(ctx, release, "operator", AccountOperation{
+		OperationID: "manual-clear-1", OperationType: "account.manual_priority.clear", State: "succeeded",
+		Phase: "readback", Actor: "operator", RemoteConfirmed: true, ReadbackConfirmed: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var schedulable, paused int64
+	var pausedReason sql.NullString
+	if err := store.db.QueryRowContext(ctx, `SELECT schedulable,paused,paused_reason FROM accounts WHERE id='41'`).
+		Scan(&schedulable, &paused, &pausedReason); err != nil {
+		t.Fatal(err)
+	}
+	if schedulable != 0 || paused != 1 || !pausedReason.Valid || pausedReason.String != "人工暂停" {
+		t.Fatalf("schedulable=%d paused=%d reason=%#v", schedulable, paused, pausedReason)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -35,7 +36,7 @@ type Repository interface {
 	Account(context.Context, string) (*business.AccountDetail, error)
 	SetAccountScopeControl(context.Context, string, string, string) (business.PolicySnapshot, error)
 	CommitAccountControlReadback(context.Context, string, string, string, bool, business.AccountOperation) error
-	CommitAccountFieldsReadback(context.Context, string, *string, *int64, *string, *int64, *string, *string, *string, bool, *string, business.AccountOperation) error
+	CommitAccountFieldsReadback(context.Context, string, *string, *int64, *string, *int64, *bool, *string, *string, *string, bool, *string, business.AccountOperation) error
 	RecordAccountOperation(context.Context, business.AccountOperation) error
 	SaveAccountModels(context.Context, string, []string) error
 }
@@ -65,6 +66,8 @@ type FieldPatch struct {
 	LoadFactor          *string
 	ConcurrencyPresent  bool
 	Concurrency         *int64
+	SchedulablePresent  bool
+	Schedulable         *bool
 	MultiplierPresent   bool
 	Multiplier          *string
 	UpstreamHostPresent bool
@@ -79,7 +82,7 @@ type SettingsInput struct {
 	Priority    int64
 	LoadFactor  string
 	Concurrency int64
-	TestModel   *string
+	TestModels  []string
 	Paused      bool
 	Excluded    bool
 }
@@ -94,11 +97,12 @@ func (e *OperationError) Error() string { return e.Message }
 func (e *OperationError) RemoteWriteSucceeded() bool { return e.RemoteWritten }
 
 type Service struct {
-	targets    TargetStore
-	repository Repository
-	tasks      TaskStore
-	taskRunner taskrunner.Runner
-	timeout    time.Duration
+	targets        TargetStore
+	repository     Repository
+	tasks          TaskStore
+	taskRunner     taskrunner.Runner
+	timeout        time.Duration
+	modelSyncProbe modelSyncProbeRunner
 }
 
 func New(targets TargetStore, repository Repository, tasks TaskStore) *Service {
@@ -345,7 +349,7 @@ func (s *Service) syncFields(
 }
 
 func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch FieldPatch, actor string, allowReservedPriority bool) (map[string]any, error) {
-	if !patch.NamePresent && !patch.PriorityPresent && !patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.MultiplierPresent && !patch.NotesPresent {
+	if !patch.NamePresent && !patch.PriorityPresent && !patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.SchedulablePresent && !patch.MultiplierPresent && !patch.NotesPresent && !patch.BaseURLPresent && !patch.UpstreamHostPresent {
 		return nil, errors.New("至少提供一个需要同步的账号字段")
 	}
 	mode, local, err := s.localAccount(ctx, accountID)
@@ -354,12 +358,13 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 	}
 	if local.ManualPriority != nil && !allowReservedPriority {
 		multiplierOnly := patch.MultiplierPresent && !patch.NamePresent && !patch.PriorityPresent &&
-			!patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.NotesPresent
+			!patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.SchedulablePresent && !patch.NotesPresent &&
+			!patch.BaseURLPresent && !patch.UpstreamHostPresent
 		if !multiplierOnly || !local.ManualSyncBalanceMultiplier {
 			return nil, errors.New("账号处于人工优先位，仅允许按人工控制设置同步余额与倍率")
 		}
 	}
-	if mode == runtimepolicy.Monitoring && (!patch.MultiplierPresent || patch.NamePresent || patch.PriorityPresent || patch.LoadFactorPresent || patch.ConcurrencyPresent || patch.NotesPresent) {
+	if mode == runtimepolicy.Monitoring && (!patch.MultiplierPresent || patch.NamePresent || patch.PriorityPresent || patch.LoadFactorPresent || patch.ConcurrencyPresent || patch.SchedulablePresent || patch.NotesPresent || patch.BaseURLPresent || patch.UpstreamHostPresent) {
 		return nil, errors.New("监控模式只允许同步账号倍率")
 	}
 	if !runtimepolicy.Valid(mode) {
@@ -381,6 +386,7 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 	body := map[string]any{}
 	var normalizedName, normalizedLoadFactor, normalizedMultiplier, normalizedUpstreamHost, normalizedBaseURL *string
 	var normalizedPriority, normalizedConcurrency *int64
+	var normalizedSchedulable *bool
 	if patch.NamePresent {
 		if patch.Name == nil || strings.TrimSpace(*patch.Name) == "" {
 			return nil, errors.New("账号名称不能为空")
@@ -415,6 +421,14 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 		value := *patch.Concurrency
 		normalizedConcurrency = &value
 		body["concurrency"] = value
+	}
+	if patch.SchedulablePresent {
+		if patch.Schedulable == nil {
+			return nil, errors.New("可调度状态不能为 null；省略字段表示不修改")
+		}
+		value := *patch.Schedulable
+		normalizedSchedulable = &value
+		body["schedulable"] = value
 	}
 	if patch.MultiplierPresent {
 		if patch.Multiplier == nil {
@@ -471,7 +485,7 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 	if err != nil {
 		return nil, err
 	}
-	beforeValues, requested := fieldAuditValues(before, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedMultiplier, normalizedBaseURL, patch)
+	beforeValues, requested := fieldAuditValues(before, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedSchedulable, normalizedMultiplier, normalizedBaseURL, patch)
 	if normalizedUpstreamHost != nil {
 		beforeHost := local.UpstreamHost
 		if local.RecordedUpstreamHost != nil {
@@ -496,19 +510,19 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 		s.recordFailure(ctx, operation, "readback", err, true)
 		return nil, &OperationError{Message: "管理平台写入成功，但账号字段读回失败：" + err.Error(), RemoteWritten: true}
 	}
-	if err := verifyFieldReadback(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedMultiplier, normalizedBaseURL, patch); err != nil {
+	if err := verifyFieldReadback(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedSchedulable, normalizedMultiplier, normalizedBaseURL, patch); err != nil {
 		operation := fieldOperation(operationID, actor, accountID, remoteName(after, accountName), fieldName, beforeValues, requested, true, false)
 		s.recordFailure(ctx, operation, "readback", err, true)
 		return nil, &OperationError{Message: "管理平台写入成功，但" + err.Error(), RemoteWritten: true}
 	}
 	readbackConfirmed := true
 	accountName = remoteName(after, accountName)
-	effective := fieldEffectiveValues(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedMultiplier, normalizedBaseURL, patch)
+	effective := fieldEffectiveValues(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedSchedulable, normalizedMultiplier, normalizedBaseURL, patch)
 	if normalizedUpstreamHost != nil {
 		effective["upstream_host"] = *normalizedUpstreamHost
 	}
 	operation := fieldOperation(operationID, actor, accountID, remoteName(after, accountName), fieldName, beforeValues, effective, remoteWritten, readbackConfirmed)
-	if err := s.repository.CommitAccountFieldsReadback(ctx, accountID, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedMultiplier, normalizedUpstreamHost, normalizedBaseURL, patch.NotesPresent, patch.Notes, operation); err != nil {
+	if err := s.repository.CommitAccountFieldsReadback(ctx, accountID, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedSchedulable, normalizedMultiplier, normalizedUpstreamHost, normalizedBaseURL, patch.NotesPresent, patch.Notes, operation); err != nil {
 		return nil, &OperationError{Message: err.Error(), RemoteWritten: true}
 	}
 	return map[string]any{
@@ -576,12 +590,9 @@ func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input S
 	if input.Concurrency < 1 || input.Concurrency > 10_000_000 {
 		return taskstore.Task{}, errors.New("并发上限必须是 1 到 10000000 之间的整数")
 	}
-	if input.TestModel != nil {
-		model := strings.TrimSpace(*input.TestModel)
-		if len(model) > 256 {
-			return taskstore.Task{}, errors.New("探测模型长度不能超过 256")
-		}
-		input.TestModel = &model
+	input.TestModels, err = normalizeTestModels(input.TestModels)
+	if err != nil {
+		return taskstore.Task{}, err
 	}
 	if _, ok := s.repository.(accountSettingsRepository); !ok {
 		return taskstore.Task{}, errors.New("账号设置服务尚未就绪")
@@ -662,7 +673,7 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		PriorityPresent: true, Priority: &input.Priority, LoadFactorPresent: true, LoadFactor: &input.LoadFactor,
 		ConcurrencyPresent: true, Concurrency: &input.Concurrency,
 	}
-	if err := verifyFieldReadback(after, nil, &input.Priority, &input.LoadFactor, &input.Concurrency, nil, nil, patch); err != nil {
+	if err := verifyFieldReadback(after, nil, &input.Priority, &input.LoadFactor, &input.Concurrency, nil, nil, nil, patch); err != nil {
 		return nil, rollback(err)
 	}
 	schedulable, err := accountSchedulable(after)
@@ -676,15 +687,15 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	if err != nil {
 		return nil, rollback(err)
 	}
-	field := "priority,load_factor,concurrency,schedulable,test_model,excluded"
+	field := "priority,load_factor,concurrency,schedulable,test_models,excluded"
 	beforeValues := map[string]any{
 		"priority": rollbackBody["priority"], "load_factor": rollbackBody["load_factor"],
 		"concurrency": rollbackBody["concurrency"], "schedulable": rollbackBody["schedulable"],
-		"test_model": local.TestModel,
+		"test_models": local.TestModels,
 	}
 	afterValues := map[string]any{
 		"priority": input.Priority, "load_factor": input.LoadFactor, "concurrency": input.Concurrency,
-		"schedulable": !input.Paused, "test_model": input.TestModel, "excluded": input.Excluded,
+		"schedulable": !input.Paused, "test_models": input.TestModels, "excluded": input.Excluded,
 	}
 	operation := business.AccountOperation{
 		OperationID: operationID, OperationType: "account.settings", State: "succeeded", Phase: "readback",
@@ -694,7 +705,7 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	}
 	if err := repository.CommitAccountSettings(ctx, accountID, actor, business.AccountSettingsUpdate{
 		Priority: input.Priority, LoadFactor: input.LoadFactor, Concurrency: input.Concurrency,
-		TestModel: input.TestModel, Paused: input.Paused, Excluded: input.Excluded, Operation: operation,
+		TestModels: input.TestModels, Paused: input.Paused, Excluded: input.Excluded, Operation: operation,
 	}); err != nil {
 		return nil, rollback(fmt.Errorf("远端设置已写入，但本地原子提交失败：%w", err))
 	}
@@ -702,6 +713,30 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		"operation_id": operationID, "account_id": accountID, "before": beforeValues,
 		"after": afterValues, "remote_write": true, "readback_confirmed": true,
 	}, nil
+}
+
+func normalizeTestModels(models []string) ([]string, error) {
+	if len(models) > 20 {
+		return nil, errors.New("账号探测模型不能超过 20 个")
+	}
+	result := make([]string, 0, len(models))
+	seen := map[string]struct{}{}
+	for _, raw := range models {
+		model := strings.TrimSpace(raw)
+		if model == "" {
+			return nil, errors.New("探测模型不能为空")
+		}
+		if utf8.RuneCountInString(model) > 256 {
+			return nil, errors.New("探测模型长度不能超过 256")
+		}
+		key := strings.ToLower(model)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, model)
+	}
+	return result, nil
 }
 
 func accountSettingsRollbackBody(account map[string]any) (map[string]any, error) {
@@ -727,7 +762,7 @@ func accountSettingsRollbackBody(account map[string]any) (map[string]any, error)
 	}, nil
 }
 
-func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
+func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, priority int64, loadFactor string, concurrency int64, schedulable bool, syncBalanceMultiplier bool, actor string) (taskstore.Task, error) {
 	if !stableID(accountID) {
 		return taskstore.Task{}, errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -761,7 +796,7 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 		return taskstore.Task{}, err
 	}
 	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority", "人工优先位设置已排队", func(run context.Context) (map[string]any, error) {
-		return s.setManualPriority(targetguard.Expect(run, expectedTarget), manualRepository, config, accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
+		return s.setManualPriority(targetguard.Expect(run, expectedTarget), manualRepository, config, accountID, priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier, actor)
 	})
 }
 
@@ -773,6 +808,7 @@ func (s *Service) setManualPriority(
 	priority int64,
 	loadFactor string,
 	concurrency int64,
+	schedulable bool,
 	syncBalanceMultiplier bool,
 	actor string,
 ) (map[string]any, error) {
@@ -811,12 +847,15 @@ func (s *Service) setManualPriority(
 		PriorityPresent: true, Priority: &assignment.Priority,
 		LoadFactorPresent: true, LoadFactor: &loadFactor,
 		ConcurrencyPresent: true, Concurrency: &concurrency,
+		SchedulablePresent: true, Schedulable: &schedulable,
 	}
 	result, err := s.syncFieldsLocked(ctx, accountID, patch, actor, true)
 	if err != nil {
 		var operationError *OperationError
 		if !errors.As(err, &operationError) || !operationError.RemoteWritten {
-			rollbackErr := rollbackManualPriority(ctx, repository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
+			rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+			rollbackErr := rollbackManualPriority(rollbackCtx, repository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
+			cancelRollback()
 			if rollbackErr != nil {
 				return nil, fmt.Errorf("%w；人工优先位回滚失败：%v", err, rollbackErr)
 			}
@@ -824,6 +863,7 @@ func (s *Service) setManualPriority(
 		return nil, err
 	}
 	result["manual_priority"] = assignment.Priority
+	result["schedulable"] = schedulable
 	result["sync_balance_multiplier"] = assignment.SyncBalanceMultiplier
 	return result, nil
 }
@@ -864,6 +904,13 @@ func (s *Service) clearManualPriority(ctx context.Context, accountID, actor stri
 }
 
 func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, actor string) (map[string]any, error) {
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if mode != runtimepolicy.Full {
+		return nil, errors.New("取消人工优先位需要完全模式")
+	}
 	repository, ok := s.repository.(manualPriorityRepository)
 	if !ok {
 		return nil, errors.New("人工优先位服务尚未就绪")
@@ -894,6 +941,9 @@ func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, acto
 		"concurrency": release.Concurrency,
 		"load_factor": json.Number("0"),
 	}
+	if release.Schedulable != nil {
+		body["schedulable"] = *release.Schedulable
+	}
 	if release.LoadFactor != nil {
 		body["load_factor"] = json.Number(*release.LoadFactor)
 	}
@@ -901,6 +951,9 @@ func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, acto
 		"priority":    release.Priority,
 		"concurrency": release.Concurrency,
 		"load_factor": release.LoadFactor,
+	}
+	if release.Schedulable != nil {
+		expected["schedulable"] = *release.Schedulable
 	}
 	if _, err := client.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
 		operation := manualPriorityClearOperation(operationID, actor, accountID, release.AccountName, beforeValues, expected, false, false)
@@ -960,7 +1013,7 @@ func (s *Service) enqueue(
 		return taskstore.Task{}, err
 	}
 	queuedTask := task
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		task := queuedTask
 		run, cancel := context.WithTimeout(parent, s.timeout)
 		defer cancel()
@@ -1089,6 +1142,12 @@ func verifyManualPriorityRelease(after map[string]any, release business.ManualPr
 	if err != nil || !sameOptionalText(loadFactor, release.LoadFactor) {
 		return errors.New("账号原负载因子读回不一致")
 	}
+	if release.Schedulable != nil {
+		schedulable, err := accountSchedulable(after)
+		if err != nil || schedulable != *release.Schedulable {
+			return errors.New("账号原调度状态读回不一致")
+		}
+	}
 	return nil
 }
 
@@ -1120,12 +1179,13 @@ func manualPriorityValues(account map[string]any) map[string]any {
 		"priority":    account["priority"],
 		"load_factor": account["load_factor"],
 		"concurrency": account["concurrency"],
+		"schedulable": account["schedulable"],
 	}
 	return result
 }
 
 func manualPriorityClearOperation(id, actor, accountID, name string, before, after any, remote, readback bool) business.AccountOperation {
-	field := "priority,load_factor,concurrency"
+	field := "priority,load_factor,concurrency,schedulable"
 	phase := "readback"
 	if remote && !readback {
 		phase = "remote-write"
@@ -1252,7 +1312,7 @@ func remoteName(value map[string]any, fallback string) string {
 	return fallback
 }
 
-func fieldAuditValues(before map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, multiplier, baseURL *string, patch FieldPatch) (map[string]any, map[string]any) {
+func fieldAuditValues(before map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, schedulable *bool, multiplier, baseURL *string, patch FieldPatch) (map[string]any, map[string]any) {
 	previous, requested := map[string]any{}, map[string]any{}
 	if name != nil {
 		previous["name"], requested["name"] = before["name"], *name
@@ -1265,6 +1325,9 @@ func fieldAuditValues(before map[string]any, name *string, priority *int64, load
 	}
 	if concurrency != nil {
 		previous["concurrency"], requested["concurrency"] = before["concurrency"], *concurrency
+	}
+	if schedulable != nil {
+		previous["schedulable"], requested["schedulable"] = before["schedulable"], *schedulable
 	}
 	if multiplier != nil {
 		previous["rate_multiplier"], _ = firstPresent(before, "rate_multiplier", "multiplier")
@@ -1287,7 +1350,7 @@ func fieldAuditValues(before map[string]any, name *string, priority *int64, load
 	return previous, requested
 }
 
-func verifyFieldReadback(after map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, multiplier, baseURL *string, patch FieldPatch) error {
+func verifyFieldReadback(after map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, schedulable *bool, multiplier, baseURL *string, patch FieldPatch) error {
 	if name != nil {
 		value, ok := after["name"].(string)
 		if !ok || value != *name {
@@ -1312,6 +1375,12 @@ func verifyFieldReadback(after map[string]any, name *string, priority *int64, lo
 			return errors.New("账号并发上限读回不一致")
 		}
 	}
+	if schedulable != nil {
+		value, err := accountSchedulable(after)
+		if err != nil || value != *schedulable {
+			return errors.New("账号可调度状态读回不一致")
+		}
+	}
 	if multiplier != nil {
 		raw, present := firstPresent(after, "rate_multiplier", "multiplier")
 		if !present || raw == nil {
@@ -1334,7 +1403,7 @@ func verifyFieldReadback(after map[string]any, name *string, priority *int64, lo
 	return nil
 }
 
-func fieldEffectiveValues(after map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, multiplier, baseURL *string, patch FieldPatch) map[string]any {
+func fieldEffectiveValues(after map[string]any, name *string, priority *int64, loadFactor *string, concurrency *int64, schedulable *bool, multiplier, baseURL *string, patch FieldPatch) map[string]any {
 	result := map[string]any{}
 	if name != nil {
 		result["name"] = after["name"]
@@ -1347,6 +1416,9 @@ func fieldEffectiveValues(after map[string]any, name *string, priority *int64, l
 	}
 	if concurrency != nil {
 		result["concurrency"] = after["concurrency"]
+	}
+	if schedulable != nil {
+		result["schedulable"] = *schedulable
 	}
 	if multiplier != nil {
 		result["rate_multiplier"], _ = firstPresent(after, "rate_multiplier", "multiplier")

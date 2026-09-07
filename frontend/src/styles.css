@@ -10,13 +10,6 @@ body:has(#root [data-slot="sidebar-wrapper"]),
   overflow: hidden;
 }
 
-/* Base UI marks the body while a sheet is open. The imported New API base
- * style relaxes body overflow for that state, so restore the console's
- * viewport boundary and prevent a second scrollbar beside detail sheets. */
-body[data-scroll-locked]:has(#root [data-slot="sidebar-wrapper"]) {
-  overflow: hidden !important;
-}
-
 /* Keep panel headings aligned with the New API card header. Rows start directly
  * below the divider; adding an extra first-row margin makes dense tables look
  * disconnected and creates the excessive bottom whitespace seen in compact

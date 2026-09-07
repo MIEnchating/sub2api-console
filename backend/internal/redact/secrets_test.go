@@ -17,3 +17,25 @@ func TestSecretsRedactsStructuredAndBearerCredentials(t *testing.T) {
 		t.Fatalf("redaction labels were lost: %q", result)
 	}
 }
+
+func TestSecretsRedactsCompleteCredentialValues(t *testing.T) {
+	for _, input := range []string{
+		`Authorization: Bearer sensitive-token`,
+		`Authorization: Basic sensitive-token`,
+		`{"password":"first sensitive-token last"}`,
+		`password='first sensitive-token last'`,
+		`{"password":"escaped \" sensitive-token"}`,
+		`{"admin_key":"sensitive-token"}`,
+		`{"password":"sensitive-token`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			result := Secrets(input)
+			if strings.Contains(result, "sensitive-token") {
+				t.Fatalf("credential remained in diagnostic: %q", result)
+			}
+			if !strings.Contains(result, "<已隐藏>") {
+				t.Fatalf("redaction marker missing: %q", result)
+			}
+		})
+	}
+}

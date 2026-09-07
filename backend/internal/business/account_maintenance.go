@@ -19,6 +19,7 @@ type BoundAccountMaintenance struct {
 	UpstreamHost          string `json:"upstream_host"`
 	SourceAuthHost        string `json:"source_auth_host"`
 	UpstreamType          string `json:"upstream_type"`
+	Platform              string `json:"platform"`
 	UpstreamKeyID         string `json:"upstream_key_id"`
 	UpstreamGroupID       string `json:"upstream_group_id"`
 	RechargeRate          string `json:"recharge_rate"`
@@ -231,7 +232,7 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 		CASE WHEN NULLIF(TRIM(b.upstream_rate),'') IS NOT NULL THEN 'account_observation'
 			WHEN NULLIF(TRIM(source_group_catalog.raw_rate),'') IS NOT NULL
 				OR NULLIF(TRIM(primary_group_catalog.raw_rate),'') IS NOT NULL THEN 'group_catalog' ELSE '' END,
-		u.base_url,u.metadata_json,
+		u.base_url,u.metadata_json,a.metadata_json,
 		EXISTS(SELECT 1 FROM operation_audit oa WHERE oa.object_id=a.id AND oa.operation_type='account.onboarding' AND oa.state='succeeded'),
 		m.account_id IS NOT NULL,COALESCE(m.sync_balance_multiplier,0)
 		FROM accounts a JOIN bindings b ON b.local_account_id=a.id JOIN binding_identities bi ON bi.binding_id=b.id
@@ -252,10 +253,10 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 	result := make([]BoundAccountMaintenance, 0)
 	for rows.Next() {
 		var item BoundAccountMaintenance
-		var multiplier, baseURL, metadataRaw string
+		var multiplier, baseURL, metadataRaw, accountMetadataRaw string
 		if err := rows.Scan(&item.AccountID, &item.AccountName, &multiplier, &item.UpstreamHost, &item.SourceAuthHost, &item.UpstreamType,
 			&item.UpstreamKeyID, &item.UpstreamGroupID, &item.RechargeRate, &item.KnownRawRate, &item.KnownRawRateSource, &baseURL, &metadataRaw,
-			&item.ConsoleOnboarded, &item.ManualPriority, &item.SyncBalanceMultiplier); err != nil {
+			&accountMetadataRaw, &item.ConsoleOnboarded, &item.ManualPriority, &item.SyncBalanceMultiplier); err != nil {
 			return nil, err
 		}
 		if len(requested) > 0 {
@@ -270,6 +271,13 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 			}
 			return nil, fmt.Errorf("上游 %s 的元数据记录损坏：%w", item.UpstreamHost, err)
 		}
+		accountMetadata := map[string]any{}
+		if err := json.Unmarshal([]byte(accountMetadataRaw), &accountMetadata); err != nil || accountMetadata == nil {
+			if err == nil {
+				err = errors.New("元数据必须是对象")
+			}
+			return nil, fmt.Errorf("账号 %s 的元数据记录损坏：%w", item.AccountID, err)
+		}
 		siteName := strings.TrimSpace(stringValue(metadata["site_name"]))
 		if siteName == "" {
 			siteName = strings.TrimSpace(stringValue(metadata["system_name"]))
@@ -279,6 +287,7 @@ func (s *Store) BoundAccountsForMaintenance(ctx context.Context, requestedIDs []
 			accountBaseURL = baseURL
 		}
 		item.CurrentMultiplier = multiplier
+		item.Platform = strings.ToLower(strings.TrimSpace(stringValue(accountMetadata["platform"])))
 		item.NamingSiteName, item.NamingBaseURL = siteName, accountBaseURL
 		item.ExpectedName = naming.AccountName(siteName, accountBaseURL, multiplier)
 		result = append(result, item)

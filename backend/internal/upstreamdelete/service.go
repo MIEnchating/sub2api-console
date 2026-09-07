@@ -101,7 +101,7 @@ func (s *Service) Enqueue(ctx context.Context, host string, expected []string, a
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(targetguard.Expect(parent, expectedTarget), task, preview.Host, append([]string{}, expected...), actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -164,6 +164,13 @@ func (s *Service) Delete(ctx context.Context, host string, expected []string, ac
 		}
 	}()
 	ctx = guardedCtx
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if mode != runtimepolicy.Full {
+		return Result{}, errors.New("上游删除只能在完全模式执行")
+	}
 	preview, err = s.repository.UpstreamDeletePreview(ctx, preview.Host)
 	if err != nil {
 		return Result{}, err
@@ -302,6 +309,10 @@ func deleteAccounts(ctx context.Context, client accountDeleter, accountIDs []str
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if err := ctx.Err(); err != nil {
+					result[index] = err
+					return
+				}
 				outcome, err := client.DeleteAccountWithVerification(ctx, accountIDs[index], verification)
 				if err == nil && verification {
 					if confirmed, _ := outcome["confirmed_absent"].(bool); !confirmed {

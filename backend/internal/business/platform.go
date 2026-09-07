@@ -11,7 +11,6 @@ var compositeAccountPlatforms = map[string]struct{}{
 	"kimi":        {},
 	"zhipu":       {},
 	"deepseek":    {},
-	"opencode":    {},
 }
 
 func NormalizePlatform(value string) string {
@@ -35,7 +34,7 @@ func NormalizePlatform(value string) string {
 func AccountPlatformCanJoinGroup(accountPlatform, groupPlatform string) bool {
 	accountPlatform = NormalizePlatform(accountPlatform)
 	groupPlatform = NormalizePlatform(groupPlatform)
-	if accountPlatform == "" || groupPlatform == "" {
+	if _, supported := compositeAccountPlatforms[accountPlatform]; !supported || groupPlatform == "" {
 		return false
 	}
 	if accountPlatform == groupPlatform {

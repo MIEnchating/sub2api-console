@@ -32,9 +32,11 @@ import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { Badge } from "@/components/ui/badge";
@@ -297,11 +299,9 @@ export function GroupAccountCostDetails(props: { groupID: string; decisions: Pri
           </TableHeader>
           <TableBody>
             {pagination.visibleItems.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={3} className="text-muted-foreground h-24 text-center">
-                  {search ? "没有匹配的账号" : "该分组当前没有账号"}
-                </TableCell>
-              </TableRow>
+              <TableEmptyState columns={3}>
+                {search ? "没有匹配的账号" : "该分组当前没有账号"}
+              </TableEmptyState>
             ) : (
               pagination.visibleItems.map((decision) => {
                 const cost = accountCostValue(decision);
@@ -440,8 +440,9 @@ function pricingDecisionReason(
   config: PricingConfig,
 ) {
   if (decision.skipped) return plainPricingIssue(decision.reason);
+  if (decision.reason?.includes("未达到目标盈利比例")) return decision.reason;
   if (decision.reason?.includes("没有满足盈利比例")) {
-    return `账号成本 ${decision.cost_multiplier} 已高于本互换组所有分组可接受的成本；本次保留当前分组。请降低目标盈利比例或提高候选分组售价。`;
+    return `${decision.reason}。请提高候选分组售价或降低账号成本。`;
   }
   const basis = pricingDecisionBasis(decision, groups, config);
   if (!decision.changed) {
@@ -543,21 +544,39 @@ export function pricingPreviewDecisions(
     });
     const desired = decision.current_group_ids.filter((groupID) => !setByGroup.has(groupID));
     const eligible: string[] = [];
-    let reason: string | null = null;
+    const reasons: string[] = [];
     for (const setIndex of [...activeSets].sort((left, right) => left - right)) {
       const compatible: Array<{ group: PricingGroup; rate: number }> = [];
       for (const groupID of config.exchange_group_sets[setIndex] ?? []) {
         const group = byID.get(groupID);
         const rate = Number(group?.rate_multiplier);
-        if (!group?.available || group.platform !== decision.platform || !Number.isFinite(rate))
+        if (
+          !group?.available ||
+          group.platform !== decision.platform ||
+          !Number.isFinite(rate) ||
+          rate <= 0
+        )
           continue;
         compatible.push({ group, rate });
       }
-      const chosen = compatible
+      let chosen = compatible
         .filter(({ rate }) => cost <= acceptableAccountCost(rate, config.profit_margin))
         .sort(
           (left, right) => left.rate - right.rate || Number(left.group.id) - Number(right.group.id),
         )[0];
+      if (!chosen) {
+        chosen = compatible
+          .filter(({ rate }) => cost <= rate)
+          .sort(
+            (left, right) =>
+              right.rate - left.rate || Number(left.group.id) - Number(right.group.id),
+          )[0];
+        if (chosen) {
+          reasons.push(
+            `${chosen.group.name} 未达到目标盈利比例，已选择本互换组内售价最高且能覆盖成本的分组；请降低目标盈利比例或提高候选分组售价`,
+          );
+        }
+      }
       let chosenGroup = chosen?.group;
       if (!chosenGroup) {
         chosenGroup = (currentBySet.get(setIndex) ?? [])
@@ -565,7 +584,9 @@ export function pricingPreviewDecisions(
           .filter((group): group is PricingGroup => Boolean(group))
           .sort((left, right) => Number(left.id) - Number(right.id))[0];
         if (compatible.length > 0) {
-          reason = "没有满足盈利比例的可用分组，保留当前分组";
+          reasons.push(
+            `互换组 ${setIndex + 1} 没有满足盈利比例的可用分组，且所有候选分组售价均低于账号成本，保留当前分组`,
+          );
         }
       }
       if (chosenGroup) {
@@ -580,7 +601,7 @@ export function pricingPreviewDecisions(
       eligible_groups: eligible,
       changed: decision.current_group_ids.join(",") !== unique.join(","),
       skipped: false,
-      reason,
+      reason: reasons.length > 0 ? reasons.join("；") : null,
     };
   });
 }
@@ -836,11 +857,9 @@ function PricingCatalogTable(props: { groups: PricingGroup[]; decisions: Pricing
           </TableHeader>
           <TableBody>
             {pagination.visibleItems.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-muted-foreground h-24 text-center">
-                  {search ? "没有匹配的分组" : "当前没有价格分组"}
-                </TableCell>
-              </TableRow>
+              <TableEmptyState columns={5}>
+                {search ? "没有匹配的分组" : "当前没有价格分组"}
+              </TableEmptyState>
             ) : (
               pagination.visibleItems.map((group) => (
                 <TableRow key={group.id}>
@@ -1293,6 +1312,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   const [draft, setDraft] = useState<PricingConfigDraft | null>(null);
   const [taskID, setTaskID] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [confirmApply, setConfirmApply] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [backupDialog, setBackupDialog] = useState<"create" | "restore" | null>(null);
   const [backupName, setBackupName] = useState("");
@@ -1359,6 +1379,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       );
     },
     onSuccess: (queued) => {
+      setPreviewOpen(false);
+      setConfirmApply(false);
       setTaskID(queued.id);
       queryClient.setQueryData(["task", queued.id], queued);
       toast.success("价格分组调整已开始");
@@ -1482,6 +1504,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         }
         action={
           <PageActions data-testid="pricing-page-actions">
+            {running && taskID ? <TaskCancelButton taskId={taskID} /> : null}
             <RefreshButton
               pending={snapshot.isFetching}
               ariaLabel="刷新价格数据"
@@ -1537,7 +1560,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   <Save /> {save.isPending ? "保存中" : "保存配置"}
                 </Button>
                 <Button
-                  onClick={() => apply.mutate()}
+                  onClick={() => {
+                    setConfirmApply(true);
+                    setPreviewOpen(true);
+                  }}
                   disabled={!current?.enabled || !valid || running || apply.isPending}
                 >
                   <Play /> {running ? "执行中" : "立即调整"}
@@ -1568,7 +1594,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 <div className="min-w-0">
                   <CardTitle>自动价格分组</CardTitle>
                   <CardDescription>
-                    设置盈利目标和自动执行参数，执行参数不参与售价计算；每个互换组只选择一个满足利润且售价最低的分组。
+                    设置盈利目标和自动执行参数，执行参数不参与售价计算。每个互换组优先选择达到目标盈利比例且售价最低的分组；均未达标时选择售价最高且能覆盖成本的分组，均亏损时保留当前分组。
                   </CardDescription>
                 </div>
               </div>
@@ -1740,15 +1766,29 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         <PricingLoading />
       )}
       {previewConfig && snapshot.data ? (
-        <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <Dialog
+          open={previewOpen}
+          onOpenChange={(open) => {
+            if (apply.isPending) return;
+            setPreviewOpen(open);
+            if (!open) setConfirmApply(false);
+          }}
+        >
           <DialogContent
             width="table"
             height="tall"
-            className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+            className={
+              confirmApply
+                ? "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+                : "grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
+            }
           >
             <DialogHeader>
-              <DialogTitle>账号分组调整明细</DialogTitle>
+              <DialogTitle>{confirmApply ? "确认价格分组调整" : "账号分组调整明细"}</DialogTitle>
               <DialogDescription>
+                {confirmApply
+                  ? `预计调整 ${previewDecisions.filter((decision) => decision.changed && !decision.skipped).length} 个账号；确认后将保存当前规则并批量改写账号分组。`
+                  : ""}
                 按目标盈利比例 {percent(previewConfig.profit_margin)} （利润 ÷
                 账号成本）计算。默认只显示需要调整的账号，完整公式可在每行的计算明细中查看。
               </DialogDescription>
@@ -1760,6 +1800,26 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 config={previewConfig}
               />
             </DialogBody>
+            {confirmApply ? (
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  disabled={apply.isPending}
+                  onClick={() => {
+                    setPreviewOpen(false);
+                    setConfirmApply(false);
+                  }}
+                >
+                  取消
+                </Button>
+                <Button
+                  disabled={apply.isPending || running || !current?.enabled || !valid}
+                  onClick={() => apply.mutate()}
+                >
+                  {apply.isPending ? "正在提交" : "确认调整"}
+                </Button>
+              </DialogFooter>
+            ) : null}
           </DialogContent>
         </Dialog>
       ) : null}

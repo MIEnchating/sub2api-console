@@ -8,8 +8,10 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/url"
 	"sort"
 	"strconv"
@@ -47,6 +49,27 @@ type RuntimeSettings struct {
 type AccountDefaultsSettings struct {
 	Concurrency int64 `json:"concurrency"`
 	Priority    int64 `json:"priority"`
+}
+
+type AccountCreationPolicy struct {
+	Models                   []string `json:"models"`
+	Concurrency              int64    `json:"concurrency"`
+	LoadFactor               *string  `json:"load_factor"`
+	Priority                 int64    `json:"priority"`
+	PoolMode                 bool     `json:"pool_mode"`
+	PoolModeRetryCount       int      `json:"pool_mode_retry_count"`
+	PoolModeRetryStatusCodes []int    `json:"pool_mode_retry_status_codes"`
+}
+
+type AccountCreationGroupSettings struct {
+	GroupID string `json:"group_id"`
+	AccountCreationPolicy
+}
+
+type AccountCreationSettings struct {
+	Default             AccountCreationPolicy          `json:"default"`
+	Groups              []AccountCreationGroupSettings `json:"groups"`
+	PlatformProbeModels map[string]string              `json:"platform_probe_models"`
 }
 
 type NotificationStatus struct {
@@ -105,6 +128,9 @@ func (s *Store) Close() error {
 func (s *Store) ensureSchema(ctx context.Context) error {
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS model_pricing_cache (
+			cache_key TEXT PRIMARY KEY, content TEXT NOT NULL, fetched_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS auth_records (
 			host TEXT PRIMARY KEY, base_url TEXT NOT NULL, upstream_type TEXT NOT NULL,
 			auth_mode TEXT NOT NULL, access_token TEXT, refresh_token TEXT, admin_key TEXT,
@@ -234,30 +260,34 @@ func (s *Store) AccountDefaults(ctx context.Context) (AccountDefaultsSettings, e
 }
 
 func (s *Store) ConfigureAccountDefaults(ctx context.Context, concurrency, priority int64) (AccountDefaultsSettings, error) {
-	settings := AccountDefaultsSettings{Concurrency: concurrency, Priority: priority}
-	if err := validateAccountDefaults(settings); err != nil {
+	defaults := AccountDefaultsSettings{Concurrency: concurrency, Priority: priority}
+	if err := validateAccountDefaults(defaults); err != nil {
 		return AccountDefaultsSettings{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	settings, err := s.AccountCreationSettings(ctx)
 	if err != nil {
 		return AccountDefaultsSettings{}, err
 	}
-	defer tx.Rollback()
-	for key, value := range map[string]int64{
-		"accounts.default_concurrency": concurrency,
-		"accounts.default_priority":    priority,
-	} {
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, strconv.FormatInt(value, 10)); err != nil {
-			return AccountDefaultsSettings{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
+	settings.Default.Concurrency = concurrency
+	settings.Default.Priority = priority
+	if _, err := s.ConfigureAccountCreationSettings(ctx, settings); err != nil {
 		return AccountDefaultsSettings{}, err
 	}
-	return settings, nil
+	return defaults, nil
 }
 
 func accountDefaultsFromValues(values map[string]string) (AccountDefaultsSettings, error) {
+	settings, err := accountCreationSettingsFromValues(values)
+	if err != nil {
+		return AccountDefaultsSettings{}, err
+	}
+	return AccountDefaultsSettings{
+		Concurrency: settings.Default.Concurrency,
+		Priority:    settings.Default.Priority,
+	}, nil
+}
+
+func legacyAccountDefaultsFromValues(values map[string]string) (AccountDefaultsSettings, error) {
 	result := AccountDefaultsSettings{Concurrency: 10, Priority: 1}
 	for key, target := range map[string]*int64{
 		"accounts.default_concurrency": &result.Concurrency,
@@ -277,6 +307,220 @@ func accountDefaultsFromValues(values map[string]string) (AccountDefaultsSetting
 		return AccountDefaultsSettings{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) AccountCreationSettings(ctx context.Context) (AccountCreationSettings, error) {
+	values, err := s.settings(ctx)
+	if err != nil {
+		return AccountCreationSettings{}, err
+	}
+	return accountCreationSettingsFromValues(values)
+}
+
+func (s *Store) ConfigureAccountCreationSettings(ctx context.Context, settings AccountCreationSettings) (AccountCreationSettings, error) {
+	normalized, err := normalizeAccountCreationSettings(settings)
+	if err != nil {
+		return AccountCreationSettings{}, err
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return AccountCreationSettings{}, errors.New("账号创建设置编码失败")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AccountCreationSettings{}, err
+	}
+	defer tx.Rollback()
+	values := map[string]string{
+		"accounts.creation_settings":   string(encoded),
+		"accounts.default_concurrency": strconv.FormatInt(normalized.Default.Concurrency, 10),
+		"accounts.default_priority":    strconv.FormatInt(normalized.Default.Priority, 10),
+	}
+	for key, value := range values {
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)`, key, value); err != nil {
+			return AccountCreationSettings{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return AccountCreationSettings{}, err
+	}
+	return normalized, nil
+}
+
+func accountCreationSettingsFromValues(values map[string]string) (AccountCreationSettings, error) {
+	legacy, err := legacyAccountDefaultsFromValues(values)
+	if err != nil {
+		return AccountCreationSettings{}, err
+	}
+	settings := AccountCreationSettings{
+		Default:             defaultAccountCreationPolicy(legacy),
+		Groups:              []AccountCreationGroupSettings{},
+		PlatformProbeModels: map[string]string{},
+	}
+	raw := strings.TrimSpace(values["accounts.creation_settings"])
+	if raw == "" {
+		return settings, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		return AccountCreationSettings{}, errors.New("accounts.creation_settings 配置无效")
+	}
+	return normalizeAccountCreationSettings(settings)
+}
+
+func defaultAccountCreationPolicy(defaults AccountDefaultsSettings) AccountCreationPolicy {
+	return AccountCreationPolicy{
+		Models:                   []string{},
+		Concurrency:              defaults.Concurrency,
+		Priority:                 defaults.Priority,
+		PoolModeRetryCount:       3,
+		PoolModeRetryStatusCodes: []int{401, 403, 429},
+	}
+}
+
+func ResolveAccountCreationPolicy(settings AccountCreationSettings, groupID string) AccountCreationPolicy {
+	groupID = strings.TrimSpace(groupID)
+	for _, group := range settings.Groups {
+		if group.GroupID == groupID {
+			return group.AccountCreationPolicy
+		}
+	}
+	return settings.Default
+}
+
+func normalizeAccountCreationSettings(settings AccountCreationSettings) (AccountCreationSettings, error) {
+	defaultPolicy, err := normalizeAccountCreationPolicy(settings.Default)
+	if err != nil {
+		return AccountCreationSettings{}, fmt.Errorf("默认账号设置无效：%w", err)
+	}
+	probeModels, err := normalizePlatformProbeModels(settings.PlatformProbeModels)
+	if err != nil {
+		return AccountCreationSettings{}, fmt.Errorf("平台默认探活模型无效：%w", err)
+	}
+	result := AccountCreationSettings{
+		Default: defaultPolicy, Groups: []AccountCreationGroupSettings{}, PlatformProbeModels: probeModels,
+	}
+	if len(settings.Groups) > 10000 {
+		return AccountCreationSettings{}, errors.New("分组账号设置不能超过 10000 项")
+	}
+	seen := make(map[string]struct{}, len(settings.Groups))
+	for _, group := range settings.Groups {
+		groupID := strings.TrimSpace(group.GroupID)
+		parsed, parseErr := strconv.ParseUint(groupID, 10, 64)
+		if parseErr != nil || parsed == 0 || strconv.FormatUint(parsed, 10) != groupID {
+			return AccountCreationSettings{}, errors.New("分组账号设置必须使用稳定正整数 ID")
+		}
+		if _, duplicate := seen[groupID]; duplicate {
+			return AccountCreationSettings{}, fmt.Errorf("分组 %s 的账号设置重复", groupID)
+		}
+		seen[groupID] = struct{}{}
+		policy, policyErr := normalizeAccountCreationPolicy(group.AccountCreationPolicy)
+		if policyErr != nil {
+			return AccountCreationSettings{}, fmt.Errorf("分组 %s 的账号设置无效：%w", groupID, policyErr)
+		}
+		result.Groups = append(result.Groups, AccountCreationGroupSettings{
+			GroupID: groupID, AccountCreationPolicy: policy,
+		})
+	}
+	sort.Slice(result.Groups, func(left, right int) bool {
+		leftID, _ := strconv.ParseUint(result.Groups[left].GroupID, 10, 64)
+		rightID, _ := strconv.ParseUint(result.Groups[right].GroupID, 10, 64)
+		return leftID < rightID
+	})
+	return result, nil
+}
+
+func normalizePlatformProbeModels(models map[string]string) (map[string]string, error) {
+	if len(models) > 32 {
+		return nil, errors.New("最多配置 32 个平台")
+	}
+	result := make(map[string]string, len(models))
+	for rawPlatform, rawModel := range models {
+		platform := strings.ToLower(strings.TrimSpace(rawPlatform))
+		model := strings.TrimSpace(rawModel)
+		if platform == "" || utf8.RuneCountInString(platform) > 64 {
+			return nil, errors.New("平台标识长度必须在 1 到 64 之间")
+		}
+		if model == "" || utf8.RuneCountInString(model) > 256 {
+			return nil, fmt.Errorf("平台 %s 的模型名称长度必须在 1 到 256 之间", platform)
+		}
+		if _, duplicate := result[platform]; duplicate {
+			return nil, fmt.Errorf("平台 %s 重复", platform)
+		}
+		result[platform] = model
+	}
+	return result, nil
+}
+
+func normalizeAccountCreationPolicy(policy AccountCreationPolicy) (AccountCreationPolicy, error) {
+	if err := validateAccountDefaults(AccountDefaultsSettings{Concurrency: policy.Concurrency, Priority: policy.Priority}); err != nil {
+		return AccountCreationPolicy{}, err
+	}
+	result := policy
+	result.Models = make([]string, 0, len(policy.Models))
+	seenModels := make(map[string]struct{}, len(policy.Models))
+	if len(policy.Models) > 100 {
+		return AccountCreationPolicy{}, errors.New("模型最多配置 100 个")
+	}
+	for _, model := range policy.Models {
+		model = strings.TrimSpace(model)
+		if model == "" || utf8.RuneCountInString(model) > 256 {
+			return AccountCreationPolicy{}, errors.New("模型名称长度必须在 1 到 256 之间")
+		}
+		if _, duplicate := seenModels[model]; duplicate {
+			continue
+		}
+		seenModels[model] = struct{}{}
+		result.Models = append(result.Models, model)
+	}
+	sort.Strings(result.Models)
+	if policy.LoadFactor != nil {
+		loadFactor := strings.TrimSpace(*policy.LoadFactor)
+		if len(loadFactor) > 128 || !isUnsignedDecimal(loadFactor) {
+			return AccountCreationPolicy{}, errors.New("负载因子必须是大于或等于 1 的十进制数")
+		}
+		value, valid := new(big.Rat).SetString(loadFactor)
+		if !valid || value.Cmp(big.NewRat(1, 1)) < 0 {
+			return AccountCreationPolicy{}, errors.New("负载因子必须是大于或等于 1 的十进制数")
+		}
+		result.LoadFactor = &loadFactor
+	}
+	if policy.PoolModeRetryCount < 0 || policy.PoolModeRetryCount > 10 {
+		return AccountCreationPolicy{}, errors.New("池模式重试次数必须在 0 到 10 之间")
+	}
+	if len(policy.PoolModeRetryStatusCodes) > 32 {
+		return AccountCreationPolicy{}, errors.New("池模式重试状态码最多配置 32 个")
+	}
+	result.PoolModeRetryStatusCodes = make([]int, 0, len(policy.PoolModeRetryStatusCodes))
+	seenCodes := make(map[int]struct{}, len(policy.PoolModeRetryStatusCodes))
+	for _, code := range policy.PoolModeRetryStatusCodes {
+		if code < 100 || code > 599 {
+			return AccountCreationPolicy{}, errors.New("池模式重试状态码必须在 100 到 599 之间")
+		}
+		if _, duplicate := seenCodes[code]; duplicate {
+			continue
+		}
+		seenCodes[code] = struct{}{}
+		result.PoolModeRetryStatusCodes = append(result.PoolModeRetryStatusCodes, code)
+	}
+	sort.Ints(result.PoolModeRetryStatusCodes)
+	return result, nil
+}
+
+func isUnsignedDecimal(value string) bool {
+	if value == "" {
+		return false
+	}
+	dot := -1
+	for index := 0; index < len(value); index++ {
+		switch character := value[index]; {
+		case character >= '0' && character <= '9':
+		case character == '.' && dot == -1 && index > 0 && index < len(value)-1:
+			dot = index
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateAccountDefaults(settings AccountDefaultsSettings) error {
@@ -434,7 +678,19 @@ func (s *Store) Authenticate(ctx context.Context, username string, password stri
 	return usernameMatches && passwordMatches, nil
 }
 
+var ErrInvalidCredentials = errors.New("账号或密码错误")
+
+// CreateAuthenticatedSession validates credentials and inserts the session in
+// one transaction, so credential rotation cannot precede a stale session insert.
+func (s *Store) CreateAuthenticatedSession(ctx context.Context, username, password string, ttl time.Duration, now time.Time) (string, error) {
+	return s.createSession(ctx, username, &password, ttl, now)
+}
+
 func (s *Store) CreateSession(ctx context.Context, username string, ttl time.Duration, now time.Time) (string, error) {
+	return s.createSession(ctx, username, nil, ttl, now)
+}
+
+func (s *Store) createSession(ctx context.Context, username string, password *string, ttl time.Duration, now time.Time) (string, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return "", errors.New("会话用户名不能为空")
@@ -454,6 +710,18 @@ func (s *Store) CreateSession(ctx context.Context, username string, ttl time.Dur
 		return "", err
 	}
 	defer tx.Rollback()
+	if password != nil {
+		values, err := settingsFrom(ctx, tx)
+		if err != nil {
+			return "", err
+		}
+		usernameMatches := hmac.Equal([]byte(username), []byte(values["console.username"]))
+		passwordMatches := verifyPassword(*password, values["console.password_hash"])
+		if !usernameMatches || !passwordMatches {
+			return "", ErrInvalidCredentials
+		}
+	}
+
 	if _, err := tx.ExecContext(ctx, `DELETE FROM console_sessions WHERE expires_at<=?`, formatTime(issuedAt)); err != nil {
 		return "", err
 	}
@@ -848,7 +1116,7 @@ func hashSessionToken(token string) string {
 }
 
 func sqliteDSN(path string) string {
-	return "file:" + path + "?_txlock=immediate&_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29"
+	return sqliteutil.DSN(path, "_txlock=immediate&_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29")
 }
 
 func formatTime(value time.Time) string {

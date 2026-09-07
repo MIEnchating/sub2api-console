@@ -9,6 +9,7 @@ import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -263,6 +264,7 @@ export function OverviewPage(props: OverviewPageProps) {
         description="汇总受管渠道、分组健康与近期运行状态。"
         action={
           <PageActions>
+            {syncTaskId ? <TaskCancelButton taskId={syncTaskId} /> : null}
             <Button variant="outline" onClick={() => sync.mutate()} disabled={syncing}>
               <RefreshCw className={cn(syncing && "animate-spin")} />
               {syncing ? "同步中" : "立即同步"}

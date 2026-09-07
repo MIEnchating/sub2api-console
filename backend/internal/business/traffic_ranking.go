@@ -203,20 +203,24 @@ func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*traffic
 	return accounts, order, rows.Err()
 }
 
+// Traffic evidence is persisted in fixed-precision UTC, so indexed text ranges
+// preserve nanosecond boundaries before request deduplication.
+const trafficRankingWindowQuery = `WITH ranked AS (
+ SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
+  ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
+ FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
+)
+SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
+FROM ranked WHERE request_rank=1 ORDER BY observed_at`
+
 func (s *Store) accumulateTrafficRanking(
 	ctx context.Context,
 	query TrafficRankingQuery,
 	bucketDuration time.Duration,
 	accounts map[string]*trafficRankingAccumulator,
 ) error {
-	rows, err := s.db.QueryContext(ctx, `WITH ranked AS (
-		SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
-			ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
-		FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
-	)
-	SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
-	FROM ranked WHERE request_rank=1 ORDER BY observed_at`,
-		query.StartAt.Format(time.RFC3339Nano), query.EndAt.Format(time.RFC3339Nano))
+	rows, err := s.db.QueryContext(ctx, trafficRankingWindowQuery,
+		query.StartAt.Format(healthSampleTimeLayout), query.EndAt.Format(healthSampleTimeLayout))
 	if err != nil {
 		return err
 	}

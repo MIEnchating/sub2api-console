@@ -65,10 +65,37 @@ func TestPreserveAutomaticInspectionKeepsQueuedMaintenanceLowPriority(t *testing
 	}
 }
 
+func TestAutomaticInspectionChildTaskKeepsItsOrigin(t *testing.T) {
+	repository := &captureRepository{maintenance: []business.BoundAccountMaintenance{{AccountID: "11", UpstreamHost: "api.example"}}}
+	tasks := &memoryTasks{}
+	service := New(staticTarget{}, repository, tasks)
+
+	taskID, err := service.EnqueueAccountRateSyncBatch(
+		mutationguard.WithAutomaticInspection(context.Background()),
+		1,
+		0,
+		"自动巡检",
+	)
+	if err != nil || taskID == "" {
+		t.Fatalf("taskID=%q err=%v", taskID, err)
+	}
+	tasks.mu.Lock()
+	defer tasks.mu.Unlock()
+	if len(tasks.values) == 0 || tasks.values[0].Result["origin"] != "automatic-inspection" {
+		t.Fatalf("automatic child origin missing: %#v", tasks.values)
+	}
+}
+
 func (runner *deferredManagementRunner) Go(run func(context.Context)) error {
 	runner.run = run
 	return nil
 }
+
+func (runner *deferredManagementRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *deferredManagementRunner) CancelTask(string) bool { return false }
 
 func (runner *deferredManagementRunner) Run(ctx context.Context) {
 	if runner.run == nil {

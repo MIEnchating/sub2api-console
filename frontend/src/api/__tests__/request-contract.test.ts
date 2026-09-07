@@ -97,6 +97,67 @@ describe("API error detail contract", () => {
   });
 });
 
+describe("task list request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads bounded task summaries without requiring task result payloads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "task-1",
+            skill: "sub2api-connectivity-test",
+            operation: "active-probe",
+            status: "running",
+            progress: 20,
+            message: "正在探活",
+            system_info: true,
+            created_at: "2026-09-05T00:00:00Z",
+            updated_at: "2026-09-05T00:00:01Z",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.tasks();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/tasks?limit=20");
+    expect(result[0]).not.toHaveProperty("result");
+  });
+});
+
+describe("system metrics request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads server CPU, memory and disk usage", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          sampled_at: "2026-09-05T00:00:00Z",
+          cpu: { usage_percent: 25, logical_cores: 4 },
+          memory: { total_bytes: 100, used_bytes: 60, available_bytes: 40, usage_percent: 60 },
+          disk: { total_bytes: 200, used_bytes: 50, available_bytes: 150, usage_percent: 25 },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.systemMetrics();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/system/metrics");
+    expect(result.cpu.usage_percent).toBe(25);
+    expect(result.memory.used_bytes).toBe(60);
+    expect(result.disk.total_bytes).toBe(200);
+  });
+});
+
 describe("setup initialization request contract", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -160,7 +221,7 @@ describe("history request contracts", () => {
     vi.unstubAllGlobals();
   });
 
-  it("reads the latest revenue report and encoded upstream group history", async () => {
+  it("reads the latest revenue report, upstream group audit, and group histories", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -174,16 +235,41 @@ describe("history request contracts", () => {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response("[]", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            items: [],
+            total_bindings: 0,
+            present: 0,
+            missing: 0,
+            unknown: 0,
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
       );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(api.latestRevenue()).resolves.toBeNull();
     await expect(api.upstreamGroupHistory("api/example")).resolves.toEqual([]);
+    await expect(api.allUpstreamGroupHistory()).resolves.toEqual([]);
+    await expect(api.upstreamGroupBindingAudit()).resolves.toMatchObject({ total_bindings: 0 });
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/pricing/revenue/latest");
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "/api/upstreams/api%2Fexample/group-history?limit=200",
     );
+    expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/upstreams/group-history?limit=500");
+    expect(fetchMock.mock.calls[3]?.[0]).toBe("/api/upstreams/group-bindings/audit");
   });
 });
 
@@ -204,7 +290,7 @@ describe("manual priority request contract", () => {
       .mockResolvedValueOnce(taskResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.setAccountManualPriority("account/41", 3, "100", 100, true);
+    await api.setAccountManualPriority("account/41", 3, "100", 100, true, true);
     await expect(api.clearAccountManualPriority("account/41")).resolves.toMatchObject({
       id: "task-1",
       status: "queued",
@@ -217,6 +303,7 @@ describe("manual priority request contract", () => {
       priority: 3,
       load_factor: "100",
       concurrency: 100,
+      schedulable: true,
       sync_balance_multiplier: true,
     });
     expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/account%2F41/manual-priority");
@@ -463,6 +550,30 @@ describe("automatic inspection control contract", () => {
   it("builds the scheduler event stream through the shared API base", () => {
     expect(api.autoInspectionEventsURL()).toBe("/api/inspection/automation/events");
     expect(api.taskEventsURL("task / 1")).toBe("/api/tasks/task%20%2F%201/events");
+  });
+});
+
+describe("active probe request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("submits the selected platform and free-form model to the probe endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "probe-platform-1", status: "queued" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.runActiveProbe({ platform: "openai", model: "gpt-5.6-sol" });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/inspection/probe");
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      platform: "openai",
+      model: "gpt-5.6-sol",
+    });
   });
 });
 
@@ -879,13 +990,13 @@ describe("account field request contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.accountModels("42");
-    await api.setAccountTestModel("42", "gpt-5.1-codex");
+    await api.setAccountTestModels("42", ["gpt-5.1-codex", "claude-sonnet-4"]);
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/42/models");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/42/test-model");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/accounts/42/test-models");
     expect((fetchMock.mock.calls[1]?.[1] as RequestInit).method).toBe("PUT");
     expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
-      model: "gpt-5.1-codex",
+      models: ["gpt-5.1-codex", "claude-sonnet-4"],
     });
   });
 
@@ -920,7 +1031,7 @@ describe("account field request contract", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await api.onboardingProbeModels("api.example", "6");
-    await api.runOnboardingProbe("api.example", "6", "gpt-5.2");
+    await api.runOnboardingProbe("api.example", "6", "gpt-5.2", "stream");
     await api.cancelOnboardingProbe("api.example", "6");
 
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/onboarding/probe/models");
@@ -933,6 +1044,7 @@ describe("account field request contract", () => {
       host: "api.example",
       group_id: "6",
       model: "gpt-5.2",
+      mode: "stream",
     });
     expect(fetchMock.mock.calls[2]?.[0]).toBe("/api/onboarding/probe/cancel");
     expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
@@ -1090,7 +1202,120 @@ describe("account rate sync request contract", () => {
   });
 });
 
+describe("account model sync request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("submits multiple unified probe models with the confirmed model selection", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ id: "model-sync-task", models: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.discoverAccountModels(["41", "42"]);
+    await api.previewAccountModels(["41", "42"]);
+    await api.applyAccountModels(
+      [
+        { account_id: "41", models: ["model-a"] },
+        { account_id: "42", models: ["model-a", "model-b"] },
+      ],
+      "catalog-hash",
+      ["model-a", "model-b"],
+    );
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/management/accounts/models/discover",
+      "/api/management/accounts/models/preview",
+      "/api/management/accounts/models/apply",
+    ]);
+    expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      account_ids: ["41", "42"],
+    });
+    expect(JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      accounts: [
+        { account_id: "41", models: ["model-a"] },
+        { account_id: "42", models: ["model-a", "model-b"] },
+      ],
+      probe_models: ["model-a", "model-b"],
+      catalog_fingerprint: "catalog-hash",
+    });
+  });
+});
+
+describe("account model sync settings contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads and updates the global model block patterns", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ blocked_patterns: ["claude-*"] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.accountModelSyncSettings();
+    await api.updateAccountModelSyncSettings({ blocked_patterns: ["claude-*", "*-image-*"] });
+
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "/api/config/model-sync",
+      "/api/config/model-sync",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "PUT" });
+    expect(JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body))).toEqual({
+      blocked_patterns: ["claude-*", "*-image-*"],
+    });
+  });
+});
+
+describe("task cancellation request contract", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("cancels exactly one task by its encoded stable ID", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ cancelled: true }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.cancelTask("task / 1");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/tasks/task%20%2F%201");
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+});
+
 describe("account settings request contract", () => {
+  it("starts a pool mode sync for stable existing account ids", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "pool-mode-sync-task" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.syncExistingAccountPoolMode(["41", "42"]);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/config/account-settings/pool-mode/apply");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({ account_ids: ["41", "42"] });
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -1107,7 +1332,7 @@ describe("account settings request contract", () => {
       priority: 120,
       load_factor: "2.5",
       concurrency: 8,
-      test_model: "gpt-5.2",
+      test_models: ["gpt-5.2", "claude-sonnet-4"],
       paused: true,
       excluded: false,
     };
@@ -1116,6 +1341,50 @@ describe("account settings request contract", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/accounts/41/settings");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("PUT");
+    expect(JSON.parse(String(request.body))).toEqual(payload);
+  });
+
+  it("persists default and per-group account creation settings in one request", async () => {
+    const payload = {
+      default: {
+        models: ["gpt-5.2"],
+        concurrency: 24,
+        load_factor: null,
+        priority: 3,
+        pool_mode: true,
+        pool_mode_retry_count: 2,
+        pool_mode_retry_status_codes: [429, 503],
+      },
+      groups: [
+        {
+          group_id: "6",
+          models: ["claude-sonnet-4-5"],
+          concurrency: 8,
+          load_factor: "12.5",
+          priority: 1,
+          pool_mode: false,
+          pool_mode_retry_count: 1,
+          pool_mode_retry_status_codes: [401, 403],
+        },
+      ],
+      platform_probe_models: {
+        openai: "gpt-5.2",
+        anthropic: "claude-sonnet-4-5",
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updateAccountCreationSettings(payload);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/config/account-settings");
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(request.method).toBe("PUT");
     expect(JSON.parse(String(request.body))).toEqual(payload);
@@ -1372,6 +1641,7 @@ describe("New API management request contracts", () => {
         newapi_group_id: "vip",
         newapi_group_name: "VIP",
         sub2api_group_id: "6",
+        sub2api_ratio: "0.35",
         sync_ratio: true,
       },
     ]);
@@ -1389,6 +1659,7 @@ describe("New API management request contracts", () => {
           newapi_group_id: "vip",
           newapi_group_name: "VIP",
           sub2api_group_id: "6",
+          sub2api_ratio: "0.35",
           sync_ratio: true,
         },
       ],

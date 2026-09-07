@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,38 +48,42 @@ type Result struct {
 }
 
 type Decision struct {
-	AccountID             string   `json:"account_id"`
-	GroupName             string   `json:"group_name"`
-	GroupID               *string  `json:"group_id"`
-	Priority              *int64   `json:"priority"`
-	Schedulable           bool     `json:"schedulable"`
-	Role                  string   `json:"role"`
-	RoutingState          string   `json:"routing_state"`
-	Rank                  *int     `json:"rank"`
-	Reason                string   `json:"reason"`
-	HealthScore           float64  `json:"health_score"`
-	RoutingHealthScore    float64  `json:"routing_health_score"`
-	ShortScore            float64  `json:"short_score"`
-	LongScore             float64  `json:"long_score"`
-	SampleCount           int      `json:"sample_count"`
-	TTFBP50MS             *float64 `json:"ttfb_p50_ms"`
-	TTFBP95MS             *float64 `json:"ttfb_p95_ms"`
-	LatestEvent           Event    `json:"latest_event"`
-	Strategy              string   `json:"strategy"`
-	Rate                  *string  `json:"rate"`
-	RateKnown             bool     `json:"rate_known"`
-	Weight                float64  `json:"weight"`
-	DesiredLoadFactor     *string  `json:"desired_load_factor"`
-	DesiredConcurrency    *int64   `json:"desired_concurrency"`
-	CostWall              *string  `json:"cost_wall"`
-	CostTier              string   `json:"cost_tier"`
-	RateReason            *string  `json:"rate_reason"`
-	WriteCooldownActive   bool     `json:"write_cooldown_active"`
-	ScalingCooldownActive bool     `json:"scaling_cooldown_active"`
-	RecoveryTarget        float64  `json:"recovery_target"`
-	StateSince            string   `json:"state_since"`
-	FusedUntil            *string  `json:"fused_until,omitempty"`
-	CleanupAction         *string  `json:"cleanup_action,omitempty"`
+	AccountID             string                    `json:"account_id"`
+	GroupName             string                    `json:"group_name"`
+	GroupID               *string                   `json:"group_id"`
+	Priority              *int64                    `json:"priority"`
+	Schedulable           bool                      `json:"schedulable"`
+	Role                  string                    `json:"role"`
+	RoutingState          string                    `json:"routing_state"`
+	Rank                  *int                      `json:"rank"`
+	Reason                string                    `json:"reason"`
+	EvidencePending       bool                      `json:"evidence_pending"`
+	Recovery              *business.AccountRecovery `json:"recovery,omitempty"`
+	HealthScore           float64                   `json:"health_score"`
+	RoutingHealthScore    float64                   `json:"routing_health_score"`
+	ShortScore            float64                   `json:"short_score"`
+	LongScore             float64                   `json:"long_score"`
+	SampleCount           int                       `json:"sample_count"`
+	ShortSampleCount      int                       `json:"short_sample_count"`
+	LongSampleCount       int                       `json:"long_sample_count"`
+	TTFBP50MS             *float64                  `json:"ttfb_p50_ms"`
+	TTFBP95MS             *float64                  `json:"ttfb_p95_ms"`
+	LatestEvent           Event                     `json:"latest_event"`
+	Strategy              string                    `json:"strategy"`
+	Rate                  *string                   `json:"rate"`
+	RateKnown             bool                      `json:"rate_known"`
+	Weight                float64                   `json:"weight"`
+	DesiredLoadFactor     *string                   `json:"desired_load_factor"`
+	DesiredConcurrency    *int64                    `json:"desired_concurrency"`
+	CostWall              *string                   `json:"cost_wall"`
+	CostTier              string                    `json:"cost_tier"`
+	RateReason            *string                   `json:"rate_reason"`
+	WriteCooldownActive   bool                      `json:"write_cooldown_active"`
+	ScalingCooldownActive bool                      `json:"scaling_cooldown_active"`
+	RecoveryTarget        float64                   `json:"recovery_target"`
+	StateSince            string                    `json:"state_since"`
+	FusedUntil            *string                   `json:"fused_until,omitempty"`
+	CleanupAction         *string                   `json:"cleanup_action,omitempty"`
 }
 
 type Service struct {
@@ -87,10 +92,12 @@ type Service struct {
 }
 
 type engineConfig struct {
+	sampleClassification  scoringConfig
 	strategy              string
 	trafficEnabled        bool
 	trafficMaxAge         time.Duration
 	probeMaxAge           time.Duration
+	historyMaxAge         time.Duration
 	shortWindow           int
 	longWindow            int
 	breakerEnabled        bool
@@ -165,6 +172,7 @@ type candidate struct {
 	account            business.RoutingAccount
 	health             Health
 	routingHealth      float64
+	evidencePending    bool
 	rows               []business.RoutingSample
 	performanceP50MS   *float64
 	performanceP95MS   *float64
@@ -197,9 +205,9 @@ type candidate struct {
 	cleanupAction      *string
 }
 
-type strategyScores struct {
-	price float64
-	speed float64
+type strategyInputs struct {
+	rate           *big.Rat
+	latencySeconds float64
 }
 
 const (
@@ -308,6 +316,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			if !accountMetadataManaged(account, groupConfig) {
 				continue
 			}
+			prior, _ := previousDecision(previous, account.ID, groupName)
 			source := "active_probe"
 			if groupConfig.trafficEnabled {
 				source = "traffic"
@@ -316,15 +325,16 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			healthRows, performanceRows := selectRoutingEvidence(
 				rows, now, groupConfig.trafficMaxAge, groupConfig.probeMaxAge, groupConfig.longWindow,
 			)
-			healthRows = withCriticalProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, policy)
-			healthInput := make([]Sample, 0, len(healthRows))
-			for _, row := range healthRows {
-				healthInput = append(healthInput, Sample{
-					Result: row.Result, FailureReason: row.FailureReason, Source: row.Source,
-					LatencyP95: row.LatencyP95, StatusCode: routingSampleStatus(row), Payload: row.Payload,
-				})
+			if fusedRoutingState(account.EffectiveState) {
+				healthRows = withRecoveryProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, previousStateSince(prior))
 			}
-			health, scoreErr := HealthScore(healthInput, policy)
+			healthRows = withCriticalProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, policy)
+			historyRows := selectScoringHistory(rows, healthRows, now, groupConfig.historyMaxAge, groupConfig.longWindow)
+			if fusedRoutingState(account.EffectiveState) {
+				// Recovery uses the existing fresh post-fuse evidence, not pre-fuse history.
+				historyRows = healthRows
+			}
+			health, scoreErr := scoreRoutingHealth(healthRows, historyRows, policy)
 			if scoreErr != nil {
 				return Result{}, scoreErr
 			}
@@ -346,7 +356,6 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			}
 			current.rate, current.rateText, current.rateKnown, current.rateReason = resolveRate(account, groupConfig, current.costWall)
 			current.costTier, current.costTierRank = costTier(current.rate, current.costWall)
-			prior, _ := previousDecision(previous, account.ID, groupName)
 			applyInitialState(current, groupConfig, prior, now)
 			candidates = append(candidates, current)
 			byAccount[account.ID] = append(byAccount[account.ID], current)
@@ -359,7 +368,23 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	for groupName, candidates := range candidatesByGroup {
 		calculateGroupWeights(candidates, configsByGroup[groupName])
 	}
-	assignAccountPlacements(candidatesByGroup, configsByGroup, byAccount)
+	capacityAccounts := accounts
+	if scope.AccountID != nil || scope.GroupName != nil {
+		for _, groupConfig := range configsByGroup {
+			if !groupConfig.scalingEnabled {
+				continue
+			}
+			// Capacity is global even when only one account or group is written.
+			capacityAccounts, err = s.repository.RoutingAccounts(ctx, nil, nil)
+			if err != nil {
+				return Result{}, fmt.Errorf("读取全局并发容量失败：%w", err)
+			}
+			break
+		}
+	}
+	if assignAccountPlacements(candidatesByGroup, configsByGroup, byAccount, capacityAccounts...) {
+		result.ConfigurationErrors = append(result.ConfigurationErrors, "全局并发预算不足，部分账号暂时无法达到单账号下限；请调整全局上限或单账号下限")
+	}
 	finalizeAccountStates(byAccount, configsByGroup, previous, now)
 	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
 		primary := primaryMembership(byAccount[accountID])
@@ -367,7 +392,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			continue
 		}
 		groupName := primary.account.GroupName
-		decision := publicDecision(primary, groupName, configsByGroup[groupName])
+		decision := publicDecision(primary, groupName, configsByGroup[groupName], now)
 		evaluations = append(evaluations, evaluationWrite(primary, groupName))
 		if persistDecisions {
 			result.AccountDecisions[accountID] = decision
@@ -561,6 +586,7 @@ func alignAccountStateToPrimary(
 				continue
 			}
 			item.state, item.reason, item.schedulable, item.fuseKind = primary.state, primary.reason, primary.schedulable, primary.fuseKind
+			item.routingHealth, item.evidencePending = primary.routingHealth, primary.evidencePending
 			item.fusedUntil = primary.fusedUntil
 		}
 	}
@@ -603,6 +629,10 @@ func fusedRoutingState(value string) bool {
 }
 
 func parseEngineConfig(policy map[string]any) (engineConfig, error) {
+	classification, err := parseScoringConfig(policy)
+	if err != nil {
+		return engineConfig{}, err
+	}
 	selection, err := requiredObject(policy, "selection")
 	if err != nil {
 		return engineConfig{}, err
@@ -671,6 +701,8 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 	if err != nil {
 		return engineConfig{}, err
 	}
+	delete(instantCodes, http.StatusTooManyRequests)
+	delete(cleanupCodes, http.StatusTooManyRequests)
 	rawCleanupAction, present := cleanup["action"]
 	if !present {
 		rawCleanupAction = "pause"
@@ -695,11 +727,13 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		return engineConfig{}, errors.New("scope.managed_group_mode 配置无效")
 	}
 	reader := &policyReader{}
-	probeInterval := reader.integer(probe, "probe.interval_seconds", "interval_seconds", 300, 1, 86400)
+	reader.integer(probe, "probe.interval_seconds", "interval_seconds", 300, 1, 86400)
 	config := engineConfig{
-		strategy: strategy, trafficEnabled: reader.boolean(traffic, "traffic.enabled", "enabled", true),
+		sampleClassification: classification,
+		strategy:             strategy, trafficEnabled: reader.boolean(traffic, "traffic.enabled", "enabled", true),
 		trafficMaxAge:  time.Duration(reader.integer(traffic, "traffic.lookback_minutes", "lookback_minutes", 120, 1, 10080)) * time.Minute,
-		probeMaxAge:    time.Duration(max(probeInterval*3, 300)) * time.Second,
+		probeMaxAge:    time.Duration(reader.integer(probe, "probe.freshness_seconds", "freshness_seconds", 900, 1, 86400)) * time.Second,
+		historyMaxAge:  time.Duration(reader.nestedInteger(policy, "scoring", "history_window_minutes", 1440, 1, 10080)) * time.Minute,
 		shortWindow:    reader.nestedInteger(policy, "scoring", "short_window", 10, 1, 10000),
 		longWindow:     reader.nestedInteger(policy, "scoring", "long_window", 60, 1, 100000),
 		breakerEnabled: reader.boolean(breaker, "breaker.enabled", "enabled", true), hardFatal: reader.boolean(breaker, "breaker.hard_fatal", "hard_fatal", true),
@@ -786,7 +820,6 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 		if err != nil || value < 30 || value > 86400 {
 			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.probe_interval_seconds 必须在 30 到 86400 之间", *groupID)
 		}
-		result.probeMaxAge = time.Duration(max(value*3, 300)) * time.Second
 	}
 	for field, target := range map[string]*bool{
 		"breaker_enabled": &result.breakerEnabled, "recovery_enabled": &result.recoveryEnabled,
@@ -830,8 +863,19 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 
 func applyInitialState(item *candidate, config engineConfig, previous business.PreviousRoutingDecision, now time.Time) {
 	item.schedulable = remoteSchedulable(item.account)
+	if strings.EqualFold(strings.TrimSpace(item.account.EffectiveState), "binding_invalid") &&
+		strings.EqualFold(strings.TrimSpace(item.account.CatalogBindingState), "active") {
+		item.state, item.schedulable, item.reason = "healthy", true, "上游 Key 与分组已重新出现，稳定 ID 绑定已恢复"
+	}
+	item.evidencePending = false
 	neutralOnly := item.health.SampleCount == 0 && item.health.NeutralCount > 0
 	confirmedUnhealthy, transientPending := routingEvidenceConfirmation(item, config)
+	previousPending, _ := previous.Payload["evidence_pending"].(bool)
+	if transientPending && degradedRoutingState(item.account.EffectiveState, previous.State) && !previousPending {
+		// A confirmed degradation must pass recovery before observation can
+		// soften its penalty again.
+		confirmedUnhealthy, transientPending = true, false
+	}
 	item.routingHealth = confirmedRoutingHealth(item, config, previous, confirmedUnhealthy, transientPending)
 	allowed, reason := eligibleScope(item.account, config)
 	_, accountPaused := config.pausedAccounts[strings.ToLower(strings.TrimSpace(item.account.ID))]
@@ -854,9 +898,6 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		item.state, item.schedulable, item.reason = "fused", false, "人工熔断"
 	case item.rate == nil:
 		item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, pointerText(item.rateReason, "倍率不可用"), "soft"
-	case strings.EqualFold(strings.TrimSpace(item.account.EffectiveState), "binding_invalid") &&
-		strings.EqualFold(strings.TrimSpace(item.account.CatalogBindingState), "active"):
-		item.state, item.schedulable, item.reason = "healthy", true, "上游 Key 与分组已重新出现，稳定 ID 绑定已恢复"
 	case fusedRoutingState(item.account.EffectiveState):
 		item.fusedUntil = previousFusedUntil(previous)
 		if item.fusedUntil.IsZero() {
@@ -865,13 +906,12 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 				item.fusedUntil = stateSince.UTC().Add(config.fusedCooldown)
 			}
 		}
-		healthySpan := recoverySpan(item.rows, item.health.RecoveryPassStreak, now)
-		if config.recoveryEnabled && (item.fusedUntil.IsZero() || !now.Before(item.fusedUntil)) && item.health.HealthScore >= config.recoveryTarget &&
-			item.health.RecoveryPassStreak >= config.recoverySuccesses && healthySpan >= config.recoveryHold && !item.health.Fatal {
+		recovery := recoveryStatus(item, config, now, true)
+		if recovery.Ready {
 			item.state, item.schedulable, item.reason = "healthy", true, "健康分与连续成功已达到回池条件"
 			item.fusedUntil = time.Time{}
 		} else {
-			item.state, item.schedulable, item.reason = "fused", false, "熔断恢复条件未满足"
+			item.state, item.schedulable, item.reason = "fused", false, recoveryReason(recovery)
 		}
 	case config.breakerEnabled && config.hardFatal && item.health.Fatal:
 		item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, "致命错误：凭据失效", "hard"
@@ -893,17 +933,21 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		item.state, item.reason = "degraded", "近期多次依赖重试成功"
 	case neutralOnly:
 		item.state, item.reason = preservedRoutingState(item.account.EffectiveState, previous.State), "客户端错误仅记录，保持上一调度状态"
+		applyPendingHealthReason(item, previousPending)
 	case item.health.SampleCount == 0:
 		// Guardian keeps an unprobed account's health unknown while still
 		// counting the remotely schedulable account in the minimum pool. Health
 		// evidence and current traffic eligibility are separate facts.
 		item.state, item.reason = "unknown", "尚无样本，等待首次探测"
 	case degradedRoutingState(item.account.EffectiveState, previous.State) && !degradedRecoveryAllowed(item, config, now):
-		item.state, item.reason = "degraded", "降级恢复条件未满足"
-	case config.degradeEnabled && confirmedUnhealthy && item.health.SampleCount > 0 && item.health.HealthScore < config.degradeThreshold:
+		item.state, item.reason = "degraded", recoveryReason(recoveryStatus(item, config, now, false))
+		applyPendingHealthReason(item, transientPending)
+	case config.degradeEnabled && item.health.SampleCount > 0 && item.health.HealthScore < config.degradeThreshold:
 		item.state, item.reason = "degraded", fmt.Sprintf("健康分低于降级线 %.4g", config.degradeThreshold)
+		applyPendingHealthReason(item, transientPending)
 	case transientPending:
-		item.reason = "短暂异常待确认，保持当前调度位置"
+		item.reason = ""
+		applyPendingHealthReason(item, true)
 	}
 	if config.manageAllAccounts && managedAccountCanReceiveTraffic(item, now) {
 		item.schedulable = true
@@ -924,7 +968,8 @@ func routingEvidenceConfirmation(item *candidate, config engineConfig) (bool, bo
 	slowConfirmed := config.latencyOccurrences > 0 && slowOccurrences(item.rows, config.latencyWindow, config.latencyTTFBMS) >= config.latencyOccurrences
 	rateLimited := item.health.LatestEvent == EventRateLimited
 	hasPending := (recent > 0 || retryRecovered > 0) && !confirmed
-	return confirmed || slowConfirmed || rateLimited, hasPending
+	confirmed = confirmed || slowConfirmed || rateLimited || item.health.Fatal
+	return confirmed, hasPending && !confirmed
 }
 
 func confirmedRoutingHealth(
@@ -938,14 +983,38 @@ func confirmedRoutingHealth(
 	if confirmed || !pending && !neutralOnly {
 		return item.health.HealthScore
 	}
+	baseline := previousRoutingHealth(item, config, previous)
+	if pending {
+		// Apply half of the health-gate loss, capped at half of full quality.
+		// Derive it from the current score, never repeatedly subtract from the
+		// last decision when evaluating the same evidence. Existing lower
+		// routing health cannot be increased by a new failure.
+		observed := min(100.0, max(0.0, item.health.HealthScore))
+		return min(baseline, (100+max(config.gateFloor, observed))/2)
+	}
+	return baseline
+}
+
+func applyPendingHealthReason(item *candidate, pending bool) {
+	if !pending {
+		return
+	}
+	item.evidencePending = true
+	if item.reason != "" {
+		item.reason += "；"
+	}
+	item.reason += "短暂异常待确认，暂时降低调度权重"
+}
+
+func previousRoutingHealth(item *candidate, config engineConfig, previous business.PreviousRoutingDecision) float64 {
 	if raw, present := previous.Payload["routing_health_score"]; present {
 		if value, err := strictNumber(raw); err == nil {
-			return value
+			return min(100.0, max(0.0, value))
 		}
 	}
 	if raw, present := previous.Payload["health_score"]; present {
 		if value, err := strictNumber(raw); err == nil {
-			return value
+			return min(100.0, max(0.0, value))
 		}
 	}
 	if strings.EqualFold(strings.TrimSpace(previous.State), "healthy") || strings.EqualFold(strings.TrimSpace(item.account.EffectiveState), "healthy") {
@@ -977,10 +1046,7 @@ func degradedRoutingState(values ...string) bool {
 }
 
 func degradedRecoveryAllowed(item *candidate, config engineConfig, now time.Time) bool {
-	if !config.recoveryEnabled || item.health.Fatal || item.health.HealthScore < config.recoveryTarget || item.health.RecoveryPassStreak < config.recoverySuccesses {
-		return false
-	}
-	return recoverySpan(item.rows, item.health.RecoveryPassStreak, now) >= config.recoveryHold
+	return recoveryStatus(item, config, now, false).Ready
 }
 
 func managedAccountCanReceiveTraffic(item *candidate, now time.Time) bool {
@@ -1228,7 +1294,7 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 		eligible = append(eligible, item)
 	}
 	applyPerformanceConfidence(eligible, config.performanceMinSamples, config.speedAdvantageCap)
-	benchmark := strategyScoreBenchmark(eligible, config)
+	benchmark := strategyScoreBenchmark(eligible)
 	qualityTotal := 0.0
 	for _, item := range eligible {
 		item.quality = strategyQuality(item, config, benchmark)
@@ -1250,7 +1316,8 @@ func assignAccountPlacements(
 	groups map[string][]*candidate,
 	configs map[string]engineConfig,
 	byAccount map[string][]*candidate,
-) {
+	inventory ...business.RoutingAccount,
+) bool {
 	primary := map[string]*candidate{}
 	for accountID, memberships := range byAccount {
 		if len(memberships) == 0 {
@@ -1272,7 +1339,23 @@ func assignAccountPlacements(
 		primary[accountID] = chosen
 	}
 
-	for groupName, members := range groups {
+	capacityInventory := append([]business.RoutingAccount(nil), inventory...)
+	for _, item := range primary {
+		// A second inventory read must not reduce the baseline used to build
+		// this account's target. The budget deduplicates using the larger value.
+		capacityInventory = append(capacityInventory, item.account)
+	}
+	groupNames := make([]string, 0, len(groups))
+	fallbackConcurrency := int64(0)
+	for groupName, config := range configs {
+		groupNames = append(groupNames, groupName)
+		fallbackConcurrency = max(fallbackConcurrency, config.scalingMin)
+	}
+	sort.Strings(groupNames)
+	budget := newScalingBudget(capacityInventory, fallbackConcurrency)
+	minimumLimited := false
+	for _, groupName := range groupNames {
+		members := groups[groupName]
 		owned := make([]*candidate, 0, len(members))
 		for _, item := range members {
 			if primary[item.account.ID] == item {
@@ -1300,7 +1383,7 @@ func assignAccountPlacements(
 			rank := index + 1
 			item.rank = &rank
 			priority := base + int64(index)
-			if item.state == "degraded" {
+			if item.state == "degraded" && !item.evidencePending {
 				priority += config.degradePriorityStep * int64(max(1, item.health.FailureStreak))
 			} else if item.state == "survivor" {
 				priority += config.degradePriorityStep
@@ -1315,7 +1398,7 @@ func assignAccountPlacements(
 				}
 				midpoint := max(1.0, float64(config.minLoadFactor+config.maxLoadFactor)/2)
 				desired := int64(math.Round(scale * midpoint))
-				if item.state == "degraded" {
+				if item.state == "degraded" && !item.evidencePending {
 					desired = max(config.degradeMinLoad, int64(math.Round(float64(desired)*config.degradeLoadRatio)))
 				} else if item.state == "survivor" {
 					desired = config.minLoadFactor
@@ -1327,7 +1410,9 @@ func assignAccountPlacements(
 		}
 		// Scaling is also account-level and is therefore evaluated only once,
 		// by the same primary group that owns priority and load factor.
-		applyScaling(owned, config)
+		if applyScalingWithBudget(owned, config, &budget) {
+			minimumLimited = true
+		}
 	}
 
 	for accountID, memberships := range byAccount {
@@ -1345,6 +1430,7 @@ func assignAccountPlacements(
 			item.desiredConcurrency = cloneInt64(owner.desiredConcurrency)
 		}
 	}
+	return minimumLimited
 }
 
 func placementLoadFactorEligible(item *candidate) bool {
@@ -1401,6 +1487,8 @@ func finalizeAccountStates(
 			item.health = primary.health
 			item.state = primary.state
 			item.reason = primary.reason
+			item.routingHealth = primary.routingHealth
+			item.evidencePending = primary.evidencePending
 			item.schedulable = primary.schedulable
 			item.fuseKind = primary.fuseKind
 			item.fusedUntil = primary.fusedUntil
@@ -1439,20 +1527,48 @@ func cloneString(value *string) *string {
 	return &copy
 }
 
-func applyScaling(items []*candidate, config engineConfig) {
-	if !config.scalingEnabled {
-		return
+type scalingBudget struct {
+	initialAllocated int64
+	allocated        int64
+}
+
+func newScalingBudget(accounts []business.RoutingAccount, fallback int64) scalingBudget {
+	byID := make(map[string]int64, len(accounts))
+	for _, account := range accounts {
+		current := fallback
+		if account.Concurrency != nil && *account.Concurrency > 0 {
+			current = *account.Concurrency
+		}
+		byID[account.ID] = max(byID[account.ID], current)
 	}
 	allocated := int64(0)
-	for _, item := range items {
-		if item.rank != nil && item.account.Concurrency != nil && *item.account.Concurrency > 0 {
-			allocated += *item.account.Concurrency
+	for _, current := range byID {
+		if current > math.MaxInt64-allocated {
+			allocated = math.MaxInt64
+			break
 		}
+		allocated += current
 	}
-	headroom := max(int64(0), config.scalingGlobalMax-allocated)
-	scaleUp := float64(allocated)/float64(config.scalingGlobalMax) >= config.scalingUpRatio && headroom > 0
+	return scalingBudget{initialAllocated: allocated, allocated: allocated}
+}
+
+func applyScaling(items []*candidate, config engineConfig) bool {
+	accounts := make([]business.RoutingAccount, 0, len(items))
 	for _, item := range items {
-		if item.rank == nil {
+		accounts = append(accounts, item.account)
+	}
+	budget := newScalingBudget(accounts, config.scalingMin)
+	return applyScalingWithBudget(items, config, &budget)
+}
+
+func applyScalingWithBudget(items []*candidate, config engineConfig, budget *scalingBudget) bool {
+	if !config.scalingEnabled {
+		return false
+	}
+	minimumLimited := false
+	scaleUp := float64(budget.initialAllocated)/float64(config.scalingGlobalMax) >= config.scalingUpRatio
+	for _, item := range items {
+		if item.rank == nil || item.account.ManualPriority != nil || item.evidencePending || !placementLoadFactorEligible(item) {
 			continue
 		}
 		current := config.scalingMin
@@ -1460,23 +1576,33 @@ func applyScaling(items []*candidate, config engineConfig) {
 			current = *item.account.Concurrency
 		}
 		desired := current
-		if item.state == "excluded" || item.state == "paused" || item.state == "disabled" || item.state == "fused" || item.state == "cost_blocked" {
-			continue
-		}
+		headroom := max(int64(0), config.scalingGlobalMax-budget.allocated)
 		if item.state == "degraded" || item.state == "survivor" {
 			desired -= config.scalingStepDown
 		} else if scaleUp {
-			increase := min(config.scalingStepUp, headroom)
+			increase := min(config.scalingStepUp, headroom, max(int64(0), config.scalingMax-current))
 			desired += increase
 		}
 		desired = min(config.scalingMax, max(config.scalingMin, desired))
 		if desired > current {
-			headroom -= desired - current
+			increase := min(desired-current, headroom)
+			desired = current + increase
+			budget.allocated += increase
 		}
+		if desired < config.scalingMin {
+			minimumLimited = true
+			if item.reason != "" {
+				item.reason += "；"
+			}
+			item.reason += "全局并发预算不足，暂时无法达到单账号下限"
+		}
+		// A proposed reduction may be suppressed by cooldown or fail remotely,
+		// so it cannot fund another account's increase in this round.
 		if desired != current {
 			item.desiredConcurrency = &desired
 		}
 	}
+	return minimumLimited
 }
 
 func applyDeadband(items []*candidate, previous map[string]business.PreviousRoutingDecision, config engineConfig, now time.Time) {
@@ -1577,6 +1703,20 @@ func applyCleanupPolicy(
 			}
 			continue
 		}
+		recovered := false
+		for _, item := range items {
+			if item.state == "healthy" && recoveryStatus(item, config, now, false).Ready {
+				recovered = true
+				break
+			}
+		}
+		if recovered {
+			if _, found := states[accountID]; found {
+				writes = append(writes, business.CleanupStateWrite{AccountID: accountID})
+				events = append(events, cleanupRuntimeEvent("cleanup_skipped", "succeeded", accountID, "账号已恢复健康，已撤销自动处置观察", items))
+			}
+			continue
+		}
 		hits, match := cleanupAccountHits(items, config)
 		if hits < config.cleanupOccurrences || cleanupAccountProtected(items, config.cleanupAction) {
 			if _, found := states[accountID]; found {
@@ -1639,38 +1779,33 @@ func cleanupAccountHits(items []*candidate, config engineConfig) (int, string) {
 	for _, item := range items {
 		hits := 0
 		limit := min(config.cleanupWindow, len(item.rows))
-		for index, row := range item.rows[:limit] {
+		for _, row := range item.rows[:limit] {
 			status := routingSampleStatus(row)
-			text := strings.ToLower(strings.TrimSpace(row.Result + " " + row.FailureReason))
-			switch {
-			case len(config.cleanupStatusCodes) > 0:
-				if status != nil {
-					_, matched := config.cleanupStatusCodes[*status]
-					if matched {
-						hits++
-					}
-				}
-			case config.cleanupOnlyAuth:
-				if cleanupAuthFailure(status, text) {
-					hits++
-				}
-			case index < len(item.health.Events) && item.health.Events[index] == EventCredentialBad:
-				hits++
+			classified := classify(Sample{
+				Result: row.Result, FailureReason: row.FailureReason, Source: row.Source,
+				LatencyP95: row.LatencyP95, StatusCode: status, Payload: row.Payload,
+			}, config.sampleClassification)
+			if classified.Neutral || classified.RateLimited || !classified.Failure {
+				continue
 			}
+			if config.cleanupOnlyAuth && classified.Event != EventCredentialBad {
+				continue
+			}
+			if len(config.cleanupStatusCodes) > 0 {
+				if status == nil {
+					continue
+				}
+				if _, matched := config.cleanupStatusCodes[*status]; !matched {
+					continue
+				}
+			} else if classified.Event != EventCredentialBad {
+				continue
+			}
+			hits++
 		}
 		best = max(best, hits)
 	}
 	return best, label
-}
-
-func cleanupAuthFailure(status *int, text string) bool {
-	if containsAnyText(text, "quota", "balance", "insufficient", "usage limit", "credit", "额度", "余额", "欠费") {
-		return false
-	}
-	if status != nil && (*status == 401 || *status == 403) {
-		return true
-	}
-	return containsAnyText(text, "unauthorized", "forbidden", "invalid api key", "authentication", "account not found", "no api key", "no access token", "expired", "鉴权", "认证", "凭据", "密钥失效")
 }
 
 func cleanupAccountProtected(items []*candidate, action string) bool {
@@ -1822,7 +1957,12 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 	return result
 }
 
-func publicDecision(item *candidate, groupName string, config engineConfig) Decision {
+func publicDecision(item *candidate, groupName string, config engineConfig, now time.Time) Decision {
+	var recovery *business.AccountRecovery
+	_, manual := config.manualFusedAccounts[strings.ToLower(strings.TrimSpace(item.account.ID))]
+	if !manual && (item.state == "fused" || item.state == "degraded") {
+		recovery = recoveryStatus(item, config, now, item.state == "fused")
+	}
 	var fusedUntil *string
 	if !item.fusedUntil.IsZero() {
 		value := item.fusedUntil.UTC().Format(time.RFC3339Nano)
@@ -1832,8 +1972,11 @@ func publicDecision(item *candidate, groupName string, config engineConfig) Deci
 		AccountID: item.account.ID, GroupName: groupName, GroupID: item.account.GroupID,
 		Priority: item.desiredPriority, Schedulable: item.schedulable, Role: item.state, RoutingState: item.state,
 		Rank: item.rank, Reason: item.reason, HealthScore: item.health.HealthScore,
+		EvidencePending:    item.evidencePending && (item.state == "healthy" || item.state == "degraded"),
+		Recovery:           recovery,
 		RoutingHealthScore: item.routingHealth, ShortScore: item.health.ShortScore,
 		LongScore: item.health.LongScore, SampleCount: item.health.SampleCount, TTFBP50MS: item.health.P50MS,
+		ShortSampleCount: min(config.shortWindow, item.health.SampleCount), LongSampleCount: item.health.SampleCount,
 		TTFBP95MS: item.health.P95MS, LatestEvent: item.health.LatestEvent, Strategy: item.strategy,
 		Rate: item.rateText, RateKnown: item.rateKnown, Weight: round4(item.weight), DesiredLoadFactor: item.desiredLoad,
 		DesiredConcurrency: item.desiredConcurrency, CostWall: item.costWallText, CostTier: item.costTier,
@@ -1857,7 +2000,10 @@ func evaluationWrite(item *candidate, groupName string) business.RoutingEvaluati
 func decisionWrite(item Decision) business.RoutingDecisionWrite {
 	payload := map[string]any{
 		"health_score": item.HealthScore, "routing_health_score": item.RoutingHealthScore,
-		"short_score": item.ShortScore, "long_score": item.LongScore,
+		"evidence_pending": item.EvidencePending,
+		"recovery":         item.Recovery,
+		"short_score":      item.ShortScore, "long_score": item.LongScore,
+		"short_sample_count": item.ShortSampleCount, "long_sample_count": item.LongSampleCount,
 		"sample_count": item.SampleCount, "ttfb_p50_ms": item.TTFBP50MS, "ttfb_p95_ms": item.TTFBP95MS,
 		"strategy": item.Strategy, "rate": item.Rate, "rate_known": item.RateKnown, "weight": item.Weight,
 		"desired_load_factor": item.DesiredLoadFactor, "desired_concurrency": item.DesiredConcurrency,
@@ -1931,12 +2077,11 @@ func costTier(rate, wall *big.Rat) (string, int) {
 	}
 }
 
-func candidateStrategyScores(item *candidate, config engineConfig) strategyScores {
-	multiplier := 1.0
-	if item.rate != nil && item.rate.Sign() > 0 {
-		multiplier, _ = item.rate.Float64()
+func candidateStrategyInputs(item *candidate) strategyInputs {
+	rate := item.rate
+	if rate == nil || rate.Sign() < 0 {
+		rate = big.NewRat(1, 1)
 	}
-	priceScore := 1 / max(multiplier, math.SmallestNonzeroFloat64)
 	latencySeconds := 1.0
 	if item.rankingLatencyMS > 0 {
 		latencySeconds = max(item.rankingLatencyMS/1000, .05)
@@ -1945,36 +2090,32 @@ func candidateStrategyScores(item *candidate, config engineConfig) strategyScore
 	} else if item.health.P50MS != nil && *item.health.P50MS > 0 {
 		latencySeconds = max(*item.health.P50MS/1000, .05)
 	}
-	speedScore := 1 / latencySeconds
-	return strategyScores{
-		price: math.Pow(priceScore, config.priceExp),
-		speed: math.Pow(speedScore, config.speedExp),
+	return strategyInputs{
+		rate:           rate,
+		latencySeconds: latencySeconds,
 	}
 }
 
-func strategyScoreBenchmark(items []*candidate, config engineConfig) strategyScores {
+func strategyScoreBenchmark(items []*candidate) strategyInputs {
 	// Price and latency use different units, so compare each account with the
 	// best eligible account in its group before mixing the two dimensions.
-	benchmark := strategyScores{}
+	benchmark := strategyInputs{}
 	for _, item := range items {
-		scores := candidateStrategyScores(item, config)
-		benchmark.price = max(benchmark.price, scores.price)
-		benchmark.speed = max(benchmark.speed, scores.speed)
+		inputs := candidateStrategyInputs(item)
+		if benchmark.rate == nil || inputs.rate.Cmp(benchmark.rate) < 0 {
+			benchmark.rate = inputs.rate
+		}
+		if benchmark.latencySeconds == 0 || inputs.latencySeconds < benchmark.latencySeconds {
+			benchmark.latencySeconds = inputs.latencySeconds
+		}
 	}
 	return benchmark
 }
 
-func relativeStrategyScore(score, benchmark float64) float64 {
-	if benchmark <= 0 {
-		return 0
-	}
-	return min(1, max(0, score/benchmark))
-}
-
-func strategyQuality(item *candidate, config engineConfig, benchmark strategyScores) float64 {
-	scores := candidateStrategyScores(item, config)
-	priceScore := relativeStrategyScore(scores.price, benchmark.price)
-	speedScore := relativeStrategyScore(scores.speed, benchmark.speed)
+func strategyQuality(item *candidate, config engineConfig, benchmark strategyInputs) float64 {
+	inputs := candidateStrategyInputs(item)
+	priceScore := relativePriceScore(inputs.rate, benchmark.rate, config.priceExp)
+	speedScore := math.Pow(min(1, benchmark.latencySeconds/inputs.latencySeconds), config.speedExp)
 	routingHealth := item.routingHealth
 	if routingHealth == 0 && item.health.HealthScore > 0 {
 		routingHealth = item.health.HealthScore
@@ -2066,9 +2207,51 @@ func selectRoutingEvidence(
 	probes := freshSourceSamples(samples, "active-probe", now, probeMaxAge, limit)
 	performance := append([]business.RoutingSample{}, traffic...)
 	if len(traffic) > 0 {
-		return traffic, performance
+		// New probe observations affect current health until superseded by traffic.
+		// Keep the performance baseline restricted to real requests.
+		latestTraffic, _ := time.Parse(time.RFC3339Nano, traffic[0].ObservedAt)
+		health := make([]business.RoutingSample, 0, len(probes)+len(traffic))
+		for _, probe := range probes {
+			observed, _ := time.Parse(time.RFC3339Nano, probe.ObservedAt)
+			if observed.After(latestTraffic) {
+				health = append(health, probe)
+			}
+		}
+		health = append(health, traffic...)
+		return health[:min(limit, len(health))], performance
 	}
 	return probes, performance
+}
+
+func withRecoveryProbeEvidence(
+	healthRows []business.RoutingSample,
+	allRows []business.RoutingSample,
+	now time.Time,
+	probeMaxAge time.Duration,
+	fusedSince time.Time,
+) []business.RoutingSample {
+	cutoff := fusedSince
+	for _, row := range healthRows {
+		if !strings.EqualFold(strings.TrimSpace(row.Source), "traffic") {
+			continue
+		}
+		observed, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
+		if err == nil && observed.After(cutoff) {
+			cutoff = observed
+		}
+	}
+	probes := freshSourceSamples(allRows, "active-probe", now, probeMaxAge, len(allRows))
+	recovery := make([]business.RoutingSample, 0, len(probes))
+	for _, probe := range probes {
+		observed, err := time.Parse(time.RFC3339Nano, probe.ObservedAt)
+		if err == nil && observed.After(cutoff) {
+			recovery = append(recovery, probe)
+		}
+	}
+	if len(recovery) > 0 {
+		return recovery
+	}
+	return healthRows
 }
 
 func withCriticalProbeEvidence(
@@ -2120,6 +2303,7 @@ func freshSourceSamples(
 		if err != nil || observed.After(now.Add(time.Minute)) || now.Sub(observed) > maxAge {
 			continue
 		}
+		sample.ObservedAt = observed.UTC().Format("2006-01-02T15:04:05.000000000Z")
 		result = append(result, sample)
 	}
 	sort.SliceStable(result, func(left, right int) bool {
@@ -2551,7 +2735,7 @@ func slowOccurrences(rows []business.RoutingSample, window int, threshold float6
 		if !successfulRoutingSample(row) {
 			continue
 		}
-		value := latencyMS(Sample{Source: row.Source, LatencyP95: row.LatencyP95, Payload: row.Payload})
+		value := healthLatencyMS(Sample{Source: row.Source, LatencyP95: row.LatencyP95, Payload: row.Payload})
 		if value != nil && *value > threshold {
 			count++
 		}

@@ -1,13 +1,14 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Save } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Activity, LoaderCircle, RefreshCw, Save, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
 
 import { api, type UpstreamConfiguration, type UpstreamConfigurationUpdate } from "@/api";
 import { Badge } from "@/components/ui/badge";
+import { FieldLabel } from "@/components/field-help-tooltip";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,10 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { TableActionButton } from "@/components/data-table/table-action-button";
+import { TaskCancelButton } from "@/components/task-startup-state";
+import { AccountDeleteDialog } from "@/features/accounts/components/account-delete-dialog";
+import { applyAccountDeletionProgress } from "@/features/accounts/lib/account-deletion-progress";
 import {
   authModesForPlatform,
   parseStringMap,
@@ -41,6 +46,8 @@ import { upstreamRateLabels } from "../lib/upstream-rate-labels";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 import { configurableUpstreamTypeOptions } from "@/lib/domain-dictionaries";
+import { terminalRefreshKeys } from "@/lib/task-refresh";
+import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import {
   defaultVaultEntryForHost,
   vaultEntriesForHost,
@@ -70,6 +77,7 @@ const upstreamEditFormID = "upstream-edit-form";
 
 const emptyValues: UpstreamEditValues = {
   name: "",
+  host: "",
   base_url_protocol: "https",
   base_url: "",
   account_base_url: "",
@@ -88,10 +96,16 @@ const emptyValues: UpstreamEditValues = {
   entry: "",
 };
 
-function Field(props: { label: string; error?: string; children: ReactNode }) {
+function Field(props: { label: string; htmlFor?: string; error?: string; children: ReactNode }) {
   return (
     <div className="grid min-w-0 gap-1.5 text-sm">
-      <span className="font-medium">{props.label}</span>
+      {props.htmlFor ? (
+        <label className="font-medium" htmlFor={props.htmlFor}>
+          {props.label}
+        </label>
+      ) : (
+        <span className="font-medium">{props.label}</span>
+      )}
       {props.children}
       {props.error ? <span className="text-destructive text-xs">{props.error}</span> : null}
     </div>
@@ -130,7 +144,9 @@ type CurrentUpstreamBinding = {
   accountId: string;
   name: string | null;
   exists: boolean;
+  host: string;
   group: string;
+  groupStatus: string | null;
   duplicate: boolean;
 };
 
@@ -153,7 +169,9 @@ function currentUpstreamBindings(groups: UpstreamConfiguration["groups"]): {
         accountId: account.account_id,
         name: account.account_name,
         exists: account.account_exists,
+        host: group.host,
         group: group.name,
+        groupStatus: group.status,
         duplicate: (accountCounts.get(account.account_id) ?? 0) > 1,
       });
     }
@@ -162,7 +180,136 @@ function currentUpstreamBindings(groups: UpstreamConfiguration["groups"]): {
   return { bindings, accountCount: accountCounts.size };
 }
 
-export function UpstreamAccounts(props: { groups: UpstreamConfiguration["groups"] }) {
+export function currentUpstreamGroupStatus(status: string | null): {
+  label: string;
+  badgeVariant: "secondary" | "warning" | "destructive" | "outline";
+} {
+  const normalized = status?.trim().toLocaleLowerCase() ?? "";
+  if (["missing", "deleted", "retired"].includes(normalized)) {
+    return { label: "已不存在", badgeVariant: "destructive" };
+  }
+  if (normalized === "suspected") {
+    return { label: "待确认", badgeVariant: "warning" };
+  }
+  if (["active", "enabled", "available", "ok", "1"].includes(normalized)) {
+    return { label: "存在 · 启用", badgeVariant: "secondary" };
+  }
+  if (normalized) return { label: "存在 · 禁用", badgeVariant: "warning" };
+  return { label: "状态未知", badgeVariant: "outline" };
+}
+
+function UpstreamAccountRowActions(props: {
+  binding: CurrentUpstreamBinding;
+  onChanged?: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [taskID, setTaskID] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const onChangedRef = useRef(props.onChanged);
+  const handledTaskIDRef = useRef<string | null>(null);
+  useEffect(() => {
+    onChangedRef.current = props.onChanged;
+  }, [props.onChanged]);
+  const task = useQuery({
+    queryKey: ["upstream-account-action", props.binding.host, props.binding.accountId, taskID],
+    queryFn: () => api.task(taskID!),
+    enabled: taskID !== null,
+    refetchInterval: taskPollInterval,
+  });
+  const pending = taskIsPending(taskID, task);
+  const actionPending = activeAction !== null;
+  useEffect(() => {
+    if (!taskStopsPolling(task.data) || activeAction === null || taskID === null) return;
+    const completedTask = task.data;
+    if (!completedTask) return;
+    if (handledTaskIDRef.current === completedTask.id) return;
+    handledTaskIDRef.current = completedTask.id;
+    setTaskID(null);
+    setActiveAction(null);
+    const scope = activeAction === "探活测试" ? "active-probe" : "account-scheduling";
+    const keys = terminalRefreshKeys(scope, completedTask);
+    void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    applyAccountDeletionProgress(queryClient, completedTask);
+    if (completedTask.status === "succeeded") {
+      toast.success(
+        `${props.binding.name ?? `账号 ${props.binding.accountId}`}：${activeAction}完成`,
+      );
+    } else if (completedTask.status === "cancelled") {
+      toast.info(completedTask.message || `${activeAction}已取消`);
+    } else {
+      toast.error(completedTask.message || `${activeAction}失败`);
+    }
+    if (activeAction === "删除账号") setDeleteOpen(false);
+    onChangedRef.current?.();
+  }, [activeAction, props.binding.accountId, props.binding.name, queryClient, task.data, taskID]);
+
+  async function startProbe(): Promise<void> {
+    if (actionPending || !props.binding.exists) return;
+    handledTaskIDRef.current = null;
+    setActiveAction("探活测试");
+    try {
+      const queued = await api.runActiveProbe({ account_id: props.binding.accountId });
+      setTaskID(queued.id);
+    } catch (error) {
+      setActiveAction(null);
+      notifyOperationError(error, "探活测试启动失败");
+    }
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-end gap-1">
+        <TableActionButton
+          label={activeAction === "探活测试" ? "正在探活" : "探活测试"}
+          disabled={actionPending || !props.binding.exists}
+          onClick={() => void startProbe()}
+        >
+          {activeAction === "探活测试" ? <LoaderCircle className="animate-spin" /> : <Activity />}
+        </TableActionButton>
+        {activeAction === "探活测试" && pending && taskID ? (
+          <TaskCancelButton taskId={taskID} compact />
+        ) : null}
+        <TableActionButton
+          label="删除账号及上游 Key"
+          tone="danger"
+          disabled={actionPending || !props.binding.exists}
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 />
+        </TableActionButton>
+      </div>
+      <AccountDeleteDialog
+        accountId={props.binding.accountId}
+        open={deleteOpen}
+        pending={actionPending}
+        activeAction={activeAction}
+        task={task.data}
+        taskError={task.error}
+        onOpenChange={(open) => {
+          if (!actionPending) setDeleteOpen(open);
+        }}
+        onConfirm={(preview) => {
+          handledTaskIDRef.current = null;
+          setActiveAction("删除账号");
+          void api.deleteAccount(preview).then(
+            (queued) => setTaskID(queued.id),
+            (error) => {
+              setActiveAction(null);
+              notifyOperationError(error, "删除账号启动失败");
+            },
+          );
+        }}
+      />
+    </>
+  );
+}
+
+export function UpstreamAccounts(props: {
+  groups: UpstreamConfiguration["groups"];
+  interactive?: boolean;
+  onChanged?: () => void;
+}) {
   const summary = currentUpstreamBindings(props.groups);
   return (
     <section className="grid min-w-0 gap-3 border-t pt-4" aria-labelledby="upstream-accounts">
@@ -185,28 +332,49 @@ export function UpstreamAccounts(props: { groups: UpstreamConfiguration["groups"
           className="divide-border/70 max-h-72 divide-y overflow-x-hidden overflow-y-auto rounded-lg border"
           aria-label="当前上游全部账号"
         >
-          {summary.bindings.map((binding) => (
-            <div
-              key={binding.key}
-              className="grid min-w-0 gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-            >
-              <div className="min-w-0">
-                <strong className="block truncate text-sm font-medium">
-                  {binding.name || `账号 ${binding.accountId}`}
-                </strong>
-                <span className="text-muted-foreground block truncate text-xs">
-                  稳定账号 ID {binding.accountId}
-                </span>
+          <div className="bg-muted/40 text-muted-foreground hidden min-w-0 px-3 py-2 text-xs font-medium sm:grid sm:grid-cols-[minmax(0,1.2fr)_minmax(8rem,1fr)_8rem_auto] sm:items-center sm:gap-3">
+            <span>账号</span>
+            <span>上游分组</span>
+            <span>状态</span>
+            <span className="text-right">操作</span>
+          </div>
+          {summary.bindings.map((binding) => {
+            const groupStatus = currentUpstreamGroupStatus(binding.groupStatus);
+            return (
+              <div
+                key={binding.key}
+                className="grid min-w-0 gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1.2fr)_minmax(8rem,1fr)_8rem_auto] sm:items-center sm:gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <strong className="block min-w-0 truncate text-sm font-medium">
+                      {binding.name || `账号 ${binding.accountId}`}
+                    </strong>
+                    {binding.duplicate ? <Badge variant="warning">重复绑定</Badge> : null}
+                  </div>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    稳定账号 ID {binding.accountId}
+                  </span>
+                  {!binding.exists ? <Badge variant="destructive">账号不存在</Badge> : null}
+                </div>
+                <div className="min-w-0">
+                  <span className="text-muted-foreground block truncate text-xs sm:hidden">
+                    上游分组
+                  </span>
+                  <span className="block min-w-0 truncate text-sm">
+                    {binding.group || "未记录"}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-xs sm:hidden">状态</span>
+                  <Badge variant={groupStatus.badgeVariant}>{groupStatus.label}</Badge>
+                </div>
+                {props.interactive ? (
+                  <UpstreamAccountRowActions binding={binding} onChanged={props.onChanged} />
+                ) : null}
               </div>
-              <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-                <span className="text-muted-foreground max-w-72 truncate text-xs">
-                  上游分组 {binding.group || "未记录"}
-                </span>
-                {binding.duplicate ? <Badge variant="warning">重复绑定</Badge> : null}
-                {!binding.exists ? <Badge variant="destructive">账号不存在</Badge> : null}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="text-muted-foreground rounded-lg border px-3 py-8 text-center text-sm">
@@ -220,6 +388,7 @@ export function UpstreamAccounts(props: { groups: UpstreamConfiguration["groups"
 export function UpstreamEditDialog(props: Props) {
   const queryClient = useQueryClient();
   const [showHeadersEditor, setShowHeadersEditor] = useState(false);
+  const [clearHeaders, setClearHeaders] = useState(false);
   const configuration = useQuery({
     queryKey: ["upstream-configuration", props.host],
     queryFn: () => api.upstreamConfiguration(props.host!),
@@ -246,16 +415,15 @@ export function UpstreamEditDialog(props: Props) {
     form.reset({
       ...emptyValues,
       name: configuration.data.name,
+      host: configuration.data.host,
       ...parsedBaseUrl,
       account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
       auth_mode: configuration.data.auth_mode,
       recharge_rate: configuration.data.recharge_rate || "1",
-      headers: Object.keys(configuration.data.headers).length
-        ? JSON.stringify(configuration.data.headers, null, 2)
-        : "",
     });
     setShowHeadersEditor(configuration.data.header_names.length > 0);
+    setClearHeaders(false);
   }, [configuration.data, form]);
 
   useEffect(() => {
@@ -270,21 +438,30 @@ export function UpstreamEditDialog(props: Props) {
       api.updateUpstreamConfiguration(props.host!, payload),
     onSuccess: (value) => {
       const parsedBaseUrl = parseUpstreamBaseUrl(value.base_url);
+      const hostChanged = props.host !== null && value.host !== props.host;
       queryClient.setQueryData(["upstream-configuration", props.host], value);
+      if (hostChanged) {
+        queryClient.removeQueries({ queryKey: ["upstream-configuration", props.host] });
+        queryClient.setQueryData(["upstream-configuration", value.host], value);
+      }
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({ queryKey: ["upstream-groups"] });
       form.reset({
         ...emptyValues,
         name: value.name,
+        host: value.host,
         ...parsedBaseUrl,
         account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
         auth_mode: value.auth_mode,
         recharge_rate: value.recharge_rate,
-        headers: Object.keys(value.headers).length ? JSON.stringify(value.headers, null, 2) : "",
       });
       setShowHeadersEditor(value.header_names.length > 0);
-      if (value.rate_sync_error || value.base_url_sync_error) {
+      setClearHeaders(false);
+      if (hostChanged) {
+        toast.success("上游 Host 已迁移，相关账号绑定已更新");
+        props.onOpenChange(false);
+      } else if (value.rate_sync_error || value.base_url_sync_error) {
         toast.warning(
           `上游配置已保存，但账号同步排队失败：${value.rate_sync_error ?? value.base_url_sync_error}`,
         );
@@ -311,9 +488,11 @@ export function UpstreamEditDialog(props: Props) {
     if (values.refresh_token.trim()) payload.refresh_token = values.refresh_token.trim();
     if (values.admin_key.trim()) payload.admin_key = values.admin_key.trim();
     if (values.user_id.trim()) payload.user_id = values.user_id.trim();
-    if (form.getFieldState("headers").isDirty) {
+    if (clearHeaders) {
+      payload.headers = {};
+    } else if (values.headers.trim()) {
       try {
-        payload.headers = values.headers.trim() ? parseStringMap(values.headers, "Headers") : {};
+        payload.headers = parseStringMap(values.headers, "Headers");
       } catch (error) {
         form.setError("headers", {
           type: "manual",
@@ -411,8 +590,11 @@ export function UpstreamEditDialog(props: Props) {
                   </Field>
                   <Field
                     label={upstreamEditConnectionLabels.upstreamHost}
-                    error={form.formState.errors.base_url?.message}
+                    error={form.formState.errors.host?.message}
                   >
+                    <Input {...form.register("host")} placeholder="api.example.com" />
+                  </Field>
+                  <Field label="请求 Base URL" error={form.formState.errors.base_url?.message}>
                     <div className="flex min-w-0 gap-2">
                       <Controller
                         control={form.control}
@@ -597,22 +779,22 @@ export function UpstreamEditDialog(props: Props) {
                   {headersAvailable ? (
                     <div className="grid min-w-0 gap-2 sm:col-span-2">
                       <div className="flex min-w-0 items-center justify-between gap-3">
-                        <label
-                          className="min-w-0 cursor-pointer"
+                        <FieldLabel
+                          label="自定义 Headers"
+                          description={
+                            data?.header_names.length
+                              ? `已配置：${data.header_names.join("、")}。留空保留，填写 JSON 替换全部 Header，关闭开关清空。`
+                              : "填写 JSON 添加自定义 Header。"
+                          }
                           htmlFor="upstream-edit-custom-headers"
-                        >
-                          <p className="text-sm font-medium">自定义 Headers</p>
-                          <p className="text-muted-foreground text-xs">
-                            {data?.header_names.length
-                              ? `已配置：${data.header_names.join("、")}`
-                              : "默认不添加"}
-                          </p>
-                        </label>
+                          className="cursor-pointer text-sm"
+                        />
                         <Switch
                           id="upstream-edit-custom-headers"
                           checked={showHeadersEditor}
                           onCheckedChange={(checked) => {
                             setShowHeadersEditor(checked);
+                            setClearHeaders(!checked);
                             if (!checked) {
                               form.setValue("headers", "", { shouldDirty: true });
                             }
@@ -621,8 +803,14 @@ export function UpstreamEditDialog(props: Props) {
                         />
                       </div>
                       {showHeadersEditor ? (
-                        <Field label="Headers JSON" error={form.formState.errors.headers?.message}>
+                        <Field
+                          label="Headers JSON"
+                          htmlFor="upstream-edit-headers-json"
+                          error={form.formState.errors.headers?.message}
+                        >
                           <Textarea
+                            id="upstream-edit-headers-json"
+                            aria-invalid={Boolean(form.formState.errors.headers)}
                             className="min-h-24"
                             placeholder={sensitiveFieldPlaceholder(
                               Boolean(data?.header_names.length),
@@ -684,7 +872,11 @@ export function UpstreamEditDialog(props: Props) {
                 </div>
               </section>
 
-              <UpstreamAccounts groups={data?.groups ?? []} />
+              <UpstreamAccounts
+                groups={data?.groups ?? []}
+                interactive
+                onChanged={() => void configuration.refetch()}
+              />
             </form>
           )}
         </DialogBody>

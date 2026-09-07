@@ -335,6 +335,10 @@ func TestUpdatePolicyRejectsInvalidValuesWithoutPartialWrite(t *testing.T) {
 		{"zero transient streak", map[string]any{"advanced_policy": map[string]any{"breaker": map[string]any{"transient_consecutive_failures": 0}}}, "不能小于 1"},
 		{"zero degrade ratio", map[string]any{"advanced_policy": map[string]any{"degrade": map[string]any{"load_factor_ratio": 0}}}, "必须大于 0 且不超过 1"},
 		{"zero degrade load floor", map[string]any{"advanced_policy": map[string]any{"degrade": map[string]any{"min_load_factor": 0}}}, "不能小于 1"},
+		{"zero probe freshness", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"freshness_seconds": 0}}}, "不能小于 1"},
+		{"oversized probe freshness", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"freshness_seconds": 86401}}}, "不能大于 86400"},
+		{"zero scoring history", map[string]any{"advanced_policy": map[string]any{"scoring": map[string]any{"history_window_minutes": 0}}}, "不能小于 1"},
+		{"oversized scoring history", map[string]any{"advanced_policy": map[string]any{"scoring": map[string]any{"history_window_minutes": 10081}}}, "不能大于 10080"},
 		{"zero probe timeout", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"timeout_seconds": 0}}}, "不能小于 1"},
 		{"invalid probe retry source", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"retry_source": "other"}}}, "选项无效"},
 		{"probe retry count exceeds limit", map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{"retry_count": 11}}}, "不能大于 10"},
@@ -349,6 +353,8 @@ func TestUpdatePolicyRejectsInvalidValuesWithoutPartialWrite(t *testing.T) {
 		{"zero scaling ratio", map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"scale_up_ratio": 0}}}, "必须大于 0 且不超过 1"},
 		{"cleanup occurrences exceed window", map[string]any{"advanced_policy": map[string]any{"cleanup": map[string]any{"occurrences": 6, "window": 5}}}, "cleanup.occurrences 不能大于"},
 		{"quota score cannot be fatal", map[string]any{"advanced_policy": map[string]any{"scoring": map[string]any{"event_scores": map[string]any{"quota_exhausted": 0}}}}, "不能小于 1"},
+		{"rate limit cannot instantly fuse", map[string]any{"advanced_policy": map[string]any{"breaker": map[string]any{"instant_status_codes": []any{429}}}}, "breaker.instant_status_codes 不能包含 429"},
+		{"rate limit cannot trigger cleanup", map[string]any{"advanced_policy": map[string]any{"cleanup": map[string]any{"trigger_status_codes": []any{401, 429}}}}, "cleanup.trigger_status_codes 不能包含 429"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

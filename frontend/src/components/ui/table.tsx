@@ -35,7 +35,10 @@ function Table({ className, containerClassName, overflowTooltip = true, ...props
     <TableOverflowTooltipContext.Provider value={overflowTooltip}>
       <div
         data-slot="table-container"
-        className={cn("relative w-full overflow-x-auto overflow-y-hidden", containerClassName)}
+        className={cn(
+          "@container/table relative w-full overflow-x-auto overflow-y-hidden",
+          containerClassName,
+        )}
       >
         <table
           data-slot="table"

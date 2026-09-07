@@ -2,7 +2,9 @@ package probe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,22 +19,49 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
-func TestResolveModelPrefersAccountOverrideBeforeGroupPolicy(t *testing.T) {
+func TestResolveModelsPreferAllAccountOverridesBeforeGroupPolicy(t *testing.T) {
 	groupID := "7"
-	model, reason := resolveModel(map[string]any{
-		"account_test_models":   map[string]any{"41": "account-model"},
+	models, reason := resolveModels(map[string]any{
+		"account_test_models":   map[string]any{"41": []any{"account-model", "second-model"}},
 		"group_policy_bindings": map[string]any{"7": map[string]any{"probe_model": "group-model"}},
 	}, "41", &groupID, nil)
-	if reason != nil || model == nil || *model != "account-model" {
-		t.Fatalf("model=%v reason=%v", model, reason)
+	if reason != nil || !reflect.DeepEqual(models, []string{"account-model", "second-model"}) {
+		t.Fatalf("models=%v reason=%v", models, reason)
+	}
+}
+
+func TestResolveModelsKeepsPreviouslyStoredAccountOverrideAheadOfGroupAndGlobalPolicy(t *testing.T) {
+	groupID := "7"
+	models, reason := resolveModels(map[string]any{
+		"account_test_models":   map[string]any{"41": " legacy-account-model "},
+		"group_policy_bindings": map[string]any{"7": map[string]any{"probe_model": "group-model"}},
+		"probe":                 map[string]any{"model": "global-model"},
+	}, "41", &groupID, []string{"legacy-account-model", "group-model", "global-model"})
+	if reason != nil || !reflect.DeepEqual(models, []string{"legacy-account-model"}) {
+		t.Fatalf("models=%v reason=%v", models, reason)
+	}
+}
+
+func TestBuildTargetsCreatesOneProbePerConfiguredAccountModel(t *testing.T) {
+	targets, err := buildTargets([]business.ProbeCandidate{{
+		AccountID: "41", GroupName: "codex", KnownModels: []string{"account-model", "second-model"}, Metadata: map[string]any{},
+	}}, map[string]any{"account_test_models": map[string]any{
+		"41": []any{"account-model", "second-model"},
+	}}, targetOptions{applySchedulingPolicy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0].Model == nil || *targets[0].Model != "account-model" ||
+		targets[1].Model == nil || *targets[1].Model != "second-model" {
+		t.Fatalf("targets=%#v", targets)
 	}
 }
 
 func TestResolveModelFallsBackToFirstKnownAccountModel(t *testing.T) {
 	groupID := "7"
-	model, reason := resolveModel(map[string]any{}, "41", &groupID, []string{"", "cached-model", "second"})
-	if reason != nil || model == nil || *model != "cached-model" {
-		t.Fatalf("model=%v reason=%v", model, reason)
+	models, reason := resolveModels(map[string]any{}, "41", &groupID, []string{"", "cached-model", "second"})
+	if reason != nil || !reflect.DeepEqual(models, []string{"cached-model"}) {
+		t.Fatalf("models=%v reason=%v", models, reason)
 	}
 }
 
@@ -49,30 +78,30 @@ func TestResolveModelUsesCurrentOverrideOrderWithoutLegacyPolicyProfiles(t *test
 			"legacy-default": map[string]any{"probe": map[string]any{"model": "legacy-default-model"}},
 		},
 	}
-	model, reason := resolveModel(policy, "41", &groupID, []string{"known-model"})
-	if reason != nil || model == nil || *model != "group-model" {
-		t.Fatalf("model=%v reason=%v", model, reason)
+	models, reason := resolveModels(policy, "41", &groupID, []string{"known-model"})
+	if reason != nil || !reflect.DeepEqual(models, []string{"group-model"}) {
+		t.Fatalf("models=%v reason=%v", models, reason)
 	}
 
 	policy["group_policy_bindings"] = map[string]any{"7": map[string]any{"policy_id": "legacy-profile"}}
-	model, reason = resolveModel(policy, "41", &groupID, []string{"known-model"})
-	if reason != nil || model == nil || *model != "global-model" {
-		t.Fatalf("legacy profile changed current resolution: model=%v reason=%v", model, reason)
+	models, reason = resolveModels(policy, "41", &groupID, []string{"known-model"})
+	if reason != nil || !reflect.DeepEqual(models, []string{"global-model"}) {
+		t.Fatalf("legacy profile changed current resolution: models=%v reason=%v", models, reason)
 	}
 }
 
 func TestResolveModelDoesNotRequireGroupIDForGlobalOrKnownModel(t *testing.T) {
-	model, reason := resolveModel(
+	models, reason := resolveModels(
 		map[string]any{"probe": map[string]any{"model": "global-model"}},
 		"41", nil, []string{"known-model"},
 	)
-	if reason != nil || model == nil || *model != "global-model" {
-		t.Fatalf("global model=%v reason=%v", model, reason)
+	if reason != nil || !reflect.DeepEqual(models, []string{"global-model"}) {
+		t.Fatalf("global models=%v reason=%v", models, reason)
 	}
 
-	model, reason = resolveModel(map[string]any{}, "41", nil, []string{"known-model"})
-	if reason != nil || model == nil || *model != "known-model" {
-		t.Fatalf("known model=%v reason=%v", model, reason)
+	models, reason = resolveModels(map[string]any{}, "41", nil, []string{"known-model"})
+	if reason != nil || !reflect.DeepEqual(models, []string{"known-model"}) {
+		t.Fatalf("known models=%v reason=%v", models, reason)
 	}
 }
 
@@ -82,6 +111,7 @@ type fakeRepository struct {
 	policyCalls int
 	candidates  []business.ProbeCandidate
 	samples     []business.ProbeSample
+	platform    *string
 	mu          sync.Mutex
 }
 
@@ -92,7 +122,8 @@ func (repository *fakeRepository) ControlPolicy(context.Context) (map[string]any
 	return repository.policy, repository.policyErr
 }
 
-func (repository *fakeRepository) ProbeCandidates(context.Context, *string, *string) ([]business.ProbeCandidate, error) {
+func (repository *fakeRepository) ProbeCandidates(_ context.Context, _ *string, _ *string, platform *string) ([]business.ProbeCandidate, error) {
+	repository.platform = platform
 	return repository.candidates, nil
 }
 
@@ -136,6 +167,12 @@ func (runner *deferredProbeRunner) Go(run func(context.Context)) error {
 	runner.run = run
 	return nil
 }
+
+func (runner *deferredProbeRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *deferredProbeRunner) CancelTask(string) bool { return false }
 
 func (runner *deferredProbeRunner) Run(ctx context.Context) {
 	if runner.run == nil {
@@ -260,6 +297,136 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 		repository.samples[0].RequestModel != "gpt-test" || repository.samples[0].ActualModel != "mapped-model" ||
 		repository.samples[0].LatencyP95 == nil {
 		t.Fatalf("requests=%d samples=%#v", requestCount, repository.samples)
+	}
+}
+
+func TestAutomaticProbeSkipsQueuedTargetWhenFreshTrafficAppearsBeforeDispatch(t *testing.T) {
+	var probeRequests atomic.Int32
+	var trafficAppeared atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v1/admin/accounts/41/test" {
+			t.Fatalf("unexpected probe request: %s", request.URL.Path)
+		}
+		probeRequests.Add(1)
+		trafficAppeared.Store(true)
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{
+			"probe":                 map[string]any{"enabled": true, "model": "gpt-test", "concurrency": int64(1)},
+			"scope":                 map[string]any{},
+			"group_policy_bindings": map[string]any{},
+		},
+		candidates: []business.ProbeCandidate{
+			{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+			{AccountID: "42", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+		},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+	}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{
+		Automatic:  true,
+		AccountIDs: []string{"41", "42"},
+		FreshTrafficCheck: func(_ context.Context, accountID string) (bool, error) {
+			return accountID == "42" && trafficAppeared.Load(), nil
+		},
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probeRequests.Load() != 1 {
+		t.Fatalf("fresh traffic did not stop the queued probe: requests=%d", probeRequests.Load())
+	}
+	if summary.Targets != 2 || summary.Passed != 1 || summary.Skipped != 1 || summary.Persisted != 1 || len(summary.Results) != 2 {
+		t.Fatalf("summary=%#v", summary)
+	}
+	result := summary.Results[1]
+	if result.Result != "跳过" || result.Attempts != 0 || result.FailureReason == nil || *result.FailureReason != "检测到新鲜真实流量，已跳过主动探测" {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestAutomaticProbeContinuesWhenFreshTrafficCheckFails(t *testing.T) {
+	var probeRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		probeRequests.Add(1)
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{
+			"probe":                 map[string]any{"enabled": true, "model": "gpt-test"},
+			"scope":                 map[string]any{},
+			"group_policy_bindings": map[string]any{},
+		},
+		candidates: []business.ProbeCandidate{{
+			AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{},
+		}},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+	}}, &observingTasks{})
+
+	summary, err := service.RunNow(context.Background(), Request{
+		Automatic:  true,
+		AccountIDs: []string{"41"},
+		FreshTrafficCheck: func(context.Context, string) (bool, error) {
+			return false, errors.New("monitoring unavailable")
+		},
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probeRequests.Load() != 1 || summary.Passed != 1 || summary.Persisted != 1 || summary.Skipped != 0 {
+		t.Fatalf("requests=%d summary=%#v", probeRequests.Load(), summary)
+	}
+}
+
+func TestPlatformModelProbeActuallyRequestsEveryAccountWithUnlistedModel(t *testing.T) {
+	requestedModels := map[string]string{}
+	var requestedModelsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		requestedModelsMu.Lock()
+		requestedModels[strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/api/v1/admin/accounts/"), "/test")] = fmt.Sprint(body["model_id"])
+		requestedModelsMu.Unlock()
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+	}))
+	defer server.Close()
+	repository := &fakeRepository{
+		policy: map[string]any{"probe": map[string]any{}},
+		candidates: []business.ProbeCandidate{
+			{AccountID: "41", GroupName: "codex", KnownModels: []string{"listed-model"}, Metadata: map[string]any{}},
+			{AccountID: "42", GroupName: "codex", Metadata: map[string]any{}},
+		},
+	}
+	service := New(repository, fakeSettings{target: configstore.TargetSettings{
+		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+	}}, &observingTasks{})
+	platform := " OpenAI "
+
+	summary, err := service.RunNow(context.Background(), Request{Platform: &platform, ProbeModel: "new-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repository.platform == nil || *repository.platform != "openai" {
+		t.Fatalf("platform filter=%v", repository.platform)
+	}
+	requestedModelsMu.Lock()
+	defer requestedModelsMu.Unlock()
+	if summary.Targets != 2 || summary.Passed != 2 || requestedModels["41"] != "new-model" || requestedModels["42"] != "new-model" {
+		t.Fatalf("summary=%#v requested=%#v", summary, requestedModels)
 	}
 }
 

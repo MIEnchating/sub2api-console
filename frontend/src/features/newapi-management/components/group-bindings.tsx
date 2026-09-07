@@ -11,6 +11,7 @@ import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -37,24 +38,46 @@ type Props = {
   onSave: (bindings: NewAPIGroupBindingUpdate[]) => void;
 };
 
-type DraftBinding = { localGroupId: string; syncRatio: boolean };
+type DraftBinding = { localGroupId: string; sub2APIRatio: string; syncRatio: boolean };
 
 const unboundGroupValue = "__unbound__";
 
 function createDraftBindings(
   groups: NewAPIRemoteGroup[],
+  localGroups: NewAPILocalGroup[],
   bindings: NewAPIGroupBinding[],
 ): Record<string, DraftBinding> {
   const bindingByGroupID = new Map(bindings.map((binding) => [binding.newapi_group_id, binding]));
+  const localGroupByID = new Map(localGroups.map((group) => [group.id, group]));
   const next: Record<string, DraftBinding> = {};
   for (const group of groups) {
     const binding = bindingByGroupID.get(group.id);
     next[group.id] = {
       localGroupId: binding?.sub2api_group_id ?? "",
+      sub2APIRatio: binding ? (localGroupByID.get(binding.sub2api_group_id)?.ratio ?? "") : "",
       syncRatio: binding?.sync_ratio ?? false,
     };
   }
   return next;
+}
+
+function validSub2APIRatio(value: string): boolean {
+  if (!/^\+?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())) return false;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function updateLocalGroupRatio(
+  drafts: Record<string, DraftBinding>,
+  localGroupID: string,
+  ratio: string,
+): Record<string, DraftBinding> {
+  return Object.fromEntries(
+    Object.entries(drafts).map(([groupID, draft]) => [
+      groupID,
+      draft.localGroupId === localGroupID ? { ...draft, sub2APIRatio: ratio } : draft,
+    ]),
+  );
 }
 
 export function updateBoundGroupRatioSync(
@@ -74,7 +97,7 @@ export function updateBoundGroupRatioSync(
 
 export function NewAPIGroupBindings(props: Props) {
   const [drafts, setDrafts] = useState<Record<string, DraftBinding>>(() =>
-    createDraftBindings(props.groups, props.bindings),
+    createDraftBindings(props.groups, props.localGroups, props.bindings),
   );
   const pagination = useClientPagination(props.groups);
   const localGroupLabels = useMemo(
@@ -94,10 +117,11 @@ export function NewAPIGroupBindings(props: Props) {
   const boundDrafts = Object.values(drafts).filter((draft) => draft.localGroupId);
   const allBoundGroupsSyncRatio =
     boundDrafts.length > 0 && boundDrafts.every((draft) => draft.syncRatio);
+  const hasInvalidRatio = boundDrafts.some((draft) => !validSub2APIRatio(draft.sub2APIRatio));
 
   useEffect(() => {
-    setDrafts(createDraftBindings(props.groups, props.bindings));
-  }, [props.bindings, props.groups]);
+    setDrafts(createDraftBindings(props.groups, props.localGroups, props.bindings));
+  }, [props.bindings, props.groups, props.localGroups]);
 
   function save() {
     const bindings = props.groups.flatMap<NewAPIGroupBindingUpdate>((group) => {
@@ -108,6 +132,7 @@ export function NewAPIGroupBindings(props: Props) {
           newapi_group_id: group.id,
           newapi_group_name: group.name,
           sub2api_group_id: draft.localGroupId,
+          sub2api_ratio: draft.sub2APIRatio.trim(),
           sync_ratio: draft.syncRatio,
         },
       ];
@@ -130,9 +155,16 @@ export function NewAPIGroupBindings(props: Props) {
           />
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <Button size="sm" onClick={save} disabled={props.pending || props.groups.length === 0}>
+          {hasInvalidRatio ? (
+            <span className="text-destructive text-xs">Sub2API 管理平台倍率必须大于 0</span>
+          ) : null}
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={props.pending || props.groups.length === 0 || hasInvalidRatio}
+          >
             <Save aria-hidden="true" />
-            {props.pending ? "正在保存" : "保存绑定"}
+            {props.pending ? "正在保存" : "保存绑定与倍率"}
           </Button>
         </div>
       </TableFilterToolbar>
@@ -148,14 +180,19 @@ export function NewAPIGroupBindings(props: Props) {
               <TableHeader>
                 <TableRow>
                   <TableHead>New API 分组</TableHead>
-                  <TableHead>当前倍率</TableHead>
+                  <TableHead>New API 当前倍率</TableHead>
                   <TableHead className="min-w-56">Sub2API 分组</TableHead>
-                  <TableHead className="w-28 text-center">倍率同步</TableHead>
+                  <TableHead className="w-44">Sub2API 管理平台倍率</TableHead>
+                  <TableHead className="w-28 text-center">同步至 New API</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pagination.visibleItems.map((group) => {
-                  const draft = drafts[group.id] ?? { localGroupId: "", syncRatio: false };
+                  const draft = drafts[group.id] ?? {
+                    localGroupId: "",
+                    sub2APIRatio: "",
+                    syncRatio: false,
+                  };
                   return (
                     <TableRow key={group.id}>
                       <TableCell className="font-medium">{group.name}</TableCell>
@@ -169,6 +206,11 @@ export function NewAPIGroupBindings(props: Props) {
                               ...current,
                               [group.id]: {
                                 localGroupId: value === unboundGroupValue ? "" : (value ?? ""),
+                                sub2APIRatio:
+                                  value === unboundGroupValue
+                                    ? ""
+                                    : (props.localGroups.find((item) => item.id === value)?.ratio ??
+                                      ""),
                                 syncRatio: value === unboundGroupValue ? false : draft.syncRatio,
                               },
                             }))
@@ -186,6 +228,26 @@ export function NewAPIGroupBindings(props: Props) {
                             ))}
                           </SelectContent>
                         </Select>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          value={draft.sub2APIRatio}
+                          inputMode="decimal"
+                          disabled={!draft.localGroupId}
+                          aria-label={`${group.name} 的 Sub2API 管理平台倍率`}
+                          aria-invalid={
+                            draft.localGroupId ? !validSub2APIRatio(draft.sub2APIRatio) : undefined
+                          }
+                          onChange={(event) =>
+                            setDrafts((current) =>
+                              updateLocalGroupRatio(
+                                current,
+                                draft.localGroupId,
+                                event.target.value,
+                              ),
+                            )
+                          }
+                        />
                       </TableCell>
                       <TableCell className="text-center">
                         <Switch

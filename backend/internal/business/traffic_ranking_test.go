@@ -195,12 +195,8 @@ func TestTrafficRankingAverageIncludesRecordsBeyondLatencySampleLimit(t *testing
 
 func TestTrafficRankingWindowQueryUsesBoundedWindowIndex(t *testing.T) {
 	store := openPolicyStore(t)
-	rows, err := store.db.Query(`EXPLAIN QUERY PLAN WITH ranked AS (
-		SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
-			ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
-		FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
-	) SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
-	FROM ranked WHERE request_rank=1 ORDER BY observed_at`, "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z")
+	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+trafficRankingWindowQuery,
+		"2026-08-01T00:00:00.000000000Z", "2026-08-02T00:00:00.000000000Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +213,7 @@ func TestTrafficRankingWindowQueryUsesBoundedWindowIndex(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan, "ix_usage_records_traffic_window") {
+	if !strings.Contains(plan, "ix_usage_records_traffic_window") || !strings.Contains(plan, "observed_at>?") || !strings.Contains(plan, "observed_at<?") {
 		t.Fatalf("traffic window index was not used:\n%s", plan)
 	}
 }

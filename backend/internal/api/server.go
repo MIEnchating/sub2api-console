@@ -45,6 +45,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
+	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
@@ -77,13 +79,15 @@ type Business interface {
 	ControlPolicy(context.Context) (map[string]any, error)
 	PolicySnapshot(context.Context) (business.PolicySnapshot, error)
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
-	SetAccountTestModel(context.Context, string, *string, string) error
+	SetAccountTestModels(context.Context, string, []string, string) error
 	UpdateGroupPolicy(context.Context, string, map[string]any, string) (business.GroupStatus, error)
 	ClearGroupPolicy(context.Context, string, string) (business.GroupStatus, error)
 	SetGroupExcluded(context.Context, string, bool, string) (business.GroupStatus, error)
 	Upstreams(context.Context) (business.UpstreamSummary, error)
 	UpstreamGroups(context.Context, string, bool) ([]business.UpstreamGroup, error)
+	UpstreamGroupBindingAudit(context.Context) (business.UpstreamGroupBindingAudit, error)
 	UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error)
+	AllUpstreamGroupHistory(context.Context, int) ([]business.UpstreamGroupChange, error)
 	Events(context.Context, *int) ([]business.RunEvent, error)
 	Alerts(context.Context, *int) ([]business.AlertListItem, error)
 	ClearAlerts(context.Context) (int64, error)
@@ -127,6 +131,7 @@ type NewAPIManagementService interface {
 	DeletePlatform(context.Context, string) (bool, error)
 	Refresh(context.Context, string) (newapimanagement.RemoteSnapshot, error)
 	ManagementModelPrices(context.Context, string) ([]newapimanagement.Sub2APIModelPrice, error)
+	ModelPriceCatalog(context.Context, string, bool) (newapimanagement.ModelPriceCatalog, error)
 	RemoteModelPricingSource(context.Context, string) (newapimanagement.RemotePricingSource, error)
 	SaveBindings(context.Context, string, []newapimanagement.GroupBindingInput) ([]business.NewAPIGroupBinding, error)
 	CreateChannelKey(context.Context, string, newapimanagement.ChannelKeyInput) (newapimanagement.ChannelKey, error)
@@ -154,7 +159,17 @@ type RoutingControlRestorer interface {
 
 type TaskRepository interface {
 	Get(context.Context, string) (taskstore.Task, error)
+	ListConsoleSummaries(context.Context, *int) ([]taskstore.Task, error)
+	ListLogSummaries(context.Context, *int) ([]taskstore.Task, error)
 	LatestByOperation(context.Context, string, string) (taskstore.Task, error)
+}
+
+type TaskCanceller interface {
+	CancelTask(string) bool
+}
+
+type SystemMetricsReader interface {
+	Snapshot(context.Context) (systeminfo.Snapshot, error)
 }
 
 type LogReader interface {
@@ -191,9 +206,18 @@ type AccountTaskEnqueuer interface {
 	EnqueueControl(context.Context, string, string, string) (taskstore.Task, error)
 	EnqueueFields(context.Context, string, accountops.FieldPatch, string) (taskstore.Task, error)
 	EnqueueSettings(context.Context, string, accountops.SettingsInput, string) (taskstore.Task, error)
-	EnqueueManualPriority(context.Context, string, int64, string, int64, bool, string) (taskstore.Task, error)
+	EnqueuePoolModeSync(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueManualPriority(context.Context, string, int64, string, int64, bool, bool, string) (taskstore.Task, error)
 	EnqueueClearManualPriority(context.Context, string, string) (taskstore.Task, error)
 	Models(context.Context, string) ([]string, error)
+}
+
+type AccountModelSyncService interface {
+	ModelSyncPreview(context.Context, []string) (business.AccountModelSyncPreview, error)
+	ModelSyncSettings(context.Context) (business.AccountModelSyncSettings, error)
+	ConfigureModelSyncSettings(context.Context, []string, string) (business.AccountModelSyncSettings, error)
+	EnqueueModelDiscovery(context.Context, []string, string) (taskstore.Task, error)
+	EnqueueModelApply(context.Context, accountops.ModelApplyRequest) (taskstore.Task, error)
 }
 
 type AccountDeleteService interface {
@@ -211,6 +235,14 @@ type ModelCheckService interface {
 	Capabilities() modelcheck.Capabilities
 	AccountStatuses(context.Context) ([]modelcheck.AccountCheckStatus, error)
 	Enqueue(context.Context, modelcheck.Request) (taskstore.Task, error)
+}
+
+type ModelCheckConfigurationService interface {
+	Configuration() modelcheck.ConfigurationView
+	SaveDraft(context.Context, modelcheck.SaveDraftRequest, string) (modelcheck.ConfigurationView, error)
+	PublishDraft(context.Context, modelcheck.PublishRequest, string) (modelcheck.ConfigurationView, error)
+	DiscardDraft(context.Context, modelcheck.PublishRequest, string) (modelcheck.ConfigurationView, error)
+	RestoreVersion(context.Context, modelcheck.RestoreRequest, string) (modelcheck.ConfigurationView, error)
 }
 
 type PricingService interface {
@@ -244,7 +276,7 @@ type UpstreamSyncTaskEnqueuer interface {
 type OnboardingService interface {
 	Candidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProbeModels(context.Context, string, string) ([]string, error)
-	Probe(context.Context, string, string, string) (onboarding.ProbeResult, error)
+	Probe(context.Context, string, string, string, ...string) (onboarding.ProbeResult, error)
 	CancelProbe(context.Context, string, string) error
 	PreviewUnboundKeys(context.Context, string) (onboarding.KeyCleanupPreview, error)
 	EnqueueKeyCleanup(context.Context, string, []string, string) (taskstore.Task, error)
@@ -272,12 +304,14 @@ type Dependencies struct {
 	InspectionTasks    InspectionTaskEnqueuer
 	RoutingControl     RoutingControlRestorer
 	Tasks              TaskRepository
+	TaskCanceller      TaskCanceller
 	Logs               LogReader
 	LogMaintenance     LogMaintenanceController
 	AlertTasks         AlertTaskEnqueuer
 	ManagementTasks    ManagementTaskEnqueuer
 	AccountMaintenance AccountMaintenanceTaskEnqueuer
 	AccountTasks       AccountTaskEnqueuer
+	AccountModelSync   AccountModelSyncService
 	AccountDelete      AccountDeleteService
 	ProbeTasks         ProbeTaskEnqueuer
 	ModelChecks        ModelCheckService
@@ -291,6 +325,7 @@ type Dependencies struct {
 	SystemLogs         SystemLogReader
 	Pricing            PricingService
 	NewAPIManagement   NewAPIManagementService
+	SystemMetrics      SystemMetricsReader
 }
 
 type Server struct {
@@ -303,12 +338,14 @@ type Server struct {
 	inspectionTasks    InspectionTaskEnqueuer
 	routingControl     RoutingControlRestorer
 	tasks              TaskRepository
+	taskCanceller      TaskCanceller
 	logs               LogReader
 	logMaintenance     LogMaintenanceController
 	alertTasks         AlertTaskEnqueuer
 	managementTasks    ManagementTaskEnqueuer
 	accountMaintenance AccountMaintenanceTaskEnqueuer
 	accountTasks       AccountTaskEnqueuer
+	accountModelSync   AccountModelSyncService
 	accountDelete      AccountDeleteService
 	probeTasks         ProbeTaskEnqueuer
 	modelChecks        ModelCheckService
@@ -322,6 +359,7 @@ type Server struct {
 	systemLogReader    SystemLogReader
 	pricing            PricingService
 	newAPIManagement   NewAPIManagementService
+	systemMetrics      SystemMetricsReader
 	loginThrottle      *loginThrottle
 	sseSlots           chan struct{}
 	now                func() time.Time
@@ -408,12 +446,12 @@ type accountDefaultsRequest struct {
 }
 
 type accountSettingsRequest struct {
-	Priority    int64   `json:"priority" binding:"required,min=1,max=10000000"`
-	LoadFactor  string  `json:"load_factor" binding:"required,min=1,max=128"`
-	Concurrency int64   `json:"concurrency" binding:"required,min=1,max=10000000"`
-	TestModel   *string `json:"test_model"`
-	Paused      *bool   `json:"paused" binding:"required"`
-	Excluded    *bool   `json:"excluded" binding:"required"`
+	Priority    int64     `json:"priority" binding:"required,min=1,max=10000000"`
+	LoadFactor  string    `json:"load_factor" binding:"required,min=1,max=128"`
+	Concurrency int64     `json:"concurrency" binding:"required,min=1,max=10000000"`
+	TestModels  *[]string `json:"test_models"`
+	Paused      *bool     `json:"paused" binding:"required"`
+	Excluded    *bool     `json:"excluded" binding:"required"`
 }
 
 type newAPIPlatformRequest struct {
@@ -506,6 +544,18 @@ type runtimeConfigResponse struct {
 	ConfigurationErrors       []string `json:"configuration_errors"`
 }
 
+type taskSummaryResponse struct {
+	ID         string `json:"id"`
+	Skill      string `json:"skill"`
+	Operation  string `json:"operation"`
+	Status     string `json:"status"`
+	Progress   int    `json:"progress"`
+	Message    string `json:"message"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
+	SystemInfo bool   `json:"system_info"`
+}
+
 func New(cfg config.Config, private *configstore.Store, business Business, dependencies ...Dependencies) *gin.Engine {
 	var services Dependencies
 	if len(dependencies) > 0 {
@@ -521,12 +571,14 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		inspectionTasks:    services.InspectionTasks,
 		routingControl:     services.RoutingControl,
 		tasks:              services.Tasks,
+		taskCanceller:      services.TaskCanceller,
 		logs:               services.Logs,
 		logMaintenance:     services.LogMaintenance,
 		alertTasks:         services.AlertTasks,
 		managementTasks:    services.ManagementTasks,
 		accountMaintenance: services.AccountMaintenance,
 		accountTasks:       services.AccountTasks,
+		accountModelSync:   services.AccountModelSync,
 		accountDelete:      services.AccountDelete,
 		probeTasks:         services.ProbeTasks,
 		modelChecks:        services.ModelChecks,
@@ -540,6 +592,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		systemLogReader:    services.SystemLogs,
 		pricing:            services.Pricing,
 		newAPIManagement:   services.NewAPIManagement,
+		systemMetrics:      services.SystemMetrics,
 		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
 		sseSlots:           make(chan struct{}, maximumSSEConnections),
 		now:                time.Now,
@@ -562,6 +615,11 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/config/mode", server.updateRuntimeMode)
 	authorized.POST("/config/probes", server.updateProbeSettings)
 	authorized.POST("/config/account-defaults", server.updateAccountDefaults)
+	authorized.GET("/config/account-settings", server.accountCreationSettings)
+	authorized.PUT("/config/account-settings", server.updateAccountCreationSettings)
+	authorized.POST("/config/account-settings/pool-mode/apply", server.syncExistingAccountPoolMode)
+	authorized.GET("/config/model-sync", server.modelSyncSettings)
+	authorized.PUT("/config/model-sync", server.updateModelSyncSettings)
 	authorized.POST("/config/target", server.updateAdminTarget)
 	authorized.GET("/notifications/status", server.notificationStatus)
 	authorized.GET("/notifications/queue", server.notificationQueue)
@@ -578,7 +636,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/traffic/ranking", server.trafficRanking)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
-	authorized.PUT("/accounts/:account_id/test-model", server.setAccountTestModel)
+	authorized.PUT("/accounts/:account_id/test-models", server.setAccountTestModels)
 	authorized.POST("/accounts/:account_id/sync", server.syncAccountFields)
 	authorized.PUT("/accounts/:account_id/settings", server.saveAccountSettings)
 	authorized.PUT("/accounts/:account_id/manual-priority", server.setAccountManualPriority)
@@ -593,6 +651,9 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/management/accounts/names/repair", server.repairAccountNames)
 	authorized.POST("/management/accounts/defaults/repair", server.repairAccountDefaults)
 	authorized.POST("/management/accounts/missing-bindings/cleanup", server.cleanupMissingBindings)
+	authorized.POST("/management/accounts/models/discover", server.discoverAccountModels)
+	authorized.POST("/management/accounts/models/preview", server.previewAccountModels)
+	authorized.POST("/management/accounts/models/apply", server.applyAccountModels)
 	authorized.POST("/onboarding", server.createOnboarding)
 	authorized.POST("/onboarding/batch", server.createOnboardingBatch)
 	authorized.POST("/onboarding/prepare", server.prepareOnboarding)
@@ -625,6 +686,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
 	authorized.POST("/newapi/platforms/:platform_id/refresh", server.refreshNewAPIPlatform)
 	authorized.GET("/newapi/platforms/:platform_id/management-model-prices", server.managementModelPrices)
+	authorized.POST("/newapi/platforms/:platform_id/management-model-prices/refresh", server.managementModelPrices)
 	authorized.GET("/newapi/platforms/:platform_id/remote-model-prices/raw", server.remoteModelPricingSource)
 	authorized.PUT("/newapi/platforms/:platform_id/group-bindings", server.saveNewAPIGroupBindings)
 	authorized.POST("/newapi/platforms/:platform_id/channel-key", server.createNewAPIChannelKey)
@@ -638,6 +700,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/upstreams/names/repair", server.repairUpstreamNames)
 	authorized.POST("/upstreams/groups/sync", server.syncAllUpstreamGroups)
 	authorized.POST("/upstreams/sync", server.syncAllUpstreams)
+	authorized.GET("/upstreams/group-bindings/audit", server.upstreamGroupBindingAudit)
+	authorized.GET("/upstreams/group-history", server.allUpstreamGroupHistory)
 	authorized.POST("/upstreams/:host/rate-sync", server.syncUpstreamRates)
 	authorized.POST("/upstreams/:host/balance-sync", server.syncUpstreamBalance)
 	authorized.GET("/upstreams/:host/configuration", server.upstreamConfiguration)
@@ -659,6 +723,11 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
 	authorized.GET("/model-checks/account-statuses", server.modelCheckAccountStatuses)
+	authorized.GET("/model-checks/configuration", server.modelCheckConfiguration)
+	authorized.PUT("/model-checks/configuration/draft", server.saveModelCheckDraft)
+	authorized.POST("/model-checks/configuration/publish", server.publishModelCheckDraft)
+	authorized.POST("/model-checks/configuration/discard", server.discardModelCheckDraft)
+	authorized.POST("/model-checks/configuration/restore", server.restoreModelCheckVersion)
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
 	authorized.PUT("/inspection/automation", server.updateAutoInspection)
@@ -673,7 +742,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/alerts/policy", server.alertPolicy)
 	authorized.PUT("/alerts/policy", server.updateAlertPolicy)
 	authorized.POST("/alerts/evaluate", server.evaluateAlerts)
+	authorized.GET("/tasks", server.tasksList)
+	authorized.GET("/system/metrics", server.systemMetricsSnapshot)
 	authorized.GET("/tasks/:task_id", server.taskDetail)
+	authorized.DELETE("/tasks/:task_id", server.cancelTask)
 	authorized.GET("/tasks/:task_id/events", server.taskEvents)
 	authorized.GET("/logs", server.logsPage)
 	authorized.DELETE("/logs", server.clearLogs)
@@ -764,7 +836,7 @@ func (s *Server) initialize(c *gin.Context) {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	if err := s.setSession(c, strings.TrimSpace(payload.Username)); err != nil {
+	if err := s.setSession(c, strings.TrimSpace(payload.Username), payload.Password); err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
 		return
 	}
@@ -824,22 +896,17 @@ func (s *Server) login(c *gin.Context) {
 		writeError(c, http.StatusTooManyRequests, "登录尝试过于频繁，请稍后再试")
 		return
 	}
-	authenticated, err := s.private.Authenticate(c.Request.Context(), payload.Username, payload.Password)
-	if err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台认证读取失败")
-		return
-	}
-	if !authenticated {
-		s.loginThrottle.recordFailure(c.Request, now)
-		writeError(c, http.StatusUnauthorized, "账号或密码错误")
+	username := strings.TrimSpace(payload.Username)
+	if err := s.setSession(c, username, payload.Password); err != nil {
+		if errors.Is(err, configstore.ErrInvalidCredentials) {
+			s.loginThrottle.recordFailure(c.Request, now)
+			writeError(c, http.StatusUnauthorized, "账号或密码错误")
+		} else {
+			writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
+		}
 		return
 	}
 	s.loginThrottle.recordSuccess(c.Request)
-	username := strings.TrimSpace(payload.Username)
-	if err := s.setSession(c, username); err != nil {
-		writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
-		return
-	}
 	c.JSON(http.StatusOK, sessionStatus{Authenticated: true, Username: &username})
 }
 
@@ -877,7 +944,11 @@ func (s *Server) updateProfile(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if err := s.setSession(c, username); err != nil {
+	password := payload.CurrentPassword
+	if payload.NewPassword != nil {
+		password = *payload.NewPassword
+	}
+	if err := s.setSession(c, username, password); err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台会话创建失败")
 		return
 	}
@@ -1073,6 +1144,93 @@ func (s *Server) updateAccountDefaults(c *gin.Context) {
 		return
 	}
 	s.runtimeConfigFromSnapshot(c, snapshot)
+}
+
+func (s *Server) accountCreationSettings(c *gin.Context) {
+	settings, err := s.private.AccountCreationSettings(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "账号设置读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (s *Server) updateAccountCreationSettings(c *gin.Context) {
+	var payload configstore.AccountCreationSettings
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "账号设置参数无效")
+		return
+	}
+	settings, err := s.private.ConfigureAccountCreationSettings(c.Request.Context(), payload)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (s *Server) syncExistingAccountPoolMode(c *gin.Context) {
+	if s.accountTasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号池模式同步服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "池模式同步参数必须只包含 account_ids")
+		return
+	}
+	accountIDs, err := stableAccountIDs(payload["account_ids"], 1000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountTasks.EnqueuePoolModeSync(c.Request.Context(), accountIDs, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) modelSyncSettings(c *gin.Context) {
+	if s.accountModelSync == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
+		return
+	}
+	settings, err := s.accountModelSync.ModelSyncSettings(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "全局屏蔽模型设置读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, settings)
+}
+
+func (s *Server) updateModelSyncSettings(c *gin.Context) {
+	if s.accountModelSync == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
+		return
+	}
+	var payload business.AccountModelSyncSettings
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "全局屏蔽模型设置参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	settings, err := s.accountModelSync.ConfigureModelSyncSettings(c.Request.Context(), payload.BlockedPatterns, actor)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, settings)
 }
 
 func (s *Server) notificationStatus(c *gin.Context) {
@@ -1582,7 +1740,7 @@ func (s *Server) accountModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"models": models})
 }
 
-func (s *Server) setAccountTestModel(c *gin.Context) {
+func (s *Server) setAccountTestModels(c *gin.Context) {
 	accountID := strings.TrimSpace(c.Param("account_id"))
 	if !positiveNumericID(accountID) {
 		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
@@ -1590,22 +1748,27 @@ func (s *Server) setAccountTestModel(c *gin.Context) {
 	}
 	payload, err := decodeRequestObject(c)
 	if err != nil || len(payload) != 1 {
-		writeError(c, http.StatusUnprocessableEntity, "账号探测模型参数必须只包含 model")
+		writeError(c, http.StatusUnprocessableEntity, "账号探测模型参数必须只包含 models")
 		return
 	}
-	raw, present := payload["model"]
+	raw, present := payload["models"]
 	if !present {
-		writeError(c, http.StatusUnprocessableEntity, "账号探测模型参数缺少 model")
+		writeError(c, http.StatusUnprocessableEntity, "账号探测模型参数缺少 models")
 		return
 	}
-	var model *string
-	if raw != nil {
-		value, ok := raw.(string)
-		if !ok || utf8.RuneCountInString(value) > 256 {
-			writeError(c, http.StatusUnprocessableEntity, "探测模型必须是长度不超过 256 的字符串或 null")
+	rawModels, ok := raw.([]any)
+	if !ok || len(rawModels) > 20 {
+		writeError(c, http.StatusUnprocessableEntity, "探测模型必须是最多包含 20 项的字符串数组")
+		return
+	}
+	models := make([]string, 0, len(rawModels))
+	for _, rawModel := range rawModels {
+		model, valid := rawModel.(string)
+		if !valid || strings.TrimSpace(model) == "" || utf8.RuneCountInString(model) > 256 {
+			writeError(c, http.StatusUnprocessableEntity, "探测模型必须是长度不超过 256 的非空字符串")
 			return
 		}
-		model = &value
+		models = append(models, model)
 	}
 	if _, ok := s.accountMutationPreflight(c, accountID, false); !ok {
 		return
@@ -1615,7 +1778,7 @@ func (s *Server) setAccountTestModel(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	if err := s.business.SetAccountTestModel(c.Request.Context(), accountID, model, actor); err != nil {
+	if err := s.business.SetAccountTestModels(c.Request.Context(), accountID, models, actor); err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
@@ -1670,13 +1833,19 @@ func (s *Server) saveAccountSettings(c *gin.Context) {
 		return
 	}
 	var request accountSettingsRequest
-	if err := bindRequestJSON(c, &request); err != nil || request.Paused == nil || request.Excluded == nil {
+	if err := bindRequestJSON(c, &request); err != nil || request.Paused == nil || request.Excluded == nil || request.TestModels == nil {
 		writeError(c, http.StatusUnprocessableEntity, "账号设置参数无效")
 		return
 	}
-	if request.TestModel != nil && utf8.RuneCountInString(*request.TestModel) > 256 {
-		writeError(c, http.StatusUnprocessableEntity, "探测模型不能超过 256 个字符")
+	if len(*request.TestModels) > 20 {
+		writeError(c, http.StatusUnprocessableEntity, "账号探测模型不能超过 20 个")
 		return
+	}
+	for _, model := range *request.TestModels {
+		if strings.TrimSpace(model) == "" || utf8.RuneCountInString(model) > 256 {
+			writeError(c, http.StatusUnprocessableEntity, "探测模型必须是长度不超过 256 的非空字符串")
+			return
+		}
 	}
 	if s.accountTasks == nil {
 		writeError(c, http.StatusServiceUnavailable, "账号设置任务服务尚未就绪")
@@ -1697,7 +1866,7 @@ func (s *Server) saveAccountSettings(c *gin.Context) {
 	}
 	task, err := s.accountTasks.EnqueueSettings(c.Request.Context(), accountID, accountops.SettingsInput{
 		Priority: request.Priority, LoadFactor: request.LoadFactor, Concurrency: request.Concurrency,
-		TestModel: request.TestModel, Paused: *request.Paused, Excluded: *request.Excluded,
+		TestModels: *request.TestModels, Paused: *request.Paused, Excluded: *request.Excluded,
 	}, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
@@ -1713,8 +1882,8 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 		return
 	}
 	payload, err := decodeRequestObject(c)
-	if err != nil || len(payload) != 4 {
-		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor、concurrency 和 sync_balance_multiplier")
+	if err != nil || len(payload) != 5 {
+		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor、concurrency、schedulable 和 sync_balance_multiplier")
 		return
 	}
 	priority, err := positiveJSONInteger(payload["priority"], "priority", 1, 1000)
@@ -1730,6 +1899,11 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 	concurrency, err := positiveJSONInteger(payload["concurrency"], "concurrency", 1, 10_000_000)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	schedulable, ok := payload["schedulable"].(bool)
+	if !ok {
+		writeError(c, http.StatusUnprocessableEntity, "schedulable 必须是布尔值")
 		return
 	}
 	syncBalanceMultiplier, ok := payload["sync_balance_multiplier"].(bool)
@@ -1754,7 +1928,7 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
 		return
 	}
-	task, err := s.accountTasks.EnqueueManualPriority(c.Request.Context(), accountID, priority, loadFactor, concurrency, syncBalanceMultiplier, actor)
+	task, err := s.accountTasks.EnqueueManualPriority(c.Request.Context(), accountID, priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier, actor)
 	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
@@ -1965,6 +2139,178 @@ func (s *Server) cleanupMissingBindings(c *gin.Context) {
 	s.enqueueAccountMaintenance(c, "cleanup")
 }
 
+func (s *Server) discoverAccountModels(c *gin.Context) {
+	if s.accountModelSync == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "模型发现参数必须只包含 account_ids")
+		return
+	}
+	accountIDs, err := stableAccountIDs(payload["account_ids"], 1000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountModelSync.EnqueueModelDiscovery(c.Request.Context(), accountIDs, actor)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func (s *Server) previewAccountModels(c *gin.Context) {
+	if s.accountModelSync == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 1 {
+		writeError(c, http.StatusUnprocessableEntity, "模型预览参数必须只包含 account_ids")
+		return
+	}
+	accountIDs, err := stableAccountIDs(payload["account_ids"], 1000)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	preview, err := s.accountModelSync.ModelSyncPreview(c.Request.Context(), accountIDs)
+	if err != nil {
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+func (s *Server) applyAccountModels(c *gin.Context) {
+	if s.accountModelSync == nil {
+		writeError(c, http.StatusServiceUnavailable, "账号模型同步服务尚未就绪")
+		return
+	}
+	payload, err := decodeRequestObject(c)
+	if err != nil || len(payload) != 3 {
+		writeError(c, http.StatusUnprocessableEntity, "模型应用参数必须只包含 accounts、probe_models 和 catalog_fingerprint")
+		return
+	}
+	accounts, err := modelSyncAccountSelections(payload["accounts"])
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	probeModels, err := modelSyncProbeModels(payload["probe_models"])
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	fingerprint, ok := payload["catalog_fingerprint"].(string)
+	fingerprint = strings.TrimSpace(fingerprint)
+	if !ok || len(fingerprint) != 64 {
+		writeError(c, http.StatusUnprocessableEntity, "模型目录指纹无效，请重新获取预览")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	task, err := s.accountModelSync.EnqueueModelApply(c.Request.Context(), accountops.ModelApplyRequest{
+		Accounts: accounts, ProbeModels: probeModels, CatalogFingerprint: fingerprint, Actor: actor,
+	})
+	if err != nil {
+		if errors.Is(err, accountops.ErrModelCatalogChanged) {
+			c.JSON(http.StatusConflict, gin.H{"code": "model_catalog_changed", "detail": err.Error()})
+			return
+		}
+		writeError(c, http.StatusConflict, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}
+
+func modelSyncAccountSelections(raw any) ([]accountops.AccountModelSelection, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 1000 {
+		return nil, errors.New("账号模型选择必须是包含 1 到 1000 项的数组")
+	}
+	result := make([]accountops.AccountModelSelection, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawSelection := range values {
+		selection, ok := rawSelection.(map[string]any)
+		if !ok || len(selection) != 2 {
+			return nil, errors.New("每项账号模型选择必须只包含 account_id 和 models")
+		}
+		accountID, ok := selection["account_id"].(string)
+		accountID = strings.TrimSpace(accountID)
+		if !ok || !positiveNumericID(accountID) {
+			return nil, errors.New("账号必须使用有效的稳定 ID")
+		}
+		if _, duplicate := seen[accountID]; duplicate {
+			return nil, fmt.Errorf("账号 ID %s 重复", accountID)
+		}
+		models, err := modelSyncSelectedModels(selection["models"])
+		if err != nil {
+			return nil, fmt.Errorf("账号 %s：%w", accountID, err)
+		}
+		seen[accountID] = struct{}{}
+		result = append(result, accountops.AccountModelSelection{AccountID: accountID, Models: models})
+	}
+	return result, nil
+}
+
+func modelSyncSelectedModels(raw any) ([]string, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) > 500 {
+		return nil, errors.New("模型必须是最多包含 500 项的数组")
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawModel := range values {
+		model, ok := rawModel.(string)
+		model = strings.TrimSpace(model)
+		if !ok || model == "" || utf8.RuneCountInString(model) > 256 {
+			return nil, errors.New("模型名称必须是长度不超过 256 的非空字符串")
+		}
+		key := strings.ToLower(model)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, model)
+	}
+	return result, nil
+}
+
+func modelSyncProbeModels(raw any) ([]string, error) {
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 || len(values) > 20 {
+		return nil, errors.New("统一探活模型必须是包含 1 到 20 项的数组")
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawModel := range values {
+		model, ok := rawModel.(string)
+		model = strings.TrimSpace(model)
+		if !ok || model == "" || utf8.RuneCountInString(model) > 256 {
+			return nil, errors.New("统一探活模型必须是长度不超过 256 的非空字符串")
+		}
+		key := strings.ToLower(model)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, model)
+	}
+	return result, nil
+}
+
 func (s *Server) enqueueAccountMaintenance(c *gin.Context, operation string) {
 	if s.accountMaintenance == nil {
 		writeError(c, http.StatusServiceUnavailable, "账号维护任务服务尚未就绪")
@@ -2078,7 +2424,7 @@ func (s *Server) onboardingProbeModels(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, _, ok := onboardingProbePayload(c, false)
+	host, groupID, _, _, ok := onboardingProbePayload(c, false)
 	if !ok {
 		return
 	}
@@ -2151,11 +2497,11 @@ func (s *Server) onboardingProbe(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, model, ok := onboardingProbePayload(c, true)
+	host, groupID, model, mode, ok := onboardingProbePayload(c, true)
 	if !ok {
 		return
 	}
-	result, err := s.onboarding.Probe(c.Request.Context(), host, groupID, model)
+	result, err := s.onboarding.Probe(c.Request.Context(), host, groupID, model, mode)
 	if err != nil {
 		if result.RequestModel != "" {
 			result.Status = "failed"
@@ -2174,7 +2520,7 @@ func (s *Server) cancelOnboardingProbe(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "接入前探活服务尚未就绪")
 		return
 	}
-	host, groupID, _, ok := onboardingProbePayload(c, false)
+	host, groupID, _, _, ok := onboardingProbePayload(c, false)
 	if !ok {
 		return
 	}
@@ -2185,39 +2531,62 @@ func (s *Server) cancelOnboardingProbe(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": true})
 }
 
-func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, string, bool) {
+func onboardingProbePayload(c *gin.Context, requireModel bool) (string, string, string, string, bool) {
 	payload, err := decodeRequestObject(c)
-	expected := 2
-	if requireModel {
-		expected = 3
-	}
-	if err != nil || len(payload) != expected {
+	if err != nil {
 		fields := "host、group_id"
 		if requireModel {
-			fields += " 和 model"
+			fields += "、model 和 mode"
 		}
 		writeError(c, http.StatusUnprocessableEntity, "接入前探活参数必须只包含 "+fields)
-		return "", "", "", false
+		return "", "", "", "", false
+	}
+	allowed := 2
+	if requireModel {
+		allowed = 4
+	}
+	if len(payload) != allowed && !(requireModel && len(payload) == 3) {
+		fields := "host、group_id"
+		if requireModel {
+			fields += "、model 和 mode"
+		}
+		writeError(c, http.StatusUnprocessableEntity, "接入前探活参数必须只包含 "+fields)
+		return "", "", "", "", false
 	}
 	host, err := requiredText(payload, "host", 1, 255)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	groupID, err := requiredText(payload, "group_id", 1, 255)
 	if err != nil {
 		writeError(c, http.StatusUnprocessableEntity, err.Error())
-		return "", "", "", false
+		return "", "", "", "", false
 	}
 	model := ""
+	mode := "default"
 	if requireModel {
 		model, err = requiredText(payload, "model", 1, 255)
 		if err != nil {
 			writeError(c, http.StatusUnprocessableEntity, err.Error())
-			return "", "", "", false
+			return "", "", "", "", false
+		}
+		if raw, present := payload["mode"]; present {
+			value, ok := raw.(string)
+			mode = strings.ToLower(strings.TrimSpace(value))
+			if !ok || (mode != "stream" && mode != "default") {
+				writeError(c, http.StatusUnprocessableEntity, "探活模式必须是 stream 或 default")
+				return "", "", "", "", false
+			}
 		}
 	}
-	return host, groupID, model, true
+	for key := range payload {
+		if key != "host" && key != "group_id" && (!requireModel || (key != "model" && key != "mode")) {
+			writeError(c, http.StatusUnprocessableEntity, "接入前探活参数包含未知字段："+key)
+			return "", "", "", "", false
+		}
+	}
+	return host, groupID, model, mode, true
 }
 
 func (s *Server) createOnboarding(c *gin.Context) {
@@ -3223,6 +3592,14 @@ func parseUpstreamInput(payload map[string]any, creating bool) (upstreamconfig.I
 		BaseURL: baseURL, AccountBaseURL: accountBaseURL, UpstreamType: platform, AuthMode: authMode, RechargeRate: recharge,
 		Headers: map[string]string{}, Cookies: map[string]string{}, Present: map[string]bool{},
 	}
+	if !creating {
+		if _, present := payload["host"]; present {
+			result.Host, err = requiredText(payload, "host", 1, 255)
+			if err != nil {
+				return upstreamconfig.Input{}, err
+			}
+		}
+	}
 	if creating {
 		result.Host, err = requiredText(payload, "host", 1, 255)
 		if err != nil {
@@ -3789,6 +4166,15 @@ func (s *Server) upstreamGroups(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+func (s *Server) upstreamGroupBindingAudit(c *gin.Context) {
+	result, err := s.business.UpstreamGroupBindingAudit(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "上游分组绑定核对失败")
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (s *Server) upstreamGroupHistory(c *gin.Context) {
 	host := strings.TrimSpace(c.Param("host"))
 	if host == "" {
@@ -3816,6 +4202,24 @@ func (s *Server) upstreamGroupHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, rows)
 }
 
+func (s *Server) allUpstreamGroupHistory(c *gin.Context) {
+	limit := 500
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 500 {
+			writeError(c, http.StatusUnprocessableEntity, "limit 必须在 1 到 500 之间")
+			return
+		}
+		limit = parsed
+	}
+	rows, err := s.business.AllUpstreamGroupHistory(c.Request.Context(), limit)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "上游分组变化历史读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, rows)
+}
+
 func (s *Server) events(c *gin.Context) {
 	limit, ok := optionalLimit(c)
 	if !ok {
@@ -3830,11 +4234,10 @@ func (s *Server) runActiveProbe(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "主动探测任务服务尚未就绪")
 		return
 	}
-	accountID, groupName, ok := scopedTaskRequest(c, "主动探测")
+	request, ok := activeProbeRequest(c)
 	if !ok {
 		return
 	}
-	request := probe.Request{AccountID: accountID, GroupName: groupName}
 	actor, err := s.requestActor(c)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
@@ -3846,6 +4249,69 @@ func (s *Server) runActiveProbe(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, task)
+}
+
+func activeProbeRequest(c *gin.Context) (probe.Request, bool) {
+	payload, err := decodeRequestObject(c)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "主动探测参数必须是 JSON 对象")
+		return probe.Request{}, false
+	}
+	var request probe.Request
+	for key, raw := range payload {
+		value, stringValue := raw.(string)
+		value = strings.TrimSpace(value)
+		switch key {
+		case "account_ids":
+			ids, idsErr := stableAccountIDs(raw, 100)
+			if idsErr != nil {
+				writeError(c, http.StatusUnprocessableEntity, idsErr.Error())
+				return probe.Request{}, false
+			}
+			request.SelectedAccountIDs = ids
+		case "account_id":
+			if !stringValue || !positiveNumericID(value) || utf8.RuneCountInString(value) > 32 {
+				writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
+				return probe.Request{}, false
+			}
+			request.AccountID = &value
+		case "group_name":
+			if !stringValue || value == "" || utf8.RuneCountInString(value) > 120 {
+				writeError(c, http.StatusUnprocessableEntity, "已提交的分组不能是空值且长度不能超过 120")
+				return probe.Request{}, false
+			}
+			request.GroupName = &value
+		case "platform":
+			if !stringValue || value == "" || utf8.RuneCountInString(value) > 64 {
+				writeError(c, http.StatusUnprocessableEntity, "平台标识不能为空且长度不能超过 64")
+				return probe.Request{}, false
+			}
+			request.Platform = &value
+		case "model":
+			if !stringValue || value == "" || utf8.RuneCountInString(value) > 256 {
+				writeError(c, http.StatusUnprocessableEntity, "探活模型不能为空且长度不能超过 256")
+				return probe.Request{}, false
+			}
+			request.ProbeModel = value
+		default:
+			writeError(c, http.StatusUnprocessableEntity, "主动探测参数包含未知字段："+key)
+			return probe.Request{}, false
+		}
+	}
+	if request.SelectedAccountIDs != nil && (request.AccountID != nil || request.GroupName != nil || request.Platform != nil || request.ProbeModel != "") {
+		writeError(c, http.StatusUnprocessableEntity, "批量探活不能与其他探测范围或模型参数混用")
+		return probe.Request{}, false
+	}
+	platformProbe := request.Platform != nil || request.ProbeModel != ""
+	if platformProbe && (request.Platform == nil || request.ProbeModel == "") {
+		writeError(c, http.StatusUnprocessableEntity, "平台和模型必须同时提交")
+		return probe.Request{}, false
+	}
+	if platformProbe && (request.AccountID != nil || request.GroupName != nil) {
+		writeError(c, http.StatusUnprocessableEntity, "平台模型探活不能与账号或分组范围混用")
+		return probe.Request{}, false
+	}
+	return request, true
 }
 
 func (s *Server) modelCheckCapabilities(c *gin.Context) {
@@ -3868,6 +4334,109 @@ func (s *Server) modelCheckAccountStatuses(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, statuses)
+}
+
+func (s *Server) modelCheckConfiguration(c *gin.Context) {
+	service, ok := s.modelChecks.(ModelCheckConfigurationService)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
+		return
+	}
+	c.JSON(http.StatusOK, service.Configuration())
+}
+
+func (s *Server) saveModelCheckDraft(c *gin.Context) {
+	service, ok := s.modelChecks.(ModelCheckConfigurationService)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
+		return
+	}
+	var payload modelcheck.SaveDraftRequest
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "模型检测画像草稿参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	result, err := service.SaveDraft(c.Request.Context(), payload, actor)
+	writeModelCheckConfigurationResult(c, result, err)
+}
+
+func (s *Server) publishModelCheckDraft(c *gin.Context) {
+	service, ok := s.modelChecks.(ModelCheckConfigurationService)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
+		return
+	}
+	var payload modelcheck.PublishRequest
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "模型检测画像发布参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	result, err := service.PublishDraft(c.Request.Context(), payload, actor)
+	writeModelCheckConfigurationResult(c, result, err)
+}
+
+func (s *Server) discardModelCheckDraft(c *gin.Context) {
+	service, ok := s.modelChecks.(ModelCheckConfigurationService)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
+		return
+	}
+	var payload modelcheck.PublishRequest
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "模型检测画像草稿删除参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	result, err := service.DiscardDraft(c.Request.Context(), payload, actor)
+	writeModelCheckConfigurationResult(c, result, err)
+}
+
+func (s *Server) restoreModelCheckVersion(c *gin.Context) {
+	service, ok := s.modelChecks.(ModelCheckConfigurationService)
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型检测画像管理服务尚未就绪")
+		return
+	}
+	var payload modelcheck.RestoreRequest
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "模型检测画像恢复参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	result, err := service.RestoreVersion(c.Request.Context(), payload, actor)
+	writeModelCheckConfigurationResult(c, result, err)
+}
+
+func writeModelCheckConfigurationResult(c *gin.Context, result modelcheck.ConfigurationView, err error) {
+	if err != nil {
+		status := http.StatusUnprocessableEntity
+		if strings.Contains(err.Error(), "已变化") {
+			status = http.StatusConflict
+		} else if strings.Contains(err.Error(), "保存失败") {
+			status = http.StatusInternalServerError
+		}
+		writeError(c, status, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (s *Server) runModelCheck(c *gin.Context) {
@@ -4099,10 +4668,16 @@ func (s *Server) autoInspectionEvents(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-updates:
+			if !s.validStreamSession(c) {
+				return
+			}
 			if err := writeStatus(); err != nil {
 				return
 			}
 		case <-ping.C:
+			if !s.validStreamSession(c) {
+				return
+			}
 			_ = controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(c.Writer, "event: ping\ndata: {}\n\n"); err != nil {
 				return
@@ -4384,12 +4959,12 @@ func (s *Server) managementModelPrices(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "New API 管理服务尚未就绪")
 		return
 	}
-	models, err := s.newAPIManagement.ManagementModelPrices(c.Request.Context(), c.Param("platform_id"))
+	catalog, err := s.newAPIManagement.ModelPriceCatalog(c.Request.Context(), c.Param("platform_id"), c.Request.Method == http.MethodPost)
 	if err != nil {
 		writeNewAPIError(c, err, http.StatusBadGateway)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"models": models})
+	c.JSON(http.StatusOK, catalog)
 }
 
 func (s *Server) remoteModelPricingSource(c *gin.Context) {
@@ -4525,6 +5100,113 @@ func (s *Server) taskDetail(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
+func (s *Server) tasksList(c *gin.Context) {
+	if s.tasks == nil {
+		writeError(c, http.StatusServiceUnavailable, "任务服务尚未就绪")
+		return
+	}
+	defaultLimit := 20
+	limit, ok := optionalLimitDefault(c, &defaultLimit)
+	if !ok {
+		return
+	}
+	if limit != nil && *limit > 20 {
+		writeError(c, http.StatusUnprocessableEntity, "系统信息任务最多读取最近 20 条")
+		return
+	}
+	rows, err := s.tasks.ListConsoleSummaries(c.Request.Context(), limit)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "任务列表读取失败")
+		return
+	}
+	result := make([]taskSummaryResponse, len(rows))
+	for index, task := range rows {
+		result[index] = taskSummaryResponse{
+			ID: task.ID, Skill: task.Skill, Operation: task.Operation, Status: task.Status,
+			Progress: task.Progress, Message: task.Message, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt, SystemInfo: true,
+		}
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *Server) systemMetricsSnapshot(c *gin.Context) {
+	if s.systemMetrics == nil {
+		writeError(c, http.StatusServiceUnavailable, "系统资源统计服务尚未就绪")
+		return
+	}
+	snapshot, err := s.systemMetrics.Snapshot(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "系统资源统计读取失败")
+		return
+	}
+	c.JSON(http.StatusOK, snapshot)
+}
+
+func (s *Server) cancelTask(c *gin.Context) {
+	if s.tasks == nil || s.taskCanceller == nil {
+		writeError(c, http.StatusServiceUnavailable, "任务取消服务尚未就绪")
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" || utf8.RuneCountInString(taskID) > 255 {
+		writeError(c, http.StatusUnprocessableEntity, "任务 ID 长度必须在 1 到 255 之间")
+		return
+	}
+	task, err := s.tasks.Get(c.Request.Context(), taskID)
+	if errors.Is(err, taskstore.ErrNotFound) {
+		writeError(c, http.StatusNotFound, taskstore.ErrNotFound.Error())
+		return
+	}
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "任务状态读取失败")
+		return
+	}
+	if task.Status == "waiting_input" {
+		challengeID, found := taskCaptchaChallengeID(task)
+		if found && s.authRecovery != nil && s.authRecovery.CancelCaptcha(challengeID) {
+			c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
+			return
+		}
+	}
+	if taskCompleted(task.Status) {
+		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
+		return
+	}
+	if s.taskCanceller.CancelTask(taskID) {
+		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
+		return
+	}
+	latest, latestErr := s.tasks.Get(c.Request.Context(), taskID)
+	if latestErr == nil && taskCompleted(latest.Status) {
+		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
+		return
+	}
+	writeError(c, http.StatusConflict, taskrunner.ErrStopped.Error()+"或任务已不在当前进程运行")
+}
+
+func taskCompleted(status string) bool {
+	switch status {
+	case "succeeded", "partial", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func taskCaptchaChallengeID(task taskstore.Task) (string, bool) {
+	raw, found := task.Result["captcha_challenge"]
+	if !found || raw == nil {
+		return "", false
+	}
+	challenge, ok := raw.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	challengeID, ok := challenge["challenge_id"].(string)
+	challengeID = strings.TrimSpace(challengeID)
+	return challengeID, ok && challengeID != ""
+}
+
 func (s *Server) taskEvents(c *gin.Context) {
 	if s.tasks == nil {
 		writeError(c, http.StatusServiceUnavailable, "任务服务尚未就绪")
@@ -4571,6 +5253,9 @@ func (s *Server) taskEvents(c *gin.Context) {
 		case <-c.Request.Context().Done():
 			return
 		case <-ticker.C:
+			if !s.validStreamSession(c) {
+				return
+			}
 			task, err = s.tasks.Get(c.Request.Context(), taskID)
 			if err != nil {
 				slog.Error("任务 SSE 状态读取失败", "task_id", taskID, "error", err)
@@ -4597,6 +5282,18 @@ func writeTaskEvent(writer io.Writer, task taskstore.Task) error {
 	}
 	_, err = fmt.Fprintf(writer, "data: %s\n\n", payload)
 	return err
+}
+
+func (s *Server) validStreamSession(c *gin.Context) bool {
+	if s.validAdminBearer(c.Request) {
+		return true
+	}
+	username, err := s.sessionUser(c)
+	if err != nil {
+		slog.Error("实时连接会话校验失败", "error", redact.Secrets(err.Error()))
+		return false
+	}
+	return username != nil
 }
 
 func writeSSEError(writer io.Writer, detail string) error {
@@ -4913,8 +5610,8 @@ func localBrowserHostname(hostname string) bool {
 	return err == nil && address.Unmap().IsLoopback()
 }
 
-func (s *Server) setSession(c *gin.Context, username string) error {
-	token, err := s.private.CreateSession(c.Request.Context(), username, sessionTTL, s.now())
+func (s *Server) setSession(c *gin.Context, username, password string) error {
+	token, err := s.private.CreateAuthenticatedSession(c.Request.Context(), username, password, sessionTTL, s.now())
 	if err != nil {
 		return err
 	}

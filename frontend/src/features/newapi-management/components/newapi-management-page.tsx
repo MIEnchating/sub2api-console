@@ -15,26 +15,33 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { notifyOperationError } from "@/lib/operation-feedback";
 import type { NewAPIManagementView } from "../constants";
 import type { NewAPIPlatformValues } from "../lib/schemas";
+import { modelPriceCatalogQueryOptions } from "../lib/model-price-catalog-query";
 import { NewAPIChannelForm } from "./channel-form";
 import { NewAPIGroupBindings } from "./group-bindings";
 import {
+  matchingRemoteModelPrice,
   NewAPIModelPrices,
-  NewAPIPriceDifferences,
   remotePriceToNewAPIModelPrice,
 } from "./model-prices";
 import { NewAPIPlatformDialog } from "./platform-dialog";
+import { NewAPIPriceComparison } from "./price-comparison";
 import { RawPricingSourceDialog } from "./raw-pricing-source-dialog";
 
 type Props = {
   view: "platform" | NewAPIManagementView;
 };
 
+type ModelPriceWrite = {
+  price: NewAPIModelPrice;
+  action: string;
+};
+
 const pageTitles: Record<Props["view"], string> = {
-  platform: "New API 配置",
+  platform: "New API 平台配置",
   groups: "分组绑定",
   channels: "渠道管理",
   prices: "模型价格",
-  differences: "价格差异",
+  differences: "价格比对",
 };
 
 export function newAPIViewNeedsRemoteSnapshot(view: Props["view"]): boolean {
@@ -68,7 +75,7 @@ export function NewAPIHeadingAction(props: {
     return (
       <Button size="sm" onClick={props.onConfigure}>
         <CirclePlus aria-hidden="true" />
-        配置 New API
+        添加平台配置
       </Button>
     );
   }
@@ -121,7 +128,7 @@ export function NewAPIPlatformDetails(props: {
             {props.onEdit ? (
               <Button size="sm" variant="outline" onClick={props.onEdit}>
                 <Pencil aria-hidden="true" />
-                编辑配置
+                编辑平台配置
               </Button>
             ) : null}
             {props.onDelete ? (
@@ -131,13 +138,13 @@ export function NewAPIPlatformDetails(props: {
                     size="icon-sm"
                     variant="ghost"
                     className="text-destructive"
-                    aria-label="删除 New API 配置"
+                    aria-label="删除 New API 平台配置"
                     onClick={props.onDelete}
                   >
                     <Trash2 aria-hidden="true" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>删除配置</TooltipContent>
+                <TooltipContent>删除平台配置</TooltipContent>
               </Tooltip>
             ) : null}
           </div>
@@ -210,36 +217,82 @@ export function NewAPIManagementPage(props: Props) {
   });
   const snapshot = remoteSnapshot.data ?? null;
   const managementPrices = useQuery({
-    queryKey: ["newapi-management-model-prices", platformId],
-    queryFn: () => api.managementModelPrices(platformId),
+    ...modelPriceCatalogQueryOptions(platformId),
     enabled: Boolean(platformId && managementPricesOpen),
-    retry: false,
-    staleTime: 60_000,
   });
   const rawPricingSource = useQuery({
     queryKey: ["newapi-remote-model-pricing-source", platformId],
     queryFn: () => api.remoteModelPricingSource(platformId),
     enabled: Boolean(platformId && rawPricingSourceOpen),
     retry: false,
-    staleTime: Number.POSITIVE_INFINITY,
+    staleTime: 60_000,
+  });
+
+  const refreshPrices = useMutation({
+    mutationFn: () => api.refreshManagementModelPrices(platformId),
+    onSuccess: async (catalog) => {
+      queryClient.setQueryData(["newapi-management-model-prices", platformId], catalog);
+      await queryClient.invalidateQueries({
+        queryKey: ["newapi-remote-model-pricing-source", platformId],
+      });
+      if (catalog.stale) return;
+      toast.success("参考价格已刷新并缓存 24 小时");
+    },
+    onError: (error) => notifyOperationError(error, "参考价格刷新失败，已保留上次缓存"),
   });
 
   const saveModelPrice = useMutation({
-    mutationFn: (price: Parameters<typeof remotePriceToNewAPIModelPrice>[0]) =>
-      api.saveNewAPIModelPrices(platformId, [remotePriceToNewAPIModelPrice(price)]),
+    mutationFn: (write: ModelPriceWrite) => api.saveNewAPIModelPrices(platformId, [write.price]),
     onMutate: () => setWrittenModelPrice(null),
-    onSuccess: (nextSnapshot, price) => {
+    onSuccess: (nextSnapshot, write) => {
       queryClient.setQueryData(newAPIRemoteSnapshotQueryKey(platformId), nextSnapshot);
-      const writtenPrice = nextSnapshot.models.find((model) => model.model === price.model) ?? null;
+      const writtenPrice =
+        nextSnapshot.models.find((model) => model.model === write.price.model) ?? null;
       setWrittenModelPrice(writtenPrice);
       if (writtenPrice) {
-        toast.success(`${price.model} 的价格已写入并从 New API 读回`);
+        toast.success(`${write.price.model} ${write.action}成功并已读回`);
         return;
       }
-      toast.error(`${price.model} 已提交，但 New API 读回结果中没有该模型`);
+      toast.error(`${write.price.model} 已提交，但平台读回结果中没有该模型`);
     },
-    onError: (error) => notifyOperationError(error, "模型价格写入 New API 失败"),
+    onError: (error) => notifyOperationError(error, "模型价格写入平台失败"),
   });
+
+  async function writeModelPrice(price: NewAPIModelPrice, action: string): Promise<boolean> {
+    try {
+      const nextSnapshot = await saveModelPrice.mutateAsync({ price, action });
+      return nextSnapshot.models.some((model) => model.model === price.model);
+    } catch {
+      return false;
+    }
+  }
+
+  const saveBatchModelPrices = useMutation({
+    mutationFn: (prices: NewAPIModelPrice[]) => api.saveNewAPIModelPrices(platformId, prices),
+    onSuccess: (nextSnapshot) => {
+      queryClient.setQueryData(newAPIRemoteSnapshotQueryKey(platformId), nextSnapshot);
+    },
+  });
+
+  async function syncRemoteModelPrice(model: string): Promise<boolean> {
+    let catalog;
+    try {
+      catalog = await queryClient.fetchQuery(modelPriceCatalogQueryOptions(platformId));
+    } catch {
+      // The query error handler reports the failed reference request.
+      return false;
+    }
+    if (catalog.stale) {
+      toast.error("参考价格已过期或刷新不完整，请先强制刷新参考价格后再同步");
+      return false;
+    }
+    const remotePrice = matchingRemoteModelPrice(catalog.models, model);
+    if (!remotePrice) {
+      toast.error(`远程价卡和 Sub2API 默认价格中都没有 ${model}`);
+      return false;
+    }
+    return writeModelPrice(remotePriceToNewAPIModelPrice(remotePrice), "同步远程价格");
+  }
 
   const savePlatform = useMutation({
     mutationFn: (values: NewAPIPlatformValues) =>
@@ -343,7 +396,7 @@ export function NewAPIManagementPage(props: Props) {
       ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {workspace.isLoading && <NewAPIRemoteLoading label="正在加载 New API 配置" />}
+        {workspace.isLoading && <NewAPIRemoteLoading label="正在加载 New API 平台配置" />}
         {!workspace.isLoading && selectedPlatform && (
           <>
             <div
@@ -399,22 +452,38 @@ export function NewAPIManagementPage(props: Props) {
               ) : null}
               {props.view === "prices" && !(remoteSnapshot.isFetching && snapshot === null) ? (
                 <NewAPIModelPrices
+                  key={platformId}
                   models={snapshot?.models ?? []}
                   unsetModels={snapshot?.unset_models ?? []}
-                  toolPrices={snapshot?.tool_prices ?? []}
                   managementPrices={managementPrices.data?.models}
-                  managementPricesPending={managementPrices.isFetching}
+                  managementPricesPending={managementPrices.isFetching || refreshPrices.isPending}
+                  managementPricesStale={managementPrices.data?.stale || refreshPrices.isError}
+                  managementPricesWarning={managementPrices.data?.warning}
+                  managementPricesFetchedAt={managementPrices.data?.fetched_at}
+                  onRefreshManagementPrices={() => refreshPrices.mutate()}
                   managementPricesError={
                     managementPrices.error instanceof Error ? managementPrices.error.message : ""
                   }
                   onViewManagementPrices={() => setManagementPricesOpen(true)}
                   onCompareManagementPrices={() => {
-                    void managementPrices.refetch();
+                    void queryClient
+                      .fetchQuery(modelPriceCatalogQueryOptions(platformId))
+                      .catch(() => {
+                        // The query error handler reports the failed reference request.
+                      });
                   }}
                   onViewRawPricingSource={() => setRawPricingSourceOpen(true)}
-                  onWriteManagementPrice={(price) => saveModelPrice.mutate(price)}
+                  onWriteManagementPrice={(price) => {
+                    void writeModelPrice(remotePriceToNewAPIModelPrice(price), "同步远程价格");
+                  }}
+                  onWriteModelPrice={writeModelPrice}
+                  onSyncModelPrice={syncRemoteModelPrice}
+                  onLoadManagementPrices={() =>
+                    queryClient.fetchQuery(modelPriceCatalogQueryOptions(platformId))
+                  }
+                  onWriteModelPrices={(prices) => saveBatchModelPrices.mutateAsync(prices)}
                   writingManagementPrice={
-                    saveModelPrice.isPending ? saveModelPrice.variables?.model : undefined
+                    saveModelPrice.isPending ? saveModelPrice.variables?.price.model : undefined
                   }
                   writtenManagementPrice={writtenModelPrice}
                   onWrittenManagementPriceOpenChange={(open) => {
@@ -423,7 +492,7 @@ export function NewAPIManagementPage(props: Props) {
                 />
               ) : null}
               {props.view === "differences" && snapshot ? (
-                <NewAPIPriceDifferences snapshot={snapshot} />
+                <NewAPIPriceComparison snapshot={snapshot} />
               ) : null}
             </div>
           </>
@@ -431,7 +500,7 @@ export function NewAPIManagementPage(props: Props) {
         {!workspace.isLoading && !selectedPlatform && (
           <div className="text-muted-foreground flex min-h-72 flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-background px-6 text-center text-sm">
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
-            <span>尚未配置 New API</span>
+            <span>尚未添加 New API 平台配置</span>
             <Button
               size="sm"
               onClick={() => {
@@ -440,7 +509,7 @@ export function NewAPIManagementPage(props: Props) {
               }}
             >
               <CirclePlus aria-hidden="true" />
-              配置 New API
+              添加平台配置
             </Button>
           </div>
         )}
@@ -455,9 +524,9 @@ export function NewAPIManagementPage(props: Props) {
       />
       <ConfirmActionDialog
         open={deleteOpen}
-        title="删除 New API 配置"
+        title="删除 New API 平台配置"
         description={`将删除 ${selectedPlatform?.name ?? "当前平台"} 的管理凭据和全部分组绑定。`}
-        confirmLabel="删除配置"
+        confirmLabel="删除平台配置"
         pending={deletePlatform.isPending}
         onOpenChange={setDeleteOpen}
         onConfirm={() => deletePlatform.mutate()}

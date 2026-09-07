@@ -155,6 +155,7 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		if err != nil {
 			return 0, errors.New("流量样本时间无效")
 		}
+		sample.ObservedAt = observedAt.UTC().Format(healthSampleTimeLayout)
 		payload, err := json.Marshal(sample.Payload)
 		if err != nil {
 			return 0, fmt.Errorf("流量样本无法严格 JSON 序列化：%w", err)
@@ -164,12 +165,25 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 			failure_reason,observed_at,source,evidence_key,payload_json
 		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(source,evidence_key,account_id,group_name) DO UPDATE SET
-			latency_p50=excluded.latency_p50,latency_p95=excluded.latency_p95,latency_p99=excluded.latency_p99,
-			payload_json=excluded.payload_json
+			latency_p50=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
+			 THEN health_samples.latency_p50 ELSE excluded.latency_p50 END,
+			latency_p95=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
+			 THEN health_samples.latency_p95 ELSE excluded.latency_p95 END,
+			latency_p99=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
+			 THEN health_samples.latency_p99 ELSE excluded.latency_p99 END,
+			payload_json=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
+			 THEN json_patch(excluded.payload_json,health_samples.payload_json)
+			 ELSE json_patch(health_samples.payload_json,excluded.payload_json) END
 		WHERE excluded.latency_p95 IS NOT NULL AND (
 			health_samples.latency_p95 IS NULL OR
 			(COALESCE(json_extract(health_samples.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')='request_duration')
+			OR (json_extract(health_samples.payload_json,'$.first_token_ms') IS NULL
+			 AND json_extract(excluded.payload_json,'$.first_token_ms') IS NOT NULL)
 		)`, sample.AccountID, sample.GroupName, sample.Result,
 			sample.LatencyP50, sample.LatencyP95, sample.LatencyP99, sample.SampleCount, sample.Attempts,
 			sample.FailureReason, sample.ObservedAt, "traffic", sample.EvidenceKey, string(payload))
@@ -204,7 +218,7 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 		ON CONFLICT(request_id,account_id,group_name,observed_at) DO UPDATE SET
 			account_name=excluded.account_name,is_error=excluded.is_error,error_reason=excluded.error_reason,
 			first_token_ms=COALESCE(excluded.first_token_ms,usage_records.first_token_ms),
-			payload_json=CASE WHEN excluded.payload_json='{}' THEN usage_records.payload_json ELSE excluded.payload_json END`,
+			payload_json=json_patch(usage_records.payload_json,excluded.payload_json)`,
 			sample.EvidenceKey, sample.AccountID, sample.AccountID, sample.GroupName, isError, sample.FailureReason,
 			firstToken, sample.ObservedAt, string(payload)); err != nil {
 			return 0, err
@@ -213,7 +227,7 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 	for accountID, latest := range latestTraffic {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_records WHERE account_id=?
 			AND LOWER(REPLACE(source,'_','-'))='traffic' AND observed_at<?`,
-			accountID, latest.Add(-30*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+			accountID, latest.Add(-30*24*time.Hour).Format(healthSampleTimeLayout)); err != nil {
 			return 0, err
 		}
 	}
@@ -236,8 +250,14 @@ func trafficResultFailed(result string, reason *string) bool {
 
 const retainedHealthSamplesPerAccount = 200
 
+// Fixed precision UTC keeps indexed text ordering identical to instant ordering.
+const healthSampleTimeLayout = "2006-01-02T15:04:05.000000000Z"
+
 func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]struct{}) error {
 	for accountID := range accountIDs {
+		if err := mergeDuplicateTrafficLatencies(ctx, tx, accountID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `WITH deduplicated AS (
 			SELECT id,observed_at,
 				ROW_NUMBER() OVER(PARTITION BY LOWER(REPLACE(source,'_','-')),
@@ -254,6 +274,133 @@ func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]s
 		}
 	}
 	return nil
+}
+
+// Merge before pruning so changing a request's group cannot erase known latency.
+// Keep the same winner as pruning and only fill missing/invalid latency fields.
+func mergeDuplicateTrafficLatencies(ctx context.Context, tx *sql.Tx, accountID string) error {
+	rows, err := tx.QueryContext(ctx, `WITH traffic AS (
+		SELECT id,evidence_key,observed_at,latency_p50,latency_p95,latency_p99,payload_json,
+			COUNT(*) OVER(PARTITION BY evidence_key) duplicates
+		FROM health_samples WHERE account_id=? AND LOWER(REPLACE(source,'_','-'))='traffic'
+			AND evidence_key IS NOT NULL AND evidence_key<>''
+	)
+	SELECT id,evidence_key,latency_p50,latency_p95,latency_p99,payload_json FROM traffic
+	WHERE duplicates>1 ORDER BY evidence_key,COALESCE(observed_at,'') DESC,id DESC`, accountID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type latencySample struct {
+		id            int64
+		key           string
+		p50, p95, p99 sql.NullString
+		payload       map[string]any
+		changed       bool
+	}
+	var retained []*latencySample
+	var winner *latencySample
+	for rows.Next() {
+		var sample latencySample
+		var raw string
+		if err := rows.Scan(&sample.id, &sample.key, &sample.p50, &sample.p95, &sample.p99, &raw); err != nil {
+			return err
+		}
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&sample.payload); err != nil {
+			return err
+		}
+		if sample.payload == nil {
+			sample.payload = map[string]any{}
+		}
+		enrichLegacyTrafficFirstToken(sample.payload, sample.p95)
+		if winner == nil || winner.key != sample.key {
+			winner = &sample
+			retained = append(retained, winner)
+			continue
+		}
+		for _, metric := range []string{"first_token", "duration"} {
+			if validTrafficLatency(winner.payload[metric+"_ms"], metric) || !validTrafficLatency(sample.payload[metric+"_ms"], metric) {
+				continue
+			}
+			for _, suffix := range []string{"_ms", "_unit", "_source"} {
+				key := metric + suffix
+				delete(winner.payload, key)
+				if value, ok := sample.payload[key]; ok {
+					winner.payload[key] = value
+				}
+			}
+			if metric == "duration" && sample.payload["latency_metric"] == "request_duration" {
+				winner.p50, winner.p95, winner.p99 = sample.p50, sample.p95, sample.p99
+				for _, key := range []string{"latency_metric", "latency_unit", "latency_source"} {
+					delete(winner.payload, key)
+					if value, ok := sample.payload[key]; ok {
+						winner.payload[key] = value
+					}
+				}
+			}
+			winner.changed = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, sample := range retained {
+		if !sample.changed {
+			continue
+		}
+		payload, err := json.Marshal(sample.payload)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE health_samples SET latency_p50=?,latency_p95=?,latency_p99=?,payload_json=? WHERE id=?`,
+			sample.p50, sample.p95, sample.p99, string(payload), sample.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validTrafficLatency(raw any, metric string) bool {
+	value := finiteFloat(raw)
+	return value != nil && (*value > 0 || (metric == "duration" && *value == 0))
+}
+
+// Match routing's legacy first-token metric, source and unit semantics before
+// replacing percentile columns with total duration from another group.
+func enrichLegacyTrafficFirstToken(payload map[string]any, p95 sql.NullString) {
+	if _, present := payload["first_token_ms"]; present {
+		return
+	}
+	metric, _ := payload["latency_metric"].(string)
+	metric = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(metric)), "-", "_")
+	source, _ := payload["latency_source"].(string)
+	value := finiteFloatFromNullString(p95)
+	if (metric != "first_token" && metric != "ttfb") || strings.EqualFold(strings.TrimSpace(source), "operations.duration_ms") || value == nil || *value <= 0 {
+		return
+	}
+	if raw, present := payload["latency_unit"]; present {
+		unit, _ := raw.(string)
+		switch strings.ToLower(strings.TrimSpace(unit)) {
+		case "ms", "millisecond", "milliseconds":
+		case "s", "second", "seconds":
+			*value *= 1000
+		default:
+			return
+		}
+	}
+	if finiteFloat(*value) == nil {
+		return
+	}
+	payload["first_token_ms"] = fmt.Sprint(*value)
+	payload["first_token_unit"] = "ms"
+	if source != "" {
+		payload["first_token_source"] = source
+	}
 }
 
 func parsedEvidenceTime(value sql.NullString) *time.Time {

@@ -1,5 +1,6 @@
+import { cleanup, render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { AccountStatus } from "@/api";
 import {
@@ -11,7 +12,6 @@ import {
   AccountRecentResultsCell,
   AccountRoutingParametersCell,
   AccountStateCell,
-  AccountSub2APIStatusCell,
 } from "../account-pool-cells";
 
 const account: AccountStatus = {
@@ -80,6 +80,120 @@ const account: AccountStatus = {
 };
 
 describe("account pool cells", () => {
+  it("评分详情区分实际短长期样本数，不把配置上限当作样本数", () => {
+    render(
+      <AccountHealthCell
+        account={{ ...account, sample_count: 58, short_sample_count: 10, long_sample_count: 58 }}
+      />,
+    );
+    expect(screen.getByLabelText(/查看健康评分详情/)).toHaveAccessibleName(
+      /短期样本数 10，长期样本数 58/,
+    );
+  });
+
+  it("旧评估未记录短期样本数时显示未记录，零样本时显示零", () => {
+    const view = render(<AccountHealthCell account={account} />);
+    expect(screen.getByLabelText(/查看健康评分详情/)).toHaveAccessibleName(
+      /短期样本数 未记录，长期样本数 2/,
+    );
+    view.rerender(<AccountHealthCell account={{ ...account, sample_count: 0 }} />);
+    expect(screen.getByLabelText(/查看健康评分详情/)).toHaveAccessibleName(
+      /短期样本数 0，长期样本数 0/,
+    );
+  });
+
+  afterEach(cleanup);
+
+  it("shows that a full-score account still has its scheduling switch closed", () => {
+    render(
+      <AccountStateCell
+        account={{ ...account, health: "fused", health_score: 100, schedulable: false }}
+      />,
+    );
+    expect(screen.getByText("调度开关：已关闭")).toBeVisible();
+  });
+
+  it("shows a warning and observation reason when a 40-point account awaits failure confirmation", () => {
+    const pendingAccount = {
+      ...account,
+      health: "healthy",
+      decision_state: "healthy",
+      desired_health: "healthy",
+      health_score: 40,
+      evidence_pending: true,
+      decision_reason: "短暂异常待确认，保持当前调度位置",
+    };
+    render(<AccountStateCell account={pendingAccount} />);
+
+    expect(screen.getByText("异常待确认").closest("[data-slot='status-badge']")).toHaveClass(
+      "text-warning",
+    );
+    expect(screen.getByText("观察原因：短暂异常待确认，保持当前调度位置")).toBeVisible();
+    expect(screen.queryByText("健康", { exact: true })).not.toBeInTheDocument();
+  });
+
+  it("returns to a green healthy badge when the backend clears pending evidence", () => {
+    const pendingAccount = {
+      ...account,
+      health: "healthy",
+      decision_state: "healthy",
+      evidence_pending: true,
+      decision_reason: "短暂异常待确认，保持当前调度位置",
+    };
+    const view = render(<AccountStateCell account={pendingAccount} />);
+    view.rerender(
+      <AccountStateCell
+        account={{
+          ...pendingAccount,
+          health_score: 100,
+          evidence_pending: false,
+          decision_reason: "已计算",
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("健康", { exact: true }).closest("[data-slot='status-badge']"),
+    ).toHaveClass("text-success");
+    expect(screen.queryByText("异常待确认")).not.toBeInTheDocument();
+    expect(screen.queryByText(/^观察原因/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the partial-weight explanation visible beside recovery progress for a degraded account", () => {
+    render(
+      <AccountStateCell
+        account={{
+          ...account,
+          health_score: 40,
+          evidence_pending: true,
+          decision_reason: "健康分低于降级线 75；短暂异常待确认，暂时降低调度权重",
+          recovery: {
+            evaluated_at: "2026-09-07T12:00:00Z",
+            ready: false,
+            conditions: [{ code: "success_streak", met: false, detail: "连续成功 0/2 次" }],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByText("降级", { exact: true })).toBeVisible();
+    expect(screen.queryByText("健康", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText(/短暂异常待确认，暂时降低调度权重/)).toBeVisible();
+    expect(screen.getByText(/连续成功 0\/2 次/)).toBeVisible();
+    expect(screen.getByText("调度开关：已开启")).toBeVisible();
+  });
+
+  it.each([
+    { health: "fused", label: "已熔断" },
+    { health: "paused", label: "已暂停" },
+    { health: "degraded", label: "降级" },
+  ])("keeps $label when stale pending evidence accompanies $health", (state) => {
+    const pendingAccount = { ...account, health: state.health, evidence_pending: true };
+    render(<AccountStateCell account={pendingAccount} />);
+
+    expect(screen.getByText(state.label, { exact: true })).toBeVisible();
+    expect(screen.queryByText("异常待确认")).not.toBeInTheDocument();
+  });
+
   it("shows account identity as name, ID/type, Host, then groups", () => {
     const markup = renderToStaticMarkup(<AccountIdentityCell account={account} />);
 
@@ -98,13 +212,12 @@ describe("account pool cells", () => {
 
     expect(markup).toContain("降级");
     expect(markup).toContain("降级原因：健康分低于降级线 75");
-    expect(markup).toContain("最近错误：上游网关错误");
+    expect(markup).not.toContain("最近错误：上游网关错误");
     expect(markup).toContain("text-warning");
-    expect(markup).toContain("text-destructive");
     expect(markup).not.toContain("已停止调度");
   });
 
-  it("shows the latest error below a healthy status like Guardian", () => {
+  it("does not show historical request errors while Sub2API is active", () => {
     const markup = renderToStaticMarkup(
       <AccountStateCell
         account={{
@@ -118,8 +231,7 @@ describe("account pool cells", () => {
     );
 
     expect(markup).toContain("健康");
-    expect(markup).toContain("最近错误：API returned 503: service unavailable");
-    expect(markup).toContain("text-destructive");
+    expect(markup).not.toContain("最近错误：API returned 503: service unavailable");
   });
 
   it("does not repeat a decision reason as a second scheduling stop reason", () => {
@@ -242,43 +354,6 @@ describe("account pool cells", () => {
     expect(groupMissing).toContain("分组已删除");
   });
 
-  it("mirrors Sub2API account status and exposes its error detail", () => {
-    const active = renderToStaticMarkup(<AccountSub2APIStatusCell account={account} />);
-    const paused = renderToStaticMarkup(
-      <AccountSub2APIStatusCell account={{ ...account, schedulable: false }} />,
-    );
-    const failed = renderToStaticMarkup(
-      <AccountSub2APIStatusCell
-        account={{
-          ...account,
-          sub2api_status: "error",
-          sub2api_error: "Access forbidden (403): quota exceeded",
-        }}
-      />,
-    );
-
-    expect(active).toContain("正常");
-    expect(paused).toContain("暂停");
-    expect(failed).toContain("错误");
-    expect(failed).toContain("查看 Sub2API 账号报错");
-  });
-
-  it("does not repeat the Sub2API error in the calculated state column", () => {
-    const markup = renderToStaticMarkup(
-      <AccountStateCell
-        account={{
-          ...account,
-          sub2api_status: "error",
-          sub2api_error: "Access forbidden (403): quota exceeded",
-          last_error: "Access forbidden (403): quota exceeded",
-          recent_results: [],
-        }}
-      />,
-    );
-
-    expect(markup).not.toContain("Access forbidden (403): quota exceeded");
-  });
-
   it("does not mistake an unexplained scheduling switch for the degraded reason", () => {
     const markup = renderToStaticMarkup(
       <AccountStateCell
@@ -312,6 +387,25 @@ describe("account pool cells", () => {
     );
 
     expect(markup).toContain("停止原因：上游倍率 1.5 超过配置阈值 1.2");
+    expect(markup).not.toContain("停止原因未记录");
+  });
+
+  it("手动熔断返回人工处置原因时展示熔断原因而非原因未记录", () => {
+    const markup = renderToStaticMarkup(
+      <AccountStateCell
+        account={{
+          ...account,
+          health: "fused",
+          schedulable: false,
+          decision_state: "fused",
+          decision_reason: "人工熔断，等待手动解除",
+          upstream_block: "unschedulable",
+          upstream_block_reason: "Sub2API 调度开关已关闭，但未记录触发原因",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("熔断原因：人工熔断，等待手动解除");
     expect(markup).not.toContain("停止原因未记录");
   });
 
@@ -383,21 +477,49 @@ describe("account pool cells", () => {
     );
     const latencyMarkup = renderToStaticMarkup(<AccountLatencyCell account={account} />);
 
-    expect(markup).toContain("72.5");
+    expect(markup).toContain("73");
     expect(markup).toContain('data-slot="account-health-score"');
-    expect(markup).toContain("健康分 72.5");
-    expect(markup).toContain("短期 68");
-    expect(markup).toContain("长期 83");
-    expect(markup).toContain("评分构成");
-    expect(markup).toContain('aria-label="查看健康分评分构成"');
+    expect(markup).toContain("健康分 73");
+    expect(markup).toContain("短期评分 68");
+    expect(markup).toContain("长期评分 83");
+    expect(markup).toContain("查看健康评分详情");
+    expect(markup).toContain("cursor-pointer");
+    expect(markup).toContain("综合健康分 73");
+    expect(markup).toContain("有效样本 2");
+    expect(markup).toContain("连续失败 2");
+    expect(markup).toContain("连续恢复 0");
     expect(markup).toContain('data-slot="account-recent-results"');
-    expect(markup).toContain("2 条样本");
-    expect(latencyMarkup).toContain("P95 1s");
-    expect(latencyMarkup).toContain("P50 0s");
-    expect(latencyMarkup).toContain('aria-label="综合延迟"');
-    expect(latencyMarkup).not.toContain("1.25s");
+    expect(markup).toContain("有效样本 2");
+    expect(latencyMarkup).toContain("1.25s");
+    expect(latencyMarkup).toContain("320ms");
+    expect(latencyMarkup).toContain('aria-label="真实流量首字延迟说明"');
     expect(latencyMarkup).not.toContain("0.32s");
     expect(latencyMarkup).not.toContain("1250ms");
+  });
+
+  it("shows zero effective samples beside health even when recent history exists", () => {
+    const recentResults = Array.from({ length: 10 }, (_, index) => ({
+      result: "通过",
+      observed_at: `2026-08-26T10:${String(index).padStart(2, "0")}:00Z`,
+      latency_ms: 100 + index,
+      failure_reason: null,
+      source: "traffic",
+    }));
+    const healthMarkup = renderToStaticMarkup(
+      <AccountHealthCell account={{ ...account, sample_count: 0 }} />,
+    );
+    const recentMarkup = renderToStaticMarkup(
+      <AccountRecentResultsCell
+        account={{ ...account, sample_count: 0, recent_results: recentResults }}
+      />,
+    );
+
+    expect(healthMarkup).toContain('aria-label="暂无健康分"');
+    expect(healthMarkup).toContain(">有效样本 0");
+    expect(recentMarkup.match(/tabindex="0"/g)).toHaveLength(10);
+    expect(recentMarkup).not.toContain("有效样本 0");
+    expect(recentMarkup).toContain("真实流量结果");
+    expect(recentMarkup).not.toContain("条最近结果");
   });
 
   it("shows missing combined latency without a seconds suffix", () => {
@@ -405,8 +527,8 @@ describe("account pool cells", () => {
       <AccountLatencyCell account={{ ...account, ttfb_p50_ms: null, ttfb_p95_ms: null }} />,
     );
 
-    expect(markup).toContain("P95 —");
-    expect(markup).toContain("P50 —");
+    expect(markup).toContain("P95</dt>");
+    expect(markup).toContain("暂无首字数据");
     expect(markup).not.toContain("—s");
   });
 
@@ -426,7 +548,7 @@ describe("account pool cells", () => {
 
     expect(markup).toContain("暂无健康分");
     expect(markup).toContain("—");
-    expect(markup).not.toContain("72.5");
+    expect(markup).not.toContain("73");
   });
 
   it("labels current and target routing parameters instead of using an unexplained arrow", () => {
@@ -442,7 +564,12 @@ describe("account pool cells", () => {
   it("shows that manual priority only controls upstream balance syncing", () => {
     const withoutBalanceSync = renderToStaticMarkup(
       <AccountRoutingParametersCell
-        account={{ ...account, manual_priority: 3, manual_sync_balance_multiplier: false }}
+        account={{
+          ...account,
+          schedulable: false,
+          manual_priority: 3,
+          manual_sync_balance_multiplier: false,
+        }}
       />,
     );
     const withBalanceSync = renderToStaticMarkup(
@@ -452,7 +579,9 @@ describe("account pool cells", () => {
     );
 
     expect(withoutBalanceSync).toContain("人工优先位 #3");
+    expect(withoutBalanceSync).toContain("停止调度");
     expect(withoutBalanceSync).toContain("不同步上游余额");
+    expect(withBalanceSync).toContain("参与调度");
     expect(withBalanceSync).toContain("同步上游余额");
   });
 });

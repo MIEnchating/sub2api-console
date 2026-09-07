@@ -1,5 +1,6 @@
 import type { GroupPolicyOverrideUpdate, GroupProbeModels } from "../../../api";
 import { RefreshCw } from "lucide-react";
+import { useState } from "react";
 import { Button } from "../../../components/ui/button";
 import { FieldLabel } from "../../../components/field-help-tooltip";
 import { Input } from "../../../components/ui/input";
@@ -10,7 +11,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../../components/ui/select";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { Switch } from "../../../components/ui/switch";
 import { cn } from "../../../lib/utils";
 import {
@@ -32,8 +32,8 @@ export type GroupPolicyOverrideDraft = Omit<
 const capabilityOptions = [
   {
     field: "breaker_enabled",
-    label: "熔断",
-    description: "连续失败达到条件后触发熔断",
+    label: "自动熔断",
+    description: "故障达到条件后自动停止调度；开启健康回池后可自动恢复",
   },
   {
     field: "recovery_enabled",
@@ -57,8 +57,6 @@ export const groupPolicyDialogLayout = {
   body: "min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1",
 } as const;
 
-const inheritedProbeModelValue = "\u0000inherited-probe-model";
-
 export function groupProbeModelOptions(models: string[], currentModel: string | null): string[] {
   const options = new Map<string, string>();
   for (const rawModel of [...models, currentModel ?? ""]) {
@@ -68,6 +66,89 @@ export function groupProbeModelOptions(models: string[], currentModel: string | 
     if (!options.has(key)) options.set(key, model);
   }
   return [...options.values()].sort((left, right) => left.localeCompare(right));
+}
+
+export function groupProbeModelDraftValue(model: string | null | undefined): string | null {
+  return model?.trim() || null;
+}
+
+const inheritedProbeModelValue = "\u0000inherited-probe-model";
+
+function ProbeModelControl(props: {
+  value: string | null;
+  options: string[];
+  disabled: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  const [mode, setMode] = useState<"manual" | "select">("manual");
+  const selectedValue = props.value?.trim() || inheritedProbeModelValue;
+
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex min-w-0 items-center justify-between gap-3">
+        <span className="block font-medium">探活模型</span>
+        <div
+          className="bg-muted grid grid-cols-2 rounded-md p-0.5"
+          role="group"
+          aria-label="探活模型输入方式"
+        >
+          {(["manual", "select"] as const).map((optionMode) => {
+            const selected = mode === optionMode;
+            const label = optionMode === "manual" ? "手动输入" : "选择模型";
+            return (
+              <button
+                key={optionMode}
+                type="button"
+                className={cn(
+                  "text-muted-foreground h-6 rounded-sm px-2 text-xs transition-colors outline-none focus-visible:ring-2",
+                  selected && "bg-background text-foreground shadow-sm",
+                )}
+                aria-pressed={selected}
+                disabled={props.disabled || (optionMode === "select" && props.options.length === 0)}
+                onClick={() => setMode(optionMode)}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {mode === "manual" ? (
+        <Input
+          className="min-w-0"
+          aria-label="手动输入探活模型"
+          value={props.value ?? ""}
+          disabled={props.disabled}
+          placeholder="留空使用全局默认"
+          onChange={(event) => props.onChange(event.target.value || null)}
+        />
+      ) : (
+        <Select
+          value={selectedValue}
+          itemToStringLabel={(value) =>
+            value === inheritedProbeModelValue ? "继承全局默认模型" : value
+          }
+          disabled={props.disabled}
+          onValueChange={(value) => {
+            if (!value) return;
+            props.onChange(value === inheritedProbeModelValue ? null : value);
+          }}
+        >
+          <SelectTrigger aria-label="选择探活模型">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            <SelectItem value={inheritedProbeModelValue}>继承全局默认模型</SelectItem>
+            {props.options.map((model) => (
+              <SelectItem key={model} value={model}>
+                {model}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
+  );
 }
 
 export function GroupPolicyEditorFields(props: {
@@ -85,60 +166,18 @@ export function GroupPolicyEditorFields(props: {
     props.probeModels?.models ?? [],
     props.value.probe_model,
   );
-  const showProbeModelSelect = Boolean(props.probeModels && probeModelOptions.length > 0);
-  const initialProbeModelsLoading = Boolean(props.probeModelsLoading && !props.probeModels);
   let probeModelsButtonLabel = props.probeModels ? "重新获取组内模型" : "获取组内模型";
   if (props.probeModelsLoading) probeModelsButtonLabel = "正在获取";
-  const probeModelControl = (() => {
-    if (initialProbeModelsLoading) {
-      return <Skeleton className="h-8 w-full" aria-label="正在自动获取组内模型" />;
-    }
-    if (showProbeModelSelect) {
-      return (
-        <Select
-          value={props.value.probe_model?.trim() || inheritedProbeModelValue}
-          itemToStringLabel={(value) =>
-            value === inheritedProbeModelValue ? "继承全局默认模型" : value
-          }
-          disabled={!props.value.probe_enabled}
-          onValueChange={(value) => {
-            if (!value) return;
-            update("probe_model", value === inheritedProbeModelValue ? null : value);
-          }}
-        >
-          <SelectTrigger aria-label="选择测试模型">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="start">
-            <SelectItem value={inheritedProbeModelValue}>继承全局默认模型</SelectItem>
-            {probeModelOptions.map((model) => (
-              <SelectItem key={model} value={model}>
-                {model}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      );
-    }
-    return (
-      <Input
-        className="min-w-0"
-        aria-label="测试模型"
-        value={props.value.probe_model ?? ""}
-        disabled={!props.value.probe_enabled}
-        placeholder="留空使用全局默认"
-        onChange={(event) => update("probe_model", event.target.value || null)}
-      />
-    );
-  })();
 
   return (
     <div className="min-w-0 space-y-5" data-testid="group-policy-editor-fields">
       <div className="flex min-w-0 items-center justify-between gap-4 border-b pb-4">
-        <label className="min-w-0 cursor-pointer" htmlFor="group-policy-enabled">
-          <span className="block text-sm font-medium">参与守护</span>
-          <span className="text-muted-foreground block text-xs">关闭后不探测、不熔断、不调权</span>
-        </label>
+        <FieldLabel
+          label="参与守护"
+          description="关闭后不探测、不熔断、不调权"
+          htmlFor="group-policy-enabled"
+          className="cursor-pointer text-sm"
+        />
         <Switch
           id="group-policy-enabled"
           checked={props.value.enabled}
@@ -185,8 +224,10 @@ export function GroupPolicyEditorFields(props: {
           <FieldLabel
             label="保底可用账号数"
             description="即使账号达到熔断条件，每个分组仍至少保留这么多个账号接收请求，避免整个分组中断"
+            htmlFor="group-policy-min-pool-size"
           />
           <Input
+            id="group-policy-min-pool-size"
             className="min-w-0"
             type="number"
             min={0}
@@ -243,15 +284,12 @@ export function GroupPolicyEditorFields(props: {
         >
           {capabilityOptions.map((option) => (
             <div key={option.field} className="flex min-w-0 items-center justify-between gap-4">
-              <label
-                className="min-w-0 cursor-pointer text-sm font-medium"
+              <FieldLabel
+                label={option.label}
+                description={option.description}
                 htmlFor={`group-policy-${option.field}`}
-              >
-                <span className="block">{option.label}</span>
-                <span className="text-muted-foreground mt-0.5 block text-xs font-normal leading-5">
-                  {option.description}
-                </span>
-              </label>
+                className="cursor-pointer text-sm"
+              />
               <Switch
                 id={`group-policy-${option.field}`}
                 checked={props.value[option.field]}
@@ -264,12 +302,12 @@ export function GroupPolicyEditorFields(props: {
 
       <section className="min-w-0 space-y-3" data-testid="group-policy-probe-settings">
         <div className="flex min-w-0 items-center justify-between gap-4">
-          <label className="min-w-0 cursor-pointer" htmlFor="group-policy-probe-enabled">
-            <span className="block text-sm font-medium">定时测试</span>
-            <span className="text-muted-foreground block text-xs">
-              定期测试该分组账号，测试参数仅覆盖当前分组。
-            </span>
-          </label>
+          <FieldLabel
+            label="定时测试"
+            description="定期测试该分组账号，测试参数仅覆盖当前分组。"
+            htmlFor="group-policy-probe-enabled"
+            className="cursor-pointer text-sm"
+          />
           <Switch
             id="group-policy-probe-enabled"
             checked={props.value.probe_enabled}
@@ -294,9 +332,13 @@ export function GroupPolicyEditorFields(props: {
             />
           </label>
           <div className="min-w-0 space-y-1.5 text-sm">
-            <span className="block font-medium">测试模型</span>
-            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-              {probeModelControl}
+            <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <ProbeModelControl
+                options={probeModelOptions}
+                value={props.value.probe_model}
+                disabled={!props.value.probe_enabled}
+                onChange={(model) => update("probe_model", model)}
+              />
               <Button
                 type="button"
                 variant="outline"

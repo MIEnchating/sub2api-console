@@ -35,6 +35,41 @@ function TabsFixture() {
 }
 
 describe("SegmentedControl", () => {
+  it("keeps overflowing tabs in a scrollable row", () => {
+    render(<TabsFixture />);
+    expect(screen.getByRole("tablist")).toHaveClass("min-w-0", "overflow-x-auto");
+  });
+
+  it("leaves vertical arrow keys available for scrolling in a horizontal tablist", async () => {
+    const user = userEvent.setup();
+    render(<TabsFixture />);
+    const details = screen.getByRole("tab", { name: "明细" });
+    details.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(details).toHaveFocus();
+    expect(details).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("skips aria-disabled tabs when moving with the keyboard", async () => {
+    const user = userEvent.setup();
+    render(
+      <SegmentedControl role="tablist" aria-label="结果">
+        <SegmentedControlItem role="tab" selected>
+          全部
+        </SegmentedControlItem>
+        <SegmentedControlItem role="tab" selected={false} aria-disabled>
+          加载中
+        </SegmentedControlItem>
+        <SegmentedControlItem role="tab" selected={false}>
+          失败
+        </SegmentedControlItem>
+      </SegmentedControl>,
+    );
+    screen.getByRole("tab", { name: "全部" }).focus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "失败" })).toHaveFocus();
+  });
+
   it("exposes one selected tab and its controlled panel", () => {
     render(<TabsFixture />);
 

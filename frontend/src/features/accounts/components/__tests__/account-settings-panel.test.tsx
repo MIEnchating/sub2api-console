@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AccountDetail, Task } from "@/api";
+import { api, type AccountDetail, type Task } from "@/api";
 import { accountDetailDialogLayout } from "../account-detail-dialog";
 import {
   AccountSettingsPanel,
@@ -53,7 +55,7 @@ const detail: AccountDetail = {
   group_rates: { codex: "0.08" },
   group_ids: { codex: "7" },
   bindings: [],
-  test_model: "gpt-5.1-codex",
+  test_models: ["gpt-5.1-codex", "claude-sonnet-4"],
 };
 
 function renderPanel() {
@@ -71,7 +73,11 @@ function renderPanel() {
 }
 
 describe("账号设置面板", () => {
-  it("获取模型后去重排序并保留当前探测模型供选择", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("获取模型后去重排序并保留当前单个探测模型供选择", () => {
     expect(
       accountTestModelOptions(["gpt-5.2", "gpt-5.1-codex", "gpt-5.2", ""], "custom-probe-model"),
     ).toEqual(["custom-probe-model", "gpt-5.1-codex", "gpt-5.2"]);
@@ -98,9 +104,15 @@ describe("账号设置面板", () => {
     expect(markup).toContain('aria-readonly="true"');
     expect(markup).toContain('aria-label="优先级说明"');
     expect(markup).toContain('aria-label="账号成本说明"');
+    expect(markup).toContain('aria-label="暂停调度说明"');
+    expect(markup).toContain('aria-label="排除该账号说明"');
     expect(markup).not.toContain("请使用“同步倍率”更新");
+    expect(markup).not.toContain("停止接收流量，继续监控计分，不自动恢复。");
     expect(markup).not.toContain("上游 Host");
     expect(markup).not.toContain("账号 Base URL");
+    expect(markup).toContain('aria-label="探测模型"');
+    expect(markup).toContain("只使用一个模型进行实际验证");
+    expect(markup).not.toContain("多个模型逐一探测");
   });
 
   it("makes the complete pause and exclude rows operable buttons", () => {
@@ -121,6 +133,49 @@ describe("账号设置面板", () => {
     expect(markup).toContain('data-testid="account-control-group"');
     expect(markup).not.toContain("border-primary/25");
     expect(markup).not.toContain("bg-primary/5");
+  });
+
+  it("保存任务开始后提供取消入口并取消精确任务", async () => {
+    const queued = {
+      id: "settings-task-41",
+      skill: "sub2api-account-management",
+      operation: "account-settings",
+      status: "queued",
+      progress: 0,
+      message: "账号设置已排队",
+      result: {},
+      created_at: "2026-09-05T00:00:00Z",
+      updated_at: "2026-09-05T00:00:00Z",
+    } as Task;
+    const save = vi.spyOn(api, "saveAccountSettings").mockResolvedValue(queued);
+    vi.spyOn(api, "task").mockImplementation(() => new Promise<Task>(() => undefined));
+    const cancel = vi.spyOn(api, "cancelTask").mockResolvedValue({ cancelled: true });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountSettingsPanel
+          accountId="41"
+          query={{ data: detail, isLoading: false, isError: false, error: null }}
+          onCancel={() => undefined}
+          onSaved={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        "41",
+        expect.objectContaining({ test_models: ["gpt-5.1-codex"] }),
+      ),
+    );
+    const cancelButton = await screen.findByRole("button", { name: "取消任务" });
+    await userEvent.click(cancelButton);
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("settings-task-41"));
   });
 });
 

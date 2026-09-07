@@ -42,6 +42,27 @@ func (s *Store) NewAPILocalGroups(ctx context.Context) ([]NewAPILocalGroup, erro
 	return result, rows.Err()
 }
 
+func (s *Store) UpdateNewAPILocalGroupRatio(ctx context.Context, groupID, ratio string) error {
+	groupID = strings.TrimSpace(groupID)
+	ratio = strings.TrimSpace(ratio)
+	if groupID == "" || ratio == "" {
+		return errors.New("Sub2API 分组 ID 和倍率不能为空")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE local_groups SET rate_multiplier=?,updated_at=? WHERE remote_id=?`,
+		ratio, time.Now().UTC().Format(time.RFC3339Nano), groupID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return errors.New("Sub2API 稳定分组 ID 不存在")
+	}
+	return nil
+}
+
 func (s *Store) NewAPIGroupBindings(ctx context.Context, platformID string) ([]NewAPIGroupBinding, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT platform_id,newapi_group_id,newapi_group_name,sub2api_group_id,sync_ratio
 		FROM newapi_group_bindings WHERE platform_id=? ORDER BY newapi_group_name,newapi_group_id`, strings.TrimSpace(platformID))

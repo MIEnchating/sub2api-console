@@ -33,6 +33,70 @@ type UpstreamConfigurationWriteResult struct {
 	UnavailableGroups int
 }
 
+// RenameUpstreamHost moves every business-side reference to a new canonical
+// Host while retaining the stable upstream identity and its catalog history.
+// The target must not already exist; merging two identities requires an
+// explicit operator decision and is intentionally outside this operation.
+func (s *Store) RenameUpstreamHost(ctx context.Context, oldHost, newHost string) error {
+	oldHost, newHost = canonicalHost(oldHost), canonicalHost(newHost)
+	if oldHost == "" || newHost == "" {
+		return errors.New("上游 Host 不能为空")
+	}
+	if oldHost == newHost {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM upstreams WHERE host=?)`, oldHost).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return errors.New("原上游 Host 不存在")
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM upstreams WHERE host=?)`, newHost).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return errors.New("目标上游 Host 已存在，不能自动合并")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// A previous configuration can leave an orphaned recharge-rate row after
+	// its upstream was removed. It is not an active target configuration (the
+	// upstream existence check above passed), so discard it before moving the
+	// source row into the new canonical Host.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recharge_rates WHERE host=?`, newHost); err != nil {
+		return err
+	}
+	for _, statement := range []string{
+		`UPDATE upstreams SET host=?,updated_at=? WHERE host=?`,
+		`UPDATE upstream_keys SET host=?,updated_at=? WHERE host=?`,
+		`UPDATE upstream_groups SET host=?,updated_at=? WHERE host=?`,
+		`UPDATE recharge_rates SET host=?,updated_at=? WHERE host=?`,
+		`UPDATE bindings SET upstream_host=CASE WHEN upstream_host=? THEN ? ELSE upstream_host END,
+			source_auth_host=CASE WHEN source_auth_host=? THEN ? ELSE source_auth_host END,
+			binding_host_alias=CASE WHEN binding_host_alias=? THEN ? ELSE binding_host_alias END,updated_at=?
+			WHERE upstream_host=? OR source_auth_host=? OR binding_host_alias=?`,
+		`UPDATE accounts SET upstream_host=?,updated_at=? WHERE upstream_host=?`,
+		`UPDATE onboarding_pending SET upstream_host=?,updated_at=? WHERE upstream_host=?`,
+		`UPDATE upstream_identity_hosts SET host=?,updated_at=? WHERE host=?`,
+	} {
+		var args []any
+		if strings.HasPrefix(statement, `UPDATE bindings`) {
+			args = []any{oldHost, newHost, oldHost, newHost, oldHost, newHost, now, oldHost, oldHost, oldHost}
+		} else {
+			args = []any{newHost, now, oldHost}
+		}
+		if _, err := tx.ExecContext(ctx, statement, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) UpstreamExists(ctx context.Context, host string) (bool, error) {
 	var marker int
 	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM upstreams WHERE host=?`, canonicalHost(host)).Scan(&marker)

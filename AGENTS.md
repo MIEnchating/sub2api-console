@@ -102,7 +102,7 @@
 
 ### 3.8 路由
 
-- 使用 TanStack Router，路由树集中在 `src/router.tsx`，通过 `createRootRoute`、`createRoute` 和 `createRouter` 显式定义；搜索参数必须在 `validateSearch` 中收窄到明确类型和允许值。
+- 使用 TanStack Router 文件路由，路由声明放在 `src/app-routes/`，由 Rsbuild 的 TanStack Router 插件生成 `src/routeTree.gen.ts`；`src/router.tsx` 只负责创建 Router，搜索参数必须在对应文件路由的 `validateSearch` 中收窄到明确类型和允许值。
 - 初始化与会话鉴权由根应用统一处理；增加路由级数据加载或权限边界时，应保持单一鉴权入口，避免与根应用重复请求或产生相互冲突的重定向。
 - 导航使用 `useNavigate` 或 `Link`，保持类型安全，避免直接操作 `window.location`。
 
@@ -179,6 +179,7 @@
 ## 四、后端与任务规范
 
 - Gin handler 只负责协议适配、认证、输入校验和响应映射；鉴权恢复、开户、倍率同步、探活、熔断、调权和告警规则放在 Go `internal` 领域包中。
+- 启用健康降级时，按有效健康分和降级阈值判断，与熔断的异常确认条件分开；短暂异常可温和降权，但不得把低于降级线的分数判为健康或反复评估同一证据累计惩罚。待确认标记与调度分必须在多分组计算权重前同步，具体规则见 README 的调度说明。
 - 使用显式 Go struct 定义请求与响应模型，外部响应先校验再进入领域逻辑；金额、余额和倍率使用十进制定点表示，禁止用 `float64` 进行计费计算。
 - 通过 `database/sql` 访问 SQLite；当前系统只支持全新数据库，schema 调整直接更新首次建库定义和测试，不增加旧库升级层。事务只覆盖本地数据库状态变更，不把外部网络调用包在长事务中。
 - 耗时操作必须创建任务并返回 task ID，记录阶段、进度、请求 ID、结构化结果和错误；前端通过 Query 或 SSE 查看任务状态。

@@ -13,7 +13,13 @@ function sourceFiles(directory) {
   });
 }
 
-function isActionOnlyLabel(expression) {
+function isActionOnlyLabel(expression, bindings, visited = new Set()) {
+  if (ts.isIdentifier(expression)) {
+    const name = expression.text;
+    const initializers = bindings.get(name) ?? [];
+    if (visited.has(name) || initializers.length !== 1) return false;
+    return isActionOnlyLabel(initializers[0], bindings, new Set([...visited, name]));
+  }
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return true;
   if (
     ts.isPropertyAccessExpression(expression) &&
@@ -22,9 +28,13 @@ function isActionOnlyLabel(expression) {
   ) {
     return true;
   }
-  if (ts.isParenthesizedExpression(expression)) return isActionOnlyLabel(expression.expression);
+  if (ts.isParenthesizedExpression(expression))
+    return isActionOnlyLabel(expression.expression, bindings, visited);
   if (ts.isConditionalExpression(expression)) {
-    return isActionOnlyLabel(expression.whenTrue) && isActionOnlyLabel(expression.whenFalse);
+    return (
+      isActionOnlyLabel(expression.whenTrue, bindings, visited) &&
+      isActionOnlyLabel(expression.whenFalse, bindings, visited)
+    );
   }
   return false;
 }
@@ -37,6 +47,18 @@ function dynamicActionLabels(file) {
     true,
     ts.ScriptKind.TSX,
   );
+  const bindings = new Map();
+  function collectBindings(node) {
+    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.Const) !== 0) {
+      for (const declaration of node.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+        const name = declaration.name.text;
+        bindings.set(name, [...(bindings.get(name) ?? []), declaration.initializer]);
+      }
+    }
+    ts.forEachChild(node, collectBindings);
+  }
+  collectBindings(source);
   const findings = [];
   function visit(node) {
     if (
@@ -52,7 +74,7 @@ function dynamicActionLabels(file) {
         (ts.isStringLiteral(label.initializer) ||
           (ts.isJsxExpression(label.initializer) &&
             label.initializer.expression &&
-            isActionOnlyLabel(label.initializer.expression)));
+            isActionOnlyLabel(label.initializer.expression, bindings)));
       if (!valid) {
         const location = source.getLineAndCharacterOfPosition(node.getStart(source));
         findings.push(`${relative(sourceRoot, file)}:${location.line + 1}`);

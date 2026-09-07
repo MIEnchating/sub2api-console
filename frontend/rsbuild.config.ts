@@ -1,8 +1,9 @@
 import { defineConfig } from "@rsbuild/core";
 import { pluginReact } from "@rsbuild/plugin-react";
 import { pluginTailwindcss } from "@rsbuild/plugin-tailwindcss";
+import { tanstackRouter } from "@tanstack/router-plugin/rspack";
 
-export default defineConfig({
+export default defineConfig(({ envMode }) => ({
   plugins: [pluginReact(), pluginTailwindcss({ optimize: false })],
   source: { entry: { index: "./src/main.tsx" } },
   resolve: { alias: { "@": "./src" } },
@@ -18,4 +19,15 @@ export default defineConfig({
     },
   },
   output: { distPath: { root: "dist" } },
-});
+  tools: {
+    rspack: {
+      plugins: [
+        tanstackRouter({
+          target: "react",
+          routesDirectory: "./src/app-routes",
+          autoCodeSplitting: envMode === "production",
+        }),
+      ],
+    },
+  },
+}));

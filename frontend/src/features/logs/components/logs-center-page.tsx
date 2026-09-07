@@ -12,6 +12,7 @@ import {
   type UnifiedLogState,
 } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
@@ -304,17 +305,11 @@ export function LogsCenterPage() {
                     </TableRow>
                   ))}
                 {!logs.isLoading && !logs.error && !logs.data?.items.length && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="h-28 text-center text-muted-foreground"
-                      overflowTooltip={false}
-                    >
-                      {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
-                        ? "没有匹配的记录"
-                        : "暂无日志记录"}
-                    </TableCell>
-                  </TableRow>
+                  <TableEmptyState columns={6}>
+                    {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
+                      ? "没有匹配的记录"
+                      : "暂无日志记录"}
+                  </TableEmptyState>
                 )}
                 {!logs.error &&
                   logs.data?.items.map((entry) => (

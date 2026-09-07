@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { api, type UnifiedLogEntry } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import {
   Dialog,
   DialogBody,
@@ -31,6 +32,10 @@ import {
   type LogChangeRow,
   type LogDetailRow,
 } from "../lib/log-display";
+import {
+  AccountRateSyncResultTable,
+  isAccountRateSyncItems,
+} from "./account-rate-sync-result-table";
 
 type LogDialogWidth = "medium" | "wide";
 type LogRecord = Record<string, unknown>;
@@ -42,6 +47,16 @@ const operationCollectionKeys = new Set([
   "planned_operations",
 ]);
 const recordMapKeys = new Set(["account_decisions", "account_targets"]);
+const expandedRecordCollectionKeys = new Set(["items", "results"]);
+const separatelyReportedInspectionResultKeys = new Set(["account_rate_sync", "alert_evaluation"]);
+const relatedEventAssociationKeys = new Set([
+  "actor",
+  "batch_id",
+  "operation_id",
+  "request_id",
+  "run_key",
+  "task_id",
+]);
 
 function isLogRecord(value: unknown): value is LogRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -102,6 +117,23 @@ function structuredDetailEntries(details: Record<string, unknown>): [string, unk
   });
 }
 
+function logDisplayDetails(
+  entry: UnifiedLogEntry,
+  details: Record<string, unknown>,
+): Record<string, unknown> {
+  const operation = details.operation;
+  const automaticInspection =
+    entry.kind === "task" &&
+    (entry.title === "automatic-inspection" || operation === "automatic-inspection");
+  if (!automaticInspection || !isLogRecord(details.result)) return details;
+  const result = Object.fromEntries(
+    Object.entries(details.result).filter(
+      ([key]) => !separatelyReportedInspectionResultKeys.has(key),
+    ),
+  );
+  return { ...details, result };
+}
+
 function recordMapRows(value: LogRecord): LogRecord[] {
   return Object.entries(value).flatMap(([key, item]) => {
     if (!isLogRecord(item)) return [];
@@ -114,6 +146,15 @@ function structuredCollectionCount(key: string, value: unknown): number | null {
   if (Array.isArray(value) && value.some(isLogRecord)) return value.length;
   if (recordMapKeys.has(key) && isLogRecord(value)) return Object.keys(value).length;
   return null;
+}
+
+function relatedEventPayload(entry: UnifiedLogEntry): LogRecord | null {
+  const payload = entry.details.payload;
+  if (!isLogRecord(payload)) return null;
+  const visible = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => !relatedEventAssociationKeys.has(key)),
+  );
+  return Object.keys(visible).length > 0 ? visible : null;
 }
 
 function recordTitle(record: LogRecord, index: number): string {
@@ -159,52 +200,61 @@ function visibleRecordRows(record: LogRecord): LogDetailRow[] {
 function LogResultItems(props: { values: unknown[] }): ReactElement {
   const records = props.values.filter(isLogRecord);
   const pagination = useClientPagination(records, 10);
+  const startIndex = (pagination.currentPage - 1) * pagination.pageSize;
+  const rateSyncItems = isAccountRateSyncItems(records);
 
   return (
     <div data-slot="log-result-items" className="overflow-hidden rounded-md border">
-      <div className="divide-border divide-y">
-        {pagination.visibleItems.map((record, index) => {
-          const absoluteIndex = (pagination.currentPage - 1) * pagination.pageSize + index;
-          const status = recordStatus(record);
-          const rows = visibleRecordRows(record);
-          const nested = Object.entries(record).filter(([, value]) => isStructuredValue(value));
-          return (
-            <article className="min-w-0 p-3" key={String(record.id ?? record.account_id ?? index)}>
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <strong className="min-w-0 break-words font-medium">
-                  {recordTitle(record, absoluteIndex)}
-                </strong>
-                {status ? (
-                  <StatusBadge
-                    label={logStatusLabel(status)}
-                    variant={recordStatusVariant(status)}
-                  />
+      {rateSyncItems ? (
+        <AccountRateSyncResultTable records={pagination.visibleItems} startIndex={startIndex} />
+      ) : (
+        <div className="divide-border divide-y">
+          {pagination.visibleItems.map((record, index) => {
+            const absoluteIndex = startIndex + index;
+            const status = recordStatus(record);
+            const rows = visibleRecordRows(record);
+            const nested = Object.entries(record).filter(([, value]) => isStructuredValue(value));
+            return (
+              <article
+                className="min-w-0 p-3"
+                key={String(record.id ?? record.account_id ?? index)}
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <strong className="min-w-0 break-words font-medium">
+                    {recordTitle(record, absoluteIndex)}
+                  </strong>
+                  {status ? (
+                    <StatusBadge
+                      label={logStatusLabel(status)}
+                      variant={recordStatusVariant(status)}
+                    />
+                  ) : null}
+                </div>
+                {rows.length > 0 ? (
+                  <dl className="mt-2 grid gap-x-5 sm:grid-cols-2 lg:grid-cols-3">
+                    {rows.map((row) => (
+                      <div className="border-border min-w-0 border-t py-2" key={row.key}>
+                        <dt className="text-muted-foreground text-xs">{row.label}</dt>
+                        <dd className="mt-0.5 break-words text-xs leading-5 font-medium">
+                          {row.value}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
                 ) : null}
-              </div>
-              {rows.length > 0 ? (
-                <dl className="mt-2 grid gap-x-5 sm:grid-cols-2 lg:grid-cols-3">
-                  {rows.map((row) => (
-                    <div className="border-border min-w-0 border-t py-2" key={row.key}>
-                      <dt className="text-muted-foreground text-xs">{row.label}</dt>
-                      <dd className="mt-0.5 break-words text-xs leading-5 font-medium">
-                        {row.value}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-              {nested.map(([key, value]) => (
-                <section className="border-border mt-2 border-t pt-2" key={key}>
-                  <h5 className="text-muted-foreground text-xs font-medium">
-                    {logDetailLabel(key)}
-                  </h5>
-                  <LogStructuredValue value={value} fieldKey={key} />
-                </section>
-              ))}
-            </article>
-          );
-        })}
-      </div>
+                {nested.map(([key, value]) => (
+                  <section className="border-border mt-2 border-t pt-2" key={key}>
+                    <h5 className="text-muted-foreground text-xs font-medium">
+                      {logDetailLabel(key)}
+                    </h5>
+                    <LogStructuredValue value={value} fieldKey={key} />
+                  </section>
+                ))}
+              </article>
+            );
+          })}
+        </div>
+      )}
       {records.length > pagination.pageSize ? (
         <DataTablePagination
           currentPage={pagination.currentPage}
@@ -308,7 +358,7 @@ function LogScalarList(props: { values: unknown[]; fieldKey?: string }): ReactEl
 
 function LogStructuredSection(props: { fieldKey: string; value: unknown }): ReactElement {
   const count = structuredCollectionCount(props.fieldKey, props.value);
-  if (count !== null && count > 10) {
+  if (count !== null && count > 10 && !expandedRecordCollectionKeys.has(props.fieldKey)) {
     return (
       <details>
         <summary className="text-muted-foreground flex cursor-pointer items-center justify-between gap-3 border-y py-2 text-xs font-medium">
@@ -321,8 +371,9 @@ function LogStructuredSection(props: { fieldKey: string; value: unknown }): Reac
   }
   return (
     <section>
-      <h4 className="text-muted-foreground mb-1 text-xs font-medium">
-        {logDetailLabel(props.fieldKey)}
+      <h4 className="text-muted-foreground mb-1 flex items-center justify-between gap-3 text-xs font-medium">
+        <span>{logDetailLabel(props.fieldKey)}</span>
+        {count !== null ? <span className="shrink-0 tabular-nums">{count} 项</span> : null}
       </h4>
       <LogStructuredValue value={props.value} fieldKey={props.fieldKey} />
     </section>
@@ -388,6 +439,7 @@ export function LogChangesList(props: { changes: LogChangeRow[] }): ReactElement
                 <span>{formatLogDate(change.occurredAt)}</span>
                 <span>{change.operation}</span>
                 <span>分组：{change.groups.length ? change.groups.join("、") : "未记录"}</span>
+                {change.operationId ? <span>原子操作 ID：{change.operationId}</span> : null}
               </div>
             </div>
             <StatusBadge label={change.result} variant={logStatusVariant(change.status)} />
@@ -407,13 +459,14 @@ export function LogDetailsContent(props: {
   loading?: boolean;
   loadFailed?: boolean;
 }): ReactElement {
-  const details = props.details ?? props.entry.details;
+  const details = logDisplayDetails(props.entry, props.details ?? props.entry.details);
   const duplicateKey = props.entry.kind === "task" ? "operation" : "event_type";
   const detailRows = scalarDetailRows(details).filter(
     (row) => props.entry.kind === "change" || row.key !== duplicateKey,
   );
   const structuredEntries = structuredDetailEntries(details);
   const events = relatedEvents(props.entry);
+  const eventPagination = useClientPagination(events, 20);
   const changes = relatedChanges(props.entry);
   const statusLabel =
     props.entry.kind === "event"
@@ -504,24 +557,43 @@ export function LogDetailsContent(props: {
             关联事件
           </h3>
           <div className="divide-border mt-1 divide-y">
-            {events.map((event) => (
-              <article className="grid gap-1 py-2.5" key={event.id}>
-                <div className="flex items-start justify-between gap-3">
-                  <span className="break-words font-medium">{logTitleLabel(event.title)}</span>
-                  <StatusBadge
-                    label={logEventLevelLabel(logEventLevel(event.status))}
-                    variant={logStatusVariant(event.status)}
-                  />
-                </div>
-                <p className="text-muted-foreground break-words text-xs leading-5">
-                  {event.summary}
-                </p>
-                <span className="text-muted-foreground text-xs">
-                  {formatLogDate(event.occurred_at)}
-                </span>
-              </article>
-            ))}
+            {eventPagination.visibleItems.map((event) => {
+              const payload = relatedEventPayload(event);
+              return (
+                <article className="grid gap-1 py-2.5" key={event.id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="break-words font-medium">{logTitleLabel(event.title)}</span>
+                    <StatusBadge
+                      label={logEventLevelLabel(logEventLevel(event.status))}
+                      variant={logStatusVariant(event.status)}
+                    />
+                  </div>
+                  <p className="text-muted-foreground break-words text-xs leading-5">
+                    {event.summary}
+                  </p>
+                  <span className="text-muted-foreground text-xs">
+                    {formatLogDate(event.occurred_at)}
+                  </span>
+                  {payload ? (
+                    <div className="mt-1">
+                      <LogStructuredValue value={payload} />
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
+          {events.length > eventPagination.pageSize ? (
+            <DataTablePagination
+              currentPage={eventPagination.currentPage}
+              totalPages={eventPagination.totalPages}
+              totalItems={events.length}
+              pageSize={eventPagination.pageSize}
+              pageSizes={[20, 50, 100]}
+              onPageChange={eventPagination.setCurrentPage}
+              onPageSizeChange={eventPagination.setPageSize}
+            />
+          ) : null}
         </section>
       ) : null}
 
@@ -552,8 +624,20 @@ export function LogDetailsDialog(props: {
     refetchInterval: (query) =>
       props.entry?.source === "task" ? taskPollInterval(query, 1_000) : false,
   });
-  const details = props.entry ? { ...props.entry.details } : {};
-  if (props.entry?.source === "task" && taskDetail.data) details.result = taskDetail.data.result;
+  const currentEntry =
+    props.entry?.source === "task" && taskDetail.data
+      ? {
+          ...props.entry,
+          status: taskDetail.data.status,
+          summary: taskDetail.data.message,
+          details: {
+            ...props.entry.details,
+            progress: taskDetail.data.progress,
+            result: taskDetail.data.result,
+          },
+        }
+      : props.entry;
+  const details = currentEntry?.details ?? {};
 
   return (
     <Dialog open={props.entry !== null} onOpenChange={(open) => !open && props.onClose()}>
@@ -569,10 +653,15 @@ export function LogDetailsDialog(props: {
               ? `${logKindLabel(props.entry.kind)} · ${formatLogDate(props.entry.occurred_at)}`
               : "查看日志记录"}
           </DialogDescription>
+          {taskDetail.data &&
+          ["queued", "running", "waiting_input"].includes(taskDetail.data.status) ? (
+            <TaskCancelButton taskId={taskDetail.data.id} className="mt-2 w-fit" />
+          ) : null}
         </DialogHeader>
-        {props.entry ? (
+        {currentEntry ? (
           <LogDetailsContent
-            entry={props.entry}
+            key={currentEntry.id}
+            entry={currentEntry}
             details={details}
             loading={taskDetail.isLoading}
             loadFailed={taskDetail.isError}

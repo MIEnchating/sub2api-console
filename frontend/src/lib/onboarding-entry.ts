@@ -14,6 +14,7 @@ export type OnboardingUpstreamTarget = {
 };
 
 type OnboardingLocalGroup = {
+  id?: string | null;
   platform?: string | null;
   platforms?: string[];
 };
@@ -27,16 +28,16 @@ const compositeAccountPlatforms = new Set([
   "kimi",
   "zhipu",
   "deepseek",
-  "opencode",
 ]);
 
 function normalizeOnboardingPlatform(value: string | null | undefined): string {
   const platform = value?.trim().toLocaleLowerCase() ?? "";
-  if (["sub2api", "newapi", "oneapi"].includes(platform)) return "openai";
-  if (["glm", "zhipuai"].includes(platform)) return "zhipu";
-  if (platform === "claude") return "anthropic";
-  if (platform === "google") return "gemini";
-  if (platform === "moonshot") return "kimi";
+  const compact = platform.replace(/[\s_-]/g, "");
+  if (["sub2api", "newapi", "oneapi", "openai"].includes(compact)) return "openai";
+  if (["glm", "zhipu", "zhipuai"].includes(compact)) return "zhipu";
+  if (["claude", "anthropic"].includes(compact)) return "anthropic";
+  if (["google", "gemini"].includes(compact)) return "gemini";
+  if (["moonshot", "kimi"].includes(compact)) return "kimi";
   return platform;
 }
 
@@ -49,7 +50,8 @@ export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
   candidate: Pick<OnboardingCandidate, "platform">,
   groups: T[],
 ): T[] {
-  const upstreamPlatform = normalizeOnboardingPlatform(candidate.platform);
+  const catalogPlatform = normalizeOnboardingPlatform(candidate.platform);
+  const upstreamPlatform = compositeAccountPlatforms.has(catalogPlatform) ? catalogPlatform : "";
   return groups.filter((group) => {
     const platforms = [group.platform, ...(group.platforms ?? [])]
       .map(normalizeOnboardingPlatform)
@@ -59,8 +61,47 @@ export function compatibleOnboardingLocalGroups<T extends OnboardingLocalGroup>(
   });
 }
 
-export function isCompositeOnboardingPlatform(value: string | null | undefined): boolean {
-  return normalizeOnboardingPlatform(value) === "composite";
+export function onboardingPlatformNeedsProtocol(value: string | null | undefined): boolean {
+  return !compositeAccountPlatforms.has(normalizeOnboardingPlatform(value));
+}
+
+export function onboardingProtocolReady(
+  catalogPlatform: string | null | undefined,
+  selectedPlatform: string | null | undefined,
+): boolean {
+  if (!onboardingPlatformNeedsProtocol(catalogPlatform)) return true;
+  return !onboardingPlatformNeedsProtocol(selectedPlatform);
+}
+
+export function pendingOnboardingSelectionNeedsProtocol(
+  pendingChange: boolean,
+  selectedCount: number,
+  catalogPlatform: string | null | undefined,
+  selectedPlatform: string | null | undefined,
+): boolean {
+  return (
+    pendingChange &&
+    selectedCount > 0 &&
+    !onboardingProtocolReady(catalogPlatform, selectedPlatform)
+  );
+}
+
+export function inferOnboardingProtocol<T extends OnboardingLocalGroup>(
+  selectedGroupIDs: string[],
+  groups: T[],
+): string | null {
+  if (selectedGroupIDs.length === 0) return null;
+  const platforms = new Set<string>();
+  for (const groupID of selectedGroupIDs) {
+    const group = groups.find((item) => item.id === groupID);
+    if (!group) return null;
+    const platform = normalizeOnboardingPlatform(group.platform);
+    if (platform === "composite") continue;
+    if (!compositeAccountPlatforms.has(platform)) return null;
+    platforms.add(platform);
+  }
+  if (platforms.size !== 1) return null;
+  return [...platforms][0] ?? null;
 }
 
 export function adjacentOnboardingUpstreams(

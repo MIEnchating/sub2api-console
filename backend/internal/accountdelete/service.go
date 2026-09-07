@@ -237,7 +237,7 @@ func (s *Service) Enqueue(
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(parent, task, preview, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -299,7 +299,7 @@ func (s *Service) EnqueueBatch(
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeBatch(parent, task, previews, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -404,6 +404,13 @@ func (s *Service) Delete(ctx context.Context, expected Preview, actor string) (R
 		}
 	}()
 	ctx = guarded
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return result, err
+	}
+	if mode != runtimepolicy.Full {
+		return result, errors.New("账号删除只能在完全模式执行")
+	}
 	current, err := s.Preview(ctx, expected.AccountID)
 	if err != nil {
 		return result, err

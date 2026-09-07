@@ -24,6 +24,10 @@ describe("上游管理筛选工具栏", () => {
     expect(tableStart).toBeGreaterThan(formStart);
     expect(toolbar).toContain('aria-label="类型筛选"');
     expect(toolbar).toContain('aria-label="状态筛选"');
+    expect(toolbar).toContain('data-slot="number-range-filter"');
+    expect(toolbar).toContain('aria-label="余额范围"');
+    expect(toolbar).toContain('aria-label="最低余额"');
+    expect(toolbar).toContain('aria-label="最高余额"');
     expect(markup).toContain('aria-label="刷新上游列表"');
     expect(toolbar.match(/data-slot="button"/g)?.length).toBeGreaterThanOrEqual(4);
     expect(toolbar).not.toContain('data-slot="select-trigger"');
@@ -72,6 +76,7 @@ describe("上游管理筛选工具栏", () => {
     expect(markup).toContain('aria-label="选择上游 示例上游"');
     expect(markup).toContain("h-20");
     expect(markup).toContain("最近方式：");
-    expect(markup).toContain("Token + 刷新 Token");
+    expect(markup).toContain("最近方式：Token · 恢复：刷新 Token");
+    expect(markup).not.toContain("Token + 刷新 Token · 刷新 Token");
   });
 });

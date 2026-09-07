@@ -159,6 +159,16 @@ type repositoryStub struct {
 	bindings []business.NewAPIGroupBinding
 }
 
+func (stub *repositoryStub) UpdateNewAPILocalGroupRatio(_ context.Context, groupID, ratio string) error {
+	for index := range stub.groups {
+		if stub.groups[index].ID == groupID {
+			stub.groups[index].Ratio = &ratio
+			return nil
+		}
+	}
+	return errors.New("group not found")
+}
+
 func (stub *repositoryStub) NewAPILocalGroups(context.Context) ([]business.NewAPILocalGroup, error) {
 	return stub.groups, nil
 }
@@ -738,7 +748,7 @@ func TestSaveModelPricesRollsBackEarlierOptionsWhenLaterWriteFails(t *testing.T)
 	if err == nil {
 		t.Fatal("later option failure was accepted")
 	}
-	if putCalls != 3 || options["ModelPrice"] != `{}` {
+	if options["ModelPrice"] != `{}` || options["ModelRatio"] != `{}` {
 		t.Fatalf("put_calls=%d options=%#v", putCalls, options)
 	}
 }
@@ -925,7 +935,7 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 	private := &privateStub{platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: server.URL, AdminKey: "key", UserID: "1"}}
 	service := New(private, repository, server.Client(), nil, nil)
 	bindings, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
-		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", SyncRatio: true,
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.35", SyncRatio: true,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -935,14 +945,156 @@ func TestSaveBindingsSynchronizesOnlyEnabledGroupRatios(t *testing.T) {
 	}
 }
 
+func TestSaveBindingsUpdatesSub2APIManagementRatioWithoutWritingNewAPIWhenSyncDisabled(t *testing.T) {
+	managementRate := "0.35"
+	newAPIWrites := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodPut:
+			var body map[string]json.Number
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil || body["rate_multiplier"].String() != "0.42" {
+				t.Fatalf("body=%#v err=%v", body, err)
+			}
+			managementRate = "0.42"
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodGet:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		case request.URL.Path == "/api/option/" && request.Method == http.MethodPut:
+			newAPIWrites++
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	ratio := "0.35"
+	repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "低价", Ratio: &ratio}}}
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: server.URL, AdminKey: "newapi-key", UserID: "1"},
+		target:   configstore.TargetSettings{BaseURL: server.URL, AdminKey: "sub2api-key", TimeoutSeconds: 2},
+	}
+	service := New(private, repository, server.Client(), nil, nil)
+
+	_, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.42", SyncRatio: false,
+	}})
+
+	if err != nil || managementRate != "0.42" || newAPIWrites != 0 || repository.groups[0].Ratio == nil || *repository.groups[0].Ratio != "0.42" {
+		t.Fatalf("rate=%s newAPIWrites=%d groups=%#v err=%v", managementRate, newAPIWrites, repository.groups, err)
+	}
+}
+
+func TestSaveBindingsUpdatesSub2APIManagementAndNewAPIWhenSyncEnabled(t *testing.T) {
+	managementRate := "0.35"
+	var newAPIValue string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/api/option/" && request.Method == http.MethodGet:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]string{"GroupRatio": `{"vip":1}`}})
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodPut:
+			var body map[string]json.Number
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil || body["rate_multiplier"].String() != "0.42" {
+				t.Fatalf("body=%#v err=%v", body, err)
+			}
+			managementRate = "0.42"
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodGet:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		case request.URL.Path == "/api/option/" && request.Method == http.MethodPut:
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			newAPIValue, _ = body["value"].(string)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	ratio := "0.35"
+	repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "低价", Ratio: &ratio}}}
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: server.URL, AdminKey: "newapi-key", UserID: "1"},
+		target:   configstore.TargetSettings{BaseURL: server.URL, AdminKey: "sub2api-key", TimeoutSeconds: 2},
+	}
+	service := New(private, repository, server.Client(), nil, nil)
+
+	_, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.42", SyncRatio: true,
+	}})
+
+	if err != nil || managementRate != "0.42" || newAPIValue != `{"vip":0.42}` || repository.groups[0].Ratio == nil || *repository.groups[0].Ratio != "0.42" {
+		t.Fatalf("managementRate=%s newAPIValue=%q groups=%#v err=%v", managementRate, newAPIValue, repository.groups, err)
+	}
+}
+
+func TestSaveBindingsRollsBackCurrentSub2APIGroupWhenWriteReadbackFails(t *testing.T) {
+	managementRate := "0.35"
+	readbackFailures := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodPut:
+			var body map[string]json.Number
+			decoder := json.NewDecoder(request.Body)
+			decoder.UseNumber()
+			if err := decoder.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			managementRate = body["rate_multiplier"].String()
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodGet && readbackFailures < 3:
+			readbackFailures++
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": false, "error": "readback failed"})
+		case request.URL.Path == "/api/v1/admin/groups/6" && request.Method == http.MethodGet:
+			_ = json.NewEncoder(writer).Encode(map[string]any{"success": true, "data": map[string]any{"id": 6, "rate_multiplier": json.Number(managementRate)}})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	ratio := "0.35"
+	repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "低价", Ratio: &ratio}}}
+	private := &privateStub{
+		platform: configstore.NewAPIPlatform{ID: "platform-1", BaseURL: "https://newapi.example", AdminKey: "newapi-key", UserID: "1"},
+		target:   configstore.TargetSettings{BaseURL: server.URL, AdminKey: "sub2api-key", TimeoutSeconds: 2},
+	}
+	service := New(private, repository, server.Client(), nil, nil)
+
+	_, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.42", SyncRatio: false,
+	}})
+
+	if err == nil || managementRate != "0.35" || readbackFailures != 3 || repository.groups[0].Ratio == nil || *repository.groups[0].Ratio != "0.35" {
+		t.Fatalf("managementRate=%s readbackFailures=%d groups=%#v err=%v", managementRate, readbackFailures, repository.groups, err)
+	}
+}
+
 func TestSaveBindingsRejectsMalformedAndDuplicateGroupsBeforeWrite(t *testing.T) {
 	valid := GroupBindingInput{
-		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6",
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.35",
 	}
 	for name, inputs := range map[string][]GroupBindingInput{
-		"missing New API ID":   {{NewAPIGroupName: "VIP", Sub2APIGroupID: "6"}},
-		"missing New API name": {{NewAPIGroupID: "vip", Sub2APIGroupID: "6"}},
-		"duplicate New API ID": {valid, {NewAPIGroupID: " vip ", NewAPIGroupName: "重复", Sub2APIGroupID: "6"}},
+		"missing New API ID":   {{NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.35"}},
+		"missing New API name": {{NewAPIGroupID: "vip", Sub2APIGroupID: "6", Sub2APIRatio: "0.35"}},
+		"duplicate New API ID": {valid, {NewAPIGroupID: " vip ", NewAPIGroupName: "重复", Sub2APIGroupID: "6", Sub2APIRatio: "0.35"}},
+		"missing ratio":        {{NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6"}},
+		"non-positive ratio":   {{NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0"}},
+		"conflicting local ratio": {
+			valid,
+			{NewAPIGroupID: "standard", NewAPIGroupName: "标准", Sub2APIGroupID: "6", Sub2APIRatio: "0.42"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			repository := &repositoryStub{groups: []business.NewAPILocalGroup{{ID: "6", Name: "标准"}}}
@@ -984,7 +1136,7 @@ func TestSaveBindingsRestoresPreviousLocalBindingsWhenRatioSyncFails(t *testing.
 	}}, repository, server.Client(), nil, nil)
 
 	_, err := service.SaveBindings(context.Background(), "platform-1", []GroupBindingInput{{
-		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", SyncRatio: true,
+		NewAPIGroupID: "vip", NewAPIGroupName: "VIP", Sub2APIGroupID: "6", Sub2APIRatio: "0.35", SyncRatio: true,
 	}})
 
 	if err == nil || !reflect.DeepEqual(repository.bindings, previous) {

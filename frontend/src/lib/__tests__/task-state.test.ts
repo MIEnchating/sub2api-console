@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { taskIsPending, taskIsTerminal, taskPollInterval } from "../task-state";
+import { taskIsPending, taskIsTerminal, taskPollInterval, taskStopsPolling } from "../task-state";
 
 describe("task state helpers", () => {
   it("keeps a queued or running task pending", () => {
@@ -11,7 +11,7 @@ describe("task state helpers", () => {
     );
   });
 
-  it("releases controls after a terminal task or a task query error", () => {
+  it("releases controls only after a terminal task", () => {
     expect(
       taskIsPending("task-1", { isError: false, data: { status: "succeeded" } as never }),
     ).toBe(false);
@@ -26,7 +26,7 @@ describe("task state helpers", () => {
     ).toBe(false);
     expect(
       taskIsPending("task-1", { isError: false, data: { status: "waiting_input" } as never }),
-    ).toBe(false);
+    ).toBe(true);
     expect(taskIsPending("task-1", { isError: true })).toBe(true);
   });
 
@@ -40,7 +40,12 @@ describe("task state helpers", () => {
     expect(taskIsTerminal()).toBe(false);
   });
 
-  it("stops polling after a terminal result or a task status request error", () => {
+  it("keeps waiting-input tasks active for controls and status refresh", () => {
+    expect(taskStopsPolling({ status: "waiting_input" } as never)).toBe(false);
+    expect(taskStopsPolling({ status: "cancelled" } as never)).toBe(true);
+  });
+
+  it("keeps polling errors and waiting-input tasks at a reduced rate", () => {
     expect(taskPollInterval({ state: { status: "error" } })).toBe(2_000);
     expect(
       taskPollInterval({ state: { status: "success", data: { status: "failed" } as never } }),
@@ -52,7 +57,7 @@ describe("task state helpers", () => {
       taskPollInterval({
         state: { status: "success", data: { status: "waiting_input" } as never },
       }),
-    ).toBe(false);
+    ).toBe(2_000);
     expect(
       taskPollInterval({ state: { status: "success", data: { status: "running" } as never } }, 300),
     ).toBe(300);

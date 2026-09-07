@@ -178,6 +178,12 @@ func (runner *deferredModelRunner) Go(run func(context.Context)) error {
 	return nil
 }
 
+func (runner *deferredModelRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *deferredModelRunner) CancelTask(string) bool { return false }
+
 func (runner *deferredModelRunner) Run(ctx context.Context) {
 	if runner.run == nil {
 		panic("model check task was not scheduled")

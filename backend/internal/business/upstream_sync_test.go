@@ -234,7 +234,7 @@ func TestAccountRateObservationAndConfirmedRateUseSeparateBindingFields(t *testi
 	}
 	name := "Example-0.2"
 	multiplier := "0.2"
-	if err := store.CommitAccountFieldsReadback(context.Background(), "11", &name, nil, nil, nil, &multiplier, nil, nil, false, nil, AccountOperation{
+	if err := store.CommitAccountFieldsReadback(context.Background(), "11", &name, nil, nil, nil, nil, &multiplier, nil, nil, false, nil, AccountOperation{
 		OperationID: "rate-sync-11", OperationType: "account.sync", State: "succeeded", Phase: "readback", Actor: "auto-inspection",
 		RemoteConfirmed: true, ReadbackConfirmed: true, ObjectID: "11", ObjectName: &name, Before: map[string]any{}, After: map[string]any{}, Writeback: true,
 	}); err != nil {
@@ -611,6 +611,31 @@ func TestUpstreamGroupHistoryTreatsAnEmptyCompleteCatalogAsBaseline(t *testing.T
 	}
 	if len(rows) != 1 || rows[0].ChangeType != "added" || rows[0].GroupID != "first-group" {
 		t.Fatalf("history=%#v", rows)
+	}
+}
+
+func TestAllUpstreamGroupHistoryReturnsChangesAcrossStableUpstreams(t *testing.T) {
+	store := upstreamSyncTestStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO upstream_identities(upstream_id,created_at,updated_at)
+		VALUES('up_second','now','now');
+		INSERT INTO upstream_group_change_events(upstream_id,group_id,group_name,change_type,changed_at)
+		VALUES
+		((SELECT upstream_id FROM upstream_identity_hosts WHERE host='api.example'),'group-1','标准组','added','2026-09-05T01:00:00Z'),
+		('up_second','group-2','高级组','removed','2026-09-05T02:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.AllUpstreamGroupHistory(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].UpstreamID != "up_second" || rows[1].GroupID != "group-1" {
+		t.Fatalf("all upstream group history=%#v", rows)
+	}
+	limited, err := store.AllUpstreamGroupHistory(ctx, 1)
+	if err != nil || len(limited) != 1 || limited[0].GroupName != "高级组" {
+		t.Fatalf("limited upstream group history=%#v err=%v", limited, err)
 	}
 }
 

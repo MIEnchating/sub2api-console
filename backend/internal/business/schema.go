@@ -179,7 +179,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_policy_nodes_array_child ON policy_nodes(po
 CREATE TABLE IF NOT EXISTS paused_accounts (account_id TEXT PRIMARY KEY,reason TEXT,enabled INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_priority_accounts (
  account_id TEXT PRIMARY KEY,priority INTEGER NOT NULL,previous_priority INTEGER,previous_load_factor TEXT,
- previous_concurrency INTEGER,sync_balance_multiplier INTEGER NOT NULL DEFAULT 0 CHECK(sync_balance_multiplier IN (0,1)),
+ previous_concurrency INTEGER,previous_schedulable INTEGER,previous_paused INTEGER,previous_paused_reason TEXT,
+ sync_balance_multiplier INTEGER NOT NULL DEFAULT 0 CHECK(sync_balance_multiplier IN (0,1)),
  created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
  FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
 );
@@ -214,7 +215,7 @@ CREATE TABLE IF NOT EXISTS scheduler_leases (
 );
 CREATE TABLE IF NOT EXISTS operation_audit (
  source_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,operation_type TEXT NOT NULL,state TEXT NOT NULL,phase TEXT NOT NULL,
- request_id TEXT,actor TEXT,source TEXT,error TEXT,remote_confirmed INTEGER,readback_confirmed INTEGER,
+ request_id TEXT,task_id TEXT,actor TEXT,source TEXT,error TEXT,remote_confirmed INTEGER,readback_confirmed INTEGER,
  object_type TEXT,object_id TEXT,object_name TEXT,group_names_json TEXT NOT NULL DEFAULT '[]',field_name TEXT,
  before_json TEXT,after_json TEXT,writeback INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL
 );
@@ -511,15 +512,15 @@ func initialControlPolicy() map[string]any {
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
 		"manual_priority":     map[string]any{"reserved_max": int64(10)},
-		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
+		"probe":               map[string]any{"enabled": true, "interval_seconds": int64(300), "freshness_seconds": int64(900), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
 		"account_rate_sync":   map[string]any{"interval_seconds": int64(120), "batch_size": int64(0), "batch_percent": int64(0)},
 		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
-			"event_scores": map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
-			"short_window": int64(10), "long_window": int64(60), "latest_weight": 0.5, "short_ratio": 0.7, "slow_ttfb_ms": int64(5000),
+			"event_scores":           map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
+			"history_window_minutes": int64(1440), "short_window": int64(10), "long_window": int64(60), "latest_weight": 0.5, "short_ratio": 0.7, "slow_ttfb_ms": int64(5000),
 		},
 		"breaker":  map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "transient_consecutive_failures": int64(2), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
 		"degrade":  map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
@@ -537,6 +538,7 @@ func initialControlPolicy() map[string]any {
 		},
 		"group_policy_bindings": map[string]any{},
 		"account_test_models":   map[string]any{},
+		"model_sync":            map[string]any{"blocked_patterns": []any{}},
 		"auto_apply":            map[string]any{"schedulable": true, "priority": true, "load_factor": true, "concurrency": false},
 	}
 }

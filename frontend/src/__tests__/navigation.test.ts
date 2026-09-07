@@ -12,6 +12,7 @@ import {
   KeyRound,
   Layers3,
   Link2,
+  ListTodo,
   Network,
   RadioTower,
   Route,
@@ -25,8 +26,15 @@ import {
 } from "lucide-react";
 
 import { navItems, navSections, viewForPath } from "../App";
+import { router } from "../router";
 
 describe("侧边菜单", () => {
+  it("按导航意图预加载按需路由", () => {
+    expect(router.options.defaultPreload).toBe("intent");
+    expect(router.options.defaultPreloadStaleTime).toBe(0);
+    expect(navItems.filter((item) => !router.routesByPath[item.to])).toEqual([]);
+  });
+
   it("按运营工作流展示固定顺序和名称", () => {
     expect(navItems.map((item) => item.label)).toEqual([
       "运营总览",
@@ -40,14 +48,15 @@ describe("侧边菜单", () => {
       "流量排行",
       "请求查询",
       "告警通知",
-      "配置",
+      "平台配置",
       "分组绑定",
       "渠道管理",
       "模型价格",
-      "价格差异",
+      "价格比对",
       "价格配置",
       "调度策略",
       "告警策略",
+      "系统信息",
       "密码箱",
       "日志中心",
       "系统设置",
@@ -75,6 +84,7 @@ describe("侧边菜单", () => {
       SlidersHorizontal,
       Route,
       ShieldAlert,
+      ListTodo,
       KeyRound,
       ScrollText,
       Settings,
@@ -111,7 +121,7 @@ describe("侧边菜单", () => {
         ],
       },
       { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
-      { label: "系统管理", itemIDs: ["vault", "logs", "config"] },
+      { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
     ]);
     expect(navSections.flatMap((section) => section.itemIDs)).toEqual(
       navItems.map((item) => item.id),
@@ -124,5 +134,17 @@ describe("侧边菜单", () => {
     expect(viewForPath("/newapi/channels")).toBe("newapi-channels");
     expect(viewForPath("/newapi/prices")).toBe("newapi-prices");
     expect(viewForPath("/newapi/differences")).toBe("newapi-differences");
+  });
+
+  it("系统信息入口使用独立路由", () => {
+    expect(viewForPath("/system-info")).toBe("system-info");
+  });
+
+  it.each([
+    ["/newapi/", "newapi"],
+    ["/accounts/", "accounts"],
+    ["/newapi/groups/", "newapi-groups"],
+  ])("直接访问带尾斜线的 %s 时保持对应导航 %s", (pathname, expected) => {
+    expect(viewForPath(pathname)).toBe(expected);
   });
 });

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Pin, Trash2 } from "lucide-react";
 
 import type { AccountStatus } from "@/api";
+import { FieldLabel } from "@/components/field-help-tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +31,7 @@ export type ManualPriorityValues = {
   priority: number;
   loadFactor: string;
   concurrency: number;
+  schedulable: boolean;
   syncBalanceMultiplier: boolean;
 };
 
@@ -37,11 +39,17 @@ export function manualPriorityInitialValues(
   account: AccountStatus,
 ): Omit<ManualPriorityValues, "priority"> {
   if (account.manual_priority == null) {
-    return { loadFactor: "100", concurrency: 100, syncBalanceMultiplier: false };
+    return {
+      loadFactor: "100",
+      concurrency: 100,
+      schedulable: true,
+      syncBalanceMultiplier: false,
+    };
   }
   return {
     loadFactor: (account.load_factor?.trim() ?? "") || "100",
     concurrency: account.concurrency ?? 100,
+    schedulable: account.schedulable ?? true,
     syncBalanceMultiplier: account.manual_sync_balance_multiplier ?? false,
   };
 }
@@ -86,9 +94,12 @@ export function ManualPriorityDialog(props: {
   const initialConcurrency = String(initialValues.concurrency);
   const [loadFactor, setLoadFactor] = useState(initialLoadFactor);
   const [concurrency, setConcurrency] = useState(initialConcurrency);
+  const [schedulable, setSchedulable] = useState(initialValues.schedulable);
   const [syncBalanceMultiplier, setSyncBalanceMultiplier] = useState(
     initialValues.syncBalanceMultiplier,
   );
+  const schedulableId = useId();
+  const syncBalanceId = useId();
   const slots = useMemo(
     () => manualPrioritySlots(props.accounts, props.account.id, props.reservedMax),
     [props.account.id, props.accounts, props.reservedMax],
@@ -102,11 +113,13 @@ export function ManualPriorityDialog(props: {
     setSelected(currentPriority);
     setLoadFactor(initialLoadFactor);
     setConcurrency(initialConcurrency);
+    setSchedulable(initialValues.schedulable);
     setSyncBalanceMultiplier(initialValues.syncBalanceMultiplier);
   }, [
     currentPriority,
     initialConcurrency,
     initialLoadFactor,
+    initialValues.schedulable,
     initialValues.syncBalanceMultiplier,
     props.open,
   ]);
@@ -123,7 +136,7 @@ export function ManualPriorityDialog(props: {
         <DialogHeader className="pr-8">
           <DialogTitle>人工优先位</DialogTitle>
           <DialogDescription className="text-foreground/80">
-            将“{props.account.name}”转为人工控制，自动调度、价格分组和主动探测不会再处理这个账号。
+            将“{props.account.name}”转为人工调度，系统不再自动调权、熔断或主动探测。
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -189,23 +202,40 @@ export function ManualPriorityDialog(props: {
             </label>
           </div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 rounded-md border px-3 py-2.5">
-            <div className="min-w-0">
-              <p className="text-sm font-medium">同步上游余额</p>
-              <p className="text-foreground/70 mt-0.5 text-xs leading-5">
-                账号成本及其派生名称始终按充值比例自动换算；此开关只控制上游余额同步。
-              </p>
-            </div>
+            <FieldLabel
+              label="参与调度"
+              description="关闭后停止接收流量；人工优先位期间系统不会自动切换此开关。"
+              htmlFor={schedulableId}
+              className="cursor-pointer text-sm"
+            />
             <div className="col-start-2 row-span-2 flex items-center justify-self-end">
               <Switch
+                id={schedulableId}
+                checked={schedulable}
+                onCheckedChange={setSchedulable}
+                disabled={props.pending}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 rounded-md border px-3 py-2.5">
+            <FieldLabel
+              label="同步上游余额"
+              description="账号成本及其派生名称始终按充值比例自动换算；此开关只控制上游余额同步。"
+              htmlFor={syncBalanceId}
+              className="cursor-pointer text-sm"
+            />
+            <div className="col-start-2 row-span-2 flex items-center justify-self-end">
+              <Switch
+                id={syncBalanceId}
                 checked={syncBalanceMultiplier}
                 onCheckedChange={setSyncBalanceMultiplier}
                 disabled={props.pending}
-                aria-label="人工优先位同步上游余额"
               />
             </div>
           </div>
           <p className="text-foreground/70 text-xs leading-5">
-            设置时会把 Sub2API 中的优先级、负载因子和并发上限同步为以上值，随后由人工控制。
+            设置时会把 Sub2API
+            中的调度状态、优先级、负载因子和并发上限同步为以上值，随后不再由自动调度修改。
             优先位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
           </p>
         </div>
@@ -238,6 +268,7 @@ export function ManualPriorityDialog(props: {
                 priority: selected,
                 loadFactor: loadFactor.trim(),
                 concurrency: parsedConcurrency,
+                schedulable,
                 syncBalanceMultiplier,
               })
             }

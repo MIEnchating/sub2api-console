@@ -261,7 +261,9 @@ export function MultiSelect(props: MultiSelectProps) {
         <ComboboxEmpty>{props.emptyText ?? "没有匹配的选项"}</ComboboxEmpty>
         <MultiSelectClearAction
           text={props.clearText ?? "清空筛选"}
-          disabled={props.selected.length === 0 && inputValue.length === 0}
+          disabled={
+            props.disabled === true || (props.selected.length === 0 && inputValue.length === 0)
+          }
           onClear={() => {
             props.onChange([]);
             setInputValue("");

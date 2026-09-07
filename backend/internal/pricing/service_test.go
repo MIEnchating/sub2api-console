@@ -78,7 +78,7 @@ func TestEvaluateKeepsExchangeGroupSetsIsolated(t *testing.T) {
 	}
 }
 
-func TestEvaluatePreservesCurrentGroupWhenNoCompatibleGroupMeetsProfitMargin(t *testing.T) {
+func TestEvaluateKeepsHighestNonLossGroupAndReportsMissedProfitTarget(t *testing.T) {
 	config := Config{Enabled: true, ProfitMargin: 0.2, ExchangeGroupSets: [][]string{{"6", "7"}}, IntervalSeconds: 120, WriteConcurrency: 4}
 	catalog := business.PricingCatalog{
 		Groups: []business.PricingGroup{
@@ -98,7 +98,7 @@ func TestEvaluatePreservesCurrentGroupWhenNoCompatibleGroupMeetsProfitMargin(t *
 	if decision.Changed || !reflect.DeepEqual(decision.DesiredGroupIDs, []string{"6"}) {
 		t.Fatalf("unprofitable account group was not preserved: %#v", decision)
 	}
-	if decision.Reason == nil || !strings.Contains(*decision.Reason, "没有满足盈利比例") {
+	if decision.Reason == nil || !strings.Contains(*decision.Reason, "未达到目标盈利比例") {
 		t.Fatalf("unprofitable decision reason=%#v", decision.Reason)
 	}
 	if snapshot.Changes != 0 {
@@ -1052,4 +1052,48 @@ func (targets *fakeTargets) AuthRecord(_ context.Context, host string) (*configs
 		return nil, nil
 	}
 	return &record, nil
+}
+
+func TestEvaluateFallsBackToHighestNonLossGroupWhenProfitTargetIsUnreachable(t *testing.T) {
+	for _, scenario := range []struct {
+		name     string
+		cost     string
+		current  []string
+		want     []string
+		eligible []string
+		manual   bool
+	}{
+		{name: "blocked account moves to flagship", cost: "0.21", current: []string{"8"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}},
+		{name: "break even is eligible", cost: "0.25", current: []string{"8"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}},
+		{name: "above all sale prices preserves current", cost: "0.250000000000000001", current: []string{"8"}, want: []string{"8"}, eligible: []string{}},
+		{name: "already in fallback group stays there", cost: "0.21", current: []string{"25"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}},
+		{name: "outside membership is preserved", cost: "0.21", current: []string{"8", "99"}, want: []string{"25", "99"}, eligible: []string{"codex-pro-旗舰"}},
+		{name: "unjoined exchange set is not entered", cost: "0.21", current: []string{"99"}, want: []string{"99"}, eligible: []string{}},
+		{name: "manual priority is preserved", cost: "0.21", current: []string{"8"}, want: []string{"8"}, eligible: []string{}, manual: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			catalog := business.PricingCatalog{
+				Groups: []business.PricingGroup{
+					{ID: "8", Name: "codex-pro-平价", Platform: "openai", RateMultiplier: testString("0.2")},
+					{ID: "23", Name: "低利润候选", Platform: "openai", RateMultiplier: testString("0.23")},
+					{ID: "24", Name: "codex-pro-特价", Platform: "openai", RateMultiplier: testString("0.15")},
+					{ID: "25", Name: "codex-pro-旗舰", Platform: "openai", RateMultiplier: testString("0.25")},
+					{ID: "26", Name: "另一平台", Platform: "anthropic", RateMultiplier: testString("1")},
+					{ID: "28", Name: "同价候选", Platform: "openai", RateMultiplier: testString("0.25")},
+				},
+				Accounts: []business.PricingAccount{{ID: "104", Name: "DeepSea API-0.21", Platform: "openai", Multiplier: &scenario.cost, GroupIDs: scenario.current, GroupsValid: true, ManualPriority: scenario.manual}},
+			}
+			snapshot, err := evaluate(Config{ProfitMargin: 0.25, ExchangeGroupSets: [][]string{{"8", "23", "24", "28", "25", "26"}}}, catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision := snapshot.Decisions[0]
+			if !reflect.DeepEqual(decision.DesiredGroupIDs, scenario.want) || !reflect.DeepEqual(decision.EligibleGroups, scenario.eligible) {
+				t.Fatalf("decision=%#v; want groups=%v eligible=%v", decision, scenario.want, scenario.eligible)
+			}
+			if len(scenario.eligible) > 0 && (decision.Reason == nil || !strings.Contains(*decision.Reason, "未达到目标盈利比例")) {
+				t.Fatalf("missing profit shortfall: %#v", decision)
+			}
+		})
+	}
 }

@@ -30,4 +30,15 @@ describe("TableActionButton", () => {
     expect(markup).toContain("text-destructive");
     expect(markup).toContain("hover:bg-destructive/10");
   });
+
+  it("allows row context in the accessible name without replacing the action label", () => {
+    const markup = renderToStaticMarkup(
+      <TableActionButton label="编辑" ariaLabel="编辑分组 codex">
+        <Pencil />
+      </TableActionButton>,
+    );
+
+    expect(markup).toContain('aria-label="编辑分组 codex"');
+    expect(markup).not.toContain('aria-label="编辑"');
+  });
 });

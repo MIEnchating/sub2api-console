@@ -221,7 +221,7 @@ function SelectContent({
         data-align-trigger={alignItemWithTrigger}
         data-appearance={appearance}
         className={cn(
-          "bg-popover text-popover-foreground ring-foreground/10 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) origin-(--transform-origin) rounded-lg shadow-md ring-1",
+          "bg-popover text-popover-foreground ring-foreground/10 relative isolate z-50 max-h-(--available-height) w-(--anchor-width) max-w-(--available-width) origin-(--transform-origin) rounded-lg shadow-md ring-1",
           selectContentAppearanceLayouts[appearance],
           !alignItemWithTrigger &&
             "transition-[opacity,scale] duration-100 ease-out data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0",
@@ -255,7 +255,7 @@ function SelectContent({
             />
           </div>
         ) : null}
-        <SelectPrimitive.List className="no-scrollbar min-h-0 overflow-y-auto p-1">
+        <SelectPrimitive.List className="no-scrollbar min-h-0 overflow-y-auto overscroll-contain p-1">
           {hasFilteredChildren ? (
             filteredChildren
           ) : (
@@ -299,10 +299,7 @@ function SelectItem({
       ) : null}
       <SelectPrimitive.ItemText
         data-slot="select-item-text"
-        className={cn(
-          "flex flex-1 gap-2",
-          appearance === "classic" ? "shrink-0 whitespace-nowrap" : "min-w-0",
-        )}
+        className="flex min-w-0 flex-1 gap-2 whitespace-normal [overflow-wrap:anywhere]"
       >
         {children}
       </SelectPrimitive.ItemText>

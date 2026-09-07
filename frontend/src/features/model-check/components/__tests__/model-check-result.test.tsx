@@ -13,7 +13,12 @@ function task(tests: Record<string, unknown>[]): Task {
     status: "succeeded",
     progress: 100,
     message: "账号模型检测完成",
-    result: { tests, summary: { SOL_CONSISTENT: 1, MISMATCH: 1 } },
+    result: {
+      tests,
+      summary: { SOL_CONSISTENT: 1, MISMATCH: 1 },
+      profile_version: "profile-20260905",
+      profile_fingerprint: "0123456789abcdef",
+    },
     created_at: "2026-08-28T00:00:00Z",
     updated_at: "2026-08-28T00:00:01Z",
   };
@@ -41,7 +46,12 @@ describe("模型检测结果", () => {
         ],
       },
     } as Task;
-    const markup = renderToStaticMarkup(<ModelCheckResult task={runningTask} />);
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <ModelCheckResult task={runningTask} />
+      </QueryClientProvider>,
+    );
 
     expect(markup).toContain('role="status"');
     expect(markup).toContain('data-testid="model-check-live-progress"');
@@ -50,6 +60,7 @@ describe("模型检测结果", () => {
     expect(markup).toContain("准备账号凭据");
     expect(markup).toContain("并行执行检测");
     expect(markup).toContain("实时账号");
+    expect(markup).toContain("取消任务");
     expect(markup).not.toContain("14%");
     expect(markup).not.toContain('data-testid="model-check-result"');
     expect(markup).toContain('data-table-panel=""');
@@ -94,6 +105,8 @@ describe("模型检测结果", () => {
     expect(markup).toContain("12.4%");
     expect(markup).toContain("2/2");
     expect(markup).toContain("rewritten-model");
+    expect(markup).toContain("画像版本 profile-20260905");
+    expect(markup).toContain("0123456789ab");
     expect(markup).toContain('data-table-panel=""');
   });
 
@@ -143,3 +156,4 @@ describe("模型检测结果", () => {
     expect(markup).toContain('aria-label="转到第 2 页"');
   });
 });
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

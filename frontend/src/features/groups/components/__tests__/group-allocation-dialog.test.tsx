@@ -85,8 +85,8 @@ describe("group allocation detail", () => {
     expect(markup).toContain("175 / 400");
     expect(markup).toContain("已生成最终权重");
     expect(markup).toContain('data-slot="account-health-score"');
-    expect(markup).toContain("短期 76");
-    expect(markup).toContain("长期 82");
+    expect(markup).toContain("短期评分 76");
+    expect(markup).toContain("长期评分 82");
     expect(markup).toContain("分配并发");
     expect(markup).toContain("48");
     expect(markup).toContain("tokenshen-0.15");

@@ -95,7 +95,7 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 		cancel()
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		stop := context.AfterFunc(parent, cancel)
 		defer stop()
 		s.execute(discoveryContext, cancel, task, request)

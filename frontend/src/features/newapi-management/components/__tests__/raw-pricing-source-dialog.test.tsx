@@ -28,6 +28,27 @@ describe("远程价卡原始文件", () => {
     expect(markup).not.toContain("JSON.stringify");
   });
 
+  it("长正文让内部滚动区占满弹窗正文的可用高度", () => {
+    const markup = renderToStaticMarkup(
+      <RawPricingSourceContent
+        source={{
+          source_url: "https://raw.example/model-prices.json",
+          content: Array.from({ length: 200 }, (_, index) => `line-${index}`).join("\n"),
+          fetched_at: "2026-09-04T12:30:00Z",
+          size_bytes: 2048,
+          sha256: "abc123",
+        }}
+        pending={false}
+        error=""
+      />,
+    );
+
+    expect(markup).toMatch(/class="[^"]*h-full[^"]*grid-rows-\[auto_minmax\(0,1fr\)\][^"]*"/);
+    expect(markup).toMatch(
+      /<pre class="[^"]*min-h-0[^"]*overflow-auto[^"]*" data-slot="raw-pricing-source"/,
+    );
+  });
+
   it("读取期间显示明确状态", () => {
     const markup = renderToStaticMarkup(
       <RawPricingSourceContent source={undefined} pending error="" />,

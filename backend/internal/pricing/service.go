@@ -21,10 +21,13 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type Repository interface {
@@ -257,7 +260,7 @@ func (s *Service) EnqueueRestore(ctx context.Context, backupID, actor string) (t
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.executeRestore(targetguard.Expect(parent, expectedTarget), task, backupID, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -387,7 +390,7 @@ func (s *Service) Enqueue(ctx context.Context, actor string) (taskstore.Task, er
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		s.execute(targetguard.Expect(parent, expectedTarget), task, actor)
 	}); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
@@ -687,9 +690,12 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 			activeSetIndexes = append(activeSetIndexes, setIndex)
 		}
 		sort.Ints(activeSetIndexes)
+		reasons := []string{}
 		for _, setIndex := range activeSetIndexes {
 			chosenID := ""
 			var chosenRate *big.Rat
+			fallbackID := ""
+			var fallbackRate *big.Rat
 			compatible := 0
 			for _, groupID := range config.ExchangeGroupSets[setIndex] {
 				group := groupByID[groupID]
@@ -697,31 +703,41 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 					continue
 				}
 				compatible++
+				rate := groupPrice[groupID]
+				if cost.Cmp(rate) <= 0 && (fallbackRate == nil || rate.Cmp(fallbackRate) > 0 || (rate.Cmp(fallbackRate) == 0 && numericLess(groupID, fallbackID))) {
+					fallbackID, fallbackRate = groupID, rate
+				}
 				limit := new(big.Rat).Quo(groupPrice[groupID], onePlusMargin)
 				if cost.Cmp(limit) > 0 {
 					continue
 				}
-				rate := groupPrice[groupID]
 				if chosenRate == nil || rate.Cmp(chosenRate) < 0 || (rate.Cmp(chosenRate) == 0 && numericLess(groupID, chosenID)) {
 					chosenID, chosenRate = groupID, rate
 				}
 			}
-			profitableChosen := chosenID != ""
+			if chosenID == "" && fallbackID != "" {
+				chosenID = fallbackID
+				reasons = append(reasons, fmt.Sprintf("%s 未达到目标盈利比例，已选择本互换组内售价最高且能覆盖成本的分组；请降低目标盈利比例或提高候选分组售价", groupByID[chosenID].Name))
+			}
+			eligibleChosen := chosenID != ""
 			if chosenID == "" && len(currentBySet[setIndex]) > 0 {
 				preserved := append([]string{}, currentBySet[setIndex]...)
 				sort.Slice(preserved, func(left, right int) bool { return numericLess(preserved[left], preserved[right]) })
 				chosenID = preserved[0]
 				if compatible > 0 {
-					reason := "没有满足盈利比例的可用分组，保留当前分组"
-					decision.Reason = &reason
+					reasons = append(reasons, fmt.Sprintf("互换组 %d 没有满足盈利比例的可用分组，且所有候选分组售价均低于账号成本，保留当前分组", setIndex+1))
 				}
 			}
 			if chosenID != "" {
 				desired = append(desired, chosenID)
-				if profitableChosen {
+				if eligibleChosen {
 					decision.EligibleGroups = append(decision.EligibleGroups, groupByID[chosenID].Name)
 				}
 			}
+		}
+		if len(reasons) > 0 {
+			reason := strings.Join(reasons, "；")
+			decision.Reason = &reason
 		}
 		sort.Slice(desired, func(i, j int) bool { return numericLess(desired[i], desired[j]) })
 		decision.DesiredGroupIDs = desired
@@ -777,6 +793,17 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	}
 	defer release()
 	ctx = guarded
+	if reader, ok := s.repository.(interface {
+		Mode(context.Context) (string, error)
+	}); ok {
+		mode, modeErr := reader.Mode(ctx)
+		if modeErr != nil {
+			return Result{}, fmt.Errorf("价格管理运行模式读取失败：%w", modeErr)
+		}
+		if mode != runtimepolicy.Full {
+			return Result{}, errors.New("当前运行模式不允许调整账号分组，请切换为完全模式后重试")
+		}
+	}
 	ctx, err = targetguard.Bind(ctx, s.targets)
 	if err != nil {
 		return Result{}, err
@@ -790,6 +817,12 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		return Result{}, err
 	}
 	result := Result{Requested: value.snapshot.Accounts, Skipped: value.snapshot.Skipped, Items: []ItemResult{}}
+	writeDecisions := make([]Decision, 0, value.snapshot.Changes)
+	for _, decision := range value.snapshot.Decisions {
+		if decision.Changed && !decision.Skipped {
+			writeDecisions = append(writeDecisions, decision)
+		}
+	}
 	jobs := make(chan Decision)
 	items := make(chan ItemResult, value.snapshot.Changes)
 	var workers sync.WaitGroup
@@ -798,6 +831,9 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		go func() {
 			defer workers.Done()
 			for decision := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				reason, protectionErr := s.pricingMutationProtection(ctx, decision.AccountID)
 				if protectionErr != nil {
 					message := protectionErr.Error()
@@ -833,17 +869,12 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 			}
 		}()
 	}
-	go func() {
-		defer close(jobs)
-		for _, decision := range value.snapshot.Decisions {
-			if decision.Changed && !decision.Skipped {
-				jobs <- decision
-			}
-		}
-	}()
+	go func() { _ = taskrunner.Feed(ctx, jobs, writeDecisions) }()
 	go func() { workers.Wait(); close(items) }()
 	syncedGroups := map[string][]string{}
+	completed := make(map[string]struct{}, len(writeDecisions))
 	for item := range items {
+		completed[item.AccountID] = struct{}{}
 		result.Items = append(result.Items, item)
 		if item.Skipped {
 			result.Skipped++
@@ -853,6 +884,17 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 			result.Changed++
 			result.RemoteWrite = true
 			syncedGroups[item.AccountID] = append([]string{}, item.After...)
+		}
+	}
+	if cancelErr := ctx.Err(); cancelErr != nil {
+		for _, decision := range writeDecisions {
+			if _, found := completed[decision.AccountID]; found {
+				continue
+			}
+			message := cancelErr.Error()
+			result.Items = append(result.Items, ItemResult{AccountID: decision.AccountID,
+				Before: decision.CurrentGroupIDs, After: decision.DesiredGroupIDs, Error: &message})
+			result.Failed++
 		}
 	}
 	result.Unchanged = result.Requested - result.Skipped - result.Changed - result.Failed
@@ -878,17 +920,16 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		}
 		if syncErr != nil {
 			rollbackErr := rollbackPricingRemoteGroups(ctx, client, result.Items)
-			release()
 			if rollbackErr != nil {
 				return result, errors.Join(fmt.Errorf("远程分组已更新，但本地目录同步失败：%w", syncErr), fmt.Errorf("远程分组补偿回滚失败：%w", rollbackErr))
 			}
 			result.RemoteWrite = false
 			return result, fmt.Errorf("本地目录同步失败，远程分组已回滚：%w", syncErr)
 		}
-		release()
 		result.LocalSync = &local
-	} else {
-		release()
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 	if result.Failed > 0 {
 		return result, fmt.Errorf("%d 个账号分组调整失败", result.Failed)
@@ -1056,8 +1097,8 @@ func integer(value any) (int, bool) {
 }
 
 func positiveRat(value string) (*big.Rat, bool) {
-	parsed := new(big.Rat)
-	if _, ok := parsed.SetString(strings.TrimSpace(value)); !ok || parsed.Sign() <= 0 {
+	parsed, ok := decimalutil.Parse(value)
+	if !ok || parsed.Sign() <= 0 {
 		return nil, false
 	}
 	return parsed, true

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { UpstreamConfiguration } from "@/api";
 import { dialogBodyLayout, dialogContentClass } from "@/components/ui/dialog";
 import {
   UpstreamAccounts,
+  UpstreamEditDialog,
+  currentUpstreamGroupStatus,
   upstreamEditConnectionLabels,
   upstreamEditDialogLayout,
   upstreamEditPresentation,
@@ -12,6 +16,47 @@ import {
 } from "../upstream-edit-dialog";
 
 describe("upstream edit dialog", () => {
+  it("uses an icon tooltip for the custom Headers helper", async () => {
+    const configuration: UpstreamConfiguration = {
+      upstream_id: "up_example",
+      host: "api.example.test",
+      name: "Example",
+      base_url: "https://api.example.test",
+      account_base_url: "https://api.example.test/v1",
+      upstream_type: "sub2api",
+      auth_mode: "sub2api_user_token",
+      recharge_rate: "1",
+      raw_balance: null,
+      balance: null,
+      has_access_token: true,
+      has_refresh_token: false,
+      has_admin_key: false,
+      has_user_id: false,
+      headers: { "X-Client": "console" },
+      header_names: ["X-Client"],
+      cookie_names: [],
+      groups: [],
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    queryClient.setQueryData(["upstream-configuration", configuration.host], configuration);
+    queryClient.setQueryData(["auth-recovery-config"], { vault_entries: [] });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <UpstreamEditDialog
+          host={configuration.host}
+          onOpenChange={() => undefined}
+          onSaved={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: "自定义 Headers说明" })).toBeVisible();
+    expect(screen.queryByText("已配置：X-Client")).not.toBeInTheDocument();
+  });
+
   it("edits upstream Host and account Base URL in the upstream dialog", () => {
     expect(upstreamEditConnectionLabels).toEqual({
       upstreamHost: "上游 Host",
@@ -131,16 +176,40 @@ describe("upstream edit dialog", () => {
     expect(JSON.stringify(presentation)).not.toContain("secret");
     expect(accounts).toContain("4 条绑定");
     expect(accounts).toContain("3 个账号");
+    expect(accounts).toContain(">账号</span>");
+    expect(accounts).toContain(">上游分组</span>");
+    expect(accounts).toContain(">状态</span>");
+    expect(accounts).toContain(">操作</span>");
     expect(accounts).toContain("Codex 主账号");
     expect(accounts.match(/稳定账号 ID 41/g)).toHaveLength(2);
     expect(accounts.match(/重复绑定/g)).toHaveLength(2);
-    expect(accounts).toContain("上游分组 codex");
-    expect(accounts).toContain("上游分组 claude");
+    expect(accounts).toContain(">codex</span>");
+    expect(accounts).toContain(">claude</span>");
+    expect(accounts.match(/存在 · 启用/g)).toHaveLength(4);
     expect(accounts).toContain("Codex 备用账号");
     expect(accounts).toContain("稳定账号 ID 42");
     expect(accounts).toContain("Claude 账号");
     expect(accounts).toContain("稳定账号 ID 43");
     expect(accounts).toContain("账号不存在");
+  });
+
+  it("区分上游分组存在时的启禁用状态和已不存在状态", () => {
+    expect(currentUpstreamGroupStatus("active")).toEqual({
+      label: "存在 · 启用",
+      badgeVariant: "secondary",
+    });
+    expect(currentUpstreamGroupStatus("disabled")).toEqual({
+      label: "存在 · 禁用",
+      badgeVariant: "warning",
+    });
+    expect(currentUpstreamGroupStatus("missing")).toEqual({
+      label: "已不存在",
+      badgeVariant: "destructive",
+    });
+    expect(currentUpstreamGroupStatus("suspected")).toEqual({
+      label: "待确认",
+      badgeVariant: "warning",
+    });
   });
 
   it("shows an empty state when the current upstream has no accounts", () => {

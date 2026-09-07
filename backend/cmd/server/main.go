@@ -36,6 +36,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
+	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
@@ -90,7 +91,7 @@ func run() error {
 			_ = taskStore.Close()
 		}
 	}()
-	if recovered, err := taskStore.RecoverStaleInterrupted(context.Background(), 45*time.Minute); err != nil {
+	if recovered, err := recoverInterruptedTasks(context.Background(), taskStore); err != nil {
 		return err
 	} else if recovered > 0 {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
@@ -130,6 +131,7 @@ func run() error {
 	pricingTasks := pricing.New(businessStore, privateStore, taskStore)
 	managementTasks.UseUpstreamCatalogReader(upstreamReader)
 	probeTasks := probe.New(businessStore, privateStore, taskStore)
+	accountTasks.UseModelSyncProbe(probeTasks)
 	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore, upstreamReader)
 	if err != nil {
 		return err
@@ -238,6 +240,7 @@ func run() error {
 		upstreamReader,
 		authClient,
 	)
+	systemMetrics := systeminfo.New(cfg.DataDir)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
 		Notification:       notificationService,
@@ -246,12 +249,14 @@ func run() error {
 		InspectionTasks:    manualInspections,
 		RoutingControl:     routingWriteService,
 		Tasks:              taskStore,
+		TaskCanceller:      backgroundTasks,
 		Logs:               logService,
 		LogMaintenance:     logMaintenance,
 		AlertTasks:         alertTasks,
 		ManagementTasks:    managementTasks,
 		AccountMaintenance: managementTasks,
 		AccountTasks:       accountTasks,
+		AccountModelSync:   accountTasks,
 		AccountDelete:      accountDeleteService,
 		ProbeTasks:         probeTasks,
 		ModelChecks:        modelChecks,
@@ -265,6 +270,7 @@ func run() error {
 		SystemLogs:         opsTrafficService,
 		Pricing:            pricingTasks,
 		NewAPIManagement:   newAPIManagement,
+		SystemMetrics:      systemMetrics,
 	})
 	servers := []httpServeTarget{{
 		name:     cfg.ListenAddress,
@@ -331,6 +337,10 @@ func run() error {
 		closeStores = false
 	}
 	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
+}
+
+func recoverInterruptedTasks(ctx context.Context, store *taskstore.Store) (int64, error) {
+	return store.RecoverInterrupted(ctx)
 }
 
 type serviceListeners struct {

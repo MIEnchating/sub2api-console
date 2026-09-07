@@ -102,14 +102,9 @@ For commercial licensing, please contact support@quantumnous.com
     font-family: var(--font-body);
   }
 
-  /* Keep sticky headers stable while primitives lock body scrolling. */
-  body[data-scroll-locked] {
-    overflow: unset !important;
-  }
-
   /* Cursor pointer for buttons */
-  button:not(:disabled),
-  [role="button"]:not(:disabled) {
+  button:not(:disabled):not([aria-disabled="true"]),
+  [role="button"]:not(:disabled):not([aria-disabled="true"]) {
     cursor: pointer;
   }
 
@@ -560,11 +555,6 @@ For commercial licensing, please contact support@quantumnous.com
     }
   }
 
-  button:not(:disabled):not([data-press-animation="none"]):not([data-close-button]):active,
-  [role="button"]:not(:disabled):not([data-press-animation="none"]):active {
-    transform: scale(0.98);
-  }
-
   [data-slot="table"] tr {
     transition: background-color 120ms ease;
   }
@@ -606,13 +596,13 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 @keyframes tableRowEnter {
+  /* Translated rows temporarily enlarge their container's scrollable area.
+   * Fade in without moving rows so async tables keep stable scrollbars. */
   from {
     opacity: 0;
-    transform: translateY(4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 

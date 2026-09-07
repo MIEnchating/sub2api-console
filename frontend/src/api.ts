@@ -29,6 +29,26 @@ export type RuntimeConfig = {
 
 export type RuntimeMode = "监控模式" | "完全模式";
 
+export type AccountCreationPolicy = {
+  models: string[];
+  concurrency: number;
+  load_factor: string | null;
+  priority: number;
+  pool_mode: boolean;
+  pool_mode_retry_count: number;
+  pool_mode_retry_status_codes: number[];
+};
+
+type AccountCreationGroupSettings = AccountCreationPolicy & {
+  group_id: string;
+};
+
+export type AccountCreationSettings = {
+  default: AccountCreationPolicy;
+  groups: AccountCreationGroupSettings[];
+  platform_probe_models: Record<string, string>;
+};
+
 export type NewAPIPlatform = {
   id: string;
   name: string;
@@ -52,7 +72,9 @@ export type NewAPIGroupBinding = {
   sync_ratio: boolean;
 };
 
-export type NewAPIGroupBindingUpdate = Omit<NewAPIGroupBinding, "platform_id">;
+export type NewAPIGroupBindingUpdate = Omit<NewAPIGroupBinding, "platform_id"> & {
+  sub2api_ratio: string;
+};
 
 export type NewAPIWorkspace = {
   platforms: NewAPIPlatform[];
@@ -112,12 +134,13 @@ export type NewAPIModelPrice = {
   audio_completion_ratio?: string;
 };
 
-export type NewAPIToolPrice = {
+type NewAPIToolPrice = {
   tool: string;
   price: string;
 };
 
 export type Sub2APIModelPrice = {
+  source?: "remote" | "sub2api";
   model: string;
   input_price: string;
   output_price: string;
@@ -145,11 +168,22 @@ export type Sub2APIModelPrice = {
 };
 
 export type RemoteModelPricingSource = {
+  stale?: boolean;
+  warning?: string;
   source_url: string;
   content: string;
   fetched_at: string;
   size_bytes: number;
   sha256: string;
+};
+
+export type ModelPriceCatalog = {
+  models: Sub2APIModelPrice[];
+  missing_models?: string[];
+  fetched_at?: string;
+  expires_at?: string;
+  stale?: boolean;
+  warning?: string;
 };
 
 type NewAPIUpstreamPriceCatalog = {
@@ -331,6 +365,30 @@ export type UpstreamGroup = {
   unavailable_reason: string | null;
 };
 
+type UpstreamGroupBindingAuditAccount = {
+  id: string;
+  name: string | null;
+};
+
+export type UpstreamGroupBindingAuditItem = {
+  upstream_id: string;
+  host: string;
+  group_id: string | null;
+  group_name: string;
+  account_count: number;
+  accounts: UpstreamGroupBindingAuditAccount[];
+  status: "present" | "missing" | "unknown";
+  reason: string | null;
+};
+
+export type UpstreamGroupBindingAudit = {
+  items: UpstreamGroupBindingAuditItem[];
+  total_bindings: number;
+  present: number;
+  missing: number;
+  unknown: number;
+};
+
 export type UpstreamGroupChange = {
   id: number;
   upstream_id: string;
@@ -366,6 +424,7 @@ export type UpstreamConfiguration = {
 };
 
 export type UpstreamConfigurationUpdate = {
+  host?: string;
   name?: string;
   base_url: string;
   account_base_url: string;
@@ -410,10 +469,13 @@ export type ProbeResult = {
   message: string;
   request_model: string;
   actual_model: string;
+  response_text?: string;
   latency_ms: number;
   http_status: number;
   temporary_key?: boolean;
 };
+
+export type OnboardingProbeMode = "stream" | "default";
 
 export type OnboardingRequest = {
   host: string;
@@ -433,6 +495,7 @@ export type OnboardingRequest = {
 };
 
 export type PolicySnapshot = {
+  revision?: string;
   available: boolean;
   source: string;
   mode: RuntimeMode;
@@ -479,6 +542,7 @@ export type PolicyUpdate = {
 };
 
 export type PolicyUpdatePayload = Partial<PolicyUpdate> & {
+  expected_revision?: string;
   group_strategies?: Record<string, string | null>;
 };
 
@@ -804,6 +868,12 @@ export type GroupPolicyOverrideUpdate = {
   probe_model: string | null;
 };
 
+export type AccountRecovery = {
+  evaluated_at: string;
+  ready: boolean;
+  conditions: Array<{ code: string; met: boolean; detail: string }>;
+};
+
 export type AccountStatus = {
   id: string;
   name: string;
@@ -849,6 +919,8 @@ export type AccountStatus = {
   apply_error: string | null;
   decision_state: string | null;
   decision_reason: string | null;
+  evidence_pending?: boolean;
+  recovery?: AccountRecovery | null;
   last_error?: string | null;
   upstream_block?: string | null;
   upstream_block_reason?: string | null;
@@ -862,6 +934,8 @@ export type AccountStatus = {
   short_score: number | null;
   long_score: number | null;
   sample_count: number;
+  short_sample_count?: number | null;
+  long_sample_count?: number;
   model_check_status?: ModelCheckAccountStatus["status"] | "loading" | "unavailable" | null;
   model_check_checked_at?: string | null;
   recent_results: AccountRecentResult[];
@@ -905,7 +979,7 @@ export type AccountDetail = AccountStatus & {
   group_rates: Record<string, string | null>;
   group_ids: Record<string, string | null>;
   bindings: AccountBinding[];
-  test_model: string | null;
+  test_models: string[];
 };
 
 export type AccountDeletePreview = {
@@ -927,6 +1001,38 @@ export type AccountDeleteBatchPreview = {
   accounts: AccountDeletePreview[];
   account_count: number;
   upstream_key_count: number;
+};
+
+type AccountModelCoverage = {
+  model: string;
+  account_count: number;
+};
+
+export type AccountModelSyncAccount = {
+  account_id: string;
+  account_name: string;
+  platform?: string;
+  models: string[];
+  probe_model: string;
+};
+
+export type AccountModelSyncPreview = {
+  account_count: number;
+  accounts_with_catalog: number;
+  blocked_patterns: string[];
+  blocked_models: string[];
+  models: AccountModelCoverage[];
+  accounts: AccountModelSyncAccount[];
+  fingerprint: string;
+};
+
+export type AccountModelSelection = {
+  account_id: string;
+  models: string[];
+};
+
+export type AccountModelSyncSettings = {
+  blocked_patterns: string[];
 };
 
 export type AccountControlAction = "pause" | "resume" | "exclude" | "include" | "fuse" | "recover";
@@ -1131,6 +1237,28 @@ export type Task = {
   updated_at: string;
 };
 
+export type TaskSummary = Omit<Task, "result"> & { system_info: true };
+
+export type SystemMetrics = {
+  sampled_at: string;
+  cpu: {
+    usage_percent: number;
+    logical_cores: number;
+  };
+  memory: {
+    total_bytes: number;
+    used_bytes: number;
+    available_bytes: number;
+    usage_percent: number;
+  };
+  disk: {
+    total_bytes: number;
+    used_bytes: number;
+    available_bytes: number;
+    usage_percent: number;
+  };
+};
+
 export type ModelCheckCapabilities = {
   claude_standards: string[];
   sol_models: string[];
@@ -1148,6 +1276,70 @@ export type ModelCheckRequest = {
   models: string[];
   rounds: number;
   timeout_seconds: number;
+};
+
+type ModelCheckNumericTolerance = {
+  value: number;
+  mode: "absolute" | "relative";
+};
+
+type ModelCheckProbeDefinition = {
+  id: string;
+  kind: "choice" | "numeric";
+  question?: string;
+  stem?: string;
+  options?: string[];
+  clusters?: Array<{ id: string; center: number }>;
+  tolerance?: ModelCheckNumericTolerance;
+  weights: Record<string, number[]>;
+};
+
+type ModelCheckClaudeProfileDefinition = {
+  identity_group: string[];
+  candidate_models: string[];
+  thresholds: number[];
+  score_bands: number[];
+  probes: ModelCheckProbeDefinition[];
+};
+
+type ModelCheckSolThresholds = {
+  sol_accept_min: number;
+  non_sol_accept_max: number;
+  subtype_accept_min: number;
+  min_coverage: number;
+  min_evidence_coverage: number;
+};
+
+export type ModelCheckProfilePayload = {
+  claude_profiles: Record<string, ModelCheckClaudeProfileDefinition>;
+  sol_profile: {
+    candidate_models: string[];
+    quick: ModelCheckProbeDefinition[];
+    reserve: ModelCheckProbeDefinition[];
+    thresholds: Record<"quick" | "full", ModelCheckSolThresholds>;
+  };
+};
+
+export type ModelCheckConfigurationVersion = {
+  id: string;
+  status: "draft" | "published" | "archived";
+  note: string;
+  fingerprint: string;
+  created_at: string;
+  created_by: string;
+  published_at: string | null;
+  payload: ModelCheckProfilePayload;
+};
+
+type ModelCheckConfigurationVersionSummary = Omit<ModelCheckConfigurationVersion, "payload"> & {
+  claude_profiles: number;
+  probe_count: number;
+};
+
+export type ModelCheckConfiguration = {
+  active: ModelCheckConfigurationVersion;
+  draft: ModelCheckConfigurationVersion | null;
+  history: ModelCheckConfigurationVersionSummary[];
 };
 
 export type TrafficRankingSort = "traffic" | "stability" | "success_rate" | "latency";
@@ -1286,8 +1478,13 @@ export const api = {
       { method: "POST" },
     ),
   managementModelPrices: (platformId: string) =>
-    request<{ models: Sub2APIModelPrice[] }>(
+    request<ModelPriceCatalog>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/management-model-prices`,
+    ),
+  refreshManagementModelPrices: (platformId: string) =>
+    request<ModelPriceCatalog>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/management-model-prices/refresh`,
+      { method: "POST" },
     ),
   remoteModelPricingSource: (platformId: string) =>
     request<RemoteModelPricingSource>(
@@ -1399,6 +1596,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  accountCreationSettings: () => request<AccountCreationSettings>("/api/config/account-settings"),
+  updateAccountCreationSettings: (payload: AccountCreationSettings) =>
+    request<AccountCreationSettings>("/api/config/account-settings", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  syncExistingAccountPoolMode: (accountIds: string[]) =>
+    request<Task>("/api/config/account-settings/pool-mode/apply", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
   setAdminTarget: (payload: {
     admin_base_url: string;
     admin_key: string;
@@ -1492,10 +1700,14 @@ export const api = {
     request<UpstreamGroup[]>(
       `/api/upstreams/${encodeURIComponent(host)}/groups?include_bound=${includeBound ? "true" : "false"}`,
     ),
+  upstreamGroupBindingAudit: () =>
+    request<UpstreamGroupBindingAudit>("/api/upstreams/group-bindings/audit"),
   upstreamGroupHistory: (host: string) =>
     request<UpstreamGroupChange[]>(
       `/api/upstreams/${encodeURIComponent(host)}/group-history?limit=200`,
     ),
+  allUpstreamGroupHistory: () =>
+    request<UpstreamGroupChange[]>("/api/upstreams/group-history?limit=500"),
   upstreamDeletePreview: (host: string) =>
     request<UpstreamDeletePreview>(`/api/upstreams/${encodeURIComponent(host)}/delete-preview`),
   deleteUpstream: (host: string, expectedAccountIds: string[]) =>
@@ -1599,10 +1811,39 @@ export const api = {
     }),
   accountModels: (accountId: string) =>
     request<{ models: string[] }>(`/api/accounts/${encodeURIComponent(accountId)}/models`),
-  setAccountTestModel: (accountId: string, model: string | null) =>
-    request<{ saved: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/test-model`, {
+  discoverAccountModels: (accountIds: string[]) =>
+    request<Task>("/api/management/accounts/models/discover", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
+  previewAccountModels: (accountIds: string[]) =>
+    request<AccountModelSyncPreview>("/api/management/accounts/models/preview", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+    }),
+  applyAccountModels: (
+    accounts: AccountModelSelection[],
+    catalogFingerprint: string,
+    probeModels: string[],
+  ) =>
+    request<Task>("/api/management/accounts/models/apply", {
+      method: "POST",
+      body: JSON.stringify({
+        accounts,
+        probe_models: probeModels,
+        catalog_fingerprint: catalogFingerprint,
+      }),
+    }),
+  accountModelSyncSettings: () => request<AccountModelSyncSettings>("/api/config/model-sync"),
+  updateAccountModelSyncSettings: (payload: AccountModelSyncSettings) =>
+    request<AccountModelSyncSettings>("/api/config/model-sync", {
       method: "PUT",
-      body: JSON.stringify({ model }),
+      body: JSON.stringify(payload),
+    }),
+  setAccountTestModels: (accountId: string, models: string[]) =>
+    request<{ saved: boolean }>(`/api/accounts/${encodeURIComponent(accountId)}/test-models`, {
+      method: "PUT",
+      body: JSON.stringify({ models }),
     }),
   syncAccount: (
     accountId: string,
@@ -1626,7 +1867,7 @@ export const api = {
       priority: number;
       load_factor: string;
       concurrency: number;
-      test_model: string | null;
+      test_models: string[];
       paused: boolean;
       excluded: boolean;
     },
@@ -1640,6 +1881,7 @@ export const api = {
     priority: number,
     loadFactor: string,
     concurrency: number,
+    schedulable: boolean,
     syncBalanceMultiplier: boolean,
   ) =>
     request<Task>(`/api/accounts/${encodeURIComponent(accountId)}/manual-priority`, {
@@ -1648,6 +1890,7 @@ export const api = {
         priority,
         load_factor: loadFactor,
         concurrency,
+        schedulable,
         sync_balance_multiplier: syncBalanceMultiplier,
       }),
     }),
@@ -1712,7 +1955,13 @@ export const api = {
     request<AutoInspectionStatus>("/api/inspection/automation/resume", {
       method: "POST",
     }),
-  runActiveProbe: (payload?: { account_id?: string; group_name?: string }) =>
+  runActiveProbe: (payload?: {
+    account_id?: string;
+    account_ids?: string[];
+    group_name?: string;
+    platform?: string;
+    model?: string;
+  }) =>
     request<Task>("/api/inspection/probe", {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
@@ -1720,6 +1969,36 @@ export const api = {
   modelCheckCapabilities: () => request<ModelCheckCapabilities>("/api/model-checks/capabilities"),
   modelCheckAccountStatuses: () =>
     request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses"),
+  modelCheckConfiguration: () =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration"),
+  saveModelCheckDraft: (payload: {
+    expected_fingerprint: string;
+    note: string;
+    payload: ModelCheckProfilePayload;
+  }) =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration/draft", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  publishModelCheckDraft: (expectedFingerprint: string) =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration/publish", {
+      method: "POST",
+      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
+    }),
+  discardModelCheckDraft: (expectedFingerprint: string) =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration/discard", {
+      method: "POST",
+      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
+    }),
+  restoreModelCheckVersion: (versionId: string, expectedFingerprint: string, note: string) =>
+    request<ModelCheckConfiguration>("/api/model-checks/configuration/restore", {
+      method: "POST",
+      body: JSON.stringify({
+        version_id: versionId,
+        expected_fingerprint: expectedFingerprint,
+        note,
+      }),
+    }),
   runModelCheck: (payload: ModelCheckRequest) =>
     request<Task>("/api/model-checks", {
       method: "POST",
@@ -1822,7 +2101,13 @@ export const api = {
       body: JSON.stringify(payload),
     }),
   evaluateAlerts: () => request<Task>("/api/alerts/evaluate", { method: "POST" }),
+  systemMetrics: () => request<SystemMetrics>("/api/system/metrics"),
+  tasks: (limit = 20) => request<TaskSummary[]>(`/api/tasks?limit=${limit}`),
   task: (id: string) => request<Task>(`/api/tasks/${id}`),
+  cancelTask: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/tasks/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   onboard: (payload: OnboardingRequest) =>
     request<Task>("/api/onboarding", {
       method: "POST",
@@ -1853,10 +2138,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ host, group_id: groupId }),
     }),
-  runOnboardingProbe: (host: string, groupId: string, model: string) =>
+  runOnboardingProbe: (
+    host: string,
+    groupId: string,
+    model: string,
+    mode: OnboardingProbeMode = "default",
+  ) =>
     request<ProbeResult>("/api/onboarding/probe", {
       method: "POST",
-      body: JSON.stringify({ host, group_id: groupId, model }),
+      body: JSON.stringify({ host, group_id: groupId, model, mode }),
     }),
   cancelOnboardingProbe: (host: string, groupId: string) =>
     request<{ cancelled: boolean }>("/api/onboarding/probe/cancel", {

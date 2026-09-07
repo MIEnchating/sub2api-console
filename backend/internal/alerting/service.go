@@ -70,7 +70,7 @@ func (s *TaskService) Enqueue(ctx context.Context) (taskstore.Task, error) {
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) { s.execute(parent, task) }); err != nil {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) { s.execute(parent, task) }); err != nil {
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
 	}

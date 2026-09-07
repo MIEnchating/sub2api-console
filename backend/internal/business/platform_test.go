@@ -15,7 +15,7 @@ func TestNormalizePlatformAliasesMatchOnboardingCatalogNames(t *testing.T) {
 }
 
 func TestAccountPlatformCanJoinCompositeGroup(t *testing.T) {
-	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek", "opencode"}
+	platforms := []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"}
 	for _, platform := range platforms {
 		if !AccountPlatformCanJoinGroup(platform, platform) {
 			t.Fatalf("%s account should join its own platform group", platform)
@@ -26,5 +26,11 @@ func TestAccountPlatformCanJoinCompositeGroup(t *testing.T) {
 	}
 	if AccountPlatformCanJoinGroup("openai", "anthropic") {
 		t.Fatal("openai account should not join an anthropic group")
+	}
+	if AccountPlatformCanJoinGroup("opencode", "composite") {
+		t.Fatal("OpenCode is a client, not a Sub2API account platform")
+	}
+	if AccountPlatformCanJoinGroup("opencode", "opencode") {
+		t.Fatal("matching unsupported strings must not become a valid platform")
 	}
 }

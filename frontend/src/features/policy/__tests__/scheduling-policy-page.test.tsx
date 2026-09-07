@@ -401,7 +401,8 @@ describe("调度策略入口", () => {
     expect(autoApply).toContain("负载因子");
     expect(autoApply).toContain("调度写入并发");
     expect(autoApply).toContain('aria-label="调度写后确认"');
-    expect(autoApply).toContain("只复核自动调度实际修改的字段");
+    expect(autoApply).toContain('aria-label="调度写后确认说明"');
+    expect(autoApply).not.toContain("只复核自动调度实际修改的字段");
     expect(autoApply).not.toContain("Key 创建");
     expect(autoApply).not.toContain("账号添加");
     expect(autoApply).not.toContain("删除结果");
@@ -410,6 +411,9 @@ describe("调度策略入口", () => {
     expect(health).toContain("窗口内慢响应次数");
     expect(health).toContain("每轮最多熔断");
     expect(health).toContain("连续瞬时失败阈值");
+    expect(health).toContain('aria-label="见到即熔断的错误码说明"');
+    expect(health).toContain('placeholder="例如 402"');
+    expect(health).toContain('aria-label="触发处置的错误码说明"');
     expect(health).toContain("保底与降级");
     expect(health).toContain("认证失效自动处置");
     expect(routing).not.toContain("认证失效自动处置");
@@ -429,7 +433,9 @@ describe("调度策略入口", () => {
     expect(sampling).toContain("探测并发");
     expect(sampling).not.toContain("真实流量并发");
     expect(sampling).toContain('value="4"');
-    expect(scaling).toContain("扩容触发负载率");
+    expect(scaling).toContain("扩容触发容量比例");
+    expect(scaling).toContain("已配置并发占全局并发上限的比例");
+    expect(scaling).not.toContain("负载率");
     expect(scaling).toContain("扩容步长");
     expect(scaling).toContain("缩容步长");
     expect(scaling).toContain("扩缩容冷却（秒）");
@@ -443,7 +449,8 @@ describe("调度策略入口", () => {
 
     expect(sampling).not.toContain("健康来源");
     expect(sampling).toContain("接入真实流量样本");
-    expect(sampling).toContain("无新鲜流量的账号回退主动探测");
+    expect(sampling).toContain('aria-label="接入真实流量样本说明"');
+    expect(sampling).not.toContain("无新鲜流量的账号回退主动探测");
     expect(sampling).toContain("启用主动探测");
     expect(sampling).toContain("默认探测模型");
     expect(sampling).toContain("探测间隔（秒）");
@@ -617,9 +624,9 @@ describe("调度策略入口", () => {
     );
 
     expect(markup).toContain("OAuth");
-    expect(markup).toContain("openai");
+    expect(markup).toContain("OpenAI");
     expect(markup).toContain("codex（#6）");
-    expect(markup).toContain("星筱主账号（#41） · openai · codex");
+    expect(markup).toContain("星筱主账号（#41） · OpenAI · codex");
     expect(markup).toContain("账号 #404（当前配置，列表中未找到）");
     expect(configured.excluded_group_ids).toEqual(["6"]);
     expect(configured.advanced_policy.scope).toMatchObject({
@@ -643,7 +650,7 @@ describe("调度策略入口", () => {
 
     expect(markup).toContain('data-testid="managed-group-options"');
     expect(markup).toContain("codex");
-    expect(markup).toContain("#6 · openai");
+    expect(markup).toContain("#6 · OpenAI");
     expect(markup).toContain('aria-label="选择分组 codex"');
     expect(selected.advanced_policy.scope).toMatchObject({
       managed_group_mode: "selected",

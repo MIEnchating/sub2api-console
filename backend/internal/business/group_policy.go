@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 )
 
 var ErrGroupNotFound = errors.New("分组不存在")
@@ -287,7 +289,21 @@ func (s *Store) RecordRuntimeEvent(ctx context.Context, eventType, status, summa
 	return eventID, nil
 }
 
+func copyRuntimeEventPayload(payload map[string]any) map[string]any {
+	copy := make(map[string]any, len(payload)+1)
+	for key, value := range payload {
+		copy[key] = value
+	}
+	return copy
+}
+
 func insertRuntimeEventWithStatus(ctx context.Context, tx *sql.Tx, eventType, status, summary string, payload map[string]any, now string) error {
+	if taskID := taskcontext.ID(ctx); taskID != "" {
+		payload = copyRuntimeEventPayload(payload)
+		if strings.TrimSpace(stringValue(payload["task_id"])) == "" {
+			payload["task_id"] = taskID
+		}
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err

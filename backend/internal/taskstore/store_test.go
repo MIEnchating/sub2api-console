@@ -79,6 +79,42 @@ func TestRecoverStaleInterruptedPreservesRecentTasks(t *testing.T) {
 	}
 }
 
+func TestSaveDoesNotOverwriteCancelledTaskWithLateTerminalResult(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	task := Task{
+		ID: "cancel-race", Skill: "console", Operation: "recover-host", Status: "waiting_input",
+		Progress: 90, Message: "等待验证码", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.Save(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	task.Status, task.Progress, task.Message = "cancelled", 100, "已取消"
+	task.Result = map[string]any{"cancelled": true}
+	if err := store.Save(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	late := task
+	late.Status, late.Message = "succeeded", "迟到的成功"
+	late.Result = map[string]any{"credentials_persisted": true}
+	if err := store.Save(ctx, late); !errors.Is(err, ErrTaskTerminal) {
+		t.Fatalf("late terminal write error=%v, want ErrTaskTerminal", err)
+	}
+	stored, err := store.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "cancelled" || stored.Result["cancelled"] != true {
+		t.Fatalf("cancelled task was overwritten: %#v", stored)
+	}
+}
+
 func TestTaskLogSummaryAndSearchAvoidLoadingUnmatchedResults(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
 	if err != nil {
@@ -109,6 +145,76 @@ func TestTaskLogSummaryAndSearchAvoidLoadingUnmatchedResults(t *testing.T) {
 	matched, err := store.SearchLogs(ctx, "REQUEST-TARGET", &limit)
 	if err != nil || len(matched) != 1 || matched[0].ID != "task-1" || matched[0].Result["request_id"] != "request-target" {
 		t.Fatalf("matched=%#v err=%v", matched, err)
+	}
+}
+
+func TestConsoleTaskSummariesOnlyIncludeSystemInfoTasks(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, task := range []Task{
+		{ID: "automatic-round", Skill: "sub2api-auto-inspection", Operation: "automatic-inspection", Status: "succeeded", Progress: 100, Message: "巡检完成", Result: map[string]any{"account_rate_sync": map[string]any{"task_id": "automatic-child"}}, CreatedAt: now, UpdatedAt: now},
+		{ID: "automatic-child", Skill: "sub2api-operations", Operation: "account-rate-sync", Status: "succeeded", Progress: 100, Message: "倍率同步完成", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+		{ID: "manual-round", Skill: "sub2api-auto-inspection", Operation: "manual-inspection", Status: "succeeded", Progress: 100, Message: "手动巡检完成", Result: map[string]any{}, CreatedAt: now, UpdatedAt: now},
+		{ID: "platform-probe", Skill: "sub2api-connectivity-test", Operation: "active-probe", Status: "running", Progress: 15, Message: "探活中", Result: map[string]any{"platform": "openai", "model": "gpt-5.4"}, CreatedAt: now, UpdatedAt: now},
+		{ID: "explicit-background-task", Skill: "console", Operation: "export", Status: "running", Progress: 15, Message: "导出中", Result: map[string]any{"system_info": true}, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	limit := 20
+	summaries, err := store.ListConsoleSummaries(ctx, &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible := map[string]bool{}
+	for _, task := range summaries {
+		visible[task.ID] = true
+	}
+	if len(summaries) != 2 || !visible["platform-probe"] || !visible["explicit-background-task"] {
+		t.Fatalf("console summaries=%#v", summaries)
+	}
+	logs, err := store.ListLogSummaries(ctx, &limit)
+	if err != nil || len(logs) != 5 {
+		t.Fatalf("log summaries must keep automatic records: %#v err=%v", logs, err)
+	}
+}
+
+func TestConsoleTaskSummariesReturnTheLatestTwentyRecords(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "tasks.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	base := time.Date(2026, time.September, 5, 0, 0, 0, 0, time.UTC)
+	for index := 0; index < 25; index++ {
+		updatedAt := base.Add(time.Duration(index) * time.Minute).Format(time.RFC3339Nano)
+		task := Task{
+			ID: fmt.Sprintf("system-task-%02d", index), Skill: "console", Operation: "background-task",
+			Status: "succeeded", Progress: 100, Message: "完成", Result: map[string]any{"system_info": true},
+			CreatedAt: updatedAt, UpdatedAt: updatedAt,
+		}
+		if err := store.Save(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	limit := 20
+	summaries, err := store.ListConsoleSummaries(ctx, &limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 20 {
+		t.Fatalf("summary count=%d want=20", len(summaries))
+	}
+	if summaries[0].ID != "system-task-24" || summaries[19].ID != "system-task-05" {
+		t.Fatalf("unexpected latest task range: first=%s last=%s", summaries[0].ID, summaries[19].ID)
 	}
 }
 

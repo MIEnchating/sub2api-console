@@ -53,7 +53,8 @@ const attentionVariants: Record<AttentionState, StatusVariant> = {
 
 function eventTone(status: string): string {
   const normalized = status.trim().toLowerCase();
-  if (["failed", "error", "cancelled"].includes(normalized)) return "bg-destructive";
+  if (normalized === "cancelled") return "bg-muted-foreground";
+  if (["failed", "error"].includes(normalized)) return "bg-destructive";
   if (["warning", "partial", "degraded"].includes(normalized)) return "bg-warning";
   if (["succeeded", "success", "ok"].includes(normalized)) return "bg-success";
   return "bg-info";

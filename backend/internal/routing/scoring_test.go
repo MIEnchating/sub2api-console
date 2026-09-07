@@ -141,6 +141,25 @@ func TestPercentilesIgnoreZeroLatencySamples(t *testing.T) {
 	}
 }
 
+func TestSlowProbeLowersHealthWithoutChangingTrafficPerformance(t *testing.T) {
+	probeLatency := "6000"
+	health, err := HealthScore([]Sample{
+		{Result: "通过", Source: "active-probe", LatencyP95: &probeLatency, Payload: map[string]any{
+			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
+		}},
+		{Result: "通过", Source: "traffic", Payload: map[string]any{"first_token_ms": "1000"}},
+	}, testPolicy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.LatestEvent != EventSlow || health.HealthScore != 82.5 || health.SampleCount != 2 {
+		t.Fatalf("slow probe did not lower health: %#v", health)
+	}
+	if health.P50MS == nil || *health.P50MS != 1000 || health.P95MS == nil || *health.P95MS != 1000 {
+		t.Fatalf("probe polluted traffic performance: %#v", health)
+	}
+}
+
 func TestActiveProbeFirstContentLatencyDoesNotEnterPerformancePercentiles(t *testing.T) {
 	firstToken, legacyFirstToken := "1250", "1500"
 	health, err := HealthScore([]Sample{
@@ -521,4 +540,44 @@ func TestHealthOutputContainsOnlyFiniteNumbers(t *testing.T) {
 func mustJSON(value any) []byte {
 	encoded, _ := json.Marshal(value)
 	return encoded
+}
+
+func TestProbeHealthLatencyRequiresFirstContentAndRespectsThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name, latency, metric, source, result string
+		want                                  Event
+	}{
+		{"at threshold", "5000", "first_token", "account_test.first_content", "通过", EventHealthy},
+		{"above threshold", "5000.1", "first_token", "account_test.first_content", "通过", EventSlow},
+		{"total duration", "30000", "total_duration", "account_test.complete_response", "通过", EventHealthy},
+		{"missing provenance", "30000", "first_token", "", "通过", EventHealthy},
+		{"invalid latency", "NaN", "first_token", "account_test.first_content", "通过", EventHealthy},
+		{"failed probe", "6000", "first_token", "account_test.first_content", "timeout", EventProbeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sample := Sample{Result: tc.result, Source: "active-probe", LatencyP95: &tc.latency, Payload: map[string]any{"latency_metric": tc.metric, "latency_source": tc.source, "latency_unit": "ms"}}
+			classified, err := ClassifySample(sample, testPolicy())
+			if err != nil || classified.Event != tc.want {
+				t.Fatalf("classified=%#v err=%v", classified, err)
+			}
+		})
+	}
+}
+
+func TestProbeHealthUsesConfiguredScoringThresholdAndEventScore(t *testing.T) {
+	latency := "4772.9"
+	sample := Sample{Result: "通过", Source: "active-probe", LatencyP95: &latency, Payload: map[string]any{"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms"}}
+	for _, tc := range []struct {
+		threshold int64
+		want      float64
+	}{{5000, 100}, {4000, 72}} {
+		policy := testPolicy()
+		policy["scoring"].(map[string]any)["slow_ttfb_ms"] = tc.threshold
+		policy["scoring"].(map[string]any)["event_scores"].(map[string]any)["slow_ttfb"] = 72
+		policy["breaker"] = map[string]any{"latency_ttfb_ms": 15000}
+		health, err := HealthScore([]Sample{sample}, policy)
+		if err != nil || health.HealthScore != tc.want {
+			t.Fatalf("threshold=%d health=%#v err=%v", tc.threshold, health, err)
+		}
+	}
 }

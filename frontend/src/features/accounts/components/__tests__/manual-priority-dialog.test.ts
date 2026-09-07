@@ -39,15 +39,26 @@ describe("人工优先位选择", () => {
         load_factor: "2",
         concurrency: 3,
       } as AccountStatus),
-    ).toEqual({ loadFactor: "100", concurrency: 100, syncBalanceMultiplier: false });
+    ).toEqual({
+      loadFactor: "100",
+      concurrency: 100,
+      schedulable: true,
+      syncBalanceMultiplier: false,
+    });
     expect(
       manualPriorityInitialValues({
         id: "42",
         manual_priority: 3,
         load_factor: "80",
         concurrency: 120,
+        schedulable: false,
         manual_sync_balance_multiplier: true,
       } as AccountStatus),
-    ).toEqual({ loadFactor: "80", concurrency: 120, syncBalanceMultiplier: true });
+    ).toEqual({
+      loadFactor: "80",
+      concurrency: 120,
+      schedulable: false,
+      syncBalanceMultiplier: true,
+    });
   });
 });

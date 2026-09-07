@@ -7,7 +7,6 @@ import { Toaster } from "./components/ui/sonner";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { createConsoleQueryClient } from "./lib/query-client";
 import "./styles.css";
-import "@fontsource-variable/public-sans";
 
 const queryClient = createConsoleQueryClient();
 

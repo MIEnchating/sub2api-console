@@ -108,9 +108,17 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		if selected[0].UpstreamGroup != nil {
 			groupReference := strings.TrimSpace(*selected[0].UpstreamGroup)
 			for _, group := range groups {
-				if group.GroupID == groupReference || group.Name == groupReference {
+				if group.GroupID == groupReference {
 					selectedGroups = append(selectedGroups, group)
 					break
+				}
+			}
+			if len(selectedGroups) == 0 {
+				for _, group := range groups {
+					if group.Name == groupReference {
+						selectedGroups = append(selectedGroups, group)
+						break
+					}
 				}
 			}
 		}

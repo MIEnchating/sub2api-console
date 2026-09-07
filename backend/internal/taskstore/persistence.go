@@ -168,7 +168,7 @@ func ContextFailureCause(ctx context.Context) error {
 }
 
 func MarkCancelled(ctx context.Context, task *Task, message string) bool {
-	if ctx == nil || task == nil || task.Status == "succeeded" || task.Status == "partial" || task.Status == "waiting_input" {
+	if ctx == nil || task == nil {
 		return false
 	}
 	if cause := ContextFailureCause(ctx); cause != nil {
@@ -213,6 +213,8 @@ func PersistLaunchFailure(saver Saver, task Task, err error) {
 	task.Message = "服务正在停止，任务未启动"
 	if errors.Is(err, taskrunner.ErrCapacity) {
 		task.Message = "后台任务并发容量已满，任务未启动"
+	} else if errors.Is(err, taskrunner.ErrTaskCancellationUnsupported) {
+		task.Message = "后台任务执行器不支持取消，任务未启动"
 	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = maps.Clone(task.Result)

@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
@@ -56,6 +57,7 @@ type upstreamAuthReader interface {
 
 type Repository interface {
 	NewAPILocalGroups(context.Context) ([]business.NewAPILocalGroup, error)
+	UpdateNewAPILocalGroupRatio(context.Context, string, string) error
 	NewAPIGroupBindings(context.Context, string) ([]business.NewAPIGroupBinding, error)
 	ReplaceNewAPIGroupBindings(context.Context, string, []business.NewAPIGroupBinding) error
 	DeleteNewAPIGroupBindings(context.Context, string) error
@@ -78,9 +80,6 @@ type Service struct {
 	auth         Authenticator
 	managementMu sync.Mutex
 	pricingMu    sync.Mutex
-	pricingAt    time.Time
-	pricing      []Sub2APIModelPrice
-	pricingRaw   RemotePricingSource
 }
 
 type Workspace struct {
@@ -131,6 +130,7 @@ type ToolPrice struct {
 // Sub2APIModelPrice is one entry from Sub2API's loaded billing catalog and its
 // corresponding New API ratios. InputPrice/OutputPrice are USD per token.
 type Sub2APIModelPrice struct {
+	Source                        string `json:"source,omitempty"`
 	Model                         string `json:"model"`
 	InputPrice                    string `json:"input_price"`
 	OutputPrice                   string `json:"output_price"`
@@ -157,6 +157,8 @@ type Sub2APIModelPrice struct {
 }
 
 type RemotePricingSource struct {
+	Stale     bool   `json:"stale,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 	SourceURL string `json:"source_url"`
 	Content   string `json:"content"`
 	FetchedAt string `json:"fetched_at"`
@@ -199,6 +201,7 @@ type GroupBindingInput struct {
 	NewAPIGroupID   string `json:"newapi_group_id" binding:"required,min=1,max=128"`
 	NewAPIGroupName string `json:"newapi_group_name" binding:"required,min=1,max=255"`
 	Sub2APIGroupID  string `json:"sub2api_group_id" binding:"required,min=1,max=128"`
+	Sub2APIRatio    string `json:"sub2api_ratio" binding:"required,min=1,max=128"`
 	SyncRatio       bool   `json:"sync_ratio"`
 }
 
@@ -376,7 +379,9 @@ func (s *Service) DeletePlatform(ctx context.Context, platformID string) (bool, 
 	}
 	deleted, deleteErr := s.private.DeleteNewAPIPlatform(ctx, platformID)
 	if deleteErr != nil || !deleted {
-		rollbackErr := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, bindings)
+		rollbackCtx, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancelRollback()
+		rollbackErr := s.repository.ReplaceNewAPIGroupBindings(rollbackCtx, platformID, bindings)
 		if deleteErr != nil {
 			return false, errors.Join(deleteErr, rollbackErr)
 		}
@@ -438,19 +443,9 @@ func sameOriginBaseURL(left, right string) bool {
 	return strings.EqualFold(leftURL.Scheme, rightURL.Scheme) && strings.EqualFold(leftURL.Host, rightURL.Host) && leftURL.Path == rightURL.Path
 }
 
-// ManagementModelPrices reads Sub2API's default remote billing catalog. The
-// catalog is cached in the Console process so opening the preview does not
-// repeatedly download the same JSON file.
 func (s *Service) ManagementModelPrices(ctx context.Context, platformID string) ([]Sub2APIModelPrice, error) {
-	if _, err := s.requirePlatform(ctx, platformID); err != nil {
-		return nil, err
-	}
-	s.pricingMu.Lock()
-	defer s.pricingMu.Unlock()
-	if err := s.ensureRemotePricingCacheLocked(ctx); err != nil {
-		return nil, err
-	}
-	return append([]Sub2APIModelPrice(nil), s.pricing...), nil
+	catalog, err := s.ModelPriceCatalog(ctx, platformID, false)
+	return catalog.Models, err
 }
 
 func (s *Service) RemoteModelPricingSource(ctx context.Context, platformID string) (RemotePricingSource, error) {
@@ -459,25 +454,8 @@ func (s *Service) RemoteModelPricingSource(ctx context.Context, platformID strin
 	}
 	s.pricingMu.Lock()
 	defer s.pricingMu.Unlock()
-	if err := s.ensureRemotePricingCacheLocked(ctx); err != nil {
-		return RemotePricingSource{}, err
-	}
-	return s.pricingRaw, nil
-}
-
-func (s *Service) ensureRemotePricingCacheLocked(ctx context.Context) error {
-	if len(s.pricing) > 0 && s.pricingRaw.Content != "" && time.Since(s.pricingAt) < 24*time.Hour {
-		return nil
-	}
-	prices, raw, err := s.fetchRemotePricingCatalog(ctx)
-	if err != nil {
-		return err
-	}
-	fetchedAt := time.Now().UTC()
-	s.pricing = prices
-	s.pricingAt = fetchedAt
-	s.pricingRaw = buildRemotePricingSource(raw, fetchedAt)
-	return nil
+	_, source, err := s.loadRemotePricing(ctx, false)
+	return source, err
 }
 
 func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) []UpstreamPriceCatalog {
@@ -498,6 +476,9 @@ func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) []UpstreamPrice
 		go func() {
 			defer wait.Done()
 			for summary := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				record, err := reader.AuthRecord(ctx, summary.Host)
 				if err != nil || record == nil {
 					continue
@@ -618,20 +599,23 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 	for _, group := range localGroups {
 		localByID[group.ID] = group
 	}
-	previous, err := s.repository.NewAPIGroupBindings(ctx, platformID)
-	if err != nil {
-		return nil, err
-	}
 	items := make([]business.NewAPIGroupBinding, 0, len(inputs))
 	seen := make(map[string]struct{}, len(inputs))
+	desiredLocalRatios := make(map[string]string, len(inputs))
+	newAPIRatios := map[string]string{}
+	var originalNewAPIRatios map[string]string
 	for _, input := range inputs {
 		input.NewAPIGroupID = strings.TrimSpace(input.NewAPIGroupID)
 		input.NewAPIGroupName = strings.TrimSpace(input.NewAPIGroupName)
 		input.Sub2APIGroupID = strings.TrimSpace(input.Sub2APIGroupID)
+		input.Sub2APIRatio = strings.TrimSpace(input.Sub2APIRatio)
 		if input.NewAPIGroupID == "" || utf8.RuneCountInString(input.NewAPIGroupID) > 128 ||
 			input.NewAPIGroupName == "" || utf8.RuneCountInString(input.NewAPIGroupName) > 255 ||
 			input.Sub2APIGroupID == "" || utf8.RuneCountInString(input.Sub2APIGroupID) > 128 {
 			return nil, serviceError(ErrorValidation, "分组绑定包含空值或过长字段")
+		}
+		if !positiveDecimal(input.Sub2APIRatio) || len(input.Sub2APIRatio) > 128 {
+			return nil, serviceError(ErrorValidation, "Sub2API 管理平台分组倍率必须是正数")
 		}
 		if _, duplicate := seen[input.NewAPIGroupID]; duplicate {
 			return nil, serviceError(ErrorValidation, "同一 New API 分组不能重复绑定")
@@ -640,17 +624,82 @@ func (s *Service) SaveBindings(ctx context.Context, platformID string, inputs []
 		if _, found := localByID[input.Sub2APIGroupID]; !found {
 			return nil, serviceError(ErrorValidation, "分组绑定包含不存在的 Sub2API 分组")
 		}
+		if ratio, found := desiredLocalRatios[input.Sub2APIGroupID]; found && !sameDecimal(ratio, input.Sub2APIRatio) {
+			return nil, serviceError(ErrorValidation, "同一 Sub2API 分组不能提交不同倍率")
+		}
+		desiredLocalRatios[input.Sub2APIGroupID] = input.Sub2APIRatio
+		if input.SyncRatio {
+			newAPIRatios[input.NewAPIGroupID] = input.Sub2APIRatio
+		}
 		items = append(items, business.NewAPIGroupBinding{PlatformID: platformID, NewAPIGroupID: input.NewAPIGroupID, NewAPIGroupName: input.NewAPIGroupName, Sub2APIGroupID: input.Sub2APIGroupID, SyncRatio: input.SyncRatio})
 	}
-	if err := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, items); err != nil {
-		return nil, err
-	}
-	if err := s.syncGroupRatios(ctx, *platform, items, localByID); err != nil {
-		rollbackErr := s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, previous)
-		if rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("本地分组绑定回滚失败：%w", rollbackErr))
+	if len(newAPIRatios) > 0 {
+		options, readErr := s.readOptions(ctx, *platform)
+		if readErr != nil {
+			return nil, readErr
 		}
-		return nil, err
+		originalNewAPIRatios, err = decodeDecimalMap(options["GroupRatio"])
+		if err != nil {
+			return nil, serviceError(ErrorUpstream, "New API 当前分组倍率不可读")
+		}
+	}
+
+	changes := make([]groupRatioChange, 0, len(desiredLocalRatios))
+	for groupID, ratio := range desiredLocalRatios {
+		current := localByID[groupID].Ratio
+		if current == nil || !positiveDecimal(*current) {
+			return nil, serviceError(ErrorConflict, "Sub2API 管理平台分组当前倍率不可读，请先同步分组目录")
+		}
+		if sameDecimal(*current, ratio) {
+			continue
+		}
+		changes = append(changes, groupRatioChange{groupID: groupID, before: *current, after: ratio})
+	}
+	sort.Slice(changes, func(i, j int) bool { return changes[i].groupID < changes[j].groupID })
+
+	var managementClient *adminclient.Client
+	if len(changes) > 0 {
+		managementClient, err = s.sub2APIManagementClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	remoteChanged := 0
+	for _, change := range changes {
+		if _, err = managementClient.UpdateGroupRateMultiplier(ctx, change.groupID, change.after); err != nil {
+			return nil, errors.Join(err, rollbackRemoteGroupRatios(ctx, managementClient, changes[:remoteChanged+1]))
+		}
+		remoteChanged++
+	}
+	localChanged := 0
+	for _, change := range changes {
+		if err = s.repository.UpdateNewAPILocalGroupRatio(ctx, change.groupID, change.after); err != nil {
+			return nil, errors.Join(err, rollbackLocalGroupRatios(ctx, s.repository, changes[:localChanged]), rollbackRemoteGroupRatios(ctx, managementClient, changes))
+		}
+		localChanged++
+	}
+
+	newAPIWritten := false
+	if len(newAPIRatios) > 0 {
+		nextRatios := cloneDecimalMap(originalNewAPIRatios)
+		for groupID, ratio := range newAPIRatios {
+			nextRatios[groupID] = ratio
+		}
+		if err = s.writeOption(ctx, *platform, "GroupRatio", nextRatios); err != nil {
+			// A failed or cancelled response may follow a committed option write.
+			return nil, errors.Join(err,
+				s.rollbackGroupRatio(ctx, *platform, originalNewAPIRatios),
+				rollbackLocalGroupRatios(ctx, s.repository, changes),
+				rollbackRemoteGroupRatios(ctx, managementClient, changes))
+		}
+		newAPIWritten = true
+	}
+	if err = s.repository.ReplaceNewAPIGroupBindings(ctx, platformID, items); err != nil {
+		var newAPIRollback error
+		if newAPIWritten {
+			newAPIRollback = s.rollbackGroupRatio(ctx, *platform, originalNewAPIRatios)
+		}
+		return nil, errors.Join(err, newAPIRollback, rollbackLocalGroupRatios(ctx, s.repository, changes), rollbackRemoteGroupRatios(ctx, managementClient, changes))
 	}
 	return s.repository.NewAPIGroupBindings(ctx, platformID)
 }
@@ -878,7 +927,7 @@ func (s *Service) channelEndpoints(ctx context.Context, target configstore.Targe
 		return fallback
 	}
 	var payload map[string]any
-	if json.Unmarshal(raw, &payload) != nil {
+	if json.Unmarshal(raw, &payload) != nil || responseBusinessError(payload) != nil {
 		return fallback
 	}
 	settings := payload
@@ -973,13 +1022,39 @@ func stableOperationName(groupName, kind string, parts ...string) string {
 
 func (s *Service) findChannelByName(ctx context.Context, platform configstore.NewAPIPlatform, name string) (map[string]any, bool, error) {
 	var match map[string]any
+	seen := map[string]struct{}{}
+	expectedTotal := -1
 	for page := 0; page < 1000; page++ {
 		payload, err := s.request(ctx, platform, http.MethodGet, fmt.Sprintf("/api/channel/?p=%d&page_size=100", page), nil)
 		if err != nil {
 			return nil, false, err
 		}
-		rows := newAPIChannelRows(payload)
+		rows, total, err := newAPIChannelRows(payload)
+		if err != nil {
+			return nil, false, err
+		}
+		if total >= 0 {
+			if expectedTotal >= 0 && expectedTotal != total {
+				return nil, false, errors.New("远端渠道目录总数在分页期间变化")
+			}
+			expectedTotal = total
+		}
 		for _, row := range rows {
+			identity := firstText(row, "id", "channel_id")
+			if identity == "" {
+				if number, ok := row["id"].(json.Number); ok {
+					identity = number.String()
+				}
+			}
+			if identity == "" {
+				raw, _ := json.Marshal(row)
+				digest := sha256.Sum256(raw)
+				identity = hex.EncodeToString(digest[:])
+			}
+			if _, duplicate := seen[identity]; duplicate {
+				return nil, false, errors.New("远端渠道目录包含重复项目")
+			}
+			seen[identity] = struct{}{}
 			if firstText(row, "name") != name {
 				continue
 			}
@@ -988,15 +1063,23 @@ func (s *Service) findChannelByName(ctx context.Context, platform configstore.Ne
 			}
 			match = row
 		}
-		if len(rows) < 100 {
+		if expectedTotal >= 0 {
+			if len(seen) > expectedTotal || (len(rows) == 0 && len(seen) < expectedTotal) {
+				return nil, false, errors.New("远端渠道目录未完整返回")
+			}
+			if len(seen) == expectedTotal {
+				return match, match != nil, nil
+			}
+		} else if len(rows) < 100 {
 			return match, match != nil, nil
 		}
 	}
 	return nil, false, errors.New("远端渠道目录超过分页上限")
 }
 
-func newAPIChannelRows(payload any) []map[string]any {
+func newAPIChannelRows(payload any) ([]map[string]any, int, error) {
 	var values []any
+	total := -1
 	switch item := payload.(type) {
 	case []any:
 		values = item
@@ -1007,14 +1090,26 @@ func newAPIChannelRows(payload any) []map[string]any {
 				break
 			}
 		}
+		if raw, present := item["total"]; present {
+			number, err := strconv.Atoi(fmt.Sprint(raw))
+			if err != nil || number < 0 {
+				return nil, -1, errors.New("远端渠道目录总数无效")
+			}
+			total = number
+		}
+	}
+	if values == nil {
+		return nil, -1, errors.New("远端渠道目录缺少列表")
 	}
 	result := make([]map[string]any, 0, len(values))
 	for _, value := range values {
-		if row, ok := value.(map[string]any); ok {
-			result = append(result, row)
+		row, ok := value.(map[string]any)
+		if !ok || firstText(row, "name") == "" {
+			return nil, -1, errors.New("远端渠道目录包含无效项目")
 		}
+		result = append(result, row)
 	}
-	return result
+	return result, total, nil
 }
 
 func publicChannelResult(value map[string]any, name string) map[string]any {
@@ -1022,7 +1117,7 @@ func publicChannelResult(value map[string]any, name string) map[string]any {
 	if value == nil {
 		return result
 	}
-	if id := firstText(value, "id", "channel_id"); id != "" {
+	if id := firstDecimal(value, "id", "channel_id"); id != "" {
 		result["id"] = id
 	}
 	return result
@@ -1096,6 +1191,9 @@ func (s *Service) fetchSub2APIModels(ctx context.Context, baseURL, serviceKey st
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("Sub2API 模型获取失败（HTTP %d%s）", response.StatusCode, remoteDetail(payload))
+	}
+	if err := responseBusinessError(payload); err != nil {
+		return nil, err
 	}
 	models := channelModelIDs(payload)
 	if len(models) == 0 {
@@ -1235,15 +1333,17 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 	}
 	writtenKeys := make([]string, 0, len(numericKeys)+2)
 	for _, key := range numericKeys {
+		// A failed response can follow a committed remote write.
+		writtenKeys = append(writtenKeys, key)
 		if err := s.writeOption(ctx, *platform, key, numericOptions[key]); err != nil {
 			return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 		}
-		writtenKeys = append(writtenKeys, key)
 	}
+	writtenKeys = append(writtenKeys, "billing_setting.billing_mode")
 	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_mode", billingModes); err != nil {
 		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 	}
-	writtenKeys = append(writtenKeys, "billing_setting.billing_mode")
+	writtenKeys = append(writtenKeys, "billing_setting.billing_expr")
 	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_expr", billingExprs); err != nil {
 		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 	}
@@ -1280,33 +1380,73 @@ func (s *Service) readOptions(ctx context.Context, item configstore.NewAPIPlatfo
 	return optionValues(payload)
 }
 
-func (s *Service) syncGroupRatios(ctx context.Context, platform configstore.NewAPIPlatform, bindings []business.NewAPIGroupBinding, local map[string]business.NewAPILocalGroup) error {
-	needsSync := false
-	for _, binding := range bindings {
-		needsSync = needsSync || binding.SyncRatio
+func (s *Service) sub2APIManagementClient(ctx context.Context) (*adminclient.Client, error) {
+	target, err := s.private.TargetSettings(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if !needsSync {
+	return adminclient.New(adminclient.Config{
+		BaseURL: target.BaseURL, AdminKey: target.AdminKey,
+		Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 3,
+	}, s.client.Transport)
+}
+
+type groupRatioChange struct {
+	groupID string
+	before  string
+	after   string
+}
+
+func rollbackRemoteGroupRatios(ctx context.Context, client *adminclient.Client, changes []groupRatioChange) error {
+	if client == nil || len(changes) == 0 {
 		return nil
 	}
-	options, err := s.readOptions(ctx, platform)
-	if err != nil {
-		return err
-	}
-	ratios, err := decodeDecimalMap(options["GroupRatio"])
-	if err != nil {
-		return errors.New("New API 当前分组倍率不可读")
-	}
-	for _, binding := range bindings {
-		if !binding.SyncRatio {
-			continue
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	var result error
+	for index := len(changes) - 1; index >= 0; index-- {
+		change := changes[index]
+		if _, err := client.UpdateGroupRateMultiplier(ctx, change.groupID, change.before); err != nil {
+			result = errors.Join(result, fmt.Errorf("Sub2API 分组 %s 倍率回滚失败：%w", change.groupID, err))
 		}
-		group := local[binding.Sub2APIGroupID]
-		if group.Ratio == nil || !validDecimal(*group.Ratio) {
-			return fmt.Errorf("Sub2API 分组 %s 没有可同步的倍率", group.Name)
-		}
-		ratios[binding.NewAPIGroupID] = *group.Ratio
 	}
-	return s.writeOption(ctx, platform, "GroupRatio", ratios)
+	return result
+}
+
+func rollbackLocalGroupRatios(ctx context.Context, repository Repository, changes []groupRatioChange) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	var result error
+	for index := len(changes) - 1; index >= 0; index-- {
+		change := changes[index]
+		if err := repository.UpdateNewAPILocalGroupRatio(ctx, change.groupID, change.before); err != nil {
+			result = errors.Join(result, fmt.Errorf("Sub2API 分组 %s 本地倍率回滚失败：%w", change.groupID, err))
+		}
+	}
+	return result
+}
+
+func (s *Service) rollbackGroupRatio(ctx context.Context, platform configstore.NewAPIPlatform, previous map[string]string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	if err := s.writeOption(ctx, platform, "GroupRatio", previous); err != nil {
+		return fmt.Errorf("New API 分组倍率回滚失败：%w", err)
+	}
+	return nil
+}
+
+func cloneDecimalMap(source map[string]string) map[string]string {
+	result := make(map[string]string, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func sameDecimal(left, right string) bool {
+	leftValue, leftOK := new(big.Rat).SetString(strings.TrimSpace(left))
+	rightValue, rightOK := new(big.Rat).SetString(strings.TrimSpace(right))
+	return leftOK && rightOK && leftValue.Cmp(rightValue) == 0
 }
 
 func (s *Service) writeOption(ctx context.Context, platform configstore.NewAPIPlatform, key string, value map[string]string) error {
@@ -1399,8 +1539,12 @@ func (s *Service) requestRaw(ctx context.Context, platform configstore.NewAPIPla
 		return nil, errors.New("New API 响应超过大小限制")
 	}
 	var payload any
-	if len(bytes.TrimSpace(raw)) > 0 && json.Unmarshal(raw, &payload) != nil {
-		return nil, fmt.Errorf("New API 返回不可读内容（HTTP %d）", response.StatusCode)
+	if len(bytes.TrimSpace(raw)) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if decoder.Decode(&payload) != nil || ensureJSONEOF(decoder) != nil {
+			return nil, fmt.Errorf("New API 返回不可读内容（HTTP %d）", response.StatusCode)
+		}
 	}
 	if len(bytes.TrimSpace(raw)) == 0 && response.StatusCode >= 200 && response.StatusCode < 300 {
 		return nil, errors.New("New API 返回空内容")
@@ -1586,10 +1730,19 @@ func decodeStringMap(raw string) (map[string]string, error) {
 	if err := decoder.Decode(&values); err != nil || values == nil {
 		return nil, errors.New("配置不是 JSON 对象")
 	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
 	for key, value := range values {
-		if text, ok := value.(string); ok && strings.TrimSpace(key) != "" {
-			result[strings.TrimSpace(key)] = strings.TrimSpace(text)
+		key = strings.TrimSpace(key)
+		if _, duplicate := result[key]; key == "" || duplicate {
+			return nil, errors.New("配置包含空白或重复模型名称")
 		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s 的配置值不是字符串", key)
+		}
+		result[key] = strings.TrimSpace(text)
 	}
 	return result, nil
 }
@@ -1772,7 +1925,9 @@ func (s *Service) requestSub2APIModelPlaza(ctx context.Context, rawBaseURL strin
 		return nil, errors.New("Sub2API 模型广场响应超过大小限制")
 	}
 	var payload any
-	if json.Unmarshal(raw, &payload) != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if decoder.Decode(&payload) != nil || ensureJSONEOF(decoder) != nil {
 		return nil, fmt.Errorf("Sub2API 模型广场响应不可读（HTTP %d）", response.StatusCode)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -2024,6 +2179,9 @@ func remoteTierPrice(basePrice, multiplier string) string {
 }
 
 func positiveDecimal(value string) bool {
+	if !validDecimal(value) {
+		return false
+	}
 	number, ok := new(big.Rat).SetString(strings.TrimSpace(value))
 	return ok && number.Sign() > 0
 }
@@ -2220,10 +2378,13 @@ func decodeDecimalMap(raw string) (map[string]string, error) {
 	if err := decoder.Decode(&values); err != nil || values == nil {
 		return nil, errors.New("倍率配置不是 JSON 对象")
 	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
 	for key, rawValue := range values {
 		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
+		if _, duplicate := result[key]; key == "" || duplicate {
+			return nil, errors.New("倍率配置包含空白或重复模型名称")
 		}
 		text := ""
 		switch value := rawValue.(type) {

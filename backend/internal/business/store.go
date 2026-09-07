@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"strconv"
@@ -64,7 +65,7 @@ func Open(path string) (*Store, error) {
 	if err := sqliteutil.Prepare(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_txlock=immediate&_pragma=busy_timeout%2810000%29&_pragma=journal_mode%28WAL%29&_pragma=foreign_keys%28ON%29")
+	db, err := sql.Open("sqlite", sqliteutil.DSN(path, "_txlock=immediate&_pragma=busy_timeout%2810000%29&_pragma=journal_mode%28WAL%29&_pragma=foreign_keys%28ON%29"))
 	if err != nil {
 		return nil, err
 	}
@@ -615,6 +616,9 @@ func decodeJSONObject(raw string) (map[string]any, error) {
 	if err := decoder.Decode(&value); err != nil {
 		return nil, err
 	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return nil, err
+	}
 	normalized, err := normalizeJSONNumbers(value)
 	if err != nil {
 		return nil, err
@@ -624,6 +628,14 @@ func decodeJSONObject(raw string) (map[string]any, error) {
 		return nil, errors.New("JSON 根节点必须是对象")
 	}
 	return result, nil
+}
+
+func ensureJSONEOF(decoder *json.Decoder) error {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("JSON 对象包含尾随数据")
+	}
+	return nil
 }
 
 func normalizeJSONNumbers(value any) (any, error) {

@@ -16,7 +16,7 @@ function productionSourceFiles(directory = sourceRoot) {
 }
 
 describe("global focus policy", () => {
-  it("only allows programmatic automatic focus for dropdown searches", () => {
+  it("allows intentional focus management for dropdowns, keyboard navigation, and account dialogs", () => {
     const nativeFocusAttribute = ["auto", "Focus"].join("");
     const programmaticFocusCall = new RegExp(`\\.${["fo", "cus"].join("")}\\s*\\(`);
     const enabledInitialFocus = new RegExp(
@@ -27,7 +27,12 @@ describe("global focus policy", () => {
       const relativePath = relative(sourceRoot, path);
       const allowsDropdownSearchFocus = relativePath === "components/ui/dropdown-search-focus.ts";
       const allowsKeyboardNavigationFocus = relativePath === "components/ui/segmented-control.tsx";
-      if (allowsDropdownSearchFocus || allowsKeyboardNavigationFocus) return [];
+      // The account dialog focuses its heading and restores focus to its explicit
+      // trigger; account-operation-buttons interaction tests protect that lifecycle.
+      const allowsAccountDialogFocus =
+        relativePath === "features/accounts/components/account-operation-buttons.tsx";
+      if (allowsDropdownSearchFocus || allowsKeyboardNavigationFocus || allowsAccountDialogFocus)
+        return [];
       return source.includes(nativeFocusAttribute) ||
         programmaticFocusCall.test(source) ||
         enabledInitialFocus.test(source)
@@ -38,15 +43,13 @@ describe("global focus policy", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("keeps dialog initial focus enabled while non-modal searchable popups opt out", () => {
-    expect(readFileSync(join(sourceRoot, "components/ui/dialog.tsx"), "utf8")).not.toContain(
-      "initialFocus={false}",
-    );
-    const surfaces = [
-      "components/ui/sheet.tsx",
-      "components/ui/combobox.tsx",
-      "components/data-table/filter-menu.tsx",
-    ];
+  it("keeps modal initial focus enabled while searchable popups focus their search fields", () => {
+    for (const path of ["components/ui/dialog.tsx", "components/ui/sheet.tsx"]) {
+      expect(readFileSync(join(sourceRoot, path), "utf8"), path).not.toContain(
+        "initialFocus={false}",
+      );
+    }
+    const surfaces = ["components/ui/combobox.tsx", "components/data-table/filter-menu.tsx"];
 
     for (const path of surfaces) {
       expect(readFileSync(join(sourceRoot, path), "utf8"), path).toContain("initialFocus={false}");

@@ -101,6 +101,13 @@ type Service struct {
 	now        func() time.Time
 }
 
+type routingEventContextKey struct{}
+
+type routingEventContext struct {
+	batchID string
+	actor   string
+}
+
 type writePolicy struct {
 	autoApply        map[string]bool
 	changeThreshold  *big.Rat
@@ -223,6 +230,11 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		result.Reason = &reason
 		return result, nil
 	}
+	batchID, batchIDErr := randomOperationID("routing-batch")
+	if batchIDErr != nil {
+		slog.Error("自动写回批次 ID 生成失败", "error", batchIDErr)
+	}
+	ctx = withRoutingEventContext(ctx, batchID, actor)
 	policyDocument, err := s.repository.ControlPolicy(ctx)
 	if err != nil {
 		return Result{}, err
@@ -285,6 +297,20 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		}
 	}()
 	ctx = guardedCtx
+	mode, err = s.repository.Mode(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	capabilities, valid = runtimepolicy.For(mode)
+	if !valid {
+		return Result{}, fmt.Errorf("运行模式无效：%s", mode)
+	}
+	result.Mode, result.CalculationOnly = mode, !capabilities.AutomaticRemoteApply
+	if result.CalculationOnly {
+		reason := "当前运行模式只保存计算结果"
+		result.Reason = &reason
+		return result, nil
+	}
 	targetFingerprint, err := s.managementTargetFingerprint(ctx)
 	if err != nil {
 		return Result{}, err
@@ -464,6 +490,13 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		}
 	}()
 	ctx = guardedCtx
+	mode, err = s.repository.Mode(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	if mode != runtimepolicy.Full {
+		return Result{}, errors.New("交还控制权只能在完全模式执行")
+	}
 	lockedTargetFingerprint, err := s.managementTargetFingerprint(ctx)
 	if err != nil {
 		return Result{}, err
@@ -905,9 +938,24 @@ func (s *Service) recordRuntimeEvent(ctx context.Context, eventType, status, sum
 	if contextFinished(ctx) {
 		return
 	}
+	metadata, _ := ctx.Value(routingEventContextKey{}).(routingEventContext)
+	payload = copyMap(payload)
+	if metadata.batchID != "" {
+		payload["batch_id"] = metadata.batchID
+	}
+	if actor := strings.TrimSpace(metadata.actor); actor != "" {
+		payload["actor"] = actor
+	}
 	if _, err := s.repository.RecordRuntimeEvent(ctx, eventType, status, summary, payload); err != nil {
 		slog.Error("调度运行事件保存失败", "event_type", eventType, "status", status, "error", err)
 	}
+}
+
+func withRoutingEventContext(ctx context.Context, batchID, actor string) context.Context {
+	return context.WithValue(ctx, routingEventContextKey{}, routingEventContext{
+		batchID: strings.TrimSpace(batchID),
+		actor:   strings.TrimSpace(actor),
+	})
 }
 
 func (s *Service) recordLocalApplyFailure(

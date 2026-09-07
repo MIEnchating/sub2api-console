@@ -1,34 +1,52 @@
 import type { AccountStatus } from "@/api";
-import { CircleHelp } from "lucide-react";
+import type { ReactElement } from "react";
 import { AccountHealthScore } from "@/components/account-health-score";
 import { AccountRecentResults } from "@/components/account-recent-results";
 import { StatusBadge } from "@/components/status-badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
-import { accountPoolState } from "@/features/accounts/lib/account-pool";
+import {
+  accountPoolState,
+  accountSchedulingSwitchLabel,
+} from "@/features/accounts/lib/account-pool";
+import { AccountRecoveryStatus } from "./account-recovery-status";
 import { accountIdentityMeta } from "@/features/accounts/lib/account-labels";
 import { cn } from "@/lib/utils";
+import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
 
-const secondsFormatter = new Intl.NumberFormat("zh-CN", {
-  maximumFractionDigits: 0,
-});
+export { AccountLatencyCell } from "./account-latency-cell";
 
-function latencySeconds(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  return `${secondsFormatter.format(value / 1000)}s`;
+function shortSampleCount(account: AccountStatus): number | string {
+  if (account.sample_count === 0) return 0;
+  return account.short_sample_count ?? "未记录";
 }
 
-function healthScoreValue(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return "—";
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+function healthScoreAriaLabel(account: AccountStatus): string {
+  return [
+    "查看健康评分详情",
+    `综合健康分 ${healthScoreValue(account.health_score)}`,
+    `短期评分 ${healthScoreValue(account.short_score)}`,
+    `长期评分 ${healthScoreValue(account.long_score)}`,
+    `短期样本数 ${shortSampleCount(account)}`,
+    `长期样本数 ${account.long_sample_count ?? account.sample_count}`,
+    `连续失败 ${account.failure_streak ?? "—"}`,
+    `连续恢复 ${account.recovery_pass_streak ?? "—"}`,
+  ].join("，");
 }
 
 export function AccountHealthCell(props: { account: AccountStatus }) {
   const account = props.account;
+  const state = accountPoolState(account);
   return (
     <Tooltip>
       <TooltipTrigger
-        render={<div className="inline-flex" tabIndex={0} aria-label="查看健康分评分构成" />}
+        render={
+          <div
+            className="focus-visible:ring-ring inline-flex cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
+            tabIndex={0}
+            aria-label={healthScoreAriaLabel(account)}
+          />
+        }
       >
         <AccountHealthScore
           score={account.health_score}
@@ -37,36 +55,67 @@ export function AccountHealthCell(props: { account: AccountStatus }) {
           sampleCount={account.sample_count}
         />
       </TooltipTrigger>
-      <TooltipContent className="grid gap-1.5 text-xs">
-        <strong>评分构成</strong>
-        <span>综合健康分：{healthScoreValue(account.health_score)}</span>
-        <span>短期评分：{healthScoreValue(account.short_score)}</span>
-        <span>长期评分：{healthScoreValue(account.long_score)}</span>
-        <span>样本数：{account.sample_count}</span>
+      <TooltipContent
+        role="tooltip"
+        aria-label="健康评分详情"
+        className="grid w-80 max-w-[calc(100vw-2rem)] gap-3 p-3 text-xs"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="grid gap-0.5">
+            <strong className="text-sm">健康评分详情</strong>
+            <span className="text-muted-foreground">本轮调度采用的健康评估</span>
+          </div>
+          <StatusBadge label={state.label} variant={state.tone} />
+        </div>
+
+        <dl className="grid gap-1.5">
+          <div className="flex items-center justify-between gap-4">
+            <dt className="text-muted-foreground">综合健康分</dt>
+            <dd className="font-semibold tabular-nums">{healthScoreValue(account.health_score)}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <dt className="text-muted-foreground">短期评分</dt>
+            <dd className="font-medium tabular-nums">{healthScoreValue(account.short_score)}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <dt className="text-muted-foreground">长期评分</dt>
+            <dd className="font-medium tabular-nums">{healthScoreValue(account.long_score)}</dd>
+          </div>
+        </dl>
+
+        <div className="border-border grid gap-2 border-t pt-2.5">
+          <strong>本轮依据</strong>
+          <dl className="grid grid-cols-2 gap-3">
+            <div className="grid gap-0.5">
+              <dt className="text-muted-foreground">短期样本数</dt>
+              <dd className="font-semibold tabular-nums">{shortSampleCount(account)}</dd>
+            </div>
+            <div className="grid gap-0.5">
+              <dt className="text-muted-foreground">长期样本数</dt>
+              <dd className="font-semibold tabular-nums">
+                {account.long_sample_count ?? account.sample_count}
+              </dd>
+            </div>
+            <div className="grid gap-0.5">
+              <dt className="text-muted-foreground">连续失败</dt>
+              <dd className="font-semibold tabular-nums">{account.failure_streak ?? "—"}</dd>
+            </div>
+            <div className="grid gap-0.5">
+              <dt className="text-muted-foreground">连续恢复</dt>
+              <dd className="font-semibold tabular-nums">{account.recovery_pass_streak ?? "—"}</dd>
+            </div>
+          </dl>
+          <p className="text-muted-foreground">
+            实际参与评分的有效样本数；短期取长期样本中最新的一部分，不重复相加。
+          </p>
+        </div>
       </TooltipContent>
     </Tooltip>
   );
 }
 
 export function AccountRecentResultsCell(props: { account: AccountStatus }) {
-  return (
-    <AccountRecentResults
-      results={props.account.recent_results}
-      sampleCount={props.account.sample_count}
-      showCount
-    />
-  );
-}
-
-export function AccountLatencyCell(props: { account: AccountStatus }) {
-  return (
-    <div className="grid gap-1 tabular-nums" aria-label="综合延迟">
-      <span className="font-medium">P95 {latencySeconds(props.account.ttfb_p95_ms)}</span>
-      <span className="text-xs text-muted-foreground">
-        P50 {latencySeconds(props.account.ttfb_p50_ms)}
-      </span>
-    </div>
-  );
+  return <AccountRecentResults results={props.account.recent_results} />;
 }
 
 export function AccountRoutingParametersCell(props: { account: AccountStatus }) {
@@ -81,6 +130,7 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
         <>
           <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
           <span className="text-muted-foreground text-xs">
+            {account.schedulable ? "参与调度" : "停止调度"} ·{" "}
             {account.manual_sync_balance_multiplier ? "同步上游余额" : "不同步上游余额"}
           </span>
         </>
@@ -236,51 +286,6 @@ export function AccountKeyStatusCell(props: { account: AccountStatus }) {
   return <StatusBadge label={presentation.label} variant={presentation.variant} title={detail} />;
 }
 
-export function AccountSub2APIStatusCell(props: { account: AccountStatus }) {
-  const raw = props.account.sub2api_status?.trim().toLowerCase() ?? "";
-  const error = props.account.sub2api_error?.trim() ?? "";
-  const presentation = (() => {
-    if (raw === "error") return { label: "错误", variant: "danger" as const };
-    if (raw === "active" && props.account.schedulable === false) {
-      return { label: "暂停", variant: "neutral" as const };
-    }
-    if (raw === "active") return { label: "正常", variant: "success" as const };
-    if (["disabled", "inactive"].includes(raw)) {
-      return { label: "停用", variant: "neutral" as const };
-    }
-    if (raw === "expired") return { label: "已过期", variant: "danger" as const };
-    if (!raw) return { label: "未同步", variant: "neutral" as const };
-    return { label: props.account.sub2api_status!.trim(), variant: "warning" as const };
-  })();
-  return (
-    <div className="flex min-w-0 items-center gap-1">
-      <StatusBadge
-        label={presentation.label}
-        variant={presentation.variant}
-        title={raw ? `Sub2API 原始状态：${raw}` : "管理快照尚未返回账号状态"}
-      />
-      {error ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                className="text-destructive hover:text-destructive/80 inline-flex size-5 shrink-0 items-center justify-center"
-                aria-label="查看 Sub2API 账号报错"
-              />
-            }
-          >
-            <CircleHelp className="size-3.5" aria-hidden="true" />
-          </TooltipTrigger>
-          <TooltipContent className="max-w-sm whitespace-pre-wrap break-words">
-            {error}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-    </div>
-  );
-}
-
 function accountStateReasonLabel(state: ReturnType<typeof accountPoolState>["value"]): string {
   const labels: Partial<Record<ReturnType<typeof accountPoolState>["value"], string>> = {
     degraded: "降级原因",
@@ -305,15 +310,9 @@ function accountStateReason(
   return account.decision_reason?.trim() || null;
 }
 
-function accountLatestError(account: AccountStatus): string | null {
-  const sub2apiError = account.sub2api_error?.trim();
-  if (account.last_error?.trim() && account.last_error.trim() !== sub2apiError) {
-    return account.last_error.trim();
-  }
-  for (const result of account.recent_results) {
-    if (result.failure_reason?.trim()) return result.failure_reason.trim();
-  }
-  return null;
+function accountCurrentError(account: AccountStatus): string | null {
+  if (account.sub2api_status?.trim().toLowerCase() !== "error") return null;
+  return account.sub2api_error?.trim() || "Sub2API 未返回错误原因，请同步账号查看最新状态";
 }
 
 function accountSchedulingStopReason(
@@ -340,25 +339,47 @@ function accountSchedulingStopReason(
   return null;
 }
 
-function AccountStateDetail(props: { children: string; tone?: "default" | "warning" | "danger" }) {
+function AccountStateDetail(props: {
+  children: string;
+  tone?: "default" | "warning" | "danger";
+  expanded?: boolean;
+}) {
   let toneClass = "text-muted-foreground";
   if (props.tone === "danger") toneClass = "text-destructive";
   if (props.tone === "warning") toneClass = "text-warning";
+  if (props.expanded)
+    return (
+      <p
+        className={cn(
+          "min-w-0 whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]",
+          toneClass,
+        )}
+      >
+        {props.children}
+      </p>
+    );
   return (
-    <TableOverflowTooltip content={props.children} className={cn("max-w-48 text-xs", toneClass)}>
+    <TableOverflowTooltip content={props.children} className={cn("text-xs", toneClass)}>
       {props.children}
     </TableOverflowTooltip>
   );
 }
 
-export function AccountStateCell(props: { account: AccountStatus }) {
+export function AccountStateCell(props: {
+  account: AccountStatus;
+  expanded?: boolean;
+}): ReactElement {
   const state = accountPoolState(props.account);
   const reason = accountStateReason(props.account, state.value);
-  const reasonLabel = accountStateReasonLabel(state.value);
+  const evidencePending =
+    (state.value === "healthy" || state.value === "degraded") && props.account.evidence_pending;
+  let reasonLabel = accountStateReasonLabel(state.value);
+  if (evidencePending) reasonLabel = "观察原因";
+  if (props.account.recovery) reasonLabel = "当前判定";
   const stateReason = reason && reasonLabel ? `${reasonLabel}：${reason}` : null;
-  const latestError = accountLatestError(props.account);
+  const currentError = accountCurrentError(props.account);
   const stopReason = accountSchedulingStopReason(props.account, state.value);
-  const errorMessage = latestError ? `最近错误：${latestError}` : null;
+  const errorMessage = currentError ? `最近错误：${currentError}` : null;
   const stopMessage =
     stopReason && stopReason.reason !== reason ? `${stopReason.label}：${stopReason.reason}` : null;
   const desiredState = props.account.desired_health
@@ -375,11 +396,18 @@ export function AccountStateCell(props: { account: AccountStatus }) {
     <StatusBadge
       label={state.label}
       variant={state.tone}
-      aria-label={pendingMessage ?? undefined}
+      aria-label={props.account.apply_pending ? (pendingMessage ?? undefined) : undefined}
     />
   );
   return (
-    <div className="grid gap-1">
+    <div className="grid min-w-0 gap-1">
+      {props.expanded ? (
+        <p className="text-sm">
+          健康评估：
+          {props.account.health_score == null ? "暂无有效评分" : `${props.account.health_score} 分`}
+          ，有效样本 {props.account.sample_count} 次
+        </p>
+      ) : null}
       {props.account.apply_pending && desiredState ? (
         <Tooltip>
           <TooltipTrigger render={badge} />
@@ -388,15 +416,35 @@ export function AccountStateCell(props: { account: AccountStatus }) {
       ) : (
         badge
       )}
-      {stateReason ? (
-        <AccountStateDetail tone={state.value === "degraded" ? "warning" : "default"}>
+      <AccountStateDetail expanded={props.expanded}>
+        {accountSchedulingSwitchLabel(props.account.schedulable)}
+      </AccountStateDetail>
+      {props.account.apply_pending && pendingMessage ? (
+        <AccountStateDetail expanded={props.expanded} tone="warning">
+          {pendingMessage}
+        </AccountStateDetail>
+      ) : null}
+      {stateReason && (!props.account.recovery || props.expanded || evidencePending) ? (
+        <AccountStateDetail
+          expanded={props.expanded}
+          tone={state.value === "degraded" || evidencePending ? "warning" : "default"}
+        >
           {stateReason}
         </AccountStateDetail>
       ) : null}
-      {errorMessage && errorMessage !== stateReason ? (
-        <AccountStateDetail tone="danger">{errorMessage}</AccountStateDetail>
+      {props.account.recovery ? (
+        <AccountRecoveryStatus recovery={props.account.recovery} expanded={props.expanded} />
       ) : null}
-      {stopMessage ? <AccountStateDetail tone="danger">{stopMessage}</AccountStateDetail> : null}
+      {errorMessage && errorMessage !== stateReason ? (
+        <AccountStateDetail expanded={props.expanded} tone="danger">
+          {errorMessage}
+        </AccountStateDetail>
+      ) : null}
+      {stopMessage ? (
+        <AccountStateDetail expanded={props.expanded} tone="danger">
+          {stopMessage}
+        </AccountStateDetail>
+      ) : null}
     </div>
   );
 }

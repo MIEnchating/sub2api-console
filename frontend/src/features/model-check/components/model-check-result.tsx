@@ -13,8 +13,10 @@ import { useEffect } from "react";
 import type { Task } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTablePanel } from "@/components/data-table/table-panel";
+import { TaskCancelButton } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
   TableBody,
@@ -191,11 +193,14 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
           </p>
           <p className="text-muted-foreground mt-1 truncate text-sm">{props.task.message}</p>
         </div>
-        <div className="text-left sm:text-right">
-          <strong className="text-lg tabular-nums">
-            {completed}/{total}
-          </strong>
-          <span className="text-muted-foreground ml-1 text-xs">个组合已完成</span>
+        <div className="flex items-center gap-3 sm:justify-end">
+          <div className="text-left sm:text-right">
+            <strong className="text-lg tabular-nums">
+              {completed}/{total}
+            </strong>
+            <span className="text-muted-foreground ml-1 text-xs">个组合已完成</span>
+          </div>
+          <TaskCancelButton taskId={props.task.id} />
         </div>
       </div>
 
@@ -293,7 +298,17 @@ export function ModelCheckResult(props: { task: Task }) {
   if (["queued", "running", "waiting_input"].includes(props.task.status)) {
     return <LiveModelCheckResult task={props.task} rows={rows} />;
   }
-  if (props.task.status === "failed" || props.task.status === "cancelled") {
+  if (props.task.status === "cancelled") {
+    return (
+      <div className="grid h-full place-items-center">
+        <div className="w-full max-w-lg rounded-md border p-5">
+          <p className="font-medium">检测已取消</p>
+          <p className="text-muted-foreground mt-2 text-sm break-words">{props.task.message}</p>
+        </div>
+      </div>
+    );
+  }
+  if (props.task.status === "failed") {
     return (
       <div className="grid h-full place-items-center">
         <div className="border-destructive/40 bg-destructive/5 w-full max-w-lg rounded-md border p-5">
@@ -310,6 +325,8 @@ export function ModelCheckResult(props: { task: Task }) {
   }
 
   const summary = resultSummary(rows);
+  const profileVersion = textValue(props.task.result.profile_version);
+  const profileFingerprint = textValue(props.task.result.profile_fingerprint);
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="model-check-result">
       <div className="flex shrink-0 flex-col gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
@@ -318,6 +335,19 @@ export function ModelCheckResult(props: { task: Task }) {
             <CheckCircle2 className="text-primary size-4" aria-hidden="true" />
             检测完成
           </p>
+          {profileVersion ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={<p className="text-muted-foreground mt-1 truncate text-xs" />}
+              >
+                画像版本 {profileVersion}
+                {profileFingerprint ? ` · ${profileFingerprint.slice(0, 12)}` : ""}
+              </TooltipTrigger>
+              <TooltipContent className="max-w-md break-all">
+                {profileFingerprint ?? `画像版本 ${profileVersion}`}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
         </div>
         <div className="flex max-w-full flex-wrap gap-1.5 sm:justify-end">
           {summaryBadges(summary)}

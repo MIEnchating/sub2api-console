@@ -125,7 +125,9 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
         </DialogDescription>
       </DialogHeader>
       <DialogBody className="min-h-0 overflow-auto pr-0">
-        {props.previewPending ? <TaskStartupState message="正在扫描上游 Key 与绑定关系" /> : null}
+        {props.previewPending && !props.preview ? (
+          <TaskStartupState message="正在扫描上游 Key 与绑定关系" />
+        ) : null}
         {props.previewError ? (
           <p className="text-destructive break-words text-sm" role="alert">
             {operationErrorMessage(props.previewError, "无绑定 Key 扫描失败")}
@@ -183,7 +185,11 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
           </p>
         ) : null}
         {props.task && taskRunning ? (
-          <TaskProgressState message={props.task.message} progress={props.task.progress} />
+          <TaskProgressState
+            message={props.task.message}
+            progress={props.task.progress}
+            taskId={props.task.id}
+          />
         ) : null}
         {props.task && taskFinished ? (
           <div className="grid gap-4">
@@ -263,7 +269,11 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
               onClick={props.onRefresh}
             />
             {keys.length > 0 ? (
-              <Button variant="destructive" disabled={controlsDisabled} onClick={props.onConfirm}>
+              <Button
+                variant="destructive"
+                disabled={controlsDisabled || Boolean(props.previewError)}
+                onClick={props.onConfirm}
+              >
                 <Trash2 aria-hidden="true" />
                 确认删除 {keys.length} 个 Key
               </Button>

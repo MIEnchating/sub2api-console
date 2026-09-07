@@ -61,6 +61,7 @@ const entry: UnifiedLogEntry = {
           changes: [
             {
               id: 2,
+              operation_id: "op-1",
               created_at: "2026-08-26T00:00:00Z",
               object_name: "demo",
               object_id: "41",
@@ -183,6 +184,7 @@ describe("log center contracts", () => {
     expect(relatedChanges(entry)).toEqual([
       {
         id: "2",
+        operationId: "op-1",
         object: "demo",
         objectId: "41",
         occurredAt: "2026-08-26T00:00:00Z",
@@ -231,6 +233,7 @@ describe("log center contracts", () => {
     expect(markup).toContain("#41");
     expect(markup).toContain("grok");
     expect(markup).toContain("更新账号");
+    expect(markup).toContain("原子操作 ID：op-1");
     expect(markup).toContain("负载因子：17 → 4；优先级：100 → 20");
     expect(markup).toContain("成功");
     expect(markup).not.toContain("min-w-[72rem]");

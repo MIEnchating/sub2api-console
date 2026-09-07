@@ -21,7 +21,7 @@ type AccountSettingsUpdate struct {
 	Priority    int64
 	LoadFactor  string
 	Concurrency int64
-	TestModel   *string
+	TestModels  []string
 	Paused      bool
 	Excluded    bool
 	Operation   AccountOperation
@@ -54,14 +54,18 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	document["scope"] = scope
 	models, _ := document["account_test_models"].(map[string]any)
 	models = copyObject(models)
-	if update.TestModel == nil || strings.TrimSpace(*update.TestModel) == "" {
+	normalizedModels, err := normalizeAccountTestModels(update.TestModels)
+	if err != nil {
+		return err
+	}
+	if len(normalizedModels) == 0 {
 		delete(models, accountID)
 	} else {
-		model := strings.TrimSpace(*update.TestModel)
-		if len(model) > 256 {
-			return errors.New("探测模型长度不能超过 256")
+		values := make([]any, len(normalizedModels))
+		for index, model := range normalizedModels {
+			values[index] = model
 		}
-		models[accountID] = model
+		models[accountID] = values
 	}
 	document["account_test_models"] = models
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -102,7 +106,7 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	}
 	payload, err := json.Marshal(map[string]any{
 		"account_id": accountID, "account_name": name, "actor": actor, "paused": update.Paused,
-		"excluded": update.Excluded, "test_model": update.TestModel,
+		"excluded": update.Excluded, "test_models": normalizedModels,
 	})
 	if err != nil {
 		return err
@@ -268,7 +272,7 @@ func (s *Store) commitAccountControl(
 	return s.PolicySnapshot(ctx)
 }
 
-func (s *Store) SetAccountTestModel(ctx context.Context, accountID string, model *string, actor string) error {
+func (s *Store) SetAccountTestModels(ctx context.Context, accountID string, requested []string, actor string) error {
 	if !positiveNumericID(accountID) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
@@ -294,21 +298,25 @@ func (s *Store) SetAccountTestModel(ctx context.Context, accountID string, model
 		}
 		models = copyObject(models)
 	}
-	if model == nil || strings.TrimSpace(*model) == "" {
+	normalized, err := normalizeAccountTestModels(requested)
+	if err != nil {
+		return err
+	}
+	if len(normalized) == 0 {
 		delete(models, accountID)
 	} else {
-		value := strings.TrimSpace(*model)
-		if len(value) > 256 {
-			return errors.New("探测模型长度不能超过 256")
+		values := make([]any, len(normalized))
+		for index, model := range normalized {
+			values[index] = model
 		}
-		models[accountID] = value
+		models[accountID] = values
 	}
 	document["account_test_models"] = models
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.writePolicyDocument(ctx, tx, "control-plane", document, now); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"account_id": accountID, "account_name": name, "model": model, "actor": actor})
+	payload, err := json.Marshal(map[string]any{"account_id": accountID, "account_name": name, "models": normalized, "actor": actor})
 	if err != nil {
 		return err
 	}
@@ -322,10 +330,54 @@ func (s *Store) SetAccountTestModel(ctx context.Context, accountID string, model
 	}
 	summary := fmt.Sprintf("账号 %s（%s）探测模型已更新", name, accountID)
 	if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
-		VALUES(?,?,?,?,?,?)`, sourceID, "account.test_model", now, "succeeded", summary, string(payload)); err != nil {
+		VALUES(?,?,?,?,?,?)`, sourceID, "account.test_models", now, "succeeded", summary, string(payload)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func normalizeAccountTestModels(raw any) ([]string, error) {
+	var values []string
+	switch models := raw.(type) {
+	case nil:
+		return []string{}, nil
+	case string:
+		values = []string{models}
+	case []string:
+		values = models
+	case []any:
+		values = make([]string, 0, len(models))
+		for _, rawModel := range models {
+			model, ok := rawModel.(string)
+			if !ok {
+				return nil, errors.New("账号探测模型配置必须是字符串数组")
+			}
+			values = append(values, model)
+		}
+	default:
+		return nil, errors.New("账号探测模型配置必须是字符串或字符串数组")
+	}
+	if len(values) > 20 {
+		return nil, errors.New("账号探测模型不能超过 20 个")
+	}
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, rawModel := range values {
+		model := strings.TrimSpace(rawModel)
+		if model == "" {
+			return nil, errors.New("探测模型不能为空")
+		}
+		if len([]rune(model)) > 256 {
+			return nil, errors.New("探测模型长度不能超过 256")
+		}
+		key := strings.ToLower(model)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, model)
+	}
+	return result, nil
 }
 
 func controlAccountIDs(raw any) map[string]struct{} {

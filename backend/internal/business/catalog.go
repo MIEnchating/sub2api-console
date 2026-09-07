@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/naming"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type UpstreamHost struct {
@@ -1087,7 +1089,7 @@ func normalizeDecimal(raw string) *string {
 	if text == "" {
 		return stringPointer("")
 	}
-	rational, ok := new(big.Rat).SetString(text)
+	rational, ok := decimalutil.Parse(text)
 	if !ok {
 		return nil
 	}
@@ -1122,8 +1124,8 @@ func divideDecimalPointers(numerator, denominator *string) *string {
 // multiplier to six decimal places so upstream floating-point noise is not
 // persisted or written to managed accounts.
 func ConvertMultiplier(rawRate, rechargeRate string) (string, error) {
-	raw, rawOK := new(big.Rat).SetString(strings.TrimSpace(rawRate))
-	recharge, rechargeOK := new(big.Rat).SetString(strings.TrimSpace(rechargeRate))
+	raw, rawOK := decimalutil.Parse(rawRate)
+	recharge, rechargeOK := decimalutil.Parse(rechargeRate)
 	if !rawOK || !rechargeOK || raw.Sign() <= 0 || recharge.Sign() <= 0 {
 		return "", errors.New("倍率换算参数必须是有限正数")
 	}

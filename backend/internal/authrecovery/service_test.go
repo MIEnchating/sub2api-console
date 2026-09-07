@@ -303,6 +303,28 @@ type recoveryCaptcha struct {
 	manualSaveToVault bool
 }
 
+type blockingRecoveryCaptcha struct {
+	recoveryCaptcha
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingRecoveryCaptcha) Submit(context.Context, string, string) (CaptchaResult, error) {
+	close(c.started)
+	<-c.release
+	return CaptchaResult{
+		Success: true, Host: "api.example", ProfileStatus: "verified", Keys: 1, Groups: 2, Stored: true,
+		InteractionKind: "image_captcha_ocr", ParentTaskID: c.parent,
+	}, nil
+}
+
+func (c *blockingRecoveryCaptcha) Cancel(string) *CaptchaCancellation {
+	return &CaptchaCancellation{
+		Challenge: CaptchaChallenge{Host: "api.example"}, ParentTaskID: c.parent,
+		CredentialsPersisted: nil,
+	}
+}
+
 func (c *recoveryCaptcha) Prepare(_ context.Context, record configstore.AuthRecord, entry string, parent *string) (CaptchaChallenge, error) {
 	c.parent = parent
 	return CaptchaChallenge{
@@ -328,8 +350,12 @@ func (c *recoveryCaptcha) Submit(context.Context, string, string) (CaptchaResult
 	}, nil
 }
 
-func (c *recoveryCaptcha) Cancel(string) (*CaptchaChallenge, *string) {
-	return &CaptchaChallenge{Host: "api.example"}, c.parent
+func (c *recoveryCaptcha) Cancel(string) *CaptchaCancellation {
+	persisted := false
+	return &CaptchaCancellation{
+		Challenge: CaptchaChallenge{Host: "api.example"}, ParentTaskID: c.parent,
+		CredentialsPersisted: &persisted,
+	}
 }
 
 func (s *recoveryTasks) Save(_ context.Context, task taskstore.Task) error {
@@ -843,6 +869,75 @@ func TestImageCaptchaWaitsForInputThenCompletesParentTask(t *testing.T) {
 	}
 	if len(repository.outcomes) != 1 || !repository.outcomes[0].Success || balance.calls != 1 {
 		t.Fatalf("projection or balance sync missing: outcomes=%#v calls=%d", repository.outcomes, balance.calls)
+	}
+}
+
+func TestCaptchaParentCancellationCannotBeOverwrittenByLateSuccess(t *testing.T) {
+	tasks := &captchaTasks{items: map[string]taskstore.Task{}, updates: make(chan taskstore.Task, 4)}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	parentTaskID := "captcha-parent"
+	tasks.items[parentTaskID] = taskstore.Task{
+		ID: parentTaskID, Skill: "sub2api-upstream-auth", Operation: "recover-host",
+		Status: "cancelled", Progress: 100, Message: "图片验证码恢复已取消",
+		Result: map[string]any{"cancelled": true}, CreatedAt: now, UpdatedAt: now,
+	}
+	service := New(&recoveryRepository{}, &recoveryPrivate{}, &recoveryAuthenticator{}, &recoveryConfigurator{}, &recoveryBalance{}, tasks)
+
+	service.finishCaptchaParent(&parentTaskID, "succeeded", "迟到的成功", map[string]any{"credentials_persisted": true})
+	stored, err := tasks.Get(context.Background(), parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "cancelled" || stored.Result["cancelled"] != true {
+		t.Fatalf("cancelled parent was overwritten: %#v", stored)
+	}
+}
+
+func TestCaptchaCancellationDuringUnknownCommitKeepsParentCancelled(t *testing.T) {
+	tasks := &captchaTasks{items: map[string]taskstore.Task{}, updates: make(chan taskstore.Task, 4)}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	parentTaskID := "captcha-parent"
+	tasks.items[parentTaskID] = taskstore.Task{
+		ID: parentTaskID, Skill: "sub2api-upstream-auth", Operation: "recover-host",
+		Status: "waiting_input", Progress: 90, Message: "等待图片验证码",
+		Result: map[string]any{}, CreatedAt: now, UpdatedAt: now,
+	}
+	captcha := &blockingRecoveryCaptcha{
+		recoveryCaptcha: recoveryCaptcha{parent: &parentTaskID},
+		started:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	service := New(&recoveryRepository{}, &recoveryPrivate{}, &recoveryAuthenticator{}, &recoveryConfigurator{}, &recoveryBalance{}, tasks, captcha)
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := service.SubmitCaptcha(context.Background(), "challenge-1", "AB12", "tester")
+		submitDone <- err
+	}()
+	select {
+	case <-captcha.started:
+	case <-time.After(time.Second):
+		t.Fatal("captcha submit did not start")
+	}
+	if !service.CancelCaptcha("challenge-1") {
+		t.Fatal("captcha cancellation was not accepted")
+	}
+	cancelled, err := tasks.Get(context.Background(), parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Status != "cancelled" || cancelled.Result["credentials_persisted"] != nil || cancelled.Result["credential_persistence_unknown"] != true {
+		t.Fatalf("unknown commit cancellation result=%#v", cancelled)
+	}
+	close(captcha.release)
+	if submitErr := <-submitDone; !errors.Is(submitErr, context.Canceled) {
+		t.Fatalf("SubmitCaptcha error=%v, want context cancellation", submitErr)
+	}
+	stored, err := tasks.Get(context.Background(), parentTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "cancelled" || stored.Result["credential_persistence_unknown"] != true {
+		t.Fatalf("late captcha result overwrote cancellation: %#v", stored)
 	}
 }
 

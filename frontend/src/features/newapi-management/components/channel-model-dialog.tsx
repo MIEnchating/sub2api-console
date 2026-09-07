@@ -99,7 +99,7 @@ export function NewAPIChannelModelDialog(props: Props) {
             role="list"
             aria-label="上游模型"
           >
-            {props.pending && (
+            {props.pending && props.models.length === 0 && (
               <div className="grid gap-3 p-3" role="status" aria-label="正在从上游获取模型">
                 {Array.from({ length: 7 }, (_, index) => (
                   <Skeleton key={index} className="h-10 w-full" />
@@ -107,7 +107,7 @@ export function NewAPIChannelModelDialog(props: Props) {
               </div>
             )}
             {!props.pending && props.error && (
-              <div className="text-destructive grid min-h-44 place-items-center p-6 text-center text-sm">
+              <div role="alert" className="text-destructive p-3 text-sm">
                 {props.error}
               </div>
             )}
@@ -116,9 +116,7 @@ export function NewAPIChannelModelDialog(props: Props) {
                 {search ? "没有匹配的模型" : "上游未返回模型"}
               </div>
             )}
-            {!props.pending &&
-              !props.error &&
-              visibleModels.length > 0 &&
+            {visibleModels.length > 0 &&
               visibleModels.map((model) => {
                 const checked = props.selected.includes(model);
                 return (
@@ -132,6 +130,7 @@ export function NewAPIChannelModelDialog(props: Props) {
                   >
                     <Checkbox
                       checked={checked}
+                      disabled={props.pending || Boolean(props.error)}
                       onCheckedChange={(next) => toggleModel(model, next)}
                       aria-label={`选择模型 ${model}`}
                     />
@@ -151,7 +150,7 @@ export function NewAPIChannelModelDialog(props: Props) {
             </Button>
             <Button
               type="button"
-              disabled={props.pending || props.selected.length === 0}
+              disabled={props.pending || Boolean(props.error) || props.selected.length === 0}
               onClick={props.onConfirm}
             >
               确认模型

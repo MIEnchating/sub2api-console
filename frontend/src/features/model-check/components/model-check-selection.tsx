@@ -31,6 +31,7 @@ export type ModelCheckSelectionProps = {
   models: string[];
   selectedModels: string[];
   modelsLoading: boolean;
+  modelsRefreshing?: boolean;
   modelsError: string | null;
   rounds: number;
   timeoutSeconds: number | null;
@@ -344,7 +345,7 @@ function ModelList(props: ModelCheckSelectionProps) {
       </div>
     );
   }
-  if (props.modelsError) {
+  if (props.modelsError && props.models.length === 0) {
     return (
       <div className="text-destructive grid h-full min-h-32 place-items-center p-4 text-center text-sm">
         {props.modelsError}
@@ -359,7 +360,7 @@ function ModelList(props: ModelCheckSelectionProps) {
     );
   }
   return (
-    <div className="divide-y" role="list" aria-label="可检测模型">
+    <div className="h-full divide-y overflow-auto" role="list" aria-label="可检测模型">
       {props.models.map((model) => {
         const checked = props.selectedModels.includes(model);
         return (
@@ -430,7 +431,7 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
             全选
           </Button>
           <RefreshButton
-            pending={props.modelsLoading}
+            pending={props.modelsLoading || props.modelsRefreshing}
             disabled={props.disabled || props.selectedAccountIDs.length === 0}
             ariaLabel="刷新模型"
             onClick={props.onRefreshModels}
@@ -438,7 +439,12 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
           />
         </div>
       </CardHeader>
-      <CardContent className="min-h-0 flex-1 overflow-hidden p-0!">
+      <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0!">
+        {props.modelsError && props.models.length > 0 ? (
+          <p role="alert" className="shrink-0 px-3 py-2 text-xs text-destructive">
+            {props.modelsError}。当前保留上次模型列表，请刷新后再检测。
+          </p>
+        ) : null}
         <ModelList {...props} />
       </CardContent>
       <div className="border-border/70 shrink-0 border-t p-3">

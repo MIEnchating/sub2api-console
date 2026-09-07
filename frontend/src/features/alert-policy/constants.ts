@@ -67,6 +67,16 @@ export const alertRuleFields: Array<{
   },
 ];
 
+export const alertRuleGroups: Array<{
+  label: string;
+  fields: typeof alertRuleFields;
+}> = [
+  { label: "上游与余额", fields: alertRuleFields.slice(0, 6) },
+  { label: "账号健康", fields: alertRuleFields.slice(6, 9) },
+  { label: "分组状态", fields: alertRuleFields.slice(9, 11) },
+  { label: "自动执行", fields: alertRuleFields.slice(11) },
+];
+
 export const routingDegradedFields: Array<{
   value: AlertPolicyFormValues["routing_degraded_types"][number];
   label: string;

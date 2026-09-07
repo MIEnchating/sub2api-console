@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"regexp"
 	"sort"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
 const (
@@ -133,6 +136,9 @@ func executeClaudeProfile(ctx context.Context, sender bundleSender, profile clau
 		}
 	}
 	results := make([]bundleResult, len(tasks))
+	for index, current := range tasks {
+		results[index] = bundleResult{Run: current.run, Err: errors.New("检测请求未执行")}
+	}
 	workers := min(6, len(tasks))
 	jobs := make(chan int)
 	var group sync.WaitGroup
@@ -141,14 +147,14 @@ func executeClaudeProfile(ctx context.Context, sender bundleSender, profile clau
 		go func() {
 			defer group.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				results[index] = requestBundle(ctx, sender, request, tasks[index].probes, tasks[index].run, "claude")
 			}
 		}()
 	}
-	for index := range tasks {
-		jobs <- index
-	}
-	close(jobs)
+	_ = taskrunner.FeedIndices(ctx, jobs, len(tasks))
 	group.Wait()
 
 	scored := make([]scoredProfile, request.Rounds)
@@ -533,6 +539,9 @@ func parseJSONArray(value string) []any {
 	decoder.UseNumber()
 	var result []any
 	if err := decoder.Decode(&result); err != nil {
+		return nil
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
 		return nil
 	}
 	return result

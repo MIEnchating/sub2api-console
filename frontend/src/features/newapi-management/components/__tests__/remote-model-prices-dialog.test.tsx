@@ -61,7 +61,7 @@ describe("远程模型价格", () => {
     expect(filterRemoteModelPrices(prices, " GPT-5 ")).toEqual([prices[0]]);
   });
 
-  it("为远程价格提供写入 New API 操作", () => {
+  it("为远程价格提供写入平台操作", () => {
     const markup = renderToStaticMarkup(
       <RemoteModelPricesTable
         prices={[
@@ -80,7 +80,7 @@ describe("远程模型价格", () => {
     );
 
     expect(markup).toContain("操作");
-    expect(markup).toContain("写入 New API");
+    expect(markup).toContain("写入平台");
   });
 
   it("没有 Token 输入基价时不提供错误的写入操作", () => {
@@ -104,7 +104,7 @@ describe("远程模型价格", () => {
 
     expect(markup).toContain("暂不支持写入");
     expect(markup).toContain("disabled");
-    expect(markup).not.toContain(">写入 New API</button>");
+    expect(markup).not.toContain(">写入平台</button>");
   });
 
   it("将远程价格完整转换为 New API 倍率配置", () => {
@@ -259,7 +259,7 @@ describe("远程模型价格", () => {
     expect(markup).toContain("0.5 / 1");
   });
 
-  it("写入后回显 New API 实际读回的完整价格", () => {
+  it("写入后回显平台实际读回的完整价格", () => {
     const expression = 'tier("base", p * 10 + c * 50 + cr * 0.25 + cc * 12.5 + cc1h * 20)';
     const markup = renderToStaticMarkup(
       <WrittenModelPriceResult
@@ -275,7 +275,7 @@ describe("远程模型价格", () => {
       />,
     );
 
-    expect(markup).toContain("New API 读回结果");
+    expect(markup).toContain("平台读回结果");
     expect(markup).toContain("输入价格");
     expect(markup).toContain(">10</");
     expect(markup).toContain(">50</");

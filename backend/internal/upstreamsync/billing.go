@@ -163,8 +163,23 @@ func finiteNumber(value any) (float64, error) {
 }
 
 func strictInteger(value any) (int, error) {
+	switch raw := value.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseInt(raw.String(), 10, strconv.IntSize)
+		if err != nil {
+			return 0, errors.New("整数字段无效")
+		}
+		return int(parsed), nil
+	case int:
+		return raw, nil
+	case int64:
+		if int64(int(raw)) != raw {
+			return 0, errors.New("整数字段无效")
+		}
+		return int(raw), nil
+	}
 	parsed, err := finiteNumber(value)
-	if err != nil || parsed != math.Trunc(parsed) || parsed < math.MinInt || parsed > math.MaxInt {
+	if err != nil || parsed != math.Trunc(parsed) || parsed < math.MinInt || parsed >= -float64(math.MinInt) {
 		return 0, errors.New("整数字段无效")
 	}
 	return int(parsed), nil

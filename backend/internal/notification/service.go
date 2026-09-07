@@ -952,11 +952,11 @@ func (s *QQBotSender) Send(
 		if !idPresent {
 			messageID = response["message_id"]
 		}
-		if messageID == nil || strings.TrimSpace(fmt.Sprint(messageID)) == "" {
+		id := qqBotMessageID(messageID)
+		if id == "" {
 			result = append(result, SendOutcome{CommitUnknown: true, Detail: "QQBot 发送响应缺少消息 ID"})
 			continue
 		}
-		id := fmt.Sprint(messageID)
 		result = append(result, SendOutcome{Success: true, Detail: "QQBot 已确认发送", MessageID: &id})
 	}
 	return result
@@ -969,11 +969,11 @@ func (s *QQBotSender) accessToken(ctx context.Context, settings configstore.Noti
 	if err != nil {
 		return "", err.Error()
 	}
-	accessToken, found := response["access_token"]
-	if !found || accessToken == nil || strings.TrimSpace(fmt.Sprint(accessToken)) == "" {
+	accessToken, found := response["access_token"].(string)
+	if !found || strings.TrimSpace(accessToken) == "" {
 		return "", "QQBot 鉴权响应缺少 access_token"
 	}
-	return fmt.Sprint(accessToken), ""
+	return strings.TrimSpace(accessToken), ""
 }
 
 func (s *QQBotSender) postJSON(ctx context.Context, endpoint string, payload any, headers map[string]string) (map[string]any, error) {
@@ -1009,10 +1009,63 @@ func (s *QQBotSender) postJSON(ctx context.Context, endpoint string, payload any
 		return nil, fmt.Errorf("QQBot 请求失败（HTTP %d）：%s", response.StatusCode, truncateRunes(detail, 300))
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(limited, &decoded); err != nil || decoded == nil {
+	decoder := json.NewDecoder(bytes.NewReader(limited))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil || decoded == nil {
 		return nil, &qqBotCommitUnknownError{detail: "QQBot 响应不可解析"}
 	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, &qqBotCommitUnknownError{detail: "QQBot 响应不可解析"}
+	}
+	if err := qqBotBusinessError(decoded); err != nil {
+		return nil, err
+	}
 	return decoded, nil
+}
+
+func qqBotMessageID(value any) string {
+	switch id := value.(type) {
+	case string:
+		return strings.TrimSpace(id)
+	case json.Number:
+		text := id.String()
+		if text == "" || strings.Trim(text, "0") == "" {
+			return ""
+		}
+		for _, character := range text {
+			if character < '0' || character > '9' {
+				return ""
+			}
+		}
+		return text
+	default:
+		return ""
+	}
+}
+
+func qqBotBusinessError(response map[string]any) error {
+	failed := false
+	for _, key := range []string{"code", "errcode"} {
+		if value, present := response[key]; present {
+			code := strings.TrimSpace(fmt.Sprint(value))
+			failed = failed || code != "0"
+		}
+	}
+	if value, present := response["success"]; present {
+		success, valid := value.(bool)
+		failed = failed || !valid || !success
+	}
+	if !failed {
+		return nil
+	}
+	detail := "上游返回业务失败"
+	for _, key := range []string{"message", "msg", "errmsg"} {
+		if value, valid := response[key].(string); valid && strings.TrimSpace(value) != "" {
+			detail = truncateRunes(redactSecrets(strings.TrimSpace(value)), 300)
+			break
+		}
+	}
+	return fmt.Errorf("QQBot 请求失败：%s", detail)
 }
 
 func validateSettings(settings configstore.NotificationSettings) string {

@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type ManagementSyncResult struct {
@@ -1249,7 +1250,7 @@ func managementDecimal(value any) (*string, error) {
 		return nil, errors.New("必须是有限数值")
 	}
 	text := strings.TrimSpace(fmt.Sprint(value))
-	parsed, ok := new(big.Rat).SetString(text)
+	parsed, ok := decimalutil.Parse(text)
 	if !ok {
 		return nil, errors.New("必须是有限数值")
 	}

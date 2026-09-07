@@ -43,6 +43,12 @@ func (runner *deferredDeleteRunner) Go(run func(context.Context)) error {
 	return nil
 }
 
+func (runner *deferredDeleteRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *deferredDeleteRunner) CancelTask(string) bool { return false }
+
 func (runner *deferredDeleteRunner) Run(ctx context.Context) {
 	if runner.run == nil {
 		panic("upstream delete task was not scheduled")

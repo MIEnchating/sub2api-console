@@ -79,8 +79,8 @@ describe("New API 页面加载", () => {
     expect(markup).toContain("平台配置");
     expect(markup).toContain("平台地址");
     expect(markup).toContain("Admin Key");
-    expect(markup).toContain("编辑配置");
-    expect(markup).toContain('aria-label="删除 New API 配置"');
+    expect(markup).toContain("编辑平台配置");
+    expect(markup).toContain('aria-label="删除 New API 平台配置"');
     expect(markup).not.toContain("主平台</");
     expect(markup).not.toContain("· User ID");
   });
@@ -117,6 +117,7 @@ describe("New API 分组绑定", () => {
     expect(markup).toContain('aria-label="默认 的 Sub2API 分组"');
     expect(markup).toContain('aria-label="VIP 倍率同步"');
     expect(markup).toContain('aria-label="统一倍率同步"');
+    expect(markup).toContain('aria-label="VIP 的 Sub2API 管理平台倍率"');
     expect(markup).toContain(
       'data-slot="select-value" class="flex flex-1 text-left">不绑定</span>',
     );
@@ -125,13 +126,14 @@ describe("New API 分组绑定", () => {
     );
     expect(markup).toContain(">1<");
     expect(markup).toContain(">2<");
+    expect(markup).toContain('value="1.2"');
   });
 
   it("统一倍率同步只更新已绑定分组", () => {
     const enabled = updateBoundGroupRatioSync(
       {
-        default: { localGroupId: "", syncRatio: false },
-        vip: { localGroupId: "7", syncRatio: false },
+        default: { localGroupId: "", sub2APIRatio: "", syncRatio: false },
+        vip: { localGroupId: "7", sub2APIRatio: "1.2", syncRatio: false },
       },
       true,
     );
@@ -194,16 +196,10 @@ describe("New API 价格差异", () => {
       completion_ratio: "",
       billing_mode: "per-token",
     }));
-    const toolPrices = Array.from({ length: 9 }, (_, index) => ({
-      tool: `tool-${index + 1}`,
-      price: String(index + 1),
-    }));
-
     const markup = renderToStaticMarkup(
       <NewAPIModelPrices
         models={models}
         unsetModels={unsetModels}
-        toolPrices={toolPrices}
         onCompareManagementPrices={vi.fn()}
         onViewRawPricingSource={vi.fn()}
       />,
@@ -211,11 +207,10 @@ describe("New API 价格差异", () => {
 
     expect(markup).toContain(">模型价格</button>");
     expect(markup).toContain(">未设置模型价格</button>");
-    expect(markup).toContain(">工具价格</button>");
+    expect(markup).not.toContain(">工具价格</button>");
     expect(markup).toContain(">远程模型价格</button>");
     expect(markup).not.toContain("模型价格（33）");
     expect(markup).not.toContain("未设置模型价格（3）");
-    expect(markup).not.toContain("工具价格（9）");
     expect(markup).toContain("按 Token");
     expect(markup).toContain("比较模型价格");
     expect(markup).toContain("查看原始价卡");

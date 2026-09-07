@@ -158,8 +158,10 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 			}
 			for _, outcome := range fetchTrafficAccounts(ctx, admin, dueIDs, configured.lookbackMinutes, configured.maxSamples, configured.trafficConcurrency) {
 				accountID, rows, readErr := outcome.accountID, outcome.rows, outcome.err
+				var latencyErr *adminclient.LatencyEnrichmentError
+				partial := errors.As(readErr, &latencyErr)
 				var disabled *adminclient.MonitoringDisabled
-				if errors.As(readErr, &disabled) {
+				if !partial && errors.As(readErr, &disabled) {
 					monitoringUnavailable = true
 					result.MonitoringAvailable = boolPointer(false)
 					result.SourceErrors = append(result.SourceErrors, disabled.Error())
@@ -167,14 +169,18 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 				}
 				if readErr != nil {
 					result.SourceErrors = append(result.SourceErrors, "账号 "+accountID+"："+safeError(readErr))
-					sourceErrorAccounts[accountID] = struct{}{}
-					continue
+					if !partial {
+						sourceErrorAccounts[accountID] = struct{}{}
+						continue
+					}
 				}
 				if !monitoringUnavailable {
 					result.MonitoringAvailable = boolPointer(true)
 				}
-				successfulFetches = append(successfulFetches, accountID)
-				converted, malformed := convertTrafficRows(accountID, byAccount[accountID], rows, now.Add(-time.Duration(configured.lookbackMinutes)*time.Minute), configured.maxSamples)
+				if !partial {
+					successfulFetches = append(successfulFetches, accountID)
+				}
+				converted, malformed := convertTrafficRows(accountID, byAccount[accountID], rows, now.Add(-time.Duration(configured.lookbackMinutes)*time.Minute), now, configured.maxSamples)
 				result.MalformedRows += malformed
 				if len(converted) > 0 {
 					trafficForScope = true
@@ -209,7 +215,13 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 			result.SourceErrors = append(result.SourceErrors, "需要主动探测回退，但探测执行器不可用")
 		} else {
 			started := time.Now()
-			summary, probeErr := s.probes.RunNow(ctx, probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName, Automatic: true})
+			request := probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName, Automatic: true}
+			if configured.source == "traffic" && configured.skipFreshTraffic && admin != nil && !monitoringUnavailable {
+				request.FreshTrafficCheck = s.freshTrafficCheck(
+					admin, byAccount, configured, &result, &trafficForScope, targets,
+				)
+			}
+			summary, probeErr := s.probes.RunNow(ctx, request)
 			result.ProbeDurationSecond = time.Since(started).Seconds()
 			if probeErr != nil {
 				result.SourceErrors = append(result.SourceErrors, safeError(probeErr))
@@ -235,6 +247,114 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		return Result{}, errors.New(strings.Join(result.SourceErrors, "；"))
 	}
 	return result, nil
+}
+
+type freshTrafficCheckCall struct {
+	done  chan struct{}
+	fresh bool
+	err   error
+}
+
+func (s *Service) freshTrafficCheck(
+	admin Admin,
+	byAccount map[string][]business.EvidenceTarget,
+	policy collectionPolicy,
+	result *Result,
+	trafficForScope *bool,
+	targets []business.EvidenceTarget,
+) func(context.Context, string) (bool, error) {
+	var callsMutex sync.Mutex
+	calls := map[string]*freshTrafficCheckCall{}
+	var persistenceMutex sync.Mutex
+
+	return func(ctx context.Context, accountID string) (bool, error) {
+		memberships := byAccount[accountID]
+		primary, found := primaryEvidenceMembership(memberships)
+		if !found || evidenceTargetFused(primary) {
+			return false, nil
+		}
+
+		callsMutex.Lock()
+		if call, present := calls[accountID]; present {
+			callsMutex.Unlock()
+			select {
+			case <-call.done:
+				return call.fresh, call.err
+			case <-ctx.Done():
+				return false, ctx.Err()
+			}
+		}
+		call := &freshTrafficCheckCall{done: make(chan struct{})}
+		calls[accountID] = call
+		callsMutex.Unlock()
+
+		lookbackMinutes := max(1, int((policy.trafficFreshWindow+time.Minute-1)/time.Minute))
+		rows, err := admin.RequestDetails(ctx, accountID, lookbackMinutes, policy.maxSamples)
+		var latencyErr *adminclient.LatencyEnrichmentError
+		partial := errors.As(err, &latencyErr)
+		if partial {
+			persistenceMutex.Lock()
+			result.SourceErrors = append(result.SourceErrors, "账号 "+accountID+" 执行前流量复核："+safeError(err))
+			persistenceMutex.Unlock()
+			err = nil
+		}
+		checkedAt := time.Now().UTC()
+		if err == nil {
+			var malformed int
+			samples, convertedMalformed := convertTrafficRows(
+				accountID, memberships, rows,
+				checkedAt.Add(-policy.trafficFreshWindow), checkedAt, policy.maxSamples,
+			)
+			malformed = convertedMalformed
+			persistenceMutex.Lock()
+			if !partial {
+				err = s.repository.PersistTrafficFetches(ctx, []string{accountID}, checkedAt)
+			}
+			if err == nil && len(samples) > 0 {
+				persisted, persistErr := s.repository.PersistTrafficSamples(ctx, samples)
+				if persistErr != nil {
+					err = persistErr
+				} else {
+					result.TrafficPersisted += persisted
+					result.MalformedRows += malformed
+					*trafficForScope = true
+					applyFreshTraffic(targets, samples)
+					call.fresh = trafficSamplesFresh(samples, checkedAt, policy.trafficFreshWindow)
+				}
+			} else {
+				result.MalformedRows += malformed
+			}
+			persistenceMutex.Unlock()
+		}
+		if err != nil {
+			persistenceMutex.Lock()
+			result.SourceErrors = append(result.SourceErrors, "账号 "+accountID+" 执行前流量复核："+safeError(err))
+			persistenceMutex.Unlock()
+		}
+		call.err = err
+		close(call.done)
+		callsMutex.Lock()
+		if calls[accountID] == call {
+			delete(calls, accountID)
+		}
+		callsMutex.Unlock()
+		return call.fresh, call.err
+	}
+}
+
+func trafficSamplesFresh(samples []business.TrafficSample, now time.Time, window time.Duration) bool {
+	for _, sample := range samples {
+		observedAt, err := time.Parse(time.RFC3339Nano, sample.ObservedAt)
+		if err == nil && !observedAt.After(now.Add(time.Minute)) && now.Sub(observedAt.UTC()) <= window {
+			return true
+		}
+	}
+	return false
+}
+
+func evidenceTargetFused(target business.EvidenceTarget) bool {
+	state := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(target.EffectiveState)), "-", "_")
+	return state == "fused" || state == "hard_open" || state == "soft_open"
 }
 
 func boolPointer(value bool) *bool {
@@ -374,6 +494,9 @@ func fetchTrafficAccounts(ctx context.Context, admin Admin, accountIDs []string,
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				accountID := accountIDs[index]
 				rows, err := admin.RequestDetails(ctx, accountID, lookbackMinutes, maxSamples)
 				result[index] = trafficFetchOutcome{accountID: accountID, rows: rows, err: err}
@@ -509,7 +632,7 @@ func parseProbeGroupOverrides(policy map[string]any) (map[string]probeGroupOverr
 	return result, nil
 }
 
-func convertTrafficRows(accountID string, memberships []business.EvidenceTarget, rows []map[string]any, cutoff time.Time, limit int) ([]business.TrafficSample, int) {
+func convertTrafficRows(accountID string, memberships []business.EvidenceTarget, rows []map[string]any, cutoff, now time.Time, limit int) ([]business.TrafficSample, int) {
 	ordered := append([]map[string]any{}, rows...)
 	sort.SliceStable(ordered, func(left, right int) bool { return rowTime(ordered[left]).After(rowTime(ordered[right])) })
 	result := []business.TrafficSample{}
@@ -528,7 +651,7 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 			continue
 		}
 		observed := rowTime(row)
-		if observed.IsZero() || observed.Before(cutoff) {
+		if observed.IsZero() || observed.Before(cutoff) || observed.After(now.Add(time.Minute)) {
 			malformed++
 			continue
 		}
@@ -582,6 +705,9 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 			payload["first_token_ms"] = *firstToken
 			payload["first_token_unit"] = "ms"
 			payload["first_token_source"] = "operations.first_token_ms"
+			if row["first_token_source"] == "usage.first_token_ms" {
+				payload["first_token_source"] = "usage.first_token_ms"
+			}
 		}
 		latency := duration
 		if latency == nil && firstToken != nil {
@@ -678,8 +804,7 @@ func membershipProbeDue(target business.EvidenceTarget, policy collectionPolicy,
 	// Recovery follows the state that is actually active in Sub2API. A desired
 	// decision may have failed to write and cannot put a healthy account into
 	// the recovery path.
-	state := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(target.EffectiveState)), "-", "_")
-	fused := state == "fused" || state == "hard_open" || state == "soft_open"
+	fused := evidenceTargetFused(target)
 	interval := probeInterval
 	if fused {
 		if !recoveryEnabled {
@@ -689,36 +814,23 @@ func membershipProbeDue(target business.EvidenceTarget, policy collectionPolicy,
 	} else if !probeEnabled {
 		return false
 	}
-	if target.ProbeAt != nil && now.Sub(target.ProbeAt.UTC()) < interval {
+	if target.ProbeAt != nil && !target.ProbeAt.After(now.Add(time.Minute)) && now.Sub(target.ProbeAt.UTC()) < interval {
 		return false
 	}
 	if fused {
 		return true
 	}
-	latestSample := latestTime(target.TrafficAt, target.ProbeAt)
-	trafficFresh := latestSample != nil && now.Sub(latestSample.UTC()) <= policy.trafficFreshWindow
+	trafficFresh := target.TrafficAt != nil && !target.TrafficAt.After(now.Add(time.Minute)) && now.Sub(target.TrafficAt.UTC()) <= policy.trafficFreshWindow
 	return policy.source == "active_probe" || monitoringUnavailable || forced || (policy.source == "traffic" && (!policy.skipFreshTraffic || !trafficFresh))
 }
 
 func trafficFetchDue(targets []business.EvidenceTarget, now time.Time, interval time.Duration) bool {
 	for _, target := range targets {
-		if target.TrafficFetchAt != nil && now.Sub(target.TrafficFetchAt.UTC()) < interval {
+		if target.TrafficFetchAt != nil && !target.TrafficFetchAt.After(now.Add(time.Minute)) && now.Sub(target.TrafficFetchAt.UTC()) < interval {
 			return false
 		}
 	}
 	return true
-}
-
-func latestTime(values ...*time.Time) *time.Time {
-	var latest *time.Time
-	for _, value := range values {
-		if value == nil || latest != nil && !value.After(*latest) {
-			continue
-		}
-		copy := value.UTC()
-		latest = &copy
-	}
-	return latest
 }
 
 func groupTargets(targets []business.EvidenceTarget) map[string][]business.EvidenceTarget {
@@ -815,7 +927,7 @@ func applyFreshTraffic(targets []business.EvidenceTarget, samples []business.Tra
 
 func hasFreshTraffic(targets []business.EvidenceTarget, now time.Time, window time.Duration) bool {
 	for _, target := range targets {
-		if target.TrafficAt != nil && now.Sub(*target.TrafficAt) <= window {
+		if target.TrafficAt != nil && !target.TrafficAt.After(now.Add(time.Minute)) && now.Sub(*target.TrafficAt) <= window {
 			return true
 		}
 	}

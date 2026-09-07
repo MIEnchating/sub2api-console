@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +27,11 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 		('41','codex','7','0.1'),('42','pro','9','0.2')`); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err := store.ProbeCandidates(ctx, nil, nil)
+	candidates, err := store.ProbeCandidates(ctx, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 2 || candidates[0].AccountID != "41" || candidates[0].GroupID == nil || *candidates[0].GroupID != "7" || candidates[0].Metadata["platform"] != "openai" {
+	if len(candidates) != 2 || candidates[0].AccountID != "41" || candidates[0].AccountName != "alpha" || candidates[0].GroupID == nil || *candidates[0].GroupID != "7" || candidates[0].Metadata["platform"] != "openai" {
 		t.Fatalf("unexpected candidates: %#v", candidates)
 	}
 	if candidates[1].MetadataErr == nil {
@@ -40,7 +41,7 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 		VALUES('41',3,'now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	candidates, err = store.ProbeCandidates(ctx, nil, nil)
+	candidates, err = store.ProbeCandidates(ctx, nil, nil, nil)
 	if err != nil || len(candidates) != 1 || candidates[0].AccountID != "42" {
 		t.Fatalf("manual priority account entered probe candidates: candidates=%#v err=%v", candidates, err)
 	}
@@ -83,6 +84,47 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 	}
 }
 
+func TestProbeCandidatesPreferEnabledModelsOverDiscoveredCatalog(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
+		('41','alpha','sub2api','{"known_models":["model-a","model-e"],"enabled_models":["model-a"]}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES
+		('41','codex','7','0.1')`); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := store.ProbeCandidates(ctx, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || !slices.Equal(candidates[0].KnownModels, []string{"model-a"}) {
+		t.Fatalf("probe candidates used filtered catalog: %#v", candidates)
+	}
+}
+
+func TestProbeCandidatesFilterPlatformByExactCaseInsensitiveValue(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
+		('41','openai-upper','sub2api','{"platform":"OpenAI"}','now'),
+		('42','openai-suffix','sub2api','{"platform":"openai-compatible"}','now'),
+		('43','anthropic','sub2api','{"platform":"anthropic"}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES
+		('41','codex','7','0.1'),('42','compatible','8','0.1'),('43','claude','9','0.1')`); err != nil {
+		t.Fatal(err)
+	}
+
+	platform := " openai "
+	candidates, err := store.ProbeCandidates(ctx, nil, nil, &platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].AccountID != "41" {
+		t.Fatalf("platform filter was not exact and case-insensitive: %#v", candidates)
+	}
+}
+
 func TestProbeRepositoryPersistsModelRewriteEvidence(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "probe-rewrite.sqlite3"))
 	if err != nil {
@@ -110,6 +152,25 @@ func TestProbeRepositoryPersistsModelRewriteEvidence(t *testing.T) {
 	if status != "warning" || !strings.Contains(summary, "requested-model") || !strings.Contains(summary, "mapped-model") ||
 		!strings.Contains(payload, `"account_id":"41"`) {
 		t.Fatalf("event=%q status=%q summary=%q payload=%s", eventType, status, summary, payload)
+	}
+}
+
+func TestProbeRepositoryKeepsMultipleModelsFromTheSameRun(t *testing.T) {
+	store := openPolicyStore(t)
+	observed := time.Now().UTC().Format(time.RFC3339Nano)
+	samples := []ProbeSample{
+		{AccountID: "41", GroupName: "codex", Result: "通过", ObservedAt: observed, RequestModel: "model-a"},
+		{AccountID: "41", GroupName: "codex", Result: "通过", ObservedAt: observed, RequestModel: "model-b"},
+	}
+	if count, err := store.PersistProbeSamples(context.Background(), samples); err != nil || count != 2 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	var persisted int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM health_samples WHERE account_id='41' AND source='active-probe'`).Scan(&persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted != 2 {
+		t.Fatalf("persisted=%d, want 2", persisted)
 	}
 }
 
@@ -174,7 +235,10 @@ func TestPersistProbeSamplesKeepsLatestTwoHundred(t *testing.T) {
 		FROM health_samples WHERE account_id='41'`).Scan(&count, &oldest, &newest); err != nil {
 		t.Fatal(err)
 	}
-	if count != retainedHealthSamplesPerAccount || oldest != samples[5].ObservedAt || newest != samples[204].ObservedAt {
+	oldestTime, oldestErr := time.Parse(time.RFC3339Nano, oldest)
+	newestTime, newestErr := time.Parse(time.RFC3339Nano, newest)
+	if count != retainedHealthSamplesPerAccount || oldestErr != nil || newestErr != nil ||
+		!oldestTime.Equal(base.Add(5*time.Second)) || !newestTime.Equal(base.Add(204*time.Second)) {
 		t.Fatalf("retained count=%d range=%s..%s", count, oldest, newest)
 	}
 }

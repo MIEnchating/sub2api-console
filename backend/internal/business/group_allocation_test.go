@@ -90,6 +90,11 @@ func TestGroupAllocationReusesCanonicalAccountStateInEveryMembership(t *testing.
 		channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 {
 		t.Fatalf("次分组没有复用账号唯一状态：%#v", channel)
 	}
+	if channel.HealthScore == nil || *channel.HealthScore != 82.5 ||
+		channel.ShortScore == nil || *channel.ShortScore != 80 || channel.LongScore == nil || *channel.LongScore != 85 ||
+		channel.SampleCount == 0 {
+		t.Fatalf("次分组丢失账号唯一健康评估：%#v", channel)
+	}
 }
 
 func TestGroupAllocationDoesNotExposeDecisionsBeforeCurrentModeEpoch(t *testing.T) {

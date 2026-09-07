@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye } from "lucide-react";
+import { Database, Eye } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -28,6 +28,7 @@ import {
 import { taskPollInterval } from "@/lib/task-state";
 
 import { modelCheckSchema, type ModelCheckForm } from "../lib/model-check-schema";
+import { ModelCheckConfigurationDialog } from "./model-check-configuration-dialog";
 import { ModelCheckResult } from "./model-check-result";
 import { ModelCheckSelection } from "./model-check-selection";
 
@@ -88,6 +89,7 @@ export function ModelCheckPage() {
   const queryClient = useQueryClient();
   const [taskID, setTaskID] = useState<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
+  const [configurationOpen, setConfigurationOpen] = useState(false);
   const [taskStreamConnected, setTaskStreamConnected] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
   const form = useForm<ModelCheckForm>({
@@ -114,6 +116,8 @@ export function ModelCheckPage() {
   });
   const modelLists = modelQueries.flatMap((query) => (query.data ? [query.data.models] : []));
   const modelsLoading =
+    selectedAccountIDs.length > 0 && modelQueries.some((query) => query.isLoading);
+  const modelsRefreshing =
     selectedAccountIDs.length > 0 && modelQueries.some((query) => query.isFetching);
   const failedModelQuery = modelQueries.find((query) => query.isError);
   let modelsError: string | null = null;
@@ -154,7 +158,7 @@ export function ModelCheckPage() {
         const next = JSON.parse(event.data) as Task;
         queryClient.setQueryData(["model-check-task", taskID], next);
         setTaskStreamConnected(true);
-        if (["succeeded", "failed", "cancelled", "waiting_input"].includes(next.status)) {
+        if (["succeeded", "partial", "failed", "cancelled"].includes(next.status)) {
           source.close();
           setTaskStreamConnected(false);
         }
@@ -188,7 +192,6 @@ export function ModelCheckPage() {
     () => new Map((accountCheckStatuses.data ?? []).map((status) => [status.account_id, status])),
     [accountCheckStatuses.data],
   );
-
   useEffect(() => {
     if (taskID !== null) void accountCheckStatuses.refetch();
   }, [accountCheckStatuses.refetch, task.data?.status, taskID]);
@@ -232,7 +235,8 @@ export function ModelCheckPage() {
   const combinationCount = selectedAccountIDs.length * selectedModels.length;
   let resultDialogTitle = "正在检测模型";
   if (task.data?.status === "succeeded") resultDialogTitle = "模型检测结果";
-  else if (task.data?.status === "failed" || task.data?.status === "cancelled") {
+  else if (task.data?.status === "cancelled") resultDialogTitle = "模型检测已取消";
+  else if (task.data?.status === "failed") {
     resultDialogTitle = "模型检测失败";
   }
   const dialogLayout = modelCheckDialogLayout(task.data);
@@ -264,14 +268,18 @@ export function ModelCheckPage() {
         title="模型检测"
         description=""
         action={
-          task.data ? (
-            <PageActions>
+          <PageActions>
+            <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
+              <Database aria-hidden="true" />
+              检测画像
+            </Button>
+            {task.data ? (
               <Button type="button" variant="outline" onClick={() => setResultOpen(true)}>
                 <Eye aria-hidden="true" />
                 查看检测结果
               </Button>
-            </PageActions>
-          ) : null
+            ) : null}
+          </PageActions>
         }
       />
       <div className="flex h-full min-h-0 flex-col">
@@ -284,6 +292,7 @@ export function ModelCheckPage() {
           models={detectableModels}
           selectedModels={selectedModels}
           modelsLoading={modelsLoading || capabilities.isLoading}
+          modelsRefreshing={modelsRefreshing}
           modelsError={
             modelsError ?? (capabilities.error instanceof Error ? capabilities.error.message : null)
           }
@@ -293,7 +302,12 @@ export function ModelCheckPage() {
           selectionError={selectionError ?? null}
           disabled={pending}
           canSubmit={
-            !pending && !capabilities.isError && combinationCount > 0 && combinationCount <= 100
+            !pending &&
+            !modelsRefreshing &&
+            !modelsError &&
+            !capabilities.isError &&
+            combinationCount > 0 &&
+            combinationCount <= 100
           }
           onAccountQueryChange={setAccountQuery}
           onAccountToggle={toggleAccount}
@@ -360,6 +374,7 @@ export function ModelCheckPage() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+      <ModelCheckConfigurationDialog open={configurationOpen} onOpenChange={setConfigurationOpen} />
     </PageLayout>
   );
 }

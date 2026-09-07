@@ -51,6 +51,12 @@ func (runner *deferredAccountRunner) Go(run func(context.Context)) error {
 	return nil
 }
 
+func (runner *deferredAccountRunner) GoTask(_ string, run func(context.Context)) error {
+	return runner.Go(run)
+}
+
+func (runner *deferredAccountRunner) CancelTask(string) bool { return false }
+
 func (runner *deferredAccountRunner) Run(ctx context.Context) {
 	if runner.run == nil {
 		panic("account task was not scheduled")
@@ -165,7 +171,7 @@ func TestManualPriorityCannotOvertakeInFlightFieldProtectionCheck(t *testing.T) 
 	observedContext := &observedDoneContext{Context: waitContext, doneObserved: make(chan struct{})}
 	manualResult := make(chan error, 1)
 	go func() {
-		_, err := service.setManualPriority(observedContext, manualRepository, config, "41", 3, "100", 100, false, "operator")
+		_, err := service.setManualPriority(observedContext, manualRepository, config, "41", 3, "100", 100, true, false, "operator")
 		manualResult <- err
 	}()
 	select {
@@ -236,9 +242,8 @@ func TestAccountSettingsRollsBackRemoteFieldsWhenLocalAtomicCommitFails(t *testi
 	service := New(&testTarget{value: configstore.TargetSettings{
 		BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2,
 	}}, repository, nil)
-	model := "gpt-5.2"
 	_, err := service.applySettings(context.Background(), "41", SettingsInput{
-		Priority: 20, LoadFactor: "4", Concurrency: 6, TestModel: &model, Paused: true, Excluded: true,
+		Priority: 20, LoadFactor: "4", Concurrency: 6, TestModels: []string{"gpt-5.2", "claude-sonnet-4"}, Paused: true, Excluded: true,
 	}, "operator")
 	if err == nil || !strings.Contains(err.Error(), "本地原子提交失败") {
 		t.Fatalf("expected local commit failure, got %v", err)
@@ -722,6 +727,9 @@ func TestAccountScopeControlStaysLocalAndDoesNotRequireManagementTarget(t *testi
 
 func TestManualPriorityTaskWritesSub2APIDefaultsAndCommitsAssignment(t *testing.T) {
 	repository, db, _ := accountRepository(t)
+	if _, err := db.Exec(`UPDATE accounts SET schedulable=0,paused=1,paused_reason='人工暂停' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
 	var written atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -730,38 +738,39 @@ func TestManualPriorityTaskWritesSub2APIDefaultsAndCommitsAssignment(t *testing.
 			decoder := json.NewDecoder(request.Body)
 			decoder.UseNumber()
 			if err := decoder.Decode(&body); err != nil || body["priority"] != json.Number("3") ||
-				body["load_factor"] != json.Number("100") || body["concurrency"] != json.Number("100") {
+				body["load_factor"] != json.Number("100") || body["concurrency"] != json.Number("100") ||
+				body["schedulable"] != true {
 				t.Fatalf("manual priority write body=%#v err=%v", body, err)
 			}
 			written.Store(true)
-			_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","priority":3,"load_factor":1,"concurrency":3,"rate_multiplier":0.1}}`)
+			_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","schedulable":true,"priority":3,"load_factor":1,"concurrency":3,"rate_multiplier":0.1}}`)
 			return
 		}
 		if written.Load() {
-			_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","priority":3,"load_factor":100,"concurrency":100,"rate_multiplier":0.1}}`)
+			_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","schedulable":true,"priority":3,"load_factor":100,"concurrency":100,"rate_multiplier":0.1}}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","priority":10,"load_factor":2,"concurrency":1,"rate_multiplier":0.1}}`)
+		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","schedulable":false,"priority":10,"load_factor":2,"concurrency":1,"rate_multiplier":0.1}}`)
 	}))
 	defer server.Close()
 	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, tasks)
-	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
+	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, true, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	finished := waitAccountTask(t, tasks.updates)
 	if finished.Status != "succeeded" {
 		t.Fatalf("manual priority task failed: %#v", finished)
 	}
-	var priority, concurrency, manualPriority int64
+	var priority, concurrency, manualPriority, schedulable, paused int64
 	var loadFactor string
-	if err := db.QueryRow(`SELECT a.priority,a.load_factor,a.concurrency,m.priority
+	if err := db.QueryRow(`SELECT a.priority,a.load_factor,a.concurrency,a.schedulable,a.paused,m.priority
 		FROM accounts a JOIN manual_priority_accounts m ON m.account_id=a.id WHERE a.id='41'`).
-		Scan(&priority, &loadFactor, &concurrency, &manualPriority); err != nil {
+		Scan(&priority, &loadFactor, &concurrency, &schedulable, &paused, &manualPriority); err != nil {
 		t.Fatal(err)
 	}
-	if priority != 3 || loadFactor != "100" || concurrency != 100 || manualPriority != 3 {
-		t.Fatalf("priority=%d load=%s concurrency=%d manual=%d", priority, loadFactor, concurrency, manualPriority)
+	if priority != 3 || loadFactor != "100" || concurrency != 100 || schedulable != 1 || paused != 0 || manualPriority != 3 {
+		t.Fatalf("priority=%d load=%s concurrency=%d schedulable=%d paused=%d manual=%d", priority, loadFactor, concurrency, schedulable, paused, manualPriority)
 	}
 }
 
@@ -782,7 +791,7 @@ func TestManualPriorityTaskRestoresPreviousSlotWhenRemoteWriteFails(t *testing.T
 	defer server.Close()
 	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 2}}, repository, tasks)
-	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
+	if _, err := service.EnqueueManualPriority(context.Background(), "41", 3, "100", 100, true, false, "operator"); err != nil {
 		t.Fatal(err)
 	}
 	finished := waitAccountTask(t, tasks.updates)
@@ -815,7 +824,8 @@ func TestClearManualPriorityTaskRestoresRemoteBaselineBeforeLocalRelease(t *test
 			decoder := json.NewDecoder(request.Body)
 			decoder.UseNumber()
 			if err := decoder.Decode(&body); err != nil || body["priority"] != json.Number("10") ||
-				body["load_factor"] != json.Number("2") || body["concurrency"] != json.Number("3") {
+				body["load_factor"] != json.Number("2") || body["concurrency"] != json.Number("3") ||
+				body["schedulable"] != true {
 				t.Fatalf("clear body=%#v err=%v", body, err)
 			}
 			written.Store(true)

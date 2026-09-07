@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,6 +23,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type TargetStore interface {
@@ -236,7 +237,7 @@ func (s *Service) EnqueueSync(ctx context.Context, actor string) (taskstore.Task
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		if targetErr == nil {
 			parent = targetguard.Expect(parent, expectedTarget)
 		}
@@ -384,6 +385,17 @@ func selectAccountRateBatch(accountIDs []string, batchSize, batchPercent, cursor
 	return selected, (start + batchSize) % len(accountIDs)
 }
 
+func (s *Service) requireAccountFieldWrites(ctx context.Context) error {
+	allowed, err := s.automaticRateSyncAllowed(ctx)
+	if err != nil {
+		return fmt.Errorf("账号维护运行模式读取失败：%w", err)
+	}
+	if !allowed {
+		return errors.New("当前运行模式不允许写入账号字段，请切换为完全模式后重试")
+	}
+	return nil
+}
+
 func (s *Service) automaticRateSyncAllowed(ctx context.Context) (bool, error) {
 	reader, ok := s.repository.(interface {
 		Mode(context.Context) (string, error)
@@ -470,10 +482,13 @@ func (s *Service) enqueueMaintenance(ctx context.Context, operation, message str
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	task := taskstore.Task{ID: id, Skill: "sub2api-operations", Operation: operation, Status: "queued", Progress: 0,
 		Message: message, Result: map[string]any{"requested": len(accountIDs)}, CreatedAt: now, UpdatedAt: now}
+	if automatic {
+		task.Result["origin"] = "automatic-inspection"
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.Go(s.taskRunner, func(parent context.Context) {
+	if err := taskrunner.GoTask(s.taskRunner, task.ID, func(parent context.Context) {
 		// Task runners use a process-level context, so explicitly preserve the
 		// lower-priority marker when an automatic inspection queues maintenance.
 		parent = preserveAutomaticInspection(parent, automatic)
@@ -518,6 +533,7 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	origin, _ := task.Result["origin"].(string)
 	var result map[string]any
 	var err error
 	requested := len(accountIDs)
@@ -587,6 +603,12 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 		} else {
 			task.Message = fmt.Sprintf("批量复验完成：存在 %v 个，缺失 %v 个", result["verified"], result["missing"])
 		}
+	}
+	if origin != "" {
+		if result == nil {
+			result = map[string]any{}
+		}
+		result["origin"] = origin
 	}
 	task.Result = result
 	taskstore.MarkCancelled(ctx, &task, "账号维护任务已取消")
@@ -785,6 +807,9 @@ func (s *Service) validateAccountBaseURLs(ctx context.Context, accountIDs []stri
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				accountID := accountIDs[index]
 				item := map[string]any{"account_id": accountID, "status": "详情读取失败"}
 				accountCtx, release, protectedReason, guardErr := s.acquireAccountMutation(ctx, accountID)
@@ -834,10 +859,7 @@ func (s *Service) validateAccountBaseURLs(ctx context.Context, accountIDs []stri
 			}
 		}()
 	}
-	for index := range accountIDs {
-		jobs <- index
-	}
-	close(jobs)
+	_ = taskrunner.FeedIndices(ctx, jobs, len(accountIDs))
 	workers.Wait()
 
 	items := make([]map[string]any, 0, len(results))
@@ -926,6 +948,9 @@ func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string
 	}
 	defer releaseAll()
 	ctx = guarded
+	if err := s.requireAccountFieldWrites(ctx); err != nil {
+		return nil, err
+	}
 	client, err := s.maintenanceClient(ctx)
 	if err != nil {
 		return nil, err
@@ -1099,14 +1124,14 @@ func (s *Service) repairAccountBaseURLs(ctx context.Context, accountIDs []string
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				process(index)
 			}
 		}()
 	}
-	for index := range accountIDs {
-		jobs <- index
-	}
-	close(jobs)
+	_ = taskrunner.FeedIndices(ctx, jobs, len(accountIDs))
 	workers.Wait()
 
 	items := make([]map[string]any, 0, len(results))
@@ -1142,7 +1167,7 @@ func (s *Service) syncAccountBaseURLs(ctx context.Context, accountIDs []string, 
 	if len(accountIDs) == 0 {
 		return map[string]any{
 			"operation": "account.base_url.sync", "requested": 0, "updated": 0,
-			"unchanged": 0, "failed": 0, "items": []map[string]any{}, "actor": actor, "remote_write": false,
+			"unchanged": 0, "skipped": 0, "failed": 0, "items": []map[string]any{}, "actor": actor, "remote_write": false,
 		}, nil
 	}
 	guarded, release, err := s.acquireAccountMutations(ctx, accountIDs, false)
@@ -1151,6 +1176,9 @@ func (s *Service) syncAccountBaseURLs(ctx context.Context, accountIDs []string, 
 	}
 	defer release()
 	ctx = guarded
+	if err := s.requireAccountFieldWrites(ctx); err != nil {
+		return nil, err
+	}
 	bound, err := s.repository.BoundAccountsForMaintenance(ctx, accountIDs)
 	if err != nil {
 		return nil, fmt.Errorf("账号绑定读取失败：%w", err)
@@ -1164,9 +1192,19 @@ func (s *Service) syncAccountBaseURLs(ctx context.Context, accountIDs []string, 
 		byID[account.AccountID] = append(byID[account.AccountID], account)
 	}
 	items := make([]map[string]any, 0, len(accountIDs))
-	updated, unchanged, failed := 0, 0, 0
+	updated, unchanged, skipped, failed, written := 0, 0, 0, 0, 0
 	for _, accountID := range accountIDs {
 		item := map[string]any{"account_id": accountID}
+		protectedReason, protectionErr := s.accountMutationProtectionReason(ctx, accountID, false)
+		if protectionErr != nil {
+			return nil, protectionErr
+		}
+		if protectedReason != nil {
+			item["status"], item["reason"] = "人工保护，已跳过", *protectedReason
+			skipped++
+			items = append(items, item)
+			continue
+		}
 		targets := map[string]string{}
 		for _, account := range byID[accountID] {
 			item["account_name"] = account.AccountName
@@ -1224,6 +1262,7 @@ func (s *Service) syncAccountBaseURLs(ctx context.Context, accountIDs []string, 
 			items = append(items, item)
 			continue
 		}
+		written++
 		confirmedRow, confirmErr := client.Account(ctx, accountID)
 		if confirmErr != nil {
 			item["status"], item["error"] = "Base URL 写后读取失败", confirmErr.Error()
@@ -1256,7 +1295,7 @@ func (s *Service) syncAccountBaseURLs(ctx context.Context, accountIDs []string, 
 	}
 	result := map[string]any{
 		"operation": "account.base_url.sync", "requested": len(accountIDs), "updated": updated,
-		"unchanged": unchanged, "failed": failed, "items": items, "actor": actor, "remote_write": updated > 0,
+		"unchanged": unchanged, "skipped": skipped, "failed": failed, "items": items, "actor": actor, "remote_write": written > 0,
 	}
 	if failed > 0 {
 		return result, errors.New("部分账号 Base URL 同步失败，请查看明细")
@@ -1528,6 +1567,9 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 		go func() {
 			defer probeWorkers.Done()
 			for index := range newAPIJobs {
+				if ctx.Err() != nil {
+					return
+				}
 				account := upstreamRates[index].account
 				catalog, fallbackEligible, catalogErr := loadCatalog(ctx, account.RateSourceHost())
 				if catalogErr != nil {
@@ -1539,10 +1581,7 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 			}
 		}()
 	}
-	for _, index := range newAPIIndexes {
-		newAPIJobs <- index
-	}
-	close(newAPIJobs)
+	_ = taskrunner.Feed(ctx, newAPIJobs, newAPIIndexes)
 	probeWorkers.Wait()
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1729,11 +1768,15 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 		go func() {
 			defer writeWorkers.Done()
 			for index := range writeJobs {
+				if writeCtx.Err() != nil {
+					return
+				}
 				accountID := accountIDs[index]
 				probe := upstreamRates[index]
 				account := probe.account
 				item := map[string]any{"account_id": accountID, "remote_write": false, "readback_confirmed": false}
 				item["account_name"], item["upstream_host"] = account.AccountName, account.UpstreamHost
+				item["platform"] = account.Platform
 				if probe.skippedReason != "" {
 					item["status"], item["reason"] = "人工保护，已跳过", probe.skippedReason
 					results[index] = rateResult{item: item, skipped: true}
@@ -1833,11 +1876,20 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 			}
 		}()
 	}
-	for index := range accountIDs {
-		writeJobs <- index
-	}
-	close(writeJobs)
+	_ = taskrunner.FeedIndices(writeCtx, writeJobs, len(accountIDs))
 	writeWorkers.Wait()
+	cancelErr := writeCtx.Err()
+	if cancelErr != nil {
+		for index := range results {
+			if results[index].item != nil {
+				continue
+			}
+			results[index] = rateResult{failed: true, item: map[string]any{
+				"account_id": accountIDs[index], "status": "同步已取消", "error": cancelErr.Error(),
+				"remote_write": false, "readback_confirmed": false,
+			}}
+		}
+	}
 
 	items := make([]map[string]any, 0, len(results))
 	updated, unchanged, skipped, missing, failed, written, fallback := 0, 0, 0, 0, 0, 0, 0
@@ -1869,7 +1921,7 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 		"operation": "account.rate.sync", "source": "upstream_live", "requested": len(accountIDs),
 		"updated": updated, "unchanged": unchanged, "skipped": skipped, "missing": missing, "failed": failed,
 		"fallback": fallback, "items": items, "read_only": false, "remote_write": written > 0,
-	}, nil
+	}, cancelErr
 }
 
 func applyStoredRateFallback(probe *accountRateProbe) {
@@ -1902,8 +1954,8 @@ func fallbackEligibleRateReadError(err error) bool {
 }
 
 func sameRate(left, right string) bool {
-	leftRate, leftOK := new(big.Rat).SetString(strings.TrimSpace(left))
-	rightRate, rightOK := new(big.Rat).SetString(strings.TrimSpace(right))
+	leftRate, leftOK := decimalutil.Parse(left)
+	rightRate, rightOK := decimalutil.Parse(right)
 	return leftOK && rightOK && leftRate.Cmp(rightRate) == 0
 }
 
@@ -1979,7 +2031,7 @@ func isNewAPIType(value string) bool {
 func managementAccountMultiplier(row map[string]any) (string, error) {
 	raw := firstValue(row, "rate_multiplier", "multiplier")
 	text := strings.TrimSpace(fmt.Sprint(raw))
-	value, ok := new(big.Rat).SetString(text)
+	value, ok := decimalutil.Parse(text)
 	if !ok || value.Sign() <= 0 {
 		return "", errors.New("管理平台账号倍率必须是大于 0 的有效数字")
 	}
@@ -2120,6 +2172,9 @@ func (s *Service) repairAccountNames(ctx context.Context, accountIDs []string, a
 	}
 	defer releaseAll()
 	ctx = guarded
+	if err := s.requireAccountFieldWrites(ctx); err != nil {
+		return nil, err
+	}
 	client, err := s.maintenanceClient(ctx)
 	if err != nil {
 		return nil, err
@@ -2139,6 +2194,9 @@ func (s *Service) repairAccountNames(ctx context.Context, accountIDs []string, a
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				account := bound[index]
 				item := map[string]any{
 					"account_id": account.AccountID, "account_name": account.AccountName,
@@ -2272,10 +2330,7 @@ func (s *Service) repairAccountNames(ctx context.Context, accountIDs []string, a
 			}
 		}()
 	}
-	for index := range bound {
-		jobs <- index
-	}
-	close(jobs)
+	_ = taskrunner.FeedIndices(ctx, jobs, len(bound))
 	workers.Wait()
 	items := make([]map[string]any, 0, len(results))
 	renamed, unchanged, missing, skipped, failed, written := 0, 0, 0, 0, 0, 0
@@ -2326,6 +2381,9 @@ func (s *Service) repairAccountDefaults(ctx context.Context, accountIDs []string
 	}
 	defer releaseAll()
 	ctx = guarded
+	if err := s.requireAccountFieldWrites(ctx); err != nil {
+		return nil, err
+	}
 	client, err := s.maintenanceClient(ctx)
 	if err != nil {
 		return nil, err
@@ -2344,6 +2402,9 @@ func (s *Service) repairAccountDefaults(ctx context.Context, accountIDs []string
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 				accountID := accountIDs[index]
 				account, boundExists := byID[accountID]
 				item := map[string]any{"account_id": accountID, "remote_write": false, "readback_confirmed": false}
@@ -2500,10 +2561,7 @@ func (s *Service) repairAccountDefaults(ctx context.Context, accountIDs []string
 			}
 		}()
 	}
-	for index := range accountIDs {
-		jobs <- index
-	}
-	close(jobs)
+	_ = taskrunner.FeedIndices(ctx, jobs, len(accountIDs))
 	workers.Wait()
 
 	items := make([]map[string]any, 0, len(results))
