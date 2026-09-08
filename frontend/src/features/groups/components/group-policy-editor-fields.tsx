@@ -15,9 +15,12 @@ import { Switch } from "../../../components/ui/switch";
 import { cn } from "../../../lib/utils";
 import {
   schedulingStrategyDescription,
+  schedulingStrategyLabel,
   schedulingStrategyOptions,
   schedulingWeightFormula,
 } from "../../../lib/scheduling-strategy";
+
+const groupStrategyOptions = [{ value: null, label: "全局默认" }, ...schedulingStrategyOptions];
 
 export type GroupPolicyOverrideDraft = Omit<
   GroupPolicyOverrideUpdate,
@@ -104,7 +107,7 @@ function ProbeModelControl(props: {
                   selected && "bg-background text-foreground shadow-sm",
                 )}
                 aria-pressed={selected}
-                disabled={props.disabled || (optionMode === "select" && props.options.length === 0)}
+                disabled={props.disabled}
                 onClick={() => setMode(optionMode)}
               >
                 {label}
@@ -154,8 +157,11 @@ function ProbeModelControl(props: {
 export function GroupPolicyEditorFields(props: {
   value: GroupPolicyOverrideDraft;
   onChange: (value: GroupPolicyOverrideDraft) => void;
+  globalStrategy?: string | null;
+  globalProbeModel?: string | null;
   probeModels?: GroupProbeModels;
   probeModelsLoading?: boolean;
+  probeModelsError?: boolean;
   onReloadProbeModels?: () => void;
 }) {
   const update = (
@@ -168,6 +174,16 @@ export function GroupPolicyEditorFields(props: {
   );
   let probeModelsButtonLabel = props.probeModels ? "重新获取组内模型" : "获取组内模型";
   if (props.probeModelsLoading) probeModelsButtonLabel = "正在获取";
+  let probeModelsStatus: string | null = null;
+  if (props.probeModelsLoading) {
+    probeModelsStatus = "正在获取组内模型，可先手动输入探活模型。";
+  } else if (props.probeModelsError) {
+    probeModelsStatus = "获取组内模型失败，请重新获取或手动输入探活模型。";
+  } else if (props.probeModels?.models.length === 0) {
+    probeModelsStatus = "暂无组内共同模型，可手动输入探活模型。";
+  } else if (props.probeModels && !props.probeModels.complete) {
+    probeModelsStatus = "部分账号尚无模型信息，当前选项仅基于已知模型。";
+  }
 
   return (
     <div className="min-w-0 space-y-5" data-testid="group-policy-editor-fields">
@@ -188,16 +204,16 @@ export function GroupPolicyEditorFields(props: {
       <fieldset className="min-w-0 space-y-2">
         <legend className="text-sm font-medium">调度策略</legend>
         <div
-          className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4"
+          className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-5"
           role="radiogroup"
           aria-label="调度策略"
           data-testid="group-policy-strategy-options"
         >
-          {schedulingStrategyOptions.map((strategy) => {
+          {groupStrategyOptions.map((strategy) => {
             const selected = props.value.strategy === strategy.value;
             return (
               <Button
-                key={strategy.value}
+                key={strategy.value ?? "global_default"}
                 type="button"
                 variant="outline"
                 className={cn(
@@ -215,7 +231,16 @@ export function GroupPolicyEditorFields(props: {
           })}
         </div>
         <p className="text-muted-foreground text-xs leading-5">
-          {schedulingStrategyDescription(props.value.strategy)}；{schedulingWeightFormula}
+          {props.value.strategy === null && (
+            <>
+              继承全局默认，随全局策略变化（当前：
+              {schedulingStrategyLabel(props.globalStrategy ?? "balanced")}）。
+            </>
+          )}
+          {schedulingStrategyDescription(
+            props.value.strategy ?? props.globalStrategy ?? "balanced",
+          )}
+          ；{schedulingWeightFormula}
         </p>
       </fieldset>
 
@@ -354,6 +379,16 @@ export function GroupPolicyEditorFields(props: {
                 {probeModelsButtonLabel}
               </Button>
             </div>
+            {!props.value.probe_model && props.globalProbeModel && (
+              <p className="text-muted-foreground break-all text-xs">
+                当前继承全局模型：{props.globalProbeModel}
+              </p>
+            )}
+            {probeModelsStatus && (
+              <p role="status" className="text-muted-foreground text-xs">
+                {probeModelsStatus}
+              </p>
+            )}
           </div>
         </div>
       </section>

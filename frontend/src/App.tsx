@@ -5903,7 +5903,10 @@ export function GroupsPage() {
     const probe = section("probe");
     setEditor({
       enabled: override.enabled ?? group.participation_status === "participating",
-      strategy: override.strategy ?? (group.strategy as GroupPolicyOverrideUpdate["strategy"]),
+      strategy:
+        group.strategy_source === "global_default"
+          ? null
+          : (override.strategy ?? (group.strategy as GroupPolicyOverrideUpdate["strategy"])),
       min_pool_size: override.min_pool_size ?? Number(breaker.min_pool_size ?? 1),
       weight_budget: override.weight_budget ?? Number(weights.budget ?? 400),
       balanced_price_ratio:
@@ -6179,8 +6182,11 @@ export function GroupsPage() {
               <GroupPolicyEditorFields
                 value={editor}
                 onChange={setEditor}
+                globalStrategy={policy.data?.global_strategy}
+                globalProbeModel={policy.data?.probe_model}
                 probeModels={groupProbeModels.data}
                 probeModelsLoading={groupProbeModels.isFetching}
+                probeModelsError={groupProbeModels.isError}
                 onReloadProbeModels={() => void groupProbeModels.refetch()}
               />
             )}

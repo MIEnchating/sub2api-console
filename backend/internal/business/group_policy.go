@@ -77,8 +77,16 @@ func (s *Store) UpdateGroupPolicy(ctx context.Context, groupID string, raw map[s
 	if err := s.writePolicyDocument(ctx, tx, "control-plane", control, now); err != nil {
 		return GroupStatus{}, err
 	}
-	strategy := binding["strategy"].(string)
-	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET strategy=?,strategy_source='group_override',updated_at=? WHERE remote_id=?`, strategy, now, groupID); err != nil {
+	strategy, source := "", "global_default"
+	if override, ok := binding["strategy"].(string); ok {
+		strategy, source = override, "group_override"
+	} else {
+		strategy, err = effectiveGlobalStrategy(control)
+		if err != nil {
+			return GroupStatus{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET strategy=?,strategy_source=?,updated_at=? WHERE remote_id=?`, strategy, source, now, groupID); err != nil {
 		return GroupStatus{}, err
 	}
 	if err := insertRuntimeEvent(ctx, tx, "group.policy.updated", "分组策略已更新："+groupName, map[string]any{"actor": strings.TrimSpace(actor), "group_id": groupID}, now); err != nil {
@@ -215,11 +223,13 @@ func normalizeGroupPolicyBinding(payload map[string]any) (map[string]any, error)
 		}
 		result[field] = value
 	}
-	strategy, err := normalizeStrategy(payload["strategy"])
-	if err != nil {
-		return nil, fmt.Errorf("分组策略字段 strategy 无效")
+	if payload["strategy"] != nil {
+		strategy, err := normalizeStrategy(payload["strategy"])
+		if err != nil {
+			return nil, fmt.Errorf("分组策略字段 strategy 无效")
+		}
+		result["strategy"] = strategy
 	}
-	result["strategy"] = strategy
 	for field, bounds := range map[string][2]int{
 		"min_pool_size": {0, 10000}, "weight_budget": {1, 1_000_000}, "probe_interval_seconds": {30, 86400},
 	} {

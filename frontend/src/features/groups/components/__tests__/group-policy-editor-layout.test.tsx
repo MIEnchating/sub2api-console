@@ -86,15 +86,15 @@ describe("分组策略编辑布局", () => {
     expect(probe).not.toContain("<datalist");
   });
 
-  it("调度策略使用四个等尺寸选项且选中态不改变尺寸", () => {
+  it("调度策略包含全局默认且五个选项尺寸一致", () => {
     const markup = renderToStaticMarkup(
       <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
     );
     const strategies = section(markup, "<fieldset", "保底可用账号数");
 
-    expect(strategies).toContain("sm:grid-cols-4");
-    expect(strategies.match(/h-9 w-full min-w-0/g)).toHaveLength(4);
-    expect(strategies.match(/role="radio"/g)).toHaveLength(4);
+    expect(strategies).toContain("sm:grid-cols-5");
+    expect(strategies.match(/h-9 w-full min-w-0/g)).toHaveLength(5);
+    expect(strategies.match(/role="radio"/g)).toHaveLength(5);
     expect(strategies).toContain('aria-checked="true"');
     expect(strategies).toContain('aria-checked="false"');
   });

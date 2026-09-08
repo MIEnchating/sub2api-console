@@ -855,7 +855,7 @@ type GroupPolicyOverride = {
 
 export type GroupPolicyOverrideUpdate = {
   enabled: boolean;
-  strategy: "balanced" | "price_first" | "speed_first" | "reliability";
+  strategy: "balanced" | "price_first" | "speed_first" | "reliability" | null;
   min_pool_size: number;
   weight_budget: number;
   balanced_price_ratio: number;
