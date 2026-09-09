@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -275,7 +276,7 @@ func run() error {
 	})
 	servers := []httpServeTarget{{
 		name:     cfg.ListenAddress,
-		server:   newHTTPServer(cfg.ListenAddress, handler),
+		server:   newHTTPServer(cfg.ListenAddress, frontendHandler(handler, "/app/web")),
 		listener: listeners.tcp,
 	}}
 	if listeners.proxy != nil {
@@ -338,6 +339,23 @@ func run() error {
 		closeStores = false
 	}
 	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
+}
+
+func frontendHandler(apiHandler http.Handler, directory string) http.Handler {
+	files := http.FileServer(http.Dir(directory))
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.HasPrefix(request.URL.Path, "/api/") || request.URL.Path == "/api" {
+			apiHandler.ServeHTTP(writer, request)
+			return
+		}
+		requested := filepath.Join(directory, filepath.Clean("/"+request.URL.Path))
+		if info, err := os.Stat(requested); err == nil && !info.IsDir() {
+			files.ServeHTTP(writer, request)
+			return
+		}
+		request.URL.Path = "/"
+		files.ServeHTTP(writer, request)
+	})
 }
 
 func recoverInterruptedTasks(ctx context.Context, store *taskstore.Store) (int64, error) {

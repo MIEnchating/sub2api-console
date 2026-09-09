@@ -16,7 +16,7 @@
 
 ## 首次初始化 Docker Hub latest
 
-发布目标为 Docker Hub 的 `mienvirtuoso/sub2api-console-api` 和 `mienvirtuoso/sub2api-console-frontend`。先创建两个镜像仓库，并在 GitHub Actions 的仓库 Secrets 中配置 `DOCKERHUB_TOKEN`（`mienvirtuoso` 账号的 Read & Write Access Token）。工作流内的 GitHub Token 仅用于访问代码和创建 GitHub Release。
+发布目标为 Docker Hub 的 `mienvirtuoso/sub2api-console`。先创建该镜像仓库，并在 GitHub Actions 的仓库 Secrets 中配置 `DOCKERHUB_TOKEN`（`mienvirtuoso` 账号的 Read & Write Access Token）。工作流内的 GitHub Token 仅用于访问代码和创建 GitHub Release。
 
 首次标签发布通过两个 `Publish and verify … version manifest` 任务后，`latest` 晋级会因标签对尚不存在而停止。确认这是首次初始化、两个 `latest` 都不存在后，用同一个已验证版本完成初始化；以下版本号须替换为本次实际标签：
 
@@ -25,16 +25,11 @@ release_tag=v2026.09.09
 docker login --username mienvirtuoso
 
 docker buildx imagetools create \
-  -t docker.io/mienvirtuoso/sub2api-console-api:latest \
-  "docker.io/mienvirtuoso/sub2api-console-api:$release_tag"
-docker buildx imagetools create \
-  -t docker.io/mienvirtuoso/sub2api-console-frontend:latest \
-  "docker.io/mienvirtuoso/sub2api-console-frontend:$release_tag"
+  -t mienvirtuoso/sub2api-console:latest \
+  "mienvirtuoso/sub2api-console:$release_tag"
 
-docker buildx imagetools inspect "docker.io/mienvirtuoso/sub2api-console-api:$release_tag"
-docker buildx imagetools inspect docker.io/mienvirtuoso/sub2api-console-api:latest
-docker buildx imagetools inspect "docker.io/mienvirtuoso/sub2api-console-frontend:$release_tag"
-docker buildx imagetools inspect docker.io/mienvirtuoso/sub2api-console-frontend:latest
+docker buildx imagetools inspect "mienvirtuoso/sub2api-console:$release_tag"
+docker buildx imagetools inspect mienvirtuoso/sub2api-console:latest
 ```
 
 登录时在密码提示中输入 Docker Hub Access Token。核对每个 `latest` 的 Digest 与其版本标签相同，再到 GitHub Actions 重跑失败任务；工作流会再次校验两个架构的版本及提交 revision，一致后完成 GitHub Release。后续发布不需要手动初始化。

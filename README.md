@@ -2,6 +2,8 @@
 
 Sub2API 的独立可视化控制面。业务规则全部由 Go 后端领域服务执行，`sub2api-skills` 只作为流程和策略参考，不是运行时依赖。当前版本提供账号与分组管理、上游同步、鉴权恢复、探活巡检、调度写回、告警、开户、运行历史和请求追踪；浏览器不会直接接触 SQLite、Admin Key、Token 或密码箱。
 
+开户自动获取模型时，优先调用 Sub2API 管理端模型同步预览接口；接口失败或未返回可用模型时，使用本次开户的 Base URL 和上游 Key 请求 `/v1/models` 兜底。兜底必须返回业务成功且非空的模型列表；两条路径均失败时保留待续记录，重试复用已有 Key。已配置分组模型列表时继续使用配置值。
+
 ## 技术栈
 
 - 前端：React 19、TypeScript、Rsbuild、Bun、TanStack Query、Tailwind 风格 CSS、Lucide
@@ -76,20 +78,23 @@ bun run dev
 
 默认数据库均位于当前目录的 `data/`：`sub2api-console.sqlite3`、`tasks.sqlite3` 和 `console-config.sqlite3`。Console 启动和运行不需要任何外部运行库路径，也不会挂载或读取 `sub2api-skills` 的数据。
 
-首次打开会进入初始化页，需要设置控制台账号密码、Sub2API Admin Base URL 和 Admin Key。直接运行 API、请求确实来自本机回环地址且使用 `localhost` 或回环 IP 访问时可以直接初始化；其他连接必须在服务端配置至少 32 个字符的 `SUB2API_CONSOLE_SETUP_TOKEN`，并在初始化页输入相同令牌。Docker Compose 的浏览器请求会经过前端容器代理，API 侧不会把它识别为回环连接，因此首次使用 Compose 时也必须配置令牌，即使浏览器打开的是宿主机 `localhost`。令牌只通过 `X-Setup-Token` 请求头发送，不写入配置数据库，初始化完成后即不能再次使用该接口覆盖配置。
+首次打开会进入初始化页，需要设置控制台账号密码、Sub2API Admin Base URL 和 Admin Key。远程访问时必须在服务端配置至少 32 个字符的 `SUB2API_CONSOLE_SETUP_TOKEN`，并在初始化页输入相同令牌。令牌只通过 `X-Setup-Token` 请求头发送，不写入配置数据库，初始化完成后即不能再次使用该接口覆盖配置。
 
-首次使用 Docker Compose 前生成一次性令牌：
+首次使用 Docker Compose 时，在项目根目录复制带中文注释的配置模板；已有 `.env` 时直接编辑，不要覆盖：
 
 ```bash
-export SUB2API_CONSOLE_SETUP_TOKEN="$(openssl rand -hex 32)"
-docker compose up -d
+cp -n .env.example .env
+chmod 600 .env
+openssl rand -hex 32
 ```
+
+将生成的令牌填入 `.env` 的 `SUB2API_CONSOLE_SETUP_TOKEN`，访问端口默认是 `3004`，需要时修改 `SUB2API_CONSOLE_FRONTEND_PORT`。默认配置只有这两项。Docker Compose 自动读取根目录 `.env`，无需逐项 `export`；同名 shell 环境变量会覆盖文件中的值。`.env` 已被 Git 忽略，可提交的 `.env.example` 保持初始化令牌为空。Docker Hub 的 `DOCKERHUB_TOKEN` 继续保存在 GitHub Actions Secret 中。
+
+启动前可以执行 `docker compose config --quiet` 检查配置格式，此命令不会启动容器或发布镜像。直接运行 Go 后端时仍通过进程环境传入配置，不会自动加载此 Compose `.env` 文件。
 
 初始化完成后可在下次重建 API 容器时从部署环境中移除该变量。控制台随后使用 HttpOnly 会话 Cookie 登录；Admin Key 只保存在后端 `data/console-config.sqlite3`，不会返回到浏览器。业务账号、分组、绑定、运行记录和告警只从 Console 自有业务库读取。
 
-Docker 版前端通过同源 `/api` 反向代理到 API，远程访问时只需开放 `3004`（Compose 默认把 API 的 `8080` 仅绑定到宿主机回环地址）。生产环境应在反向代理层启用 HTTPS，并设置 `SUB2API_CONSOLE_COOKIE_SECURE=true`。若 TLS 在外层反向代理终止，还必须把该代理连接前端容器时使用的源地址或专用网段配置到 `SUB2API_CONSOLE_FRONTEND_TRUSTED_PROXY_CIDRS`，例如 `192.0.2.10/32`；默认空值不会采信客户端发送的 `X-Forwarded-For` 或 `X-Forwarded-Proto`。外层代理必须覆盖 `X-Forwarded-Proto` 为单个 `http` 或 `https` 值，并正确覆盖或追加经过验证的客户端地址。不要配置普通客户端网段、共享的不可信容器网段或 `0.0.0.0/0`；非法 CIDR 会使前端容器拒绝启动。
-
-`SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS` 是独立的 API 侧信任列表。Compose 默认不信任任何 TCP 来源；前端与 API 通过当前 Compose 项目专属卷中的 `/run/sub2api-console/api.sock` 通信，只有这个 Unix socket listener 会把请求标记为来自受信代理。同一 Docker 网络中的其他容器既不能通过重复 IP 冒充前端，也不能访问未挂载的 socket 卷。该方案不占用固定子网，多套 Compose 项目可以并行使用；宿主机端口可分别通过 `SUB2API_CONSOLE_API_PORT` 和 `SUB2API_CONSOLE_FRONTEND_PORT` 调整。显式配置 API 的 TCP 信任列表时，只能填写会规范化 `X-Forwarded-For`、`X-Real-IP` 和 `X-Forwarded-Proto` 的直接反向代理地址，优先使用单地址 `/32` 或 `/128`。若前端与 API 不同源，还需通过 `SUB2API_CONSOLE_FRONTEND_ORIGINS` 明确列出允许携带凭据的前端 Origin；不要使用通配符。
+单体服务通过同源路径提供页面和 `/api`，远程访问时只需开放 `3004`。多套 Compose 项目可使用不同的 `SUB2API_CONSOLE_FRONTEND_PORT` 并行部署；数据库统一保存在宿主机部署目录的 `./data`，路径无需配置。
 
 使用 Docker Compose 部署：
 
@@ -99,27 +104,26 @@ docker compose up -d
 docker compose ps
 ```
 
-默认使用本仓库发布的 `docker.io/mienvirtuoso/sub2api-console-api:latest` 和 `docker.io/mienvirtuoso/sub2api-console-frontend:latest` 多架构镜像。生产环境建议通过 `SUB2API_CONSOLE_API_IMAGE`、`SUB2API_CONSOLE_FRONTEND_IMAGE` 固定到同一个版本标签，避免两个服务版本不一致。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
+默认使用本仓库发布的 `mienvirtuoso/sub2api-console:latest` 多架构单体镜像。镜像地址直接写在 `docker-compose.yml` 中；按版本部署时，将 `image` 标签改为已发布版本。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
 
-Compose 会等待 API 健康后再启动前端，并为两个服务配置自动重启和健康检查。API 容器启动时会调整挂载的 `./data` 和项目专属 socket 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。SSE 反向代理读写超时为一小时，长时间巡检不会被 Nginx 的默认超时截断。
+Compose 为单体服务配置自动重启和健康检查。容器启动时会调整挂载的 `./data` 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。
 
 ## 发布
 
-镜像在 GitHub Actions 中构建，并推送到 Docker Hub 的 `mienvirtuoso` 命名空间。首次配置时，在 Docker Hub 创建 `sub2api-console-api` 和 `sub2api-console-frontend` 两个仓库；公开部署时将仓库设为 Public。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加 `DOCKERHUB_TOKEN`，值为 `mienvirtuoso` 账号具有 Read & Write 权限的 Docker Hub Access Token。令牌只保存在 GitHub Secret 中。
+镜像在 GitHub Actions 中构建，并推送到 Docker Hub 的 `mienvirtuoso` 命名空间。首次配置时，在 Docker Hub 创建 `sub2api-console` 仓库并设为 Public。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加 `DOCKERHUB_TOKEN`，值为 `mienvirtuoso` 账号具有 Read & Write 权限的 Docker Hub Access Token。令牌只保存在 GitHub Secret 中。
 
 版本使用日期标签：当天首个版本为 `vYYYY.MM.DD`，后续版本依次为 `-2`、`-3`，禁止使用 `-1`。创建标签前必须提交 `.github/release-notes/<tag>.md`；具体硬性规则见 [发布说明流程](.github/release-notes/README.md)。
 
-标签推送后，GitHub Actions 会先执行完整前后端检查和两个 Dockerfile 的预构建。全部通过后才会发布以下 amd64/arm64 镜像，并在两个镜像的多架构清单都验证成功后创建 GitHub Release：
+标签推送后，GitHub Actions 会执行完整检查并构建单体 Docker 镜像，发布 amd64/arm64 多架构镜像：
 
-- `docker.io/mienvirtuoso/sub2api-console-api:<tag>`
-- `docker.io/mienvirtuoso/sub2api-console-frontend:<tag>`
+- `mienvirtuoso/sub2api-console:<tag>`
 
-首次发布时，两个版本镜像发布并验证成功后，工作流会停在 `latest` 晋级步骤。按[首次初始化说明](.github/release-notes/README.md#首次初始化-docker-hub-latest)将两个已验证版本镜像设为 `latest`，核对后重跑失败任务。后续发布会自动更新 `latest`；生产部署应通过 Compose 环境变量将前后端固定到同一个版本标签。
+发布后会同时更新 `latest`；生产部署需要指定版本时，直接修改 Compose 中的 `image` 标签。
 
 ## 验证
 
 ```bash
-cd backend && go test -race ./...
+cd backend && go test -race ./... ./internal/onboarding/__tests__
 cd frontend && bun run test && bun run typecheck && bun run lint && bun run build
 ```
 

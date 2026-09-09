@@ -1,0 +1,9 @@
+.git
+.github
+data
+output
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+backend/tmp

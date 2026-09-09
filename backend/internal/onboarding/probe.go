@@ -426,6 +426,9 @@ func fetchProbeModels(ctx context.Context, baseURL, secret string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
+	if err := gatewayBusinessError(payload); err != nil {
+		return nil, err
+	}
 	seen := map[string]struct{}{}
 	models := make([]string, 0)
 	var walk func(any)

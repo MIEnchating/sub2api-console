@@ -1,0 +1,8 @@
+Use case: logo-brand
+Asset type: production website app icon and browser favicon for Sub2API Console, an API aggregation, routing and monitoring console.
+Primary request: Create one polished, minimal geometric brand symbol: two bold interlocking routing ribbons forming a clear letter S, with subtle opposing directional cuts suggesting API request flow. The S is a symbol, not typeset text.
+Style/medium: precise flat graphic design, clean vector-like edges, bold solid shapes, balanced negative space.
+Composition/framing: one centered white symbol occupying approximately 72 percent of a square canvas; generous even safe margins; front-on, no perspective. Full-bleed solid deep blue background #176B9B extending to all four image edges.
+Color palette: solid white symbol on solid deep blue #176B9B, matching a restrained technical console with light and dark themes.
+Constraints: instantly recognizable at 16 and 32 pixels, thick strokes and open gaps, no fine details. Deliver exactly one finished icon, no presentation sheet or mockup.
+Avoid: words, caption, wordmark, tiny nodes, circuitry, hairlines, borders, extra symbols, gradients, texture, 3D, shadows, lighting, watermark, outer white padding.

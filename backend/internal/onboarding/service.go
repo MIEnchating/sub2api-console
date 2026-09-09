@@ -540,7 +540,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	}
 	models := append([]string{}, creationPolicy.Models...)
 	if len(models) == 0 {
-		models, err = client.PreviewAccountModels(ctx, platform, accountType, validated.accountBaseURL, key.Secret)
+		models, err = discoverOnboardingModels(ctx, client, platform, accountType, validated.accountBaseURL, key.Secret)
 		if err != nil {
 			return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
 		}

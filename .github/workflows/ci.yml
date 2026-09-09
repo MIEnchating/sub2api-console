@@ -63,9 +63,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: Vet
-        run: go vet ./... ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+        run: go vet ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
       - name: Race tests
-        run: go test -race ./... ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+        run: go test -race ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
       - name: Build
         run: go build ./...
 
@@ -77,13 +77,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Build API image
-        run: docker build --build-arg VERSION=ci-${GITHUB_SHA::12} -t sub2api-console-api:ci backend
-      - name: Build frontend image
-        run: docker build --build-arg VERSION=ci-${GITHUB_SHA::12} -t sub2api-console-frontend:ci frontend
+      - name: Build application image
+        run: docker build --build-arg VERSION=ci-${GITHUB_SHA::12} -t sub2api-console:ci -f backend/Dockerfile .
       - name: Validate deployment configuration
         run: node --test .github/scripts/*.test.mjs
-      - name: Test frontend proxy trust boundaries
-        env:
-          SUB2API_CONSOLE_FRONTEND_TEST_IMAGE: sub2api-console-frontend:ci
-        run: ./frontend/test-nginx-proxy.sh

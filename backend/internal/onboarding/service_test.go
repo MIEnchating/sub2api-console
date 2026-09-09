@@ -600,7 +600,7 @@ func TestOnboardRetriesModelSyncWithoutCreatingASecondKey(t *testing.T) {
 	service := New(repository, private, keys, nil)
 	request := Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
-		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		UpstreamGroupID: "6", BaseURL: &admin.URL, Schedulable: false, Actor: "operator",
 	}
 	first, firstErr := service.Onboard(context.Background(), request)
 	if firstErr == nil || !strings.Contains(firstErr.Error(), "开户模型同步失败") || accountPosts != 0 {
@@ -1669,7 +1669,7 @@ func TestOnboardReusesPendingKeyAfterRemoteAccountFailure(t *testing.T) {
 	service := New(repository, private, keys, nil)
 	request := Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
-		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		UpstreamGroupID: "6", BaseURL: &admin.URL, Schedulable: false, Actor: "operator",
 	}
 	first, firstErr := service.Onboard(context.Background(), request)
 	second, secondErr := service.Onboard(context.Background(), request)
@@ -1962,7 +1962,7 @@ func TestOnboardRetriesExplicitlyRejectedLegacyMarkerWithNeutralName(t *testing.
 	service := New(repository, private, &checkingKeys{databasePath: databasePath}, nil)
 	request := Request{
 		Host: "upstream.test", UpstreamType: "sub2api", LocalGroupID: "3",
-		UpstreamGroupID: "6", Schedulable: false, Actor: "operator",
+		UpstreamGroupID: "6", BaseURL: &admin.URL, Schedulable: false, Actor: "operator",
 	}
 	validated, err := service.validate(context.Background(), request)
 	if err != nil {
