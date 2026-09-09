@@ -1,6 +1,6 @@
 services:
   api:
-    image: ${SUB2API_CONSOLE_API_IMAGE:-ghcr.io/mienchating/sub2api-console-api:latest}
+    image: ${SUB2API_CONSOLE_API_IMAGE:-docker.io/mienvirtuoso/sub2api-console-api:latest}
     build:
       context: ./backend
       args:
@@ -30,7 +30,7 @@ services:
       start_period: 10s
 
   frontend:
-    image: ${SUB2API_CONSOLE_FRONTEND_IMAGE:-ghcr.io/mienchating/sub2api-console-frontend:latest}
+    image: ${SUB2API_CONSOLE_FRONTEND_IMAGE:-docker.io/mienvirtuoso/sub2api-console-frontend:latest}
     build:
       context: ./frontend
       args:

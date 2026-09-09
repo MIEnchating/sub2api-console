@@ -9,6 +9,8 @@ const composeVariables = [
   "SUB2API_CONSOLE_API_PORT",
   "SUB2API_CONSOLE_FRONTEND_PORT",
   "SUB2API_CONSOLE_TRUSTED_PROXY_CIDRS",
+  "SUB2API_CONSOLE_API_IMAGE",
+  "SUB2API_CONSOLE_FRONTEND_IMAGE",
 ];
 
 function composeConfig(overrides = {}) {
@@ -25,6 +27,25 @@ function composeConfig(overrides = {}) {
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
 }
+
+test("Compose defaults to the Docker Hub API and frontend images", () => {
+  const config = composeConfig();
+
+  assert.equal(config.services.api.image, "docker.io/mienvirtuoso/sub2api-console-api:latest");
+  assert.equal(config.services.frontend.image, "docker.io/mienvirtuoso/sub2api-console-frontend:latest");
+});
+
+test("Compose preserves explicitly pinned image versions", () => {
+  const apiImage = "docker.io/mienvirtuoso/sub2api-console-api:v2026.09.09";
+  const frontendImage = "docker.io/mienvirtuoso/sub2api-console-frontend:v2026.09.09";
+  const config = composeConfig({
+    SUB2API_CONSOLE_API_IMAGE: apiImage,
+    SUB2API_CONSOLE_FRONTEND_IMAGE: frontendImage,
+  });
+
+  assert.equal(config.services.api.image, apiImage);
+  assert.equal(config.services.frontend.image, frontendImage);
+});
 
 test("default Compose trust is limited to the project-scoped Unix socket", () => {
   const config = composeConfig();

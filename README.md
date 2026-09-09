@@ -99,18 +99,22 @@ docker compose up -d
 docker compose ps
 ```
 
-默认使用本仓库发布的 `ghcr.io/mienchating/sub2api-console-api:latest` 和 `ghcr.io/mienchating/sub2api-console-frontend:latest` 多架构镜像。生产环境建议通过 `SUB2API_CONSOLE_API_IMAGE`、`SUB2API_CONSOLE_FRONTEND_IMAGE` 固定到同一个版本标签，避免两个服务版本不一致。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
+默认使用本仓库发布的 `docker.io/mienvirtuoso/sub2api-console-api:latest` 和 `docker.io/mienvirtuoso/sub2api-console-frontend:latest` 多架构镜像。生产环境建议通过 `SUB2API_CONSOLE_API_IMAGE`、`SUB2API_CONSOLE_FRONTEND_IMAGE` 固定到同一个版本标签，避免两个服务版本不一致。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
 
 Compose 会等待 API 健康后再启动前端，并为两个服务配置自动重启和健康检查。API 容器启动时会调整挂载的 `./data` 和项目专属 socket 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。SSE 反向代理读写超时为一小时，长时间巡检不会被 Nginx 的默认超时截断。
 
 ## 发布
 
+镜像在 GitHub Actions 中构建，并推送到 Docker Hub 的 `mienvirtuoso` 命名空间。首次配置时，在 Docker Hub 创建 `sub2api-console-api` 和 `sub2api-console-frontend` 两个仓库；公开部署时将仓库设为 Public。在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加 `DOCKERHUB_TOKEN`，值为 `mienvirtuoso` 账号具有 Read & Write 权限的 Docker Hub Access Token。令牌只保存在 GitHub Secret 中。
+
 版本使用日期标签：当天首个版本为 `vYYYY.MM.DD`，后续版本依次为 `-2`、`-3`，禁止使用 `-1`。创建标签前必须提交 `.github/release-notes/<tag>.md`；具体硬性规则见 [发布说明流程](.github/release-notes/README.md)。
 
 标签推送后，GitHub Actions 会先执行完整前后端检查和两个 Dockerfile 的预构建。全部通过后才会发布以下 amd64/arm64 镜像，并在两个镜像的多架构清单都验证成功后创建 GitHub Release：
 
-- `ghcr.io/mienchating/sub2api-console-api:<tag>`
-- `ghcr.io/mienchating/sub2api-console-frontend:<tag>`
+- `docker.io/mienvirtuoso/sub2api-console-api:<tag>`
+- `docker.io/mienvirtuoso/sub2api-console-frontend:<tag>`
+
+首次发布时，两个版本镜像发布并验证成功后，工作流会停在 `latest` 晋级步骤。按[首次初始化说明](.github/release-notes/README.md#首次初始化-docker-hub-latest)将两个已验证版本镜像设为 `latest`，核对后重跑失败任务。后续发布会自动更新 `latest`；生产部署应通过 Compose 环境变量将前后端固定到同一个版本标签。
 
 ## 验证
 

@@ -173,6 +173,7 @@
 - 使用 Rsbuild，配置见 `rsbuild.config.ts`；脚本以 `package.json` 为准（如 `bun run dev`、`bun run build`、`bun run typecheck`、`bun run lint`、`bun run format`），包管理见 [3.15 依赖管理](#315-依赖管理)。后端使用 Gin，SQLite 仅按当前 schema 完成首次建库，不提供旧版本数据库升级。
 - 代码分割与懒加载策略见 [3.4 性能](#34-性能)；资源使用合适格式与压缩，环境变量用 `.env` 且以 `VITE_` 前缀，不在代码中硬编码。
 - **发布前**：执行 typecheck、lint、format 检查，完成生产构建并检查产物体积与环境变量配置。
+- **镜像发布**：由 GitHub Actions 构建并推送到 Docker Hub 的 `mienvirtuoso` 命名空间，API 与前端分别发布 amd64/arm64 镜像；凭据使用仓库 Secret `DOCKERHUB_TOKEN`，不得提交令牌。版本标签与首次 `latest` 初始化遵循 `.github/release-notes/README.md`。
 
 ---
 

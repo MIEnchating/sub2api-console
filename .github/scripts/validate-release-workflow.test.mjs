@@ -231,6 +231,23 @@ test("architecture builds publish versioned tags without moving latest tags", ()
   assert.doesNotMatch(workflow, /:latest-(?:amd64|arm64|\$\{\{)/);
 });
 
+test("all registry jobs use Docker Hub credentials and the mienvirtuoso image namespace", () => {
+  assert.match(workflow, /REGISTRY: docker\.io/);
+  assert.match(workflow, /DOCKERHUB_USERNAME: mienvirtuoso/);
+  assert.doesNotMatch(workflow, /ghcr\.io|Log in to GHCR/);
+  for (const name of ["registry_guard", "images", "manifests", "promote_latest", "rollback_latest"]) {
+    const job = jobBody(name);
+    assert.match(job, /registry: \$\{\{ env\.REGISTRY }}/);
+    assert.match(job, /username: \$\{\{ env\.DOCKERHUB_USERNAME }}/);
+    assert.match(job, /password: \$\{\{ secrets\.DOCKERHUB_TOKEN }}/);
+    assert.doesNotMatch(job, /secrets\.GITHUB_TOKEN/);
+    for (const service of ["api", "frontend"]) {
+      assert.ok(job.includes(`docker.io/mienvirtuoso/sub2api-console-${service}`));
+    }
+  }
+  assert.match(jobBody("release"), /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN }}/);
+});
+
 test("version manifests are built and verified before latest promotion", () => {
   const manifests = jobBody("manifests");
   const promotion = jobBody("promote_latest");
@@ -317,8 +334,8 @@ test("one promotion step advances both latest tags and rolls back failures", () 
   const promotion = jobBody("promote_latest");
 
   assert.match(promotion, /name: Promote both service manifests/);
-  assert.match(promotion, /API_IMAGE: ghcr\.io\/mienchating\/sub2api-console-api/);
-  assert.match(promotion, /FRONTEND_IMAGE: ghcr\.io\/mienchating\/sub2api-console-frontend/);
+  assert.match(promotion, /API_IMAGE: docker\.io\/mienvirtuoso\/sub2api-console-api/);
+  assert.match(promotion, /FRONTEND_IMAGE: docker\.io\/mienvirtuoso\/sub2api-console-frontend/);
   assert.match(promotion, /api_previous_digest="\$\(snapshot_latest/);
   assert.match(promotion, /frontend_previous_digest="\$\(snapshot_latest/);
   assert.match(promotion, /trap rollback_promotions EXIT/);
@@ -580,18 +597,13 @@ test("release compensation retries a transient digest inspection failure", () =>
 test("jobs use least-privilege token scopes", () => {
   assert.match(workflow, /^permissions: \{}/m);
   assert.doesNotMatch(workflow, /id-token:/);
-  assert.match(jobBody("validate"), /permissions:\n      contents: read/);
-  assert.match(
-    jobBody("registry_guard"),
-    /permissions:\n      contents: read\n      packages: read/,
-  );
-  assert.match(jobBody("preflight"), /permissions:\n      contents: read/);
-  assert.match(jobBody("images"), /permissions:\n      contents: read\n      packages: write/);
-  assert.match(jobBody("manifests"), /permissions:\n      packages: write/);
-  assert.match(
-    jobBody("promote_latest"),
-    /permissions:\n      contents: read\n      packages: write/,
-  );
-  assert.match(jobBody("release"), /permissions:\n      contents: write/);
-  assert.match(jobBody("rollback_latest"), /permissions:\n      packages: write/);
+  assert.doesNotMatch(workflow, /packages:/);
+  assert.match(jobBody("validate"), /permissions:\n {6}contents: read/);
+  assert.match(jobBody("registry_guard"), /permissions:\n {6}contents: read/);
+  assert.match(jobBody("preflight"), /permissions:\n {6}contents: read/);
+  assert.match(jobBody("images"), /permissions:\n {6}contents: read/);
+  assert.match(jobBody("manifests"), /permissions: \{}/);
+  assert.match(jobBody("promote_latest"), /permissions:\n {6}contents: read/);
+  assert.match(jobBody("release"), /permissions:\n {6}contents: write/);
+  assert.match(jobBody("rollback_latest"), /permissions: \{}/);
 });
