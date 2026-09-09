@@ -37,6 +37,7 @@ import {
 
 import { accountPlatformLabel } from "../lib/account-labels";
 import { platformProbeSchema, type PlatformProbeForm } from "../lib/platform-probe-schema";
+import { formatProbeDuration } from "@/lib/probe-task-feedback";
 
 export type PlatformProbeOption = {
   value: string;
@@ -52,6 +53,7 @@ export type PlatformProbeResult = {
   actualModel: string;
   statusCode: number | null;
   failureReason: string;
+  durationMS: number | null;
 };
 
 export function platformProbeRequest(values: PlatformProbeForm): {
@@ -103,6 +105,7 @@ export function platformProbeResults(
         actualModel: optionalString(row.actual_model),
         statusCode: typeof row.status_code === "number" ? row.status_code : null,
         failureReason: optionalString(row.failure_reason),
+        durationMS: typeof row.duration_ms === "number" ? row.duration_ms : null,
       },
     ];
   });
@@ -180,6 +183,7 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
             <TableHead>请求模型</TableHead>
             <TableHead>实际模型</TableHead>
             <TableHead className="w-20">HTTP</TableHead>
+            <TableHead className="w-24">耗时</TableHead>
             <TableHead>失败原因</TableHead>
           </TableRow>
         </TableHeader>
@@ -196,12 +200,13 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
               <TableCell>{result.requestModel || "-"}</TableCell>
               <TableCell>{result.actualModel || "-"}</TableCell>
               <TableCell>{result.statusCode ?? "-"}</TableCell>
+              <TableCell>{formatProbeDuration(result.durationMS) ?? "-"}</TableCell>
               <TableCell>{result.failureReason || "-"}</TableCell>
             </TableRow>
           ))}
           {visibleResults.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={6} className="h-20 text-center text-muted-foreground">
+              <TableCell colSpan={7} className="h-20 text-center text-muted-foreground">
                 当前分类暂无结果
               </TableCell>
             </TableRow>

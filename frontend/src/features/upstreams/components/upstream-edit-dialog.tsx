@@ -43,6 +43,7 @@ import {
 } from "../lib/upstream-edit-schema";
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyProbeTaskResult } from "@/lib/probe-task-feedback";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 import { configurableUpstreamTypeOptions } from "@/lib/domain-dictionaries";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
@@ -235,7 +236,9 @@ function UpstreamAccountRowActions(props: {
     const keys = terminalRefreshKeys(scope, completedTask);
     void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
     applyAccountDeletionProgress(queryClient, completedTask);
-    if (completedTask.status === "succeeded") {
+    if (activeAction === "探活测试") {
+      notifyProbeTaskResult(completedTask, props.binding.name ?? `账号 ${props.binding.accountId}`);
+    } else if (completedTask.status === "succeeded") {
       toast.success(
         `${props.binding.name ?? `账号 ${props.binding.accountId}`}：${activeAction}完成`,
       );

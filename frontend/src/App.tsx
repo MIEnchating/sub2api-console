@@ -193,6 +193,7 @@ import {
 } from "./lib/task-state";
 import { useClientPagination } from "./hooks/use-client-pagination";
 import { terminalRefreshKeys, type TaskRefreshScope } from "./lib/task-refresh";
+import { notifyProbeTaskResult } from "./lib/probe-task-feedback";
 import { flattenTaskResult } from "./lib/task-result";
 import { MultiSelect } from "./components/multi-select";
 import { FieldLabel } from "./components/field-help-tooltip";
@@ -5542,14 +5543,17 @@ function AccountRow(props: {
     }
   }, [account.id, activeAction, queryClient, task.data?.status]);
   useEffect(() => {
-    if (!taskStopsPolling(task.data) || activeAction === null) return;
-    applyAccountDeletionProgress(queryClient, task.data);
-    if (task.data?.status === "succeeded") {
+    const completedTask = task.data;
+    if (!completedTask || !taskStopsPolling(completedTask) || activeAction === null) return;
+    applyAccountDeletionProgress(queryClient, completedTask);
+    if (activeAction === "探活测试") {
+      notifyProbeTaskResult(completedTask, account.name);
+    } else if (completedTask.status === "succeeded") {
       toast.success(`${account.name}：${activeAction}完成`);
-    } else if (task.data?.status === "cancelled") {
-      toast.info(task.data.message || `${account.name}：${activeAction}已取消`);
+    } else if (completedTask.status === "cancelled") {
+      toast.info(completedTask.message || `${account.name}：${activeAction}已取消`);
     } else {
-      toast.error(task.data?.message || `${account.name}：${activeAction}失败`);
+      toast.error(completedTask.message || `${account.name}：${activeAction}失败`);
     }
     if (activeAction === accountDeleteActionLabel) setDeleteOpen(false);
     setTaskId(null);

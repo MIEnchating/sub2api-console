@@ -186,7 +186,7 @@ type observingTasks struct {
 }
 
 func (tasks *observingTasks) Save(_ context.Context, task taskstore.Task) error {
-	if task.Status == "succeeded" || task.Status == "failed" {
+	if task.Status == "succeeded" || task.Status == "partial" || task.Status == "failed" {
 		select {
 		case tasks.terminal <- task:
 		default:
@@ -297,6 +297,77 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 		repository.samples[0].RequestModel != "gpt-test" || repository.samples[0].ActualModel != "mapped-model" ||
 		repository.samples[0].LatencyP95 == nil {
 		t.Fatalf("requests=%d samples=%#v", requestCount, repository.samples)
+	}
+}
+
+func TestActiveProbeTaskStatusReflectsTargetResults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		if strings.Contains(request.URL.Path, "/41/test") {
+			_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+			return
+		}
+		_, _ = response.Write([]byte("data: {\"type\":\"error\",\"error\":{\"message\":\"API returned 502: upstream authentication failed\"}}\n\n"))
+	}))
+	defer server.Close()
+
+	for _, test := range []struct {
+		name       string
+		candidates []business.ProbeCandidate
+		status     string
+		passed     int
+		failed     int
+	}{
+		{
+			name: "all targets fail",
+			candidates: []business.ProbeCandidate{
+				{AccountID: "42", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+			},
+			status: "failed", failed: 1,
+		},
+		{
+			name: "some targets fail",
+			candidates: []business.ProbeCandidate{
+				{AccountID: "41", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+				{AccountID: "42", GroupName: "codex", KnownModels: []string{"gpt-test"}, Metadata: map[string]any{}},
+			},
+			status: "partial", passed: 1, failed: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repository := &fakeRepository{
+				policy:     map[string]any{"probe": map[string]any{}},
+				candidates: test.candidates,
+			}
+			tasks := &observingTasks{terminal: make(chan taskstore.Task, 1)}
+			service := New(repository, fakeSettings{target: configstore.TargetSettings{
+				BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 5,
+			}}, tasks)
+
+			if _, err := service.Enqueue(context.Background(), Request{}, "operator"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case terminal := <-tasks.terminal:
+				if terminal.Status != test.status || terminal.Result["passed"] != test.passed || terminal.Result["failed"] != test.failed {
+					t.Fatalf("unexpected terminal task: %#v", terminal)
+				}
+				if _, ok := terminal.Result["duration_ms"].(int64); !ok || !strings.Contains(terminal.Message, "耗时") {
+					t.Fatalf("probe task did not expose its duration: %#v", terminal)
+				}
+				results, ok := terminal.Result["results"].([]Result)
+				if !ok || len(results) != len(test.candidates) {
+					t.Fatalf("unexpected probe results: %#v", terminal.Result["results"])
+				}
+				for _, result := range results {
+					if result.DurationMS < 0 {
+						t.Fatalf("invalid target duration: %#v", result)
+					}
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("active probe task did not finish")
+			}
+		})
 	}
 }
 

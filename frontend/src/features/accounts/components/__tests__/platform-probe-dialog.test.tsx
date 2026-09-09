@@ -39,6 +39,7 @@ function completedTask(): Task {
           actual_model: "gpt-5.6-sol",
           status_code: 200,
           failure_reason: null,
+          duration_ms: 842,
         },
         {
           account_id: "42",
@@ -48,6 +49,7 @@ function completedTask(): Task {
           actual_model: "",
           status_code: 404,
           failure_reason: "模型不可用",
+          duration_ms: 2180,
         },
       ],
     },
@@ -157,6 +159,7 @@ describe("平台模型探活", () => {
       actualModel: "",
       statusCode: 404,
       failureReason: "模型不可用",
+      durationMS: 2180,
     });
   });
 
@@ -183,6 +186,7 @@ describe("平台模型探活", () => {
       "true",
     );
     expect(screen.getByText("备用账号")).toBeVisible();
+    expect(screen.getByText("2.18 秒")).toBeVisible();
     expect(screen.queryByText("主账号")).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "成功 1" }));

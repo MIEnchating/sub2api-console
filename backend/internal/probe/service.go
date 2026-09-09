@@ -109,6 +109,7 @@ type Result struct {
 	AccountName        string  `json:"account_name"`
 	GroupName          string  `json:"group_name"`
 	Result             string  `json:"result"`
+	DurationMS         int64   `json:"duration_ms"`
 	LatencyP50         *string `json:"latency_p50_ms"`
 	LatencyP95         *string `json:"latency_p95_ms"`
 	LatencyP99         *string `json:"latency_p99_ms"`
@@ -358,17 +359,27 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	probeStarted := time.Now()
 	summary, err := s.runPrepared(ctx, prepared)
+	durationMS := time.Since(probeStarted).Milliseconds()
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
-		task.Status, task.Message = "failed", "主动探测失败："+err.Error()
-		task.Result = map[string]any{"remote_write": false, "credentials_persisted": false, "error": err.Error()}
+		task.Status, task.Message = "failed", fmt.Sprintf("主动探测失败：%s；耗时 %d 毫秒", err.Error(), durationMS)
+		task.Result = map[string]any{"remote_write": false, "credentials_persisted": false, "error": err.Error(), "duration_ms": durationMS}
 	} else {
-		task.Status = "succeeded"
-		task.Message = fmt.Sprintf("官方探测完成：通过 %d，失败 %d，跳过 %d", summary.Passed, summary.Failed, summary.Skipped)
+		switch {
+		case summary.Failed == 0:
+			task.Status = "succeeded"
+		case summary.Passed > 0:
+			task.Status = "partial"
+		default:
+			task.Status = "failed"
+		}
+		task.Message = fmt.Sprintf("官方探测完成：通过 %d，失败 %d，跳过 %d；耗时 %d 毫秒", summary.Passed, summary.Failed, summary.Skipped, durationMS)
 		task.Result = map[string]any{
 			"source": "official-account-test", "targets": summary.Targets, "persisted": summary.Persisted,
 			"passed": summary.Passed, "failed": summary.Failed, "skipped": summary.Skipped,
+			"duration_ms":  durationMS,
 			"results":      summary.Results,
 			"remote_write": false, "credentials_persisted": false,
 		}
@@ -546,9 +557,10 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 		requestModel = *target.Model
 	}
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
+	durationMS := time.Since(started).Milliseconds()
 	if firstResponse {
 		latency := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
-		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
+		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -559,7 +571,7 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
+	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, DurationMS: durationMS, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
 }
 
 func skippedProbeResult(target Target, reason string) Result {

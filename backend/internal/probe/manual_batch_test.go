@@ -69,7 +69,7 @@ func TestManualBatchRetainsScopeAndBackgroundVisibilityAfterCompletion(t *testin
 			t.Errorf("unexpected target: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"type\":\"test_complete\",\"success\":true}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{policy: map[string]any{}, candidates: []business.ProbeCandidate{

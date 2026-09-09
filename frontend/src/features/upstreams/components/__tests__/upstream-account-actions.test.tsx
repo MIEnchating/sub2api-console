@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { api, type AccountDeletePreview, type Task, type UpstreamGroup } from "@/api";
@@ -84,8 +85,14 @@ afterAll(() => vi.unstubAllGlobals());
 describe("编辑上游账号操作", () => {
   it("探活使用与账号管理相同的稳定账号 ID 接口", async () => {
     const runProbe = vi.spyOn(api, "runActiveProbe").mockResolvedValue(task());
+    const successToast = vi.spyOn(toast, "success");
     vi.spyOn(api, "task").mockResolvedValue(
-      task({ status: "succeeded", progress: 100, message: "探活完成" }),
+      task({
+        status: "succeeded",
+        progress: 100,
+        message: "官方探测完成：通过 1，失败 0，跳过 0",
+        result: { results: [{ result: "通过", duration_ms: 842 }] },
+      }),
     );
     const onChanged = renderAccounts();
 
@@ -93,6 +100,41 @@ describe("编辑上游账号操作", () => {
 
     expect(runProbe).toHaveBeenCalledWith({ account_id: "41" });
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(successToast).toHaveBeenCalledWith("Codex 主账号：探活通过", {
+      description: "耗时 842 毫秒",
+    });
+  });
+
+  it("旧任务误标为执行成功时仍按探活明细显示失败和耗时", async () => {
+    vi.spyOn(api, "runActiveProbe").mockResolvedValue(task());
+    const successToast = vi.spyOn(toast, "success");
+    const errorToast = vi.spyOn(toast, "error");
+    vi.spyOn(api, "task").mockResolvedValue(
+      task({
+        status: "succeeded",
+        progress: 100,
+        message: "官方探测完成：通过 0，失败 1，跳过 0",
+        updated_at: "2026-09-07T00:00:02.180Z",
+        result: {
+          results: [
+            {
+              result: "失败",
+              failure_reason: "Upstream authentication failed",
+            },
+          ],
+        },
+      }),
+    );
+    renderAccounts();
+
+    fireEvent.click(screen.getByRole("button", { name: "探活测试" }));
+
+    await waitFor(() =>
+      expect(errorToast).toHaveBeenCalledWith("Codex 主账号：探活失败", {
+        description: "耗时 2.18 秒 · Upstream authentication failed",
+      }),
+    );
+    expect(successToast).not.toHaveBeenCalled();
   });
 
   it("删除先读取账号管理的删除范围并提交同一稳定 ID 预览", async () => {

@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyProbeTaskResult } from "@/lib/probe-task-feedback";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 
@@ -82,9 +83,7 @@ export function AccountBatchProbeDialog(props: {
       queryClient.invalidateQueries({ queryKey: ["account-detail"] }),
       queryClient.invalidateQueries({ queryKey: ["tasks"] }),
     ]);
-    if (completed.status === "succeeded") toast.success(completed.message || "批量探活完成");
-    else if (completed.status === "cancelled") toast.info(completed.message || "批量探活已取消");
-    else toast.error(completed.message || "批量探活失败");
+    notifyProbeTaskResult(completed);
   }, [queryClient, task.data]);
 
   return (
