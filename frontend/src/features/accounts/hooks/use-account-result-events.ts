@@ -26,7 +26,7 @@ const collectionSchema = z.object({
   state: z.enum(["connected", "retrying"]),
 });
 
-export function mergeAccountResults(
+function mergeAccountResults(
   previous: readonly AccountRecentResult[],
   incoming: readonly AccountRecentResult[],
 ): AccountRecentResult[] {
