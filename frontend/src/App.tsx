@@ -1,3 +1,5 @@
+import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
+import { useAccountResultEvents } from "@/features/accounts/hooks/use-account-result-events";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
 import { UpstreamsPageActions } from "./features/upstreams/components/upstreams-page-actions";
 import {
@@ -4156,6 +4158,7 @@ export function AccountsPage() {
   );
   const pagination = useClientPagination(filteredRows, 20);
   const pageRows = pagination.visibleItems;
+  const liveResultsStatus = useAccountResultEvents(pageRows.map((account) => account.id));
   const pageAccountIds = pageRows.map((account) => account.id);
   const selectedRows = rows.filter(
     (account) =>
@@ -4488,7 +4491,12 @@ export function AccountsPage() {
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
-                <TableHead className="w-[172px]">最近结果</TableHead>
+                <TableHead className="w-[172px]">
+                  <span className="inline-flex items-center gap-1.5">
+                    最近结果
+                    <AccountLiveStatus status={liveResultsStatus} />
+                  </span>
+                </TableHead>
                 <AccountSortTableHead
                   className="w-28"
                   label="流量首字"

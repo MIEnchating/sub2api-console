@@ -180,7 +180,9 @@ function ResultSourceRow(props: {
         {props.results.map((result, index) => {
           const detail = resultDetail(result);
           return (
-            <Tooltip key={`${result.observed_at ?? "unknown"}:${index}`}>
+            <Tooltip
+              key={result.id ?? `${result.source}:${result.observed_at ?? "unknown"}:${index}`}
+            >
               <TooltipTrigger
                 render={
                   <span

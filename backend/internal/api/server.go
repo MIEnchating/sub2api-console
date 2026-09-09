@@ -298,6 +298,7 @@ type AuthRecoveryService interface {
 }
 
 type Dependencies struct {
+	AccountResultsLive AccountResultsLive
 	Notification       NotificationTester
 	NotificationTarget NotificationTargetDiscovery
 	Inspection         InspectionController
@@ -329,6 +330,7 @@ type Dependencies struct {
 }
 
 type Server struct {
+	accountResultsLive AccountResultsLive
 	config             config.Config
 	private            *configstore.Store
 	business           Business
@@ -562,6 +564,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		services = dependencies[0]
 	}
 	server := &Server{
+		accountResultsLive: services.AccountResultsLive,
 		config:             cfg,
 		private:            private,
 		business:           business,
@@ -634,6 +637,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
 	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
 	authorized.GET("/traffic/ranking", server.trafficRanking)
+	authorized.GET("/accounts/results/events", server.accountResultsEvents)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
 	authorized.PUT("/accounts/:account_id/test-models", server.setAccountTestModels)

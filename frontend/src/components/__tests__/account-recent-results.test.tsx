@@ -32,6 +32,23 @@ const placeholder: AccountRecentResult = {
 };
 
 describe("AccountRecentResults", () => {
+  it("追加请求时最旧色块移出，保留色块不会因位置变化被重建", () => {
+    const first = { ...traffic, id: "1", observed_at: "2026-09-09T08:00:01Z" };
+    const second = { ...traffic, id: "2", observed_at: "2026-09-09T08:00:02Z", duration_ms: 2000 };
+    const third = { ...traffic, id: "3", observed_at: "2026-09-09T08:00:03Z", duration_ms: 3000 };
+    const view = render(<AccountRecentResults results={[second, first]} limit={2} />);
+    const retained = screen.getByLabelText(/总耗时 2000ms/);
+    view.rerender(<AccountRecentResults results={[third, second, first]} limit={2} />);
+    expect(screen.queryByLabelText(/总耗时 2795ms/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/总耗时 2000ms/)).toBe(retained);
+    expect(retained).toHaveAttribute("tabindex", "0");
+    const blocks = within(screen.getByRole("group", { name: "真实流量结果" })).getAllByLabelText(
+      /网关错误/,
+    );
+    expect(blocks[0]).toHaveAccessibleName(/总耗时 2000ms/);
+    expect(blocks[1]).toHaveAccessibleName(/总耗时 3000ms/);
+  });
+
   it("混合来源分成真实流量与探针两行，均以实心色块保留事件颜色", () => {
     render(<AccountRecentResults results={[traffic, probe]} />);
     const trafficRow = screen.getByRole("group", { name: "真实流量结果" });

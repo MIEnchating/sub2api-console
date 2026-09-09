@@ -584,3 +584,21 @@ test("刷新账号快照后状态列展示当前错误并清除已恢复错误",
     row.getByText("最近错误：额度不足，请检查上游账户余额", { exact: true }),
   ).toHaveCount(0);
 });
+
+test("实时连接异常收在最近结果表头，键盘聚焦后显示重连说明", async ({ page }) => {
+  await page.route("**/api/accounts/results/events?*", (route) =>
+    route.fulfill({ status: 404, body: "not found" }),
+  );
+  await page.goto("/accounts");
+  const header = page.getByRole("columnheader", { name: /最近结果/ });
+  const indicator = header.getByRole("status", { name: "实时请求连接中断" });
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveCSS("width", "20px");
+  await expect(indicator).toHaveCSS("height", "20px");
+  await expect(page.getByText("实时请求连接中断，正在重连", { exact: true })).toHaveCount(0);
+  await indicator.focus();
+  await expect(indicator).toBeFocused();
+  await expect(page.getByRole("tooltip")).toContainText("正在自动重连，已有请求结果仍保留");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toBeHidden();
+});

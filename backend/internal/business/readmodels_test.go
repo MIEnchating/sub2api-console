@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -315,6 +316,53 @@ func TestAccountProjectionLimitsRecentResultsWithoutChangingScoringCount(t *test
 	}
 	if first.SampleCount != 4 {
 		t.Fatalf("display limit changed persisted scoring count: %d", first.SampleCount)
+	}
+}
+
+func TestRecentResultsExposeDistinctStableIDsWhenRequestsShareTimestamp(t *testing.T) {
+	store := openReadModelFixture(t)
+	for _, key := range []string{"same-time-a", "same-time-b"} {
+		if _, err := store.db.Exec(`INSERT INTO health_samples(account_id,group_name,result,observed_at,source,evidence_key)
+			VALUES('41','codex','通过','2026-09-09T08:00:00Z','traffic',?)`, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accounts, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(accounts[0].RecentResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(encoded, &results); err != nil {
+		t.Fatal(err)
+	}
+	if len(results) < 2 || results[0].ID == "" || results[1].ID == "" || results[0].ID == results[1].ID {
+		t.Fatalf("same-time requests need distinct public IDs: %s", encoded)
+	}
+	if _, err := store.db.Exec(`UPDATE health_samples SET latency_p95='321' WHERE evidence_key='same-time-b'`); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.Accounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err = json.Marshal(updated[0].RecentResults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enriched []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(encoded, &enriched); err != nil {
+		t.Fatal(err)
+	}
+	if enriched[0].ID != results[0].ID {
+		t.Fatalf("latency enrichment changed request identity: %s -> %s", results[0].ID, enriched[0].ID)
 	}
 }
 

@@ -945,6 +945,7 @@ export type AccountStatus = {
 };
 
 export type AccountRecentResult = {
+  id?: string;
   result: string | null;
   event_type?: string | null;
   score?: number | null;
@@ -1418,6 +1419,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  accountResultsEventsURL: (ids: readonly string[]) =>
+    apiEndpoint(`/api/accounts/results/events?account_ids=${encodeURIComponent(ids.join(","))}`),
   autoInspectionEventsURL: () => apiEndpoint("/api/inspection/automation/events"),
   taskEventsURL: (id: string) => apiEndpoint(`/api/tasks/${encodeURIComponent(id)}/events`),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),

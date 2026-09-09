@@ -99,8 +99,10 @@ func run() error {
 	}
 	serviceContext, cancelServices := context.WithCancel(context.Background())
 	backgroundTasks := taskrunner.NewBounded(serviceContext, 4)
+	liveTasks := taskrunner.NewBounded(serviceContext, 500)
 	defer cancelServices()
 	defer backgroundTasks.Cancel()
+	defer liveTasks.Cancel()
 	if err := backgroundTasks.Go(func(ctx context.Context) {
 		compacted, compactErr := taskStore.CompactAutomaticInspectionHistory(ctx, 100)
 		if compactErr != nil {
@@ -194,6 +196,13 @@ func run() error {
 	logService.UseTaskRunner(backgroundTasks)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)
 	evidenceService := evidence.New(businessStore, probeTasks)
+	liveResults := evidence.NewLive(func(ctx context.Context, accountID string) error {
+		policy, err := businessStore.ControlPolicy(ctx)
+		if err != nil {
+			return err
+		}
+		return evidenceService.CollectLive(ctx, policy, privateStore, accountID)
+	}, liveTasks)
 	opsTrafficService := opstraffic.New(privateStore, businessStore)
 	routingService := routing.NewService(businessStore)
 	routingWriteService := routingwrite.New(privateStore, businessStore)
@@ -245,6 +254,7 @@ func run() error {
 	systemMetrics := systeminfo.New(cfg.DataDir)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
+		AccountResultsLive: liveResults,
 		Notification:       notificationService,
 		NotificationTarget: notificationTargetDiscovery,
 		Inspection:         inspectionScheduler,
@@ -326,6 +336,7 @@ func run() error {
 		maintenanceErr = fmt.Errorf("停止日志维护任务失败: %w", maintenanceErr)
 	}
 	taskErr := backgroundTasks.Shutdown(shutdown)
+	liveErr := liveTasks.Shutdown(shutdown)
 	var httpErr error
 	for range servers {
 		httpErr = errors.Join(httpErr, <-httpShutdowns)
@@ -334,11 +345,11 @@ func run() error {
 		serveErr = errors.Join(serveErr, <-serveErrors)
 		remainingServers--
 	}
-	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || httpErr != nil {
+	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || liveErr != nil || httpErr != nil {
 		// Do not explicitly close databases while a task or HTTP handler may still be finalizing.
 		closeStores = false
 	}
-	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
+	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr, liveErr)
 }
 
 func frontendHandler(apiHandler http.Handler, directory string) http.Handler {

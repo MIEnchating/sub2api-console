@@ -18,6 +18,7 @@ import (
 )
 
 type AccountRecentResult struct {
+	ID                    string         `json:"id"`
 	Result                *string        `json:"result"`
 	EventType             *string        `json:"event_type"`
 	Score                 *float64       `json:"score"`
@@ -740,12 +741,26 @@ func (s *Store) loadAccountEvaluations(ctx context.Context, accounts map[string]
 }
 
 func (s *Store) loadRecentEvidence(ctx context.Context, accounts map[string]*accountProjection) error {
+	return s.loadRecentEvidenceLimit(ctx, accounts, 10)
+}
+
+// RecentAccountResults is the bounded public projection used by live request streams.
+func (s *Store) RecentAccountResults(ctx context.Context, accountID string, limit int) ([]AccountRecentResult, error) {
+	account := &accountProjection{}
+	account.RecentResults = []AccountRecentResult{}
+	if err := s.loadRecentEvidenceLimit(ctx, map[string]*accountProjection{accountID: account}, min(max(limit, 1), 100)); err != nil {
+		return nil, err
+	}
+	return account.RecentResults, nil
+}
+
+func (s *Store) loadRecentEvidenceLimit(ctx context.Context, accounts map[string]*accountProjection, limit int) error {
 	clauses := []string{`LOWER(REPLACE(source,'_','-'))<>'account-state'`}
 	accountIDs := make([]string, 0, len(accounts))
 	for accountID := range accounts {
 		accountIDs = append(accountIDs, accountID)
 	}
-	selections, err := s.selectHealthSampleWindowsForAccounts(ctx, accountIDs, clauses, nil, 10, false)
+	selections, err := s.selectHealthSampleWindowsForAccounts(ctx, accountIDs, clauses, nil, limit, false)
 	if err != nil {
 		return err
 	}
@@ -771,6 +786,7 @@ func (s *Store) loadRecentEvidence(ctx context.Context, accounts map[string]*acc
 				classificationLatency = nullString(sample.latencyP50)
 			}
 			account.RecentResults = append(account.RecentResults, AccountRecentResult{
+				ID:     strconv.FormatInt(sample.id, 10),
 				Result: nullString(sample.result), ObservedAt: nullString(sample.observedAt), LatencyMS: latency, DurationMS: duration,
 				FailureReason: nullString(sample.failureReason), Source: sample.source,
 				ClassificationLatency: classificationLatency, ClassificationPayload: payload,
