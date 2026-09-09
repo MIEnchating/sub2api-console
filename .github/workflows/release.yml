@@ -8,7 +8,63 @@ env:
   REGISTRY: docker.io
   DOCKERHUB_USERNAME: mienvirtuoso
 jobs:
+  preflight:
+    name: Mandatory release preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Validate deployment configuration
+        run: node --test .github/scripts/*.test.mjs
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.2.22"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Frontend mandatory checks
+        working-directory: frontend
+        run: |
+          bun run format:check
+          bun run typecheck
+          bun run lint
+          bun run deadcode
+          bun run test
+      - name: Install browser
+        working-directory: frontend
+        run: bun x playwright install --with-deps chromium
+      - name: Browser regressions
+        id: browser
+        working-directory: frontend
+        run: bun run test:e2e
+      - name: Preserve browser failure diagnostics
+        if: ${{ failure() && steps.browser.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failure-diagnostics
+          path: frontend/test-results/
+          retention-days: 7
+      - name: Production build
+        working-directory: frontend
+        run: bun run build
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Backend mandatory checks
+        working-directory: backend
+        run: |
+          go vet ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          go test -race ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          go build ./...
+
   build-and-push:
+    needs: preflight
     runs-on: ubuntu-latest
     permissions:
       contents: read

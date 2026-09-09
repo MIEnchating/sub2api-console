@@ -5,6 +5,7 @@ export default defineConfig({
   testMatch: "**/*.e2e.ts",
   fullyParallel: true,
   workers: 2,
+  reporter: process.env.CI ? [["list"], ["github"]] : "list",
   use: {
     baseURL: "http://127.0.0.1:3013",
     trace: "retain-on-failure",

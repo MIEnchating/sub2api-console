@@ -14,6 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  configuration:
+    name: Deployment configuration checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Validate deployment configuration
+        run: node --test .github/scripts/*.test.mjs
+
   frontend:
     name: Frontend checks
     runs-on: ubuntu-latest
@@ -43,7 +53,15 @@ jobs:
       - name: Install browser
         run: bun x playwright install --with-deps chromium
       - name: Browser regressions
+        id: browser
         run: bun run test:e2e
+      - name: Preserve browser failure diagnostics
+        if: ${{ failure() && steps.browser.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-failure-diagnostics
+          path: frontend/test-results/
+          retention-days: 7
       - name: Production build
         run: bun run build
 
@@ -71,7 +89,7 @@ jobs:
 
   docker:
     name: Docker build preflight
-    needs: [frontend, backend]
+    needs: [configuration, frontend, backend]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -79,5 +97,3 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build application image
         run: docker build --build-arg VERSION=ci-${GITHUB_SHA::12} -t sub2api-console:ci -f backend/Dockerfile .
-      - name: Validate deployment configuration
-        run: node --test .github/scripts/*.test.mjs

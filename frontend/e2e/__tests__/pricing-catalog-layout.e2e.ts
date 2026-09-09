@@ -118,9 +118,17 @@ test("首次加载在剩余高度内展示骨架并禁用预览，读取完成�
     await expect(
       page.getByRole("button", { name: "查看账号调整明细", exact: true }),
     ).toBeDisabled();
-    const bounds = (await loading.boundingBox())!;
-    const content = (await page.locator('[data-slot="page-workspace"]').boundingBox())!;
-    expect(bounds.height).toBeLessThanOrEqual(content.height);
+    // Layout dimensions exclude the page entrance transform and its subpixel rounding.
+    const layout = await loading.evaluate((element) => {
+      const workspace = element.closest<HTMLElement>('[data-slot="page-workspace"]')!;
+      return {
+        loadingHeight: element.clientHeight,
+        availableHeight: workspace.clientHeight,
+        contentHeight: workspace.scrollHeight,
+      };
+    });
+    expect(layout.loadingHeight).toBeLessThanOrEqual(layout.availableHeight);
+    expect(layout.contentHeight).toBeLessThanOrEqual(layout.availableHeight);
   } finally {
     completeRead();
   }
