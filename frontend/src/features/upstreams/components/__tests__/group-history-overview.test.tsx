@@ -1,13 +1,27 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterContextProvider } from "@tanstack/react-router";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UpstreamsPage } from "../../../../App";
 import { router } from "../../../../router";
 
+beforeEach(() => {
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
 describe("上游分组变化汇总", () => {
-  it("点击顶部统计变化后显示各上游的分组变化记录", () => {
+  it("从顶部维护菜单打开统计变化后显示各上游的分组变化记录", async () => {
+    const user = userEvent.setup();
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
@@ -57,7 +71,9 @@ describe("上游分组变化汇总", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "统计变化" }));
+    screen.getByRole("button", { name: "上游维护" }).focus();
+    await user.keyboard("{Enter}");
+    await user.click(await screen.findByRole("menuitem", { name: "统计变化" }));
 
     const dialog = screen.getByRole("dialog", { name: "上游分组变化" });
     expect(dialog).toBeVisible();

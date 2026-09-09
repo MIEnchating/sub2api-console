@@ -10,6 +10,7 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { operationErrorMessage } from "@/lib/operation-feedback";
 import { TraceAccountActions } from "./trace-account-actions";
 
 function emptySearch(): SystemLogSearchQuery {
@@ -343,7 +344,18 @@ export function SystemLogSearchPanel() {
               />
             </>
           )}
-          {!logs.isLoading && !logPage?.items.length && (
+          {logs.isError && !logPage && (
+            <div
+              role="alert"
+              className="flex min-h-28 flex-col items-center justify-center gap-2 px-4 py-6 text-center text-sm wrap-anywhere"
+            >
+              <p className="text-destructive">
+                {operationErrorMessage(logs.error, "Sub2API 系统日志查询失败")}
+              </p>
+              <p className="text-muted-foreground">请检查连接后点击“查询”重新查询。</p>
+            </div>
+          )}
+          {logs.isSuccess && !logPage?.items.length && (
             <div className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">
               没有匹配的系统日志
             </div>

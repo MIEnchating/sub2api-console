@@ -76,6 +76,46 @@ it("勾选分组后显示底部批量操作条，按 Esc 清空选择", () => {
   );
 });
 
+it("顶部维护菜单未勾选时预览当前筛选分组，取消前不执行写入", async () => {
+  const user = userEvent.setup();
+  const control = vi.spyOn(api, "setGroupExcluded");
+  renderGroups([group("1", "目标分组"), group("2", "其他分组"), group(null, "目标无 ID")]);
+  fireEvent.change(screen.getByPlaceholderText("搜索分组、平台或策略"), {
+    target: { value: "目标" },
+  });
+  screen.getByRole("button", { name: "分组维护" }).focus();
+  await user.keyboard("{Enter}");
+  await screen.findByRole("menu");
+  expect(screen.getByText("当前筛选 1 个分组")).toBeVisible();
+  await user.click(screen.getByRole("menuitem", { name: "排除分组" }));
+  const dialog = screen.getByRole("dialog", { name: "批量排除分组" });
+  expect(within(dialog).getByRole("list", { name: "本次处理的分组" })).toHaveTextContent(
+    "目标分组（#1）",
+  );
+  expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
+  expect(control).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole("button", { name: "取消" }));
+  expect(control).not.toHaveBeenCalled();
+});
+
+it("顶部维护菜单已有勾选时只处理选中分组，确认后按稳定 ID 写入", async () => {
+  const user = userEvent.setup();
+  const control = vi.spyOn(api, "setGroupExcluded").mockResolvedValue(group("2"));
+  renderGroups([group("1"), group("2")]);
+  await user.click(screen.getByRole("checkbox", { name: "选择分组 分组 2" }));
+  screen.getByRole("button", { name: "分组维护" }).focus();
+  await user.keyboard("{Enter}");
+  await screen.findByRole("menu");
+  expect(screen.getByText("已选择 1 个分组")).toBeVisible();
+  await user.click(screen.getByRole("menuitem", { name: "恢复管控" }));
+  const dialog = screen.getByRole("dialog", { name: "批量恢复管控" });
+  expect(within(dialog).getAllByRole("listitem")).toHaveLength(1);
+  expect(dialog).toHaveTextContent("分组 2（#2）");
+  expect(control).not.toHaveBeenCalled();
+  await user.click(within(dialog).getByRole("button", { name: "确认处理 1 个分组" }));
+  await waitFor(() => expect(control).toHaveBeenCalledWith("2", false));
+});
+
 it("当前页全选只选择有稳定 ID 的分组，跨页保留选择且筛选后清空", () => {
   renderGroups([
     group(null, "无 ID"),

@@ -1,3 +1,4 @@
+import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -159,8 +160,8 @@ describe("OverviewPage", () => {
     expect(markup).toContain("连续失败达到熔断线");
     expect(markup).toContain('data-slot="account-health-score"');
     expect(markup).toContain("健康分 12");
-    expect(markup).toContain("短期 10");
-    expect(markup).toContain("长期 20");
+    expect(markup).toContain('aria-label="短期评分 10"');
+    expect(markup).toContain('aria-label="长期评分 20"');
     expect(markup).toContain("1 个渠道需要处理");
     expect(markup).toContain("1 个限流中（会自愈）");
     expect(markup).toContain("1/2 有评分");
@@ -170,4 +171,19 @@ describe("OverviewPage", () => {
     expect(markup).toContain('data-slot="account-recent-results"');
     expect(markup).not.toContain("排除分组");
   });
+});
+
+it("超长分组名不会挤压健康状态标签的可读宽度", () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  const name = "生产环境专用分组".repeat(12);
+  queryClient.setQueryData(["accounts"], [{ ...account(), groups: [name] }]);
+  queryClient.setQueryData(["groups"], [group({ name })]);
+  render(
+    <QueryClientProvider client={queryClient}>
+      <OverviewPage onOpenAccounts={() => {}} onOpenGroups={() => {}} onOpenEvents={() => {}} />
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getByText("仅剩保底", { exact: true }).closest('[data-slot="status-badge"]'),
+  ).toHaveClass("shrink-0");
 });

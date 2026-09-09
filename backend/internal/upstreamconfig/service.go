@@ -233,7 +233,13 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if host == "" {
 		return Configuration{}, inputError(errors.New("上游 Host 不能为空"))
 	}
-	targetHost := host
+	baseURL, err := configstore.ValidateBaseURL(input.BaseURL)
+	if err != nil {
+		return Configuration{}, inputError(err)
+	}
+	// The edit form submits one upstream address. Derive its Host here so
+	// address changes use the same identity-preserving rename as explicit edits.
+	targetHost := configstore.CanonicalHost(baseURL)
 	if strings.TrimSpace(input.Host) != "" {
 		targetHost = configstore.CanonicalHost(input.Host)
 	}

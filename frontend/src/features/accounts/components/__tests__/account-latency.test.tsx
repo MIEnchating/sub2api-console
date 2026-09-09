@@ -10,6 +10,19 @@ const account: Pick<AccountStatus, "ttfb_p50_ms" | "ttfb_p95_ms"> = {
 };
 
 describe("账号流量首字延迟", () => {
+  it.each([
+    { name: "有延迟数据", value: account },
+    { name: "暂无数据", value: { ttfb_p50_ms: null, ttfb_p95_ms: null } },
+  ])("$name 时分位数标签与数值按内容宽度紧凑排列", ({ value }) => {
+    render(<AccountLatencyCell account={value} />);
+
+    const metrics = screen.getByText("P95").closest("dl");
+    expect(metrics).toHaveClass("w-fit", "grid-cols-[auto_auto]", "gap-x-2");
+    for (const definition of screen.getAllByRole("definition")) {
+      expect(definition).not.toHaveClass("text-right");
+    }
+  });
+
   it("有亚秒和秒级延迟时保留精度，避免较快请求显示为零秒", () => {
     render(<AccountLatencyCell account={account} />);
     expect(screen.getByText("320ms")).toBeVisible();

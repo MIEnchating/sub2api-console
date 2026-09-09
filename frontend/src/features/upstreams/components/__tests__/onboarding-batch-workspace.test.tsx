@@ -137,7 +137,7 @@ describe("账号添加批量工作区", () => {
     expect(markup).not.toContain("由本地分组确定");
   });
 
-  it("复合分组无法唯一反推时显示明确原因", () => {
+  it("账号类型仍有冲突时显示明确原因", () => {
     const markup = renderToStaticMarkup(
       <OnboardingInferredPlatformStatus required selectedCount={1} platformLabel={null} />,
     );

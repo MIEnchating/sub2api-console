@@ -4,35 +4,25 @@ export { parseJsonStringMap as parseStringMap } from "@/lib/json-string-map";
 
 export const upstreamEditSchema = z.object({
   name: z.string().trim().min(1, "请输入上游名称").max(100, "上游名称不能超过 100 个字符"),
-  host: z
-    .string()
-    .trim()
-    .min(1, "请输入上游 Host")
-    .refine(
-      (value) => !value.includes("://") && !/[/\\?#]/.test(value),
-      "请输入纯 Host，可包含端口",
-    )
-    .refine((value) => {
-      try {
-        const parsed = new URL(`https://${value}`);
-        return Boolean(parsed.hostname) && !parsed.username && !parsed.password;
-      } catch {
-        return false;
-      }
-    }, "请输入有效的上游 Host"),
-  base_url_protocol: z.enum(["https", "http"]),
   base_url: z
     .string()
     .trim()
-    .min(1, "请输入 Base URL")
-    .refine((value) => !value.includes("://"), "协议请使用左侧下拉选择")
+    .min(1, "请输入上游地址")
+    .max(2048, "上游地址不能超过 2048 个字符")
     .refine((value) => {
       try {
-        return Boolean(new URL(`https://${value}`).hostname);
+        const parsed = new URL(value);
+        return (
+          /^https?:\/\//.test(value) &&
+          Boolean(parsed.hostname) &&
+          !parsed.username &&
+          !parsed.password &&
+          !/[?#\\]/.test(value)
+        );
       } catch {
         return false;
       }
-    }, "请输入有效的 Base URL"),
+    }, "请输入完整的 HTTP/HTTPS 地址，不含用户名、密码、查询参数或片段"),
   account_base_url: z
     .string()
     .trim()
@@ -61,33 +51,13 @@ export const upstreamEditSchema = z.object({
 
 export type UpstreamEditValues = z.infer<typeof upstreamEditSchema>;
 
-export function composeUpstreamBaseUrl(
-  values: Pick<UpstreamEditValues, "base_url_protocol" | "base_url">,
-): string {
-  return `${values.base_url_protocol}://${values.base_url.trim().replace(/^\/+/, "")}`;
-}
-
-export function parseUpstreamBaseUrl(
-  value: string,
-): Pick<UpstreamEditValues, "base_url_protocol" | "base_url"> {
-  const trimmed = value.trim();
-  return {
-    base_url_protocol: trimmed.toLowerCase().startsWith("http://") ? "http" : "https",
-    base_url: trimmed.replace(/^https?:\/\//i, ""),
-  };
-}
-
 export function upstreamConnectionPayload(
-  values: Pick<UpstreamEditValues, "base_url_protocol" | "base_url" | "account_base_url"> & {
-    host?: string;
-  },
-): { host?: string; base_url: string; account_base_url: string } {
-  const result = {
-    base_url: composeUpstreamBaseUrl(values),
+  values: Pick<UpstreamEditValues, "base_url" | "account_base_url">,
+): { base_url: string; account_base_url: string } {
+  return {
+    base_url: values.base_url.trim(),
     account_base_url: values.account_base_url.trim(),
   };
-  const host = values.host?.trim().toLowerCase();
-  return host ? { ...result, host } : result;
 }
 
 export type AuthModeOption = { value: string; label: string };

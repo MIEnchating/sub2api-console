@@ -152,6 +152,7 @@ func run() error {
 		taskStore,
 		managementTasks,
 	)
+	upstreamSyncTasks.UseBalanceAlerts(alertService.EvaluateBalance)
 	upstreamDeleteService := upstreamdelete.New(businessStore, privateStore, taskStore)
 	accountDeleteService := accountdelete.New(businessStore, privateStore, upstreamReader, taskStore)
 	onboardingService := onboarding.New(businessStore, privateStore, upstreamReader, taskStore)

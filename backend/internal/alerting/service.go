@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -14,11 +16,14 @@ import (
 
 type Repository interface {
 	EvaluateAlertIncidents(context.Context) (business.AlertEvidenceResult, error)
+	EvaluateBalanceAlertIncidents(context.Context, string) (business.AlertEvidenceResult, error)
+	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
 	RecordAlertEvaluation(context.Context, string, business.AlertEvidenceResult, business.AlertDeliveryResult) (business.AlertEvaluationRecord, error)
 }
 
 type Deliverer interface {
 	Deliver(context.Context, bool) (business.AlertDeliveryResult, error)
+	DeliverBalance(context.Context, string) (business.AlertDeliveryResult, error)
 }
 
 type Result struct {
@@ -31,9 +36,10 @@ type Result struct {
 }
 
 type Service struct {
-	repository Repository
-	deliverer  Deliverer
-	now        func() time.Time
+	evaluationMu sync.Mutex
+	repository   Repository
+	deliverer    Deliverer
+	now          func() time.Time
 }
 
 type TaskStore interface {
@@ -116,6 +122,8 @@ func randomTaskID() (string, error) {
 }
 
 func (s *Service) Evaluate(ctx context.Context) (Result, error) {
+	s.evaluationMu.Lock()
+	defer s.evaluationMu.Unlock()
 	started := s.now().UTC().Format(time.RFC3339Nano)
 	evidence, err := s.repository.EvaluateAlertIncidents(ctx)
 	if err != nil {
@@ -138,4 +146,33 @@ func (s *Service) Evaluate(ctx context.Context) (Result, error) {
 		AlertEvaluationRecord: record, Source: "console-domain-db", Findings: evidence.Findings,
 		Delivery: delivery, RemoteWrite: false, EvaluationDisabled: evidence.EvaluationDisabled,
 	}, nil
+}
+
+// EvaluateBalance is called after a Host balance has been committed, independently
+// of the inspection's probe and routing stages. Both evaluation paths serialize so
+// a full evaluation cannot overwrite this recovery with an older balance snapshot.
+func (s *Service) EvaluateBalance(ctx context.Context, host string) error {
+	s.evaluationMu.Lock()
+	defer s.evaluationMu.Unlock()
+	evidence, evaluationErr := s.repository.EvaluateBalanceAlertIncidents(ctx, host)
+	delivery := business.AlertDeliveryResult{MessageIDs: []string{}}
+	if evaluationErr == nil && !evidence.EvaluationDisabled {
+		delivery, evaluationErr = s.deliverer.DeliverBalance(ctx, host)
+	}
+	if evidence.EvaluationDisabled {
+		delivery.Disabled = true
+	}
+	status := "succeeded"
+	summary := fmt.Sprintf("上游余额告警检测完成：%s，发送 %d 项", host, delivery.Sent)
+	if evaluationErr == nil && (delivery.Failed > 0 || delivery.Uncertain > 0 || (delivery.Skipped > 0 && !delivery.Configured && !delivery.Disabled)) {
+		evaluationErr = errors.New("余额告警通知未完成，请查看通知投递记录")
+	}
+	payload := map[string]any{"host": host, "findings": evidence.Findings, "delivery": delivery, "evaluation_disabled": evidence.EvaluationDisabled}
+	if evaluationErr != nil {
+		status = "failed"
+		summary = "上游余额告警检测或通知失败：" + host
+		payload["error"] = evaluationErr.Error()
+	}
+	_, recordErr := s.repository.RecordRuntimeEvent(ctx, "upstream.balance_alert", status, summary, payload)
+	return errors.Join(evaluationErr, recordErr)
 }

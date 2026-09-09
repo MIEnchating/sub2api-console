@@ -95,6 +95,175 @@ const accounts = [
   }),
 ];
 
+test("账号操作每行三个共两行，第二行末尾可展开更多操作", async ({ page }) => {
+  await page.goto("/accounts");
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(accounts.length);
+  await expect(page.getByRole("button", { name: "状态与处置", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "操作", exact: true })).toHaveCSS(
+    "width",
+    "112px",
+  );
+  await expect(page.getByRole("columnheader", { name: "按账号升序排列", exact: true })).toHaveCSS(
+    "width",
+    "232px",
+  );
+  await expect(page.getByRole("columnheader", { name: "状态", exact: true })).toHaveCSS(
+    "width",
+    "208px",
+  );
+  for (const row of await rows.all()) {
+    const actions = row.getByRole("group", { name: "账号操作", exact: true });
+    await actions.scrollIntoViewIfNeeded();
+    const buttons = actions.getByRole("button");
+    await expect(buttons).toHaveCount(6);
+    await expect(buttons.nth(5)).toHaveAccessibleName("更多账号操作");
+    const positions = await buttons.evaluateAll((elements) =>
+      elements.map((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, bottom: rect.bottom, right: rect.right };
+      }),
+    );
+    for (const index of [0, 3]) {
+      expect(positions[index].y).toBe(positions[index + 1].y);
+      expect(positions[index].y).toBe(positions[index + 2].y);
+      expect(positions[index + 1].x).toBeGreaterThanOrEqual(positions[index].right);
+      expect(positions[index + 2].x).toBeGreaterThanOrEqual(positions[index + 1].right);
+      expect(positions[index].x).toBe(positions[0].x);
+      if (index > 0) {
+        expect(positions[index].y).toBeGreaterThanOrEqual(positions[index - 3].bottom);
+      }
+    }
+  }
+  const more = rows.first().getByRole("button", { name: "更多账号操作" });
+  await more.scrollIntoViewIfNeeded();
+  await more.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+  await expect(menu.getByRole("menuitem", { name: "查看并编辑账号" })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "删除账号及上游 Key" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).not.toBeVisible();
+  await expect(more).toBeFocused();
+});
+
+test("长账号名限制在账号列内，辅助信息保持较小字号", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 959 });
+  await page.goto("/accounts");
+  const identity = page.locator("tbody tr").nth(2).getByRole("cell").nth(1);
+  const name = identity.getByText(accounts[2].name, { exact: true });
+  await expect(name).toBeVisible();
+  const cellBounds = await identity.boundingBox();
+  const nameBounds = await name.boundingBox();
+  expect(nameBounds!.x + nameBounds!.width).toBeLessThanOrEqual(cellBounds!.x + cellBounds!.width);
+  await expect(identity.getByText("upstream.example.test", { exact: true })).toHaveCSS(
+    "font-size",
+    "12px",
+  );
+});
+
+test("人工优先账号和未知调度开关的说明在窄列内完整换行", async ({ page }) => {
+  await page.route("**/api/accounts", (route) =>
+    route.fulfill({
+      json: [
+        account("manual", { manual_priority: 3, manual_sync_balance_multiplier: false }),
+        account("unknown", { schedulable: null }),
+      ],
+    }),
+  );
+  await page.goto("/accounts");
+  await page.getByRole("switch", { name: "显示人工优先账号" }).check();
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(2);
+  const overflow = await rows.evaluateAll((elements) =>
+    elements.flatMap((row) =>
+      [7, 8].flatMap((column) => {
+        const cell = row.children[column];
+        const bounds = cell.getBoundingClientRect();
+        return Array.from(cell.querySelectorAll("span"))
+          .filter((element) => {
+            const rect = element.getBoundingClientRect();
+            return (
+              rect.left < bounds.left ||
+              rect.right > bounds.right ||
+              element.scrollWidth > element.clientWidth
+            );
+          })
+          .map((element) => element.textContent);
+      }),
+    ),
+  );
+  expect(overflow).toEqual([]);
+});
+
+test("横向滚动前后都能直接打开右侧账号操作", async ({ page }) => {
+  await page.goto("/accounts");
+  const trigger = page.getByRole("button", { name: "更多账号操作", exact: true }).first();
+  await expect(trigger).toBeInViewport({ ratio: 1 });
+  const container = page.locator('[data-slot="table-container"]');
+  await container.evaluate((element) => {
+    element.scrollLeft = element.scrollWidth / 2;
+  });
+  await expect(trigger).toBeInViewport({ ratio: 1 });
+  await trigger.click();
+  await expect(page.getByRole("menu")).toBeVisible();
+});
+
+test("多行账号滚动时表头与分页保持可见，固定操作列跟随行背景", async ({ page }) => {
+  await page.route("**/api/accounts", (route) =>
+    route.fulfill({ json: Array.from({ length: 20 }, (_, index) => account(String(index))) }),
+  );
+  await page.goto("/accounts");
+  const rows = page.locator("tbody tr");
+  await expect(rows).toHaveCount(20);
+  const actions = rows.first().getByRole("cell").last();
+  const cardBackground = await page
+    .locator("[data-table-panel]")
+    .evaluate((element) => getComputedStyle(element).backgroundColor);
+  await expect(actions).toHaveCSS("background-color", cardBackground);
+  await rows.first().getByRole("checkbox").check();
+  await expect
+    .poll(() =>
+      rows
+        .first()
+        .evaluate(
+          (row) =>
+            getComputedStyle(row).backgroundColor ===
+            getComputedStyle(row.lastElementChild!).backgroundColor,
+        ),
+    )
+    .toBe(true);
+  await rows.first().getByRole("checkbox").uncheck();
+  const container = page.locator('[data-slot="table-container"]');
+  await container.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(page.getByRole("columnheader", { name: "操作", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+  await expect(rows.last().getByRole("button", { name: "更多账号操作" })).toBeInViewport({
+    ratio: 1,
+  });
+  await expect(page.getByRole("button", { name: "转到下一页", exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+});
+
+test("低频维护收进菜单，空账号禁用写入且关闭后恢复键盘焦点", async ({ page }) => {
+  await page.route("**/api/accounts", (route) => route.fulfill({ json: [] }));
+  await page.goto("/accounts");
+  await expect(page.getByText("当前没有账号", { exact: true })).toBeVisible();
+  const trigger = page.getByRole("button", { name: "账号维护", exact: true });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("menuitem", { name: "复验绑定", exact: true })).toBeDisabled();
+  await expect(page.getByRole("menuitem", { name: "同步模型", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+});
+
 test.beforeEach(async ({ page, colorScheme }) => {
   await page.addInitScript((theme) => {
     localStorage.setItem("sub2api-console-theme", theme ?? "light");
@@ -134,7 +303,7 @@ test("宽屏下状态文案和不同数量的操作按钮均保持在各自列�
   );
   await expect(rows.first().getByRole("cell")).toHaveCount(10);
   await expect(
-    page.getByRole("button", { name: "状态与处置", exact: true }).first(),
+    page.getByRole("button", { name: "更多账号操作", exact: true }).first(),
   ).toBeInViewport({
     ratio: 1,
   });
@@ -168,7 +337,7 @@ test("宽屏下状态文案和不同数量的操作按钮均保持在各自列�
   await page.screenshot({ path: test.info().outputPath("account-metrics.png"), clip });
 });
 
-test("窄视口仅在表格内横向滚动且可打开完整状态详情", async ({ page }) => {
+test("窄视口仅在表格内横向滚动且可展开更多账号操作", async ({ page }) => {
   await page.goto("/accounts");
   await expect(page.locator("tbody tr")).toHaveCount(accounts.length);
   const container = page.locator('[data-slot="table-container"]');
@@ -180,14 +349,12 @@ test("窄视口仅在表格内横向滚动且可打开完整状态详情", async
   await container.evaluate((element) => {
     element.scrollLeft = element.scrollWidth;
   });
-  const trigger = page.getByRole("button", { name: "状态与处置", exact: true }).first();
+  const trigger = page.getByRole("button", { name: "更多账号操作", exact: true }).first();
   await expect(trigger).toBeInViewport({ ratio: 1 });
   await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "状态与处置" });
-  await expect(dialog).toBeVisible();
-  await expect(
-    dialog.getByText(`最近错误：${accounts[0].sub2api_error}`, { exact: true }),
-  ).toBeVisible();
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "查看并编辑账号" })).toBeInViewport({ ratio: 1 });
 });
 
 test("评分恢复圆环并保留整数，短长期在右侧、样本数在下方", async ({ page }) => {
@@ -195,8 +362,9 @@ test("评分恢复圆环并保留整数，短长期在右侧、样本数在下�
   const health = page.locator('[data-slot="account-health-score"]').first();
   await health.scrollIntoViewIfNeeded();
   const score = health.getByLabel("健康分 100", { exact: true });
-  await expect(score).toHaveCSS("width", "40px");
-  await expect(score.getByText("100", { exact: true })).toHaveCSS("font-size", "11px");
+  await expect(score).toHaveCSS("width", "44px");
+  await expect(score).toHaveCSS("height", "44px");
+  await expect(score.getByText("100", { exact: true })).toHaveCSS("font-size", "12px");
   await expect(score.locator("svg")).toHaveCount(1);
   await expect(health.getByText("有效样本 2", { exact: true })).toBeVisible();
   const bounds = await score.boundingBox();
@@ -259,8 +427,8 @@ test("流量与探针分行显示实心色块，十条同源结果也不越列",
   await results.scrollIntoViewIfNeeded();
   const traffic = results.getByLabel(/首字 320ms.*真实流量/);
   const probe = results.getByLabel(/首字 321ms.*探针/);
-  await expect(traffic).toHaveCSS("width", "6px");
-  await expect(probe).toHaveCSS("height", "12px");
+  await expect(traffic).toHaveCSS("width", "8px");
+  await expect(probe).toHaveCSS("height", "16px");
   await expect(probe).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(traffic).not.toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   expect(await traffic.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
@@ -324,7 +492,8 @@ test("没有流量或探针时显示十格空色条且不增加键盘停靠点",
     const strip = results.getByRole("img", { name });
     await expect(strip).toBeVisible();
     await expect(strip.locator('[aria-hidden="true"]')).toHaveCount(10);
-    await expect(strip.locator('[aria-hidden="true"]').first()).toHaveCSS("height", "12px");
+    await expect(strip.locator('[aria-hidden="true"]').first()).toHaveCSS("height", "16px");
+    await expect(strip.locator('[aria-hidden="true"]').first()).toHaveCSS("width", "8px");
     await expect(strip.locator('[tabindex="0"]')).toHaveCount(0);
   }
   await expect(
@@ -381,7 +550,7 @@ test("评分详情展示本轮短长期实际样本数，键盘可打开并关�
   await expect(tooltip).not.toBeVisible();
 });
 
-test("刷新账号快照后错误随Sub2API状态显示与清除，详情不再展示历史失败", async ({ page }) => {
+test("刷新账号快照后状态列展示当前错误并清除已恢复错误", async ({ page }) => {
   let snapshot = account("51", {
     sub2api_status: "error",
     sub2api_error: "额度不足，请检查上游账户余额",
@@ -404,25 +573,10 @@ test("刷新账号快照后错误随Sub2API状态显示与清除，详情不再�
   ).toBeVisible();
   await expect(row.getByText("调度开关：已开启", { exact: true })).toBeVisible();
   await expect(row.getByText(/最近错误：历史/)).toHaveCount(0);
-  const action = page.getByRole("button", { name: "状态与处置", exact: true });
-  await action.click();
-  const dialog = page.getByRole("dialog", { name: "状态与处置" });
-  await expect(
-    dialog.getByText("最近错误：额度不足，请检查上游账户余额", { exact: true }),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(dialog).not.toBeVisible();
-
   snapshot = { ...snapshot, sub2api_status: "active" };
   const refresh = page.getByRole("button", { name: "刷新账号池", exact: true });
   await refresh.click();
   await expect(row.getByText(/^最近错误：/)).toHaveCount(0);
-  await action.click();
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText(/^最近错误：/)).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(dialog).not.toBeVisible();
-
   snapshot = { ...snapshot, sub2api_status: "error", sub2api_error: "凭据失效，请更新上游凭据" };
   await refresh.click();
   await expect(row.getByText("最近错误：凭据失效，请更新上游凭据", { exact: true })).toBeVisible();

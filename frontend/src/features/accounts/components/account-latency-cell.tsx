@@ -31,11 +31,11 @@ export function AccountLatencyCell(props: {
           />
         }
       >
-        <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-3 gap-y-1 text-xs tabular-nums">
+        <dl className="grid w-fit grid-cols-[auto_auto] items-baseline gap-x-2 gap-y-1 text-xs tabular-nums">
           <dt className="text-muted-foreground">P95</dt>
-          <dd className="text-right text-sm font-semibold">{p95}</dd>
+          <dd className="text-sm font-semibold">{p95}</dd>
           <dt className="text-muted-foreground">P50</dt>
-          <dd className="text-right font-medium">{p50}</dd>
+          <dd className="font-medium">{p50}</dd>
         </dl>
         {missing ? <span className="text-muted-foreground text-xs">暂无首字数据</span> : null}
       </TooltipTrigger>

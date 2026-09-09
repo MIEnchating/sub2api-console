@@ -31,17 +31,33 @@ type alertFinding struct {
 }
 
 func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult, error) {
+	return s.evaluateAlertIncidents(ctx, "")
+}
+
+// EvaluateBalanceAlertIncidents only reconciles evidence for the synchronized Host.
+func (s *Store) EvaluateBalanceAlertIncidents(ctx context.Context, host string) (AlertEvidenceResult, error) {
+	host = canonicalHost(host)
+	if host == "" {
+		return AlertEvidenceResult{}, errors.New("余额告警评估缺少 Host")
+	}
+	return s.evaluateAlertIncidents(ctx, host)
+}
+
+func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) (AlertEvidenceResult, error) {
 	policy, err := s.AlertPolicy(ctx)
 	if err != nil {
 		return AlertEvidenceResult{}, err
 	}
 	if !policy.Enabled {
+		if balanceHost != "" {
+			return AlertEvidenceResult{EvaluationDisabled: true}, nil
+		}
 		if err := s.suppressFiringAlertIncidents(ctx); err != nil {
 			return AlertEvidenceResult{}, err
 		}
 		return AlertEvidenceResult{EvaluationDisabled: true}, nil
 	}
-	findings, notEvaluated, err := s.alertFindings(ctx, policy)
+	findings, notEvaluated, err := s.alertFindings(ctx, policy, balanceHost)
 	if err != nil {
 		return AlertEvidenceResult{}, err
 	}
@@ -73,8 +89,14 @@ func (s *Store) EvaluateAlertIncidents(ctx context.Context) (AlertEvidenceResult
 			}
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents
-		WHERE status IN ('firing','suppressed') AND event_type NOT IN ('account.multiplier_increased','account.multiplier_decreased')`)
+	query := `SELECT incident_key,event_type,object_kind,object_id,cause_code,status FROM alert_incidents
+		WHERE status IN ('firing','suppressed') AND event_type NOT IN ('account.multiplier_increased','account.multiplier_decreased')`
+	var args []any
+	if balanceHost != "" {
+		query += " AND event_type='upstream.balance' AND object_kind='host' AND object_id=?"
+		args = append(args, balanceHost)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return AlertEvidenceResult{}, err
 	}
@@ -267,8 +289,15 @@ func (s *Store) RecordAlertEvaluation(ctx context.Context, startedAt string, evi
 	return AlertEvaluationRecord{RunKey: runKey, EventID: eventID, Status: status, Summary: summary}, nil
 }
 
-func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy) ([]alertFinding, map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT host,auth_status,COALESCE(mapped_balance,CAST(balance AS TEXT)),metadata_json FROM upstreams ORDER BY host`)
+func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy, balanceHost string) ([]alertFinding, map[string]string, error) {
+	query := `SELECT host,auth_status,COALESCE(mapped_balance,CAST(balance AS TEXT)),metadata_json FROM upstreams`
+	var args []any
+	if balanceHost != "" {
+		query += " WHERE host=?"
+		args = append(args, balanceHost)
+		policy.ConfigurationEnabled, policy.AuthEnabled, policy.RateSyncEnabled = false, false, false
+	}
+	rows, err := s.db.QueryContext(ctx, query+" ORDER BY host", args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -332,6 +361,9 @@ func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy) ([]alertF
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err
+	}
+	if balanceHost != "" {
+		return findings, nil, nil
 	}
 	routingFindings, routingNotEvaluated, err := s.routingAlertFindings(ctx, policy)
 	if err != nil {

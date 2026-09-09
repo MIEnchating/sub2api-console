@@ -101,6 +101,18 @@ func (s *Store) PrepareAlertDelivery(
 	channelKey string,
 	privateConfigured bool,
 ) (AlertDeliveryPlan, error) {
+	return s.prepareAlertDelivery(ctx, channelKey, privateConfigured, "")
+}
+
+func (s *Store) PrepareBalanceAlertDelivery(ctx context.Context, channelKey string, privateConfigured bool, host string) (AlertDeliveryPlan, error) {
+	host = canonicalHost(host)
+	if host == "" {
+		return AlertDeliveryPlan{}, errors.New("余额通知缺少 Host")
+	}
+	return s.prepareAlertDelivery(ctx, channelKey, privateConfigured, host)
+}
+
+func (s *Store) prepareAlertDelivery(ctx context.Context, channelKey string, privateConfigured bool, balanceHost string) (AlertDeliveryPlan, error) {
 	policy, err := s.readAlertPolicy(ctx)
 	if err != nil {
 		return AlertDeliveryPlan{}, err
@@ -109,7 +121,7 @@ func (s *Store) PrepareAlertDelivery(
 	if err != nil {
 		return AlertDeliveryPlan{}, err
 	}
-	incidents, err := s.deliveryIncidents(ctx)
+	incidents, err := s.scopedDeliveryIncidents(ctx, balanceHost)
 	if err != nil {
 		return AlertDeliveryPlan{}, err
 	}
@@ -624,10 +636,20 @@ func notificationEnabled(source map[string]any, fields ...string) (bool, bool) {
 }
 
 func (s *Store) deliveryIncidents(ctx context.Context) ([]AlertIncident, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
+	return s.scopedDeliveryIncidents(ctx, "")
+}
+
+func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string) ([]AlertIncident, error) {
+	query := `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
 		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error FROM alert_incidents i
 		LEFT JOIN accounts a ON i.object_kind='account' AND a.id=i.object_id
-		WHERE i.status IN ('firing','recovered') ORDER BY i.last_seen_at,i.incident_key`)
+		WHERE i.status IN ('firing','recovered')`
+	var args []any
+	if balanceHost != "" {
+		query += " AND i.event_type='upstream.balance' AND i.object_kind='host' AND i.object_id=?"
+		args = append(args, balanceHost)
+	}
+	rows, err := s.db.QueryContext(ctx, query+" ORDER BY i.last_seen_at,i.incident_key", args...)
 	if err != nil {
 		return nil, err
 	}

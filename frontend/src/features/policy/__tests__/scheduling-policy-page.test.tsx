@@ -280,7 +280,10 @@ describe("调度策略入口", () => {
     expect(markup).toContain('data-testid="policy-page-layout"');
     expect(markup).toContain('class="w-full space-y-3"');
     expect(markup).toContain('data-testid="policy-category-navigation"');
-    expect(markup).toContain("sticky top-0");
+    expect(markup.indexOf('data-slot="page-navigation"')).toBeLessThan(
+      markup.indexOf('data-slot="page-content"'),
+    );
+    expect(markup).not.toContain("sticky top-0");
     expect(markup).toContain("overflow-x-auto");
     expect(markup.match(/data-slot="card"/g)).toHaveLength(4);
     expect(markup.match(/data-slot="card" data-card-hover="false" data-size="sm"/g)).toHaveLength(

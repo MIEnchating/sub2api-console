@@ -1445,7 +1445,7 @@ func TestCreateChannelUsesSub2APITypeAndNewAPIGroups(t *testing.T) {
 		t.Fatalf("request missing channel wrapper: %#v", created)
 	}
 	name, _ := channel["name"].(string)
-	if created["mode"] != "single" || channel["type"] != float64(59) || !strings.HasPrefix(name, "NewAPI-标准-console-") ||
+	if created["mode"] != "single" || channel["type"] != float64(59) || name != "标准" ||
 		channel["base_url"] != "https://edge.example/v1" || channel["key"] != "sub2api-user-key" ||
 		channel["models"] != "gpt-5.2" || channel["group"] != "default,vip" {
 		t.Fatalf("unexpected create request: %#v", created)
@@ -1500,12 +1500,12 @@ func TestCreateChannelReconcilesAfterResponseConnectionBreaks(t *testing.T) {
 		NewAPIGroups: []string{"default"},
 	})
 
-	if err != nil || createCalls != 1 || !strings.HasPrefix(fmt.Sprint(result["name"]), "NewAPI-标准-console-") {
+	if err != nil || createCalls != 1 || fmt.Sprint(result["name"]) != "标准" {
 		t.Fatalf("result=%#v create_calls=%d err=%v", result, createCalls, err)
 	}
 }
 
-func TestCreateChannelKeyReusesStableMarkerOnRetry(t *testing.T) {
+func TestCreateChannelKeyUsesSelectedGroupNameAndReusesItOnRetry(t *testing.T) {
 	username, password, token := "operator@example.test", "password", "user-jwt"
 	private := &privateStub{
 		platform: configstore.NewAPIPlatform{ID: "platform-1"},
@@ -1527,7 +1527,7 @@ func TestCreateChannelKeyReusesStableMarkerOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if keys.createCalls != 1 || first.KeyID != second.KeyID || !strings.HasPrefix(keys.createName, "NewAPI-标准-console-") {
-		t.Fatalf("create_calls=%d first=%#v second=%#v marker=%q", keys.createCalls, first, second, keys.createName)
+	if keys.createCalls != 1 || first.KeyID != second.KeyID || keys.createName != "标准" {
+		t.Fatalf("create_calls=%d first=%#v second=%#v name=%q", keys.createCalls, first, second, keys.createName)
 	}
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eraser, KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -212,10 +212,16 @@ export function VaultEntryTable(props: {
   );
 }
 
-function VaultField(props: { label: string; hint?: string; error?: string; children: ReactNode }) {
+function VaultField(props: {
+  label: string;
+  htmlFor: string;
+  hint?: string;
+  error?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="grid min-w-0 gap-1.5 text-sm">
-      <FieldLabel label={props.label} description={props.hint} />
+      <FieldLabel label={props.label} description={props.hint} htmlFor={props.htmlFor} />
       {props.children}
       {props.error ? (
         <span className="text-xs text-destructive" role="alert">
@@ -227,6 +233,7 @@ function VaultField(props: { label: string; hint?: string; error?: string; child
 }
 
 export function VaultPage() {
+  const fieldId = useId();
   const queryClient = useQueryClient();
   const config = useQuery({
     queryKey: ["auth-recovery-config"],
@@ -470,8 +477,9 @@ export function VaultPage() {
           </DialogHeader>
           <DialogBody className="grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <VaultField label="凭据名称">
+              <VaultField label="凭据名称" htmlFor={`${fieldId}-entry`}>
                 <Input
+                  id={`${fieldId}-entry`}
                   value={form.entry}
                   disabled={editing !== null}
                   onChange={(event) => setForm({ ...form, entry: event.target.value })}
@@ -481,11 +489,13 @@ export function VaultPage() {
             </div>
             <VaultField
               label="用户名"
+              htmlFor={`${fieldId}-username`}
               hint={editing?.has_username ? "已配置，留空则不修改" : undefined}
             >
               <div className="flex min-w-0 items-center gap-2">
                 <Input
                   className="min-w-0 flex-1"
+                  id={`${fieldId}-username`}
                   autoComplete="username"
                   value={form.username}
                   placeholder={sensitiveFieldPlaceholder(
@@ -522,6 +532,7 @@ export function VaultPage() {
             </VaultField>
             <VaultField
               label="密码"
+              htmlFor={`${fieldId}-password`}
               hint={editing?.has_password ? "已配置，留空则不修改" : undefined}
             >
               <div className="flex min-w-0 items-center gap-2">
@@ -529,6 +540,7 @@ export function VaultPage() {
                   className="min-w-0 flex-1"
                   type="password"
                   autoComplete="new-password"
+                  id={`${fieldId}-password`}
                   value={form.password}
                   placeholder={sensitiveFieldPlaceholder(
                     editing?.has_password === true,
@@ -563,9 +575,14 @@ export function VaultPage() {
               </div>
             </VaultField>
             <div className="sm:col-span-2">
-              <VaultField label="匹配 Host" hint="多个 Host 使用逗号或换行分隔">
+              <VaultField
+                label="匹配 Host"
+                htmlFor={`${fieldId}-hosts`}
+                hint="多个 Host 使用逗号或换行分隔"
+              >
                 <Textarea
                   className="min-h-20"
+                  id={`${fieldId}-hosts`}
                   value={form.hosts}
                   onChange={(event) => {
                     markTouched("hosts");
@@ -578,6 +595,7 @@ export function VaultPage() {
             <div className="sm:col-span-2">
               <VaultField
                 label="Headers JSON"
+                htmlFor={`${fieldId}-headers`}
                 error={headersError ?? undefined}
                 hint={
                   editing?.header_names.length
@@ -587,6 +605,7 @@ export function VaultPage() {
               >
                 <Textarea
                   className="min-h-24 font-mono"
+                  id={`${fieldId}-headers`}
                   aria-invalid={headersError !== null}
                   value={form.headers}
                   onChange={(event) => {

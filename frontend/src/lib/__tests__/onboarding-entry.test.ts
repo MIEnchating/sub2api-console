@@ -106,14 +106,14 @@ describe("onboarding entry workflow", () => {
     expect(inferOnboardingProtocol(["27"], groups)).toBe("anthropic");
   });
 
-  it("does not infer a protocol from only composite or conflicting local groups", () => {
+  it("defaults an all-Composite selection to OpenAI but rejects conflicting concrete groups", () => {
     const groups = [
       { id: "6", name: "国产-平价", platform: "composite" },
       { id: "22", name: "Gemini", platform: "gemini" },
       { id: "27", name: "kiro-旗舰", platform: "anthropic" },
     ];
 
-    expect(inferOnboardingProtocol(["6"], groups)).toBeNull();
+    expect(inferOnboardingProtocol(["6"], groups)).toBe("openai");
     expect(inferOnboardingProtocol(["22", "27"], groups)).toBeNull();
   });
 

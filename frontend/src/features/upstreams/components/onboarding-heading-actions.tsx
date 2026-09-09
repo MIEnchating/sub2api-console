@@ -28,7 +28,7 @@ function UpstreamNavigationButton(props: {
           onClick={props.target?.onSelect}
         >
           {previous ? <ChevronLeft aria-hidden="true" /> : null}
-          {label}
+          <span className="hidden sm:inline">{label}</span>
           {!previous ? <ChevronRight aria-hidden="true" /> : null}
         </Button>
       </TooltipTrigger>
@@ -46,13 +46,15 @@ export function OnboardingHeadingActions(props: {
 }) {
   return (
     <PageActions>
-      <Button type="button" variant="outline" onClick={props.onBack}>
+      <Button type="button" variant="outline" aria-label="返回上游管理" onClick={props.onBack}>
         <ArrowLeft aria-hidden="true" />
-        返回上游管理
+        <span className="hidden sm:inline">返回上游管理</span>
       </Button>
       <UpstreamNavigationButton direction="previous" target={props.previousUpstream ?? null} />
       <UpstreamNavigationButton direction="next" target={props.nextUpstream ?? null} />
-      <Badge variant="outline">新建 Key</Badge>
+      <Badge variant="outline" className="hidden sm:inline-flex">
+        新建 Key
+      </Badge>
     </PageActions>
   );
 }

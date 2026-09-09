@@ -92,14 +92,19 @@ export function inferOnboardingProtocol<T extends OnboardingLocalGroup>(
 ): string | null {
   if (selectedGroupIDs.length === 0) return null;
   const platforms = new Set<string>();
+  let compositeSelected = false;
   for (const groupID of selectedGroupIDs) {
     const group = groups.find((item) => item.id === groupID);
     if (!group) return null;
     const platform = normalizeOnboardingPlatform(group.platform);
-    if (platform === "composite") continue;
+    if (platform === "composite") {
+      compositeSelected = true;
+      continue;
+    }
     if (!compositeAccountPlatforms.has(platform)) return null;
     platforms.add(platform);
   }
+  if (platforms.size === 0 && compositeSelected) return "openai";
   if (platforms.size !== 1) return null;
   return [...platforms][0] ?? null;
 }

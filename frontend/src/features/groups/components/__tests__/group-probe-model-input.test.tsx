@@ -71,6 +71,34 @@ describe("分组探活模型输入", () => {
     expect(screen.queryByRole("textbox", { name: "手动输入探活模型" })).not.toBeInTheDocument();
   });
 
+  it("切换到模型下拉框后隐藏表单节点不产生额外垂直间距", () => {
+    render(
+      <GroupPolicyEditorFields
+        value={value}
+        onChange={() => undefined}
+        onReloadProbeModels={() => undefined}
+        probeModels={{
+          group_id: "6",
+          group_name: "codex",
+          models: ["gpt-5.1-codex"],
+          account_count: 1,
+          accounts_with_models: 1,
+          complete: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "选择模型" }));
+
+    const modeGroup = screen.getByRole("group", { name: "探活模型输入方式" });
+    const control = modeGroup.parentElement?.parentElement;
+    const reloadButton = screen.getByRole("button", { name: "重新获取组内模型" });
+
+    expect(control).toHaveClass("flex", "flex-col", "gap-1.5");
+    expect(control).not.toHaveClass("space-y-1.5");
+    expect(reloadButton.parentElement).toHaveClass("sm:items-end");
+  });
+
   it("清空模型后恢复继承全局默认", () => {
     const onChange = vi.fn();
     render(

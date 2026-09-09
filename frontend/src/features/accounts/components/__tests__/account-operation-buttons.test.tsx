@@ -1,11 +1,11 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountStatus } from "@/api";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import type { AccountOperationProps } from "../account-operation-controls";
 import { AccountOperationButtons } from "../account-operation-buttons";
-import { AccountOperationControls } from "../account-operation-controls";
 
 const account: AccountStatus = {
   id: "41",
@@ -46,245 +46,218 @@ const account: AccountStatus = {
   weight: 100,
 };
 
-function markup(overrides: Partial<AccountStatus> = {}, probePending = false) {
-  return renderToStaticMarkup(
-    <AccountOperationControls
-      expanded
-      account={{ ...account, ...overrides }}
-      pending={probePending}
-      probePending={probePending}
-      onProbe={vi.fn()}
-      onControl={vi.fn()}
-      onRateSync={vi.fn()}
-      onManualPriority={vi.fn()}
-      onEdit={vi.fn()}
-      onDelete={vi.fn()}
-    />,
-  );
+function operationProps(overrides: Partial<AccountStatus> = {}): AccountOperationProps {
+  return {
+    account: { ...account, ...overrides },
+    pending: false,
+    probePending: false,
+    onProbe: vi.fn(),
+    onControl: vi.fn(),
+    onRateSync: vi.fn(),
+    onManualPriority: vi.fn(),
+    onEdit: vi.fn(),
+    onDelete: vi.fn(),
+  };
 }
 
-describe("account operation buttons", () => {
-  afterEach(cleanup);
-
-  it("opens complete failure details and common actions from one account entry", async () => {
-    const onProbe = vi.fn();
-    render(
-      <AccountOperationButtons
-        account={{
-          ...account,
-          sub2api_status: "error",
-          sub2api_error: "上游返回 503，请稍后重新探活",
-        }}
-        pending={false}
-        probePending={false}
-        onProbe={onProbe}
-        onControl={vi.fn()}
-        onRateSync={vi.fn()}
-        onManualPriority={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
-    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
-    expect(within(dialog).getByText("最近错误：上游返回 503，请稍后重新探活")).toBeVisible();
-    const details = within(dialog).getByRole("region", { name: "账号状态详情" });
-    expect(details).toHaveClass("min-h-0", "overflow-y-auto");
-    expect(within(details).queryByRole("group", { name: "账号常用处置" })).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole("button", { name: "探活测试" }));
-    expect(onProbe).toHaveBeenCalledOnce();
+beforeEach(() => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  // JSDOM 26 recurses on these selectors; these menus never enter the top layer.
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
   });
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
-  it("keeps disposition details readable while probe and control actions are pending", async () => {
-    render(
-      <AccountOperationButtons
-        account={account}
-        pending
-        probePending
-        onProbe={vi.fn()}
-        onControl={vi.fn()}
-        onRateSync={vi.fn()}
-        onManualPriority={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
-    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
-    expect(within(dialog).getByRole("button", { name: "正在探活" })).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: "手动熔断（停止调度）" })).toBeDisabled();
-    expect(within(dialog).queryByRole("button", { name: /取消/ })).not.toBeInTheDocument();
-  });
-
-  it("passes fuse confirmation from the disposition panel to the existing control flow", async () => {
-    const onControl = vi.fn();
-    render(
-      <AccountOperationButtons
-        account={account}
-        pending={false}
-        probePending={false}
-        onProbe={vi.fn()}
-        onControl={onControl}
-        onRateSync={vi.fn()}
-        onManualPriority={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
-    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "手动熔断（停止调度）" }));
-    expect(onControl).toHaveBeenCalledWith(
-      "fuse",
-      "手动熔断",
-      expect.stringContaining("直到手动解除"),
-    );
-  });
-
-  it("opens by keyboard with focus on the explanation title and restores focus on Escape", async () => {
+describe("账号操作", () => {
+  it("账号名称较长时，按钮名称和探活悬浮提示仅包含具体操作", async () => {
     const user = userEvent.setup();
     render(
-      <AccountOperationButtons
-        account={account}
-        pending={false}
-        probePending={false}
-        onProbe={vi.fn()}
-        onControl={vi.fn()}
-        onRateSync={vi.fn()}
-        onManualPriority={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-      />,
+      <TooltipProvider delay={0}>
+        <AccountOperationButtons
+          {...operationProps({ name: "上游平台的长名称账号-用于确认操作提示不追加账号名称" })}
+        />
+      </TooltipProvider>,
     );
-    const trigger = screen.getByRole("button", { name: "状态与处置" });
-    trigger.focus();
-    await user.keyboard("{Enter}");
-    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
-    await waitFor(() =>
-      expect(within(dialog).getByRole("heading", { name: "状态与处置" })).toHaveFocus(),
-    );
-    expect(trigger).toHaveAttribute("aria-expanded", "true");
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(trigger).toHaveFocus());
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    const actions = within(screen.getByRole("group", { name: "账号操作" }));
+    for (const label of [
+      "探活测试",
+      "暂停调度",
+      "手动熔断（停止调度）",
+      "同步账号倍率",
+      "设置人工优先位",
+      "更多账号操作",
+    ]) {
+      expect(actions.getByRole("button", { name: label })).toBeVisible();
+    }
+
+    await user.hover(actions.getByRole("button", { name: "探活测试" }));
+
+    expect(await screen.findByText("探活测试", { exact: true })).toBeVisible();
   });
 
-  it("offers recovery with confirmation for a fused account in the disposition panel", async () => {
-    const onControl = vi.fn();
+  it.each([
+    { name: "正常", overrides: {}, count: 6 },
+    { name: "已排除", overrides: { health: "excluded", routing_state: "excluded" }, count: 5 },
+    { name: "熔断", overrides: { health: "fused", routing_state: "fused" }, count: 6 },
+    { name: "人工优先", overrides: { manual_priority: 3 }, count: 6 },
+  ])("$name 账号仅展示具体操作，更多入口固定在三列两行的右下角", (fixture) => {
+    render(<AccountOperationButtons {...operationProps(fixture.overrides)} />);
+
+    const actions = screen.getByRole("group", { name: "账号操作" });
+    expect(actions).toHaveClass("grid", "grid-cols-3");
+    expect(within(actions).getAllByRole("button")).toHaveLength(fixture.count);
+    expect(screen.getByRole("button", { name: "更多账号操作" })).toHaveClass(
+      "col-start-3",
+      "row-start-2",
+    );
+    expect(screen.queryByRole("button", { name: "状态与处置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("键盘打开更多操作后可关闭并恢复焦点", async () => {
+    const user = userEvent.setup();
+    render(<AccountOperationButtons {...operationProps()} />);
+    const more = screen.getByRole("button", { name: "更多账号操作" });
+    more.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("menu")).toBeVisible();
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "删除账号及上游 Key" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "状态与处置" })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(more).toHaveFocus());
+    expect(more).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each([
+    { label: "查看并编辑账号", callback: "onEdit" as const },
+    { label: "删除账号及上游 Key", callback: "onDelete" as const },
+  ])("从更多菜单选择 $label 时进入对应操作并关闭菜单", async (fixture) => {
+    const user = userEvent.setup();
+    const props = operationProps();
+    render(<AccountOperationButtons {...props} />);
+    await user.click(screen.getByRole("button", { name: "更多账号操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: fixture.label }));
+    expect(props[fixture.callback]).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+  });
+
+  it.each([
+    { label: "探活测试", callback: "onProbe" as const },
+    { label: "同步账号倍率", callback: "onRateSync" as const },
+    { label: "设置人工优先位", callback: "onManualPriority" as const },
+  ])("直接点击 $label 时进入对应操作", async (fixture) => {
+    const user = userEvent.setup();
+    const props = operationProps();
+    render(<AccountOperationButtons {...props} />);
+    await user.click(screen.getByRole("button", { name: fixture.label }));
+    expect(props[fixture.callback]).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      name: "手动熔断（停止调度）",
+      action: "fuse",
+      label: "手动熔断",
+      description: "直到手动解除",
+      overrides: {},
+    },
+    {
+      name: "解除熔断",
+      action: "recover",
+      label: "解除熔断",
+      description: "仍受调度策略约束",
+      overrides: { health: "fused", schedulable: false },
+    },
+    {
+      name: "暂停调度",
+      action: "pause",
+      label: "暂停调度",
+      description: "停止接收流量",
+      overrides: {},
+    },
+  ])("直接点击 $name 时仍传递确认说明，不绕过既有确认流程", async (fixture) => {
+    const user = userEvent.setup();
+    const props = operationProps(fixture.overrides);
+    render(<AccountOperationButtons {...props} />);
+    await user.click(screen.getByRole("button", { name: fixture.name }));
+    expect(props.onControl).toHaveBeenCalledWith(
+      fixture.action,
+      fixture.label,
+      expect.stringContaining(fixture.description),
+    );
+  });
+
+  it("账号操作进行中禁用所有操作及更多入口", () => {
+    render(<AccountOperationButtons {...operationProps()} pending probePending />);
+    expect(screen.getByRole("button", { name: "正在探活" })).toBeDisabled();
+    for (const button of screen.getAllByRole("button")) expect(button).toBeDisabled();
+  });
+
+  it.each([false, true])(
+    "人工优先账号的余额同步设置为 %s 时允许同步倍率和调整优先位，禁用自动处置",
+    (syncBalance) => {
+      render(
+        <AccountOperationButtons
+          {...operationProps({ manual_priority: 3, manual_sync_balance_multiplier: syncBalance })}
+        />,
+      );
+      for (const label of ["探活测试", "暂停调度", "手动熔断（停止调度）"]) {
+        expect(screen.getByRole("button", { name: label })).toBeDisabled();
+      }
+      expect(screen.getByRole("button", { name: "同步账号倍率" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "调整人工优先位" })).toBeEnabled();
+    },
+  );
+
+  it("暂停账号允许恢复调度并禁用手动熔断", async () => {
+    const user = userEvent.setup();
+    const props = operationProps({ health: "paused", routing_state: "paused", paused: true });
+    render(<AccountOperationButtons {...props} />);
+    expect(screen.getByRole("button", { name: "手动熔断（停止调度）" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "恢复调度" }));
+    expect(props.onControl).toHaveBeenCalledWith("resume", "恢复调度", undefined);
+  });
+
+  it("策略已停止调度时不提供暂停和恢复调度操作", () => {
     render(
       <AccountOperationButtons
-        account={{ ...account, health: "fused", schedulable: false }}
-        pending={false}
-        probePending={false}
-        onProbe={vi.fn()}
-        onControl={onControl}
-        onRateSync={vi.fn()}
-        onManualPriority={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
+        {...operationProps({
+          health: "cost_blocked",
+          routing_state: "cost_blocked",
+          schedulable: false,
+        })}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "状态与处置" }));
-    const dialog = await screen.findByRole("dialog", { name: "状态与处置" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "解除熔断" }));
-    expect(onControl).toHaveBeenCalledWith(
-      "recover",
-      "解除熔断",
-      expect.stringContaining("仍受调度策略约束"),
-    );
-  });
-  it("matches the channel pool operations without a multiplier threshold breaker", () => {
-    const result = markup();
-    for (const label of ["探活测试", "暂停调度", "手动熔断（停止调度）"]) {
-      expect(result).toContain(label);
-    }
-    expect(result).toContain('aria-label="更多账号操作"');
-    expect(result).toContain("lucide-ellipsis");
-    expect(result).toContain("flex");
-    expect(result).not.toContain("grid-cols-4");
-    expect(result).not.toContain("w-[9.5rem]");
-    expect(result).toContain("lucide-activity");
-    expect(result).not.toContain("lucide-scan-search");
-    expect(result).not.toContain("排除账号");
-    expect(result).not.toContain("倍率超阈值");
-    expect(result.match(/border-destructive\/40/g)).toHaveLength(1);
-    expect(result).toContain("bg-destructive/10");
-    expect(result).toContain("hover:bg-destructive/20");
+    expect(screen.queryByRole("button", { name: /暂停调度|恢复调度/ })).not.toBeInTheDocument();
   });
 
-  it("shows an adjustment action for an assigned manual priority account", () => {
-    const result = markup({ manual_priority: 3, manual_sync_balance_multiplier: false });
-    expect(result).toContain('aria-label="更多账号操作"');
-    expect(result.match(/disabled/g)?.length).toBeGreaterThanOrEqual(4);
-    expect(result).not.toContain('aria-label="同步账号倍率"');
-  });
-
-  it("always enables cost sync for a manual account", () => {
-    const withoutBalanceSync = markup({
-      manual_priority: 3,
-      manual_sync_balance_multiplier: false,
-    });
-    const withBalanceSync = markup({
-      manual_priority: 3,
-      manual_sync_balance_multiplier: true,
-    });
-
-    expect(withoutBalanceSync).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
-    expect(withBalanceSync).not.toMatch(/disabled=""[^>]*aria-label="同步账号倍率"/);
-  });
-
-  it("shows an immediate loading state while an active probe is running", () => {
-    const result = markup({}, true);
-
-    expect(result).toContain('aria-label="正在探活"');
-    expect(result).toContain("lucide-loader-circle");
-    expect(result).toContain("animate-spin");
-    expect(result).toContain("disabled");
-    expect(result).not.toContain("lucide-activity");
-  });
-
-  it("switches pause and fuse actions to their recovery variants", () => {
-    expect(markup({ health: "paused", routing_state: "paused", paused: true })).toContain(
-      "恢复调度",
-    );
-    const fused = markup({ health: "fused", routing_state: "fused", schedulable: false });
-    expect(fused).toContain("解除熔断");
-    expect(fused.match(/border-destructive\/40/g) ?? []).toHaveLength(0);
-  });
-
-  it("does not offer pause again when a policy already stopped scheduling", () => {
-    const result = markup({
-      health: "cost_blocked",
-      routing_state: "cost_blocked",
-      decision_state: "cost_blocked",
-      schedulable: false,
-      target_schedulable: false,
-    });
-
-    expect(result).not.toContain('aria-label="已停止调度"');
-    expect(result).not.toContain('aria-label="暂停调度"');
-  });
-
-  it("offers recovery when Sub2API reports an otherwise disabled account", () => {
-    const result = markup({
-      health: "disabled",
-      routing_state: "disabled",
+  it("已排除账号允许恢复管控，同步倍率仍可用且删除保留在菜单中", async () => {
+    const user = userEvent.setup();
+    const props = operationProps({
+      health: "excluded",
+      routing_state: "excluded",
       schedulable: false,
     });
-
-    expect(result).toContain('aria-label="恢复调度"');
-    expect(result).not.toContain('aria-label="暂停调度"');
-  });
-
-  it("keeps action labels independent from the account name", () => {
-    expect(markup()).not.toContain(account.name);
-  });
-
-  it("keeps read-only rate sync available for an excluded account", () => {
-    const result = markup({ health: "excluded", routing_state: "excluded", schedulable: false });
-    expect(result).toContain("恢复管控");
-    expect(result).toContain('aria-label="更多账号操作"');
-    expect(result).not.toContain("探活测试");
-    expect(result).not.toContain("手动熔断");
+    render(<AccountOperationButtons {...props} />);
+    expect(screen.getByRole("button", { name: "同步账号倍率" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "删除账号及上游 Key" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "恢复管控" }));
+    expect(props.onControl).toHaveBeenCalledWith("include", "恢复管控");
+    await user.click(screen.getByRole("button", { name: "更多账号操作" }));
+    expect(await screen.findByRole("menuitem", { name: "删除账号及上游 Key" })).toBeVisible();
   });
 });

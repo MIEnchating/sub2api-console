@@ -14,6 +14,27 @@ import {
   AccountStateCell,
 } from "../account-pool-cells";
 
+it("人工优先位状态使用中文展示且不显示历史成本墙拦截", () => {
+  render(
+    <AccountStateCell
+      account={{
+        ...account,
+        manual_priority: 1,
+        health: "manual_priority",
+        routing_state: "manual_priority",
+        health_status: "cost_blocked",
+        decision_state: null,
+        decision_reason: null,
+      }}
+    />,
+  );
+
+  expect(screen.getByText("人工优先位")).toBeVisible();
+  expect(screen.getByText("调度开关：已开启")).toBeVisible();
+  expect(screen.queryByText("成本墙拦截")).not.toBeInTheDocument();
+  expect(screen.queryByText("待探测")).not.toBeInTheDocument();
+});
+
 const account: AccountStatus = {
   id: "63005",
   name: "primary-account",

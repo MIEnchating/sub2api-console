@@ -13,7 +13,7 @@ import { vi } from "vitest";
 import { OnboardingPage } from "@/App";
 import { api, type GroupStatus, type OnboardingCandidate, type UpstreamConfiguration } from "@/api";
 
-const upstream: UpstreamConfiguration = {
+export const upstream: UpstreamConfiguration = {
   upstream_id: "upstream-1",
   host: "api.example.test",
   name: "测试上游",
@@ -72,7 +72,11 @@ export function boundCandidate(status: string): OnboardingCandidate {
   };
 }
 
-export function renderOnboarding(candidate?: OnboardingCandidate, directGroup = true): QueryClient {
+export function renderOnboarding(
+  candidate?: OnboardingCandidate,
+  directGroup = true,
+  groupOverrides?: GroupStatus[],
+): QueryClient {
   // JSDOM 26 recurses while matching top-layer selectors; these tests use ordinary popups.
   const matches = Element.prototype.matches;
   vi.spyOn(Element.prototype, "matches").mockImplementation(function (
@@ -106,7 +110,7 @@ export function renderOnboarding(candidate?: OnboardingCandidate, directGroup = 
     participation_reason: null,
     status: "healthy",
   }));
-  vi.spyOn(api, "groups").mockResolvedValue(groups);
+  vi.spyOn(api, "groups").mockResolvedValue(groupOverrides ?? groups);
   vi.spyOn(api, "config").mockResolvedValue({
     database_available: true,
     data_database_available: true,

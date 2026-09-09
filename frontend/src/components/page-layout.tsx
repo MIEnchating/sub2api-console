@@ -5,6 +5,7 @@ import { PageHeading, type PageHeadingProps } from "./page-heading";
 export type PageLayoutProps = {
   children: ReactNode;
   fixedContent?: boolean;
+  navigation?: ReactNode;
 };
 
 export function PageLayout(props: PageLayoutProps) {
@@ -20,17 +21,24 @@ export function PageLayout(props: PageLayoutProps) {
   });
 
   return (
-    <div data-slot="page-layout" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div data-slot="page-layout" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {heading}
+      {props.navigation && (
+        <div data-slot="page-navigation" className="shrink-0 px-3 pb-3 sm:px-4">
+          {props.navigation}
+        </div>
+      )}
       <div
         data-slot="page-content"
-        className={
-          props.fixedContent
-            ? "min-h-0 flex-1 overflow-hidden px-3 pt-1 pb-3 sm:px-4 sm:pt-1.5 sm:pb-4"
-            : "min-h-0 flex-1 overflow-auto px-3 pt-1 pb-3 sm:px-4 sm:pt-1.5 sm:pb-4"
-        }
+        className="min-h-0 min-w-0 flex-1 overflow-auto overscroll-contain px-3 pt-1 pb-3 sm:px-4 sm:pt-1.5 sm:pb-4"
       >
-        {content}
+        {props.fixedContent ? (
+          <div data-slot="page-workspace" className="h-full min-h-[32rem] min-w-0 sm:min-h-[28rem]">
+            {content}
+          </div>
+        ) : (
+          content
+        )}
       </div>
     </div>
   );

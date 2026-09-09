@@ -166,7 +166,7 @@ export function AccountIdentityMeta(props: { account: AccountStatus; className?:
 export function AccountIdentityCell(props: { account: AccountStatus }) {
   const groups = props.account.groups.length ? props.account.groups.join("、") : "未分组";
   return (
-    <div className="w-60 max-w-[15rem]">
+    <div className="grid min-w-0 gap-0.5">
       <Tooltip>
         <TooltipTrigger render={<strong className="block truncate font-semibold" />}>
           {props.account.name}
@@ -368,6 +368,7 @@ function AccountStateDetail(props: {
 export function AccountStateCell(props: {
   account: AccountStatus;
   expanded?: boolean;
+  compact?: boolean;
 }): ReactElement {
   const state = accountPoolState(props.account);
   const reason = accountStateReason(props.account, state.value);
@@ -399,6 +400,31 @@ export function AccountStateCell(props: {
       aria-label={props.account.apply_pending ? (pendingMessage ?? undefined) : undefined}
     />
   );
+  if (props.compact && !props.expanded) {
+    const pending = props.account.apply_pending ? pendingMessage : null;
+    const summary = pending || errorMessage || stopMessage || stateReason;
+    let tone: "default" | "warning" | "danger" = "default";
+    if (pending) tone = "warning";
+    else if (errorMessage || stopMessage) tone = "danger";
+    else if (state.value === "degraded" || evidencePending) tone = "warning";
+    return (
+      <div className="grid min-w-0 gap-1.5">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {badge}
+          <span
+            className="min-w-0 whitespace-normal text-xs text-muted-foreground"
+            aria-label={accountSchedulingSwitchLabel(props.account.schedulable)}
+          >
+            {accountSchedulingSwitchLabel(props.account.schedulable)}
+          </span>
+        </div>
+        {summary ? <AccountStateDetail tone={tone}>{summary}</AccountStateDetail> : null}
+        {props.account.recovery ? (
+          <AccountRecoveryStatus recovery={props.account.recovery} />
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className="grid min-w-0 gap-1">
       {props.expanded ? (

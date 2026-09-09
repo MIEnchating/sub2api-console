@@ -4,6 +4,7 @@ import { effectiveAccountState } from "@/features/accounts/lib/account-state";
 
 export type AccountPoolFilter =
   | "all"
+  | "manual_priority"
   | "healthy"
   | "degraded"
   | "cost_blocked"
@@ -27,6 +28,7 @@ export const accountPoolFilters: Array<{
   label: string;
 }> = [
   { value: "all", label: "全部" },
+  { value: "manual_priority", label: "人工优先位" },
   { value: "healthy", label: "健康" },
   { value: "degraded", label: "降级" },
   { value: "cost_blocked", label: "成本墙拦截" },
@@ -39,6 +41,7 @@ export const accountPoolFilters: Array<{
 ];
 
 const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
+  manual_priority: { value: "manual_priority", label: "人工优先位", tone: "neutral" },
   healthy: { value: "healthy", label: "健康", tone: "success" },
   degraded: { value: "degraded", label: "降级", tone: "warning" },
   cost_blocked: { value: "cost_blocked", label: "成本墙拦截", tone: "warning" },
@@ -67,6 +70,7 @@ export function accountSchedulingSwitchLabel(schedulable: boolean | null): strin
 export function accountPoolCounts(accounts: AccountStatus[]): Record<AccountPoolFilter, number> {
   const counts: Record<AccountPoolFilter, number> = {
     all: accounts.length,
+    manual_priority: 0,
     healthy: 0,
     degraded: 0,
     cost_blocked: 0,

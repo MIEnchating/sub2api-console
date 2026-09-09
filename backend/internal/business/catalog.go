@@ -958,6 +958,9 @@ func classifyGroupAccount(group *GroupStatus, account accountProjection, now tim
 	}
 	sampleRateLimited := strings.EqualFold(strings.TrimSpace(account.latestEvents[group.Name]), "rate_limited_or_exhausted")
 	switch account.Health {
+	case AccountStateManualPriority:
+		// Manual accounts have no pending automatic health assessment.
+		return
 	case "degraded":
 		group.DegradedAccounts++
 		if sampleRateLimited {
@@ -991,7 +994,7 @@ func availableGroupAccounts(accounts []accountProjection, groupName string, minS
 		if account.Schedulable == nil || !*account.Schedulable {
 			continue
 		}
-		if account.HealthScore == nil || *account.HealthScore >= minScore {
+		if account.Health == AccountStateManualPriority || account.HealthScore == nil || *account.HealthScore >= minScore {
 			count++
 		}
 	}

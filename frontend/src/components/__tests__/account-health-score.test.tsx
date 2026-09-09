@@ -4,6 +4,19 @@ import { describe, expect, it } from "vitest";
 import { AccountHealthScore } from "../account-health-score";
 
 describe("AccountHealthScore", () => {
+  it.each([0, 2, 10000])("有效样本为 %i 时短长期标签与分数保持紧凑间距", (sampleCount) => {
+    render(
+      <AccountHealthScore score={98} shortScore={98} longScore={96} sampleCount={sampleCount} />,
+    );
+
+    for (const label of [/短期评分/, /长期评分/]) {
+      const row = screen.getByLabelText(label);
+      expect(row).toHaveClass("flex", "gap-2");
+      expect(row).not.toHaveClass("justify-between");
+      expect(row).not.toHaveClass("min-w-16");
+    }
+  });
+
   it("有有效样本时同时展示综合分、短长期分和样本数", () => {
     render(<AccountHealthScore score={72.5} shortScore={62.4} longScore={90.5} sampleCount={2} />);
     expect(screen.getByLabelText("健康分 73")).toBeVisible();

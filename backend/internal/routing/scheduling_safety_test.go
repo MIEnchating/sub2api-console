@@ -102,6 +102,44 @@ func TestReviewNeutralClientErrorsCannotTriggerCredentialOnlyDeletion(t *testing
 	}
 }
 
+func TestWrappedForbiddenWithGatewayDegradeOnlyKeepsAccountSchedulable(t *testing.T) {
+	now := time.Date(2026, 9, 9, 0, 37, 0, 0, time.UTC)
+	policy := routingPolicy()
+	policy["classify"].(map[string]any)["fatal_patterns"] = []any{"forbidden", "authentication"}
+	policy["breaker"] = map[string]any{"hard_fatal": true, "http_failures": 3, "http_degrade_only": true}
+	enabled, rate := true, "0.08"
+	repo := &routingRepositoryStub{policy: policy, accounts: []business.RoutingAccount{
+		{ID: "41", GroupName: "kiro", Schedulable: &enabled, Multiplier: &rate, EffectiveState: "healthy", Metadata: map[string]any{}},
+		{ID: "42", GroupName: "kiro", Schedulable: &enabled, Multiplier: &rate, EffectiveState: "healthy", Metadata: map[string]any{}},
+	}}
+	for _, minutes := range []int{1, 2, 3} {
+		repo.samples = append(repo.samples, business.RoutingSample{
+			AccountID: "41", GroupName: "kiro", Source: "traffic", Result: "失败",
+			FailureReason: "Upstream access forbidden, please contact administrator",
+			ObservedAt:    now.Add(-time.Duration(minutes) * time.Minute).Format(time.RFC3339Nano),
+			Payload:       map[string]any{"status_code": 502},
+		})
+	}
+	repo.samples = append(repo.samples, business.RoutingSample{
+		AccountID: "42", GroupName: "kiro", Source: "traffic", Result: "通过",
+		ObservedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), Payload: map[string]any{"status_code": 200},
+	})
+	service := NewService(repo)
+	service.now = func() time.Time { return now }
+	result, err := service.Calculate(context.Background(), Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := result.AccountDecisions["41"]
+	if decision.RoutingState != "degraded" || !decision.Schedulable {
+		t.Fatalf("wrapped forbidden bypassed gateway degrade-only policy: %+v", decision)
+	}
+	target := result.AccountTargets["41"]
+	if target.Schedulable == nil || !*target.Schedulable {
+		t.Fatalf("wrapped forbidden must not disable account scheduling on writeback: %+v", target)
+	}
+}
+
 func TestRecoveryProbesDoNotReplaceNewerTrafficFailure(t *testing.T) {
 	now := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
 	traffic := business.RoutingSample{Source: "traffic", Result: "failed", ObservedAt: now.Add(-time.Second).Format(time.RFC3339Nano)}

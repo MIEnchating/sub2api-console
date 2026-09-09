@@ -102,7 +102,7 @@ describe("模型检测响应式布局", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain("min-h-0 flex-1 overflow-hidden px-3");
+    expect(markup).toContain('data-slot="page-workspace"');
     expect(markup).toContain("flex h-full min-h-0 flex-col");
     expect(markup).toContain("grid min-h-0 flex-1 items-stretch");
   });

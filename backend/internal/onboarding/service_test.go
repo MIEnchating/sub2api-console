@@ -279,6 +279,66 @@ func (keys *uncertainKeys) RevealKey(context.Context, configstore.AuthRecord, st
 	return upstreamsync.CreatedKey{}, errors.New("unexpected stable-ID reveal")
 }
 
+func TestOnboardingAccountCredentialsUseUpstreamBaseURLForEveryAdaptiveProtocol(t *testing.T) {
+	tests := []struct {
+		name     string
+		platform string
+		chatURL  string
+		wantURLs map[string]string
+	}{
+		{
+			name:     "GLM uses the upstream endpoint for every supported protocol",
+			platform: "zhipu",
+			chatURL:  "https://ai.unitenav.com",
+			wantURLs: map[string]string{
+				"chat_completions": "https://ai.unitenav.com",
+				"anthropic":        "https://ai.unitenav.com",
+			},
+		},
+		{
+			name:     "Kimi uses the upstream endpoint for every supported protocol",
+			platform: "kimi",
+			chatURL:  "https://ai.unitenav.com",
+			wantURLs: map[string]string{
+				"chat_completions": "https://ai.unitenav.com",
+				"anthropic":        "https://ai.unitenav.com",
+				"responses":        "https://ai.unitenav.com",
+			},
+		},
+		{
+			name:     "DeepSeek uses the upstream endpoint for every supported protocol",
+			platform: "deepseek",
+			chatURL:  "https://wanjckn.xyz",
+			wantURLs: map[string]string{
+				"chat_completions": "https://wanjckn.xyz",
+				"anthropic":        "https://wanjckn.xyz",
+				"responses":        "https://wanjckn.xyz",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			credentials := onboardingAccountCredentials(
+				"secret", test.chatURL, []string{"test-model"}, configstore.AccountCreationPolicy{}, test.platform, "apikey",
+			)
+
+			if credentials["account_mode"] != "payg" || credentials["api_protocol"] != "adaptive" || credentials["base_url"] != test.chatURL {
+				t.Fatalf("adaptive protocol credentials not applied: %#v", credentials)
+			}
+			urls, ok := credentials["api_base_urls"].(map[string]any)
+			if !ok || len(urls) != len(test.wantURLs) {
+				t.Fatalf("api_base_urls=%#v want=%#v", credentials["api_base_urls"], test.wantURLs)
+			}
+			for protocol, want := range test.wantURLs {
+				if urls[protocol] != want {
+					t.Errorf("api_base_urls[%q]=%#v want=%q", protocol, urls[protocol], want)
+				}
+			}
+		})
+	}
+}
+
 func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateStore(t *testing.T) {
 	reads := 0
 	schedulableWrites := 0
@@ -797,7 +857,7 @@ func TestValidateAllowsExplicitConcretePlatformForCompositeUpstreamGroup(t *test
 	}
 }
 
-func TestValidateRejectsCompositeUpstreamWithoutConcretePlatform(t *testing.T) {
+func TestValidateDefaultsCompositeUpstreamWithoutConcretePlatformToOpenAI(t *testing.T) {
 	repository, private, databasePath := onboardingFixture(t, "https://admin.example")
 	database, err := sql.Open("sqlite", "file:"+databasePath)
 	if err != nil {
@@ -808,15 +868,19 @@ func TestValidateRejectsCompositeUpstreamWithoutConcretePlatform(t *testing.T) {
 		UPDATE local_groups SET name='国产-平价',platform='composite' WHERE remote_id='3'`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
+	validated, err := New(repository, private, &checkingKeys{databasePath: databasePath}, nil).validate(
 		context.Background(),
 		Request{
 			Host: "upstream.test", UpstreamType: "sub2api", LocalGroupIDs: []string{"3"},
 			UpstreamGroupID: "6", Actor: "operator",
 		},
 	)
-	if err == nil || !strings.Contains(err.Error(), "无法确定具体账号协议") {
-		t.Fatalf("unexpected error: %v", err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform, err := accountPlatform(validated.request, validated.candidate, validated.locals)
+	if err != nil || platform != "openai" {
+		t.Fatalf("platform=%q err=%v", platform, err)
 	}
 }
 
@@ -842,15 +906,15 @@ func TestCompositeLocalGroupAcceptsEveryConcreteSub2APIPlatform(t *testing.T) {
 	}
 }
 
-func TestAccountPlatformDoesNotDeriveProtocolFromOpenCodeGroupName(t *testing.T) {
+func TestAccountPlatformDefaultsCompositeOpenCodeGroupToOpenAI(t *testing.T) {
 	composite := "composite"
-	_, err := accountPlatform(
+	platform, err := accountPlatform(
 		Request{},
 		business.OnboardingCandidate{GroupName: "OPENCODE", Platform: &composite},
 		[]business.LocalOnboardingGroup{{Name: "国产-平价", Platform: &composite}},
 	)
-	if err == nil || !strings.Contains(err.Error(), "无法确定具体账号协议") {
-		t.Fatalf("err=%v", err)
+	if err != nil || platform != "openai" {
+		t.Fatalf("platform=%q err=%v", platform, err)
 	}
 }
 

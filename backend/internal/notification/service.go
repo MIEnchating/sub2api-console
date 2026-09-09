@@ -30,6 +30,7 @@ const (
 
 type Repository interface {
 	PrepareAlertDelivery(context.Context, string, bool) (business.AlertDeliveryPlan, error)
+	PrepareBalanceAlertDelivery(context.Context, string, bool, string) (business.AlertDeliveryPlan, error)
 	BeginAlertDelivery(context.Context, string, []business.AlertIncident) error
 	FinalizeAlertDelivery(context.Context, string, []business.AlertDeliveryOutcome) error
 	RecordRuntimeEvent(context.Context, string, string, string, map[string]any) (int64, error)
@@ -128,6 +129,18 @@ func (s *Service) Test(ctx context.Context, message string, dryRun bool) (TestRe
 }
 
 func (s *Service) Deliver(ctx context.Context, dryRun bool) (business.AlertDeliveryResult, error) {
+	return s.deliver(ctx, dryRun, "")
+}
+
+func (s *Service) DeliverBalance(ctx context.Context, host string) (business.AlertDeliveryResult, error) {
+	host = configstore.CanonicalHost(host)
+	if host == "" {
+		return business.AlertDeliveryResult{}, errors.New("余额通知缺少 Host")
+	}
+	return s.deliver(ctx, false, host)
+}
+
+func (s *Service) deliver(ctx context.Context, dryRun bool, balanceHost string) (business.AlertDeliveryResult, error) {
 	s.deliveryMu.Lock()
 	s.setConsumerActive(true)
 	defer func() {
@@ -140,7 +153,12 @@ func (s *Service) Deliver(ctx context.Context, dryRun bool) (business.AlertDeliv
 	}
 	privateConfigured := settings.AppID != "" && settings.ClientSecret != "" && settings.HomeChannel != ""
 	channelKey := business.NotificationChannelKey("qqbot", settings.HomeChannel)
-	plan, err := s.repository.PrepareAlertDelivery(ctx, channelKey, privateConfigured)
+	var plan business.AlertDeliveryPlan
+	if balanceHost == "" {
+		plan, err = s.repository.PrepareAlertDelivery(ctx, channelKey, privateConfigured)
+	} else {
+		plan, err = s.repository.PrepareBalanceAlertDelivery(ctx, channelKey, privateConfigured, balanceHost)
+	}
 	if err != nil {
 		return business.AlertDeliveryResult{}, err
 	}

@@ -146,16 +146,16 @@ it.each([
   const pendingTask = new Promise<Task>((resolve) => {
     resolveTask = resolve;
   });
-  const create = vi.spyOn(api, operation === "同步余额" ? "runBalanceSync" : "runUpstreamSync");
+  const create = vi.spyOn(
+    api,
+    operation === "同步余额" ? "syncUpstreamBalances" : "runUpstreamSync",
+  );
   create.mockReturnValue(phase === "正在创建" ? pendingTask : Promise.resolve(queued));
   const readTask = vi.spyOn(api, "task").mockReturnValue(pendingTask);
   renderUpstreams();
-  if (operation === "同步余额") {
-    await user.click(await screen.findByRole("button", { name: "更多操作" }));
-    await user.click(await screen.findByRole("menuitem", { name: "同步余额" }));
-  } else {
-    await user.click(await screen.findByRole("button", { name: "同步上游" }));
-  }
+  (await screen.findByRole("button", { name: "上游维护" })).focus();
+  await user.keyboard("{Enter}");
+  await user.click(await screen.findByRole("menuitem", { name: operation }));
   const dialog = await screen.findByRole("dialog", { name: operation });
   if (phase === "正在读取")
     await waitFor(() => expect(readTask).toHaveBeenCalledWith("upstream-task"));

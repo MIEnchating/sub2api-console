@@ -15,7 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { operationErrorMessage } from "@/lib/operation-feedback";
 import { logStatusLabel, logTitleLabel } from "@/features/logs/lib/log-display";
 import { cn } from "@/lib/utils";
 import type { AttentionAccount, AttentionState } from "../lib/overview-health";
@@ -102,7 +102,7 @@ function EmptyActivity(props: { icon: React.ReactNode; title: string; detail?: s
       >
         {props.icon}
       </span>
-      <p className="text-foreground text-sm font-medium">{props.title}</p>
+      <p className="text-foreground wrap-anywhere text-sm font-medium">{props.title}</p>
       {props.detail && <p className="mt-1 text-xs">{props.detail}</p>}
     </div>
   );
@@ -114,7 +114,7 @@ export function OverviewActivity(props: OverviewActivityProps) {
       <div className="min-w-0 xl:col-span-3 xl:border-r">
         <CardHeader>
           <CardTitle>需要关注的渠道</CardTitle>
-          <CardDescription className="truncate">
+          <CardDescription className="wrap-anywhere">
             自动执行失败、熔断、停用、暂停、保底与降级渠道按风险排序。
           </CardDescription>
           <CardAction>
@@ -126,6 +126,13 @@ export function OverviewActivity(props: OverviewActivityProps) {
 
         <CardContent className="p-0">
           {props.attentionLoading && <ActivitySkeleton rows={4} />}
+          {!props.attentionLoading && props.attentionError ? (
+            <EmptyActivity
+              icon={<ShieldCheck size={18} />}
+              title={operationErrorMessage(props.attentionError, "渠道读取失败")}
+              detail="请检查连接后点击顶部刷新重试。"
+            />
+          ) : null}
           {!props.attentionLoading && !props.attentionError && props.attention.length === 0 && (
             <EmptyActivity
               icon={<ShieldCheck size={18} />}
@@ -147,8 +154,8 @@ export function OverviewActivity(props: OverviewActivityProps) {
                     sampleCount={item.account.sample_count}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <p className="truncate text-sm font-medium">{item.account.name}</p>
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <p className="wrap-anywhere text-sm font-medium">{item.account.name}</p>
                       <StatusBadge
                         className="shrink-0"
                         label={attentionLabels[item.state]}
@@ -156,14 +163,9 @@ export function OverviewActivity(props: OverviewActivityProps) {
                       />
                     </div>
                     <AccountIdentityMeta account={item.account} className="mt-0.5 block" />
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={<p className="text-muted-foreground mt-1 truncate text-xs" />}
-                      >
-                        {item.reason}
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-sm">{item.reason}</TooltipContent>
-                    </Tooltip>
+                    <p className="text-muted-foreground mt-1 wrap-anywhere text-xs leading-5">
+                      {item.reason}
+                    </p>
                   </div>
                   <AccountRecentResults
                     className="hidden shrink-0 sm:grid"
@@ -181,7 +183,9 @@ export function OverviewActivity(props: OverviewActivityProps) {
       <div className="min-w-0 border-t xl:col-span-2 xl:border-t-0">
         <CardHeader>
           <CardTitle>最近事件</CardTitle>
-          <CardDescription className="truncate">最近的运行、自动执行与策略变化。</CardDescription>
+          <CardDescription className="wrap-anywhere">
+            最近的运行、自动执行与策略变化。
+          </CardDescription>
           <CardAction>
             <Button variant="outline" size="sm" onClick={props.onOpenEvents}>
               全部 <ArrowRight />
@@ -191,6 +195,13 @@ export function OverviewActivity(props: OverviewActivityProps) {
 
         <CardContent className="p-0">
           {props.eventsLoading && <ActivitySkeleton rows={4} />}
+          {!props.eventsLoading && props.eventsError ? (
+            <EmptyActivity
+              icon={<Clock3 size={18} />}
+              title={operationErrorMessage(props.eventsError, "事件读取失败")}
+              detail="请检查连接后点击顶部刷新重试。"
+            />
+          ) : null}
           {!props.eventsLoading && !props.eventsError && props.events.length === 0 && (
             <EmptyActivity icon={<Clock3 size={18} />} title="暂无最近事件" />
           )}
@@ -203,13 +214,8 @@ export function OverviewActivity(props: OverviewActivityProps) {
                     aria-hidden="true"
                   />
                   <div className="min-w-0 flex-1">
-                    <Tooltip>
-                      <TooltipTrigger render={<p className="truncate text-sm" />}>
-                        {event.summary}
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-sm">{event.summary}</TooltipContent>
-                    </Tooltip>
-                    <p className="text-muted-foreground mt-1 flex min-w-0 items-center gap-1.5 text-xs">
+                    <p className="wrap-anywhere text-sm leading-6">{event.summary}</p>
+                    <p className="text-muted-foreground mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
                       <span className="truncate">{logTitleLabel(event.event_type)}</span>
                       <span aria-hidden="true">·</span>
                       <span className="shrink-0">{logStatusLabel(event.status)}</span>

@@ -28,6 +28,10 @@ func (f fakeDeliverer) Deliver(context.Context, bool) (business.AlertDeliveryRes
 	return f.result, nil
 }
 
+func (f fakeDeliverer) DeliverBalance(context.Context, string) (business.AlertDeliveryResult, error) {
+	return f.result, nil
+}
+
 func TestEnqueuePersistsTerminalTaskWhenRunnerIsStopping(t *testing.T) {
 	store := &recordingTaskStore{}
 	runner := taskrunner.New(context.Background())

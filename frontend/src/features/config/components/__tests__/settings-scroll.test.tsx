@@ -67,6 +67,10 @@ describe("系统设置滚动边界", () => {
         </QueryClientProvider>,
       );
 
+      const navigation = screen.getByRole("navigation", { name: "系统设置分类导航" });
+      expect(navigation).toHaveClass("shrink-0");
+      expect(navigation).not.toHaveClass("sticky");
+      expect(navigation.closest('[data-slot="page-content"]')).toBeNull();
       const panel = screen.getByTestId("system-settings-panel");
       expect(panel).toHaveClass("xl:overflow-hidden");
       const footer = panel.querySelector('[data-slot="settings-footer"]');

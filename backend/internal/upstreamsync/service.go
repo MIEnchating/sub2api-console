@@ -116,6 +116,7 @@ type HostResult struct {
 	AuthRecovered        bool                              `json:"auth_recovered"`
 	Reason               *string                           `json:"reason,omitempty"`
 	Catalog              *business.UpstreamCatalogSnapshot `json:"-"`
+	balanceObserved      bool
 }
 
 type BatchResult struct {
@@ -130,16 +131,17 @@ type BatchResult struct {
 }
 
 type Service struct {
-	repository Repository
-	private    PrivateStore
-	reader     CatalogReader
-	refresher  Refresher
-	resolver   AuthResolver
-	tasks      TaskStore
-	taskRunner taskrunner.Runner
-	rateSync   AccountRateSyncScheduler
-	timeout    time.Duration
-	workers    int
+	repository    Repository
+	private       PrivateStore
+	reader        CatalogReader
+	refresher     Refresher
+	resolver      AuthResolver
+	tasks         TaskStore
+	taskRunner    taskrunner.Runner
+	rateSync      AccountRateSyncScheduler
+	timeout       time.Duration
+	workers       int
+	balanceAlerts func(context.Context, string) error
 }
 
 type upstreamEventContextKey struct{}
@@ -162,6 +164,10 @@ func (s *Service) SetAuthResolver(resolver AuthResolver) {
 }
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
+func (s *Service) UseBalanceAlerts(evaluate func(context.Context, string) error) {
+	s.balanceAlerts = evaluate
+}
 
 func (s *Service) EnqueueAll(ctx context.Context, scope Scope, actor, operation string) (taskstore.Task, error) {
 	var err error
@@ -435,6 +441,19 @@ func applyBatchAccountCounts(result *BatchResult, summary business.UpstreamSumma
 }
 
 func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor string) HostResult {
+	result := s.syncHostData(ctx, host, scope, actor)
+	// Notify after committing the balance and releasing the mutation lease.
+	// Each Host can recover while other Hosts or inspection stages are still busy.
+	if result.balanceObserved && s.balanceAlerts != nil {
+		if alertErr := s.balanceAlerts(ctx, host); alertErr != nil {
+			// Keep the successful read; delivery failures remain available for retry.
+			slog.Error("余额同步后的告警处理失败", "host", host, "error", safeReason(alertErr.Error()))
+		}
+	}
+	return result
+}
+
+func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, actor string) HostResult {
 	if scope.Balance {
 		if policy, ok := s.repository.(balanceSyncPolicy); ok {
 			allowed, policyErr := policy.HostBalanceSyncAllowed(ctx, host)
@@ -533,7 +552,7 @@ func (s *Service) syncHost(ctx context.Context, host string, scope Scope, actor 
 		GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,
-		Catalog: catalog,
+		Catalog: catalog, balanceObserved: scope.Balance && balance != nil && balance.RawBalance != nil,
 	}
 }
 

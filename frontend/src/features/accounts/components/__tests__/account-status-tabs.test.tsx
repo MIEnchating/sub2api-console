@@ -1,7 +1,31 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+
+// JSDOM 26 的样式匹配不支持浏览器顶层选择器，会在菜单焦点计算时递归。
+const restoreSelectorMatching = vi.hoisted(() => {
+  const matches = Element.prototype.matches;
+  Element.prototype.matches = function (selector: string): boolean {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  };
+  return () => {
+    Element.prototype.matches = matches;
+  };
+});
+afterAll(restoreSelectorMatching);
+beforeEach(() => {
+  const getComputedStyle = window.getComputedStyle;
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElement) => {
+    if (element instanceof HTMLSelectElement) {
+      const style = document.createElement("div").style;
+      style.display = "none";
+      return style;
+    }
+    return getComputedStyle(element, pseudoElement);
+  });
+});
 
 import { AccountSelectionToolbar, AccountTaskCancelButton, AccountsPage } from "../../../../App";
 import { api, type AccountStatus } from "../../../../api";
@@ -107,23 +131,45 @@ describe("AccountStatusFilter", () => {
     expect(toolbar).not.toContain("个账号");
     expect(markup).not.toMatch(/<th[^>]*>分组<\/th>/);
     expect(markup).toContain("调度权重");
-    expect(markup).toContain("Key 状态");
-    expect(markup).toContain("Sub2API 状态");
+    expect(markup).toMatch(/<th[^>]*>状态<\/th>/);
+    expect(markup).not.toMatch(/<th[^>]*>Key 状态<\/th>/);
+    expect(markup).not.toMatch(/<th[^>]*>Sub2API 状态<\/th>/);
     expect(markup).toContain('aria-label="按账号升序排列"');
     expect(markup).toContain('aria-label="按健康分升序排列"');
-    expect(markup).toContain('aria-label="按综合延迟升序排列"');
+    expect(markup).toContain('aria-label="按流量首字升序排列"');
     expect(markup).toContain('aria-label="按账号成本升序排列"');
     expect(markup).toContain('aria-label="按调度权重升序排列"');
     expect(markup).toContain('aria-label="按调度参数升序排列"');
     expect(markup.match(/aria-sort="none"/g)).toHaveLength(6);
     expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
-    expect(markup).toContain("min-w-[1640px]");
+    expect(markup).toContain("min-w-[1336px]");
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('aria-label="选择当前页账号"');
     expect(markup).toContain('aria-disabled="true"');
   });
 
-  it("keeps maintenance actions independent from selection", () => {
+  it("未选择账号时仍可从维护菜单操作当前筛选结果", async () => {
+    vi.spyOn(api, "accounts").mockResolvedValue([account()]);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["accounts"], [account()]);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountsPage />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("checkbox", { name: "选择当前页账号" })).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "配置校验与修复" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+    for (const name of ["配置校验与修复", "同步倍率", "同步模型", "复验绑定", "命名修复"]) {
+      expect(await screen.findByRole("menuitem", { name })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    }
+    queryClient.clear();
+  });
+
+  it("把刷新账号池按钮放在账号管理操作栏最前面", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(["accounts"], [account()]);
     const markup = renderToStaticMarkup(
@@ -131,26 +177,12 @@ describe("AccountStatusFilter", () => {
         <AccountsPage />
       </QueryClientProvider>,
     );
-    const buttons = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].map(
-      (match) => match[0],
-    );
-    const actionButton = (label: string) => buttons.find((button) => button.includes(label)) ?? "";
 
-    expect(markup).not.toContain("同步全部上游余额");
-    expect(markup).toContain("平台模型探活");
-    expect(markup).toContain("配置校验与修复");
-    expect(markup).toContain("同步倍率");
-    expect(markup).toContain("同步模型");
-    expect(markup).toContain("复验绑定");
-    expect(markup).toContain("命名修复");
-    expect(markup).not.toContain("选择筛选结果");
-    expect(markup).not.toContain("批量删除（");
-    expect(markup).not.toContain("批量操作");
-    expect(markup).toContain("状态与处置");
-    for (const label of ["配置校验与修复", "同步倍率", "同步模型", "复验绑定", "命名修复"]) {
-      expect(actionButton(label)).not.toContain(' disabled=""');
-    }
-    expect(markup).toContain('role="checkbox"');
+    const refreshPosition = markup.indexOf('aria-label="刷新账号池"');
+    const probePosition = markup.indexOf("平台模型探活");
+
+    expect(refreshPosition).toBeGreaterThan(-1);
+    expect(refreshPosition).toBeLessThan(probePosition);
   });
 
   it("从账号管理入口直接打开平台模型探活", () => {
@@ -205,19 +237,22 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain('aria-checked="false"');
   });
 
-  it("disables bulk rate sync when the filtered result only contains manual-priority accounts", () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(["accounts"], [{ ...account(), manual_priority: 3 }]);
-    const markup = renderToStaticMarkup(
+  it("只有人工优先账号时维护菜单禁用批量倍率同步", async () => {
+    const rows = [{ ...account(), manual_priority: 3 }];
+    vi.spyOn(api, "accounts").mockResolvedValue(rows);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["accounts"], rows);
+    render(
       <QueryClientProvider client={queryClient}>
         <AccountsPage />
       </QueryClientProvider>,
     );
-    const syncButton = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)]
-      .map((match) => match[0])
-      .find((button) => button.includes("同步倍率"));
-
-    expect(syncButton).toContain(' disabled=""');
+    fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+    expect(await screen.findByRole("menuitem", { name: "同步倍率" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    queryClient.clear();
   });
 
   it("shows 20 accounts on the first page by default", () => {

@@ -185,7 +185,7 @@ function ResultSourceRow(props: {
                 render={
                   <span
                     className={cn(
-                      "focus-visible:ring-ring h-3 w-1.5 shrink-0 rounded-[2px] outline-none hover:opacity-75 focus-visible:ring-2 focus-visible:ring-offset-2",
+                      "focus-visible:ring-ring h-4 w-2 shrink-0 rounded-[2px] outline-none hover:opacity-75 focus-visible:ring-2 focus-visible:ring-offset-2",
                       resultTone(result),
                     )}
                     tabIndex={0}
@@ -202,7 +202,7 @@ function ResultSourceRow(props: {
         {Array.from({ length: Math.max(0, props.slots - props.results.length) }, (_, index) => (
           <span
             key={`empty:${index}`}
-            className="bg-muted-foreground/20 h-3 w-1.5 shrink-0 rounded-[2px]"
+            className="bg-muted-foreground/20 h-4 w-2 shrink-0 rounded-[2px]"
             aria-hidden="true"
           />
         ))}

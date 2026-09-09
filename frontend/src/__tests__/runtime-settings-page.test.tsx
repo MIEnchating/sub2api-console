@@ -134,11 +134,11 @@ describe("系统设置页面职责", () => {
     expect(pageShell).toContain("w-full");
     expect(pageShell).not.toContain("max-w-");
     expect(connectionMarkup).toContain('data-slot="page-content"');
-    expect(connectionMarkup).toContain("min-h-0 flex-1 overflow-hidden");
+    expect(connectionMarkup).toContain('data-slot="page-workspace"');
     expect(connectionMarkup).toContain('role="tablist"');
     expect(connectionMarkup).toContain('aria-label="系统设置分类"');
     expect(connectionMarkup).toContain('data-testid="system-settings-tabs"');
-    expect(connectionMarkup).toContain("sticky top-0");
+    expect(connectionMarkup).not.toContain("sticky top-0");
     expect(connectionMarkup).toContain("grid w-full grid-cols-2 sm:grid-cols-4");
     expect(connectionMarkup).toContain("flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden");
     expect(connectionMarkup.match(/role="tab"/g)).toHaveLength(4);

@@ -184,10 +184,9 @@ export function NewAPIModelPrices(props: PriceProps) {
       const configured = new Map(
         [...props.models, ...(props.unsetModels ?? [])].map((price) => [price.model, price]),
       );
-      const references = new Map(catalog.models.map((price) => [price.model, price]));
       setBatchPreview(
         [...selectedModels].sort().map((model) => {
-          const reference = references.get(model);
+          const reference = matchingRemoteModelPrice(catalog.models, model);
           if (!reference) return { model, reason: "跳过：参考价未找到", differences: [] };
           if (!remotePriceSupportsNewAPIWrite(reference))
             return { model, reason: "跳过：不支持此计费格式", differences: [] };
@@ -597,9 +596,9 @@ export function NewAPIModelPrices(props: PriceProps) {
                                 label="查看价格差异"
                                 ariaLabel={`查看 ${row.model} 价格差异`}
                                 onClick={() => {
-                                  const remote = props.managementPrices?.find(
-                                    (price) => price.model === row.model,
-                                  );
+                                  const remote = props.managementPrices
+                                    ? matchingRemoteModelPrice(props.managementPrices, row.model)
+                                    : null;
                                   if (remote) {
                                     setDifferenceSelection({ configured: row.configured, remote });
                                   }
@@ -957,7 +956,13 @@ export function matchingRemoteModelPrice(
   prices: Sub2APIModelPrice[],
   model: string,
 ): Sub2APIModelPrice | null {
-  return prices.find((price) => price.model === model) ?? null;
+  const exact = prices.find((price) => price.model === model);
+  if (exact) return exact;
+
+  const thinkingVariant = /^(gemini-.+)-(high|low|medium|tiered)$/.exec(model);
+  if (!thinkingVariant) return null;
+  const base = prices.find((price) => price.model === thinkingVariant[1]);
+  return base ? { ...base, model } : null;
 }
 
 export function remotePriceToNewAPIModelPrice(price: Sub2APIModelPrice): NewAPIModelPrice {
@@ -1088,7 +1093,7 @@ export function newAPIPriceComparisonStatus(
   configured: NewAPIModelPrice,
   remotePrices: Sub2APIModelPrice[],
 ): NewAPIPriceComparisonStatus {
-  const remote = remotePrices.find((price) => price.model === configured.model);
+  const remote = matchingRemoteModelPrice(remotePrices, configured.model);
   if (!remote) return "missing";
   const expected = remotePriceToNewAPIModelPrice(remote);
   if (expected.billing_mode === "tiered_expr") {

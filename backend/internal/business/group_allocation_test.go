@@ -5,6 +5,40 @@ import (
 	"testing"
 )
 
+func TestGroupAllocationDoesNotReuseManualAccountCostBlock(t *testing.T) {
+	store := openReadModelFixture(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `UPDATE accounts SET schedulable=1,health_status='cost_blocked' WHERE id='41'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AssignManualPriority(ctx, "41", 1, "100", 100, false, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO routing_decisions VALUES
+		('41','codex',20,0,'cost_blocked','cost_blocked',1,'旧成本墙决策','2099-01-01T00:00:00Z','{"weight":0}')`); err != nil {
+		t.Fatal(err)
+	}
+	allocation, err := store.GroupAllocation(ctx, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allocation.Channels) != 1 || allocation.Channels[0].Health != "manual_priority" || allocation.AvailableAccounts != 1 {
+		t.Fatalf("manual account allocation retained automatic state: %+v", allocation)
+	}
+	if allocation.HasAllocation || allocation.Channels[0].Reason != nil || allocation.Channels[0].Weight != nil {
+		t.Fatalf("manual account exposed stale automatic allocation: %+v", allocation)
+	}
+	groups, err := store.Groups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range groups {
+		if group.Name == "codex" && (group.DegradedAccounts != 0 || group.FusedAccounts != 0 || group.PendingAccounts != 0) {
+			t.Fatalf("manual account counted as automatically blocked: %+v", group)
+		}
+	}
+}
+
 func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 	store := openReadModelFixture(t)
 	ctx := context.Background()

@@ -17,7 +17,7 @@ describe("PageHeading", () => {
     expect(markup).not.toContain("overflow-auto");
   });
 
-  it("keeps title and page actions in one responsive row", () => {
+  it("allows title and page actions to wrap when the available width is insufficient", () => {
     const markup = renderToStaticMarkup(
       <PageHeading
         eyebrow="OPERATIONS"
@@ -27,7 +27,9 @@ describe("PageHeading", () => {
       />,
     );
 
-    expect(markup).toContain("flex-nowrap");
+    expect(markup).not.toContain("flex-nowrap");
+    expect(markup).not.toContain("truncate");
+    expect(markup).toContain("max-w-full");
     expect(markup).toContain("min-w-0");
     expect(markup).toContain("flex-wrap");
     expect(markup).toContain("shrink-0");

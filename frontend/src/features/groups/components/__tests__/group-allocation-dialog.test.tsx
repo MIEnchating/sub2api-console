@@ -1,8 +1,25 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { GroupAllocation } from "@/api";
 import { GroupAllocationContent, groupAllocationLayout } from "../group-allocation-dialog";
+
+afterEach(cleanup);
+
+it("分组分配中人工优先位显示中文状态", () => {
+  render(
+    <GroupAllocationContent
+      allocation={{
+        ...allocation,
+        channels: [{ ...allocation.channels[0], health: "manual_priority" }],
+      }}
+    />,
+  );
+
+  expect(screen.getByText("人工优先位")).toBeVisible();
+  expect(screen.queryByText("manual_priority")).not.toBeInTheDocument();
+});
 
 const allocation: GroupAllocation = {
   group_id: "6",

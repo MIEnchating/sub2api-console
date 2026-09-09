@@ -4,6 +4,8 @@ import { ArrowRight, Bolt, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } fr
 import { toast } from "sonner";
 
 import { api } from "@/api";
+import { RefreshButton } from "@/components/refresh-button";
+import { operationErrorMessage } from "@/lib/operation-feedback";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -94,15 +96,15 @@ function MetricCard(props: {
           {props.icon}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-muted-foreground truncate text-sm">{props.label}</p>
+          <p className="text-muted-foreground text-sm">{props.label}</p>
           {props.loading ? (
             <Skeleton className="mt-1.5 h-6 w-20" />
           ) : (
-            <strong className="mt-0.5 block truncate text-xl leading-6 font-semibold tabular-nums">
+            <strong className="mt-0.5 block wrap-anywhere text-xl leading-6 font-semibold tabular-nums">
               {props.value ?? "—"}
             </strong>
           )}
-          <p className="text-muted-foreground mt-1 truncate text-xs">{props.detail}</p>
+          <p className="text-muted-foreground mt-1 wrap-anywhere text-xs">{props.detail}</p>
         </div>
       </div>
     </Card>
@@ -119,9 +121,9 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
       aria-label="打开分组管理"
     >
       <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">{props.health.group.name}</h3>
-          <p className="text-muted-foreground mt-1 truncate text-xs">
+        <div className="min-w-0 flex-1">
+          <h3 className="wrap-anywhere text-sm font-semibold">{props.health.group.name}</h3>
+          <p className="text-muted-foreground mt-1 wrap-anywhere text-xs">
             {props.health.group.id ? `#${props.health.group.id}` : "无分组 ID"} ·{" "}
             {props.health.platformSummary}
             {props.health.averageMultiplier === null
@@ -129,7 +131,11 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
               : ` · 倍率 ${props.health.averageMultiplier}`}
           </p>
         </div>
-        <StatusBadge label={props.health.statusLabel} variant={styles.variant} />
+        <StatusBadge
+          className="shrink-0"
+          label={props.health.statusLabel}
+          variant={styles.variant}
+        />
       </div>
 
       <div className="mt-4 flex items-end justify-between gap-3">
@@ -142,8 +148,8 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center gap-3">
-        <span className="bg-muted h-2 min-w-0 flex-1 overflow-hidden rounded-full">
+      <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="bg-muted h-2 min-w-16 flex-1 overflow-hidden rounded-full">
           <span
             className={cn(
               "block h-full rounded-full transition-[width] duration-300",
@@ -158,7 +164,7 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
         </span>
       </div>
 
-      <p className={cn("mt-auto line-clamp-2 pt-4 text-xs", styles.detail)}>
+      <p className={cn("mt-auto wrap-anywhere pt-4 text-xs", styles.detail)}>
         {groupHealthDetail(props.health)}
       </p>
     </button>
@@ -249,6 +255,7 @@ export function OverviewPage(props: OverviewPageProps) {
   const loading = accounts.isLoading || groups.isLoading;
   const syncing = sync.isPending || Boolean(syncTaskId);
   const error = accounts.error ?? groups.error;
+  const unavailable = !accounts.data || !groups.data;
 
   const accountDetail = `${metrics.healthyAccounts} 健康 · ${metrics.degradedAccounts} 降级 · ${metrics.fusedAccounts} 熔断${metrics.costBlockedAccounts ? ` · ${metrics.costBlockedAccounts} 成本拦截` : ""}${metrics.pausedAccounts ? ` · ${metrics.pausedAccounts} 暂停` : ""}${metrics.disabledAccounts ? ` · ${metrics.disabledAccounts} 停用` : ""}${metrics.survivorAccounts ? ` · ${metrics.survivorAccounts} 保底` : ""}${metrics.unknownAccounts ? ` · ${metrics.unknownAccounts} 待观察` : ""}`;
   const healthDetail =
@@ -265,6 +272,13 @@ export function OverviewPage(props: OverviewPageProps) {
         action={
           <PageActions>
             {syncTaskId ? <TaskCancelButton taskId={syncTaskId} /> : null}
+            <RefreshButton
+              ariaLabel="刷新运营总览"
+              pending={accounts.isFetching || groups.isFetching || events.isFetching}
+              onClick={() =>
+                void Promise.all([accounts.refetch(), groups.refetch(), events.refetch()])
+              }
+            />
             <Button variant="outline" onClick={() => sync.mutate()} disabled={syncing}>
               <RefreshCw className={cn(syncing && "animate-spin")} />
               {syncing ? "同步中" : "立即同步"}
@@ -280,32 +294,40 @@ export function OverviewPage(props: OverviewPageProps) {
       >
         <MetricCard
           label="受管渠道"
-          value={formatNumber(metrics.managedAccounts)}
-          detail={accountDetail}
+          value={unavailable ? null : formatNumber(metrics.managedAccounts)}
+          detail={unavailable ? "等待完整渠道与分组数据" : accountDetail}
           icon={<ServerCog size={20} />}
           tone="teal"
           loading={loading}
         />
         <MetricCard
           label="平均健康分"
-          value={metrics.averageHealthScore}
-          detail={healthDetail}
+          value={unavailable ? null : metrics.averageHealthScore}
+          detail={unavailable ? "等待完整渠道与分组数据" : healthDetail}
           icon={<ShieldCheck size={20} />}
           tone="red"
           loading={loading}
         />
         <MetricCard
           label="已分配并发"
-          value={formatNumber(metrics.assignedConcurrency)}
-          detail={`${metrics.accountsWithConcurrency} 个渠道已设置并发上限`}
+          value={unavailable ? null : formatNumber(metrics.assignedConcurrency)}
+          detail={
+            unavailable
+              ? "等待完整渠道与分组数据"
+              : `${metrics.accountsWithConcurrency} 个渠道已设置并发上限`
+          }
           icon={<Bolt size={20} />}
           tone="teal"
           loading={loading}
         />
         <MetricCard
           label="风险分组"
-          value={metrics.riskGroups}
-          detail={`${metrics.criticalGroups} 个分组仅剩保底或无可用账号`}
+          value={unavailable ? null : metrics.riskGroups}
+          detail={
+            unavailable
+              ? "等待完整渠道与分组数据"
+              : `${metrics.criticalGroups} 个分组仅剩保底或无可用账号`
+          }
           icon={<TriangleAlert size={20} />}
           tone="red"
           loading={loading}
@@ -327,12 +349,19 @@ export function OverviewPage(props: OverviewPageProps) {
           className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
         >
           {loading && <MatrixSkeleton />}
+          {!loading && error && unavailable ? (
+            <div className="col-span-full flex min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm wrap-anywhere">
+              <p className="text-destructive">{operationErrorMessage(error, "运营数据读取失败")}</p>
+              <p className="text-muted-foreground">请检查连接后点击顶部刷新重试。</p>
+            </div>
+          ) : null}
           {!loading && !error && healthRows.length === 0 && (
             <div className="text-muted-foreground col-span-full flex min-h-48 items-center justify-center text-sm">
               暂无分组数据
             </div>
           )}
           {!loading &&
+            !unavailable &&
             healthRows.map((health) => (
               <GroupHealthCard
                 key={health.group.id ?? health.group.name}

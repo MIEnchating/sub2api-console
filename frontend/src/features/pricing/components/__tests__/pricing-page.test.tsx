@@ -291,15 +291,13 @@ describe("PricingPage", () => {
     expect(markup).not.toContain("价格配置");
     expect(markup).not.toContain("目标盈利比例");
     expect(markup).toContain("查看账号调整明细");
-    expect(markup).toContain("变更记录");
-    expect(markup).toContain("创建备份");
-    expect(markup).toContain("从备份还原");
+    expect(markup).toContain("价格维护");
     expect(markup).toContain("min-w-[960px]");
     expect(markup).toContain("w-56");
     expect(markup).toContain('data-testid="pricing-catalog-table-frame"');
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('data-slot="card"');
-    expect(markup).toContain("min-h-0 flex-1 overflow-hidden px-3");
+    expect(markup).toContain('data-slot="page-workspace"');
     expect(markup).toContain('data-testid="pricing-page"');
     expect(markup).toContain("flex h-full min-h-0 flex-col");
     expect(markup).toContain("min-h-0 flex-1 overflow-auto");
@@ -404,7 +402,7 @@ describe("PricingPage", () => {
     expect(markup).toContain('aria-label="互换组 1 可选分组"');
     expect(markup).toContain('data-testid="exchange-set-options-1"');
     const exchangeOption = markup.match(/<label[^>]*data-slot="exchange-group-option"[^>]*>/)?.[0];
-    expect(exchangeOption).toContain("min-h-9");
+    expect(exchangeOption).toContain("min-h-12");
     expect(markup).toContain(">售价 1</span>");
     expect(markup).not.toContain("account-41");
     expect(markup).toContain("disabled");

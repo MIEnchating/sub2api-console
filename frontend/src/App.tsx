@@ -1,3 +1,9 @@
+import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
+import { UpstreamsPageActions } from "./features/upstreams/components/upstreams-page-actions";
+import {
+  PolicyCategoryNavigation,
+  type PolicyCategory,
+} from "./features/policy/components/policy-category-navigation";
 import { GroupBatchDialog } from "./features/groups/components/group-batch-dialog";
 import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
 import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
@@ -8,7 +14,6 @@ import {
   Activity,
   Ban,
   BellRing,
-  BadgeCheck,
   BadgeDollarSign,
   ChartSpline,
   ChartNoAxesColumnIncreasing,
@@ -44,7 +49,6 @@ import {
   ScanSearch,
   Search,
   ScrollText,
-  Server,
   ServerCog,
   Settings,
   ShieldAlert,
@@ -282,6 +286,7 @@ import {
 import { AccountStatusFilter } from "./features/accounts/components/account-status-tabs";
 import { AccountSortTableHead } from "./features/accounts/components/account-sort-header";
 import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
+import { AccountsPageActions } from "./features/accounts/components/accounts-page-actions";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
 import {
   AccountDeleteDialog,
@@ -1486,6 +1491,7 @@ const autoApplyLabels: Record<string, string> = {
   concurrency: "并发上限",
 };
 const statusLabels: Record<string, string> = {
+  manual_priority: "人工优先位",
   ok: "正常",
   partial: "部分完成",
   warning: "警告",
@@ -2407,93 +2413,48 @@ export function UpstreamsPage() {
         title="上游管理"
         description="管理上游 Host、鉴权方式、倍率、余额和关联账号。"
         action={
-          <PageActions>
-            <RefreshButton
-              pending={upstreams.isFetching}
-              ariaLabel="刷新上游列表"
-              onClick={() => void upstreams.refetch()}
-            />
-            <Button variant="outline" onClick={() => setGroupHistoryOverviewOpen(true)}>
-              <ChartNoAxesColumnIncreasing size={16} />
-              统计变化
-            </Button>
-            <Button
-              onClick={() =>
-                navigate({
-                  to: "/onboarding",
-                  search: {
-                    host: undefined,
-                    upstream_type: undefined,
-                    group_id: undefined,
-                  },
-                })
-              }
-            >
-              <UserPlus size={16} />
-              添加账号
-            </Button>
-            <Button
-              variant="outline"
-              disabled={managementPending}
-              onClick={() => {
-                setManagementTaskId(null);
-                balanceSync.reset();
-                groupSync.reset();
-                setManagementDialog("balance");
-                balanceSync.mutate();
-              }}
-            >
-              <WalletCards size={16} />
-              同步余额
-            </Button>
-            <Button
-              variant="outline"
-              disabled={managementPending}
-              onClick={() => {
-                setManagementTaskId(null);
-                nameRepair.reset();
-                setManagementDialog("names");
-                nameRepair.mutate();
-              }}
-            >
-              <SpellCheck2 size={16} />
-              名称修复
-            </Button>
-            <Button
-              variant="outline"
-              disabled={managementPending}
-              onClick={() => {
-                setManagementTaskId(null);
-                balanceSync.reset();
-                groupSync.reset();
-                setManagementDialog("groups");
-                groupSync.mutate();
-              }}
-            >
-              <FolderOpen size={16} />
-              同步分组
-            </Button>
-            <Button
-              variant="outline"
-              disabled={groupAuditPending || !upstreams.data?.hosts.length}
-              onClick={() => groupAuditMutation.mutate()}
-            >
-              <ScanSearch size={16} />
-              {groupAuditPending ? "核对中…" : "核对分组绑定"}
-            </Button>
-            <Button
-              disabled={syncPending}
-              onClick={() => {
-                setSyncTaskId(null);
-                syncUpstreams.reset();
-                setSyncDialogOpen(true);
-                syncUpstreams.mutate();
-              }}
-            >
-              <Server size={16} />
-              同步上游
-            </Button>
-          </PageActions>
+          <UpstreamsPageActions
+            refreshing={upstreams.isFetching}
+            maintenancePending={managementPending}
+            syncPending={syncPending}
+            auditPending={groupAuditPending}
+            auditDisabled={groupAuditPending || !upstreams.data?.hosts.length}
+            onRefresh={() => void upstreams.refetch()}
+            onAdd={() =>
+              navigate({
+                to: "/onboarding",
+                search: { host: undefined, upstream_type: undefined, group_id: undefined },
+              })
+            }
+            onHistory={() => setGroupHistoryOverviewOpen(true)}
+            onBalanceSync={() => {
+              setManagementTaskId(null);
+              balanceSync.reset();
+              groupSync.reset();
+              setManagementDialog("balance");
+              balanceSync.mutate();
+            }}
+            onNameRepair={() => {
+              setManagementTaskId(null);
+              nameRepair.reset();
+              setManagementDialog("names");
+              nameRepair.mutate();
+            }}
+            onGroupSync={() => {
+              setManagementTaskId(null);
+              balanceSync.reset();
+              groupSync.reset();
+              setManagementDialog("groups");
+              groupSync.mutate();
+            }}
+            onGroupAudit={() => groupAuditMutation.mutate()}
+            onSync={() => {
+              setSyncTaskId(null);
+              syncUpstreams.reset();
+              setSyncDialogOpen(true);
+              syncUpstreams.mutate();
+            }}
+          />
         }
       />
       {upstreams.error && <QueryError error={upstreams.error} fallback="上游数据读取失败" />}
@@ -4416,62 +4377,23 @@ export function AccountsPage() {
         title="账号管理"
         description="健康分、最近结果、真实流量首字延迟、账号成本和组内分配权重集中查看，可按状态快速定位。"
         action={
-          <PageActions>
-            <Button variant="default" onClick={() => setPlatformProbeOpen(true)}>
-              <Activity />
-              平台模型探活
-            </Button>
-            <RefreshButton
-              pending={accounts.isFetching}
-              ariaLabel="刷新账号池"
-              onClick={() => void accounts.refetch()}
-            />
-            <Button
-              variant="outline"
-              disabled={batchOperationPending || automaticAccountIDs.length === 0}
-              onClick={startBaseURLCheck}
-            >
-              <ScanSearch />
-              配置校验与修复
-            </Button>
-            <Button
-              variant="outline"
-              disabled={batchOperationPending || rateSyncAccountIDs.length === 0}
-              onClick={() => startMaintenance("rate")}
-            >
-              <RefreshCw />
-              同步倍率
-            </Button>
-            <Button
-              variant="outline"
-              disabled={batchOperationPending || automaticAccountIDs.length === 0}
-              onClick={() => startModelSync(automaticAccountIDs)}
-            >
-              <RefreshCw />
-              同步模型
-            </Button>
-            <Button
-              variant="outline"
-              disabled={batchOperationPending || automaticAccountIDs.length === 0}
-              onClick={() => startMaintenance("revalidate")}
-            >
-              <BadgeCheck />
-              复验绑定
-            </Button>
-            <Button
-              variant="outline"
-              disabled={batchOperationPending || automaticAccountIDs.length === 0}
-              onClick={() => startMaintenance("repair")}
-            >
-              <SpellCheck2 />
-              命名修复
-            </Button>
-          </PageActions>
+          <AccountsPageActions
+            refreshing={accounts.isFetching}
+            automaticDisabled={batchOperationPending || automaticAccountIDs.length === 0}
+            rateSyncDisabled={batchOperationPending || rateSyncAccountIDs.length === 0}
+            onRefresh={() => void accounts.refetch()}
+            onProbe={() => setPlatformProbeOpen(true)}
+            onCheck={startBaseURLCheck}
+            onRateSync={() => startMaintenance("rate")}
+            onModelSync={() => startModelSync(automaticAccountIDs)}
+            onRevalidate={() => startMaintenance("revalidate")}
+            onRepairNames={() => startMaintenance("repair")}
+          />
         }
       />
       {accounts.error && <QueryError error={accounts.error} fallback="账号读取失败" />}
       <div className="flex h-full min-h-0 flex-col gap-2.5 sm:gap-3">
-        <TableFilterToolbar data-testid="account-filter-toolbar">
+        <TableFilterToolbar data-testid="account-filter-toolbar" className="gap-y-3">
           <SearchField
             value={search}
             onChange={(value) => {
@@ -4516,7 +4438,7 @@ export function AccountsPage() {
               pagination.setCurrentPage(1);
             }}
           />
-          <div className="flex items-center gap-2 border-l pl-2">
+          <div className="flex items-center gap-2 sm:ml-auto">
             <Switch
               id="accounts-show-manual-priority"
               checked={showManualPriorityAccounts}
@@ -4532,8 +4454,12 @@ export function AccountsPage() {
           </div>
         </TableFilterToolbar>
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1432px]">
-            <TableHeader className="sticky top-0 z-10">
+          <Table
+            containerClassName="min-h-0 flex-1 overflow-auto"
+            uniformTextSize={false}
+            className="min-w-[1336px] [&_td]:py-3"
+          >
+            <TableHeader className="sticky top-0 z-20">
               <TableRow>
                 <TableHead className="w-10 px-3">
                   <Checkbox
@@ -4549,20 +4475,20 @@ export function AccountsPage() {
                   />
                 </TableHead>
                 <AccountSortTableHead
-                  className="w-52"
+                  className="w-[232px]"
                   label="账号"
                   column="name"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
                 <AccountSortTableHead
-                  className="w-36"
+                  className="w-[136px]"
                   label="健康分"
                   column="health"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
-                <TableHead className="w-40">最近结果</TableHead>
+                <TableHead className="w-[172px]">最近结果</TableHead>
                 <AccountSortTableHead
                   className="w-28"
                   label="流量首字"
@@ -4571,7 +4497,7 @@ export function AccountsPage() {
                   onValueChange={changeAccountSort}
                 />
                 <AccountSortTableHead
-                  className="w-24"
+                  className="w-[88px]"
                   label="账号成本"
                   column="cost"
                   value={accountSort}
@@ -4585,14 +4511,16 @@ export function AccountsPage() {
                   onValueChange={changeAccountSort}
                 />
                 <AccountSortTableHead
-                  className="w-44"
+                  className="w-40"
                   label="调度参数"
                   column="priority"
                   value={accountSort}
                   onValueChange={changeAccountSort}
                 />
-                <TableHead className="w-48">状态</TableHead>
-                <TableHead className="w-52 text-right">操作</TableHead>
+                <TableHead className="w-52">状态</TableHead>
+                <TableHead className="right-0 z-20! w-28 text-right shadow-[-1px_0_0_var(--border)]">
+                  操作
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -5681,9 +5609,6 @@ function AccountRow(props: {
           <Tooltip>
             <TooltipTrigger render={<span className="inline-grid cursor-help gap-0.5" />}>
               <span className="font-semibold tabular-nums">{schedulingMetric(account.weight)}</span>
-              {account.weight !== null && (
-                <span className="text-muted-foreground text-[11px] font-normal">调度权重</span>
-              )}
             </TooltipTrigger>
             <TooltipContent>
               每轮根据分组预算和质量分计算调度权重；账号属于多个分组时取各分组结果的平均值
@@ -5694,9 +5619,12 @@ function AccountRow(props: {
           <AccountRoutingParametersCell account={account} />
         </TableCell>
         <TableCell className="align-middle">
-          <AccountStateCell account={account} />
+          <AccountStateCell account={account} compact />
         </TableCell>
-        <TableCell className="align-middle text-right" overflowTooltip={false}>
+        <TableCell
+          className="sticky right-0 z-10 bg-card align-middle text-right shadow-[-1px_0_0_var(--border)] group-hover:[background-color:color-mix(in_oklch,var(--muted)_50%,var(--background))] group-data-[state=selected]:bg-muted"
+          overflowTooltip={false}
+        >
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <AccountTaskCancelButton
               taskId={taskId}
@@ -5943,6 +5871,19 @@ export function GroupsPage() {
   const pageRows = pagination.visibleItems;
   const selectedGroups = rows.filter((group) => group.id && batch.selectedIDs.has(group.id));
   const pageIDs = pageRows.flatMap((group) => (group.id ? [group.id] : []));
+  const maintenanceTargets = (selectedGroups.length > 0 ? selectedGroups : filteredRows).filter(
+    (group) => group.id,
+  );
+  const headingActions = (
+    <GroupsPageActions
+      refreshing={groups.isFetching || policy.isFetching}
+      disabled={!policyReady || groupWritePending || groups.isLoading || groups.isError}
+      selectedCount={selectedGroups.length}
+      targetCount={maintenanceTargets.length}
+      onRefresh={() => void refreshGroups()}
+      onAction={(action) => batch.open(action, maintenanceTargets)}
+    />
+  );
   const allPageSelected = pageIDs.length > 0 && pageIDs.every((id) => batch.selectedIDs.has(id));
   const somePageSelected = pageIDs.some((id) => batch.selectedIDs.has(id));
   if (groups.error)
@@ -5952,15 +5893,7 @@ export function GroupsPage() {
           eyebrow="ROUTING / GROUPS"
           title="分组管理"
           description="查看各分组的账号规模、调度状态和策略。"
-          action={
-            <PageActions>
-              <RefreshButton
-                pending={groups.isFetching || policy.isFetching}
-                ariaLabel="刷新分组"
-                onClick={() => void refreshGroups()}
-              />
-            </PageActions>
-          }
+          action={headingActions}
         />
         <QueryError error={groups.error} fallback="分组读取失败" />
       </PageLayout>
@@ -5971,15 +5904,7 @@ export function GroupsPage() {
         eyebrow="ROUTING / GROUPS"
         title="分组管理"
         description="查看各分组的账号规模、调度状态和策略。"
-        action={
-          <PageActions>
-            <RefreshButton
-              pending={groups.isFetching || policy.isFetching}
-              ariaLabel="刷新分组"
-              onClick={() => void refreshGroups()}
-            />
-          </PageActions>
-        }
+        action={headingActions}
       />
       <div className="flex h-full min-h-0 flex-col gap-2.5 sm:gap-3">
         {policy.error && (
@@ -6001,7 +5926,7 @@ export function GroupsPage() {
             placeholder="搜索分组、平台或策略"
           />
         </TableFilterToolbar>
-        <DataTablePanel className={cn("flex-1", selectedGroups.length > 0 && "mb-20")}>
+        <DataTablePanel className="flex-1">
           <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1160px]">
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
@@ -6609,21 +6534,6 @@ export function OnboardingPage() {
     enabled: onboardingMaintenanceTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
-  const createUpstream = useMutation({
-    mutationFn: api.createUpstream,
-    onSuccess: (upstream) => {
-      setVerifiedUpstream(upstream);
-      if (!form.getFieldState("account_base_url").isDirty) {
-        form.resetField("account_base_url", { defaultValue: upstream.account_base_url });
-      }
-      void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["auth-recovery-config"],
-      });
-      toast.success("上游已添加并通过验证");
-    },
-  });
-  const detection = useMutation({ mutationFn: api.detectUpstream });
   const prepare = useMutation({
     mutationFn: api.prepareOnboarding,
     onSuccess: (context, requestedHost) => {
@@ -6641,6 +6551,23 @@ export function OnboardingPage() {
     },
     onError: (error) => notifyOperationError(error, "上游信息获取失败"),
   });
+  const createUpstream = useMutation({
+    mutationFn: api.createUpstream,
+    onSuccess: (upstream) => {
+      setVerifiedUpstream(upstream);
+      if (!form.getFieldState("account_base_url").isDirty) {
+        form.resetField("account_base_url", { defaultValue: upstream.account_base_url });
+      }
+      prepare.reset();
+      prepare.mutate(upstream.host);
+      void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["auth-recovery-config"],
+      });
+      toast.success("上游已添加并通过验证");
+    },
+  });
+  const detection = useMutation({ mutationFn: api.detectUpstream });
   const balanceSync = useMutation({
     mutationFn: api.runBalanceSync,
     onSuccess: (queuedTask) => setBalanceTaskId(queuedTask.id),
@@ -6803,6 +6730,7 @@ export function OnboardingPage() {
         setAuthMode(configuration.auth_mode);
         setSelectedGroupId(null);
         prepare.reset();
+        prepare.mutate(configuration.host);
       } catch (error) {
         notifyOperationError(error, "已有上游读取失败");
       }
@@ -9733,7 +9661,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       </PageLayout>
     );
   return (
-    <PageLayout fixedContent>
+    <PageLayout
+      fixedContent
+      navigation={<ConfigSectionTabs activeTab={activeTab} onTabChange={props.onTabChange} />}
+    >
       <PageHeading
         eyebrow="SYSTEM / SETTINGS"
         title="系统设置"
@@ -9758,8 +9689,6 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             ；相关功能已停止执行，请修正配置。
           </div>
         ) : null}
-
-        <ConfigSectionTabs activeTab={activeTab} onTabChange={props.onTabChange} />
 
         <div
           id={`config-panel-${activeTab}`}
@@ -11706,7 +11635,7 @@ function AutoInspectionCard() {
         </div>
 
         <div
-          className="min-h-0 flex-1 grid items-start gap-3 overflow-y-auto content-start overscroll-contain xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)] xl:items-stretch"
+          className="min-h-0 flex-1 grid items-start gap-3 overflow-y-auto content-start overscroll-contain grid-cols-1 auto-rows-max xl:auto-rows-fr xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)] xl:items-stretch"
           data-testid="auto-inspection-workspace"
         >
           <Card size="sm" className="min-w-0 xl:min-h-0">
@@ -12051,7 +11980,7 @@ export function PolicyPage() {
     if (draft === null && value !== null) setDraftRevision(policy.data?.revision);
     setDraftValue(value);
   }
-  const [category, setCategory] = useState<"routing" | "health" | "sampling" | "scope">("routing");
+  const [category, setCategory] = useState<PolicyCategory>("routing");
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: api.accounts,
@@ -12146,7 +12075,7 @@ export function PolicyPage() {
     }
   }
   return (
-    <PageLayout>
+    <PageLayout navigation={<PolicyCategoryNavigation value={category} onChange={setCategory} />}>
       <PageHeading
         eyebrow="SCHEDULING / POLICY"
         title="调度策略"
@@ -12180,228 +12109,224 @@ export function PolicyPage() {
         ) : null}
         {policy.error ? <QueryError error={policy.error} fallback="调度策略读取失败" /> : null}
         <div
-          className="bg-background/95 sticky top-0 z-20 -mx-1 overflow-x-auto px-1 py-1 backdrop-blur-sm"
-          data-testid="policy-category-navigation"
+          role="tabpanel"
+          id={`policy-panel-${category}`}
+          aria-labelledby={`policy-tab-${category}`}
+          tabIndex={0}
+          className="min-w-0 space-y-4 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <SegmentedControl className="w-max min-w-full sm:min-w-0">
-            {(
-              [
-                ["routing", "调度与写入"],
-                ["health", "健康与处置"],
-                ["sampling", "巡检与采样"],
-                ["scope", "守护范围"],
-              ] as const
-            ).map(([value, label]) => (
-              <SegmentedControlItem
-                key={value}
-                className="shrink-0"
-                selected={category === value}
-                onClick={() => setCategory(value)}
-              >
-                {label}
-              </SegmentedControlItem>
-            ))}
-          </SegmentedControl>
-        </div>
-        {policy.isLoading && !current ? <PolicyPageLoading /> : null}
-        {category === "routing" && current ? (
-          <div className="flex flex-col gap-3" data-testid="policy-operations-layout">
-            <div className="grid items-stretch gap-3" data-testid="policy-routing-overview">
-              {current && (
-                <Card size="sm">
-                  <CardHeader>
-                    <CardTitle>全局默认策略</CardTitle>
-                    <CardDescription>
-                      分组没有单独设置时使用；分组级选择在分组管理中配置。
-                      {schedulingWeightFormula}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <FormField
-                      label="全局默认策略"
-                      description={schedulingStrategyDescription(current.global_strategy)}
-                    >
-                      <Select
-                        value={current.global_strategy}
-                        onValueChange={(value) =>
-                          value && setDraft({ ...current, global_strategy: value })
-                        }
+          {policy.isLoading && !current ? <PolicyPageLoading /> : null}
+          {category === "routing" && current ? (
+            <div className="flex flex-col gap-3" data-testid="policy-operations-layout">
+              <div className="grid items-stretch gap-3" data-testid="policy-routing-overview">
+                {current && (
+                  <Card size="sm" className="rounded-xl">
+                    <CardHeader className="bg-muted/20">
+                      <CardTitle>全局默认策略</CardTitle>
+                      <CardDescription className="mt-1 text-xs leading-5">
+                        分组没有单独设置时使用；分组级选择在分组管理中配置。
+                      </CardDescription>
+                      <details className="group text-muted-foreground mt-2 text-xs leading-6">
+                        <summary className="focus-visible:ring-ring w-fit cursor-pointer rounded-sm font-medium outline-none focus-visible:ring-2">
+                          查看权重计算说明
+                        </summary>
+                        <p className="bg-muted/40 mt-2 rounded-lg px-3 py-2">
+                          {schedulingWeightFormula}
+                        </p>
+                      </details>
+                    </CardHeader>
+                    <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+                      <FormField
+                        label="全局默认策略"
+                        description={schedulingStrategyDescription(current.global_strategy)}
                       >
-                        <SelectTrigger>
-                          <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {schedulingStrategyOptions.map((option) => (
-                            <SelectItem key={option.value} value={option.value}>
-                              {option.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </FormField>
-                    <FormField label="倍率缺失回退" description="账号没有倍率数据时采用的策略">
-                      <Select
-                        value={current.missing_rate_fallback}
-                        onValueChange={(value) =>
-                          value && setDraft({ ...current, missing_rate_fallback: value })
+                        <Select
+                          value={current.global_strategy}
+                          onValueChange={(value) =>
+                            value && setDraft({ ...current, global_strategy: value })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {schedulingStrategyOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormField>
+                      <FormField label="倍率缺失回退" description="账号没有倍率数据时采用的策略">
+                        <Select
+                          value={current.missing_rate_fallback}
+                          onValueChange={(value) =>
+                            value && setDraft({ ...current, missing_rate_fallback: value })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue>
+                              {displayFallback(current.missing_rate_fallback)}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
+                            <SelectItem value="fail_closed">停止调度</SelectItem>
+                            <SelectItem value="fail_open">允许继续</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FormField>
+                      <PolicyNumberField
+                        label="每组总权重预算"
+                        description="由同一分组内参与调度的账号按策略共享"
+                        min={1}
+                        max={1000000}
+                        value={policyAdvancedValue(current, "weights", "budget")}
+                        onChange={(value) =>
+                          setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
                         }
-                      >
-                        <SelectTrigger>
-                          <SelectValue>
-                            {displayFallback(current.missing_rate_fallback)}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
-                          <SelectItem value="fail_closed">停止调度</SelectItem>
-                          <SelectItem value="fail_open">允许继续</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </FormField>
-                    <PolicyNumberField
-                      label="每组总权重预算"
-                      description="由同一分组内参与调度的账号按策略共享"
-                      min={1}
-                      max={1000000}
-                      value={policyAdvancedValue(current, "weights", "budget")}
-                      onChange={(value) =>
-                        setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
-                      }
-                    />
-                    <PolicyNumberField
-                      label="人工优先位范围"
-                      description="保留优先级 1 至 N；自动调度从 N+1 开始"
-                      min={1}
-                      max={1000}
-                      value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
-                      onChange={(value) =>
-                        setDraft(
-                          withPolicyAdvancedValue(
-                            current,
-                            "manual_priority",
-                            "reserved_max",
-                            value,
-                          ),
-                        )
-                      }
-                    />
-                    <PolicyNumberField
-                      label="权重健康闸门"
-                      unit="分"
-                      min={0}
-                      max={100}
-                      step="any"
-                      value={policyAdvancedValue(current, "weights", "gate_floor")}
-                      onChange={(value) =>
-                        setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
-                      }
-                    />
-                    <PolicyNumberField
-                      label="均衡中价格占比"
-                      min={0}
-                      max={1}
-                      value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
-                      step="0.05"
-                      onChange={(value) =>
-                        setDraft(
-                          withPolicyAdvancedValue(
-                            current,
-                            "weights",
-                            "balanced_price_ratio",
-                            value,
-                          ),
-                        )
-                      }
-                    />
-                    <PolicyNumberField
-                      label="性能最小样本数"
-                      description="不足时向同模型组内基准收缩，避免偶然快请求占优"
-                      unit="次"
-                      min={1}
-                      max={200}
-                      value={policyAdvancedValue(current, "weights", "performance_min_samples")}
-                      onChange={(value) =>
-                        setDraft(
-                          withPolicyAdvancedValue(
-                            current,
-                            "weights",
-                            "performance_min_samples",
-                            value,
-                          ),
-                        )
-                      }
-                    />
-                    <PolicyNumberField
-                      label="速度优势上限"
-                      description="限制异常低延迟相对组内基准的最大优势"
-                      min={1}
-                      max={100}
-                      step="any"
-                      value={policyAdvancedValue(current, "weights", "speed_advantage_cap")}
-                      onChange={(value) =>
-                        setDraft(
-                          withPolicyAdvancedValue(current, "weights", "speed_advantage_cap", value),
-                        )
-                      }
-                    />
-                  </CardContent>
-                </Card>
-              )}
+                      />
+                      <PolicyNumberField
+                        label="人工优先位范围"
+                        description="保留优先级 1 至 N；自动调度从 N+1 开始"
+                        min={1}
+                        max={1000}
+                        value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
+                        onChange={(value) =>
+                          setDraft(
+                            withPolicyAdvancedValue(
+                              current,
+                              "manual_priority",
+                              "reserved_max",
+                              value,
+                            ),
+                          )
+                        }
+                      />
+                      <PolicyNumberField
+                        label="权重健康闸门"
+                        unit="分"
+                        min={0}
+                        max={100}
+                        step="any"
+                        value={policyAdvancedValue(current, "weights", "gate_floor")}
+                        onChange={(value) =>
+                          setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
+                        }
+                      />
+                      <PolicyNumberField
+                        label="均衡中价格占比"
+                        min={0}
+                        max={1}
+                        value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
+                        step="0.05"
+                        onChange={(value) =>
+                          setDraft(
+                            withPolicyAdvancedValue(
+                              current,
+                              "weights",
+                              "balanced_price_ratio",
+                              value,
+                            ),
+                          )
+                        }
+                      />
+                      <PolicyNumberField
+                        label="性能最小样本数"
+                        description="不足时向同模型组内基准收缩，避免偶然快请求占优"
+                        unit="次"
+                        min={1}
+                        max={200}
+                        value={policyAdvancedValue(current, "weights", "performance_min_samples")}
+                        onChange={(value) =>
+                          setDraft(
+                            withPolicyAdvancedValue(
+                              current,
+                              "weights",
+                              "performance_min_samples",
+                              value,
+                            ),
+                          )
+                        }
+                      />
+                      <PolicyNumberField
+                        label="速度优势上限"
+                        description="限制异常低延迟相对组内基准的最大优势"
+                        min={1}
+                        max={100}
+                        step="any"
+                        value={policyAdvancedValue(current, "weights", "speed_advantage_cap")}
+                        onChange={(value) =>
+                          setDraft(
+                            withPolicyAdvancedValue(
+                              current,
+                              "weights",
+                              "speed_advantage_cap",
+                              value,
+                            ),
+                          )
+                        }
+                      />
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+              {current ? (
+                <PolicyOperationsEditor
+                  section="routing"
+                  value={current}
+                  onChange={setDraft}
+                  probesEnabled={config.data?.probes_enabled}
+                  probesPending={updateProbes.isPending || config.isLoading}
+                  onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
+                />
+              ) : null}
             </div>
-            {current ? (
+          ) : null}
+          {category === "health" && current ? (
+            <div className="flex flex-col gap-3" data-testid="policy-health-layout">
+              <PolicyRulesEditor value={current} onChange={setDraft} />
               <PolicyOperationsEditor
-                section="routing"
+                section="health"
                 value={current}
                 onChange={setDraft}
                 probesEnabled={config.data?.probes_enabled}
                 probesPending={updateProbes.isPending || config.isLoading}
                 onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
               />
-            ) : null}
-          </div>
-        ) : null}
-        {category === "health" && current ? (
-          <div className="flex flex-col gap-3" data-testid="policy-health-layout">
-            <PolicyRulesEditor value={current} onChange={setDraft} />
-            <PolicyOperationsEditor
-              section="health"
-              value={current}
-              onChange={setDraft}
-              probesEnabled={config.data?.probes_enabled}
-              probesPending={updateProbes.isPending || config.isLoading}
-              onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
-            />
-          </div>
-        ) : null}
-        {category === "sampling" && current ? (
-          <div className="flex flex-col gap-3" data-testid="policy-sampling-layout">
-            <PolicyInspectionSchedule value={current} onChange={setDraft} />
-            <PolicyOperationsEditor
-              section="sampling"
-              value={current}
-              onChange={setDraft}
-              probesEnabled={config.data?.probes_enabled}
-              probesPending={updateProbes.isPending || config.isLoading}
-              onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
-            />
-          </div>
-        ) : null}
-        {category === "scope" && current ? (
-          <>
-            {accounts.error ? (
-              <QueryError error={accounts.error} fallback="账号选项读取失败" />
-            ) : null}
-            <PolicyScopeLayout
-              value={current}
-              onChange={setDraft}
-              groups={data?.group_strategies ?? []}
-              accounts={accounts.data ?? []}
-              accountsPending={accounts.isLoading}
-              onRestoreControl={() => setRestoreControlOpen(true)}
-              restorePending={restoreControl.isPending}
-            />
-          </>
-        ) : null}
+            </div>
+          ) : null}
+          {category === "sampling" && current ? (
+            <div className="flex flex-col gap-3" data-testid="policy-sampling-layout">
+              <PolicyInspectionSchedule value={current} onChange={setDraft} />
+              <PolicyOperationsEditor
+                section="sampling"
+                value={current}
+                onChange={setDraft}
+                probesEnabled={config.data?.probes_enabled}
+                probesPending={updateProbes.isPending || config.isLoading}
+                onProbesEnabledChange={(enabled) => updateProbes.mutate(enabled)}
+              />
+            </div>
+          ) : null}
+          {category === "scope" && current ? (
+            <>
+              {accounts.error ? (
+                <QueryError error={accounts.error} fallback="账号选项读取失败" />
+              ) : null}
+              <PolicyScopeLayout
+                value={current}
+                onChange={setDraft}
+                groups={data?.group_strategies ?? []}
+                accounts={accounts.data ?? []}
+                accountsPending={accounts.isLoading}
+                onRestoreControl={() => setRestoreControlOpen(true)}
+                restorePending={restoreControl.isPending}
+              />
+            </>
+          ) : null}
+        </div>
       </div>
       <Dialog open={dangerousSaveOpen} onOpenChange={setDangerousSaveOpen}>
         <DialogContent>
@@ -12742,16 +12667,16 @@ function PolicyConfigCard(props: {
   const heading = (
     <>
       <CardTitle>{props.title}</CardTitle>
-      <CardDescription>{props.description}</CardDescription>
+      <CardDescription className="mt-1 text-xs leading-5">{props.description}</CardDescription>
     </>
   );
   return (
     <Card
       size="sm"
-      className={props.wide ? "xl:col-span-2" : undefined}
+      className={cn("rounded-xl", props.wide && "xl:col-span-2")}
       data-policy-section={props.title}
     >
-      <CardHeader className="flex items-start justify-between gap-4">
+      <CardHeader className="bg-muted/20 flex items-start justify-between gap-4">
         {props.switchAction ? (
           <label
             className={cn(
@@ -12790,7 +12715,7 @@ function PolicyConfigCard(props: {
       </CardHeader>
       <CardContent
         className={cn(
-          "grid gap-x-4 gap-y-3 sm:grid-cols-2",
+          "grid gap-x-5 gap-y-4 sm:grid-cols-2",
           props.columns === 3 && "lg:grid-cols-3",
         )}
       >

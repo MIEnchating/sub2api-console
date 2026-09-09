@@ -87,7 +87,7 @@ function ProbeModelControl(props: {
   const selectedValue = props.value?.trim() || inheritedProbeModelValue;
 
   return (
-    <div className="min-w-0 space-y-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <span className="block font-medium">探活模型</span>
         <div

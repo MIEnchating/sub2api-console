@@ -1017,6 +1017,9 @@ func applyAccountCalculations(
 			item.ShortSampleCount = evaluation.shortSampleCount
 		}
 	}
+	if item.ManualPriority != nil {
+		applyManualPriorityProjection(item)
+	}
 }
 
 func accountMetadataState(raw string) string {
@@ -1070,6 +1073,10 @@ func decimalPointersEqual(left, right *string) bool {
 }
 
 func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}, degradeThreshold float64) {
+	if item.ManualPriority != nil {
+		applyManualPriorityProjection(item)
+		return
+	}
 	item.EvidencePending = false
 	item.Recovery = nil
 	current := AccountStateUnknown

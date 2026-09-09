@@ -1,6 +1,7 @@
 import type { AccountStatus } from "@/api";
 
 export type CanonicalAccountState =
+  | "manual_priority"
   | "healthy"
   | "degraded"
   | "fused"
@@ -12,6 +13,7 @@ export type CanonicalAccountState =
   | "unknown";
 
 const aliases: Record<string, CanonicalAccountState> = {
+  manual_priority: "manual_priority",
   healthy: "healthy",
   active: "healthy",
   available: "healthy",

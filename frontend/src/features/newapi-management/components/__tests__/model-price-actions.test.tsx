@@ -19,6 +19,28 @@ describe("模型价格行操作", () => {
     expect(matchingRemoteModelPrice([price], "gpt-5-mini")).toBeNull();
   });
 
+  it("Gemini 思考等级变体继承基础模型价格并保留目标模型名", () => {
+    const price = {
+      model: "gemini-3.8-flash",
+      input_price: "0.00000075",
+      output_price: "0.00000375",
+      model_ratio: "0.375",
+      completion_ratio: "5",
+    };
+
+    for (const suffix of ["high", "low", "medium", "tiered"]) {
+      const model = `${price.model}-${suffix}`;
+      expect(matchingRemoteModelPrice([price], model)).toEqual({ ...price, model });
+    }
+    const exactVariant = {
+      ...price,
+      model: `${price.model}-high`,
+      model_ratio: "0.5",
+    };
+    expect(matchingRemoteModelPrice([price, exactVariant], exactVariant.model)).toBe(exactVariant);
+    expect(matchingRemoteModelPrice([price], `${price.model}-image`)).toBeNull();
+  });
+
   it("使用图标 Tooltip 提供上调、下调、还原和远程同步", () => {
     render(
       <NewAPIModelPrices

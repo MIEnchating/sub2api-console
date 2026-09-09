@@ -37,7 +37,6 @@ import { applyAccountDeletionProgress } from "@/features/accounts/lib/account-de
 import {
   authModesForPlatform,
   parseStringMap,
-  parseUpstreamBaseUrl,
   upstreamConnectionPayload,
   upstreamEditSchema,
   type UpstreamEditValues,
@@ -68,8 +67,8 @@ export const upstreamEditDialogLayout = {
 
 export const upstreamEditSectionOrder = ["connection", "recharge", "accounts"] as const;
 
-export const upstreamEditConnectionLabels = {
-  upstreamHost: "上游 Host",
+const upstreamEditConnectionLabels = {
+  upstreamAddress: "上游地址",
   accountBaseURL: "账号 Base URL",
 } as const;
 
@@ -77,8 +76,6 @@ const upstreamEditFormID = "upstream-edit-form";
 
 const emptyValues: UpstreamEditValues = {
   name: "",
-  host: "",
-  base_url_protocol: "https",
   base_url: "",
   account_base_url: "",
   upstream_type: "sub2api",
@@ -107,7 +104,14 @@ function Field(props: { label: string; htmlFor?: string; error?: string; childre
         <span className="font-medium">{props.label}</span>
       )}
       {props.children}
-      {props.error ? <span className="text-destructive text-xs">{props.error}</span> : null}
+      {props.error ? (
+        <span
+          id={props.htmlFor ? `${props.htmlFor}-error` : undefined}
+          className="text-destructive text-xs"
+        >
+          {props.error}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -411,12 +415,10 @@ export function UpstreamEditDialog(props: Props) {
 
   useEffect(() => {
     if (!configuration.data) return;
-    const parsedBaseUrl = parseUpstreamBaseUrl(configuration.data.base_url);
     form.reset({
       ...emptyValues,
       name: configuration.data.name,
-      host: configuration.data.host,
-      ...parsedBaseUrl,
+      base_url: configuration.data.base_url,
       account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
       auth_mode: configuration.data.auth_mode,
@@ -437,7 +439,6 @@ export function UpstreamEditDialog(props: Props) {
     mutationFn: (payload: UpstreamConfigurationUpdate) =>
       api.updateUpstreamConfiguration(props.host!, payload),
     onSuccess: (value) => {
-      const parsedBaseUrl = parseUpstreamBaseUrl(value.base_url);
       const hostChanged = props.host !== null && value.host !== props.host;
       queryClient.setQueryData(["upstream-configuration", props.host], value);
       if (hostChanged) {
@@ -449,8 +450,7 @@ export function UpstreamEditDialog(props: Props) {
       form.reset({
         ...emptyValues,
         name: value.name,
-        host: value.host,
-        ...parsedBaseUrl,
+        base_url: value.base_url,
         account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
         auth_mode: value.auth_mode,
@@ -459,7 +459,7 @@ export function UpstreamEditDialog(props: Props) {
       setShowHeadersEditor(value.header_names.length > 0);
       setClearHeaders(false);
       if (hostChanged) {
-        toast.success("上游 Host 已迁移，相关账号绑定已更新");
+        toast.success("上游地址已更新，相关账号绑定已同步");
         props.onOpenChange(false);
       } else if (value.rate_sync_error || value.base_url_sync_error) {
         toast.warning(
@@ -589,36 +589,27 @@ export function UpstreamEditDialog(props: Props) {
                     <Input {...form.register("name")} />
                   </Field>
                   <Field
-                    label={upstreamEditConnectionLabels.upstreamHost}
-                    error={form.formState.errors.host?.message}
+                    label={upstreamEditConnectionLabels.upstreamAddress}
+                    htmlFor="upstream-edit-address"
+                    error={form.formState.errors.base_url?.message}
                   >
-                    <Input {...form.register("host")} placeholder="api.example.com" />
-                  </Field>
-                  <Field label="请求 Base URL" error={form.formState.errors.base_url?.message}>
-                    <div className="flex min-w-0 gap-2">
-                      <Controller
-                        control={form.control}
-                        name="base_url_protocol"
-                        render={({ field }) => (
-                          <Select value={field.value} onValueChange={field.onChange}>
-                            <SelectTrigger className="w-[6.75rem] shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="https">HTTPS</SelectItem>
-                              <SelectItem value="http">HTTP</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        )}
-                      />
-                      <Input {...form.register("base_url")} placeholder="api.example.com" />
-                    </div>
+                    <Input
+                      id="upstream-edit-address"
+                      {...form.register("base_url")}
+                      placeholder="https://api.example.com"
+                      aria-invalid={Boolean(form.formState.errors.base_url)}
+                      aria-describedby={
+                        form.formState.errors.base_url ? "upstream-edit-address-error" : undefined
+                      }
+                    />
                   </Field>
                   <Field
                     label={upstreamEditConnectionLabels.accountBaseURL}
+                    htmlFor="upstream-edit-account-base-url"
                     error={form.formState.errors.account_base_url?.message}
                   >
                     <Input
+                      id="upstream-edit-account-base-url"
                       {...form.register("account_base_url")}
                       placeholder="https://api.example.com"
                     />

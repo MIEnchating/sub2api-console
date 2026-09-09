@@ -46,6 +46,21 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
 }
 
 describe("accountPoolState", () => {
+  it("人工优先位单独统计和筛选，不计入成本墙拦截或待探测", () => {
+    const manual = account({ manual_priority: 1, health: "manual_priority" });
+    const accounts = [manual, account({ health: "cost_blocked" })];
+
+    expect(accountPoolState(manual).label).toBe("人工优先位");
+    expect(accountPoolCounts(accounts)).toMatchObject({
+      all: 2,
+      manual_priority: 1,
+      cost_blocked: 1,
+      unknown: 0,
+    });
+    expect(accountMatchesPoolFilter(manual, "manual_priority")).toBe(true);
+    expect(accountMatchesPoolFilter(manual, "cost_blocked")).toBe(false);
+  });
+
   it("gives explicit pause and fuse states priority over scheduling", () => {
     expect(accountPoolState(account({ paused: true, schedulable: false })).value).toBe("paused");
     expect(

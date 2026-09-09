@@ -1,13 +1,14 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { PricingCatalogActions } from "./pricing-catalog-actions";
+import { PricingSettingsPanel } from "./pricing-settings-panel";
+import type { PricingConfigDraft } from "../types";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeftRight,
   ArrowRight,
   ChevronDown,
-  CircleDollarSign,
   CircleHelp,
   DatabaseBackup,
-  Eye,
   History,
   Play,
   Plus,
@@ -38,7 +39,6 @@ import { SearchField } from "@/components/data-table/search-field";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { TableEmptyState } from "@/components/data-table/empty-state";
 import { DataTablePanel } from "@/components/data-table/table-panel";
-import { FieldLabel } from "@/components/field-help-tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -55,7 +55,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Table,
@@ -69,6 +68,7 @@ import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { cn } from "@/lib/utils";
+import { operationErrorMessage } from "@/lib/operation-feedback";
 
 function percent(value: number) {
   return `${(value * 100)
@@ -467,15 +467,6 @@ function pricingDecisionReason(
   return `账号成本 ${decision.cost_multiplier} 已高于本互换组所有分组可接受的成本，继续使用会低于 ${percent(config.profit_margin)} 目标成本利润率。`;
 }
 
-type PricingConfigDraft = Omit<
-  PricingConfig,
-  "profit_margin" | "interval_seconds" | "write_concurrency"
-> & {
-  profit_margin: number | null;
-  interval_seconds: number | null;
-  write_concurrency: number | null;
-};
-
 function pricingConfigIsValid(config: PricingConfigDraft, groups: PricingGroup[]) {
   if (
     config.profit_margin === null ||
@@ -806,7 +797,20 @@ export function PricingChangeList(props: { records: PricingChangeRecord[] }) {
   );
 }
 
-function PricingLoading() {
+function PricingLoading(props: { catalog?: boolean } = {}) {
+  if (props.catalog) {
+    return (
+      <div
+        role="status"
+        aria-label="正在读取价格数据"
+        className="flex h-full min-h-0 flex-col gap-3"
+        data-testid="pricing-loading"
+      >
+        <Skeleton className="h-8 w-full shrink-0 sm:w-56" />
+        <Skeleton className="min-h-0 w-full flex-1" />
+      </div>
+    );
+  }
   return (
     <div className="space-y-4" data-testid="pricing-loading">
       <Skeleton className="h-48 w-full" />
@@ -816,33 +820,37 @@ function PricingLoading() {
   );
 }
 
-function PricingCatalogTable(props: { groups: PricingGroup[]; decisions: PricingDecision[] }) {
-  const [search, setSearch] = useState("");
+function PricingCatalogTable(props: {
+  groups: PricingGroup[];
+  decisions: PricingDecision[];
+  search: string;
+}) {
+  const tableRef = useRef<HTMLDivElement>(null);
   const [selectedGroup, setSelectedGroup] = useState<PricingGroup | null>(null);
   const filteredGroups = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase();
+    const query = props.search.trim().toLocaleLowerCase();
     if (!query) return props.groups;
     return props.groups.filter((group) =>
       [group.id, group.name, group.platform, group.status, group.reason].some((value) =>
         value?.toLocaleLowerCase().includes(query),
       ),
     );
-  }, [props.groups, search]);
+  }, [props.groups, props.search]);
   const pagination = useClientPagination(filteredGroups);
+  useEffect(() => {
+    pagination.setCurrentPage(1);
+    const content = tableRef.current?.closest<HTMLElement>('[data-slot="page-content"]');
+    if (content) content.scrollTop = 0;
+    const table = tableRef.current?.querySelector<HTMLElement>('[data-slot="table-container"]');
+    if (table) {
+      table.scrollTop = 0;
+      table.scrollLeft = 0;
+    }
+  }, [props.search, pagination.setCurrentPage]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <TableFilterToolbar>
-        <SearchField
-          value={search}
-          onChange={(value) => {
-            setSearch(value);
-            pagination.setCurrentPage(1);
-          }}
-          placeholder="搜索分组、ID 或平台"
-        />
-      </TableFilterToolbar>
-      <DataTablePanel className="flex-1" data-testid="pricing-catalog-table-frame">
+      <DataTablePanel className="flex-1" data-testid="pricing-catalog-table-frame" ref={tableRef}>
         <Table className="min-w-[960px]" containerClassName="min-h-0 flex-1 overflow-auto">
           <TableHeader>
             <TableRow>
@@ -858,7 +866,7 @@ function PricingCatalogTable(props: { groups: PricingGroup[]; decisions: Pricing
           <TableBody>
             {pagination.visibleItems.length === 0 ? (
               <TableEmptyState columns={5}>
-                {search ? "没有匹配的分组" : "当前没有价格分组"}
+                {props.search ? "没有匹配的分组" : "当前没有价格分组"}
               </TableEmptyState>
             ) : (
               pagination.visibleItems.map((group) => (
@@ -1004,11 +1012,7 @@ export function PricingPreviewTable(props: {
           </TableHeader>
           <TableBody>
             {filteredDecisions.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground h-24 text-center">
-                  当前筛选条件下没有账号
-                </TableCell>
-              </TableRow>
+              <TableEmptyState columns={6}>当前筛选条件下没有账号</TableEmptyState>
             ) : (
               pagination.visibleItems.map((decision) => {
                 const transition = pricingGroupTransition(decision, props.config);
@@ -1164,11 +1168,12 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
 
   return (
     <section
+      className="overflow-hidden rounded-lg border"
       data-testid={`exchange-set-${setNumber}`}
       aria-labelledby={`exchange-set-title-${setNumber}`}
     >
-      <div className="bg-muted/20 flex min-h-10 items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+      <div className="bg-muted/30 flex min-h-12 flex-wrap items-start justify-between gap-2 border-b px-3 py-3">
+        <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-2">
           <span
             id={`exchange-set-title-${setNumber}`}
             className="text-muted-foreground shrink-0 text-xs font-medium"
@@ -1176,7 +1181,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
             规则 {setNumber}
           </span>
           <Input
-            className="h-8 min-w-36 max-w-64 flex-1 font-medium"
+            className="h-8 min-w-0 max-w-64 flex-1 basis-36 font-medium"
             value={props.name}
             maxLength={64}
             aria-label={`互换组 ${setNumber} 规则名称`}
@@ -1189,7 +1194,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
             {visibleGroups.filter((group) => group.available).length} 个可用
           </span>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1247,7 +1252,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                 </span>
               </div>
             ) : null}
-            <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
               {groups.map((group) => {
                 const assignedSet = props.exchangeSetByGroup.get(group.id);
                 const selected = assignedSet === props.setIndex;
@@ -1271,9 +1276,11 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                     data-slot="exchange-group-option"
                     data-selected={selected ? "true" : "false"}
                     className={cn(
-                      "flex min-h-9 min-w-0 items-center gap-2 rounded-md border px-2.5 py-1.5 text-sm transition-colors",
+                      "flex min-h-12 min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors focus-within:ring-2 focus-within:ring-ring",
                       selected ? "border-primary/50 bg-primary/5" : "hover:bg-muted/40",
-                      disabled && "bg-muted/20 text-muted-foreground",
+                      disabled
+                        ? "bg-muted/20 text-muted-foreground cursor-not-allowed"
+                        : "cursor-pointer",
                     )}
                   >
                     <Checkbox
@@ -1284,7 +1291,9 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                       }
                       aria-label={`互换组 ${props.setIndex + 1} 分组 ${group.name}`}
                     />
-                    <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>
+                    <span className="min-w-0 flex-1 break-words font-medium [overflow-wrap:anywhere]">
+                      {group.name}
+                    </span>
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -1309,6 +1318,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
 function PricingWorkspace(props: { page: "catalog" | "config" }) {
   const queryClient = useQueryClient();
   const snapshot = useQuery({ queryKey: ["pricing"], queryFn: api.pricing });
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [draft, setDraft] = useState<PricingConfigDraft | null>(null);
   const [taskID, setTaskID] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -1493,7 +1503,20 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   }
 
   return (
-    <PageLayout fixedContent={props.page === "catalog"}>
+    <PageLayout
+      fixedContent={props.page === "catalog"}
+      navigation={
+        props.page === "catalog" && snapshot.data ? (
+          <TableFilterToolbar aria-label="价格分组筛选">
+            <SearchField
+              value={catalogSearch}
+              onChange={setCatalogSearch}
+              placeholder="搜索分组、ID 或平台"
+            />
+          </TableFilterToolbar>
+        ) : undefined
+      }
+    >
       <PageHeading
         eyebrow={props.page === "catalog" ? "OPERATIONS / PRICING" : "POLICY / PRICING"}
         title={props.page === "catalog" ? "价格管理" : "价格配置"}
@@ -1511,43 +1534,27 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
               onClick={() => void snapshot.refetch()}
             />
             {props.page === "catalog" ? (
-              <>
-                <Button variant="outline" onClick={() => setChangesOpen(true)}>
-                  <History /> 变更记录
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setBackupName("");
-                    setBackupDialog("create");
-                  }}
-                  disabled={!snapshot.data || !valid}
-                >
-                  <DatabaseBackup /> 创建备份
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setSelectedBackupID(backups.data?.[0]?.id ?? "");
-                    setBackupDialog("restore");
-                  }}
-                  disabled={!backups.data?.length || running}
-                >
-                  <RotateCcw /> 从备份还原
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setPreviewOpen(true)}
-                  disabled={!snapshot.data}
-                >
-                  <Eye /> 查看账号调整明细
-                </Button>
-              </>
+              <PricingCatalogActions
+                previewDisabled={!snapshot.data}
+                backupDisabled={!snapshot.data || !valid}
+                restoreDisabled={!backups.data?.length || running}
+                onPreview={() => setPreviewOpen(true)}
+                onHistory={() => setChangesOpen(true)}
+                onBackup={() => {
+                  setBackupName("");
+                  setBackupDialog("create");
+                }}
+                onRestore={() => {
+                  setSelectedBackupID(backups.data?.[0]?.id ?? "");
+                  setBackupDialog("restore");
+                }}
+              />
             ) : null}
             {props.page === "config" ? (
               <>
                 <Button
                   variant="outline"
+                  aria-label={save.isPending ? "保存中" : "保存配置"}
                   onClick={() => {
                     if (!current || !valid) {
                       toast.error("价格配置存在空值或无效数字，请修正后再保存");
@@ -1557,16 +1564,19 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   }}
                   disabled={!current || save.isPending}
                 >
-                  <Save /> {save.isPending ? "保存中" : "保存配置"}
+                  <Save aria-hidden="true" />{" "}
+                  <span className="hidden sm:inline">{save.isPending ? "保存中" : "保存配置"}</span>
                 </Button>
                 <Button
+                  aria-label={running ? "执行中" : "立即调整"}
                   onClick={() => {
                     setConfirmApply(true);
                     setPreviewOpen(true);
                   }}
                   disabled={!current?.enabled || !valid || running || apply.isPending}
                 >
-                  <Play /> {running ? "执行中" : "立即调整"}
+                  <Play aria-hidden="true" />{" "}
+                  <span className="hidden sm:inline">{running ? "执行中" : "立即调整"}</span>
                 </Button>
               </>
             ) : null}
@@ -1577,140 +1587,50 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       {snapshot.error ? (
         <QueryErrorToast error={snapshot.error} fallback="价格数据读取失败" />
       ) : null}
-      {(snapshot.isLoading || !snapshot.data) && <PricingLoading />}
+      {!snapshot.data && !snapshot.error && <PricingLoading catalog={props.page === "catalog"} />}
+      {!snapshot.data && snapshot.error ? (
+        <div
+          data-testid="pricing-load-error"
+          className="flex h-full min-h-40 flex-col items-center justify-center gap-2 px-4 text-center"
+        >
+          <p className="text-destructive text-sm wrap-anywhere">
+            {operationErrorMessage(snapshot.error, "价格数据读取失败")}
+          </p>
+          <p className="text-muted-foreground text-sm">请检查服务连接后点击顶部刷新重试。</p>
+        </div>
+      ) : null}
       {!snapshot.isLoading && snapshot.data && props.page === "catalog" && (
         <div className="flex h-full min-h-0 flex-col" data-testid="pricing-page">
-          <PricingCatalogTable groups={snapshot.data.groups} decisions={snapshot.data.decisions} />
+          <PricingCatalogTable
+            groups={snapshot.data.groups}
+            decisions={snapshot.data.decisions}
+            search={catalogSearch}
+          />
         </div>
       )}
       {!snapshot.isLoading && snapshot.data && props.page !== "catalog" && current && (
-        <div className="space-y-3" data-testid="pricing-config-page">
-          <Card size="sm" data-testid="pricing-settings-panel">
-            <CardHeader className="grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto]">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
-                  <CircleDollarSign className="size-4" aria-hidden="true" />
-                </span>
-                <div className="min-w-0">
-                  <CardTitle>自动价格分组</CardTitle>
-                  <CardDescription>
-                    设置盈利目标和自动执行参数，执行参数不参与售价计算。每个互换组优先选择达到目标盈利比例且售价最低的分组；均未达标时选择售价最高且能覆盖成本的分组，均亏损时保留当前分组。
-                  </CardDescription>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 justify-self-start sm:justify-self-end">
-                <Badge variant={current.enabled ? "default" : "secondary"}>
-                  {current.enabled ? "已开启" : "默认关闭"}
-                </Badge>
-                <Switch
-                  checked={current.enabled}
-                  onCheckedChange={(enabled) => setDraft({ ...current, enabled })}
-                  aria-label="启用动态价格分组"
-                />
-              </div>
-            </CardHeader>
-            <CardContent
-              className="grid divide-y p-0 lg:grid-cols-3 lg:divide-x lg:divide-y-0"
-              data-testid="pricing-settings-grid"
-            >
-              <div
-                className="grid gap-3 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_9rem] sm:items-center lg:grid-cols-1 lg:items-start 2xl:grid-cols-[minmax(0,1fr)_8.5rem] 2xl:items-center"
-                data-testid="pricing-goal-settings"
-              >
-                <FieldLabel
-                  label="目标盈利比例"
-                  description="利润 ÷ 账号成本；允许范围 0% - 99%"
-                  htmlFor="pricing-profit-margin"
-                />
-                <span className="relative block">
-                  <Input
-                    id="pricing-profit-margin"
-                    className="pr-8 tabular-nums"
-                    type="number"
-                    min={0}
-                    max={99}
-                    step="0.1"
-                    value={
-                      current.profit_margin === null
-                        ? ""
-                        : Number((current.profit_margin * 100).toFixed(4))
-                    }
-                    onChange={(event) =>
-                      setDraft({
-                        ...current,
-                        profit_margin:
-                          event.target.value === "" ? null : Number(event.target.value) / 100,
-                      })
-                    }
-                  />
-                  <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs">
-                    %
-                  </span>
-                </span>
-              </div>
-              <div
-                className="grid gap-3 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_9rem] sm:items-center lg:grid-cols-1 lg:items-start 2xl:grid-cols-[minmax(0,1fr)_8.5rem] 2xl:items-center"
-                data-testid="pricing-execution-settings"
-              >
-                <FieldLabel
-                  label="动态调整间隔"
-                  description="30 秒 - 24 小时"
-                  htmlFor="pricing-interval-seconds"
-                />
-                <span className="relative block">
-                  <Input
-                    id="pricing-interval-seconds"
-                    className="pr-9 tabular-nums"
-                    type="number"
-                    min={30}
-                    max={86400}
-                    value={current.interval_seconds ?? ""}
-                    onChange={(event) =>
-                      setDraft({
-                        ...current,
-                        interval_seconds:
-                          event.target.value === "" ? null : Number(event.target.value),
-                      })
-                    }
-                  />
-                  <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs">
-                    秒
-                  </span>
-                </span>
-              </div>
-              <div className="grid gap-3 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_9rem] sm:items-center lg:grid-cols-1 lg:items-start 2xl:grid-cols-[minmax(0,1fr)_8.5rem] 2xl:items-center">
-                <FieldLabel
-                  label="写入并发"
-                  description="允许范围 1 - 16"
-                  htmlFor="pricing-write-concurrency"
-                />
-                <Input
-                  id="pricing-write-concurrency"
-                  className="tabular-nums"
-                  type="number"
-                  min={1}
-                  max={16}
-                  value={current.write_concurrency ?? ""}
-                  onChange={(event) =>
-                    setDraft({
-                      ...current,
-                      write_concurrency:
-                        event.target.value === "" ? null : Number(event.target.value),
-                    })
-                  }
-                />
-              </div>
-            </CardContent>
-          </Card>
+        <div
+          className="grid min-w-0 items-start gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]"
+          data-testid="pricing-config-page"
+        >
+          <PricingSettingsPanel value={current} onChange={setDraft} />
 
-          <Card size="sm">
-            <CardHeader className="flex items-start justify-between gap-3 sm:flex-row sm:items-center">
+          <Card
+            size="sm"
+            role="region"
+            aria-labelledby="pricing-exchange-title"
+            className="rounded-xl"
+          >
+            <CardHeader className="bg-muted/20 flex flex-wrap items-start justify-between gap-3 sm:flex-row sm:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
                   <ArrowLeftRight className="size-4" aria-hidden="true" />
                 </span>
                 <div className="min-w-0">
-                  <CardTitle className="flex items-center gap-2">
+                  <CardTitle
+                    id="pricing-exchange-title"
+                    className="flex flex-wrap items-center gap-2"
+                  >
                     账号互换范围
                     <Badge variant="secondary">{current.exchange_group_sets.length} 组</Badge>
                   </CardTitle>
@@ -1723,7 +1643,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                 <Plus /> 添加互换组
               </Button>
             </CardHeader>
-            <CardContent className="divide-y p-0">
+            <CardContent className="space-y-3">
               {current.exchange_group_sets.length === 0 ? (
                 <div
                   className="flex min-h-28 flex-wrap items-center justify-center gap-x-4 gap-y-3 px-4 py-5"

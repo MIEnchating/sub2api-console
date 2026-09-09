@@ -545,12 +545,9 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
 		}
 	}
-	credentials := map[string]any{
-		"api_key": key.Secret, "base_url": validated.accountBaseURL, "model_mapping": identityModelMapping(models),
-		"pool_mode":                    creationPolicy.PoolMode,
-		"pool_mode_retry_count":        creationPolicy.PoolModeRetryCount,
-		"pool_mode_retry_status_codes": creationPolicy.PoolModeRetryStatusCodes,
-	}
+	credentials := onboardingAccountCredentials(
+		key.Secret, validated.accountBaseURL, models, creationPolicy, platform, accountType,
+	)
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
 		"credentials": credentials, "extra": validated.request.Extra,
@@ -660,6 +657,36 @@ func identityModelMapping(models []string) map[string]string {
 		mapping[model] = model
 	}
 	return mapping
+}
+
+func onboardingAccountCredentials(secret, baseURL string, models []string, policy configstore.AccountCreationPolicy, platform, accountType string) map[string]any {
+	credentials := map[string]any{
+		"api_key": secret, "base_url": baseURL, "model_mapping": identityModelMapping(models),
+		"pool_mode":                    policy.PoolMode,
+		"pool_mode_retry_count":        policy.PoolModeRetryCount,
+		"pool_mode_retry_status_codes": policy.PoolModeRetryStatusCodes,
+	}
+	if accountType == "apikey" {
+		applyAdaptiveProtocolCredentials(credentials, platform, baseURL)
+	}
+	return credentials
+}
+
+func applyAdaptiveProtocolCredentials(credentials map[string]any, platform, chatBaseURL string) {
+	protocolURLs := map[string]any{"chat_completions": chatBaseURL}
+	switch normalizePlatform(platform) {
+	case "zhipu":
+		protocolURLs["anthropic"] = chatBaseURL
+	case "kimi", "deepseek":
+		protocolURLs["anthropic"] = chatBaseURL
+		protocolURLs["responses"] = chatBaseURL
+	default:
+		return
+	}
+	credentials["account_mode"] = "payg"
+	credentials["api_protocol"] = "adaptive"
+	credentials["api_base_urls"] = protocolURLs
+	credentials["base_url"] = chatBaseURL
 }
 
 func onboardingMutationResources(host string, accountIDs []string) []string {
@@ -1193,6 +1220,9 @@ func accountPlatform(request Request, candidate business.OnboardingCandidate, lo
 	}
 	if concreteAccountPlatform(localPlatform) {
 		return localPlatform, nil
+	}
+	if localPlatform == "composite" {
+		return "openai", nil
 	}
 	return "", fmt.Errorf("上游分组「%s」使用复合平台，无法确定具体账号协议", candidate.GroupName)
 }

@@ -17,7 +17,7 @@ export function ConfigSectionTabs(props: {
 }) {
   return (
     <nav
-      className="bg-background/95 sticky top-0 z-10 -mx-1 px-1 py-1 backdrop-blur-sm"
+      className="min-w-0 shrink-0"
       data-testid="system-settings-tabs"
       aria-label="系统设置分类导航"
     >

@@ -208,8 +208,8 @@ jobs:
       - name: Backend mandatory checks
         working-directory: backend
         run: |
-          go vet ./...
-          go test -race ./...
+          go vet ./... ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          go test -race ./... ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
           go build ./...
       - name: API Docker build preflight
         run: docker build --build-arg VERSION="$GITHUB_REF_NAME" -t "sub2api-console-api-preflight:$GITHUB_REF_NAME" backend

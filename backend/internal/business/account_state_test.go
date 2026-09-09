@@ -7,22 +7,47 @@ import (
 
 func TestNormalizeAccountStateUsesCanonicalStates(t *testing.T) {
 	tests := map[string]string{
-		"active":       AccountStateHealthy,
-		"pass":         AccountStateHealthy,
-		"success":      AccountStateHealthy,
-		"ok":           AccountStateHealthy,
-		"observing":    AccountStateDegraded,
-		"hard_open":    AccountStateFused,
-		"survivor":     AccountStateSurvivor,
-		"paused":       AccountStatePaused,
-		"inactive":     AccountStateDisabled,
-		"out_of_scope": AccountStateExcluded,
-		"unexpected":   AccountStateUnknown,
+		"active":          AccountStateHealthy,
+		"pass":            AccountStateHealthy,
+		"success":         AccountStateHealthy,
+		"ok":              AccountStateHealthy,
+		"observing":       AccountStateDegraded,
+		"hard_open":       AccountStateFused,
+		"survivor":        AccountStateSurvivor,
+		"paused":          AccountStatePaused,
+		"inactive":        AccountStateDisabled,
+		"out_of_scope":    AccountStateExcluded,
+		"unexpected":      AccountStateUnknown,
+		"manual_priority": AccountStateManualPriority,
 	}
 	for input, want := range tests {
 		if got := NormalizeAccountState(input); got != want {
 			t.Fatalf("NormalizeAccountState(%q)=%q want=%q", input, got, want)
 		}
+	}
+}
+
+func TestGroupAvailabilityUsesManualSchedulingInsteadOfHistoricalScore(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		state       string
+		schedulable bool
+		want        int64
+	}{
+		{name: "manual account remains available with a low historical score", state: AccountStateManualPriority, schedulable: true, want: 1},
+		{name: "manual scheduling off remains unavailable", state: AccountStateManualPriority, schedulable: false, want: 0},
+		{name: "automatic account still requires the minimum score", state: AccountStateDegraded, schedulable: true, want: 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			score := 10.0
+			account := accountProjection{
+				AccountStatus: AccountStatus{Groups: []string{"codex"}, Health: scenario.state, HealthScore: &score, Schedulable: &scenario.schedulable},
+				metadataRaw:   `{"status":"active"}`,
+			}
+			if got := availableGroupAccounts([]accountProjection{account}, "codex", 75, time.Now()); got != scenario.want {
+				t.Fatalf("available manual/automatic account count=%d, want %d", got, scenario.want)
+			}
+		})
 	}
 }
 

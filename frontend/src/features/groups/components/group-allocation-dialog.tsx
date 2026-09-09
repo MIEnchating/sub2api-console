@@ -49,6 +49,7 @@ export const groupAllocationLayout = {
 } as const;
 
 const stateLabels: Record<string, string> = {
+  manual_priority: "人工优先位",
   healthy: "健康",
   active: "健康",
   available: "可用",

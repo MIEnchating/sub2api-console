@@ -9,7 +9,6 @@ import {
   UpstreamAccounts,
   UpstreamEditDialog,
   currentUpstreamGroupStatus,
-  upstreamEditConnectionLabels,
   upstreamEditDialogLayout,
   upstreamEditPresentation,
   upstreamEditSectionOrder,
@@ -55,13 +54,6 @@ describe("upstream edit dialog", () => {
 
     expect(await screen.findByRole("button", { name: "自定义 Headers说明" })).toBeVisible();
     expect(screen.queryByText("已配置：X-Client")).not.toBeInTheDocument();
-  });
-
-  it("edits upstream Host and account Base URL in the upstream dialog", () => {
-    expect(upstreamEditConnectionLabels).toEqual({
-      upstreamHost: "上游 Host",
-      accountBaseURL: "账号 Base URL",
-    });
   });
 
   it("places recharge conversion directly above current upstream accounts", () => {

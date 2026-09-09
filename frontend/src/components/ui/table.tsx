@@ -28,9 +28,16 @@ const TableOverflowTooltipContext = React.createContext(true);
 type TableProps = React.ComponentProps<"table"> & {
   containerClassName?: string;
   overflowTooltip?: boolean;
+  uniformTextSize?: boolean;
 };
 
-function Table({ className, containerClassName, overflowTooltip = true, ...props }: TableProps) {
+function Table({
+  className,
+  containerClassName,
+  overflowTooltip = true,
+  uniformTextSize = true,
+  ...props
+}: TableProps) {
   return (
     <TableOverflowTooltipContext.Provider value={overflowTooltip}>
       <div
@@ -44,7 +51,8 @@ function Table({ className, containerClassName, overflowTooltip = true, ...props
           data-slot="table"
           data-overflow-tooltip={overflowTooltip ? "true" : "false"}
           className={cn(
-            "w-full caption-bottom text-sm tabular-nums [&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm",
+            "w-full caption-bottom text-sm tabular-nums",
+            uniformTextSize && "[&_td]:text-sm [&_td_*]:text-sm [&_th]:text-sm [&_th_*]:text-sm",
             overflowTooltip && "table-fixed",
             className,
           )}

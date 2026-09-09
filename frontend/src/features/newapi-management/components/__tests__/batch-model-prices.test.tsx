@@ -56,6 +56,48 @@ describe("批量模型价格同步", () => {
     );
     expect(await screen.findByText("同步成功并已读回")).toBeVisible();
   });
+  it("Gemini 思考等级变体批量继承基础模型价格并写入各自模型名", async () => {
+    const variants = ["high", "low", "medium", "tiered"].map((suffix) => ({
+      model: `gemini-3.8-flash-${suffix}`,
+      input_ratio: "",
+      completion_ratio: "",
+    }));
+    const reference = {
+      model: "gemini-3.8-flash",
+      input_price: "0.00000075",
+      output_price: "0.00000375",
+      model_ratio: "0.375",
+      completion_ratio: "5",
+      cache_ratio: "0.1",
+    };
+    const write = vi.fn().mockImplementation(async (nextPrices) => ({
+      ...snapshot,
+      models: nextPrices,
+    }));
+    render(
+      <NewAPIModelPrices
+        models={variants}
+        onLoadManagementPrices={async () => ({ models: [reference] })}
+        onWriteModelPrices={write}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择本页模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "批量同步（4）" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认同步 4 个模型" }));
+
+    await waitFor(() =>
+      expect(write).toHaveBeenCalledWith(
+        variants.map((variant) => ({
+          model: variant.model,
+          input_ratio: "0.375",
+          completion_ratio: "5",
+          cache_ratio: "0.1",
+        })),
+      ),
+    );
+    expect(await screen.findAllByText("同步成功并已读回")).toHaveLength(4);
+  });
   it("筛选和翻页后保留选择，取消预览不写入平台", async () => {
     const write = vi.fn();
     const many = Array.from({ length: 21 }, (_, index) => ({

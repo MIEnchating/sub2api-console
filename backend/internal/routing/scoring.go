@@ -99,6 +99,8 @@ var decisiveAuthFailurePatterns = []string{
 	"revoked", "disabled key", "key not found",
 }
 
+var accessDeniedPatterns = []string{"forbidden", "permission denied", "access denied"}
+
 func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	config, err := parseScoringConfig(policy)
 	if err != nil {
@@ -223,7 +225,10 @@ func classify(sample Sample, config scoringConfig) Classified {
 	quota := !success && (quotaStatus || quotaText)
 	decisiveCredential := status == 401 || containsPattern(text, decisiveAuthFailurePatterns)
 	credential := decisiveCredential || containsPattern(text, config.fatalPatterns)
-	if status == 403 && !decisiveCredential {
+	// Upstream 403 responses may be wrapped as 502 (or omit the status).
+	// Access denial alone does not prove the account credential is invalid,
+	// even when persisted fatal patterns include a broad "forbidden" match.
+	if (status == 403 || containsPattern(text, accessDeniedPatterns)) && !decisiveCredential {
 		credential = false
 	}
 	_, gateway := config.gatewayCodes[status]

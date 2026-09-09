@@ -1,7 +1,31 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { toast } from "sonner";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, afterEach, expect, it, vi } from "vitest";
+
+// JSDOM 26 的样式匹配不支持浏览器顶层选择器，会在菜单焦点计算时递归。
+const restoreSelectorMatching = vi.hoisted(() => {
+  const matches = Element.prototype.matches;
+  Element.prototype.matches = function (selector: string): boolean {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  };
+  return () => {
+    Element.prototype.matches = matches;
+  };
+});
+afterAll(restoreSelectorMatching);
+beforeEach(() => {
+  const getComputedStyle = window.getComputedStyle;
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudoElement) => {
+    if (element instanceof HTMLSelectElement) {
+      const style = document.createElement("div").style;
+      style.display = "none";
+      return style;
+    }
+    return getComputedStyle(element, pseudoElement);
+  });
+});
 
 import { AccountsPage } from "@/App";
 import { api } from "@/api";
@@ -38,8 +62,9 @@ it("Base URL 修复完成后只提示一次该修复结果", async () => {
     </QueryClientProvider>,
   );
   await screen.findByText("待校验账号");
-  fireEvent.click(screen.getByRole("button", { name: "配置校验与修复" }));
-  fireEvent.click(await screen.findByRole("button", { name: "修复并恢复" }));
+  fireEvent.click(screen.getByRole("button", { name: "账号维护" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "配置校验与修复" }));
+  fireEvent.click(await screen.findByRole("button", { name: "修复并恢复" }, { timeout: 5_000 }));
   await waitFor(() => expect(success).toHaveBeenCalledWith("Base URL 已修复"));
   expect(success).toHaveBeenCalledTimes(1);
   client.clear();

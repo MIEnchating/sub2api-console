@@ -72,7 +72,7 @@ describe("LogsCenterPage layout", () => {
     const scrollRegion = openingTag(markup, 'data-testid="logs-table-scroll-region"');
     const tableContainer = openingTag(markup, 'data-slot="table-container"');
 
-    expect(pageContent).toContain("overflow-hidden");
+    expect(pageContent).toContain("overflow-auto");
     expect(tableShell).toContain("min-h-0");
     expect(tableShell).toContain("flex-1");
     expect(scrollRegion).toContain("min-h-0");

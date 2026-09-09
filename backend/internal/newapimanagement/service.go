@@ -727,7 +727,7 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	groupName := ""
 	for _, group := range localGroups {
 		if group.ID == input.Sub2APIGroupID {
-			groupName = group.Name
+			groupName = strings.TrimSpace(group.Name)
 			break
 		}
 	}
@@ -750,7 +750,7 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 	if err != nil {
 		return nil, serviceError(ErrorValidation, "渠道 API 地址无效")
 	}
-	channelName := stableOperationName(groupName, "channel", platformID, input.Sub2APIGroupID, input.KeyID, baseURL, strings.Join(models, ","), strings.Join(newAPIGroups, ","))
+	channelName := groupName
 	if existing, found, err := s.findChannelByName(ctx, *platform, channelName); err != nil {
 		return nil, fmt.Errorf("New API 渠道幂等对账失败：%w", err)
 	} else if found {
@@ -770,7 +770,7 @@ func (s *Service) CreateChannel(ctx context.Context, platformID string, input Ch
 		if existing, found, reconcileErr := s.findChannelByName(reconcileCtx, *platform, channelName); reconcileErr == nil && found {
 			return publicChannelResult(existing, channelName), nil
 		}
-		return nil, fmt.Errorf("New API 渠道创建结果不确定（marker %s）：%w", channelName, err)
+		return nil, fmt.Errorf("New API 渠道创建结果不确定（名称 %s）：%w", channelName, err)
 	}
 	result, _ := payload.(map[string]any)
 	return publicChannelResult(result, channelName), nil
@@ -805,17 +805,13 @@ func (s *Service) CreateChannelKey(ctx context.Context, platformID string, input
 	if err != nil {
 		return ChannelKey{}, wrapServiceError(ErrorUpstream, fmt.Errorf("Sub2API 普通账号登录失败：%w", err))
 	}
-	credentialIdentity := strings.TrimSpace(input.VaultEntry)
-	if strings.TrimSpace(input.CredentialSource) == "custom" {
-		credentialIdentity = strings.TrimSpace(input.Username)
-	}
-	marker := stableOperationName(group.Name, "key", platformID, group.ID, strings.TrimSpace(input.CredentialSource), credentialIdentity)
-	created, found, err := s.keys.ReconcileCreatedKey(ctx, authenticated, marker, group.ID)
+	keyName := strings.TrimSpace(group.Name)
+	created, found, err := s.keys.ReconcileCreatedKey(ctx, authenticated, keyName, group.ID)
 	if err != nil {
 		return ChannelKey{}, wrapServiceError(ErrorUpstream, fmt.Errorf("Sub2API 密钥幂等对账失败：%w", err))
 	}
 	if !found {
-		created, err = s.keys.CreateKeyWithVerification(ctx, authenticated, marker, group.ID, true)
+		created, err = s.keys.CreateKeyWithVerification(ctx, authenticated, keyName, group.ID, true)
 		if err != nil {
 			return ChannelKey{}, wrapServiceError(ErrorUpstream, err)
 		}
@@ -1011,15 +1007,6 @@ func sub2APIUserLoginRecord(target configstore.TargetSettings) configstore.AuthR
 	}
 }
 
-func stableOperationName(groupName, kind string, parts ...string) string {
-	digest := sha256.Sum256([]byte(strings.Join(append([]string{kind}, parts...), "\x00")))
-	name := strings.TrimSpace(groupName)
-	if len([]rune(name)) > 72 {
-		name = string([]rune(name)[:72])
-	}
-	return fmt.Sprintf("NewAPI-%s-console-%s", name, hex.EncodeToString(digest[:12]))
-}
-
 func (s *Service) findChannelByName(ctx context.Context, platform configstore.NewAPIPlatform, name string) (map[string]any, bool, error) {
 	var match map[string]any
 	seen := map[string]struct{}{}
@@ -1059,7 +1046,7 @@ func (s *Service) findChannelByName(ctx context.Context, platform configstore.Ne
 				continue
 			}
 			if match != nil {
-				return nil, false, errors.New("远端存在多个同 marker 渠道")
+				return nil, false, errors.New("远端存在多个同名渠道")
 			}
 			match = row
 		}

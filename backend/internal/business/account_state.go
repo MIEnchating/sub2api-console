@@ -3,15 +3,16 @@ package business
 import "strings"
 
 const (
-	AccountStateHealthy     = "healthy"
-	AccountStateDegraded    = "degraded"
-	AccountStateFused       = "fused"
-	AccountStateCostBlocked = "cost_blocked"
-	AccountStateSurvivor    = "survivor"
-	AccountStatePaused      = "paused"
-	AccountStateDisabled    = "disabled"
-	AccountStateExcluded    = "excluded"
-	AccountStateUnknown     = "unknown"
+	AccountStateHealthy        = "healthy"
+	AccountStateDegraded       = "degraded"
+	AccountStateFused          = "fused"
+	AccountStateCostBlocked    = "cost_blocked"
+	AccountStateSurvivor       = "survivor"
+	AccountStatePaused         = "paused"
+	AccountStateDisabled       = "disabled"
+	AccountStateExcluded       = "excluded"
+	AccountStateUnknown        = "unknown"
+	AccountStateManualPriority = "manual_priority"
 )
 
 // NormalizeAccountState is the single backend mapping from upstream and engine
@@ -34,6 +35,8 @@ func NormalizeAccountState(value string) string {
 		return AccountStateDisabled
 	case "excluded", "out_of_scope", "排除", "已排除":
 		return AccountStateExcluded
+	case "manual_priority":
+		return AccountStateManualPriority
 	default:
 		return AccountStateUnknown
 	}
@@ -55,6 +58,8 @@ func accountStatePriority(state string) int {
 		return 40
 	case AccountStateHealthy:
 		return 30
+	case AccountStateManualPriority:
+		return 25
 	case AccountStateUnknown:
 		return 20
 	case AccountStateExcluded:

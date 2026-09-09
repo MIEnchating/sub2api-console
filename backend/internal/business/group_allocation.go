@@ -79,10 +79,11 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
 		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.short_score,he.long_score,
 		he.sample_count,he.ttfb_p95_ms,
-		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json
+		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json,m.priority
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
-		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND rd.updated_at>=COALESCE(
+		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
+		LEFT JOIN routing_decisions rd ON rd.account_id=a.id AND m.account_id IS NULL AND rd.updated_at>=COALESCE(
 			(SELECT updated_at FROM app_state WHERE key='routing-decision-epoch'),rd.updated_at)
 		LEFT JOIN account_health_evaluations he ON he.account_id=a.id
 		WHERE ag.group_id=? OR (ag.group_id IS NULL AND LOWER(TRIM(ag.group_name))=LOWER(TRIM(?)))
@@ -93,14 +94,14 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	defer rows.Close()
 	for rows.Next() {
 		var channel GroupAllocationChannel
-		var priority, schedulable, rank, sampleCount, accountSchedulable, paused sql.NullInt64
+		var priority, schedulable, rank, sampleCount, accountSchedulable, paused, manualPriority sql.NullInt64
 		var accountMultiplier, role, state, reason, updatedAt, payloadRaw sql.NullString
 		var accountRoutingState, accountHealthStatus sql.NullString
 		var metadataRaw string
 		var healthScore, shortScore, longScore, p95 sql.NullFloat64
 		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &accountMultiplier, &priority, &schedulable, &role, &state,
 			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &shortScore, &longScore, &sampleCount, &p95,
-			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw); err != nil {
+			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw, &manualPriority); err != nil {
 			return GroupAllocation{}, err
 		}
 		channel.Priority, channel.Schedulable, channel.Rank = nullInt(priority), strictBool(schedulable), nullInt(rank)
@@ -114,7 +115,7 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		}
 		account := accountProjection{AccountStatus: AccountStatus{
 			ID: channel.AccountID, Schedulable: strictBool(accountSchedulable), RoutingState: nullString(accountRoutingState),
-			HealthStatus: nullString(accountHealthStatus), Paused: strictBool(paused),
+			HealthStatus: nullString(accountHealthStatus), Paused: strictBool(paused), ManualPriority: nullInt(manualPriority),
 		}, metadataRaw: metadataRaw}
 		decisions := []decisionProjection{}
 		if updatedAt.Valid {

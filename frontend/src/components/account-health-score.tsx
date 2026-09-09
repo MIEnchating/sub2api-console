@@ -29,10 +29,10 @@ export function AccountHealthScore(props: AccountHealthScoreProps): ReactElement
     >
       <div className="flex items-center gap-2.5">
         <div
-          className={cn("relative size-10 shrink-0", tone)}
+          className={cn("relative size-11 shrink-0", tone)}
           aria-label={hasSamples ? `健康分 ${score}` : "暂无健康分"}
         >
-          <svg viewBox="0 0 40 40" className="size-10 -rotate-90" aria-hidden="true">
+          <svg viewBox="0 0 40 40" className="size-11 -rotate-90" aria-hidden="true">
             <circle
               cx="20"
               cy="20"
@@ -53,22 +53,16 @@ export function AccountHealthScore(props: AccountHealthScoreProps): ReactElement
               strokeDashoffset={circumference * (1 - progress / 100)}
             />
           </svg>
-          <strong className="absolute inset-0 flex items-center justify-center text-[11px]! font-semibold">
+          <strong className="absolute inset-0 flex items-center justify-center text-xs! font-semibold">
             {score}
           </strong>
         </div>
         <div className="grid gap-1 text-xs!">
-          <span
-            className="flex min-w-16 justify-between gap-2"
-            aria-label={`短期评分 ${shortScore}`}
-          >
+          <span className="flex gap-2" aria-label={`短期评分 ${shortScore}`}>
             <span className="text-muted-foreground text-xs!">短期 </span>
             <span className="text-xs! font-medium">{shortScore}</span>
           </span>
-          <span
-            className="flex min-w-16 justify-between gap-2"
-            aria-label={`长期评分 ${longScore}`}
-          >
+          <span className="flex gap-2" aria-label={`长期评分 ${longScore}`}>
             <span className="text-muted-foreground text-xs!">长期 </span>
             <span className="text-xs! font-medium">{longScore}</span>
           </span>

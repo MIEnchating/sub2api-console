@@ -1,0 +1,70 @@
+import type { PolicySnapshot, PricingSnapshot } from "../../../src/api";
+
+export const policy: PolicySnapshot = {
+  revision: "isolated-policy",
+  available: true,
+  source: "隔离测试",
+  mode: "完全模式",
+  global_strategy: "balanced",
+  group_strategies: [],
+  missing_rate_fallback: "current_cost_wall",
+  change_threshold: "0.1",
+  cooldown_seconds: 60,
+  auto_apply: { schedulable: true, priority: true, load_factor: true, concurrency: false },
+  excluded_group_ids: [],
+  traffic_enabled: true,
+  probe_interval_seconds: 300,
+  probe_model: "test-model",
+  traffic_lookback_minutes: 120,
+  max_samples_per_account: 60,
+  advanced_policy: {
+    weights: {
+      budget: 1000,
+      gate_floor: 40,
+      balanced_price_ratio: 0.5,
+      performance_min_samples: 5,
+      speed_advantage_cap: 3,
+    },
+    manual_priority: { reserved_max: 10 },
+    writeback: { concurrency: 4, verification: true },
+    upstream_multiplier: { interval_seconds: 120 },
+    traffic: { refresh_seconds: 60 },
+    scoring: {
+      short_window: 10,
+      long_window: 60,
+      latest_weight: 0.5,
+      short_ratio: 0.7,
+      slow_ttfb_ms: 5000,
+    },
+  },
+  configuration_errors: [],
+};
+
+export const pricing: PricingSnapshot = {
+  config: {
+    enabled: false,
+    profit_margin: 0.2,
+    interval_seconds: 120,
+    write_concurrency: 4,
+    exchange_group_sets: [["6", "7"]],
+    exchange_group_set_names: ["常规价格"],
+  },
+  groups: [
+    { id: "6", name: "codex-平价", rate_multiplier: "0.2" },
+    { id: "7", name: "codex-特价", rate_multiplier: "0.15" },
+    { id: "8", name: "codex-pro", rate_multiplier: "0.3" },
+    { id: "9", name: "暂不可用", rate_multiplier: "0.4" },
+  ].map((group) => ({
+    ...group,
+    platform: "openai",
+    status: "active",
+    managed: true,
+    available: group.id !== "9",
+    reason: group.id === "9" ? "分组已停用" : null,
+  })),
+  decisions: [],
+  accounts: 0,
+  changes: 0,
+  skipped: 0,
+  generated_at: "2026-09-09T00:00:00Z",
+};

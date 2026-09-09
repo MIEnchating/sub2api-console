@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fromDate } from "@internationalized/date";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, type RevenueReport, type RevenueRow, type Task } from "@/api";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { DataTablePagination } from "@/components/data-table/pagination";
-import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { DatePicker } from "@/components/date-picker";
 import { PageActions } from "@/components/page-actions";
@@ -17,7 +17,6 @@ import { TaskCancelButton } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import {
   Table,
   TableBody,
@@ -29,7 +28,7 @@ import {
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 
-type RevenueAnalysisView = "details" | "summary" | "issues";
+import { RevenueViewNavigation, type RevenueAnalysisView } from "./revenue-view-navigation";
 
 const revenueTimezone = "Asia/Shanghai";
 
@@ -188,6 +187,9 @@ function RevenueDetails(props: { rows: RevenueRow[] }) {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {props.rows.length === 0 ? (
+            <TableEmptyState columns={12}>暂无账号核算明细</TableEmptyState>
+          ) : null}
           {pagination.visibleItems.map((row) => (
             <TableRow key={row.account_id}>
               <TableCell
@@ -256,6 +258,9 @@ function RevenueSummaryTable(props: { report: RevenueReport }) {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {props.report.summaries.length === 0 ? (
+            <TableEmptyState columns={8}>暂无金额统计</TableEmptyState>
+          ) : null}
           {props.report.summaries.map((row) => (
             <TableRow
               key={row.group}
@@ -304,6 +309,12 @@ export function RevenueAnalysisPage() {
   const queryClient = useQueryClient();
   const [date, setDate] = useState(defaultRevenueDate);
   const [view, setView] = useState<RevenueAnalysisView>("details");
+  const pageRef = useRef<HTMLDivElement>(null);
+  function changeView(nextView: RevenueAnalysisView): void {
+    setView(nextView);
+    const content = pageRef.current?.closest<HTMLElement>('[data-slot="page-content"]');
+    if (content) content.scrollTop = 0;
+  }
   const [taskID, setTaskID] = useState<string | null>(null);
   const latest = useQuery({
     queryKey: ["pricing-revenue-latest"],
@@ -346,7 +357,14 @@ export function RevenueAnalysisPage() {
   }, [report]);
 
   return (
-    <PageLayout fixedContent>
+    <PageLayout
+      fixedContent
+      navigation={
+        !running && task.data?.status !== "failed" && report ? (
+          <RevenueViewNavigation value={view} onChange={changeView} />
+        ) : undefined
+      }
+    >
       <PageHeading
         eyebrow="OPERATIONS / REVENUE"
         title="收益分析"
@@ -364,10 +382,15 @@ export function RevenueAnalysisPage() {
               label="核算日期"
               clearable={false}
               onSelect={(value) => setDate(revenueDateText(value))}
-              className="w-44"
+              className="w-36 sm:w-44"
             />
-            <Button onClick={() => calculate.mutate(date)} disabled={running || !date}>
-              <Play /> {running ? "核算中" : "开始分析"}
+            <Button
+              onClick={() => calculate.mutate(date)}
+              disabled={running || !date}
+              aria-label={running ? "核算中" : "开始分析"}
+            >
+              <Play aria-hidden="true" />{" "}
+              <span className="hidden sm:inline">{running ? "核算中" : "开始分析"}</span>
             </Button>
           </PageActions>
         }
@@ -379,30 +402,25 @@ export function RevenueAnalysisPage() {
       <div
         className="flex h-full min-h-0 flex-col gap-3 overflow-hidden"
         data-testid="revenue-analysis-page"
+        ref={pageRef}
       >
         {running && <RevenueCalculationProgress progress={task.data?.progress ?? 0} />}
         {!running && task.data?.status === "failed" && (
-          <div className="flex min-h-0 items-center justify-center text-sm text-destructive">
+          <div
+            role="alert"
+            className="flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm text-destructive wrap-anywhere"
+          >
             {task.data.message}
           </div>
         )}
         {!running && task.data?.status !== "failed" && report && (
-          <div className="flex min-h-0 flex-1 flex-col gap-3">
-            <TableFilterToolbar aria-label="收益分析视图">
-              <SegmentedControl>
-                {(
-                  [
-                    ["details", "账号明细"],
-                    ["summary", "金额统计"],
-                    ["issues", "上游读取问题"],
-                  ] as const
-                ).map(([id, label]) => (
-                  <SegmentedControlItem key={id} selected={view === id} onClick={() => setView(id)}>
-                    {label}
-                  </SegmentedControlItem>
-                ))}
-              </SegmentedControl>
-            </TableFilterToolbar>
+          <div
+            id={`revenue-panel-${view}`}
+            role="tabpanel"
+            aria-labelledby={`revenue-tab-${view}`}
+            tabIndex={0}
+            className="flex min-h-0 flex-1 flex-col gap-3 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
             {view === "details" ? <RevenueDetails rows={report.rows} /> : null}
             {view === "summary" ? <RevenueSummaryTable report={report} /> : null}
             {view === "issues" ? <RevenueIssuesTable issues={report.issues} /> : null}
@@ -414,7 +432,7 @@ export function RevenueAnalysisPage() {
           </div>
         )}
         {!running && task.data?.status !== "failed" && !report && !latest.isLoading && (
-          <div className="text-muted-foreground flex min-h-0 items-center justify-center text-sm">
+          <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm">
             尚未生成核算结果
           </div>
         )}
@@ -430,22 +448,28 @@ function RevenueIssuesTable(props: { issues: RevenueReport["issues"] }) {
       <Table containerClassName="min-h-0 flex-1 overflow-auto">
         <TableHeader>
           <TableRow>
-            <TableHead className="w-64">Host</TableHead>
+            <TableHead className="w-1/3 sm:w-64">Host</TableHead>
             <TableHead>原因</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {props.issues.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={2} className="text-muted-foreground h-24 text-center">
-                没有上游读取问题
-              </TableCell>
-            </TableRow>
+            <TableEmptyState columns={2}>没有上游读取问题</TableEmptyState>
           ) : (
             pagination.visibleItems.map((issue) => (
               <TableRow key={`${issue.host}:${issue.reason}`}>
-                <TableCell className="font-medium">{issue.host}</TableCell>
-                <TableCell>{issue.reason}</TableCell>
+                <TableCell
+                  className="whitespace-normal wrap-anywhere font-medium"
+                  overflowTooltip={false}
+                >
+                  {issue.host}
+                </TableCell>
+                <TableCell
+                  className="whitespace-normal wrap-anywhere leading-6"
+                  overflowTooltip={false}
+                >
+                  {issue.reason}
+                </TableCell>
               </TableRow>
             ))
           )}
