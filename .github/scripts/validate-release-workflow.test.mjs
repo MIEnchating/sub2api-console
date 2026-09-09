@@ -14,4 +14,9 @@ test("release workflow builds one multi-architecture Docker Hub image", () => {
   assert.match(workflow, /DOCKERHUB_TOKEN/);
   assert.doesNotMatch(workflow, /ghcr\.io|packages:/);
   assert.equal((workflow.match(/docker\/build-push-action@/g) ?? []).length, 1);
+  assert.match(workflow, /create-release:/);
+  assert.match(workflow, /needs: build-and-push/);
+  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /gh release create/);
+  assert.match(workflow, /\.github\/release-notes\/\$GITHUB_REF_NAME\.md/);
 });
