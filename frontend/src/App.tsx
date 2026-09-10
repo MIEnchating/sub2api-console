@@ -14,6 +14,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "reac
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
+  Cable,
+  Files,
+  PanelsTopLeft,
   Ban,
   BellRing,
   BadgeDollarSign,
@@ -384,6 +387,10 @@ export type View =
   | "accounts"
   | "upstreams"
   | "groups"
+  | "uptime-kuma-templates"
+  | "uptime-kuma-status-pages"
+  | "uptime-kuma-config"
+  | "uptime-kuma"
   | "newapi"
   | "newapi-groups"
   | "newapi-channels"
@@ -415,6 +422,10 @@ export const navItems: Array<{
     | "/accounts"
     | "/upstreams"
     | "/groups"
+    | "/uptime-kuma/templates"
+    | "/uptime-kuma/status-pages"
+    | "/uptime-kuma/config"
+    | "/uptime-kuma"
     | "/newapi"
     | "/newapi/groups"
     | "/newapi/channels"
@@ -478,6 +489,20 @@ export const navItems: Array<{
     icon: GitCompareArrows,
     to: "/newapi/differences",
   },
+  { id: "uptime-kuma-config", label: "接入配置", icon: Cable, to: "/uptime-kuma/config" },
+  { id: "uptime-kuma", label: "监控管理", icon: Activity, to: "/uptime-kuma" },
+  {
+    id: "uptime-kuma-templates",
+    label: "功能模板",
+    icon: Files,
+    to: "/uptime-kuma/templates",
+  },
+  {
+    id: "uptime-kuma-status-pages",
+    label: "状态页管理",
+    icon: PanelsTopLeft,
+    to: "/uptime-kuma/status-pages",
+  },
   {
     id: "pricing-config",
     label: "价格配置",
@@ -523,6 +548,15 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
     label: "New API",
     itemIDs: ["newapi", "newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
   },
+  {
+    label: "Uptime Kuma",
+    itemIDs: [
+      "uptime-kuma-config",
+      "uptime-kuma",
+      "uptime-kuma-templates",
+      "uptime-kuma-status-pages",
+    ],
+  },
   { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
   { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
 ];
@@ -545,6 +579,10 @@ const viewByPath: Record<string, View> = {
   "/accounts": "accounts",
   "/upstreams": "upstreams",
   "/groups": "groups",
+  "/uptime-kuma/config": "uptime-kuma-config",
+  "/uptime-kuma/templates": "uptime-kuma-templates",
+  "/uptime-kuma/status-pages": "uptime-kuma-status-pages",
+  "/uptime-kuma": "uptime-kuma",
   "/newapi": "newapi",
   "/newapi/groups": "newapi-groups",
   "/newapi/channels": "newapi-channels",

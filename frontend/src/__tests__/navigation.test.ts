@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  Activity,
+  Cable,
+  Files,
+  PanelsTopLeft,
   BadgeDollarSign,
   ChartSpline,
   ChartNoAxesColumnIncreasing,
@@ -53,6 +57,10 @@ describe("侧边菜单", () => {
       "渠道管理",
       "模型价格",
       "价格比对",
+      "接入配置",
+      "监控管理",
+      "功能模板",
+      "状态页管理",
       "价格配置",
       "调度策略",
       "告警策略",
@@ -81,6 +89,10 @@ describe("侧边菜单", () => {
       RadioTower,
       BadgeDollarSign,
       GitCompareArrows,
+      Cable,
+      Activity,
+      Files,
+      PanelsTopLeft,
       SlidersHorizontal,
       Route,
       ShieldAlert,
@@ -120,6 +132,15 @@ describe("侧边菜单", () => {
           "newapi-differences",
         ],
       },
+      {
+        label: "Uptime Kuma",
+        itemIDs: [
+          "uptime-kuma-config",
+          "uptime-kuma",
+          "uptime-kuma-templates",
+          "uptime-kuma-status-pages",
+        ],
+      },
       { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
       { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
     ]);
@@ -134,6 +155,13 @@ describe("侧边菜单", () => {
     expect(viewForPath("/newapi/channels")).toBe("newapi-channels");
     expect(viewForPath("/newapi/prices")).toBe("newapi-prices");
     expect(viewForPath("/newapi/differences")).toBe("newapi-differences");
+  });
+
+  it("Uptime Kuma 入口使用独立路由", () => {
+    expect(viewForPath("/uptime-kuma")).toBe("uptime-kuma");
+    expect(viewForPath("/uptime-kuma/config")).toBe("uptime-kuma-config");
+    expect(viewForPath("/uptime-kuma/templates")).toBe("uptime-kuma-templates");
+    expect(navItems.some((item) => ["通知渠道", "维护计划"].includes(item.label))).toBe(false);
   });
 
   it("系统信息入口使用独立路由", () => {

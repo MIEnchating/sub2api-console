@@ -51,6 +51,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+	"github.com/MIEnchating/sub2api-console/backend/internal/uptimekuma"
 )
 
 const (
@@ -298,6 +299,7 @@ type AuthRecoveryService interface {
 }
 
 type Dependencies struct {
+	UptimeKuma         *uptimekuma.TaskService
 	AccountResultsLive AccountResultsLive
 	Notification       NotificationTester
 	NotificationTarget NotificationTargetDiscovery
@@ -330,6 +332,8 @@ type Dependencies struct {
 }
 
 type Server struct {
+	kumaTasks          *uptimekuma.TaskService
+	uptimeKuma         *uptimekuma.Service
 	accountResultsLive AccountResultsLive
 	config             config.Config
 	private            *configstore.Store
@@ -564,6 +568,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		services = dependencies[0]
 	}
 	server := &Server{
+		kumaTasks:          services.UptimeKuma,
+		uptimeKuma:         uptimekuma.New(private, nil),
 		accountResultsLive: services.AccountResultsLive,
 		config:             cfg,
 		private:            private,
@@ -599,6 +605,9 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
 		sseSlots:           make(chan struct{}, maximumSSEConnections),
 		now:                time.Now,
+	}
+	if services.UptimeKuma != nil {
+		server.uptimeKuma = services.UptimeKuma.Service
 	}
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
@@ -685,6 +694,22 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/pricing/backups", server.createPricingBackup)
 	authorized.DELETE("/pricing/backups/:backup_id", server.deletePricingBackup)
 	authorized.POST("/pricing/backups/:backup_id/restore", server.restorePricingBackup)
+	authorized.GET("/uptime-kuma/config", server.kumaConfig)
+	authorized.GET("/uptime-kuma/templates", server.kumaTemplates)
+	authorized.GET("/uptime-kuma/templates/:template_id", server.kumaTemplate)
+	authorized.POST("/uptime-kuma/templates", server.saveKumaTemplate)
+	authorized.POST("/uptime-kuma/template-preset", server.kumaTemplatePreset)
+	authorized.PUT("/uptime-kuma/templates/:template_id", server.saveKumaTemplate)
+	authorized.DELETE("/uptime-kuma/templates/:template_id", server.deleteKumaTemplate)
+	authorized.PUT("/uptime-kuma/config", server.saveKumaConfig)
+	authorized.DELETE("/uptime-kuma/config", server.disconnectKuma)
+	authorized.GET("/uptime-kuma/monitors", server.kumaMonitors)
+	authorized.GET("/uptime-kuma/monitors/:monitor_id/push-url", server.kumaPushURL)
+	authorized.GET("/uptime-kuma/resources/:kind", server.kumaResources)
+	authorized.GET("/uptime-kuma/resources/:kind/:resource_id", server.kumaResource)
+	authorized.POST("/uptime-kuma/resources/:kind/:resource_id", server.writeKumaResource)
+	authorized.POST("/uptime-kuma/monitors", server.writeKumaMonitor)
+	authorized.POST("/uptime-kuma/monitors/:monitor_id", server.writeKumaMonitor)
 	authorized.GET("/newapi", server.newAPIWorkspace)
 	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)

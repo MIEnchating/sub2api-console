@@ -45,6 +45,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
+	"github.com/MIEnchating/sub2api-console/backend/internal/uptimekuma"
 	"golang.org/x/sys/unix"
 )
 
@@ -66,6 +67,10 @@ func run() error {
 	defer listeners.close()
 	privateStore, err := configstore.Open(cfg.ConfigDB)
 	if err != nil {
+		return err
+	}
+	if err := uptimekuma.SeedTemplates(context.Background(), privateStore); err != nil {
+		_ = privateStore.Close()
 		return err
 	}
 	closeStores := true
@@ -254,6 +259,7 @@ func run() error {
 	systemMetrics := systeminfo.New(cfg.DataDir)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
+		UptimeKuma:         uptimekuma.NewTasks(uptimekuma.New(privateStore, nil), taskStore, backgroundTasks),
 		AccountResultsLive: liveResults,
 		Notification:       notificationService,
 		NotificationTarget: notificationTargetDiscovery,

@@ -1,0 +1,107 @@
+import { Controller, type UseFormReturn } from "react-hook-form";
+import type { KumaTemplate } from "@/api";
+import { FormField } from "@/App";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { requestAuthLabels } from "../constants";
+import type { MonitorValues } from "../lib/schemas";
+
+export function TemplateSelector(props: {
+  form: UseFormReturn<MonitorValues>;
+  templates: KumaTemplate[];
+  disabled: boolean;
+  editing?: boolean;
+}) {
+  const selectedID = props.form.watch("template_id");
+  const selected = props.templates.find((item) => item.id === selectedID);
+  const selectTemplate = (id: string | null): void => {
+    const item = props.templates.find((value) => value.id === id);
+    props.form.setValue("template_id", item?.id ?? "");
+    props.form.setValue("template_revision", item?.revision ?? 0);
+    props.form.setValue("template_settings_override", !!item?.monitoring);
+    if (item && !item.monitoring && !props.editing) props.form.setValue("type", "http");
+    if (item?.monitoring) {
+      const m = item.monitoring;
+      if (!props.editing) props.form.setValue("type", m.type);
+      props.form.setValue("interval", m.interval);
+      if (m.url) props.form.setValue("url", m.url);
+      else if (item.url_redacted) props.form.setValue("url", "");
+      for (const name of [
+        "timeout",
+        "retry_interval",
+        "max_retries",
+        "max_redirects",
+        "accepted_status_codes",
+        "ignore_tls",
+        "upside_down",
+        "hostname",
+        "port",
+        "keyword",
+        "dns_record_type",
+        "dns_resolver",
+      ] as const) {
+        props.form.setValue(`options.${name}`, m[name]);
+      }
+    }
+    props.form.setValue("template_auth_override", false);
+    props.form.setValue("options.clear_auth", false);
+    props.form.clearErrors(["options.auth_username", "options.auth_password"]);
+    if (item) {
+      for (const field of ["headers", "body", "auth_username", "auth_password"] as const)
+        props.form.setValue(`options.${field}`, "");
+      props.form.clearErrors("options.headers");
+    }
+  };
+  return (
+    <div className="grid gap-2">
+      <FormField label="功能模板">
+        <Controller
+          control={props.form.control}
+          name="template_id"
+          render={({ field }) => (
+            <Select
+              value={field.value || "manual"}
+              disabled={props.disabled}
+              itemToStringLabel={(id) =>
+                props.templates.find((item) => item.id === id)?.name ?? "手动设置"
+              }
+              onValueChange={selectTemplate}
+            >
+              <SelectTrigger aria-label="功能模板">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="manual">手动设置</SelectItem>
+                {props.templates
+                  .filter(
+                    (item) =>
+                      !props.editing ||
+                      (item.monitoring
+                        ? item.monitoring.type === props.form.getValues("type")
+                        : ["http", "keyword"].includes(props.form.getValues("type"))),
+                  )
+                  .map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+      </FormField>
+      {selected && (
+        <p role="status" className="text-xs leading-relaxed text-muted-foreground">
+          {selected.method} · 请求头{selected.headers_configured ? "已配置" : "为空"} · 请求体
+          {selected.body_configured ? "已配置" : "为空"} · {requestAuthLabels[selected.auth_method]}
+          。下方可单独设置鉴权；模板后续修改不会影响此监控。
+        </p>
+      )}
+    </div>
+  );
+}

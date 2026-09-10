@@ -15,7 +15,25 @@ Sub2API 的独立可视化控制面。业务规则全部由 Go 后端领域服�
 - 实时任务：Go 调度器 + SSE
 - 领域服务：`internal/inspection`、`internal/probe`、`internal/authrecovery`、`internal/upstreamsync`、`internal/routing`、`internal/notification`；外部网络调用均通过受控适配器进入。
 
-页面入口：运营总览、账号管理、上游管理、分组调度、调度策略、自动巡检、日志中心、告警与通知、告警策略、请求查询、密码箱和系统设置。
+页面入口：运营总览、账号管理、上游管理、分组调度、调度策略、自动巡检、Uptime Kuma、日志中心、告警与通知、告警策略、请求查询、密码箱和系统设置。
+
+## Uptime Kuma 接入
+
+Uptime Kuma 菜单包含四个独立页面：接入配置（`/uptime-kuma/config`）、监控管理（`/uptime-kuma`）、功能模板（`/uptime-kuma/templates`）和状态页管理（`/uptime-kuma/status-pages`）。页面通过侧栏导航，不提供页头互跳；配置保存与断开操作位于页头，管理列表使用通用表格、筛选、分页和行内操作，编辑在通用弹窗中完成。通知渠道及维护计划的控制台页面和管理接口已移除，远端已有配置保留。
+
+在「Uptime Kuma → 接入配置」填写服务地址与 Uptime Kuma 设置中创建的 API 密钥。支持输入实例根地址或以 `/dashboard` 结尾的仪表盘地址，保存前会验证 `/metrics` 接口。官方 API 密钥通过 HTTP Basic Auth 的密码字段读取指标，本身没有监控项管理权限。
+
+需要管理监控项时，同时填写仪表盘账号和密码；已启用两步验证的账号还需填写当前 6 位验证码。Go 后端通过原生 Socket.IO / Engine.IO 4 WebSocket 接口登录并保存会话。反向代理必须允许 `/socket.io/` 的 WebSocket 升级。登录会话失效后重新输入密码和当前验证码并保存，不会自动重放写请求。地址、密钥、密码和登录会话保存在后端私有配置库，API 只返回地址、账号、配置状态和版本；验证码不持久化。更换地址必须重新输入对应实例的密钥及管理凭据，禁止把旧实例的凭据自动发送到新地址；连接不跟随重定向。
+
+- 只配置 API 密钥：查看监控状态、响应时间、证书有效期和上游提供的 24 小时在线比例，每分钟刷新。暂停项可能不在指标中，旧版没有提供的指标显示「暂无数据」。旧版 `/metrics` 不带稳定监控 ID 时仅展示数据，不通过名称绑定管理目标。
+- 监控管理：新增 HTTP(S)、HTTP 关键字、TCP、Ping、DNS、Push 和分组；编辑名称、地址、检测及重试间隔和分组。HTTP 支持请求方法、请求头、请求体、状态码范围、重定向、TLS 和 Basic/Bearer 鉴权。已有敏感字段留空保留，可显式清空；编辑不能改变类型，分组调整校验循环引用，已有通知关联保留。监控列表按稳定父组 ID 展示可折叠的层级，支持分组筛选；搜索和状态筛选保留匹配子项的父组，跨页仍显示完整所属分组。Push 上报地址仅在详情中按需读取，不进入常规列表或浏览器持久存储。
+- 功能模板：保存监控类型、地址、检测间隔、正常状态码、超时、重试参数、TLS 忽略、反转判断，以及请求方法、请求头、请求体和编码。监控地址填写服务地址，选择接口模式后自动补全 Messages、Chat Completions 或 Responses 路径；切换模式时保留网关前缀和查询参数，不重复追加 `/v1`。列表只返回摘要，编辑时通过受鉴权保护的 no-store 详情接口回显请求头和请求体，关闭弹窗清理查询缓存。请求头默认留空，不以示例充当默认内容；模板编辑不提供独立鉴权方式，保存时清除旧模板的独立鉴权配置，需要认证时可填写请求头。已有监控不随模板修改而改变，监控表单仍可独立设置鉴权。
+- 内置请求模式：Claude Messages（`/v1/messages`）、OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）及 Claude CLI。选择模式时由 Go 后端生成预设并填入可编辑请求体，后续保存以当前文本为准，不再覆盖修改；请求模型和发送消息提供独立输入，修改会同步到请求体；原始请求体默认收起，可展开查看或编辑，复杂内容只修改对应字段并保留其他参数。标准模式不自动填入请求头，直连 Claude 需自行设置 `anthropic-version`；显式选择 Claude CLI 会填入其专用请求头。请求体编码支持 JSON、表单（x-www-form-urlencoded）和 XML，套用时传递至 Kuma 的 `httpBodyEncoding`；JSON 内容会校验。默认预设非流式、输出上限 16 token，OpenAI 使用 `store=false`。请求规范参考 [Claude Messages](https://platform.claude.com/docs/en/api/messages/create)、[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)、[OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create)。
+- 状态页：新增、编辑和删除，配置标题、路径、说明、主题、域名、页脚、标签及证书显示，管理公开分组及监控项顺序。编辑保留原路径和未修改的展示设置；公告、历史事件、外观高级配置及尚未提供专属表单的监控类型仍在原仪表盘管理，不表示覆盖 Uptime Kuma 的全部原生功能。
+- 暂停、恢复和删除需要确认目标及 ID；非空分组需先移出子项再删除。配置版本或监控项基本信息发生变化时，旧页面的写入会被拒绝，需刷新后重试。Uptime Kuma 原生接口没有跨客户端原子版本控制，因此其他仪表盘仍可能在校验后的极短窗口内修改同一项。
+- 验证配置和远端写入创建后台任务，页面通过 Query 读取进度，日志中心保留结构化任务结果；任务创建审计与执行结果分开记录。连接中断后先核对远端状态及任务结果，不自动重试新增、修改和删除。断开接入只清除本地配置及凭据，不删除远端监控项。
+
+接入层针对 Uptime Kuma 1.23/2.x 原生事件契约实现，测试使用隔离 HTTP/WebSocket 服务和临时数据库，不连接生产实例。Prometheus 文本解析使用 Apache-2.0 许可的 `prometheus/common/expfmt`，Socket.IO 的有限事件适配复用已有 Go WebSocket 库，不引入额外业务运行时。
 
 ## 调度与告警事实模型
 

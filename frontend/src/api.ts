@@ -1418,7 +1418,278 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export type KumaConfig = {
+  base_url: string;
+  username: string;
+  api_key_configured: boolean;
+  management_configured: boolean;
+  revision: number;
+};
+export type KumaTemplate = {
+  body_encoding?: string;
+  monitoring?: KumaTemplateMonitoring;
+  url_configured?: boolean;
+  url_redacted?: boolean;
+  request_profile?: string;
+  model?: string;
+  id: string;
+  revision: number;
+  name: string;
+  method: string;
+  auth_method: string;
+  headers_configured: boolean;
+  body_configured: boolean;
+  auth_configured: boolean;
+};
+export type KumaTemplateDetail = KumaTemplate & { headers: string; body: string };
+export type KumaTemplateInput = {
+  body_encoding?: string;
+  monitoring?: KumaTemplateMonitoring;
+  clear_url?: boolean;
+  request_profile?: string;
+  model?: string;
+  revision: number;
+  name: string;
+  method: string;
+  headers: string;
+  body: string;
+  auth_method: string;
+  auth_username: string;
+  auth_password: string;
+  clear_headers: boolean;
+  clear_body: boolean;
+  clear_auth: boolean;
+};
+
+type KumaTemplateMonitoring = {
+  type: string;
+  url: string;
+  interval: number;
+  timeout: number;
+  retry_interval: number;
+  max_retries: number;
+  max_redirects: number;
+  accepted_status_codes: string[];
+  ignore_tls: boolean;
+  upside_down: boolean;
+  hostname: string;
+  port: number;
+  keyword: string;
+  dns_record_type: string;
+  dns_resolver: string;
+};
+
+export type KumaConfigInput = {
+  base_url: string;
+  api_key: string;
+  username: string;
+  password: string;
+  otp: string;
+  disable_management: boolean;
+  revision: number;
+};
+
+type KumaMonitorOptions = {
+  hostname: string;
+  port: number;
+  keyword: string;
+  dns_record_type: string;
+  dns_resolver: string;
+  method: string;
+  timeout: number;
+  retry_interval: number;
+  max_retries: number;
+  resend_interval: number;
+  max_redirects: number;
+  ignore_tls: boolean;
+  upside_down: boolean;
+  accepted_status_codes: string[];
+  notification_ids: number[];
+  auth_method: string;
+  headers_configured?: boolean;
+  body_configured?: boolean;
+  auth_configured?: boolean;
+  headers?: string;
+  body?: string;
+  auth_username?: string;
+  auth_password?: string;
+  clear_headers?: boolean;
+  clear_body?: boolean;
+  clear_auth?: boolean;
+};
+export type KumaResourceKind = "notifications" | "maintenance" | "status-pages";
+type KumaNotification = {
+  name: string;
+  type: string;
+  default: boolean;
+  active: boolean;
+  endpoint: string;
+  token: string;
+  username: string;
+  password: string;
+  endpoint_configured?: boolean;
+  token_configured?: boolean;
+  username_configured?: boolean;
+  password_configured?: boolean;
+  chat_id: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_secure: boolean;
+  from: string;
+  to: string;
+  topic: string;
+};
+type KumaMaintenance = {
+  title: string;
+  description: string;
+  strategy: string;
+  active: boolean;
+  timezone: string;
+  start: string;
+  end: string;
+  cron: string;
+  duration_minutes: number;
+  interval_days: number;
+  start_time: string;
+  end_time: string;
+  weekdays: number[];
+  days_of_month: number[];
+  last_day?: boolean;
+  monitor_ids: number[];
+  status_page_ids: number[];
+  status?: string;
+};
+type KumaPublicGroup = {
+  id?: number;
+  name: string;
+  monitorList: { id: number; sendUrl: boolean; url?: string }[];
+};
+type KumaStatusPage = {
+  title: string;
+  slug: string;
+  description: string;
+  theme: string;
+  footer: string;
+  show_tags: boolean;
+  show_powered_by: boolean;
+  show_certificate_expiry: boolean;
+  domains: string[];
+  groups: KumaPublicGroup[];
+};
+export type KumaResource = {
+  id: number;
+  name: string;
+  type: string;
+  active: boolean;
+  revision: string;
+  association_revision: string;
+  notification?: KumaNotification;
+  maintenance?: KumaMaintenance;
+  status_page?: KumaStatusPage;
+};
+export type KumaResourceList = {
+  config: KumaConfig;
+  items: KumaResource[];
+  monitors: KumaMonitor[];
+  status_pages: { id: number; title: string }[];
+};
+export type KumaResourceWrite = {
+  action: "create" | "edit" | "delete" | "test" | "pause" | "resume";
+  config_revision: number;
+  revision: string;
+  association_revision: string;
+  notification?: KumaNotification;
+  maintenance?: KumaMaintenance;
+  status_page?: KumaStatusPage;
+};
+
+export type KumaMonitor = {
+  target?: string;
+  options?: KumaMonitorOptions;
+  id: number;
+  key: string;
+  name: string;
+  type: string;
+  url: string;
+  url_redacted: boolean;
+  active: boolean;
+  parent: number | null;
+  interval: number;
+  status: number | null;
+  response_time: number | null;
+  certificate_days: number | null;
+  uptime: number | null;
+  revision: string;
+};
+
+type KumaMonitorInput = {
+  template_id?: string;
+  template_revision?: number;
+  template_auth_override?: boolean;
+  template_settings_override?: boolean;
+  name: string;
+  type: string;
+  options?: KumaMonitorOptions;
+  url: string;
+  interval: number;
+  parent: number | null;
+};
+
+export type KumaWriteInput = {
+  config_revision: number;
+  revision: string;
+  action: "create" | "edit" | "pause" | "resume" | "delete";
+  monitor?: KumaMonitorInput;
+};
+
+export type KumaSnapshot = { config: KumaConfig; monitors: KumaMonitor[]; warning: string };
+
 export const api = {
+  kumaTemplatePreset: (input: { request_profile: string; model: string }) =>
+    request<KumaTemplateDetail>("/api/uptime-kuma/template-preset", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  kumaTemplates: () => request<KumaTemplate[]>("/api/uptime-kuma/templates"),
+  kumaTemplate: (id: string, signal?: AbortSignal) =>
+    request<KumaTemplateDetail>(`/api/uptime-kuma/templates/${id}`, { signal, cache: "no-store" }),
+  saveKumaTemplate: (id: string | undefined, input: KumaTemplateInput) =>
+    request<KumaTemplate>(`/api/uptime-kuma/templates${id ? `/${id}` : ""}`, {
+      method: id ? "PUT" : "POST",
+      body: JSON.stringify(input),
+    }),
+  deleteKumaTemplate: (id: string, revision: number) =>
+    request<{ deleted: boolean }>(`/api/uptime-kuma/templates/${id}`, {
+      method: "DELETE",
+      body: JSON.stringify({ revision }),
+    }),
+  kumaResources: (kind: KumaResourceKind) =>
+    request<KumaResourceList>(`/api/uptime-kuma/resources/${kind}`),
+  kumaResource: (kind: KumaResourceKind, id: number) =>
+    request<KumaResource>(`/api/uptime-kuma/resources/${kind}/${id}`),
+  writeKumaResource: (kind: KumaResourceKind, id: number, input: KumaResourceWrite) =>
+    request<Task>(`/api/uptime-kuma/resources/${kind}/${id}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  kumaConfig: () => request<KumaConfig>("/api/uptime-kuma/config"),
+  saveKumaConfig: (input: KumaConfigInput) =>
+    request<Task>("/api/uptime-kuma/config", { method: "PUT", body: JSON.stringify(input) }),
+  disconnectKuma: (revision: number) =>
+    request<{ disconnected: boolean }>("/api/uptime-kuma/config", {
+      method: "DELETE",
+      body: JSON.stringify({ revision }),
+    }),
+  kumaMonitors: () => request<KumaSnapshot>("/api/uptime-kuma/monitors"),
+  kumaPushURL: (id: number, revision: string) =>
+    request<{ url: string }>(
+      `/api/uptime-kuma/monitors/${id}/push-url?revision=${encodeURIComponent(revision)}`,
+    ),
+  writeKumaMonitor: (id: number, input: KumaWriteInput) =>
+    request<Task>(`/api/uptime-kuma/monitors${id ? `/${id}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   accountResultsEventsURL: (ids: readonly string[]) =>
     apiEndpoint(`/api/accounts/results/events?account_ids=${encodeURIComponent(ids.join(","))}`),
   autoInspectionEventsURL: () => apiEndpoint("/api/inspection/automation/events"),

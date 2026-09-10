@@ -127,6 +127,10 @@ func (s *Store) Close() error {
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS uptime_kuma_config (
+			id INTEGER PRIMARY KEY CHECK(id=1), base_url TEXT NOT NULL, api_key TEXT NOT NULL,
+			username TEXT NOT NULL, password TEXT NOT NULL, token TEXT NOT NULL, revision INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS model_pricing_cache (
 			cache_key TEXT PRIMARY KEY, content TEXT NOT NULL, fetched_at TEXT NOT NULL

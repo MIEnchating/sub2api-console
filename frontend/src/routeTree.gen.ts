@@ -29,12 +29,17 @@ import { Route as SystemInfoRouteImport } from './app-routes/system-info'
 import { Route as TraceRouteImport } from './app-routes/trace'
 import { Route as TrafficRouteImport } from './app-routes/traffic'
 import { Route as UpstreamsRouteImport } from './app-routes/upstreams'
+import { Route as UptimeKumaRouteRouteImport } from './app-routes/uptime-kuma/route'
 import { Route as VaultRouteImport } from './app-routes/vault'
 import { Route as NewapiIndexRouteImport } from './app-routes/newapi/index'
 import { Route as NewapiChannelsRouteImport } from './app-routes/newapi/channels'
 import { Route as NewapiDifferencesRouteImport } from './app-routes/newapi/differences'
 import { Route as NewapiGroupsRouteImport } from './app-routes/newapi/groups'
 import { Route as NewapiPricesRouteImport } from './app-routes/newapi/prices'
+import { Route as UptimeKumaIndexRouteImport } from './app-routes/uptime-kuma/index'
+import { Route as UptimeKumaConfigRouteImport } from './app-routes/uptime-kuma/config'
+import { Route as UptimeKumaStatusPagesRouteImport } from './app-routes/uptime-kuma/status-pages'
+import { Route as UptimeKumaTemplatesRouteImport } from './app-routes/uptime-kuma/templates'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -136,6 +141,11 @@ const UpstreamsRoute = UpstreamsRouteImport.update({
   path: '/upstreams',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UptimeKumaRouteRoute = UptimeKumaRouteRouteImport.update({
+  id: '/uptime-kuma',
+  path: '/uptime-kuma',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VaultRoute = VaultRouteImport.update({
   id: '/vault',
   path: '/vault',
@@ -166,10 +176,31 @@ const NewapiPricesRoute = NewapiPricesRouteImport.update({
   path: '/prices',
   getParentRoute: () => NewapiRouteRoute,
 } as any)
+const UptimeKumaIndexRoute = UptimeKumaIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => UptimeKumaRouteRoute,
+} as any)
+const UptimeKumaConfigRoute = UptimeKumaConfigRouteImport.update({
+  id: '/config',
+  path: '/config',
+  getParentRoute: () => UptimeKumaRouteRoute,
+} as any)
+const UptimeKumaStatusPagesRoute = UptimeKumaStatusPagesRouteImport.update({
+  id: '/status-pages',
+  path: '/status-pages',
+  getParentRoute: () => UptimeKumaRouteRoute,
+} as any)
+const UptimeKumaTemplatesRoute = UptimeKumaTemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => UptimeKumaRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
+  '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
@@ -193,7 +224,11 @@ export interface FileRoutesByFullPath {
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
   '/newapi/prices': typeof NewapiPricesRoute
+  '/uptime-kuma/config': typeof UptimeKumaConfigRoute
+  '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
+  '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
   '/newapi/': typeof NewapiIndexRoute
+  '/uptime-kuma/': typeof UptimeKumaIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -220,12 +255,17 @@ export interface FileRoutesByTo {
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
   '/newapi/prices': typeof NewapiPricesRoute
+  '/uptime-kuma/config': typeof UptimeKumaConfigRoute
+  '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
+  '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
   '/newapi': typeof NewapiIndexRoute
+  '/uptime-kuma': typeof UptimeKumaIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
+  '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
@@ -249,13 +289,18 @@ export interface FileRoutesById {
   '/newapi/differences': typeof NewapiDifferencesRoute
   '/newapi/groups': typeof NewapiGroupsRoute
   '/newapi/prices': typeof NewapiPricesRoute
+  '/uptime-kuma/config': typeof UptimeKumaConfigRoute
+  '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
+  '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
   '/newapi/': typeof NewapiIndexRoute
+  '/uptime-kuma/': typeof UptimeKumaIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/newapi'
+    | '/uptime-kuma'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
@@ -279,7 +324,11 @@ export interface FileRouteTypes {
     | '/newapi/differences'
     | '/newapi/groups'
     | '/newapi/prices'
+    | '/uptime-kuma/config'
+    | '/uptime-kuma/status-pages'
+    | '/uptime-kuma/templates'
     | '/newapi/'
+    | '/uptime-kuma/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -306,11 +355,16 @@ export interface FileRouteTypes {
     | '/newapi/differences'
     | '/newapi/groups'
     | '/newapi/prices'
+    | '/uptime-kuma/config'
+    | '/uptime-kuma/status-pages'
+    | '/uptime-kuma/templates'
     | '/newapi'
+    | '/uptime-kuma'
   id:
     | '__root__'
     | '/'
     | '/newapi'
+    | '/uptime-kuma'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
@@ -334,12 +388,17 @@ export interface FileRouteTypes {
     | '/newapi/differences'
     | '/newapi/groups'
     | '/newapi/prices'
+    | '/uptime-kuma/config'
+    | '/uptime-kuma/status-pages'
+    | '/uptime-kuma/templates'
     | '/newapi/'
+    | '/uptime-kuma/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   NewapiRouteRoute: typeof NewapiRouteRouteWithChildren
+  UptimeKumaRouteRoute: typeof UptimeKumaRouteRouteWithChildren
   AccountsRoute: typeof AccountsRoute
   AlertPolicyRoute: typeof AlertPolicyRoute
   AlertsRoute: typeof AlertsRoute
@@ -503,6 +562,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof UpstreamsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/uptime-kuma': {
+      id: '/uptime-kuma'
+      path: '/uptime-kuma'
+      fullPath: '/uptime-kuma'
+      preLoaderRoute: typeof UptimeKumaRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/vault': {
       id: '/vault'
       path: '/vault'
@@ -545,6 +611,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof NewapiPricesRouteImport
       parentRoute: typeof NewapiRouteRoute
     }
+    '/uptime-kuma/': {
+      id: '/uptime-kuma/'
+      path: '/'
+      fullPath: '/uptime-kuma/'
+      preLoaderRoute: typeof UptimeKumaIndexRouteImport
+      parentRoute: typeof UptimeKumaRouteRoute
+    }
+    '/uptime-kuma/config': {
+      id: '/uptime-kuma/config'
+      path: '/config'
+      fullPath: '/uptime-kuma/config'
+      preLoaderRoute: typeof UptimeKumaConfigRouteImport
+      parentRoute: typeof UptimeKumaRouteRoute
+    }
+    '/uptime-kuma/status-pages': {
+      id: '/uptime-kuma/status-pages'
+      path: '/status-pages'
+      fullPath: '/uptime-kuma/status-pages'
+      preLoaderRoute: typeof UptimeKumaStatusPagesRouteImport
+      parentRoute: typeof UptimeKumaRouteRoute
+    }
+    '/uptime-kuma/templates': {
+      id: '/uptime-kuma/templates'
+      path: '/templates'
+      fullPath: '/uptime-kuma/templates'
+      preLoaderRoute: typeof UptimeKumaTemplatesRouteImport
+      parentRoute: typeof UptimeKumaRouteRoute
+    }
   }
 }
 
@@ -568,9 +662,28 @@ const NewapiRouteRouteWithChildren = NewapiRouteRoute._addFileChildren(
   NewapiRouteRouteChildren,
 )
 
+interface UptimeKumaRouteRouteChildren {
+  UptimeKumaConfigRoute: typeof UptimeKumaConfigRoute
+  UptimeKumaStatusPagesRoute: typeof UptimeKumaStatusPagesRoute
+  UptimeKumaTemplatesRoute: typeof UptimeKumaTemplatesRoute
+  UptimeKumaIndexRoute: typeof UptimeKumaIndexRoute
+}
+
+const UptimeKumaRouteRouteChildren: UptimeKumaRouteRouteChildren = {
+  UptimeKumaConfigRoute: UptimeKumaConfigRoute,
+  UptimeKumaStatusPagesRoute: UptimeKumaStatusPagesRoute,
+  UptimeKumaTemplatesRoute: UptimeKumaTemplatesRoute,
+  UptimeKumaIndexRoute: UptimeKumaIndexRoute,
+}
+
+const UptimeKumaRouteRouteWithChildren = UptimeKumaRouteRoute._addFileChildren(
+  UptimeKumaRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   NewapiRouteRoute: NewapiRouteRouteWithChildren,
+  UptimeKumaRouteRoute: UptimeKumaRouteRouteWithChildren,
   AccountsRoute: AccountsRoute,
   AlertPolicyRoute: AlertPolicyRoute,
   AlertsRoute: AlertsRoute,
