@@ -79,7 +79,7 @@ func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, er
 		if in.Monitor.TemplateAuthOverride && (in.Monitor.TemplateID == "" || in.Monitor.Options == nil) {
 			return 0, failure("kuma_invalid_auth", "请选择模板并填写独立鉴权设置", 422)
 		}
-		if in.Action == "create" || in.Monitor.Options != nil {
+		if in.Action == "create" || in.Monitor.Options != nil || in.Monitor.TemplateID == "" {
 			if err := s.resolveTemplate(ctx, &in.Monitor); err != nil {
 				return 0, err
 			}

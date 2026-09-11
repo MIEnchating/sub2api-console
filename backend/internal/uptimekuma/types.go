@@ -63,6 +63,7 @@ type Snapshot struct {
 	Warning  string    `json:"warning"`
 }
 type MonitorInput struct {
+	TemplateModel            string          `json:"template_model,omitempty"`
 	TemplateID               string          `json:"template_id,omitempty"`
 	TemplateRevision         int64           `json:"template_revision,omitempty"`
 	TemplateAuthOverride     bool            `json:"template_auth_override,omitempty"`

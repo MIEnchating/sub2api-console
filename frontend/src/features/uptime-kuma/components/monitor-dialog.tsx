@@ -40,6 +40,7 @@ export function MonitorDialog(props: {
       name: props.monitor?.name ?? "",
       type: props.monitor?.type ?? props.initialType ?? "http",
       template_id: "",
+      template_model: "",
       template_revision: 0,
       template_auth_override: false,
       options: {
@@ -65,6 +66,7 @@ export function MonitorDialog(props: {
       kuma_invalid_interval: "interval",
       kuma_invalid_monitor_url: "url",
       kuma_invalid_parent: "parent",
+      kuma_invalid_template_model: "template_model",
     };
     const field = props.error instanceof ApiError ? fields[props.error.code] : undefined;
     if (field) form.setError(field, { message: props.error.message });
@@ -76,6 +78,7 @@ export function MonitorDialog(props: {
       !props.templates?.find((item) => item.id === values.template_id)?.monitoring
     ) {
       values.template_id = "";
+      values.template_model = "";
       values.template_revision = 0;
       values.template_auth_override = false;
     }
@@ -90,6 +93,7 @@ export function MonitorDialog(props: {
     }
     if (values.type === "group") {
       values.template_id = "";
+      values.template_model = "";
       values.template_revision = 0;
       values.template_auth_override = false;
       values.template_settings_override = false;

@@ -53,6 +53,8 @@ export function MonitorBasicsForm(props: {
                       form.clearErrors();
                     }
                     form.setValue("template_id", "");
+                    form.setValue("template_model", "");
+                    form.clearErrors("template_model");
                     form.setValue("template_revision", 0);
                     form.setValue("template_settings_override", false);
                     form.setValue("template_auth_override", false);

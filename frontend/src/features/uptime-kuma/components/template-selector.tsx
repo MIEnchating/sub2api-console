@@ -1,6 +1,7 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { KumaTemplate } from "@/api";
 import { FormField } from "@/App";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectTrigger,
@@ -21,6 +22,8 @@ export function TemplateSelector(props: {
   const selectTemplate = (id: string | null): void => {
     const item = props.templates.find((value) => value.id === id);
     props.form.setValue("template_id", item?.id ?? "");
+    props.form.setValue("template_model", "");
+    props.form.clearErrors("template_model");
     props.form.setValue("template_revision", item?.revision ?? 0);
     props.form.setValue("template_settings_override", !!item?.monitoring);
     if (item && !item.monitoring && !props.editing) props.form.setValue("type", "http");
@@ -95,6 +98,23 @@ export function TemplateSelector(props: {
           )}
         />
       </FormField>
+      {selected?.body_configured &&
+        ["http", "keyword"].includes(props.form.watch("type")) &&
+        (!selected.body_encoding || selected.body_encoding === "json") && (
+          <FormField
+            label="请求模型"
+            htmlFor="kuma-template-model"
+            error={props.form.formState.errors.template_model?.message}
+          >
+            <Input
+              id="kuma-template-model"
+              {...props.form.register("template_model")}
+              placeholder={selected.model || "使用模板模型"}
+              disabled={props.disabled}
+              aria-invalid={!!props.form.formState.errors.template_model}
+            />
+          </FormField>
+        )}
       {selected && (
         <p role="status" className="text-xs leading-relaxed text-muted-foreground">
           {selected.method} · 请求头{selected.headers_configured ? "已配置" : "为空"} · 请求体

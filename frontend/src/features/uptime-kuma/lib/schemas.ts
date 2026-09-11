@@ -85,6 +85,12 @@ export const defaultMonitorOptions: z.infer<typeof monitorOptionsSchema> = {
 export const monitorSchema = z
   .object({
     name: z.string().trim().min(1, "请输入监控项名称").max(150, "名称不能超过 150 个字符"),
+    template_model: z
+      .string()
+      .trim()
+      .max(200, "模型名称最多为 200 个字符")
+      .refine((value) => !/[\s\p{Cc}]/u.test(value), "模型名称不能包含空白或控制字符")
+      .optional(),
     template_id: z.string().optional(),
     template_revision: z.number().int().nonnegative().optional(),
     template_auth_override: z.boolean().optional(),

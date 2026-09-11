@@ -216,6 +216,9 @@ func (s *Service) DeleteTemplate(ctx context.Context, id string, revision int64)
 }
 func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 	if in.TemplateID == "" {
+		if strings.TrimSpace(in.TemplateModel) != "" {
+			return failure("kuma_invalid_template_model", "请先选择功能模板，再设置请求模型", 422)
+		}
 		return nil
 	}
 	if !templateIDPattern.MatchString(in.TemplateID) {
@@ -284,7 +287,10 @@ func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 	}
 	o.Method = item.Method
 	o.Headers = item.Headers
-	o.Body = item.Body
+	o.Body, err = templateBodyWithModel(item.Body, o.bodyEncoding, in.Type, in.TemplateModel)
+	if err != nil {
+		return err
+	}
 	o.replaceAuth = true
 	o.ClearHeaders = true
 	o.ClearBody = true

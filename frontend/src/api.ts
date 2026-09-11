@@ -1627,6 +1627,7 @@ type KumaMonitorInput = {
   template_revision?: number;
   template_auth_override?: boolean;
   template_settings_override?: boolean;
+  template_model?: string;
   name: string;
   type: string;
   options?: KumaMonitorOptions;
