@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/select";
 
 const noModelSelected = "__not_selected__";
+type ProbePhase = "idle" | "preparing-key" | "loading-models" | "ready" | "probing" | "completed";
 
 export const onboardingProbeModeOptions: Array<{
   value: OnboardingProbeMode;
@@ -106,6 +107,7 @@ export function AccountProbeDialog(props: {
   const [selectedModel, setSelectedModel] = useState(noModelSelected);
   const [selectedMode, setSelectedMode] = useState<OnboardingProbeMode>("default");
   const [result, setResult] = useState<ProbeResult | null>(null);
+  const [phase, setPhase] = useState<ProbePhase>("idle");
   const accountSettings = useQuery({
     queryKey: ["account-creation-settings"],
     queryFn: api.accountCreationSettings,
@@ -118,7 +120,9 @@ export function AccountProbeDialog(props: {
   const modelSelectionEdited = useRef(false);
   const loadModels = useMutation({
     mutationFn: () => api.onboardingProbeModels(props.target.host, props.target.groupId),
+    onMutate: () => setPhase("preparing-key"),
     onSuccess: (response) => {
+      setPhase("loading-models");
       setModels(response.models);
       setSelectedModel((current) => {
         if (current !== noModelSelected && response.models.includes(current)) return current;
@@ -134,6 +138,7 @@ export function AccountProbeDialog(props: {
     onSettled: () => {
       modelLoadInFlight.current = false;
       setModelsLoading(false);
+      setPhase((current) => (current === "loading-models" ? "ready" : current));
     },
   });
   const runProbe = useMutation({
@@ -146,9 +151,13 @@ export function AccountProbeDialog(props: {
         selectedMode,
       );
     },
-    onMutate: () => setResult(null),
+    onMutate: () => {
+      setResult(null);
+      setPhase("probing");
+    },
     onSuccess: (probeResult) => {
       setResult(probeResult);
+      setPhase("completed");
       props.onCompleted?.();
     },
   });
@@ -171,6 +180,7 @@ export function AccountProbeDialog(props: {
       setModels([]);
       setModelsLoading(false);
       setResult(null);
+      setPhase("idle");
       setSelectedModel(noModelSelected);
       setSelectedMode("default");
       loadModels.reset();
@@ -224,6 +234,11 @@ export function AccountProbeDialog(props: {
         </DialogHeader>
         <DialogBody className="grid gap-4 px-6 py-4">
           <ProbeAccountCard target={props.target} />
+          <ProbePhaseIndicator
+            phase={phase}
+            modelsLoading={modelsLoading}
+            probing={runProbe.isPending}
+          />
           <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">选择测试模型</span>
             <Select
@@ -448,6 +463,49 @@ function ProbeResultPanel(props: { result: ProbeResult }) {
           {props.result.latency_ms > 0 ? ` · ${props.result.latency_ms} 毫秒` : ""}
         </span>
       </div>
+    </div>
+  );
+}
+
+function ProbePhaseIndicator(props: {
+  phase: ProbePhase;
+  modelsLoading: boolean;
+  probing: boolean;
+}) {
+  const phases = [
+    ["preparing-key", "准备探活凭据（读取已有 Key 或创建临时 Key）"],
+    ["loading-models", "获取上游模型列表"],
+    ["probing", "发送测试请求并等待响应"],
+    ["completed", "探活完成并清理临时 Key"],
+  ] as const;
+  const activeIndex =
+    props.phase === "ready" ? 1 : phases.findIndex(([key]) => key === props.phase);
+  return (
+    <div
+      className="grid gap-1.5 rounded-lg border bg-muted/20 px-3 py-2.5 text-xs"
+      aria-live="polite"
+    >
+      {phases.map(([key, label], index) => {
+        const done = activeIndex > index || (key === "completed" && props.phase === "completed");
+        const active =
+          key === props.phase ||
+          (key === "loading-models" && props.modelsLoading) ||
+          (key === "probing" && props.probing);
+        let stateClass = "text-muted-foreground";
+        let marker = "○";
+        if (done) {
+          stateClass = "text-emerald-600 dark:text-emerald-400";
+          marker = "✓";
+        } else if (active) {
+          stateClass = "text-foreground";
+          marker = "●";
+        }
+        return (
+          <div key={key} className={stateClass}>
+            {marker} {label}
+          </div>
+        );
+      })}
     </div>
   );
 }
