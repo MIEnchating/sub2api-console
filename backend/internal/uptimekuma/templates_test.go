@@ -203,3 +203,70 @@ func TestClearedTemplateFieldsReplaceExistingMonitorRequestSettings(t *testing.T
 		t.Fatal("empty template retained old request credentials")
 	}
 }
+
+func TestMonitorTemplateReadbackRetainsBindingAfterTemplateDeletionAndNormalEdit(t *testing.T) {
+	f := resourceFixture(t)
+	cfg := f.configure(t, true)
+	ctx := context.Background()
+	item, err := f.service.SaveTemplate(ctx, "", TemplateInput{Name: "原模板", Method: "POST", AuthMethod: "none", BodyEncoding: "json", Body: `{"model":"original","messages":[{"role":"user","content":"keep me"}]}`, Headers: `{"X-Key":"private-link-key"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.service.Write(ctx, 0, WriteInput{Action: "create", ConfigRevision: cfg.Revision, Monitor: MonitorInput{Name: "关联监控", Type: "http", URL: "https://monitor.example/probe", Interval: 60, TemplateID: item.ID, TemplateRevision: item.Revision, TemplateModel: "my-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.edited["id"], _ = json.Marshal(id)
+	f.edited["basic_auth_pass"] = json.RawMessage(`"private-monitor-password"`)
+	f.edited["authMethod"] = json.RawMessage(`"basic"`)
+	f.edited["basic_auth_user"] = json.RawMessage(`"private-user"`)
+	f.edited["timeout"] = json.RawMessage(`45`)
+	raw, _ := json.Marshal(f.edited)
+	f.monitors["20"] = raw
+	f.mu.Unlock()
+	if err = f.service.DeleteTemplate(ctx, item.ID, item.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// A new service must recover the saved association from backend storage.
+	service := New(f.service.store, f.service.client)
+	snapshot, err := service.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(snapshot.Monitors)
+	var items []map[string]json.RawMessage
+	if err = json.Unmarshal(data, &items); err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]json.RawMessage
+	for _, m := range items {
+		if string(m["id"]) == "20" {
+			saved = m
+		}
+	}
+	if rawString(saved, "template_id") != item.ID || rawString(saved, "template_name") != "原模板" || rawString(saved, "template_model") != "my-model" {
+		t.Fatalf("template association missing: %s", data)
+	}
+	if strings.Contains(string(data), "private-") {
+		t.Fatal("readback exposed credentials")
+	}
+	var in MonitorInput
+	if err = json.Unmarshal([]byte(`{"name":"改名监控","type":"http","interval":60,"template_retain":true,"template_model":"my-model"}`), &in); err != nil {
+		t.Fatal(err)
+	}
+	in.TemplateID, in.TemplateRevision = item.ID, item.Revision
+	_, err = service.Write(ctx, id, WriteInput{Action: "edit", ConfigRevision: cfg.Revision, Revision: rawString(saved, "revision"), Monitor: in})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rawString(f.edited, "body") != `{"messages":[{"content":"keep me","role":"user"}],"model":"my-model"}` {
+		var body map[string]any
+		if json.Unmarshal([]byte(rawString(f.edited, "body")), &body) != nil || body["model"] != "my-model" {
+			t.Fatal("normal edit changed request body")
+		}
+	}
+	if rawInt(f.edited, "timeout", 0) != 45 || rawString(f.edited, "basic_auth_pass") != "private-monitor-password" || rawString(f.edited, "headers") != `{"X-Key":"private-link-key"}` {
+		t.Fatal("normal edit overwrote request configuration")
+	}
+}

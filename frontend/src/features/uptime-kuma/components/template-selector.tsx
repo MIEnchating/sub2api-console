@@ -1,5 +1,5 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
-import type { KumaTemplate } from "@/api";
+import type { KumaMonitor, KumaTemplate } from "@/api";
 import { FormField } from "@/App";
 import { Input } from "@/components/ui/input";
 import {
@@ -16,13 +16,18 @@ export function TemplateSelector(props: {
   templates: KumaTemplate[];
   disabled: boolean;
   editing?: boolean;
+  monitor?: KumaMonitor | null;
 }) {
   const selectedID = props.form.watch("template_id");
+  const retained = !!props.form.watch("template_retain");
   const selected = props.templates.find((item) => item.id === selectedID);
+  const selectedName = retained ? props.monitor?.template_name : undefined;
   const selectTemplate = (id: string | null): void => {
     const item = props.templates.find((value) => value.id === id);
     props.form.setValue("template_id", item?.id ?? "");
     props.form.setValue("template_model", "");
+    props.form.setValue("template_retain", false);
+    props.form.setValue("template_clear", !item);
     props.form.clearErrors("template_model");
     props.form.setValue("template_revision", item?.revision ?? 0);
     props.form.setValue("template_settings_override", !!item?.monitoring);
@@ -71,7 +76,9 @@ export function TemplateSelector(props: {
               value={field.value || "manual"}
               disabled={props.disabled}
               itemToStringLabel={(id) =>
-                props.templates.find((item) => item.id === id)?.name ?? "手动设置"
+                (id === selectedID && selectedName) ||
+                props.templates.find((item) => item.id === id)?.name ||
+                "手动设置"
               }
               onValueChange={selectTemplate}
             >

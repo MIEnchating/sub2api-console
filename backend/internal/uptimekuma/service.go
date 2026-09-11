@@ -173,6 +173,18 @@ func (s *Service) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return result, err
 	}
+	links, err := s.store.KumaMonitorTemplates(ctx, c.BaseURL)
+	if err != nil {
+		return result, err
+	}
+	for i := range result.Monitors {
+		link := links[result.Monitors[i].ID]
+		result.Monitors[i].TemplateID = link.TemplateID
+		result.Monitors[i].TemplateRevision = link.Revision
+		result.Monitors[i].TemplateName = link.Name
+		result.Monitors[i].TemplateModel = link.Model
+		result.Monitors[i].TemplateBodyEncoding = link.BodyEncoding
+	}
 	if metricsErr != nil {
 		result.Warning = "指标读取失败，当前仅显示管理接口数据；请检查 API 密钥或重新保存接入配置"
 		return result, nil

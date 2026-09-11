@@ -40,22 +40,27 @@ type ConfigInput struct {
 	Revision          int64  `json:"revision"`
 }
 type Monitor struct {
-	Options         *MonitorOptions `json:"options,omitempty"`
-	Target          string          `json:"target"`
-	ID              int64           `json:"id"`
-	Key             string          `json:"key"`
-	Name            string          `json:"name"`
-	Type            string          `json:"type"`
-	URL             string          `json:"url"`
-	URLRedacted     bool            `json:"url_redacted"`
-	Active          bool            `json:"active"`
-	Parent          *int64          `json:"parent"`
-	Interval        int             `json:"interval"`
-	Status          *int            `json:"status"`
-	ResponseTime    *float64        `json:"response_time"`
-	CertificateDays *float64        `json:"certificate_days"`
-	Uptime          *float64        `json:"uptime"`
-	Revision        string          `json:"revision"`
+	TemplateName         string          `json:"template_name,omitempty"`
+	TemplateBodyEncoding string          `json:"template_body_encoding,omitempty"`
+	Options              *MonitorOptions `json:"options,omitempty"`
+	Target               string          `json:"target"`
+	ID                   int64           `json:"id"`
+	Key                  string          `json:"key"`
+	Name                 string          `json:"name"`
+	Type                 string          `json:"type"`
+	URL                  string          `json:"url"`
+	URLRedacted          bool            `json:"url_redacted"`
+	Active               bool            `json:"active"`
+	Parent               *int64          `json:"parent"`
+	Interval             int             `json:"interval"`
+	Status               *int            `json:"status"`
+	ResponseTime         *float64        `json:"response_time"`
+	CertificateDays      *float64        `json:"certificate_days"`
+	Uptime               *float64        `json:"uptime"`
+	Revision             string          `json:"revision"`
+	TemplateID           string          `json:"template_id,omitempty"`
+	TemplateRevision     int64           `json:"template_revision,omitempty"`
+	TemplateModel        string          `json:"template_model,omitempty"`
 }
 type Snapshot struct {
 	Config   Config    `json:"config"`
@@ -63,7 +68,10 @@ type Snapshot struct {
 	Warning  string    `json:"warning"`
 }
 type MonitorInput struct {
+	appliedTemplate          *configstore.KumaMonitorTemplate
+	TemplateRetain           bool            `json:"template_retain,omitempty"`
 	TemplateModel            string          `json:"template_model,omitempty"`
+	TemplateClear            bool            `json:"template_clear,omitempty"`
 	TemplateID               string          `json:"template_id,omitempty"`
 	TemplateRevision         int64           `json:"template_revision,omitempty"`
 	TemplateAuthOverride     bool            `json:"template_auth_override,omitempty"`

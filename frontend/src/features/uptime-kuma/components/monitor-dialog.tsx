@@ -39,9 +39,11 @@ export function MonitorDialog(props: {
     defaultValues: {
       name: props.monitor?.name ?? "",
       type: props.monitor?.type ?? props.initialType ?? "http",
-      template_id: "",
-      template_model: "",
-      template_revision: 0,
+      template_id: props.monitor?.template_id ?? "",
+      template_model: props.monitor?.template_model ?? "",
+      template_clear: false,
+      template_retain: !!props.monitor?.template_id,
+      template_revision: props.monitor?.template_revision ?? 0,
       template_auth_override: false,
       options: {
         ...defaultMonitorOptions,
@@ -59,6 +61,25 @@ export function MonitorDialog(props: {
   const type = form.watch("type");
   const isGroup = type === "group";
   const entity = isGroup ? "分组" : "监控项";
+  const templates =
+    props.monitor?.template_id &&
+    !props.templates?.some((item) => item.id === props.monitor?.template_id)
+      ? [
+          ...(props.templates ?? []),
+          {
+            id: props.monitor.template_id,
+            revision: props.monitor.template_revision ?? 0,
+            name: props.monitor.template_name ?? "已关联模板（已删除）",
+            method: props.monitor.options?.method ?? "POST",
+            auth_method: "none",
+            headers_configured: !!props.monitor.options?.headers_configured,
+            body_configured: !!props.monitor.options?.body_configured,
+            auth_configured: !!props.monitor.options?.auth_configured,
+            model: props.monitor.template_model ?? "",
+            body_encoding: props.monitor.template_body_encoding ?? "",
+          },
+        ]
+      : (props.templates ?? []);
   useEffect(() => {
     if (!props.error) return;
     const fields: Record<string, keyof MonitorValues> = {
@@ -75,10 +96,12 @@ export function MonitorDialog(props: {
   const onSubmit = (values: MonitorValues): void => {
     if (
       !["http", "keyword"].includes(values.type) &&
-      !props.templates?.find((item) => item.id === values.template_id)?.monitoring
+      !templates.find((item) => item.id === values.template_id)?.monitoring
     ) {
       values.template_id = "";
       values.template_model = "";
+      values.template_clear = true;
+      values.template_retain = false;
       values.template_revision = 0;
       values.template_auth_override = false;
     }
@@ -86,7 +109,7 @@ export function MonitorDialog(props: {
       !props.monitor &&
       ["http", "keyword"].includes(values.type) &&
       !values.url &&
-      !props.templates?.find((item) => item.id === values.template_id)?.url_configured
+      !templates.find((item) => item.id === values.template_id)?.url_configured
     ) {
       form.setError("url", { message: "请输入监控地址" });
       return;
@@ -94,6 +117,8 @@ export function MonitorDialog(props: {
     if (values.type === "group") {
       values.template_id = "";
       values.template_model = "";
+      values.template_clear = true;
+      values.template_retain = false;
       values.template_revision = 0;
       values.template_auth_override = false;
       values.template_settings_override = false;
@@ -137,9 +162,10 @@ export function MonitorDialog(props: {
               {!isGroup && (
                 <TemplateSelector
                   form={form}
-                  templates={props.templates ?? []}
+                  templates={templates}
                   disabled={props.pending || !!props.templatesPending}
                   editing={!!props.monitor}
+                  monitor={props.monitor}
                 />
               )}
               {["http", "keyword"].includes(type) && (

@@ -91,6 +91,8 @@ export const monitorSchema = z
       .max(200, "模型名称最多为 200 个字符")
       .refine((value) => !/[\s\p{Cc}]/u.test(value), "模型名称不能包含空白或控制字符")
       .optional(),
+    template_clear: z.boolean().optional(),
+    template_retain: z.boolean().optional(),
     template_id: z.string().optional(),
     template_revision: z.number().int().nonnegative().optional(),
     template_auth_override: z.boolean().optional(),

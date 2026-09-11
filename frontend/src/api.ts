@@ -139,8 +139,29 @@ type NewAPIToolPrice = {
   price: string;
 };
 
+export type ModelTimePricing = {
+  timezone: string;
+  weekdays_only: boolean;
+  periods: Array<{ start_time: string; end_time: string }>;
+  peak: { input_price: string; output_price: string; cache_read_price: string };
+};
+
+export type OfficialPriceTier = {
+  label: string;
+  condition: string;
+  input_price: string;
+  output_price: string;
+  cache_read_price?: string;
+  cache_write_price?: string;
+};
+
 export type Sub2APIModelPrice = {
-  source?: "remote" | "sub2api";
+  source_scope?: string;
+  price_tiers?: OfficialPriceTier[];
+  billing_expr?: string;
+  source?: "remote" | "sub2api" | "official";
+  source_url?: string;
+  time_pricing?: ModelTimePricing;
   model: string;
   input_price: string;
   output_price: string;
@@ -1620,6 +1641,9 @@ export type KumaMonitor = {
   certificate_days: number | null;
   uptime: number | null;
   revision: string;
+  template_id?: string;
+  template_revision?: number;
+  template_model?: string;
 };
 
 type KumaMonitorInput = {
@@ -1628,6 +1652,8 @@ type KumaMonitorInput = {
   template_auth_override?: boolean;
   template_settings_override?: boolean;
   template_model?: string;
+  template_clear?: boolean;
+  template_retain?: boolean;
   name: string;
   type: string;
   options?: KumaMonitorOptions;

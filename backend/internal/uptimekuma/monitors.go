@@ -75,11 +75,17 @@ func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, er
 	if (in.Action == "create" && id != 0) || (in.Action != "create" && id <= 0) {
 		return 0, failure("kuma_invalid_id", "监控项 ID 无效，请刷新列表", 422)
 	}
+	if in.Monitor.TemplateRetain && (in.Action != "edit" || in.Monitor.TemplateID == "" || in.Monitor.TemplateClear || in.Monitor.TemplateAuthOverride) {
+		return 0, failure("kuma_template_conflict", "模板关联无效，请刷新监控后重试", 409)
+	}
+	if in.Monitor.TemplateClear && in.Monitor.TemplateID != "" {
+		return 0, failure("kuma_template_conflict", "不能同时选择和清除模板，请重新选择", 409)
+	}
 	if in.Action == "create" || in.Action == "edit" {
 		if in.Monitor.TemplateAuthOverride && (in.Monitor.TemplateID == "" || in.Monitor.Options == nil) {
 			return 0, failure("kuma_invalid_auth", "请选择模板并填写独立鉴权设置", 422)
 		}
-		if in.Action == "create" || in.Monitor.Options != nil || in.Monitor.TemplateID == "" {
+		if !in.Monitor.TemplateRetain && (in.Action == "create" || in.Monitor.Options != nil || in.Monitor.TemplateID == "") {
 			if err := s.resolveTemplate(ctx, &in.Monitor); err != nil {
 				return 0, err
 			}
@@ -133,9 +139,14 @@ func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, er
 		}
 	}
 	if in.Action == "create" || in.Action == "edit" {
-		if in.Action == "edit" && in.Monitor.TemplateID != "" && in.Monitor.Options == nil {
+		if in.Action == "edit" && in.Monitor.TemplateID != "" && in.Monitor.Options == nil && !in.Monitor.TemplateRetain {
 			in.Monitor.Options = current.Options
 			if err := s.resolveTemplate(ctx, &in.Monitor); err != nil {
+				return 0, err
+			}
+		}
+		if in.Monitor.TemplateRetain {
+			if err := s.retainMonitorTemplate(ctx, c.BaseURL, id, &in.Monitor, raw); err != nil {
 				return 0, err
 			}
 		}
@@ -231,6 +242,20 @@ func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, er
 		_, err = conn.call(ctx, "resumeMonitor", id)
 	case "delete":
 		_, err = conn.call(ctx, "deleteMonitor", id)
+	}
+	if err == nil {
+		switch {
+		case in.Action == "delete" || in.Monitor.TemplateClear:
+			err = s.store.DeleteKumaMonitorTemplate(ctx, c.BaseURL, id)
+		case in.Monitor.appliedTemplate != nil:
+			in.Monitor.appliedTemplate.MonitorID = id
+			err = s.store.SaveKumaMonitorTemplate(ctx, c.BaseURL, *in.Monitor.appliedTemplate)
+		case in.Action == "create":
+			err = s.store.DeleteKumaMonitorTemplate(ctx, c.BaseURL, id)
+		}
+		if err != nil {
+			return id, failure("kuma_template_record_failed", "远端操作已完成，但模板关联记录失败；请刷新并核对监控结果，勿重复新增", 500)
+		}
 	}
 	return id, err
 }

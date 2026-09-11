@@ -24,12 +24,13 @@ export function MonitorAuthForm(props: {
   const usingTemplate = !!form.watch("template_id");
   const method = form.watch("options.auth_method") ?? "none";
   const errors = form.formState.errors.options;
-  const canPreserve = !usingTemplate && !!props.monitor;
+  const retained = !!form.watch("template_retain");
+  const canPreserve = (!usingTemplate || retained) && !!props.monitor;
   const usernameLabel = canPreserve ? "鉴权用户名（留空保留）" : "鉴权用户名";
   const passwordLabel = canPreserve ? "鉴权密码 / Token（留空保留）" : "鉴权密码 / Token";
   const changeMethod = (value: string | null): void => {
     if (!value) return;
-    form.setValue("template_auth_override", usingTemplate);
+    form.setValue("template_auth_override", usingTemplate && !retained);
     form.setValue("options.auth_method", value);
     form.setValue("options.auth_username", "");
     form.setValue("options.auth_password", "");

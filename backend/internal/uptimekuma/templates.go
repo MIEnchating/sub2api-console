@@ -291,6 +291,7 @@ func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 	if err != nil {
 		return err
 	}
+	in.appliedTemplate = &configstore.KumaMonitorTemplate{TemplateID: item.ID, Revision: item.Revision, Name: item.Name, Model: strings.TrimSpace(in.TemplateModel), BodyEncoding: o.bodyEncoding}
 	o.replaceAuth = true
 	o.ClearHeaders = true
 	o.ClearBody = true
