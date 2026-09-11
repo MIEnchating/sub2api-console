@@ -1,5 +1,4 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
-import { TaskStartupState } from "@/components/task-startup-state";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
 import { ProbeProgressSummary } from "./probe-task-timeline";
@@ -240,6 +239,10 @@ function AccountProbeSession(props: {
   const selectDisabled =
     Boolean(props.pending) || runProbe.isPending || closing || cancelProbe.isPending;
   const runDisabled = selectDisabled || modelsLoading || selectedModel === noModelSelected;
+  let pendingMessage: string | undefined;
+  if (closing || cancelProbe.isPending) pendingMessage = "正在取消探活并清理临时 Key";
+  else if ((modelsLoading || runProbe.isPending) && progress.history.length === 0)
+    pendingMessage = "正在创建探活任务";
   async function closeProbe() {
     if (closing) return;
     setClosing(true);
@@ -265,27 +268,13 @@ function AccountProbeSession(props: {
         </DialogHeader>
         <DialogBody className="grid gap-4 px-6 py-4">
           <ProbeAccountCard target={props.target} status={progress.task?.status} />
-          {(modelsLoading || runProbe.isPending || closing) && progress.history.length === 0 ? (
-            <TaskStartupState message="正在创建探活任务" />
-          ) : null}
-          {closing ? <TaskStartupState message="正在取消探活并清理临时 Key" /> : null}
-          {progress.queryError ? (
-            <Button variant="outline" onClick={() => void progress.refetch()}>
-              重新读取探活状态
-            </Button>
-          ) : null}
-          {(modelsLoading || runProbe.isPending) && !closing ? (
-            <Button
-              variant="outline"
-              onClick={() => cancelProbe.mutate()}
-              disabled={cancelProbe.isPending}
-            >
-              <XCircle aria-hidden="true" />
-              取消探活
-            </Button>
-          ) : null}
           <div className="grid min-w-0 gap-1.5">
-            <span className="text-sm font-medium">选择测试模型</span>
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <span className="text-sm font-medium">选择测试模型</span>
+              {loadModels.isSuccess ? (
+                <span className="text-muted-foreground text-xs">已读取 {models.length} 个模型</span>
+              ) : null}
+            </div>
             <div
               role="group"
               aria-label="测试模型选择与获取"
@@ -334,9 +323,6 @@ function AccountProbeSession(props: {
               />
             </div>
           </div>
-          {loadModels.isSuccess ? (
-            <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
-          ) : null}
           {loadModels.isError ? (
             <QueryErrorToast error={loadModels.error} fallback="上游模型获取失败" />
           ) : null}
@@ -379,7 +365,16 @@ function AccountProbeSession(props: {
                 提示词："hi"
               </span>
             </div>
-            <ProbeProgressSummary steps={progress.history} />
+            <div role="region" aria-label="探活进度" className="flex min-w-0 items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage} />
+              </div>
+              {progress.queryError ? (
+                <Button variant="outline" onClick={() => void progress.refetch()}>
+                  重新读取探活状态
+                </Button>
+              ) : null}
+            </div>
             <ProbeResultSlot
               pending={runProbe.isPending}
               pendingLabel="探活处理中，当前阶段见上方"
@@ -393,6 +388,11 @@ function AccountProbeSession(props: {
           runDisabled={runDisabled}
           probePending={runProbe.isPending}
           hasResult={result !== null}
+          closing={closing}
+          cancelDisabled={
+            closing || cancelProbe.isPending || !(modelsLoading || runProbe.isPending)
+          }
+          onCancel={() => cancelProbe.mutate()}
           onClose={closeProbe}
           onRun={() => runProbe.mutate()}
         />
@@ -416,11 +416,10 @@ export function ProbeModelLoadButton(props: {
       variant="outline"
       className="shrink-0"
       aria-label={label}
-      title={label}
       disabled={props.disabled || props.pending}
       onClick={props.onLoad}
     >
-      <RefreshCw className={props.pending ? "animate-spin" : undefined} />
+      <RefreshCw className={props.pending ? "animate-spin" : undefined} aria-hidden="true" />
       <span className="hidden sm:inline">{label}</span>
     </Button>
   );
@@ -476,6 +475,9 @@ export function ProbeDialogActions(props: {
   runDisabled: boolean;
   probePending: boolean;
   hasResult: boolean;
+  closing?: boolean;
+  cancelDisabled?: boolean;
+  onCancel?: () => void;
   onClose: () => void;
   onRun: () => void;
 }) {
@@ -486,8 +488,23 @@ export function ProbeDialogActions(props: {
   if (props.probePending) actionIcon = <LoaderCircle className="animate-spin" />;
   else if (props.hasResult) actionIcon = <RefreshCw />;
   return (
-    <DialogFooter className="mx-0 mb-0 min-w-0 rounded-none bg-transparent px-6 py-4 sm:flex-row">
-      <Button variant="outline" onClick={props.onClose}>
+    <DialogFooter
+      role="group"
+      aria-label="探活操作"
+      className="mx-0 mb-0 min-w-0 flex-row rounded-none bg-transparent px-6 py-4"
+    >
+      {props.onCancel ? (
+        <Button
+          variant="ghost"
+          className="mr-auto"
+          onClick={props.onCancel}
+          disabled={props.cancelDisabled}
+        >
+          <XCircle aria-hidden="true" />
+          取消探活
+        </Button>
+      ) : null}
+      <Button variant="outline" onClick={props.onClose} aria-busy={props.closing}>
         关闭
       </Button>
       <Button disabled={props.runDisabled} onClick={props.onRun}>

@@ -1,9 +1,21 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { api, type Task } from "@/api";
 import { AccountProbeDialog } from "../account-probe-dialog";
+
+beforeEach(() => {
+  // JSDOM 26 recurses on native top-layer selectors; these dialogs use a portal.
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -101,12 +113,55 @@ it("任务创建期间关闭弹窗会在拿到任务 ID 后取消并等待清理
     id,
   }));
   const view = setup();
+  const progress = screen.getByRole("region", { name: "探活进度" });
+  expect(within(progress).getByRole("status", { name: "正在创建探活任务" })).toBeVisible();
+  const actions = screen.getByRole("group", { name: "探活操作" });
+  expect(within(actions).getByRole("button", { name: "取消探活" })).toBeEnabled();
   await userEvent.keyboard("{Escape}");
   expect(view.close).not.toHaveBeenCalled();
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expect(
+    within(progress).getByRole("status", { name: "正在取消探活并清理临时 Key" }),
+  ).toBeVisible();
+  expect(within(actions).getByRole("button", { name: "关闭" })).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  expect(screen.getByRole("combobox", { name: "选择测试模型" })).toBeVisible();
   await act(async () => resolveStart(task("queued", "create_key")));
   await waitFor(() => expect(cancel).toHaveBeenCalledWith("probe-task"));
   await waitFor(() => expect(view.close).toHaveBeenCalledWith(false));
   expect(start).toHaveBeenLastCalledWith("cleanup", "upstream.test", "6", undefined, undefined);
+  cleanup();
+  view.client.clear();
+});
+
+it("关闭清理失败时保留表单和原位进度，允许再次关闭重试", async () => {
+  const start = vi
+    .spyOn(api, "startOnboardingProbeTask")
+    .mockResolvedValue(task("succeeded", "models"));
+  vi.spyOn(api, "task").mockResolvedValue(task("succeeded", "models"));
+  const view = setup();
+  await waitFor(() => expect(screen.getByRole("button", { name: "开始测试" })).toBeEnabled());
+  const closeButton = within(screen.getByRole("group", { name: "探活操作" })).getByRole("button", {
+    name: "关闭",
+  });
+  start.mockRejectedValueOnce(new Error("清理失败，请重试"));
+  await userEvent.click(closeButton);
+  await waitFor(() => expect(closeButton).toHaveAttribute("aria-busy", "false"));
+  expect(view.close).not.toHaveBeenCalled();
+  expect(screen.getByRole("combobox", { name: "选择测试模型" })).toHaveTextContent("kimi-k2");
+  expect(screen.getByRole("region", { name: "探活进度" })).toBeVisible();
+  expect(
+    screen.queryByRole("status", { name: "正在取消探活并清理临时 Key" }),
+  ).not.toBeInTheDocument();
+  start.mockResolvedValueOnce({ ...task("succeeded", "cleanup_key"), id: "cleanup-task" });
+  vi.spyOn(api, "task").mockResolvedValue({
+    ...task("succeeded", "cleanup_key"),
+    id: "cleanup-task",
+  });
+  await userEvent.click(closeButton);
+  await waitFor(() => expect(view.close).toHaveBeenCalledWith(false));
   cleanup();
   view.client.clear();
 });

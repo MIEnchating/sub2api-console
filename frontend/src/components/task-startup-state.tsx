@@ -5,6 +5,7 @@ import { api } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
 import { Button } from "@/components/ui/button";
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { cn } from "@/lib/utils";
 
 import { Progress } from "@/components/ui/progress";
 
@@ -22,8 +23,14 @@ export const taskStartupStateLayout = {
   heading: "flex min-w-0 items-center gap-2",
 } as const;
 
-export function TaskStartupState(props: Props) {
-  return <ContentLoading label={props.message} compact className="min-h-12 text-sm" />;
+export function TaskStartupState(props: Props & { className?: string }) {
+  return (
+    <ContentLoading
+      label={props.message}
+      compact
+      className={cn("min-h-12 text-sm", props.className)}
+    />
+  );
 }
 
 export function TaskProgressState(props: ProgressProps) {

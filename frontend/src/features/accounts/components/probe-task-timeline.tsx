@@ -8,6 +8,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TaskStartupState } from "@/components/task-startup-state";
 import type { ProbeStep } from "../hooks/use-onboarding-probe-task";
 
 const stageLabels: Record<string, string> = {
@@ -27,11 +28,18 @@ const statusLabels = {
   skipped: "无需清理",
 };
 
-export function ProbeProgressSummary(props: { steps: ProbeStep[] }) {
+export function ProbeProgressSummary(props: { steps: ProbeStep[]; pendingMessage?: string }) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
   const latest = props.steps.at(-1);
-  if (!latest) return null;
+  if (!latest)
+    return (
+      <div className="min-h-8 min-w-0">
+        {props.pendingMessage ? (
+          <TaskStartupState message={props.pendingMessage} className="min-h-8 py-0 text-xs" />
+        ) : null}
+      </div>
+    );
   return (
     <div className="min-w-0">
       <Button
@@ -41,16 +49,16 @@ export function ProbeProgressSummary(props: { steps: ProbeStep[] }) {
         aria-controls={id}
         onClick={() => setExpanded(!expanded)}
       >
-        {latest.status === "running" ? (
+        {props.pendingMessage || latest.status === "running" ? (
           <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
         ) : (
           <Circle aria-hidden="true" />
         )}
         <span className="min-w-0 flex-1 truncate text-left">
-          {stageLabels[latest.stage] ?? latest.stage}
+          {props.pendingMessage || stageLabels[latest.stage] || latest.stage}
         </span>
         <span className="text-muted-foreground shrink-0 text-xs">
-          {statusLabels[latest.status]}
+          {props.pendingMessage ? "进行中" : statusLabels[latest.status]}
         </span>
         <ChevronDown aria-hidden="true" className={expanded ? "rotate-180" : undefined} />
       </Button>

@@ -38,6 +38,14 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
     unavailable_reason: null,
   };
   let phase = "create";
+  let releaseModelStart!: () => void;
+  const modelStart = new Promise<void>((resolve) => {
+    releaseModelStart = resolve;
+  });
+  let releaseCleanup!: () => void;
+  const cleanupStart = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
   const step = (stage: string, status: string) => ({
     stage,
     status,
@@ -114,6 +122,8 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
     };
     if (path.includes("/onboarding/probe/tasks/")) {
       const id = path.split("/").at(-1)!;
+      if (id === "models") await modelStart;
+      if (id === "cleanup") await cleanupStart;
       if (id === "probe") phase = "request";
       await route.fulfill({ json: { ...task(id), status: "queued", result: { steps: [] } } });
     } else if (path.startsWith("/api/tasks/"))
@@ -126,6 +136,10 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
   await page.goto("/onboarding?host=upstream.test&upstream_type=sub2api&group_id=%226%22");
   await page.getByRole("button", { name: "探活测试", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "测试账号连接" });
+  const progress = dialog.getByRole("region", { name: "探活进度" });
+  await expect(progress.getByRole("status", { name: "正在创建探活任务" })).toBeVisible();
+  const openingHeight = await dialog.evaluate((node) => (node as HTMLElement).offsetHeight);
+  releaseModelStart();
   const timeline = dialog.getByRole("list", { name: "探活过程" });
   const modelRow = dialog.getByRole("group", { name: "测试模型选择与获取" });
   const selector = modelRow.getByRole("combobox");
@@ -141,6 +155,7 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
   await expect(timeline).toHaveCount(0);
   const expand = dialog.getByRole("button", { name: /创建临时上游 Key/ });
   await expect(expand).toHaveAttribute("aria-expanded", "false");
+  expect(await dialog.evaluate((node) => (node as HTMLElement).offsetHeight)).toBe(openingHeight);
   await expand.click();
   await expect(timeline.getByText("创建临时上游 Key")).toBeVisible();
   await expect(dialog.getByRole("button", { name: "开始测试" })).toBeDisabled();
@@ -160,4 +175,16 @@ test("探活真实阶段在桌面和手机上可见，创建 Key、请求和清�
   expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await expect(dialog.getByRole("button", { name: "重试", exact: true })).toBeInViewport();
   await page.screenshot({ path: test.info().outputPath("probe-completed.png") });
+  const completedHeight = await dialog.evaluate((node) => (node as HTMLElement).offsetHeight);
+  const actions = dialog.getByRole("group", { name: "探活操作" });
+  await actions.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(progress.getByRole("button", { name: /正在取消探活并清理临时 Key/ })).toBeVisible();
+  await expect(actions.getByRole("button", { name: "关闭", exact: true })).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  await expect(selector).toBeVisible();
+  expect(await dialog.evaluate((node) => (node as HTMLElement).offsetHeight)).toBe(completedHeight);
+  releaseCleanup();
+  await expect(dialog).toHaveCount(0);
 });

@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, type OnboardingCandidate } from "@/api";
 import { dialogContentClass } from "@/components/ui/dialog";
@@ -17,6 +17,18 @@ import {
   ProbeResultSlot,
   shouldLoadProbeModels,
 } from "../account-probe-dialog";
+
+beforeEach(() => {
+  // JSDOM 26 recurses on native top-layer selectors; these dialogs use a portal.
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  });
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -144,6 +156,8 @@ describe("账号探活弹窗", () => {
     );
 
     expect(markup).toContain("获取上游模型");
+    expect(markup).toContain('aria-label="获取上游模型"');
+    expect(markup).not.toContain("title=");
     expect(markup).toContain('type="button"');
     expect(markup).not.toContain('disabled=""');
   });
