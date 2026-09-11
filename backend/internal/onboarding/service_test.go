@@ -1241,6 +1241,75 @@ func TestOnboardingFailureAuditOutlivesCancelledWorkContext(t *testing.T) {
 	}
 }
 
+func TestProbeTaskPersistsCreationRequestAndCleanupWithoutSecrets(t *testing.T) {
+	for _, cleanupFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "cleanup_failure"}[cleanupFails], func(t *testing.T) {
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/v1/models" {
+					_, _ = w.Write([]byte(`{"data":[{"id":"gpt-5.2"}]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"model":"gpt-5.2","output":[{"content":[{"text":"ok"}]}]}`))
+			}))
+			defer gateway.Close()
+			repository, private, _ := onboardingFixture(t, gateway.URL)
+			token := "upstream-token"
+			if err := private.SaveAuthRecord(context.Background(), configstore.AuthRecord{Host: "upstream.test", BaseURL: gateway.URL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", AccessToken: &token, Headers: map[string]string{}, Cookies: map[string]string{}}, nil); err != nil {
+				t.Fatal(err)
+			}
+			store := &queuedTaskStore{}
+			runner := &retainedTaskRunner{}
+			keys := &probeKeys{}
+			service := New(repository, private, keys, store)
+			service.UseTaskRunner(runner)
+			if _, err := service.EnqueueProbe(context.Background(), "models", "upstream.test", "6", "", ""); err != nil {
+				t.Fatal(err)
+			}
+			runner.run(context.Background())
+			final := store.tasks[len(store.tasks)-1]
+			if final.Status != "succeeded" {
+				t.Fatalf("models=%#v", final)
+			}
+			if cleanupFails {
+				keys.deleteErr = errors.New("isolated cleanup failed")
+			}
+			if _, err := service.EnqueueProbe(context.Background(), "probe", "upstream.test", "6", "gpt-5.2", "default"); err != nil {
+				t.Fatal(err)
+			}
+			runner.run(context.Background())
+			final = store.tasks[len(store.tasks)-1]
+			want := "succeeded"
+			if cleanupFails {
+				want = "failed"
+			}
+			if final.Status != want {
+				t.Fatalf("probe=%#v", final)
+			}
+			steps := final.Result["steps"].([]ProbeStep)
+			if len(steps) != 3 || steps[0].Stage != "reuse_key" || steps[1].Stage != "request" || steps[2].Stage != "cleanup_key" || steps[2].Status != want {
+				t.Fatalf("steps=%#v", steps)
+			}
+			for _, snapshot := range store.tasks {
+				raw, err := json.Marshal(snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(raw), "probe-secret") || strings.Contains(string(raw), token) {
+					t.Fatal("task exposes a credential")
+				}
+			}
+			keys.deleteErr = nil
+			if err := service.CancelProbe(context.Background(), "upstream.test", "6"); err != nil {
+				t.Fatal(err)
+			}
+			if _, pending := service.pendingProbeCleanup("upstream.test", "6"); pending {
+				t.Fatal("cleanup retry did not remove failed credential")
+			}
+		})
+	}
+}
+
 func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 	gateway := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
@@ -1268,9 +1337,16 @@ func TestProbeBeforeOnboardingUsesAndCleansTemporaryKeys(t *testing.T) {
 	}
 	keys := &probeKeys{}
 	service := New(repository, private, keys, nil)
-	models, err := service.ProbeModels(context.Background(), "upstream.test", "6")
+	var stages []string
+	probeContext := context.WithValue(context.Background(), probeReporterKey{}, probeReporter(func(stage, status string) {
+		stages = append(stages, stage+":"+status)
+	}))
+	models, err := service.ProbeModels(probeContext, "upstream.test", "6")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := strings.Join(stages, ","); got != "credential:running,credential:succeeded,create_key:running,create_key:succeeded,models:running,models:succeeded" {
+		t.Fatalf("model discovery must report actual credential creation before model fetch: %s", got)
 	}
 	if strings.Join(models, ",") != "gpt-5.1-codex,gpt-5.2" {
 		t.Fatalf("models=%v", models)
@@ -1431,6 +1507,8 @@ func TestProbeRequestCancellationStillCleansTemporaryKey(t *testing.T) {
 	}
 	keys := &probeKeys{}
 	ctx, cancel := context.WithCancel(context.Background())
+	var stages []string
+	ctx = context.WithValue(ctx, probeReporterKey{}, probeReporter(func(stage, status string) { stages = append(stages, stage+":"+status) }))
 	done := make(chan error, 1)
 	go func() {
 		_, err := New(repository, private, keys, nil).ProbeModels(ctx, "upstream.test", "6")
@@ -1442,6 +1520,9 @@ func TestProbeRequestCancellationStillCleansTemporaryKey(t *testing.T) {
 	case err := <-done:
 		if err == nil || keys.creates != 1 || keys.deletes != 1 {
 			t.Fatalf("err=%v creates=%d deletes=%d", err, keys.creates, keys.deletes)
+		}
+		if !strings.HasSuffix(strings.Join(stages, ","), "models:failed,cleanup_key:running,cleanup_key:succeeded") {
+			t.Fatalf("cancelled model lookup must finish cleanup stages: %v", stages)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancelled probe did not finish cleanup")

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -73,9 +73,19 @@ describe("账号探活弹窗", () => {
       groups: [],
       platform_probe_models: { openai: "gpt-5.2" },
     });
-    vi.spyOn(api, "onboardingProbeModels").mockResolvedValue({
-      models: ["gpt-5.1", "gpt-5.2"],
-    });
+    const task = {
+      id: "models-task",
+      skill: "onboarding",
+      operation: "onboarding-probe-models",
+      status: "succeeded" as const,
+      progress: 0,
+      message: "完成",
+      result: { models: ["gpt-5.1", "gpt-5.2"], steps: [] },
+      created_at: "",
+      updated_at: "",
+    };
+    vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(task);
+    vi.spyOn(api, "task").mockResolvedValue(task);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
@@ -96,8 +106,8 @@ describe("账号探活弹窗", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("combobox", { name: "选择测试模型" })).toHaveTextContent(
-      "gpt-5.2",
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "选择测试模型" })).toHaveTextContent("gpt-5.2"),
     );
     expect(await screen.findByRole("button", { name: "重新获取上游模型" })).toBeInTheDocument();
   });

@@ -2441,6 +2441,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ host, group_id: groupId }),
     }),
+  startOnboardingProbeTask: (
+    action: "models" | "probe" | "cleanup",
+    host: string,
+    groupId: string,
+    model?: string,
+    mode?: OnboardingProbeMode,
+  ) =>
+    request<Task>(`/api/onboarding/probe/tasks/${action}`, {
+      method: "POST",
+      body: JSON.stringify({ host, group_id: groupId, model, mode }),
+    }),
   runOnboardingProbe: (
     host: string,
     groupId: string,

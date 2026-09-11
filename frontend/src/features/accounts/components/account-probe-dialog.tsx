@@ -1,4 +1,8 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { TaskStartupState } from "@/components/task-startup-state";
+import { notifyOperationError } from "@/lib/operation-feedback";
+import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
+import { ProbeTaskTimeline } from "./probe-task-timeline";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -36,7 +40,6 @@ import {
 } from "@/components/ui/select";
 
 const noModelSelected = "__not_selected__";
-type ProbePhase = "idle" | "preparing-key" | "loading-models" | "ready" | "probing" | "completed";
 
 export const onboardingProbeModeOptions: Array<{
   value: OnboardingProbeMode;
@@ -102,12 +105,24 @@ export function AccountProbeDialog(props: {
   onOpenChange: (open: boolean) => void;
   onCompleted?: () => void;
 }) {
+  if (!props.open) return null;
+  return <AccountProbeSession key={`${props.target.host}:${props.target.groupId}`} {...props} />;
+}
+
+function AccountProbeSession(props: {
+  target: ProbeDialogTarget;
+  open: boolean;
+  pending?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCompleted?: () => void;
+}) {
   const [models, setModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [selectedModel, setSelectedModel] = useState(noModelSelected);
   const [selectedMode, setSelectedMode] = useState<OnboardingProbeMode>("default");
   const [result, setResult] = useState<ProbeResult | null>(null);
-  const [phase, setPhase] = useState<ProbePhase>("idle");
+  const progress = useOnboardingProbeTask(props.target.host, props.target.groupId);
+  const [closing, setClosing] = useState(false);
   const accountSettings = useQuery({
     queryKey: ["account-creation-settings"],
     queryFn: api.accountCreationSettings,
@@ -119,10 +134,18 @@ export function AccountProbeDialog(props: {
   const modelLoadStarted = useRef(false);
   const modelSelectionEdited = useRef(false);
   const loadModels = useMutation({
-    mutationFn: () => api.onboardingProbeModels(props.target.host, props.target.groupId),
-    onMutate: () => setPhase("preparing-key"),
+    mutationFn: async () => {
+      const task = await progress.run("models");
+      if (task.status !== "succeeded") throw new Error(task.message);
+      const values = task.result.models;
+      if (
+        !Array.isArray(values) ||
+        !values.every((value): value is string => typeof value === "string")
+      )
+        throw new Error("模型列表格式无效，请重新获取");
+      return { models: values };
+    },
     onSuccess: (response) => {
-      setPhase("loading-models");
       setModels(response.models);
       setSelectedModel((current) => {
         if (current !== noModelSelected && response.models.includes(current)) return current;
@@ -138,31 +161,33 @@ export function AccountProbeDialog(props: {
     onSettled: () => {
       modelLoadInFlight.current = false;
       setModelsLoading(false);
-      setPhase((current) => (current === "loading-models" ? "ready" : current));
     },
   });
   const runProbe = useMutation({
     mutationFn: async () => {
       if (selectedModel === noModelSelected) throw new Error("请先获取并选择一个上游模型");
-      return api.runOnboardingProbe(
-        props.target.host,
-        props.target.groupId,
-        selectedModel,
-        selectedMode,
-      );
+      const task = await progress.run("probe", selectedModel, selectedMode);
+      const parsed = probeTaskResultSchema.safeParse(task.result.probe_result);
+      if (!parsed.success) throw new Error(task.message);
+      if (task.status !== "succeeded")
+        return { ...parsed.data, status: "failed" as const, message: task.message };
+      return parsed.data;
     },
     onMutate: () => {
       setResult(null);
-      setPhase("probing");
     },
     onSuccess: (probeResult) => {
       setResult(probeResult);
-      setPhase("completed");
       props.onCompleted?.();
     },
   });
   const cancelProbe = useMutation({
-    mutationFn: () => api.cancelOnboardingProbe(props.target.host, props.target.groupId),
+    mutationFn: async () => {
+      await progress.cancel();
+      const task = await progress.run("cleanup");
+      if (task.status !== "succeeded") throw new Error(task.message);
+    },
+    onError: (error) => notifyOperationError(error, "临时 Key 清理失败"),
   });
   function startModelLoad() {
     if (modelLoadInFlight.current) return;
@@ -180,7 +205,6 @@ export function AccountProbeDialog(props: {
       setModels([]);
       setModelsLoading(false);
       setResult(null);
-      setPhase("idle");
       setSelectedModel(noModelSelected);
       setSelectedMode("default");
       loadModels.reset();
@@ -213,13 +237,20 @@ export function AccountProbeDialog(props: {
   }, [accountSettings.data, models, props.open, props.target.platform]);
 
   const options = useMemo(() => onboardingProbeModelOptions(models), [models]);
-  const selectDisabled = Boolean(props.pending) || runProbe.isPending;
+  const selectDisabled =
+    Boolean(props.pending) || runProbe.isPending || closing || cancelProbe.isPending;
   const runDisabled = selectDisabled || modelsLoading || selectedModel === noModelSelected;
-  function closeProbe() {
-    if (modelLoadStarted.current && !runProbe.isPending) {
-      cancelProbe.mutate();
+  async function closeProbe() {
+    if (closing) return;
+    setClosing(true);
+    try {
+      if (modelLoadStarted.current) await cancelProbe.mutateAsync();
+      props.onOpenChange(false);
+    } catch {
+      // Keep the timeline visible so cleanup can be retried.
+    } finally {
+      setClosing(false);
     }
-    props.onOpenChange(false);
   }
 
   return (
@@ -233,12 +264,27 @@ export function AccountProbeDialog(props: {
           <DialogTitle className="min-w-0 break-words">测试账号连接</DialogTitle>
         </DialogHeader>
         <DialogBody className="grid gap-4 px-6 py-4">
-          <ProbeAccountCard target={props.target} />
-          <ProbePhaseIndicator
-            phase={phase}
-            modelsLoading={modelsLoading}
-            probing={runProbe.isPending}
-          />
+          <ProbeAccountCard target={props.target} status={progress.task?.status} />
+          <ProbeTaskTimeline steps={progress.history} />
+          {(modelsLoading || runProbe.isPending || closing) && progress.history.length === 0 ? (
+            <TaskStartupState message="正在创建探活任务" />
+          ) : null}
+          {closing ? <TaskStartupState message="正在取消探活并清理临时 Key" /> : null}
+          {progress.queryError ? (
+            <Button variant="outline" onClick={() => void progress.refetch()}>
+              重新读取探活状态
+            </Button>
+          ) : null}
+          {(modelsLoading || runProbe.isPending) && !closing ? (
+            <Button
+              variant="outline"
+              onClick={() => cancelProbe.mutate()}
+              disabled={cancelProbe.isPending}
+            >
+              <XCircle aria-hidden="true" />
+              取消探活
+            </Button>
+          ) : null}
           <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">选择测试模型</span>
             <Select
@@ -318,7 +364,7 @@ export function AccountProbeDialog(props: {
             </Select>
           </div>
           <ProbeResultSlot
-            pending={runProbe.isPending}
+            pending={false}
             error={runProbe.isError ? runProbe.error : null}
             result={result}
             requestModel={selectedModel === noModelSelected ? null : selectedModel}
@@ -448,6 +494,9 @@ function ProbeResultPanel(props: { result: ProbeResult }) {
         <p className="min-w-0 whitespace-pre-wrap break-words text-emerald-300 [overflow-wrap:anywhere]">
           {props.result.response_text || props.result.message}
         </p>
+        {!passed && props.result.response_text ? (
+          <p className="text-red-300 break-words">{props.result.message}</p>
+        ) : null}
       </div>
       <div className="mt-3 flex items-center gap-2 border-t border-zinc-700 pt-3 font-mono text-xs">
         {passed ? (
@@ -467,50 +516,14 @@ function ProbeResultPanel(props: { result: ProbeResult }) {
   );
 }
 
-function ProbePhaseIndicator(props: {
-  phase: ProbePhase;
-  modelsLoading: boolean;
-  probing: boolean;
-}) {
-  const phases = [
-    ["preparing-key", "准备探活凭据（读取已有 Key 或创建临时 Key）"],
-    ["loading-models", "获取上游模型列表"],
-    ["probing", "发送测试请求并等待响应"],
-    ["completed", "探活完成并清理临时 Key"],
-  ] as const;
-  const activeIndex =
-    props.phase === "ready" ? 1 : phases.findIndex(([key]) => key === props.phase);
-  return (
-    <div
-      className="grid gap-1.5 rounded-lg border bg-muted/20 px-3 py-2.5 text-xs"
-      aria-live="polite"
-    >
-      {phases.map(([key, label], index) => {
-        const done = activeIndex > index || (key === "completed" && props.phase === "completed");
-        const active =
-          key === props.phase ||
-          (key === "loading-models" && props.modelsLoading) ||
-          (key === "probing" && props.probing);
-        let stateClass = "text-muted-foreground";
-        let marker = "○";
-        if (done) {
-          stateClass = "text-emerald-600 dark:text-emerald-400";
-          marker = "✓";
-        } else if (active) {
-          stateClass = "text-foreground";
-          marker = "●";
-        }
-        return (
-          <div key={key} className={stateClass}>
-            {marker} {label}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ProbeAccountCard(props: { target: ProbeDialogTarget }) {
+function ProbeAccountCard(props: { target: ProbeDialogTarget; status?: string }) {
+  const statusLabels: Record<string, string> = {
+    queued: "已排队",
+    running: "进行中",
+    succeeded: "已完成",
+    failed: "失败",
+    cancelled: "已取消",
+  };
   return (
     <div className="flex min-w-0 items-center gap-3 rounded-lg border bg-muted/20 px-3 py-3">
       <div className="bg-primary flex size-10 shrink-0 items-center justify-center rounded-md text-primary-foreground">
@@ -518,15 +531,15 @@ function ProbeAccountCard(props: { target: ProbeDialogTarget }) {
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-semibold">{props.target.name}</p>
-        <div className="text-muted-foreground mt-1 flex min-w-0 items-center gap-2 text-xs">
+        <div className="text-muted-foreground mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
           <span className="rounded bg-muted px-1.5 py-0.5 font-medium uppercase">APIKEY</span>
-          <span>账号</span>
+          <span className="shrink-0">账号</span>
           {props.target.platform ? <span className="truncate">{props.target.platform}</span> : null}
           <span className="truncate">{props.target.host}</span>
         </div>
       </div>
       <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-        待测试
+        {statusLabels[props.status ?? ""] ?? "待测试"}
       </span>
     </div>
   );

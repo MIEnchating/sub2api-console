@@ -65,22 +65,38 @@ func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]stri
 		return nil, err
 	}
 	defer s.releaseProbeMutation(release, host)
+	if pending, found := s.pendingProbeCleanup(host, groupID); found {
+		if err := s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), pending); err != nil {
+			return nil, err
+		}
+	}
 	if s.consumeProbeCancellation(host, groupID) {
 		return nil, errors.New("探活已取消")
 	}
 	credential, found := s.probeSession(host, groupID)
 	if !found {
 		credential, err = s.acquireProbeCredential(guardedCtx, host, groupID)
+	} else {
+		reportProbe(ctx, "reuse_key", "running")
+		reportProbe(ctx, "reuse_key", "succeeded")
 	}
 	if err != nil {
 		return nil, err
 	}
+	finishModels := probeStep(ctx, "models")
 	models, requestErr := fetchProbeModels(guardedCtx, credential.auth.BaseURL, credential.key.Secret)
+	if requestErr == nil && len(models) == 0 {
+		requestErr = errors.New("上游模型接口未返回可选择的模型")
+	}
+	if requestErr == nil {
+		requestErr = ctx.Err()
+	}
+	finishModels(requestErr)
 	var cleanupErr error
 	if requestErr != nil && credential.temporary {
 		s.removeProbeSession(host, groupID)
 		s.clearProbeCancellation(host, groupID)
-		cleanupErr = s.cleanupProbeCredential(credential)
+		cleanupErr = s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), credential)
 	}
 	if requestErr != nil {
 		if cleanupErr != nil {
@@ -92,7 +108,7 @@ func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]stri
 		if credential.temporary {
 			s.removeProbeSession(host, groupID)
 			s.clearProbeCancellation(host, groupID)
-			if err := s.cleanupProbeCredential(credential); err != nil {
+			if err := s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), credential); err != nil {
 				return nil, fmt.Errorf("上游模型接口未返回可选择的模型；临时测试 Key 清理失败：%w", err)
 			}
 		}
@@ -100,7 +116,7 @@ func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]stri
 	}
 	if credential.temporary {
 		if !s.saveProbeSessionUnlessCanceled(host, groupID, credential) {
-			if err := s.cleanupProbeCredential(credential); err != nil {
+			if err := s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), credential); err != nil {
 				return nil, fmt.Errorf("探活已取消；临时测试 Key 清理失败：%w", err)
 			}
 			return nil, errors.New("探活已取消")
@@ -121,16 +137,30 @@ func (s *Service) Probe(ctx context.Context, host, groupID, model string, modes 
 		return ProbeResult{}, err
 	}
 	defer s.releaseProbeMutation(release, host)
+	if pending, found := s.pendingProbeCleanup(host, groupID); found {
+		if err := s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), pending); err != nil {
+			return ProbeResult{}, err
+		}
+	}
 	credential, fromSession := s.takeProbeSession(host, groupID)
 	if !fromSession {
 		credential, err = s.acquireProbeCredential(guardedCtx, host, groupID)
+	} else {
+		reportProbe(ctx, "reuse_key", "running")
+		reportProbe(ctx, "reuse_key", "succeeded")
 	}
 	if err != nil {
 		return ProbeResult{}, err
 	}
+	finishRequest := probeStep(ctx, "request")
 	result, requestErr := runGatewayProbe(guardedCtx, credential.auth.BaseURL, credential.key.Secret, model, credential.candidate.Platform, modes...)
+	if requestErr == nil && result.Status != "passed" {
+		finishRequest(errors.New(result.Message))
+	} else {
+		finishRequest(requestErr)
+	}
 	result.TemporaryKey = credential.temporary
-	cleanupErr := s.cleanupProbeCredential(credential)
+	cleanupErr := s.cleanupProbeCredentialWithContext(context.WithoutCancel(ctx), credential)
 	if requestErr != nil {
 		if cleanupErr != nil {
 			return result, fmt.Errorf("%v；临时测试 Key 清理失败：%w", requestErr, cleanupErr)
@@ -153,7 +183,10 @@ func (s *Service) CancelProbe(ctx context.Context, host, groupID string) error {
 	if !active {
 		// Wait for a concurrent Probe request to finish before taking its session.
 		// This keeps cancellation from racing with the second probe phase.
-		if _, found := s.probeSession(host, groupID); !found {
+		_, found := s.probeSession(host, groupID)
+		_, pending := s.pendingProbeCleanup(host, groupID)
+		if !found && !pending {
+			reportProbe(ctx, "cleanup_key", "skipped")
 			return nil
 		}
 	} else {
@@ -169,7 +202,11 @@ func (s *Service) CancelProbe(ctx context.Context, host, groupID string) error {
 	}
 	defer s.releaseProbeMutation(release, host)
 	credential, found := s.takeProbeSession(host, groupID)
+	if !found {
+		credential, found = s.pendingProbeCleanup(host, groupID)
+	}
 	if !found || !credential.temporary {
+		reportProbe(ctx, "cleanup_key", "skipped")
 		return nil
 	}
 	return s.cleanupProbeCredentialWithContext(guardedCtx, credential)
@@ -283,7 +320,9 @@ func (s *Service) clearProbeCancellation(host, groupID string) {
 	delete(s.probeCanceled, s.probeSessionKey(host, groupID))
 }
 
-func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID string) (probeCredential, error) {
+func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID string) (_ probeCredential, returnErr error) {
+	finishCredential := probeStep(ctx, "credential")
+	defer func() { finishCredential(returnErr) }()
 	groupID = strings.TrimSpace(groupID)
 	if groupID == "" || len(groupID) > 255 {
 		return probeCredential{}, errors.New("上游分组 ID 无效")
@@ -310,9 +349,12 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 		return probeCredential{}, errors.New("上游分组不存在或不在 Console 业务库中")
 	}
 	credential := probeCredential{auth: *auth, candidate: *candidate}
+	finishCredential(nil)
 	staleExistingKey := false
 	if candidate.UpstreamKeyID != nil && strings.TrimSpace(*candidate.UpstreamKeyID) != "" {
+		finishRead := probeStep(ctx, "read_key")
 		credential.key, err = s.keys.RevealKey(ctx, *auth, strings.TrimSpace(*candidate.UpstreamKeyID), groupID)
+		finishRead(err)
 		if err == nil {
 			return credential, nil
 		}
@@ -334,11 +376,16 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 		return probeCredential{}, errors.New("当前上游客户端不支持安全清理临时测试 Key")
 	}
 	marker := probeKeyMarker(auth.Host, groupID)
+	finishCreate := probeStep(ctx, "create_key")
 	credential.key, err = createKey(ctx, s.keys, *auth, marker, groupID, true)
+	finishCreate(err)
 	if err != nil {
 		var unknown *upstreamsync.CommitUnknownError
 		if errors.As(err, &unknown) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-			if cleanupErr := s.cleanupUnknownProbeCredential(*auth, marker, groupID); cleanupErr != nil {
+			finishReconcile := probeStep(ctx, "reconcile_key")
+			cleanupErr := s.cleanupUnknownProbeCredential(*auth, marker, groupID)
+			finishReconcile(cleanupErr)
+			if cleanupErr != nil {
 				return probeCredential{}, fmt.Errorf("临时测试 Key 创建结果不确定：%w；按 marker 清理失败：%v", err, cleanupErr)
 			}
 		}
@@ -353,10 +400,29 @@ func (s *Service) cleanupProbeCredential(credential probeCredential) error {
 	return s.cleanupProbeCredentialWithContext(context.Background(), credential)
 }
 
-func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, credential probeCredential) error {
+func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, credential probeCredential) (err error) {
 	if !credential.temporary {
+		reportProbe(parent, "cleanup_key", "skipped")
 		return nil
 	}
+	finish := probeStep(parent, "cleanup_key")
+	defer func() { finish(err) }()
+	defer func() {
+		if credential.candidate.GroupID == nil {
+			return
+		}
+		key := s.probeSessionKey(credential.auth.Host, *credential.candidate.GroupID)
+		s.probeMu.Lock()
+		defer s.probeMu.Unlock()
+		if err != nil {
+			if s.probeCleanup == nil {
+				s.probeCleanup = map[string]probeCredential{}
+			}
+			s.probeCleanup[key] = credential
+		} else {
+			delete(s.probeCleanup, key)
+		}
+	}()
 	deleter, ok := s.keys.(probeKeyDeleter)
 	if !ok {
 		return errors.New("上游客户端不支持删除 Key")
@@ -364,6 +430,13 @@ func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, cred
 	ctx, cancel := context.WithTimeout(parent, probeCleanupTimeout)
 	defer cancel()
 	return deleter.DeleteKey(ctx, credential.auth, credential.key.KeyID)
+}
+
+func (s *Service) pendingProbeCleanup(host, groupID string) (probeCredential, bool) {
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	credential, found := s.probeCleanup[s.probeSessionKey(host, groupID)]
+	return credential, found
 }
 
 func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, marker, groupID string) error {

@@ -673,6 +673,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/onboarding/keys/cleanup-preview", server.onboardingKeyCleanupPreview)
 	authorized.POST("/onboarding/keys/cleanup", server.onboardingKeyCleanup)
 	authorized.POST("/onboarding/probe/models", server.onboardingProbeModels)
+	authorized.POST("/onboarding/probe/tasks/:action", server.onboardingProbeTask)
 	authorized.POST("/onboarding/probe", server.onboardingProbe)
 	authorized.POST("/onboarding/probe/cancel", server.cancelOnboardingProbe)
 	authorized.GET("/groups", server.groups)

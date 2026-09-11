@@ -1075,6 +1075,10 @@ func (f fakeOnboarding) ProbeModels(context.Context, string, string) ([]string, 
 	return f.models, f.err
 }
 
+func (f fakeOnboarding) EnqueueProbe(context.Context, string, string, string, string, string) (taskstore.Task, error) {
+	return taskstore.Task{ID: "probe-task", Status: "queued", Result: map[string]any{"steps": []onboarding.ProbeStep{}}}, f.err
+}
+
 func (f fakeOnboarding) Probe(context.Context, string, string, string, ...string) (onboarding.ProbeResult, error) {
 	return f.probe, f.err
 }
@@ -2839,6 +2843,19 @@ func TestOnboardingProbeEndpointsWorkWithoutALocalAccount(t *testing.T) {
 	})
 	if invalid.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid=%d %s", invalid.Code, invalid.Body.String())
+	}
+	queued := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe/tasks/models", map[string]any{"host": "api.example", "group_id": "6"})
+	if queued.Code != http.StatusOK || !strings.Contains(queued.Body.String(), `"id":"probe-task"`) || !strings.Contains(queued.Body.String(), `"status":"queued"`) {
+		t.Fatalf("queued=%d %s", queued.Code, queued.Body.String())
+	}
+	badTask := authenticatedRequest(t, router, http.MethodPost, "/api/onboarding/probe/tasks/probe", map[string]any{"host": "api.example", "group_id": "6"})
+	if badTask.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing model accepted: %d", badTask.Code)
+	}
+	anonymous := httptest.NewRecorder()
+	router.ServeHTTP(anonymous, httptest.NewRequest(http.MethodPost, "/api/onboarding/probe/tasks/models", strings.NewReader(`{"host":"api.example","group_id":"6"}`)))
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated task=%d", anonymous.Code)
 	}
 }
 

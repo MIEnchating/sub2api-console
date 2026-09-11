@@ -102,6 +102,7 @@ type Service struct {
 	probeSessions map[string]probeCredential
 	probeActive   map[string]bool
 	probeCanceled map[string]bool
+	probeCleanup  map[string]probeCredential
 }
 
 const schedulableWriteTimeout = 2 * time.Second
