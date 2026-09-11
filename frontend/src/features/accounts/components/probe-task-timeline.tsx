@@ -1,4 +1,13 @@
-import { CheckCircle2, Circle, LoaderCircle, MinusCircle, XCircle } from "lucide-react";
+import { useId, useState } from "react";
+import {
+  CheckCircle2,
+  ChevronDown,
+  Circle,
+  LoaderCircle,
+  MinusCircle,
+  XCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { ProbeStep } from "../hooks/use-onboarding-probe-task";
 
 const stageLabels: Record<string, string> = {
@@ -17,6 +26,40 @@ const statusLabels = {
   failed: "失败",
   skipped: "无需清理",
 };
+
+export function ProbeProgressSummary(props: { steps: ProbeStep[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  const latest = props.steps.at(-1);
+  if (!latest) return null;
+  return (
+    <div className="min-w-0">
+      <Button
+        variant="ghost"
+        className="w-full min-w-0 justify-start gap-2 px-0"
+        aria-expanded={expanded}
+        aria-controls={id}
+        onClick={() => setExpanded(!expanded)}
+      >
+        {latest.status === "running" ? (
+          <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+        ) : (
+          <Circle aria-hidden="true" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-left">
+          {stageLabels[latest.stage] ?? latest.stage}
+        </span>
+        <span className="text-muted-foreground shrink-0 text-xs">
+          {statusLabels[latest.status]}
+        </span>
+        <ChevronDown aria-hidden="true" className={expanded ? "rotate-180" : undefined} />
+      </Button>
+      <div id={id} hidden={!expanded} className="max-h-40 overflow-y-auto overscroll-contain">
+        {expanded ? <ProbeTaskTimeline steps={props.steps} /> : null}
+      </div>
+    </div>
+  );
+}
 
 export function ProbeTaskTimeline(props: { steps: ProbeStep[] }) {
   if (!props.steps.length) return null;

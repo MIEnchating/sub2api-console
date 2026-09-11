@@ -2,7 +2,7 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { TaskStartupState } from "@/components/task-startup-state";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
-import { ProbeTaskTimeline } from "./probe-task-timeline";
+import { ProbeProgressSummary } from "./probe-task-timeline";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -52,7 +52,7 @@ export const onboardingProbeModeOptions: Array<{
 export const accountProbeDialogLayout = {
   width: "medium",
   height: "adaptive",
-  content: "grid grid-rows-[auto_minmax(0,1fr)_auto_auto] overflow-hidden",
+  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
 } as const;
 
 export type ProbeDialogTarget = {
@@ -265,7 +265,6 @@ function AccountProbeSession(props: {
         </DialogHeader>
         <DialogBody className="grid gap-4 px-6 py-4">
           <ProbeAccountCard target={props.target} status={progress.task?.status} />
-          <ProbeTaskTimeline steps={progress.history} />
           {(modelsLoading || runProbe.isPending || closing) && progress.history.length === 0 ? (
             <TaskStartupState message="正在创建探活任务" />
           ) : null}
@@ -287,48 +286,54 @@ function AccountProbeSession(props: {
           ) : null}
           <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">选择测试模型</span>
-            <Select
-              value={selectedModel}
-              itemToStringLabel={(value) =>
-                value === noModelSelected ? "选择上游模型" : String(value)
-              }
-              disabled={selectDisabled}
-              onValueChange={(value) => {
-                if (!value) return;
-                modelSelectionEdited.current = true;
-                setSelectedModel(value);
-                setResult(null);
-                runProbe.reset();
-              }}
+            <div
+              role="group"
+              aria-label="测试模型选择与获取"
+              className="flex min-w-0 items-center gap-2"
             >
-              <SelectTrigger className="w-full min-w-0" aria-label="选择测试模型">
-                <SelectValue placeholder="选择上游模型" />
-              </SelectTrigger>
-              <SelectContent>
-                {modelsLoading ? (
-                  <SelectItem value={noModelSelected} disabled>
-                    正在获取上游模型
-                  </SelectItem>
-                ) : null}
-                {!modelsLoading && options.length === 0 ? (
-                  <SelectItem value={noModelSelected} disabled>
-                    {loadModels.isError ? "—" : "暂无可用模型"}
-                  </SelectItem>
-                ) : null}
-                {options.map((model) => (
-                  <SelectItem key={model} value={model}>
-                    {model}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <Select
+                value={selectedModel}
+                itemToStringLabel={(value) =>
+                  value === noModelSelected ? "选择上游模型" : String(value)
+                }
+                disabled={selectDisabled}
+                onValueChange={(value) => {
+                  if (!value) return;
+                  modelSelectionEdited.current = true;
+                  setSelectedModel(value);
+                  setResult(null);
+                  runProbe.reset();
+                }}
+              >
+                <SelectTrigger className="min-w-0 flex-1" aria-label="选择测试模型">
+                  <SelectValue placeholder="选择上游模型" />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelsLoading ? (
+                    <SelectItem value={noModelSelected} disabled>
+                      正在获取上游模型
+                    </SelectItem>
+                  ) : null}
+                  {!modelsLoading && options.length === 0 ? (
+                    <SelectItem value={noModelSelected} disabled>
+                      {loadModels.isError ? "—" : "暂无可用模型"}
+                    </SelectItem>
+                  ) : null}
+                  {options.map((model) => (
+                    <SelectItem key={model} value={model}>
+                      {model}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <ProbeModelLoadButton
+                pending={modelsLoading}
+                succeeded={loadModels.isSuccess}
+                disabled={selectDisabled}
+                onLoad={startModelLoad}
+              />
+            </div>
           </div>
-          <ProbeModelLoadButton
-            pending={modelsLoading}
-            succeeded={loadModels.isSuccess}
-            disabled={selectDisabled}
-            onLoad={startModelLoad}
-          />
           {loadModels.isSuccess ? (
             <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
           ) : null}
@@ -363,23 +368,27 @@ function AccountProbeSession(props: {
               </SelectContent>
             </Select>
           </div>
-          <ProbeResultSlot
-            pending={false}
-            error={runProbe.isError ? runProbe.error : null}
-            result={result}
-            requestModel={selectedModel === noModelSelected ? null : selectedModel}
-          />
+          <section aria-label="测试模型响应" className="grid min-w-0 gap-2">
+            <div className="text-muted-foreground flex min-w-0 items-center justify-between gap-3 text-xs">
+              <span className="inline-flex items-center gap-1.5">
+                <Grid2X2 className="size-3.5" aria-hidden="true" />
+                测试模型
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <MessageCircle className="size-3.5" aria-hidden="true" />
+                提示词："hi"
+              </span>
+            </div>
+            <ProbeProgressSummary steps={progress.history} />
+            <ProbeResultSlot
+              pending={runProbe.isPending}
+              pendingLabel="探活处理中，当前阶段见上方"
+              error={runProbe.isError ? runProbe.error : null}
+              result={result}
+              requestModel={selectedModel === noModelSelected ? null : selectedModel}
+            />
+          </section>
         </DialogBody>
-        <div className="text-muted-foreground flex min-w-0 items-center justify-between gap-3 border-t px-6 py-3 text-xs">
-          <span className="inline-flex items-center gap-1.5">
-            <Grid2X2 className="size-3.5" aria-hidden="true" />
-            测试模型
-          </span>
-          <span className="inline-flex min-w-0 items-center gap-1.5 truncate">
-            <MessageCircle className="size-3.5 shrink-0" aria-hidden="true" />
-            提示词："hi"
-          </span>
-        </div>
         <ProbeDialogActions
           runDisabled={runDisabled}
           probePending={runProbe.isPending}
@@ -405,12 +414,14 @@ export function ProbeModelLoadButton(props: {
     <Button
       type="button"
       variant="outline"
-      className="w-full min-w-0"
+      className="shrink-0"
+      aria-label={label}
+      title={label}
       disabled={props.disabled || props.pending}
       onClick={props.onLoad}
     >
       <RefreshCw className={props.pending ? "animate-spin" : undefined} />
-      {label}
+      <span className="hidden sm:inline">{label}</span>
     </Button>
   );
 }
@@ -420,8 +431,15 @@ export function ProbeResultSlot(props: {
   error: Error | null;
   result: ProbeResult | null;
   requestModel?: string | null;
+  pendingLabel?: string;
 }) {
-  if (!props.pending && !props.error && !props.result) return null;
+  if (!props.pending && !props.error && !props.result)
+    return (
+      <div className="grid min-w-0 gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 text-xs text-zinc-300">
+        <p className="break-words text-cyan-300">使用模型：{props.requestModel ?? "待选择"}</p>
+        <p>点击“开始测试”查看响应</p>
+      </div>
+    );
 
   let content = null;
   if (props.pending) {
@@ -436,7 +454,7 @@ export function ProbeResultSlot(props: {
           <p className="text-amber-300">响应：</p>
           <p className="inline-flex items-center gap-2 text-zinc-400">
             <LoaderCircle className="size-3.5 animate-spin text-cyan-400" aria-hidden="true" />
-            等待上游响应
+            {props.pendingLabel ?? "等待上游响应"}
           </p>
         </div>
         <div className="mt-3 flex items-center gap-2 border-t border-zinc-700 pt-3 font-mono text-xs text-cyan-300">

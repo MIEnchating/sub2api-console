@@ -61,6 +61,7 @@ it("Key 创建未完成时只显示后端实际阶段，禁止提前探活且保
   vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(task("queued", "create_key"));
   vi.spyOn(api, "task").mockResolvedValue(task("running", "create_key"));
   const view = setup();
+  await userEvent.click(await screen.findByRole("button", { name: /创建临时上游 Key/ }));
   const timeline = await screen.findByRole("list", { name: "探活过程" });
   expect(within(timeline).getByText("创建临时上游 Key")).toBeInTheDocument();
   expect(within(timeline).getByText("进行中")).toBeInTheDocument();
@@ -76,6 +77,7 @@ it("Key 创建失败时保留失败阶段并提供模型获取重试", async () 
   vi.spyOn(api, "startOnboardingProbeTask").mockResolvedValue(task("queued", "create_key"));
   vi.spyOn(api, "task").mockResolvedValue(task("failed", "create_key"));
   const view = setup();
+  await userEvent.click(await screen.findByRole("button", { name: /创建临时上游 Key/ }));
   const timeline = await screen.findByRole("list", { name: "探活过程" });
   expect(await within(timeline).findByText("失败")).toBeInTheDocument();
   await waitFor(() => expect(screen.getByRole("button", { name: "获取上游模型" })).toBeEnabled());

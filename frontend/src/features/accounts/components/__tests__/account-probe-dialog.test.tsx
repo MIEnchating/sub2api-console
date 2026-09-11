@@ -179,7 +179,7 @@ describe("账号探活弹窗", () => {
     );
 
     expect(className).toContain("w-[min(32rem,calc(100vw-2rem))]");
-    expect(className).toContain("grid-rows-[auto_minmax(0,1fr)_auto_auto]");
+    expect(className).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
     expect(className).toContain("max-h-[calc(100svh-2rem)]");
     expect(className).not.toContain("h-[min(42rem");
     expect(className).toContain("overflow-hidden");
@@ -225,12 +225,13 @@ describe("账号探活弹窗", () => {
     expect(failedMarkup).toContain("测试失败");
   });
 
-  it("尚未探活时不显示底部结果占位", () => {
+  it("尚未选择模型时默认展示测试响应区和待选择提示", () => {
     const markup = renderToStaticMarkup(
       <ProbeResultSlot pending={false} error={null} result={null} />,
     );
 
-    expect(markup).toBe("");
+    expect(markup).toContain("待选择");
+    expect(markup).toContain("点击“开始测试”查看响应");
   });
 
   it("探活进行中允许关闭弹窗并阻止重复测试", () => {
