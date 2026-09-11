@@ -4,6 +4,7 @@ import { fromDate } from "@internationalized/date";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import { toast } from "sonner";
+import { notifyOperationError } from "@/lib/operation-feedback";
 
 import { api, type RevenueReport, type RevenueRow, type Task } from "@/api";
 import { TableEmptyState } from "@/components/data-table/empty-state";
@@ -334,7 +335,7 @@ export function RevenueAnalysisPage() {
       queryClient.setQueryData(["task", queued.id], queued);
       toast.success("收益核算已开始");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "收益核算启动失败"),
+    onError: (error) => notifyOperationError(error, "收益核算启动失败"),
   });
   const currentReport = useMemo(() => revenueReportFromTask(task.data), [task.data]);
   const latestReport = useMemo(

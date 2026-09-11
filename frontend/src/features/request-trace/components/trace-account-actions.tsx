@@ -3,13 +3,13 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, LoaderCircle, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 
 import { api, type AccountControlAction } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 
@@ -59,9 +59,7 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
         queryClient.invalidateQueries({ queryKey }),
       ),
     ]);
-    if (completed.status === "succeeded") toast.success("账号处置完成");
-    else if (completed.status === "cancelled") toast.info(completed.message || "账号处置已取消");
-    else toast.error(completed.message || "账号处置失败");
+    notifyTaskResult(completed, "账号处置", { successMessage: "账号处置完成" });
   }, [props.accountId, queryClient, task.data]);
 
   if (!validId) {

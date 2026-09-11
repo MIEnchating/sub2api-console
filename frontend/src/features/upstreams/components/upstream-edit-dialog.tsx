@@ -44,6 +44,7 @@ import {
 } from "../lib/upstream-edit-schema";
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { notifyProbeTaskResult } from "@/lib/probe-task-feedback";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 import { configurableUpstreamTypeOptions } from "@/lib/domain-dictionaries";
@@ -239,14 +240,10 @@ function UpstreamAccountRowActions(props: {
     applyAccountDeletionProgress(queryClient, completedTask);
     if (activeAction === "探活测试") {
       notifyProbeTaskResult(completedTask, props.binding.name ?? `账号 ${props.binding.accountId}`);
-    } else if (completedTask.status === "succeeded") {
-      toast.success(
-        `${props.binding.name ?? `账号 ${props.binding.accountId}`}：${activeAction}完成`,
-      );
-    } else if (completedTask.status === "cancelled") {
-      toast.info(completedTask.message || `${activeAction}已取消`);
     } else {
-      toast.error(completedTask.message || `${activeAction}失败`);
+      notifyTaskResult(completedTask, activeAction, {
+        successMessage: `${props.binding.name ?? `账号 ${props.binding.accountId}`}：${activeAction}完成`,
+      });
     }
     if (activeAction === "删除账号") setDeleteOpen(false);
     onChangedRef.current?.();

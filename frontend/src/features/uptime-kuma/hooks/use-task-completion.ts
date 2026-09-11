@@ -1,8 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError, type Task } from "@/api";
+import { operationErrorMessage } from "@/lib/operation-feedback";
+import { isSessionExpiredError } from "@/lib/session-auth";
 
 const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "partial"]);
+
+async function readTaskProgress(taskID: string): Promise<Task> {
+  try {
+    return await api.task(taskID);
+  } catch (error) {
+    if (isSessionExpiredError(error)) throw error;
+    throw new Error(
+      `任务 ${taskID} 的进度读取失败，请在日志中心查看结果后再决定是否重试：${operationErrorMessage(error, "请求未完成")}`,
+      { cause: error },
+    );
+  }
+}
 
 // The mutation remains pending while React Query follows the persisted backend
 // task. Neither a failed poll nor a disconnected page resubmits the operation.
@@ -14,7 +28,7 @@ export function useTaskCompletion() {
   } | null>(null);
   const query = useQuery({
     queryKey: ["tasks", task?.id],
-    queryFn: () => api.task(task!.id),
+    queryFn: () => readTaskProgress(task!.id),
     enabled: !!task,
     retry: false,
     refetchInterval: (query) =>
@@ -23,9 +37,7 @@ export function useTaskCompletion() {
   useEffect(() => {
     if (!task || !completion.current) return;
     if (query.error) {
-      completion.current.reject(
-        new Error(`任务 ${task.id} 的进度读取失败，请在日志中心查看结果后再决定是否重试`),
-      );
+      completion.current.reject(query.error);
     } else if (query.data && terminalStatuses.has(query.data.status)) {
       if (query.data.status === "succeeded") completion.current.resolve(query.data);
       else

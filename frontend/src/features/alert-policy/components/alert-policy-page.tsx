@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { notifyOperationError } from "@/lib/operation-feedback";
 
 import { api, type AlertPolicy } from "@/api";
 import { PageActions } from "@/components/page-actions";
@@ -93,7 +94,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
       form.reset(policyToForm(saved));
       toast.success("告警策略已保存");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "告警策略保存失败"),
+    onError: (error) => notifyOperationError(error, "告警策略保存失败"),
   });
 
   useEffect(() => {

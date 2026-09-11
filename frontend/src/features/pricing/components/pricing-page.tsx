@@ -18,6 +18,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { notifyOperationError } from "@/lib/operation-feedback";
+import { notifyTaskResult } from "@/lib/task-result-feedback";
 
 import {
   api,
@@ -1353,11 +1355,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     for (const queryKey of terminalRefreshKeys("pricing", task.data)) {
       void queryClient.invalidateQueries({ queryKey });
     }
-    if (task.data?.status === "succeeded") {
-      toast.success(task.data.message || "价格分组调整完成");
-    } else if (task.data) {
-      toast.error(task.data.message || "价格分组调整失败");
-    }
+    if (task.data) notifyTaskResult(task.data, "价格分组调整");
     setTaskID(null);
   }, [queryClient, task.data, taskID]);
 
@@ -1370,7 +1368,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         saved.config.enabled ? "价格配置已保存并开启" : "价格配置已保存，自动调整保持关闭",
       );
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "价格配置保存失败"),
+    onError: (error) => notifyOperationError(error, "价格配置保存失败"),
   });
   const apply = useMutation({
     mutationFn: () => {
@@ -1394,8 +1392,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       queryClient.setQueryData(["task", queued.id], queued);
       toast.success("价格分组调整已开始");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "价格分组调整启动失败"),
+    onError: (error) => notifyOperationError(error, "价格分组调整启动失败"),
   });
   const createBackup = useMutation({
     mutationFn: api.createPricingBackup,
@@ -1405,7 +1402,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       void queryClient.invalidateQueries({ queryKey: ["pricing-backups"] });
       toast.success(`备份“${backup.name}”已创建`);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "价格分组备份失败"),
+    onError: (error) => notifyOperationError(error, "价格分组备份失败"),
   });
   const restoreBackup = useMutation({
     mutationFn: api.restorePricingBackup,
@@ -1415,8 +1412,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       setBackupDialog(null);
       toast.success("价格分组备份还原已开始");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "价格分组备份还原启动失败"),
+    onError: (error) => notifyOperationError(error, "价格分组备份还原启动失败"),
   });
   const deleteBackup = useMutation({
     mutationFn: (backup: PricingBackup) => api.deletePricingBackup(backup.id),
@@ -1430,8 +1426,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
       await queryClient.invalidateQueries({ queryKey: ["pricing-backups"] });
       toast.success(`备份“${deletedBackup.name}”已删除`);
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "价格分组备份删除失败"),
+    onError: (error) => notifyOperationError(error, "价格分组备份删除失败"),
   });
   const current =
     draft ?? (snapshot.data ? pricingConfigWithRuleNames(snapshot.data.config) : null);

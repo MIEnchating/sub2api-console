@@ -7,6 +7,7 @@ import { ArchiveRestore, RefreshCw, Save, Send, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { notifyOperationError } from "@/lib/operation-feedback";
 
 import {
   api,
@@ -107,7 +108,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
       });
     },
     onSuccess: (value) => applyConfiguration(value, "画像草稿已保存"),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "画像草稿保存失败"),
+    onError: (error) => notifyOperationError(error, "画像草稿保存失败"),
   });
   const publish = useMutation({
     mutationFn: () => {
@@ -119,7 +120,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
       applyConfiguration(value, "画像版本已发布");
       void queryClient.invalidateQueries({ queryKey: ["model-check-capabilities"] });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "画像发布失败"),
+    onError: (error) => notifyOperationError(error, "画像发布失败"),
   });
   const discard = useMutation({
     mutationFn: () => {
@@ -130,7 +131,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
       setDiscardConfirmOpen(false);
       applyConfiguration(value, "画像草稿已删除");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "画像草稿删除失败"),
+    onError: (error) => notifyOperationError(error, "画像草稿删除失败"),
   });
   const restore = useMutation({
     mutationFn: (versionID: string) => {
@@ -145,7 +146,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
       setRestoreVersionID(null);
       applyConfiguration(value, "历史版本已恢复为草稿");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "历史版本恢复失败"),
+    onError: (error) => notifyOperationError(error, "历史版本恢复失败"),
   });
 
   const current = configuration.data ? editableVersion(configuration.data) : null;

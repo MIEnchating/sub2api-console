@@ -5,6 +5,7 @@ import { Database, Eye } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
+import { notifyOperationError } from "@/lib/operation-feedback";
 
 import {
   api,
@@ -180,7 +181,7 @@ export function ModelCheckPage() {
       queryClient.setQueryData(["model-check-task", created.id], created);
       setResultOpen(true);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "模型检测启动失败"),
+    onError: (error) => notifyOperationError(error, "模型检测启动失败"),
   });
   const pending =
     run.isPending || ["queued", "running", "waiting_input"].includes(task.data?.status ?? "");

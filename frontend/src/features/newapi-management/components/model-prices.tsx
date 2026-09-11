@@ -1,6 +1,6 @@
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import {
@@ -47,6 +47,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { useClientPagination } from "@/hooks/use-client-pagination";
+import { notifyOperationError } from "@/lib/operation-feedback";
 import {
   adjustNewAPIModelPrice,
   type ModelPriceAdjustmentDirection,
@@ -127,7 +128,8 @@ export function NewAPIModelPrices(props: PriceProps) {
   const [batchPreview, setBatchPreview] = useState<BatchModelPricePreview[] | null>(null);
   const [batchPreparing, setBatchPreparing] = useState(false);
   const [batchWriting, setBatchWriting] = useState(false);
-  const [batchError, setBatchError] = useState("");
+  const [batchFailed, setBatchFailed] = useState(false);
+  const batchPreviewRequest = useRef(0);
   const [batchResults, setBatchResults] = useState<Record<string, string> | null>(null);
   const batchEnabled = Boolean(props.onLoadManagementPrices && props.onWriteModelPrices);
   const selectionBusy =
@@ -181,12 +183,14 @@ export function NewAPIModelPrices(props: PriceProps) {
   async function prepareBatchSync(): Promise<void> {
     if (!props.onLoadManagementPrices || selectedModels.size === 0 || selectedModels.size > 1000)
       return;
+    const requestID = ++batchPreviewRequest.current;
     setBatchPreview([]);
     setBatchResults(null);
-    setBatchError("");
+    setBatchFailed(false);
     setBatchPreparing(true);
     try {
       const catalog = await props.onLoadManagementPrices();
+      if (requestID !== batchPreviewRequest.current) return;
       if (catalog.stale)
         throw new Error("参考价格已过期或刷新不完整，请先强制刷新参考价格后再批量同步");
       const configured = new Map(
@@ -208,10 +212,19 @@ export function NewAPIModelPrices(props: PriceProps) {
         }),
       );
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : "参考价格读取失败，请重试");
+      if (requestID !== batchPreviewRequest.current) return;
+      setBatchFailed(true);
+      notifyOperationError(error, "参考价格读取失败，请重试");
     } finally {
-      setBatchPreparing(false);
+      if (requestID === batchPreviewRequest.current) setBatchPreparing(false);
     }
+  }
+
+  function closeBatchPreview(): void {
+    batchPreviewRequest.current += 1;
+    setBatchPreview(null);
+    setBatchPreparing(false);
+    setBatchFailed(false);
   }
 
   async function confirmBatchSync(): Promise<void> {
@@ -219,7 +232,7 @@ export function NewAPIModelPrices(props: PriceProps) {
     const prices = batchPreview.flatMap((row) => (row.price ? [row.price] : []));
     if (prices.length === 0) return;
     setBatchWriting(true);
-    setBatchError("");
+    setBatchFailed(false);
     try {
       const result = await props.onWriteModelPrices(prices);
       const actual = new Map(result.models.map((price) => [price.model, price]));
@@ -243,7 +256,8 @@ export function NewAPIModelPrices(props: PriceProps) {
       setBatchResults(results);
       selectModels(successful, false);
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : "批量同步失败，请核对平台后重试");
+      setBatchFailed(true);
+      notifyOperationError(error, "批量同步失败，请核对平台后重试");
     } finally {
       setBatchWriting(false);
     }
@@ -709,9 +723,10 @@ export function NewAPIModelPrices(props: PriceProps) {
         selectedCount={batchPreview?.length || selectedModels.size}
         preparing={batchPreparing}
         writing={batchWriting}
-        error={batchError}
+        failed={batchFailed}
         results={batchResults}
-        onClose={() => setBatchPreview(null)}
+        onClose={closeBatchPreview}
+        onRetry={() => void prepareBatchSync()}
         onConfirm={() => void confirmBatchSync()}
       />
       <WrittenModelPriceDialog

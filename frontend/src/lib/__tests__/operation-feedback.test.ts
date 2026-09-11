@@ -40,4 +40,14 @@ describe("global operation feedback", () => {
 
     expect(toastError).not.toHaveBeenCalled();
   });
+
+  it("部分操作成功后失败时同时保留已保存状态和失败原因", () => {
+    notifyOperationError(new Error("同步服务不可用"), "请重新测试同步", {
+      context: "连接已保存，但同步启动失败",
+    });
+
+    expect(toastError).toHaveBeenCalledWith("连接已保存，但同步启动失败：同步服务不可用", {
+      id: "operation-error:连接已保存，但同步启动失败：同步服务不可用",
+    });
+  });
 });

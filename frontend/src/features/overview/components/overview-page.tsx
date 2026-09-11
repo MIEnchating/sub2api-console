@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Bolt, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
-import { toast } from "sonner";
 
 import { api } from "@/api";
 import { RefreshButton } from "@/components/refresh-button";
@@ -17,6 +16,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
+import { notifyOperationError } from "@/lib/operation-feedback";
+import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { OverviewActivity } from "./overview-activity";
 import {
   buildAttentionAccounts,
@@ -210,7 +211,7 @@ export function OverviewPage(props: OverviewPageProps) {
   const sync = useMutation({
     mutationFn: api.syncManagement,
     onSuccess: (task) => setSyncTaskId(task.id),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "同步启动失败"),
+    onError: (error) => notifyOperationError(error, "同步启动失败"),
   });
   const syncTask = useQuery({
     queryKey: ["overview-sync", syncTaskId],
@@ -224,11 +225,8 @@ export function OverviewPage(props: OverviewPageProps) {
     for (const queryKey of terminalRefreshKeys("management-sync", syncTask.data)) {
       void queryClient.invalidateQueries({ queryKey });
     }
-    if (syncTask.data?.status === "succeeded") {
-      toast.success("运营数据已同步");
-    } else if (syncTask.data?.status === "failed") {
-      toast.error(syncTask.data.message || "运营数据同步失败");
-    }
+    if (syncTask.data)
+      notifyTaskResult(syncTask.data, "运营数据同步", { successMessage: "运营数据已同步" });
     setSyncTaskId(null);
   }, [queryClient, syncTask.data]);
 

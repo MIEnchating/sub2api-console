@@ -226,7 +226,8 @@ import {
   schedulingStrategyOptions,
   schedulingWeightFormula,
 } from "./lib/scheduling-strategy";
-import { notifyOperationError, operationErrorMessage } from "./lib/operation-feedback";
+import { notifyOperationError } from "./lib/operation-feedback";
+import { notifyTaskResult } from "./lib/task-result-feedback";
 import { sensitiveFieldPlaceholder } from "./lib/sensitive-field";
 import { sessionExpiredEvent, sessionExpiredMessage } from "./lib/session-auth";
 import { cn } from "./lib/utils";
@@ -806,7 +807,7 @@ function App() {
                           clearSession();
                           setLoginReason(null);
                         } catch (error) {
-                          toast.error(error instanceof Error ? error.message : "退出登录失败");
+                          notifyOperationError(error, "退出登录失败");
                         }
                       }}
                     />
@@ -924,7 +925,7 @@ export function SchedulerHeaderControls() {
       setSyncTaskId(task.id);
       toast.success("账号与分组同步已开始");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "同步启动失败"),
+    onError: (error) => notifyOperationError(error, "同步启动失败"),
   });
   const run = useMutation({
     mutationFn: () => api.runInspection(),
@@ -932,7 +933,7 @@ export function SchedulerHeaderControls() {
       setRunTaskId(task.id);
       void status.refetch();
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "巡检启动失败"),
+    onError: (error) => notifyOperationError(error, "巡检启动失败"),
   });
   const toggle = useMutation({
     mutationFn: async () => {
@@ -945,7 +946,7 @@ export function SchedulerHeaderControls() {
       queryClient.setQueryData(["auto-inspection"], value);
       toast.success(value.enabled ? "自动巡检已启动" : "自动巡检已停止");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "调度状态更新失败"),
+    onError: (error) => notifyOperationError(error, "调度状态更新失败"),
   });
   const syncTask = useQuery({
     queryKey: ["header-management-sync", syncTaskId],
@@ -2292,11 +2293,7 @@ export function UpstreamsPage() {
       queryClient.invalidateQueries({ queryKey: ["groups"] }),
     ]);
     setGroupBindings({});
-    if (groupBindingTask.data.status === "succeeded") {
-      toast.success(groupBindingTask.data.message || "账号分组绑定变更已完成");
-    } else {
-      toast.error(groupBindingTask.data.message || "账号分组绑定变更失败");
-    }
+    notifyTaskResult(groupBindingTask.data, "账号分组绑定变更");
     setGroupBindingTaskId(null);
   }, [groupBindingTask.data, queryClient, selectedHost]);
   const data = upstreams.data;
@@ -2333,14 +2330,13 @@ export function UpstreamsPage() {
   const allPageHostsSelected =
     pageHosts.length > 0 && pageHosts.every((host) => selectedRecoveryHosts.has(host));
   const somePageHostsSelected = pageHosts.some((host) => selectedRecoveryHosts.has(host));
+  const invalidBalanceRange =
+    filterDraft.minimumBalance !== "" &&
+    filterDraft.maximumBalance !== "" &&
+    Number(filterDraft.minimumBalance) > Number(filterDraft.maximumBalance);
   function applyFilters(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const minimum = filterDraft.minimumBalance ? Number(filterDraft.minimumBalance) : null;
-    const maximum = filterDraft.maximumBalance ? Number(filterDraft.maximumBalance) : null;
-    if (minimum !== null && maximum !== null && minimum > maximum) {
-      toast.error("最低余额不能大于最高余额");
-      return;
-    }
+    if (invalidBalanceRange) return;
     setFilters({ ...filterDraft });
     hostPagination.setCurrentPage(1);
   }
@@ -2539,6 +2535,7 @@ export function UpstreamsPage() {
           />
           <NumberRangeFilter
             label="余额"
+            error={invalidBalanceRange ? "最低余额不能大于最高余额" : undefined}
             minimumValue={filterDraft.minimumBalance}
             maximumValue={filterDraft.maximumBalance}
             onMinimumValueChange={(minimumBalance) =>
@@ -5580,12 +5577,10 @@ function AccountRow(props: {
     applyAccountDeletionProgress(queryClient, completedTask);
     if (activeAction === "探活测试") {
       notifyProbeTaskResult(completedTask, account.name);
-    } else if (completedTask.status === "succeeded") {
-      toast.success(`${account.name}：${activeAction}完成`);
-    } else if (completedTask.status === "cancelled") {
-      toast.info(completedTask.message || `${account.name}：${activeAction}已取消`);
     } else {
-      toast.error(completedTask.message || `${account.name}：${activeAction}失败`);
+      notifyTaskResult(completedTask, `${account.name}：${activeAction}`, {
+        successMessage: `${account.name}：${activeAction}完成`,
+      });
     }
     if (activeAction === accountDeleteActionLabel) setDeleteOpen(false);
     setTaskId(null);
@@ -5820,7 +5815,7 @@ export function GroupsPage() {
       setEditor(null);
       toast.success("分组策略已保存");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "分组策略保存失败"),
+    onError: (error) => notifyOperationError(error, "分组策略保存失败"),
   });
   const groupPolicyValid =
     editor !== null &&
@@ -5845,8 +5840,7 @@ export function GroupsPage() {
       setExcludeTarget(null);
       toast.success(variables.excluded ? "分组已排除" : "分组已恢复管控");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "分组管控状态修改失败"),
+    onError: (error) => notifyOperationError(error, "分组管控状态修改失败"),
   });
   const clearGroup = useMutation({
     mutationFn: (id: string) => api.clearGroupPolicy(id),
@@ -5854,7 +5848,7 @@ export function GroupsPage() {
       await invalidate();
       toast.success("分组策略已回落到全局默认");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "分组策略清除失败"),
+    onError: (error) => notifyOperationError(error, "分组策略清除失败"),
   });
   const groupWritePending =
     batch.pending || updateGroup.isPending || excludeGroup.isPending || clearGroup.isPending;
@@ -6222,7 +6216,7 @@ export function AlertsPage() {
   const evaluate = useMutation({
     mutationFn: api.evaluateAlerts,
     onSuccess: (created) => setTaskId(created.id),
-    onError: (error) => toast.error(error instanceof Error ? error.message : "告警检测失败"),
+    onError: (error) => notifyOperationError(error, "告警检测失败"),
   });
   const clearAlerts = useMutation({
     mutationFn: api.clearAlerts,
@@ -9568,11 +9562,9 @@ export function ConfigPage(props: ConfigPageProps = {}) {
     for (const queryKey of terminalRefreshKeys("management-sync", completedTask)) {
       void queryClient.invalidateQueries({ queryKey });
     }
-    if (completedTask.status === "succeeded") {
-      toast.success("Sub2API 连接测试与管理数据同步完成");
-    } else {
-      toast.error(completedTask.message || "Sub2API 连接测试同步失败");
-    }
+    notifyTaskResult(completedTask, "Sub2API 连接测试同步", {
+      successMessage: "Sub2API 连接测试与管理数据同步完成",
+    });
   }, [managementTask.data?.message, managementTask.data?.status, queryClient]);
   const saveNotification = useMutation({
     mutationFn: () => api.configureNotification(notificationForm),
@@ -9582,7 +9574,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       setNotificationEdited(false);
       toast.success("通知配置已保存");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "通知配置保存失败"),
+    onError: (error) => notifyOperationError(error, "通知配置保存失败"),
   });
   const discoverNotificationTarget = useMutation({
     mutationFn: () =>
@@ -9592,16 +9584,14 @@ export function ConfigPage(props: ConfigPageProps = {}) {
         target_type: notificationForm.home_channel_type,
       }),
     onSuccess: (task) => setNotificationTargetTaskId(task.id),
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "QQBot 目标获取启动失败"),
+    onError: (error) => notifyOperationError(error, "QQBot 目标获取启动失败"),
   });
   const notificationTargetBusy =
     notificationTargetTaskActive || discoverNotificationTarget.isPending;
   const cancelNotificationTargetDiscovery = useMutation({
     mutationFn: () => api.cancelNotificationTargetDiscovery(notificationTargetTaskId!),
     onSuccess: () => void notificationTargetTask.refetch(),
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "QQBot 目标获取取消失败"),
+    onError: (error) => notifyOperationError(error, "QQBot 目标获取取消失败"),
   });
   const saveLogCleanup = useMutation({
     mutationFn: () => {
@@ -9618,8 +9608,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       setLogCleanupEdited(false);
       toast.success(value.enabled ? "日志自动清理已开启" : "日志自动清理已关闭");
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "日志清理设置保存失败"),
+    onError: (error) => notifyOperationError(error, "日志清理设置保存失败"),
   });
   const clearLogs = useMutation({
     mutationFn: () => {
@@ -9642,7 +9631,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
         `已清理 ${result.retention_days} 天以前的 ${result.total} 条日志${protectedText}`,
       );
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "日志清空失败"),
+    onError: (error) => notifyOperationError(error, "日志清空失败"),
   });
   const testNotification = useMutation({
     mutationFn: api.testNotification,
@@ -9658,7 +9647,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
         queryClient.invalidateQueries({ queryKey: ["overview"] }),
       ]);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "测试通知失败"),
+    onError: (error) => notifyOperationError(error, "测试通知失败"),
   });
   const saveTarget = useMutation({
     mutationFn: (syncAfterSave: boolean) =>
@@ -9680,7 +9669,9 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       }),
     onSuccess: ({ task, syncFailed, syncError }) => {
       if (syncFailed) {
-        toast.error(`目标已保存，但同步启动失败：${operationErrorMessage(syncError, "未知错误")}`);
+        notifyOperationError(syncError, "请重新测试同步", {
+          context: "连接已保存，但同步启动失败",
+        });
         return;
       }
       if (task) {
@@ -9690,7 +9681,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
         toast.success("连接配置已保存");
       }
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "管理目标保存失败"),
+    onError: (error) => notifyOperationError(error, "管理目标保存失败"),
   });
   const updateRuntimeMode = useMutation({
     mutationFn: (mode: RuntimeMode) => api.setMode(mode),
@@ -9703,7 +9694,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
       ]);
       toast.success(`已切换至${value.mode}`);
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "执行模式切换失败"),
+    onError: (error) => notifyOperationError(error, "执行模式切换失败"),
   });
   let notificationStatusLabel = "未配置";
   if (notifications.isLoading) notificationStatusLabel = "读取中";
@@ -11585,8 +11576,7 @@ function AutoInspectionCard() {
       toast.success(value.enabled ? "自动巡检已开启" : "自动巡检已关闭");
       void status.refetch();
     },
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : "自动巡检设置保存失败"),
+    onError: (error) => notifyOperationError(error, "自动巡检设置保存失败"),
   });
   useEffect(() => {
     if (status.data) {
@@ -12081,10 +12071,7 @@ export function PolicyPage() {
       ]);
       toast.success("策略已保存，将用于下一轮调度");
     },
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : "策略保存失败";
-      toast.error(message);
-    },
+    onError: (error) => notifyOperationError(error, "策略保存失败"),
   });
   const restoreControl = useMutation({
     mutationFn: api.restorePolicyControl,
@@ -12102,7 +12089,7 @@ export function PolicyPage() {
         toast.success(`已交还控制权，恢复 ${result.restored} 个账号`);
       }
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "交还控制权失败"),
+    onError: (error) => notifyOperationError(error, "交还控制权失败"),
   });
   const updateProbes = useMutation({
     mutationFn: (enabled: boolean) => api.setProbesEnabled(enabled),
@@ -12116,7 +12103,7 @@ export function PolicyPage() {
       void queryClient.invalidateQueries({ queryKey: ["policy"] });
       toast.success(value.probes_enabled ? "主动探测已启用" : "主动探测已关闭");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "主动探测设置失败"),
+    onError: (error) => notifyOperationError(error, "主动探测设置失败"),
   });
   const data = policy.data;
   const current = policy.error ? null : (draft ?? (data ? policyDraft(data) : null));

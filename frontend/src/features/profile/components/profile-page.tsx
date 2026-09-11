@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { notifyOperationError } from "@/lib/operation-feedback";
 
 const profileSchema = z
   .object({
@@ -92,7 +93,7 @@ export function ProfilePage() {
       form.reset(emptyProfileForm(saved.username ?? ""));
       toast.success("账号信息已保存，其他登录会话已退出");
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "账号信息保存失败"),
+    onError: (error) => notifyOperationError(error, "账号信息保存失败"),
   });
   const submit = form.handleSubmit((values) =>
     updateProfile.mutate({

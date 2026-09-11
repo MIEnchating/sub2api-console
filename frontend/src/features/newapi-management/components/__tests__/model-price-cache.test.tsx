@@ -108,7 +108,7 @@ describe("模型价格操作复用参考缓存", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "选择本页模型" }));
     fireEvent.click(screen.getByRole("button", { name: "批量同步（1）" }));
-    await screen.findByText("正在准备批量价格预览…");
+    await screen.findByRole("status", { name: "正在准备批量价格预览" });
     expect(screen.getByText("一致", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("比较中", { exact: true })).not.toBeInTheDocument();
     await act(async () => rejectPrices(new Error("参考接口暂时不可用")));

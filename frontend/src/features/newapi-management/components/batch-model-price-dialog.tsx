@@ -1,4 +1,5 @@
-import { QueryErrorToast } from "@/components/query-error-toast";
+import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import type { NewAPIModelPrice, Sub2APIModelPrice } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -52,9 +53,10 @@ export function BatchModelPriceDialog(props: {
   selectedCount: number;
   preparing: boolean;
   writing: boolean;
-  error: string;
+  failed: boolean;
   results: Record<string, string> | null;
   onClose: () => void;
+  onRetry: () => void;
   onConfirm: () => void;
 }) {
   const writable = props.preview?.filter((row) => row.price) ?? [];
@@ -63,10 +65,10 @@ export function BatchModelPriceDialog(props: {
     <Dialog
       open={props.preview !== null}
       onOpenChange={(open) => {
-        if (!open && !busy) props.onClose();
+        if (!open && !props.writing) props.onClose();
       }}
     >
-      <DialogContent width="wide" height="adaptive" showCloseButton={!busy}>
+      <DialogContent width="wide" height="adaptive" showCloseButton={!props.writing}>
         <DialogHeader>
           <DialogTitle>{props.results ? "批量同步结果" : "批量同步模型价格"}</DialogTitle>
           <DialogDescription>
@@ -76,8 +78,10 @@ export function BatchModelPriceDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {props.preparing ? <p role="status">正在准备批量价格预览…</p> : null}
-          {props.error ? <QueryErrorToast error={props.error} fallback="批量价格操作失败" /> : null}
+          {props.preparing ? <ContentLoading label="正在准备批量价格预览" /> : null}
+          {!props.preparing && props.failed && props.preview?.length === 0 ? (
+            <ContentRetry onRetry={props.onRetry} />
+          ) : null}
           {!props.preparing && props.preview?.length ? (
             <Table
               className="min-w-[56rem]"
@@ -122,7 +126,7 @@ export function BatchModelPriceDialog(props: {
           ) : null}
         </DialogBody>
         <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={props.onClose}>
+          <Button variant="outline" disabled={props.writing} onClick={props.onClose}>
             {props.results ? "关闭" : "取消"}
           </Button>
           {!props.results ? (

@@ -10,12 +10,17 @@ export function operationErrorMessage(error: unknown, fallback: string): string 
   return fallback;
 }
 
-export function notifyOperationError(error: unknown, fallback: string): void {
+export function notifyOperationError(
+  error: unknown,
+  fallback: string,
+  options?: { context: string },
+): void {
   if (isSessionExpiredError(error)) return;
   if ((typeof error === "object" && error !== null) || typeof error === "function") {
     if (notifiedErrorObjects.has(error)) return;
     notifiedErrorObjects.add(error);
   }
-  const message = operationErrorMessage(error, fallback);
+  const detail = operationErrorMessage(error, fallback);
+  const message = options?.context ? `${options.context}：${detail}` : detail;
   toast.error(message, { id: `operation-error:${message}` });
 }
