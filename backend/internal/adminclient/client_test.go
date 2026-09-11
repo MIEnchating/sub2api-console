@@ -1105,7 +1105,7 @@ func TestRequestDetailsUsageEnrichmentHandlesNullInvalidAndPagedValues(t *testin
 }
 
 func TestRequestDetailsSkipsUsageWhenNoSuccessNeedsEnrichment(t *testing.T) {
-	for _, items := range []string{`[]`, `[{"account_id":41,"request_id":"error","kind":"error"}]`, `[{"account_id":41,"request_id":"success","kind":"success","first_token_ms":1000}]`} {
+	for _, items := range []string{`[]`, `[{"account_id":41,"request_id":"error","kind":"error"}]`, `[{"account_id":41,"request_id":"success","kind":"success","first_token_ms":1000,"input_tokens":10,"output_tokens":5}]`} {
 		t.Run(items, func(t *testing.T) {
 			client, server := testClient(t, 1, func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/api/v1/admin/ops/requests" {

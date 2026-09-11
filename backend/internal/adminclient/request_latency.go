@@ -7,13 +7,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/usagequality"
 )
 
 // LatencyEnrichmentError preserves usable ops evidence when the usage API fails.
 type LatencyEnrichmentError struct{ Cause error }
 
 func (e *LatencyEnrichmentError) Error() string {
-	return "真实请求首字采集失败，已保留运维请求记录：" + e.Cause.Error()
+	return "真实请求用量及首字采集失败，已保留运维请求记录：" + e.Cause.Error()
 }
 
 func (e *LatencyEnrichmentError) Unwrap() error { return e.Cause }
@@ -23,7 +25,8 @@ func (c *Client) enrichRequestLatency(ctx context.Context, accountID string, sta
 	for _, row := range rows {
 		requestID, _ := row["request_id"].(string)
 		requestID = strings.TrimSpace(requestID)
-		if fmt.Sprint(row["account_id"]) == accountID && row["kind"] == "success" && requestID != "" && !validFirstToken(row["first_token_ms"]) {
+		_, hasUsage := usagequality.Normalize(row)
+		if fmt.Sprint(row["account_id"]) == accountID && row["kind"] == "success" && requestID != "" && (!validFirstToken(row["first_token_ms"]) || !hasUsage) {
 			pending[requestID] = append(pending[requestID], row)
 		}
 	}
@@ -32,7 +35,7 @@ func (c *Client) enrichRequestLatency(ctx context.Context, accountID string, sta
 	}
 	// The official usage API accepts calendar dates rather than ops timestamps.
 	// Request/account identity limits enrichment to the already selected ops rows.
-	usage, err := c.fetchEvidence(ctx, "/admin/usage", "真实请求首字记录", map[string]string{
+	usage, err := c.fetchEvidence(ctx, "/admin/usage", "真实请求用量及首字记录", map[string]string{
 		"account_id": accountID, "start_date": start.UTC().Format(time.DateOnly),
 		"end_date": end.UTC().Format(time.DateOnly), "timezone": "UTC",
 		"sort_by": "created_at", "sort_order": "desc",
@@ -41,14 +44,21 @@ func (c *Client) enrichRequestLatency(ctx context.Context, accountID string, sta
 		return rows, &LatencyEnrichmentError{Cause: err}
 	}
 	for _, item := range usage {
-		if fmt.Sprint(item["account_id"]) != accountID || !validFirstToken(item["first_token_ms"]) {
+		if fmt.Sprint(item["account_id"]) != accountID {
 			continue
 		}
 		requestID, _ := item["request_id"].(string)
 		requestID = strings.TrimSpace(requestID)
 		for _, row := range pending[requestID] {
-			row["first_token_ms"] = item["first_token_ms"]
-			row["first_token_source"] = "usage.first_token_ms"
+			if !validFirstToken(row["first_token_ms"]) && validFirstToken(item["first_token_ms"]) {
+				row["first_token_ms"] = item["first_token_ms"]
+				row["first_token_source"] = "usage.first_token_ms"
+			}
+			if counts, valid := usagequality.Normalize(item); valid {
+				for key, value := range counts {
+					row[key] = value
+				}
+			}
 		}
 		delete(pending, requestID)
 	}

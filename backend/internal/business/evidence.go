@@ -165,26 +165,32 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 			failure_reason,observed_at,source,evidence_key,payload_json
 		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(source,evidence_key,account_id,group_name) DO UPDATE SET
-			latency_p50=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			latency_p50=CASE WHEN excluded.latency_p50 IS NULL THEN health_samples.latency_p50
+			 WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 THEN health_samples.latency_p50 ELSE excluded.latency_p50 END,
-			latency_p95=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			latency_p95=CASE WHEN excluded.latency_p95 IS NULL THEN health_samples.latency_p95
+			 WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 THEN health_samples.latency_p95 ELSE excluded.latency_p95 END,
-			latency_p99=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			latency_p99=CASE WHEN excluded.latency_p99 IS NULL THEN health_samples.latency_p99
+			 WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 THEN health_samples.latency_p99 ELSE excluded.latency_p99 END,
-			payload_json=CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
+			payload_json=json_patch(CASE WHEN json_extract(health_samples.payload_json,'$.latency_metric')='request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 THEN json_patch(excluded.payload_json,health_samples.payload_json)
-			 ELSE json_patch(health_samples.payload_json,excluded.payload_json) END
-		WHERE excluded.latency_p95 IS NOT NULL AND (
+			 ELSE json_patch(health_samples.payload_json,excluded.payload_json) END,
+			 CASE WHEN json_type(excluded.payload_json,'$.token_usage')='object'
+			 THEN json_object('token_usage',json_extract(excluded.payload_json,'$.token_usage')) ELSE '{}' END)
+		WHERE (excluded.latency_p95 IS NOT NULL AND (
 			health_samples.latency_p95 IS NULL OR
 			(COALESCE(json_extract(health_samples.payload_json,'$.latency_metric'),'')<>'request_duration'
 			 AND COALESCE(json_extract(excluded.payload_json,'$.latency_metric'),'')='request_duration')
 			OR (json_extract(health_samples.payload_json,'$.first_token_ms') IS NULL
 			 AND json_extract(excluded.payload_json,'$.first_token_ms') IS NOT NULL)
-		)`, sample.AccountID, sample.GroupName, sample.Result,
+		)) OR (json_type(excluded.payload_json,'$.token_usage')='object'
+		 AND json_extract(excluded.payload_json,'$.token_usage') IS NOT json_extract(health_samples.payload_json,'$.token_usage'))`, sample.AccountID, sample.GroupName, sample.Result,
 			sample.LatencyP50, sample.LatencyP95, sample.LatencyP99, sample.SampleCount, sample.Attempts,
 			sample.FailureReason, sample.ObservedAt, "traffic", sample.EvidenceKey, string(payload))
 		if err != nil {
@@ -319,6 +325,10 @@ func mergeDuplicateTrafficLatencies(ctx context.Context, tx *sql.Tx, accountID s
 			winner = &sample
 			retained = append(retained, winner)
 			continue
+		}
+		if winner.payload["token_usage"] == nil && sample.payload["token_usage"] != nil {
+			winner.payload["token_usage"] = sample.payload["token_usage"]
+			winner.changed = true
 		}
 		for _, metric := range []string{"first_token", "duration"} {
 			if validTrafficLatency(winner.payload[metric+"_ms"], metric) || !validTrafficLatency(sample.payload[metric+"_ms"], metric) {

@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/usagequality"
 )
 
 type Event string
@@ -16,6 +18,7 @@ type Event string
 const (
 	EventHealthy       Event = "healthy"
 	EventSlow          Event = "slow"
+	EventEmptyResponse Event = "empty_response"
 	EventUnknown       Event = "unknown_upstream_error"
 	EventGateway       Event = "gateway_error"
 	EventRateLimited   Event = "rate_limited_or_exhausted"
@@ -244,6 +247,9 @@ func classify(sample Sample, config scoringConfig) Classified {
 		return Classified{Score: config.eventScores[EventCredentialBad], Event: EventCredentialBad, Fatal: true, Failure: true}
 	}
 	if success {
+		if emptyResponseSample(sample) {
+			return Classified{Score: config.eventScores[EventEmptyResponse], Event: EventEmptyResponse, Failure: true}
+		}
 		if latency := healthLatencyMS(sample); latency != nil && *latency > float64(config.slowTTFBMS) {
 			return Classified{Score: config.eventScores[EventSlow], Event: EventSlow}
 		}
@@ -271,6 +277,18 @@ func looksLikeNetworkFailure(value string) bool {
 		}
 	}
 	return false
+}
+
+func emptyResponseSample(sample Sample) bool {
+	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
+	if source != "traffic" && source != "logs" {
+		return false
+	}
+	usage := sample.Payload
+	if raw, present := sample.Payload["token_usage"]; present {
+		usage, _ = raw.(map[string]any)
+	}
+	return usagequality.Empty(usage)
 }
 
 func trafficClientError(source string, status int, allowed map[int]struct{}) bool {
@@ -359,7 +377,8 @@ func parseScoringConfig(policy map[string]any) (scoringConfig, error) {
 func configuredEventScores(scoring map[string]any) (map[Event]float64, error) {
 	defaults := map[Event]float64{
 		EventHealthy: 100, EventSlow: 65, EventUnknown: 40, EventGateway: 25,
-		EventRateLimited: 15, EventProbeFailed: 10, EventCredentialBad: 0,
+		EventEmptyResponse: 40,
+		EventRateLimited:   15, EventProbeFailed: 10, EventCredentialBad: 0,
 	}
 	raw, present := scoring["event_scores"]
 	if !present {
@@ -371,7 +390,8 @@ func configuredEventScores(scoring map[string]any) (map[Event]float64, error) {
 	}
 	fields := map[Event]string{
 		EventHealthy: "perfect", EventSlow: "slow_ttfb", EventUnknown: "upstream_unknown", EventGateway: "gateway_error",
-		EventRateLimited: "quota_exhausted", EventProbeFailed: "probe_fail", EventCredentialBad: "fatal",
+		EventEmptyResponse: "empty_response",
+		EventRateLimited:   "quota_exhausted", EventProbeFailed: "probe_fail", EventCredentialBad: "fatal",
 	}
 	for event, key := range fields {
 		value, found := values[key]

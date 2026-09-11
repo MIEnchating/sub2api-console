@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -535,6 +536,22 @@ describe("调度策略入口", () => {
       event_scores: { quota_exhausted: 0 },
     };
     expect(policyRelationshipError(value)).toBe("限流 / 额度耗尽分必须大于 0");
+  });
+
+  it("疑似空回复分数可编辑并写入事件分值配置", () => {
+    let value = policyDraft(policy);
+    render(
+      <PolicyRulesEditor
+        value={value}
+        onChange={(next) => {
+          value = next;
+        }}
+      />,
+    );
+    const field = screen.getByRole("spinbutton", { name: "疑似空回复（分）" });
+    expect(field).toHaveValue(40);
+    fireEvent.change(field, { target: { value: "35" } });
+    expect(value.advanced_policy.scoring).toMatchObject({ event_scores: { empty_response: 35 } });
   });
 
   it("系统规则只展示参考项目的健康公式和错误分类字段", () => {

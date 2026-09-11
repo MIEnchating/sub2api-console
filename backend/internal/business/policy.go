@@ -789,7 +789,7 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 		if !ok {
 			return nil, fmt.Errorf("高级策略字段 %s 必须是对象", path)
 		}
-		allowed := valueStringSet("perfect", "slow_ttfb", "upstream_unknown", "gateway_error", "quota_exhausted", "probe_fail", "fatal")
+		allowed := valueStringSet("perfect", "slow_ttfb", "empty_response", "upstream_unknown", "gateway_error", "quota_exhausted", "probe_fail", "fatal")
 		result := map[string]any{}
 		for key, rawScore := range scores {
 			if _, found := allowed[key]; !found {

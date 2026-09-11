@@ -15,6 +15,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
+	"github.com/MIEnchating/sub2api-console/backend/internal/usagequality"
 )
 
 type Repository interface {
@@ -690,6 +691,9 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 		}
 		payload := map[string]any{
 			"request_id": requestID, "status_code": safeScalar(row["status_code"]), "phase": safeScalar(row["phase"]),
+		}
+		if counts, valid := usagequality.Normalize(row); valid {
+			payload["token_usage"] = counts
 		}
 		if model := firstTrafficModel(row); model != "" {
 			payload["model"] = model

@@ -23,6 +23,7 @@ function resultTone(result: AccountRecentResult): string {
     case "slow":
       return "bg-lime-500";
     case "unknown_upstream_error":
+    case "empty_response":
       return "bg-amber-500";
     case "gateway_error":
     case "rate_limited_or_exhausted":
@@ -63,6 +64,8 @@ function eventLabel(result: AccountRecentResult): string {
       return "响应慢";
     case "unknown_upstream_error":
       return "上游未知异常";
+    case "empty_response":
+      return "疑似空回复";
     case "gateway_error":
       return "网关错误";
     case "rate_limited_or_exhausted":

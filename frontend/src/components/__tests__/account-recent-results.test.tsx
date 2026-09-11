@@ -32,6 +32,23 @@ const placeholder: AccountRecentResult = {
 };
 
 describe("AccountRecentResults", () => {
+  it("成功请求被判定为疑似空回复时显示异常颜色与分数", () => {
+    render(
+      <AccountRecentResults
+        results={[
+          {
+            ...traffic,
+            result: "通过",
+            event_type: "empty_response",
+            score: 40,
+            failure_reason: null,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByLabelText(/疑似空回复 · 40 分/)).toHaveClass("bg-amber-500");
+  });
+
   it("追加请求时最旧色块移出，保留色块不会因位置变化被重建", () => {
     const first = { ...traffic, id: "1", observed_at: "2026-09-09T08:00:01Z" };
     const second = { ...traffic, id: "2", observed_at: "2026-09-09T08:00:02Z", duration_ms: 2000 };

@@ -1586,6 +1586,7 @@ const statusLabels: Record<string, string> = {
   gateway_error: "网关错误",
   rate_limited_or_exhausted: "限流或额度不足",
   unknown_upstream_error: "上游错误",
+  empty_response: "疑似空回复",
   apply: "自动执行",
   shadow: "仅计算",
   calculation: "计算",
@@ -13471,6 +13472,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
   const scoreFields = [
     ["perfect", "完美健康"],
     ["slow_ttfb", "响应慢"],
+    ["empty_response", "疑似空回复"],
     ["upstream_unknown", "上游未知异常"],
     ["gateway_error", "网关错误"],
     ["quota_exhausted", "限流 / 额度耗尽"],
@@ -13571,7 +13573,10 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
             max={100}
             step="any"
             disabled={key === "fatal"}
-            value={policyAdvancedValue(props.value, "scoring", `event_scores.${key}`)}
+            value={
+              policyAdvancedValue(props.value, "scoring", `event_scores.${key}`) ??
+              (key === "empty_response" ? 40 : undefined)
+            }
             onChange={(value) => set("scoring", `event_scores.${key}`, key === "fatal" ? 0 : value)}
           />
         ))}

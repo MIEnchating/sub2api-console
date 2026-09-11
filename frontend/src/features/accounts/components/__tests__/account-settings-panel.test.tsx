@@ -131,6 +131,7 @@ describe("账号设置面板", () => {
     expect(markup).toContain('data-testid="account-routing-grid"');
     expect(markup).toContain("sm:grid-cols-2");
     expect(markup).toContain('data-testid="account-control-group"');
+    expect(markup).toContain("rounded-xl border bg-muted/10");
     expect(markup).not.toContain("border-primary/25");
     expect(markup).not.toContain("bg-primary/5");
   });

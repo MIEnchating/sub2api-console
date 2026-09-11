@@ -2397,6 +2397,9 @@ func dominantModel(counts map[string]int) string {
 }
 
 func successfulRoutingSample(row business.RoutingSample) bool {
+	if emptyResponseSample(Sample{Source: row.Source, Payload: row.Payload}) {
+		return false
+	}
 	if strings.TrimSpace(row.FailureReason) != "" {
 		return false
 	}
@@ -2712,7 +2715,7 @@ func recentTransientFailures(health Health, window int) int {
 	count := 0
 	for _, event := range health.Events[:min(window, len(health.Events))] {
 		switch event {
-		case EventUnknown, EventGateway, EventProbeFailed:
+		case EventUnknown, EventGateway, EventProbeFailed, EventEmptyResponse:
 			count++
 		}
 	}

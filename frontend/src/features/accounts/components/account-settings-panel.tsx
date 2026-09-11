@@ -203,7 +203,7 @@ export function AccountSettingsPanel(props: {
         {detail ? (
           <form
             id={formId}
-            className="grid gap-4"
+            className="grid gap-5"
             onSubmit={form.handleSubmit((values) => save.mutate(values))}
           >
             <section aria-labelledby={`${formId}-routing`} className="grid gap-3">
@@ -245,14 +245,14 @@ export function AccountSettingsPanel(props: {
               </div>
             </section>
 
-            <section aria-labelledby={`${formId}-control`} className="grid gap-3 border-t pt-4">
+            <section aria-labelledby={`${formId}-control`} className="grid gap-4 border-t pt-5">
               <SettingsSectionHeading
                 id={`${formId}-control`}
                 title="账号管控"
                 description="控制账号是否参与调度、探测和健康评分。"
               />
               <div
-                className="divide-border divide-y overflow-hidden rounded-lg border"
+                className="divide-border divide-y overflow-hidden rounded-xl border bg-muted/10"
                 data-testid="account-control-group"
               >
                 <SettingsSwitch
@@ -276,7 +276,7 @@ export function AccountSettingsPanel(props: {
               </div>
             </section>
 
-            <section aria-labelledby={`${formId}-model`} className="grid gap-3 border-t pt-4">
+            <section aria-labelledby={`${formId}-model`} className="grid gap-4 border-t pt-5">
               <SettingsSectionHeading
                 id={`${formId}-model`}
                 title="探测模型"
@@ -388,7 +388,7 @@ function SettingsSwitch(props: {
   onCheckedChange: (checked: boolean) => void;
 }) {
   return (
-    <div className="hover:bg-muted/35 flex min-h-16 items-center justify-between gap-4 px-3 py-3 transition-colors">
+    <div className="hover:bg-muted/35 flex min-h-16 items-center justify-between gap-4 px-4 py-3 transition-colors">
       <FieldLabel label={props.label} description={props.description} htmlFor={props.id} />
       <Switch
         id={props.id}

@@ -350,6 +350,7 @@ describe("automatic inspection log details", () => {
     }
 
     expect(formatLogValue("slow_ttfb", "latest_event")).toBe("首字延迟过高");
+    expect(formatLogValue("empty_response", "latest_event")).toBe("疑似空回复");
     expect(formatLogValue("cost_blocked", "desired_health")).toBe("成本墙拦截");
   });
 });

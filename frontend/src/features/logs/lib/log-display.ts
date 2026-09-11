@@ -259,6 +259,7 @@ const contextualValueLabels: Record<string, Record<string, string>> = {
     image_captcha_required: "需要图片验证码",
   },
   latest_event: {
+    empty_response: "疑似空回复",
     fatal: "致命异常",
     gateway_error: "网关错误",
     perfect: "运行正常",

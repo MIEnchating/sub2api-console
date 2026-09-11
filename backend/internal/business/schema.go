@@ -519,7 +519,7 @@ func initialControlPolicy() map[string]any {
 		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
-			"event_scores":           map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
+			"event_scores":           map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "empty_response": int64(40), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
 			"history_window_minutes": int64(1440), "short_window": int64(10), "long_window": int64(60), "latest_weight": 0.5, "short_ratio": 0.7, "slow_ttfb_ms": int64(5000),
 		},
 		"breaker":  map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "transient_consecutive_failures": int64(2), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
