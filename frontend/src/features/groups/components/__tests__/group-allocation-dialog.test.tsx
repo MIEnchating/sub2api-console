@@ -3,7 +3,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { GroupAllocation } from "@/api";
-import { GroupAllocationContent, groupAllocationLayout } from "../group-allocation-dialog";
+import {
+  GroupAllocationContent,
+  GroupAllocationDialog,
+  groupAllocationLayout,
+} from "../group-allocation-dialog";
 
 afterEach(cleanup);
 
@@ -187,4 +191,19 @@ describe("group allocation detail", () => {
     expect(markup).toContain("尚未生成账号最终调度状态");
     expect(markup).not.toContain("权重 0.5");
   });
+});
+
+it("读取分组调度时展示具名轻量提示，后台刷新保留已读取内容", () => {
+  const group = { id: "6", name: "codex", account_count: 2 } as import("@/api").GroupStatus;
+  const props = { group, loading: true, error: null, onClose: () => {} };
+  const view = render(<GroupAllocationDialog {...props} />);
+  expect(screen.getByRole("status", { name: "正在读取分组账号调度状态" })).toHaveTextContent(
+    "正在读取分组账号调度状态",
+  );
+  expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
+  view.rerender(<GroupAllocationDialog {...props} allocation={allocation} />);
+  expect(screen.getByText("tokenshen-0.15")).toBeVisible();
+  expect(
+    screen.queryByRole("status", { name: "正在读取分组账号调度状态" }),
+  ).not.toBeInTheDocument();
 });

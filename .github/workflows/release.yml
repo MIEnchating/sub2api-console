@@ -59,8 +59,8 @@ jobs:
       - name: Backend mandatory checks
         working-directory: backend
         run: |
-          go vet ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
-          go test -race ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          go vet ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          go test -race ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
           go build ./...
 
   build-and-push:

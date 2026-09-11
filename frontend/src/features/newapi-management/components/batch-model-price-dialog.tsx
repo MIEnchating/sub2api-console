@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import type { NewAPIModelPrice, Sub2APIModelPrice } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -76,11 +77,7 @@ export function BatchModelPriceDialog(props: {
         </DialogHeader>
         <DialogBody>
           {props.preparing ? <p role="status">正在准备批量价格预览…</p> : null}
-          {props.error ? (
-            <p role="alert" className="mb-3 text-sm text-destructive">
-              {props.error}
-            </p>
-          ) : null}
+          {props.error ? <QueryErrorToast error={props.error} fallback="批量价格操作失败" /> : null}
           {!props.preparing && props.preview?.length ? (
             <Table
               className="min-w-[56rem]"

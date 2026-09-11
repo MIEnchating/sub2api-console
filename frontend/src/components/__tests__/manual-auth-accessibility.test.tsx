@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,6 +38,7 @@ afterEach(() => {
   clients.splice(0).forEach((client) => client.clear());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function renderForm(upstreamType = "sub2api"): void {
@@ -77,11 +78,19 @@ describe("手动鉴权表单可访问性", () => {
     await waitFor(() => expect(screen.getByRole("option", { name: "密码箱登录" })).toBeVisible());
   });
 
-  it("切换密码箱登录时密码项选择器关联标签", async () => {
+  it("点击后下拉框在下一帧展开时，等待密码箱登录选项并显示关联标签的密码项选择器", async () => {
+    // Base UI defers opening to requestAnimationFrame; a completed click need not open it yet.
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const user = userEvent.setup();
     renderForm();
-    await user.click(screen.getByRole("combobox"));
-    await user.click(screen.getByRole("option", { name: "密码箱登录" }));
+    const mode = screen.getByRole("combobox", { name: "鉴权方式" });
+    await user.click(mode);
+    const option = screen.findByRole("option", { name: "密码箱登录" });
+    await act(async () => {
+      vi.advanceTimersToNextFrame();
+    });
+    expect(mode).toHaveAttribute("aria-expanded", "true");
+    await user.click(await option);
 
     expect(screen.getByRole("combobox", { name: "密码箱密码项" })).toBeVisible();
   });
@@ -89,8 +98,8 @@ describe("手动鉴权表单可访问性", () => {
   it("切换账号密码并启用保存时用户名密码及凭据名称关联标签", async () => {
     const user = userEvent.setup();
     renderForm();
-    await user.click(screen.getByRole("combobox"));
-    await user.click(screen.getByRole("option", { name: "自定义账号密码" }));
+    await user.click(screen.getByRole("combobox", { name: "鉴权方式" }));
+    await user.click(await screen.findByRole("option", { name: "自定义账号密码" }));
     fireEvent.click(screen.getByRole("switch", { name: /登录成功后/ }));
 
     for (const label of ["用户名", "密码", "凭据名称（可选）"]) {

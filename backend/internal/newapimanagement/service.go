@@ -23,6 +23,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/officialpricing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
@@ -128,32 +129,37 @@ type ToolPrice struct {
 }
 
 // Sub2APIModelPrice is one entry from Sub2API's loaded billing catalog and its
-// corresponding New API ratios. InputPrice/OutputPrice are USD per token.
+// corresponding New API ratios. Prices retain source numbers per token, without currency conversion.
 type Sub2APIModelPrice struct {
-	Source                        string `json:"source,omitempty"`
-	Model                         string `json:"model"`
-	InputPrice                    string `json:"input_price"`
-	OutputPrice                   string `json:"output_price"`
-	ImageInputPrice               string `json:"image_input_price,omitempty"`
-	ImageOutputPrice              string `json:"image_output_price,omitempty"`
-	Provider                      string `json:"provider,omitempty"`
-	Mode                          string `json:"mode,omitempty"`
-	CacheWritePrice               string `json:"cache_write_price,omitempty"`
-	CacheWrite1hPrice             string `json:"cache_write_1h_price,omitempty"`
-	CacheReadPrice                string `json:"cache_read_price,omitempty"`
-	ModelRatio                    string `json:"model_ratio"`
-	CompletionRatio               string `json:"completion_ratio"`
-	CacheRatio                    string `json:"cache_ratio,omitempty"`
-	CreateCacheRatio              string `json:"create_cache_ratio,omitempty"`
-	CreateCache1hRatio            string `json:"create_cache_1h_ratio,omitempty"`
-	ImageRatio                    string `json:"image_ratio,omitempty"`
-	LongContextThreshold          int    `json:"long_context_threshold,omitempty"`
-	LongContextThresholdInclusive bool   `json:"long_context_threshold_inclusive,omitempty"`
-	LongContextInputPrice         string `json:"long_context_input_price,omitempty"`
-	LongContextOutputPrice        string `json:"long_context_output_price,omitempty"`
-	LongContextCacheWritePrice    string `json:"long_context_cache_write_price,omitempty"`
-	LongContextCacheWrite1hPrice  string `json:"long_context_cache_write_1h_price,omitempty"`
-	LongContextCacheReadPrice     string `json:"long_context_cache_read_price,omitempty"`
+	SourceScope                   string                       `json:"source_scope,omitempty"`
+	PriceTiers                    []officialpricing.Tier       `json:"price_tiers,omitempty"`
+	BillingExpr                   string                       `json:"billing_expr,omitempty"`
+	Source                        string                       `json:"source,omitempty"`
+	SourceURL                     string                       `json:"source_url,omitempty"`
+	TimePricing                   *officialpricing.TimePricing `json:"time_pricing,omitempty"`
+	Model                         string                       `json:"model"`
+	InputPrice                    string                       `json:"input_price"`
+	OutputPrice                   string                       `json:"output_price"`
+	ImageInputPrice               string                       `json:"image_input_price,omitempty"`
+	ImageOutputPrice              string                       `json:"image_output_price,omitempty"`
+	Provider                      string                       `json:"provider,omitempty"`
+	Mode                          string                       `json:"mode,omitempty"`
+	CacheWritePrice               string                       `json:"cache_write_price,omitempty"`
+	CacheWrite1hPrice             string                       `json:"cache_write_1h_price,omitempty"`
+	CacheReadPrice                string                       `json:"cache_read_price,omitempty"`
+	ModelRatio                    string                       `json:"model_ratio"`
+	CompletionRatio               string                       `json:"completion_ratio"`
+	CacheRatio                    string                       `json:"cache_ratio,omitempty"`
+	CreateCacheRatio              string                       `json:"create_cache_ratio,omitempty"`
+	CreateCache1hRatio            string                       `json:"create_cache_1h_ratio,omitempty"`
+	ImageRatio                    string                       `json:"image_ratio,omitempty"`
+	LongContextThreshold          int                          `json:"long_context_threshold,omitempty"`
+	LongContextThresholdInclusive bool                         `json:"long_context_threshold_inclusive,omitempty"`
+	LongContextInputPrice         string                       `json:"long_context_input_price,omitempty"`
+	LongContextOutputPrice        string                       `json:"long_context_output_price,omitempty"`
+	LongContextCacheWritePrice    string                       `json:"long_context_cache_write_price,omitempty"`
+	LongContextCacheWrite1hPrice  string                       `json:"long_context_cache_write_1h_price,omitempty"`
+	LongContextCacheReadPrice     string                       `json:"long_context_cache_read_price,omitempty"`
 }
 
 type RemotePricingSource struct {
@@ -1326,14 +1332,10 @@ func (s *Service) SaveModelPrices(ctx context.Context, platformID string, inputs
 			return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 		}
 	}
-	writtenKeys = append(writtenKeys, "billing_setting.billing_mode")
-	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_mode", billingModes); err != nil {
+	if err := s.writeBillingOptions(ctx, *platform, options, billingModes, billingExprs); err != nil {
 		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
 	}
-	writtenKeys = append(writtenKeys, "billing_setting.billing_expr")
-	if err := s.writeStringOption(ctx, *platform, "billing_setting.billing_expr", billingExprs); err != nil {
-		return RemoteSnapshot{}, errors.Join(err, s.rollbackOptions(ctx, *platform, options, writtenKeys))
-	}
+
 	return s.Refresh(ctx, platformID)
 }
 
@@ -1445,15 +1447,6 @@ func (s *Service) writeOption(ctx context.Context, platform configstore.NewAPIPl
 		numericValues[itemKey] = json.RawMessage(strings.TrimSpace(raw))
 	}
 	encoded, err := json.Marshal(numericValues)
-	if err != nil {
-		return err
-	}
-	_, err = s.request(ctx, platform, http.MethodPut, "/api/option/", map[string]any{"key": key, "value": string(encoded)})
-	return err
-}
-
-func (s *Service) writeStringOption(ctx context.Context, platform configstore.NewAPIPlatform, key string, value map[string]string) error {
-	encoded, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}

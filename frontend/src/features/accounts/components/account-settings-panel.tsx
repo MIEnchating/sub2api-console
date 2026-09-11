@@ -1,3 +1,6 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Save } from "lucide-react";
@@ -19,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
 import { notifyOperationError } from "@/lib/operation-feedback";
@@ -91,6 +93,7 @@ export function AccountSettingsPanel(props: {
     isLoading: boolean;
     isError: boolean;
     error: unknown;
+    refetch?: () => unknown;
   };
   onCancel: () => void;
   onSaved: () => void;
@@ -188,11 +191,14 @@ export function AccountSettingsPanel(props: {
   return (
     <>
       <DialogBody className={accountDetailDialogLayout.body}>
-        {props.query.isLoading ? <AccountSettingsSkeleton /> : null}
+        {props.query.isLoading ? <ContentLoading label="正在读取账号设置" /> : null}
         {props.query.isError ? (
-          <p className="text-destructive py-6 text-center text-sm">
-            {props.query.error instanceof Error ? props.query.error.message : "账号详情读取失败"}
-          </p>
+          <>
+            <QueryErrorToast error={props.query.error} fallback="账号详情读取失败" />
+            {!detail && props.query.refetch && (
+              <ContentRetry onRetry={() => void props.query.refetch?.()} />
+            )}
+          </>
         ) : null}
         {detail ? (
           <form
@@ -402,21 +408,6 @@ function SettingsSectionHeading(props: { id: string; title: string; description:
         {props.title}
       </h3>
       <p className="text-muted-foreground text-xs leading-4">{props.description}</p>
-    </div>
-  );
-}
-
-function AccountSettingsSkeleton() {
-  return (
-    <div className="grid gap-4" aria-label="正在读取账号设置">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Skeleton className="h-16" />
-        <Skeleton className="h-16" />
-        <Skeleton className="h-16" />
-        <Skeleton className="h-16" />
-      </div>
-      <Skeleton className="h-32" />
-      <Skeleton className="h-16" />
     </div>
   );
 }

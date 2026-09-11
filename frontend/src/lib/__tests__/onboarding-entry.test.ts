@@ -14,6 +14,7 @@ import {
   candidateUsesAccountBaseURL,
   compatibleOnboardingLocalGroups,
   composeOnboardingBaseUrl,
+  effectiveOnboardingPlatform,
   inferOnboardingProtocol,
   localGroupSelectionLabel,
   localGroupMultiplierLabel,
@@ -87,6 +88,11 @@ describe("onboarding entry workflow", () => {
     expect(onboardingPlatformNeedsProtocol("Claude")).toBe(false);
     expect(onboardingPlatformNeedsProtocol("openai")).toBe(false);
     expect(onboardingPlatformNeedsProtocol("Zhipu AI")).toBe(false);
+  });
+
+  it("keeps a recognized upstream platform when a Composite local group infers OpenAI", () => {
+    expect(effectiveOnboardingPlatform("kimi", "openai")).toBe("kimi");
+    expect(effectiveOnboardingPlatform("composite", "kimi")).toBe("kimi");
   });
 
   it("only enables unresolved catalog groups after a concrete protocol is selected", () => {

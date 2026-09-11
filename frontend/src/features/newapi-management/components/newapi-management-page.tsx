@@ -73,7 +73,7 @@ export function NewAPIHeadingAction(props: {
 
   if (!props.hasPlatform) {
     return (
-      <Button size="sm" onClick={props.onConfigure}>
+      <Button onClick={props.onConfigure}>
         <CirclePlus aria-hidden="true" />
         添加平台配置
       </Button>
@@ -126,7 +126,7 @@ export function NewAPIPlatformDetails(props: {
         {props.onEdit || props.onDelete ? (
           <div className="flex items-center gap-2">
             {props.onEdit ? (
-              <Button size="sm" variant="outline" onClick={props.onEdit}>
+              <Button variant="outline" onClick={props.onEdit}>
                 <Pencil aria-hidden="true" />
                 编辑平台配置
               </Button>
@@ -135,7 +135,7 @@ export function NewAPIPlatformDetails(props: {
               <Tooltip>
                 <TooltipTrigger render={<span className="inline-flex" />}>
                   <Button
-                    size="icon-sm"
+                    size="icon"
                     variant="ghost"
                     className="text-destructive"
                     aria-label="删除 New API 平台配置"
@@ -236,7 +236,7 @@ export function NewAPIManagementPage(props: Props) {
         queryKey: ["newapi-remote-model-pricing-source", platformId],
       });
       if (catalog.stale) return;
-      toast.success("参考价格已刷新并缓存 24 小时");
+      toast.success("参考价格已刷新并缓存");
     },
     onError: (error) => notifyOperationError(error, "参考价格刷新失败，已保留上次缓存"),
   });
@@ -502,7 +502,6 @@ export function NewAPIManagementPage(props: Props) {
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
             <span>尚未添加 New API 平台配置</span>
             <Button
-              size="sm"
               onClick={() => {
                 setEditingPlatform(null);
                 setPlatformDialogOpen(true);
@@ -533,6 +532,7 @@ export function NewAPIManagementPage(props: Props) {
       />
       <RawPricingSourceDialog
         open={rawPricingSourceOpen}
+        onRetry={() => void rawPricingSource.refetch()}
         source={rawPricingSource.data}
         pending={rawPricingSource.isFetching}
         error={rawPricingSource.error instanceof Error ? rawPricingSource.error.message : ""}

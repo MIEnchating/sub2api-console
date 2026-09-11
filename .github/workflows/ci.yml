@@ -81,9 +81,9 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: Vet
-        run: go vet ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+        run: go vet ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
       - name: Race tests
-        run: go test -race ./... ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+        run: go test -race ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
       - name: Build
         run: go build ./...
 

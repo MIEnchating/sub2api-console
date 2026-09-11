@@ -34,7 +34,6 @@ export function GroupSelectionToolbar(props: {
               <Button
                 variant="outline"
                 size="icon"
-                className="size-6"
                 aria-label="清空选择"
                 disabled={props.pending}
                 onClick={props.onClear}
@@ -68,7 +67,6 @@ export function GroupSelectionToolbar(props: {
                   <Button
                     variant={action === "exclude" ? "destructive" : "outline"}
                     size="icon"
-                    className="size-8"
                     aria-label={meta.label}
                     disabled={props.pending || props.disabled}
                     onClick={() => props.onAction(action)}

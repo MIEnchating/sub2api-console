@@ -1,20 +1,23 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+
+import { Toaster, toast } from "sonner";
+import { createConsoleQueryClient } from "@/lib/query-client";
 
 import { api } from "@/api";
 import { ModelCheckPage } from "../model-check-page";
 
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => {
+  toast.dismiss();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-it("刷新共同模型期间保留列表节点与选择，失败时展示原因并禁止检测", async () => {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
-  });
+it("刷新共同模型期间保留列表节点与选择，失败时仅悬浮提示并禁止检测", async () => {
+  const client = createConsoleQueryClient();
+  client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
     ["accounts"],
     [
@@ -44,6 +47,7 @@ it("刷新共同模型期间保留列表节点与选择，失败时展示原因�
   );
   const view = render(
     <QueryClientProvider client={client}>
+      <Toaster />
       <ModelCheckPage />
     </QueryClientProvider>,
   );
@@ -57,7 +61,9 @@ it("刷新共同模型期间保留列表节点与选择，失败时展示原因�
   expect(model).toBeChecked();
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();
   await act(async () => rejectModels(new Error("模型接口暂时不可用")));
-  expect(await screen.findByRole("alert")).toHaveTextContent("模型接口暂时不可用");
+  expect(await screen.findByText("模型接口暂时不可用")).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByText(/当前保留上次模型列表/)).not.toBeInTheDocument();
   expect(screen.getByRole("list", { name: "可检测模型" })).toBe(list);
   expect(model).toBeChecked();
   expect(screen.getByRole("button", { name: /开始检测/ })).toBeDisabled();

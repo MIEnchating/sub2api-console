@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import type { Task } from "@/api";
 import { OperationDialogFooter } from "./operation-dialog-footer";
 import { notifyOperationError } from "@/lib/operation-feedback";
@@ -7,6 +9,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
 import type { KumaResource, KumaResourceKind, KumaResourceList } from "@/api";
 import { Button } from "@/components/ui/button";
+import { QueryErrorToast } from "@/components/query-error-toast";
 import {
   Dialog,
   DialogBody,
@@ -25,6 +28,9 @@ export function ResourceDialog(props: {
   item?: KumaResource;
   options: KumaResourceList;
   pending: boolean;
+  loading?: boolean;
+  loadError?: Error | null;
+  onRetry?: () => void;
   task?: Pick<Task, "message" | "progress"> | null;
   error: Error | null;
   onClose: () => void;
@@ -34,6 +40,9 @@ export function ResourceDialog(props: {
     resolver: zodResolver(resourceSchema),
     defaultValues: resourceDefaults(props.kind, props.item),
   });
+  useEffect(() => {
+    form.reset(resourceDefaults(props.kind, props.item));
+  }, [form, props.kind, props.item]);
   useEffect(() => {
     if (props.error) notifyOperationError(props.error, "保存失败，请重试");
   }, [form, props.error]);
@@ -61,30 +70,43 @@ export function ResourceDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          <form id="kuma-resource" onSubmit={form.handleSubmit(props.onSubmit)}>
-            <fieldset disabled={props.pending} className="grid min-w-0 gap-4">
-              {props.kind === "notifications" && (
-                <NotificationForm form={form} editing={!!props.item} pending={props.pending} />
-              )}
-              {props.kind === "maintenance" && (
-                <MaintenanceForm form={form} options={props.options} pending={props.pending} />
-              )}
-              {props.kind === "status-pages" && (
-                <StatusPageForm
-                  form={form}
-                  options={props.options}
-                  pending={props.pending}
-                  editing={!!props.item}
-                />
-              )}
-            </fieldset>
-          </form>
+          {props.loading && <ContentLoading label="正在读取编辑配置…" />}
+          {props.loadError && !props.loading && (
+            <>
+              <QueryErrorToast error={props.loadError} fallback="编辑数据读取失败" />
+              {props.onRetry && <ContentRetry onRetry={props.onRetry} />}
+            </>
+          )}
+          {!props.loading && !props.loadError && (
+            <form id="kuma-resource" onSubmit={form.handleSubmit(props.onSubmit)}>
+              <fieldset disabled={props.pending} className="grid min-w-0 gap-4">
+                {props.kind === "notifications" && (
+                  <NotificationForm form={form} editing={!!props.item} pending={props.pending} />
+                )}
+                {props.kind === "maintenance" && (
+                  <MaintenanceForm form={form} options={props.options} pending={props.pending} />
+                )}
+                {props.kind === "status-pages" && (
+                  <StatusPageForm
+                    form={form}
+                    options={props.options}
+                    pending={props.pending}
+                    editing={!!props.item}
+                  />
+                )}
+              </fieldset>
+            </form>
+          )}
         </DialogBody>
         <OperationDialogFooter pending={props.pending} task={props.task}>
           <Button variant="outline" disabled={props.pending} onClick={props.onClose}>
             取消
           </Button>
-          <Button type="submit" form="kuma-resource" disabled={props.pending}>
+          <Button
+            type="submit"
+            form="kuma-resource"
+            disabled={props.pending || props.loading || !!props.loadError}
+          >
             <Save aria-hidden="true" />
             {props.pending ? "正在保存…" : "保存"}
           </Button>

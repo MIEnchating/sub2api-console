@@ -15,7 +15,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 import { logStatusLabel, logTitleLabel } from "@/features/logs/lib/log-display";
 import { cn } from "@/lib/utils";
 import type { AttentionAccount, AttentionState } from "../lib/overview-health";
@@ -118,7 +117,7 @@ export function OverviewActivity(props: OverviewActivityProps) {
             自动执行失败、熔断、停用、暂停、保底与降级渠道按风险排序。
           </CardDescription>
           <CardAction>
-            <Button variant="outline" size="sm" onClick={props.onOpenAccounts}>
+            <Button variant="outline" onClick={props.onOpenAccounts}>
               全部渠道 <ArrowRight />
             </Button>
           </CardAction>
@@ -126,13 +125,6 @@ export function OverviewActivity(props: OverviewActivityProps) {
 
         <CardContent className="p-0">
           {props.attentionLoading && <ActivitySkeleton rows={4} />}
-          {!props.attentionLoading && props.attentionError ? (
-            <EmptyActivity
-              icon={<ShieldCheck size={18} />}
-              title={operationErrorMessage(props.attentionError, "渠道读取失败")}
-              detail="请检查连接后点击顶部刷新重试。"
-            />
-          ) : null}
           {!props.attentionLoading && !props.attentionError && props.attention.length === 0 && (
             <EmptyActivity
               icon={<ShieldCheck size={18} />}
@@ -187,7 +179,7 @@ export function OverviewActivity(props: OverviewActivityProps) {
             最近的运行、自动执行与策略变化。
           </CardDescription>
           <CardAction>
-            <Button variant="outline" size="sm" onClick={props.onOpenEvents}>
+            <Button variant="outline" onClick={props.onOpenEvents}>
               全部 <ArrowRight />
             </Button>
           </CardAction>
@@ -195,13 +187,6 @@ export function OverviewActivity(props: OverviewActivityProps) {
 
         <CardContent className="p-0">
           {props.eventsLoading && <ActivitySkeleton rows={4} />}
-          {!props.eventsLoading && props.eventsError ? (
-            <EmptyActivity
-              icon={<Clock3 size={18} />}
-              title={operationErrorMessage(props.eventsError, "事件读取失败")}
-              detail="请检查连接后点击顶部刷新重试。"
-            />
-          ) : null}
           {!props.eventsLoading && !props.eventsError && props.events.length === 0 && (
             <EmptyActivity icon={<Clock3 size={18} />} title="暂无最近事件" />
           )}

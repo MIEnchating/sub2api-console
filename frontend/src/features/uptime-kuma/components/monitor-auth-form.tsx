@@ -25,12 +25,13 @@ export function MonitorAuthForm(props: {
   const method = form.watch("options.auth_method") ?? "none";
   const errors = form.formState.errors.options;
   const retained = !!form.watch("template_retain");
-  const canPreserve = (!usingTemplate || retained) && !!props.monitor;
+  const canPreserve = !!props.monitor && method === (props.monitor.options?.auth_method ?? "none");
   const usernameLabel = canPreserve ? "鉴权用户名（留空保留）" : "鉴权用户名";
   const passwordLabel = canPreserve ? "鉴权密码 / Token（留空保留）" : "鉴权密码 / Token";
   const changeMethod = (value: string | null): void => {
     if (!value) return;
     form.setValue("template_auth_override", usingTemplate && !retained);
+    if (value === method) return;
     form.setValue("options.auth_method", value);
     form.setValue("options.auth_username", "");
     form.setValue("options.auth_password", "");
@@ -56,7 +57,7 @@ export function MonitorAuthForm(props: {
                   {label}
                 </SelectItem>
               ))}
-              {!usingTemplate && !["none", "basic", "bearer"].includes(method) && (
+              {!["none", "basic", "bearer"].includes(method) && (
                 <SelectItem value={method}>保留现有鉴权</SelectItem>
               )}
             </SelectContent>

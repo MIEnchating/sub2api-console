@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Task, TaskSummary } from "@/api";
 
@@ -63,6 +63,7 @@ function renderPage(
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
   queryClient.setQueryData(["tasks"], taskRows);
+  queryClient.setQueryData(["accounts"], []);
   queryClient.setQueryData(["task", completedTask.id], completedTask);
   queryClient.setQueryData(["system-metrics"], {
     sampled_at: "2026-09-05T00:00:00Z",
@@ -147,4 +148,25 @@ describe("系统信息任务页面", () => {
       .querySelector('[data-slot="table-container"]');
     expect(resultTable).toHaveClass("max-h-[min(32rem,calc(100svh-18rem))]");
   });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+it("打开未缓存任务时显示轻量读取状态，失败后可以重新读取", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ detail: "任务读取失败" }, { status: 502 }))
+      .mockResolvedValue(Response.json(completedTask)),
+  );
+  const view = renderPage([{ ...completedTask, id: "uncached" }]);
+  fireEvent.click(screen.getByRole("tab", { name: "历史任务 1" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看任务" }));
+  expect(screen.getByRole("status", { name: "正在读取任务详情" })).toHaveTextContent(
+    "正在读取任务详情",
+  );
+  expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "重新读取" }, { timeout: 5_000 }));
+  expect(await screen.findByText("OpenAI · gpt-5.6-sol")).toBeVisible();
+  view.unmount();
 });

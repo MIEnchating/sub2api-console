@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import type { Task, UnifiedLogEntry } from "@/api";
-import { LogDetailsDialog } from "../log-details-dialog";
+import { LogDetailsDialog, LogDetailsContent } from "../log-details-dialog";
 
 it("任务已失败而列表摘要仍在运行时详情展示最新失败原因与进度", () => {
   const entry: UnifiedLogEntry = {
@@ -45,4 +45,31 @@ it("任务已失败而列表摘要仍在运行时详情展示最新失败原因�
   expect(screen.getByText("失败")).toBeInTheDocument();
   expect(screen.getByText("75%")).toBeInTheDocument();
   expect(screen.queryByText("执行中")).not.toBeInTheDocument();
+});
+
+it("日志完整结果读取中保留列表摘要并显示紧凑忙碌提示", () => {
+  render(
+    <LogDetailsContent
+      entry={{
+        id: "log-loading",
+        kind: "task",
+        occurred_at: "2026-09-11T00:00:00Z",
+        title: "active-probe",
+        summary: "正在验证账号",
+        status: "running",
+        actor: null,
+        object_label: null,
+        source: "task",
+        source_id: "task-loading",
+        related_count: 0,
+        details: {},
+      }}
+      loading
+    />,
+  );
+  expect(screen.getByText("正在验证账号")).toBeVisible();
+  expect(screen.getByRole("status", { name: "正在读取完整任务结果…" })).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
 });

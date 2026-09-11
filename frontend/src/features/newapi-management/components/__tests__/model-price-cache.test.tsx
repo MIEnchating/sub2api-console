@@ -1,3 +1,4 @@
+import { Toaster, toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +52,7 @@ beforeEach(() => {
   vi.spyOn(api, "managementModelPrices").mockResolvedValue(catalog);
 });
 afterEach(() => {
+  toast.dismiss();
   client.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -65,6 +67,7 @@ describe("模型价格操作复用参考缓存", () => {
     const write = vi.spyOn(api, "saveNewAPIModelPrices").mockResolvedValue(snapshot);
     render(
       <QueryClientProvider client={client}>
+        <Toaster />
         <NewAPIManagementPage view="prices" />
       </QueryClientProvider>,
     );
@@ -84,6 +87,7 @@ describe("模型价格操作复用参考缓存", () => {
     client.setQueryData(["newapi-management-model-prices", "primary"], catalog);
     render(
       <QueryClientProvider client={client}>
+        <Toaster />
         <NewAPIManagementPage view="prices" />
       </QueryClientProvider>,
     );
@@ -108,9 +112,8 @@ describe("模型价格操作复用参考缓存", () => {
     expect(screen.getByText("一致", { exact: true })).toBeInTheDocument();
     expect(screen.queryByText("比较中", { exact: true })).not.toBeInTheDocument();
     await act(async () => rejectPrices(new Error("参考接口暂时不可用")));
-    expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent(
-      "参考接口暂时不可用",
-    );
+    expect(await screen.findByText("参考接口暂时不可用")).toBeVisible();
+    expect(within(screen.getByRole("dialog")).queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认同步 0 个模型" })).toBeDisabled();
     expect(screen.getByText("一致", { exact: true })).toBeInTheDocument();
   });
@@ -123,6 +126,7 @@ describe("模型价格操作复用参考缓存", () => {
     });
     render(
       <QueryClientProvider client={client}>
+        <Toaster />
         <NewAPIManagementPage view="prices" />
       </QueryClientProvider>,
     );

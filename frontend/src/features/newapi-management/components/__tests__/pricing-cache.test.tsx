@@ -54,7 +54,7 @@ describe("模型参考价缓存", () => {
     expect(screen.queryByText("比较中", { exact: true })).not.toBeInTheDocument();
     view.rerender(<NewAPIModelPrices {...props} managementPricesError="连接失败" />);
     expect(screen.getByText("一致", { exact: true })).toBe(status);
-    expect(screen.getByText(/连接失败/)).toBeVisible();
+    expect(screen.queryByText(/连接失败/)).not.toBeInTheDocument();
   });
 
   it("刷新失败时展示过期提示且已有缓存仍可查看", () => {

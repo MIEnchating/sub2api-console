@@ -33,7 +33,8 @@ it("重新扫描 Key 时保留预览尺寸及表格，扫描失败后禁用删�
   expect(screen.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();
   view.rerender(<OnboardingKeyCleanupDialog {...props} previewError={new Error("扫描连接失败")} />);
   expect(screen.getByRole("table")).toBe(table);
-  expect(screen.getByRole("alert")).toHaveTextContent("扫描连接失败");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByText("扫描连接失败")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "刷新扫描结果" })).toBeEnabled();
 });

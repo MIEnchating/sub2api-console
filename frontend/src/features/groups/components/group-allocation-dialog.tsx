@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import type { GroupAllocation, GroupAllocationChannel, GroupStatus } from "@/api";
 import { AccountHealthScore } from "@/components/account-health-score";
 import { DataTablePanel } from "@/components/data-table/table-panel";
@@ -10,7 +12,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import {
   Table,
@@ -31,6 +32,7 @@ type Props = {
   loading: boolean;
   error: unknown;
   onClose: () => void;
+  onRetry?: () => void;
 };
 
 export const groupAllocationLayout = {
@@ -38,7 +40,7 @@ export const groupAllocationLayout = {
   width: "table",
   height: "tall",
   content: "flex h-full min-h-0 flex-col gap-3 overflow-hidden",
-  loading: "grid h-full min-h-0 grid-rows-[4rem_minmax(0,1fr)] gap-4",
+  loading: "h-full",
   policy:
     "bg-muted/40 grid min-w-0 grid-cols-1 divide-y overflow-hidden rounded-lg border sm:grid-cols-3 sm:divide-x sm:divide-y-0",
   policyItem: "grid min-w-0 content-center gap-1.5 px-3 py-2.5",
@@ -320,18 +322,19 @@ export function GroupAllocationDialog(props: Props) {
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="overflow-hidden pr-0">
-          {props.loading && (
-            <div className={groupAllocationLayout.loading} aria-label="正在读取分组账号调度状态">
-              <Skeleton className="h-full w-full" />
-              <Skeleton className="h-full min-h-0 w-full" />
-            </div>
+          {props.loading && !props.allocation && (
+            <ContentLoading
+              className={groupAllocationLayout.loading}
+              label="正在读取分组账号调度状态"
+            />
           )}
           {!props.loading && Boolean(props.error) && (
-            <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
+            <>
+              <QueryErrorToast error={props.error} fallback="分组账号调度状态读取失败" />
+              {!props.allocation && props.onRetry && <ContentRetry onRetry={props.onRetry} />}
+            </>
           )}
-          {!props.loading && !props.error && props.allocation && (
-            <GroupAllocationContent allocation={props.allocation} />
-          )}
+          {props.allocation && <GroupAllocationContent allocation={props.allocation} />}
         </DialogBody>
       </DialogContent>
     </Dialog>

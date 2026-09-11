@@ -46,7 +46,6 @@ export function ThresholdSettings(props: {
             <Button
               type="button"
               variant="outline"
-              size="sm"
               disabled={!enabled || !balanceEnabled || balanceThresholds.fields.length >= 20}
               onClick={() => balanceThresholds.append({ value: "" })}
             >

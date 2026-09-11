@@ -4,8 +4,7 @@ import { FormField } from "@/App";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardAction, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
-import { MultiSelect } from "@/components/multi-select";
+import { StatusPageMonitors } from "./status-page-monitors";
 import type { KumaResourceList } from "@/api";
 import type { ResourceValues } from "../lib/resource-schemas";
 import { ResourceTextField, ResourceSelectField, ResourceCheckboxField } from "./resource-fields";
@@ -126,50 +125,17 @@ export function StatusPageForm(props: {
               name={`status_page.groups.${index}.name`}
               label={`分组 ${index + 1} 名称`}
             />
-            <FormField label={`分组 ${index + 1} 监控项`}>
-              <Controller
-                control={props.form.control}
-                name={`status_page.groups.${index}.monitorList`}
-                render={({ field }) => (
-                  <MultiSelect
-                    ariaLabel={`分组 ${index + 1} 监控项`}
-                    title="选择公开展示的监控项"
-                    options={props.options.monitors.map((m) => ({
-                      label: m.name,
-                      value: String(m.id),
-                    }))}
-                    selected={field.value.map((m) => String(m.id))}
-                    onChange={(values) =>
-                      field.onChange(
-                        values.map(
-                          (v) =>
-                            field.value.find((m) => m.id === Number(v)) ?? {
-                              id: Number(v),
-                              sendUrl: false,
-                            },
-                        ),
-                      )
-                    }
-                    disabled={props.pending}
-                  />
-                )}
-              />
-            </FormField>
             <Controller
               control={props.form.control}
               name={`status_page.groups.${index}.monitorList`}
               render={({ field }) => (
-                <label className="flex items-center gap-2 text-sm">
-                  <Checkbox
-                    aria-label={`分组 ${index + 1} 公开监控地址`}
-                    checked={field.value.length > 0 && field.value.every((m) => m.sendUrl)}
-                    onCheckedChange={(checked) =>
-                      field.onChange(field.value.map((m) => ({ ...m, sendUrl: checked })))
-                    }
-                    disabled={props.pending || field.value.length === 0}
-                  />
-                  公开监控地址
-                </label>
+                <StatusPageMonitors
+                  groupIndex={index}
+                  monitors={props.options.monitors}
+                  value={field.value}
+                  onChange={field.onChange}
+                  pending={props.pending}
+                />
               )}
             />
           </CardContent>

@@ -171,7 +171,7 @@ export function AccountOperationControls(props: AccountOperationProps): ReactEle
             <Button
               type="button"
               variant="outline"
-              size="icon-sm"
+              size="icon"
               className="col-start-3 row-start-2 data-popup-open:bg-muted"
               aria-label="更多账号操作"
               disabled={props.pending}

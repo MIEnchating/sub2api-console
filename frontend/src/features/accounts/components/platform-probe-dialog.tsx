@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Activity, LoaderCircle } from "lucide-react";
@@ -330,11 +331,7 @@ export function PlatformProbeDialog(props: {
               </p>
             ) : null}
 
-            {run.error ? (
-              <p className="text-destructive text-sm" role="alert">
-                {run.error instanceof Error ? run.error.message : "探活任务启动失败"}
-              </p>
-            ) : null}
+            {run.error ? <QueryErrorToast error={run.error} fallback="探活任务启动失败" /> : null}
             <p className="text-muted-foreground text-xs">
               任务启动后弹窗会自动关闭，可在“系统信息”中查看进度和结果。
             </p>

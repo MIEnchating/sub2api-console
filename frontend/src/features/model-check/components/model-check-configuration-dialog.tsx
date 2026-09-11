@@ -1,3 +1,6 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArchiveRestore, RefreshCw, Save, Send, Trash2 } from "lucide-react";
@@ -165,26 +168,17 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="overflow-y-auto">
-            {configuration.isLoading ? (
-              <div
-                className="text-muted-foreground grid min-h-64 place-items-center text-sm"
-                role="status"
-              >
-                正在读取画像配置
-              </div>
-            ) : null}
+            {configuration.isLoading ? <ContentLoading label="正在读取画像配置" /> : null}
             {configuration.error ? (
-              <div className="grid min-h-64 place-items-center gap-3 text-center" role="alert">
-                <p className="text-destructive text-sm">画像配置读取失败</p>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void configuration.refetch()}
-                >
-                  <RefreshCw aria-hidden="true" />
-                  重新读取
-                </Button>
-              </div>
+              <>
+                <QueryErrorToast error={configuration.error} fallback="画像配置读取失败" />
+                {!configuration.data && (
+                  <ContentRetry
+                    onRetry={() => void configuration.refetch()}
+                    pending={configuration.isFetching}
+                  />
+                )}
+              </>
             ) : null}
             {configuration.data && current && counts ? (
               <form id="model-check-configuration-form" className="grid gap-4" onSubmit={submit}>
@@ -236,7 +230,6 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
                     </label>
                     <Button
                       type="button"
-                      size="sm"
                       variant="ghost"
                       disabled={pending}
                       onClick={() => {
@@ -290,7 +283,6 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
                           </div>
                           <Button
                             type="button"
-                            size="sm"
                             variant="outline"
                             disabled={pending}
                             onClick={() => setRestoreVersionID(version.id)}

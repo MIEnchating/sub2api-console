@@ -1,3 +1,4 @@
+import { ContentLoading } from "@/components/content-loading";
 import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 
@@ -13,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -25,6 +25,7 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   onSelectedChange: (models: string[]) => void;
   onConfirm: () => void;
+  onRetry?: () => void;
 };
 
 export function filterChannelModels(models: string[], search: string): string[] {
@@ -77,7 +78,6 @@ export function NewAPIChannelModelDialog(props: Props) {
             </div>
             <Button
               type="button"
-              size="sm"
               variant="outline"
               disabled={props.pending || props.models.length === 0}
               onClick={() => props.onSelectedChange(props.models)}
@@ -86,7 +86,6 @@ export function NewAPIChannelModelDialog(props: Props) {
             </Button>
             <Button
               type="button"
-              size="sm"
               variant="ghost"
               disabled={props.pending || props.selected.length === 0}
               onClick={() => props.onSelectedChange([])}
@@ -100,16 +99,7 @@ export function NewAPIChannelModelDialog(props: Props) {
             aria-label="上游模型"
           >
             {props.pending && props.models.length === 0 && (
-              <div className="grid gap-3 p-3" role="status" aria-label="正在从上游获取模型">
-                {Array.from({ length: 7 }, (_, index) => (
-                  <Skeleton key={index} className="h-10 w-full" />
-                ))}
-              </div>
-            )}
-            {!props.pending && props.error && (
-              <div role="alert" className="text-destructive p-3 text-sm">
-                {props.error}
-              </div>
+              <ContentLoading label="正在从上游获取模型" className="h-full" />
             )}
             {!props.pending && !props.error && visibleModels.length === 0 && (
               <div className="text-muted-foreground grid min-h-44 place-items-center p-6 text-center text-sm">
@@ -148,6 +138,16 @@ export function NewAPIChannelModelDialog(props: Props) {
             <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
               取消
             </Button>
+            {props.error && props.onRetry && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={props.pending}
+                onClick={props.onRetry}
+              >
+                重新读取
+              </Button>
+            )}
             <Button
               type="button"
               disabled={props.pending || Boolean(props.error) || props.selected.length === 0}

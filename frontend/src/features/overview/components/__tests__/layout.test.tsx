@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { OverviewPage } from "../overview-page";
 import { OverviewActivity } from "../overview-activity";
 
-it("读取事件或渠道失败时在对应区域说明原因和下一步", () => {
+it("读取事件或渠道失败时不在页面重复展示查询错误", () => {
   render(
     <OverviewActivity
       attention={[]}
@@ -17,8 +17,8 @@ it("读取事件或渠道失败时在对应区域说明原因和下一步", () =
       onOpenEvents={() => {}}
     />,
   );
-  expect(screen.getByText("账号读取失败")).toBeVisible();
-  expect(screen.getByText("事件读取失败")).toBeVisible();
+  expect(screen.queryByText("账号读取失败")).not.toBeInTheDocument();
+  expect(screen.queryByText("事件读取失败")).not.toBeInTheDocument();
   expect(screen.queryByText("所有受管渠道都健康")).not.toBeInTheDocument();
 });
 

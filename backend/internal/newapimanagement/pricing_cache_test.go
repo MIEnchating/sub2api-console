@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,9 +42,12 @@ func TestPricingCatalogPersistsRemotePriorityAndDefaultFallback(t *testing.T) {
 	}
 	private := &pricingTestStore{Store: db, target: configstore.TargetSettings{BaseURL: "https://sub2api.example", AdminKey: "sub2-secret", TimeoutSeconds: 1}}
 	calls := map[string]int{}
+	var callsMu sync.Mutex
 	client := &http.Client{Transport: pricingTransport(func(r *http.Request) (*http.Response, error) {
 		key := r.URL.Host + r.URL.Path
+		callsMu.Lock()
 		calls[key]++
+		callsMu.Unlock()
 		body := ""
 		switch key {
 		case "raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json":
@@ -52,9 +56,9 @@ func TestPricingCatalogPersistsRemotePriorityAndDefaultFallback(t *testing.T) {
 			}
 			body = `{"remote":{"input_cost_per_token":0.000002,"output_cost_per_token":0.000006}}`
 		case "newapi.example/api/option/":
-			body = `{"success":true,"data":[{"key":"ModelRatio","value":"{\"remote\":1,\"kimi-k3\":1}"}]}`
+			body = `{"success":true,"data":[{"key":"ModelRatio","value":"{\"remote\":1,\"fallback-model\":1}"}]}`
 		case "newapi.example/api/channel/models_enabled":
-			body = `{"success":true,"data":["missing","kimi-k3"]}`
+			body = `{"success":true,"data":["missing","fallback-model"]}`
 		case "sub2api.example/api/v1/admin/channels/model-pricing":
 			if r.Header.Get("X-API-Key") != "sub2-secret" {
 				t.Fatal("wrong admin credential")
@@ -63,7 +67,7 @@ func TestPricingCatalogPersistsRemotePriorityAndDefaultFallback(t *testing.T) {
 				t.Fatal("remote model must not query fallback")
 			}
 			body = `{"code":0,"data":{"found":false}}`
-			if r.URL.Query().Get("model") == "kimi-k3" {
+			if r.URL.Query().Get("model") == "fallback-model" {
 				body = `{"code":0,"data":{"found":true,"input_price":0.00000123,"output_price":0.00000492,"cache_read_price":0,"cache_write_price":0.00000246}}`
 			}
 		default:
@@ -76,7 +80,7 @@ func TestPricingCatalogPersistsRemotePriorityAndDefaultFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.Models) != 2 || first.Models[0].Model != "kimi-k3" || first.Models[0].Source != "sub2api" || first.Models[0].ModelRatio != "0.615" || first.Models[0].CacheRatio != "0" || first.Models[1].Source != "remote" {
+	if len(first.Models) != 2 || first.Models[0].Model != "fallback-model" || first.Models[0].Source != "sub2api" || first.Models[0].ModelRatio != "0.615" || first.Models[0].CacheRatio != "0" || first.Models[1].Source != "remote" {
 		t.Fatalf("unexpected catalog: %#v", first)
 	}
 	if first.Stale || len(first.MissingModels) != 1 || first.MissingModels[0] != "missing" {

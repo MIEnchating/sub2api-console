@@ -1644,6 +1644,8 @@ export type KumaMonitor = {
   template_id?: string;
   template_revision?: number;
   template_model?: string;
+  template_name?: string;
+  template_body_encoding?: string;
 };
 
 type KumaMonitorInput = {
@@ -1692,8 +1694,8 @@ export const api = {
     }),
   kumaResources: (kind: KumaResourceKind) =>
     request<KumaResourceList>(`/api/uptime-kuma/resources/${kind}`),
-  kumaResource: (kind: KumaResourceKind, id: number) =>
-    request<KumaResource>(`/api/uptime-kuma/resources/${kind}/${id}`),
+  kumaResource: (kind: KumaResourceKind, id: number, signal?: AbortSignal) =>
+    request<KumaResource>(`/api/uptime-kuma/resources/${kind}/${id}`, { signal }),
   writeKumaResource: (kind: KumaResourceKind, id: number, input: KumaResourceWrite) =>
     request<Task>(`/api/uptime-kuma/resources/${kind}/${id}`, {
       method: "POST",

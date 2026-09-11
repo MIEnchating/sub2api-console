@@ -88,7 +88,7 @@ function ProbeModelControl(props: {
 
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex min-w-0 items-center justify-between gap-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
         <span className="block font-medium">探活模型</span>
         <div
           className="bg-muted grid grid-cols-2 rounded-md p-0.5"
@@ -99,11 +99,12 @@ function ProbeModelControl(props: {
             const selected = mode === optionMode;
             const label = optionMode === "manual" ? "手动输入" : "选择模型";
             return (
-              <button
+              <Button
                 key={optionMode}
                 type="button"
+                variant="ghost"
                 className={cn(
-                  "text-muted-foreground h-6 rounded-sm px-2 text-xs transition-colors outline-none focus-visible:ring-2",
+                  "text-muted-foreground",
                   selected && "bg-background text-foreground shadow-sm",
                 )}
                 aria-pressed={selected}
@@ -111,7 +112,7 @@ function ProbeModelControl(props: {
                 onClick={() => setMode(optionMode)}
               >
                 {label}
-              </button>
+              </Button>
             );
           })}
         </div>
@@ -217,7 +218,7 @@ export function GroupPolicyEditorFields(props: {
                 type="button"
                 variant="outline"
                 className={cn(
-                  "h-9 w-full min-w-0 rounded-lg border",
+                  "w-full min-w-0",
                   selected &&
                     "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground dark:bg-primary dark:hover:bg-primary/90",
                 )}

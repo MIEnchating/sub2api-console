@@ -208,7 +208,9 @@ export function UptimeKumaPage() {
           initialType={editor.initialType}
           monitors={monitors}
           templates={templatesQuery.data}
-          templatesPending={templatesQuery.isPending || templatesQuery.isError}
+          templatesPending={templatesQuery.isPending}
+          templatesError={templatesQuery.isError}
+          onTemplatesRetry={() => void templatesQuery.refetch()}
           pending={write.isPending}
           task={task.task}
           error={write.error}

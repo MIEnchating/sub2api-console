@@ -1,5 +1,7 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RawPricingSourceContent } from "../raw-pricing-source-dialog";
 
@@ -55,6 +57,16 @@ describe("远程价卡原始文件", () => {
     );
 
     expect(markup).toContain('role="status"');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('aria-label="正在读取远程价卡原始文件"');
     expect(markup).toContain("正在读取远程价卡原始文件");
   });
+});
+
+it("原始价卡读取失败提供重试且不显示空数据结论", async () => {
+  const retry = vi.fn();
+  render(<RawPricingSourceContent pending={false} error="读取失败" onRetry={retry} />);
+  expect(screen.queryByText("尚未读取到原始价卡")).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("button", { name: "重新读取" }));
+  expect(retry).toHaveBeenCalledOnce();
 });

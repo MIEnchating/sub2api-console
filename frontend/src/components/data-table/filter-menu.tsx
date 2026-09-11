@@ -105,9 +105,8 @@ export function FilterMenu<Value extends string>(props: FilterMenuProps<Value>) 
           <Button
             type="button"
             variant="outline"
-            size="sm"
             data-press-animation="none"
-            className={cn("h-8 max-w-64 bg-transparent", props.className)}
+            className={cn("max-w-64 bg-transparent", props.className)}
             aria-label={`${props.label}筛选`}
           />
         }

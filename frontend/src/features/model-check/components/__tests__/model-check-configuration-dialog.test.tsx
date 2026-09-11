@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ModelCheckConfiguration } from "@/api";
 
@@ -107,4 +107,25 @@ describe("模型检测画像管理弹窗", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("配置必须是有效的 JSON 对象");
   });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+it("画像配置读取中提供具名轻量反馈并禁止保存", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>(() => {})),
+  );
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <ModelCheckConfigurationDialog open onOpenChange={vi.fn()} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("status", { name: "正在读取画像配置" })).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "保存草稿" })).toBeDisabled();
+  view.unmount();
+  client.clear();
 });

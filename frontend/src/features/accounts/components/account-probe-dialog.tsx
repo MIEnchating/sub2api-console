@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -33,7 +34,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 
 const noModelSelected = "__not_selected__";
 
@@ -251,7 +251,7 @@ export function AccountProbeDialog(props: {
                 ) : null}
                 {!modelsLoading && options.length === 0 ? (
                   <SelectItem value={noModelSelected} disabled>
-                    {loadModels.isError ? "获取失败，可点击下方按钮重试" : "暂无可用模型"}
+                    {loadModels.isError ? "—" : "暂无可用模型"}
                   </SelectItem>
                 ) : null}
                 {options.map((model) => (
@@ -272,12 +272,7 @@ export function AccountProbeDialog(props: {
             <p className="text-muted-foreground text-xs">已读取 {models.length} 个上游模型。</p>
           ) : null}
           {loadModels.isError ? (
-            <p
-              className="text-destructive min-w-0 break-words text-sm [overflow-wrap:anywhere]"
-              role="alert"
-            >
-              {operationErrorMessage(loadModels.error, "上游模型获取失败")}
-            </p>
+            <QueryErrorToast error={loadModels.error} fallback="上游模型获取失败" />
           ) : null}
           <div className="grid min-w-0 gap-1.5">
             <span className="text-sm font-medium">测试模式</span>
@@ -390,20 +385,7 @@ export function ProbeResultSlot(props: {
       </div>
     );
   } else if (props.error) {
-    content = (
-      <div
-        className="border-destructive/40 bg-destructive/5 min-w-0 overflow-hidden rounded-lg border px-4 py-3"
-        role="alert"
-      >
-        <div className="text-destructive flex items-center gap-2 text-sm font-medium">
-          <XCircle className="size-4 shrink-0" />
-          探活失败
-        </div>
-        <p className="text-muted-foreground mt-1.5 min-w-0 break-words text-sm [overflow-wrap:anywhere]">
-          {operationErrorMessage(props.error, "探活请求失败")}
-        </p>
-      </div>
-    );
+    return <QueryErrorToast error={props.error} fallback="探活请求失败" />;
   } else if (props.result) {
     content = <ProbeResultPanel result={props.result} />;
   }

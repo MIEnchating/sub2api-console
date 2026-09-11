@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import { useQuery } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 
@@ -13,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { taskStopsPolling } from "@/lib/task-state";
 
 export const accountDeleteActionLabel = "删除账号";
@@ -99,14 +100,12 @@ export function AccountDeleteDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {preview.isLoading ? (
-            <div className="grid gap-3 py-2" aria-label="正在读取账号删除范围">
-              <Skeleton className="h-5 w-40" />
-              <Skeleton className="h-28 w-full" />
-            </div>
-          ) : null}
+          {preview.isLoading ? <ContentLoading label="正在读取账号删除范围" /> : null}
           {preview.error ? (
-            <QueryErrorToast error={preview.error} fallback="账号删除范围读取失败" />
+            <>
+              <QueryErrorToast error={preview.error} fallback="账号删除范围读取失败" />
+              <ContentRetry onRetry={() => void preview.refetch()} pending={preview.isFetching} />
+            </>
           ) : null}
           {preview.data && !deleting ? (
             <div className="grid gap-4">
@@ -117,7 +116,7 @@ export function AccountDeleteDialog(props: {
                 </Button>
                 <Button
                   variant="destructive"
-                  disabled={props.pending}
+                  disabled={props.pending || preview.isFetching || preview.isError}
                   onClick={() => props.onConfirm(preview.data)}
                 >
                   <Trash2 aria-hidden="true" />

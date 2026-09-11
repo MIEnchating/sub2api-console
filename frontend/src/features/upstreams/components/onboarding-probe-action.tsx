@@ -27,7 +27,6 @@ export function OnboardingProbeAction(props: {
         <Button
           type="button"
           variant="outline"
-          size="sm"
           aria-label={label}
           disabled={!available || props.pending}
           onClick={props.onProbe}

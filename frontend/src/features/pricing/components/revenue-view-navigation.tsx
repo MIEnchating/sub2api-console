@@ -28,7 +28,7 @@ export function RevenueViewNavigation(props: {
           aria-controls={`revenue-panel-${view.id}`}
           selected={props.value === view.id}
           onClick={() => props.onChange(view.id)}
-          className="h-9 min-w-0 px-2 sm:px-4"
+          className="min-w-0"
         >
           {view.label}
         </SegmentedControlItem>

@@ -742,10 +742,14 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	if incident.ObjectName != nil && strings.TrimSpace(*incident.ObjectName) != "" {
 		objectValue = objectLabel + "：" + strings.TrimSpace(*incident.ObjectName) + "（#" + incident.ObjectID + "）"
 	}
+	groupSummary := strings.Join(incident.GroupNames, "、")
 	if prefix := accountGroupIncidentPrefix(incident.EventType, incident.ObjectID); prefix != "" {
 		if group := strings.TrimSpace(strings.TrimPrefix(incident.IncidentKey, prefix)); strings.HasPrefix(incident.IncidentKey, prefix) && group != "" {
-			objectValue += " · 分组：" + group
+			groupSummary = group
 		}
+	}
+	if incident.ObjectKind == "account" && groupSummary != "" {
+		objectValue += " · 分组：" + groupSummary
 	}
 	return notificationIncidentDisplay{
 		event: eventLabel, object: objectValue, cause: causeLabel,

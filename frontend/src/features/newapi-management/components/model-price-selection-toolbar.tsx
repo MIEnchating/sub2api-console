@@ -38,7 +38,6 @@ export function ModelPriceSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-6"
                 aria-label="清空选择"
                 disabled={props.pending}
                 onClick={props.onClear}
@@ -73,7 +72,6 @@ export function ModelPriceSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-8"
                 aria-label="全选筛选结果"
                 disabled={props.pending || props.selectAllDisabled}
                 onClick={props.onSelectAll}
@@ -91,7 +89,6 @@ export function ModelPriceSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-8"
                 aria-label={`批量同步（${props.selectedCount}）`}
                 aria-describedby={overLimit ? "model-price-bulk-limit" : undefined}
                 disabled={props.pending || overLimit}

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ConfigPage,
+  navItems,
   notificationFormFromStatus,
   notificationTargetResultFromTask,
   notificationTargetField,
@@ -203,7 +204,9 @@ describe("系统设置页面职责", () => {
 
     expect(interfaceMarkup).toContain("xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]");
     expect(interfaceMarkup).toContain("菜单设置");
-    expect(interfaceMarkup).toContain("当前显示 23 / 23 个菜单入口");
+    expect(interfaceMarkup).toContain(
+      `当前显示 ${navItems.length} / ${navItems.length} 个菜单入口`,
+    );
     expect(interfaceMarkup).toContain('aria-label="在菜单中显示账号管理"');
     expect(interfaceMarkup).toContain('aria-label="系统设置说明"');
     expect(interfaceMarkup).not.toContain("/config · 始终显示");

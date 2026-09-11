@@ -82,101 +82,105 @@ export const defaultMonitorOptions: z.infer<typeof monitorOptionsSchema> = {
   clear_auth: false,
 };
 
-export const monitorSchema = z
-  .object({
-    name: z.string().trim().min(1, "请输入监控项名称").max(150, "名称不能超过 150 个字符"),
-    template_model: z
-      .string()
-      .trim()
-      .max(200, "模型名称最多为 200 个字符")
-      .refine((value) => !/[\s\p{Cc}]/u.test(value), "模型名称不能包含空白或控制字符")
-      .optional(),
-    template_clear: z.boolean().optional(),
-    template_retain: z.boolean().optional(),
-    template_id: z.string().optional(),
-    template_revision: z.number().int().nonnegative().optional(),
-    template_auth_override: z.boolean().optional(),
-    template_settings_override: z.boolean().optional(),
-    type: z.string().min(1),
-    options: monitorOptionsSchema.optional(),
-    url: z
-      .string()
-      .trim()
-      .max(4096)
-      .refine((value) => value === "" || validURL(value), "请输入有效的 HTTP(S) 监控地址"),
-    interval: z
-      .number()
-      .int("请输入整数秒数")
-      .min(20, "检测间隔至少为 20 秒")
-      .max(86400, "检测间隔最多为 86400 秒"),
-    parent: z.number().int().positive().nullable(),
-  })
-  .superRefine((values, ctx) => {
-    const o = values.options;
-    if (!o) return;
-    if (
-      ["http", "keyword"].includes(values.type) &&
-      values.template_id &&
-      values.template_auth_override
-    ) {
-      if (o.auth_method === "basic" && !o.auth_username)
-        ctx.addIssue({
-          code: "custom",
-          path: ["options", "auth_username"],
-          message: "请输入鉴权用户名",
-        });
-      if (["basic", "bearer"].includes(o.auth_method) && !o.auth_password)
-        ctx.addIssue({
-          code: "custom",
-          path: ["options", "auth_password"],
-          message: "请输入鉴权密码或 Token",
-        });
-    }
-    if (
-      ["port", "ping", "dns"].includes(values.type) &&
-      (!o.hostname || /[\s/\\?#@]/.test(o.hostname))
-    )
-      ctx.addIssue({
-        code: "custom",
-        path: ["options", "hostname"],
-        message: "请输入有效的主机名或 IP 地址",
-      });
-    if (values.type === "port" && o.port < 1)
-      ctx.addIssue({
-        code: "custom",
-        path: ["options", "port"],
-        message: "TCP 端口必须为 1 到 65535",
-      });
-    if (values.type === "keyword" && !o.keyword.trim())
-      ctx.addIssue({
-        code: "custom",
-        path: ["options", "keyword"],
-        message: "请输入要匹配的关键字",
-      });
-    if (o.headers) {
-      try {
-        const h: unknown = JSON.parse(o.headers);
-        if (
-          !h ||
-          Array.isArray(h) ||
-          typeof h !== "object" ||
-          Object.values(h).some((v) => typeof v !== "string")
-        )
-          throw new Error();
-      } catch {
-        ctx.addIssue({
-          code: "custom",
-          path: ["options", "headers"],
-          message: "请求头须为 JSON 对象，值须为字符串",
-        });
+export const createMonitorSchema = (existingAuthMethod?: string) =>
+  z
+    .object({
+      name: z.string().trim().min(1, "请输入监控项名称").max(150, "名称不能超过 150 个字符"),
+      template_model: z
+        .string()
+        .trim()
+        .max(200, "模型名称最多为 200 个字符")
+        .refine((value) => !/[\s\p{Cc}]/u.test(value), "模型名称不能包含空白或控制字符")
+        .optional(),
+      template_clear: z.boolean().optional(),
+      template_retain: z.boolean().optional(),
+      template_id: z.string().optional(),
+      template_revision: z.number().int().nonnegative().optional(),
+      template_auth_override: z.boolean().optional(),
+      template_settings_override: z.boolean().optional(),
+      type: z.string().min(1),
+      options: monitorOptionsSchema.optional(),
+      url: z
+        .string()
+        .trim()
+        .max(4096)
+        .refine((value) => value === "" || validURL(value), "请输入有效的 HTTP(S) 监控地址"),
+      interval: z
+        .number()
+        .int("请输入整数秒数")
+        .min(20, "检测间隔至少为 20 秒")
+        .max(86400, "检测间隔最多为 86400 秒"),
+      parent: z.number().int().positive().nullable(),
+    })
+    .superRefine((values, ctx) => {
+      const o = values.options;
+      if (!o) return;
+      if (
+        ["http", "keyword"].includes(values.type) &&
+        ((values.template_id && values.template_auth_override) ||
+          existingAuthMethod !== undefined) &&
+        o.auth_method !== existingAuthMethod &&
+        !o.clear_auth
+      ) {
+        if (o.auth_method === "basic" && !o.auth_username)
+          ctx.addIssue({
+            code: "custom",
+            path: ["options", "auth_username"],
+            message: "请输入鉴权用户名",
+          });
+        if (["basic", "bearer"].includes(o.auth_method) && !o.auth_password)
+          ctx.addIssue({
+            code: "custom",
+            path: ["options", "auth_password"],
+            message: "请输入鉴权密码或 Token",
+          });
       }
-    }
-    for (const code of o.accepted_status_codes)
-      if (!/^[1-5]\d{2}(-[1-5]\d{2})?$/.test(code))
+      if (
+        ["port", "ping", "dns"].includes(values.type) &&
+        (!o.hostname || /[\s/\\?#@]/.test(o.hostname))
+      )
         ctx.addIssue({
           code: "custom",
-          path: ["options", "accepted_status_codes"],
-          message: "正常状态码格式：200-299 或 301",
+          path: ["options", "hostname"],
+          message: "请输入有效的主机名或 IP 地址",
         });
-  });
+      if (values.type === "port" && o.port < 1)
+        ctx.addIssue({
+          code: "custom",
+          path: ["options", "port"],
+          message: "TCP 端口必须为 1 到 65535",
+        });
+      if (values.type === "keyword" && !o.keyword.trim())
+        ctx.addIssue({
+          code: "custom",
+          path: ["options", "keyword"],
+          message: "请输入要匹配的关键字",
+        });
+      if (o.headers) {
+        try {
+          const h: unknown = JSON.parse(o.headers);
+          if (
+            !h ||
+            Array.isArray(h) ||
+            typeof h !== "object" ||
+            Object.values(h).some((v) => typeof v !== "string")
+          )
+            throw new Error();
+        } catch {
+          ctx.addIssue({
+            code: "custom",
+            path: ["options", "headers"],
+            message: "请求头须为 JSON 对象，值须为字符串",
+          });
+        }
+      }
+      for (const code of o.accepted_status_codes)
+        if (!/^[1-5]\d{2}(-[1-5]\d{2})?$/.test(code))
+          ctx.addIssue({
+            code: "custom",
+            path: ["options", "accepted_status_codes"],
+            message: "正常状态码格式：200-299 或 301",
+          });
+    });
+export const monitorSchema = createMonitorSchema();
 export type MonitorValues = z.infer<typeof monitorSchema>;

@@ -81,15 +81,17 @@ test("首次读取失败后结束骨架显示，展示原因且刷新后恢复�
       : route.fulfill({ json: catalog }),
   );
   await page.goto("/pricing");
-  await expect(page.getByTestId("pricing-load-error")).toContainText("价格服务暂时不可用", {
-    timeout: 15000,
-  });
+  const errorMessage = page
+    .locator("[data-sonner-toast]")
+    .filter({ hasText: "价格服务暂时不可用" });
+  await expect(errorMessage).toHaveCount(1, { timeout: 15000 });
+  await expect(page.getByRole("main")).not.toContainText("价格服务暂时不可用");
   await expect(page.getByTestId("pricing-loading")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "查看账号调整明细", exact: true })).toBeDisabled();
   failed = false;
   await page.getByRole("button", { name: "刷新价格数据" }).click();
   await expect(page.getByText("价格分组 1", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("pricing-load-error")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
 });
 
 test("搜索无匹配时空提示可见，清空筛选后恢复价格分组", async ({ page }) => {

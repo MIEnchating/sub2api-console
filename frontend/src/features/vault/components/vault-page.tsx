@@ -516,7 +516,6 @@ export function VaultPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     className="shrink-0"
                     onClick={() => {
                       markTouched("username");
@@ -560,7 +559,6 @@ export function VaultPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     className="shrink-0"
                     onClick={() => {
                       markTouched("password");
@@ -626,7 +624,6 @@ export function VaultPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    size="sm"
                     className="mt-1 w-fit"
                     onClick={() => {
                       markTouched("headers");

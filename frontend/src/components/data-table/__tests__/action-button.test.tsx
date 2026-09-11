@@ -13,7 +13,7 @@ describe("TableActionButton", () => {
     );
 
     expect(markup).toContain('aria-label="编辑分组"');
-    expect(markup).toContain("size-7");
+    expect(markup).toContain("size-8");
     expect(markup).toContain("border-border");
     expect(markup).toContain("bg-background");
     expect(markup).toContain("hover:bg-muted");

@@ -25,6 +25,7 @@ type Props = {
   selectedGroups: string[];
   selectedModelCount: number;
   modelError?: string;
+  modelRequestFailed?: boolean;
   baseURLError?: string;
   groupError?: string;
   pending: boolean;
@@ -156,7 +157,6 @@ export function NewAPIChannelConfigurationStep(props: Props) {
             </span>
             <Button
               type="button"
-              size="sm"
               variant="outline"
               disabled={props.fetchingModels}
               onClick={props.onFetchModels}
@@ -181,6 +181,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
             props.pending ||
             props.fetchingModels ||
             Boolean(props.modelError) ||
+            props.modelRequestFailed ||
             props.newAPIGroupOptions.length === 0
           }
         >

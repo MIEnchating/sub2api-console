@@ -1,9 +1,10 @@
+import { ContentLoading } from "@/components/content-loading";
 import type { Task } from "@/api";
 import { OperationDialogFooter } from "./operation-dialog-footer";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { ApiError, type KumaMonitor, type KumaTemplate } from "@/api";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { monitorSchema, defaultMonitorOptions, type MonitorValues } from "../lib/schemas";
+import { createMonitorSchema, defaultMonitorOptions, type MonitorValues } from "../lib/schemas";
 import { Save } from "lucide-react";
 import { MonitorOptionsForm } from "./monitor-options-form";
 import { MonitorBasicsForm } from "./monitor-basics-form";
@@ -28,14 +29,20 @@ export function MonitorDialog(props: {
   monitors: KumaMonitor[];
   templates?: KumaTemplate[];
   templatesPending?: boolean;
+  templatesError?: boolean;
+  onTemplatesRetry?: () => void;
   pending: boolean;
   task?: Pick<Task, "message" | "progress"> | null;
   error?: Error | null;
   onClose: () => void;
   onSubmit: (values: MonitorValues) => void;
 }) {
+  const existingAuthMethod = props.monitor
+    ? (props.monitor.options?.auth_method ?? "none")
+    : undefined;
+  const schema = useMemo(() => createMonitorSchema(existingAuthMethod), [existingAuthMethod]);
   const form = useForm<MonitorValues>({
-    resolver: zodResolver(monitorSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       name: props.monitor?.name ?? "",
       type: props.monitor?.type ?? props.initialType ?? "http",
@@ -61,7 +68,7 @@ export function MonitorDialog(props: {
   const type = form.watch("type");
   const isGroup = type === "group";
   const entity = isGroup ? "分组" : "监控项";
-  const templates =
+  const templates: KumaTemplate[] =
     props.monitor?.template_id &&
     !props.templates?.some((item) => item.id === props.monitor?.template_id)
       ? [
@@ -160,13 +167,27 @@ export function MonitorDialog(props: {
                 pending={props.pending}
               />
               {!isGroup && (
-                <TemplateSelector
-                  form={form}
-                  templates={templates}
-                  disabled={props.pending || !!props.templatesPending}
-                  editing={!!props.monitor}
-                  monitor={props.monitor}
-                />
+                <div className="grid gap-2">
+                  <TemplateSelector
+                    form={form}
+                    templates={templates}
+                    disabled={props.pending || !!props.templatesPending || !!props.templatesError}
+                    editing={!!props.monitor}
+                    monitor={props.monitor}
+                  />
+                  {props.templatesPending && <ContentLoading label="正在读取可用模板" compact />}
+                  {!props.templatesPending && props.templatesError && props.onTemplatesRetry && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="justify-self-start"
+                      onClick={props.onTemplatesRetry}
+                      disabled={props.pending}
+                    >
+                      重新读取模板
+                    </Button>
+                  )}
+                </div>
               )}
               {["http", "keyword"].includes(type) && (
                 <>

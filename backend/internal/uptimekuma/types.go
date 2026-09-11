@@ -68,6 +68,7 @@ type Snapshot struct {
 	Warning  string    `json:"warning"`
 }
 type MonitorInput struct {
+	editing                  bool
 	appliedTemplate          *configstore.KumaMonitorTemplate
 	TemplateRetain           bool            `json:"template_retain,omitempty"`
 	TemplateModel            string          `json:"template_model,omitempty"`

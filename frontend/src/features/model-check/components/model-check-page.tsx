@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, Eye } from "lucide-react";
@@ -349,11 +350,7 @@ export function ModelCheckPage() {
           }
           onSubmit={submit}
         />
-        {task.error ? (
-          <p className="text-destructive text-sm" role="alert">
-            任务状态读取失败
-          </p>
-        ) : null}
+        {task.error ? <QueryErrorToast error={task.error} fallback="任务状态读取失败" /> : null}
       </div>
       <Dialog open={resultOpen && taskID !== null} onOpenChange={setResultOpen}>
         <DialogContent
@@ -365,11 +362,7 @@ export function ModelCheckPage() {
             <DialogTitle>{resultDialogTitle}</DialogTitle>
           </DialogHeader>
           <DialogBody className={dialogLayout.resultsReady ? "overflow-hidden pr-0" : undefined}>
-            {task.error ? (
-              <p className="text-destructive text-sm" role="alert">
-                任务状态读取失败
-              </p>
-            ) : null}
+            {task.error ? <QueryErrorToast error={task.error} fallback="任务状态读取失败" /> : null}
             {task.data ? <ModelCheckResult task={task.data} /> : null}
           </DialogBody>
         </DialogContent>

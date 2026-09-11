@@ -72,7 +72,11 @@ test("首次读取失败时显示明确错误和缺失指标，刷新成功后�
   );
   await page.goto("/");
   const matrix = page.getByTestId("group-health-grid");
-  await expect(matrix).toContainText("分组数据暂时不可用", { timeout: 15000 });
+  const errorMessage = page
+    .locator("[data-sonner-toast]")
+    .filter({ hasText: "分组数据暂时不可用" });
+  await expect(errorMessage).toHaveCount(1, { timeout: 15000 });
+  await expect(matrix).not.toContainText("分组数据暂时不可用");
   await expect(
     page.getByRole("region", { name: "核心运营指标" }).getByText("—", { exact: true }),
   ).toHaveCount(4);

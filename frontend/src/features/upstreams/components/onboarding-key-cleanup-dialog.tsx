@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { operationErrorMessage } from "@/lib/operation-feedback";
+import { QueryErrorToast } from "@/components/query-error-toast";
 
 type CleanupResultItem = {
   keyId: string;
@@ -129,9 +129,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
           <TaskStartupState message="正在扫描上游 Key 与绑定关系" />
         ) : null}
         {props.previewError ? (
-          <p className="text-destructive break-words text-sm" role="alert">
-            {operationErrorMessage(props.previewError, "无绑定 Key 扫描失败")}
-          </p>
+          <QueryErrorToast error={props.previewError} fallback="无绑定 Key 扫描失败" />
         ) : null}
         {!props.task && props.preview ? (
           <div className="grid gap-4">
@@ -180,9 +178,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
           <TaskStartupState message="正在创建 Key 清理任务" />
         ) : null}
         {props.taskError ? (
-          <p className="text-destructive break-words text-sm" role="alert">
-            {operationErrorMessage(props.taskError, "Key 清理任务启动或读取失败")}
-          </p>
+          <QueryErrorToast error={props.taskError} fallback="Key 清理任务启动或读取失败" />
         ) : null}
         {props.task && taskRunning ? (
           <TaskProgressState

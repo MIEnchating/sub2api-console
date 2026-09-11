@@ -257,11 +257,11 @@ func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 	if item.Monitoring != nil && !in.TemplateSettingsOverride {
 		applyTemplateMonitoring(o, item.Monitoring)
 	}
-	if in.TemplateAuthOverride {
-		if o.AuthMethod != "none" && o.AuthMethod != "basic" && o.AuthMethod != "bearer" {
+	if in.TemplateAuthOverride || in.editing {
+		if !in.editing && o.AuthMethod != "none" && o.AuthMethod != "basic" && o.AuthMethod != "bearer" {
 			return failure("kuma_invalid_auth", "请选择无鉴权、Basic 或 Bearer", 422)
 		}
-		if o.AuthMethod != "none" && o.AuthPassword == "" || o.AuthMethod == "basic" && o.AuthUsername == "" {
+		if !in.editing && (o.AuthMethod != "none" && o.AuthPassword == "" || o.AuthMethod == "basic" && o.AuthUsername == "") {
 			return failure("kuma_invalid_auth", "单独设置鉴权时，请填写完整的用户名和密码或 Token", 422)
 		}
 		if item.Headers != "" {
@@ -292,9 +292,11 @@ func (s *Service) resolveTemplate(ctx context.Context, in *MonitorInput) error {
 		return err
 	}
 	in.appliedTemplate = &configstore.KumaMonitorTemplate{TemplateID: item.ID, Revision: item.Revision, Name: item.Name, Model: strings.TrimSpace(in.TemplateModel), BodyEncoding: o.bodyEncoding}
-	o.replaceAuth = true
+	o.replaceAuth = !in.editing
 	o.ClearHeaders = true
 	o.ClearBody = true
-	o.ClearAuth = false
+	if !in.editing {
+		o.ClearAuth = false
+	}
 	return nil
 }

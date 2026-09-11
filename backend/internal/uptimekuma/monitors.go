@@ -69,6 +69,7 @@ func validateMonitor(in MonitorInput) error {
 	return validateOptions(in.Type, in.Options)
 }
 func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, error) {
+	in.Monitor.editing = in.Action == "edit"
 	if in.Action != "create" && in.Action != "edit" && in.Action != "pause" && in.Action != "resume" && in.Action != "delete" {
 		return 0, failure("kuma_invalid_action", "不支持的监控操作", 422)
 	}
@@ -147,6 +148,11 @@ func (s *Service) Write(ctx context.Context, id int64, in WriteInput) (int64, er
 		}
 		if in.Monitor.TemplateRetain {
 			if err := s.retainMonitorTemplate(ctx, c.BaseURL, id, &in.Monitor, raw); err != nil {
+				return 0, err
+			}
+		}
+		if in.Action == "edit" && in.Monitor.Options != nil && isHTTP(in.Monitor.Type) {
+			if err := prepareMonitorAuthEdit(raw, &in.Monitor); err != nil {
 				return 0, err
 			}
 		}

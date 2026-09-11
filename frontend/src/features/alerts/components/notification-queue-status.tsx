@@ -1,5 +1,7 @@
+import { ContentLoading } from "@/components/content-loading";
+import { notifyOperationError } from "@/lib/operation-feedback";
 import { useEffect, useMemo, useState } from "react";
-import { CircleAlert, Eye, LoaderCircle } from "lucide-react";
+import { CircleAlert, Eye } from "lucide-react";
 
 import type { NotificationQueueDetails, NotificationQueueItem, NotificationStatus } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
@@ -333,17 +335,18 @@ export function NotificationQueueStatus(props: {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [details, setDetails] = useState<NotificationQueueDetails | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const loadQueue = async () => {
     setDialogOpen(true);
     setDetails(null);
-    setError(null);
+    setLoadFailed(false);
     setLoading(true);
     try {
       setDetails(await props.loadDetails());
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "队列内容读取失败");
+      notifyOperationError(loadError, "队列内容读取失败");
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -377,7 +380,6 @@ export function NotificationQueueStatus(props: {
             <Button
               type="button"
               variant="outline"
-              size="sm"
               className="justify-self-end"
               onClick={() => void loadQueue()}
             >
@@ -409,23 +411,17 @@ export function NotificationQueueStatus(props: {
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
-            {loading && (
-              <DataTablePanel className="h-full overflow-auto">
-                <div className="text-muted-foreground flex min-h-40 items-center justify-center gap-2 text-sm">
-                  <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-                  正在读取队列内容
-                </div>
-              </DataTablePanel>
-            )}
-            {!loading && error && (
+            {loading && <ContentLoading label="正在读取队列内容" className="h-full" />}
+            {!loading && loadFailed && (
               <DataTablePanel className="h-full overflow-auto">
                 <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-4 text-center text-sm">
-                  <span className="text-destructive">{error}</span>
                   <RefreshButton ariaLabel="刷新队列内容" onClick={() => void loadQueue()} />
                 </div>
               </DataTablePanel>
             )}
-            {!loading && !error && details && <NotificationQueueDetailsList details={details} />}
+            {!loading && !loadFailed && details && (
+              <NotificationQueueDetailsList details={details} />
+            )}
           </DialogBody>
         </DialogContent>
       </Dialog>

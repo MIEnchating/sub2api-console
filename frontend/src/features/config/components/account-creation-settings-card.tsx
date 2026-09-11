@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, RefreshCw, Save } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -5,7 +6,6 @@ import { toast } from "sonner";
 
 import {
   api,
-  ApiError,
   type AccountCreationPolicy,
   type AccountCreationSettings,
   type GroupStatus,
@@ -75,13 +75,6 @@ function groupOptions(
   return [...names]
     .map(([id, name]) => ({ id, name }))
     .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
-}
-
-function settingsErrorMessage(error: unknown): string {
-  if (error instanceof ApiError && error.status === 404) {
-    return "当前后端未加载账号设置接口，请更新并重启后端服务";
-  }
-  return error instanceof Error ? error.message : "账号设置读取失败";
 }
 
 export function AccountCreationSettingsCard(props: {
@@ -260,9 +253,7 @@ export function AccountCreationSettingsCard(props: {
       <CardContent className="flex min-h-0 flex-1 flex-col group-data-[size=sm]/card:p-0">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {settings.error ? (
-            <p className="text-destructive text-sm" role="alert">
-              {settingsErrorMessage(settings.error)}
-            </p>
+            <QueryErrorToast error={settings.error} fallback="账号设置读取失败" />
           ) : null}
 
           {poolModeTaskID && poolModeTask.data && !taskStopsPolling(poolModeTask.data) ? (
@@ -371,9 +362,7 @@ export function AccountCreationSettingsCard(props: {
                 </span>
               </div>
               {groups.error ? (
-                <p className="text-destructive text-sm" role="alert">
-                  分组列表读取失败，当前仅显示已保存的分组设置
-                </p>
+                <QueryErrorToast error={groups.error} fallback="分组列表读取失败" />
               ) : null}
               <div
                 data-slot="settings-scroll"

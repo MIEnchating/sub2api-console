@@ -1,3 +1,4 @@
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -54,7 +55,14 @@ import {
   modelPriceAdjustmentSchema,
   type ModelPriceAdjustmentValues,
 } from "../lib/model-price-adjustment-schema";
-import { formatModelPriceNumber, modelPriceNumbersEqual } from "../lib/pricing-number";
+import {
+  formatModelPriceNumber,
+  modelPriceNumbersEqual,
+  pricePerMillion,
+} from "../lib/pricing-number";
+import { timePricingDescription, timePricingExpression } from "../lib/time-pricing";
+import { TimePriceValues } from "./time-price-values";
+import { OfficialTierValues } from "./official-tier-values";
 import {
   Table,
   TableBody,
@@ -336,14 +344,13 @@ export function NewAPIModelPrices(props: PriceProps) {
             </TableActionButton>
           ) : null}
           {props.onViewRawPricingSource ? (
-            <Button size="sm" variant="outline" onClick={props.onViewRawPricingSource}>
+            <Button variant="outline" onClick={props.onViewRawPricingSource}>
               <FileText aria-hidden="true" />
               查看原始价卡
             </Button>
           ) : null}
           {props.onCompareManagementPrices ? (
             <Button
-              size="sm"
               variant="outline"
               disabled={props.managementPricesPending}
               onClick={() => {
@@ -376,11 +383,6 @@ export function NewAPIModelPrices(props: PriceProps) {
             <StatusBadge label="缓存过期或刷新不完整" variant="warning" />
           ) : null}
           {props.managementPricesWarning ? <span>{props.managementPricesWarning}</span> : null}
-          {props.managementPricesError ? (
-            <span className="text-destructive">
-              参考价格读取失败：{props.managementPricesError}。已有结果为上次缓存，请刷新后重试。
-            </span>
-          ) : null}
         </div>
       ) : null}
       <SegmentedControl role="tablist" aria-label="价格分类">
@@ -821,17 +823,7 @@ export function RemoteModelPricesTable(props: {
   return (
     <DataTablePanel className="flex min-h-0 flex-1 flex-col">
       {props.pending && props.prices.length === 0 && (
-        <div
-          className="text-muted-foreground grid min-h-52 place-items-center text-sm"
-          role="status"
-        >
-          正在获取远程模型价格
-        </div>
-      )}
-      {!props.pending && props.error && props.prices.length === 0 && (
-        <div className="text-destructive grid min-h-52 place-items-center px-6 text-center text-sm">
-          {props.error}
-        </div>
+        <PageLoadingSkeleton label="正在获取远程模型价格" />
       )}
       {!props.pending && !props.error && props.prices.length === 0 && (
         <div className="text-muted-foreground grid min-h-52 place-items-center px-6 text-center text-sm">
@@ -858,11 +850,11 @@ export function RemoteModelPricesTable(props: {
                 </TableHead>
               ) : null}
               <TableHead className="min-w-56">模型</TableHead>
-              <TableHead className="text-right">输入价格（$/百万 Token）</TableHead>
-              <TableHead className="text-right">输出价格（$/百万 Token）</TableHead>
+              <TableHead className="text-right">输入价格（每百万 Token）</TableHead>
+              <TableHead className="text-right">输出价格（每百万 Token）</TableHead>
               <TableHead className="text-right">缓存写入</TableHead>
               <TableHead className="text-right">缓存读取</TableHead>
-              <TableHead className="text-right">图片价格（USD）</TableHead>
+              <TableHead className="text-right">图片价格</TableHead>
               {props.onWritePrice ? <TableHead className="w-36 text-right">操作</TableHead> : null}
             </TableRow>
           </TableHeader>
@@ -885,8 +877,29 @@ export function RemoteModelPricesTable(props: {
                   <TableCell className="font-mono text-xs font-medium">
                     <div>{price.model}</div>
                     <div className="text-muted-foreground mt-1 font-sans text-[11px] font-normal">
-                      {modelPriceSourceLabels[price.source ?? "remote"]}
+                      {price.source === "official" && price.source_url ? (
+                        <a
+                          href={price.source_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-2"
+                        >
+                          {modelPriceSourceLabels.official}
+                        </a>
+                      ) : (
+                        modelPriceSourceLabels[price.source ?? "remote"]
+                      )}
                     </div>
+                    {price.source_scope ? (
+                      <div className="text-muted-foreground mt-1 max-w-80 whitespace-normal font-sans text-[11px] font-normal">
+                        {price.source_scope}
+                      </div>
+                    ) : null}
+                    {price.time_pricing ? (
+                      <div className="text-muted-foreground mt-1 max-w-80 whitespace-normal font-sans text-[11px] font-normal">
+                        {timePricingDescription(price.time_pricing)}
+                      </div>
+                    ) : null}
                     {price.long_context_threshold ? (
                       <div className="text-muted-foreground mt-1 font-sans text-[11px] font-normal">
                         阶梯 {formatRemoteThreshold(price.long_context_threshold)}
@@ -894,19 +907,48 @@ export function RemoteModelPricesTable(props: {
                     ) : null}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {managementTierPrice(price.input_price, price.long_context_input_price)}
+                    <OfficialTierValues tiers={price.price_tiers} field="input_price">
+                      {price.time_pricing ? (
+                        <TimePriceValues
+                          peak={price.time_pricing.peak.input_price}
+                          offPeak={price.input_price}
+                        />
+                      ) : (
+                        managementTierPrice(price.input_price, price.long_context_input_price)
+                      )}
+                    </OfficialTierValues>
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {managementTierPrice(price.output_price, price.long_context_output_price)}
+                    <OfficialTierValues tiers={price.price_tiers} field="output_price">
+                      {price.time_pricing ? (
+                        <TimePriceValues
+                          peak={price.time_pricing.peak.output_price}
+                          offPeak={price.output_price}
+                        />
+                      ) : (
+                        managementTierPrice(price.output_price, price.long_context_output_price)
+                      )}
+                    </OfficialTierValues>
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    <ManagementCacheWritePrice price={price} />
+                    <OfficialTierValues tiers={price.price_tiers} field="cache_write_price">
+                      <ManagementCacheWritePrice price={price} />
+                    </OfficialTierValues>
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {managementTierPrice(
-                      price.cache_read_price,
-                      price.long_context_cache_read_price,
-                    )}
+                    <OfficialTierValues tiers={price.price_tiers} field="cache_read_price">
+                      {price.time_pricing ? (
+                        <TimePriceValues
+                          peak={price.time_pricing.peak.cache_read_price}
+                          offPeak={price.cache_read_price ?? "0"}
+                        />
+                      ) : (
+                        managementTierPrice(
+                          price.cache_read_price,
+                          price.long_context_cache_read_price,
+                        )
+                      )}
+                    </OfficialTierValues>
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     <ManagementImagePrice price={price} />
@@ -1033,6 +1075,8 @@ function RemotePriceWriteAction(props: {
 }
 
 function remotePriceBillingExpression(price: Sub2APIModelPrice): string {
+  if (price.billing_expr) return price.billing_expr;
+  if (price.time_pricing) return timePricingExpression(price);
   if (price.long_context_threshold) {
     const standard = remotePriceTierExpression(price, false);
     const longContext = remotePriceTierExpression(price, true);
@@ -1061,32 +1105,6 @@ function remotePriceTierExpression(price: Sub2APIModelPrice, longContext: boolea
   return terms.join(" + ");
 }
 
-function pricePerMillion(value?: string): string {
-  const normalized = value?.trim() ?? "";
-  const match = /^(\+?)(\d+)(?:\.(\d*))?(?:e([+-]?\d+))?$/i.exec(normalized);
-  if (!match) return "";
-  const whole = match[2];
-  const fraction = match[3] ?? "";
-  const exponent = Number(match[4] ?? "0");
-  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 100) return "";
-  const digits = `${whole}${fraction}`;
-  if (!/[1-9]/.test(digits)) return "0";
-  const decimalPosition = whole.length + exponent + 6;
-  let result: string;
-  if (decimalPosition <= 0) {
-    result = `0.${"0".repeat(-decimalPosition)}${digits}`;
-  } else if (decimalPosition >= digits.length) {
-    result = `${digits}${"0".repeat(decimalPosition - digits.length)}`;
-  } else {
-    result = `${digits.slice(0, decimalPosition)}.${digits.slice(decimalPosition)}`;
-  }
-  const parts = result.split(".");
-  const normalizedWhole = parts[0].replace(/^0+(?=\d)/, "");
-  const normalizedFraction = (parts[1] ?? "").replace(/0+$/, "");
-  const shifted = normalizedFraction ? `${normalizedWhole}.${normalizedFraction}` : normalizedWhole;
-  return formatModelPriceNumber(shifted);
-}
-
 export type NewAPIPriceComparisonStatus = "matched" | "mismatched" | "missing";
 
 export function newAPIPriceComparisonStatus(
@@ -1096,6 +1114,12 @@ export function newAPIPriceComparisonStatus(
   const remote = matchingRemoteModelPrice(remotePrices, configured.model);
   if (!remote) return "missing";
   const expected = remotePriceToNewAPIModelPrice(remote);
+  if (remote.time_pricing || remote.billing_expr) {
+    return configured.billing_mode === "tiered_expr" &&
+      configured.billing_expr?.replace(/\s+/g, "") === expected.billing_expr?.replace(/\s+/g, "")
+      ? "matched"
+      : "mismatched";
+  }
   if (expected.billing_mode === "tiered_expr") {
     if (configured.billing_mode !== "tiered_expr" || !configured.billing_expr?.trim()) {
       return "mismatched";
@@ -1247,7 +1271,29 @@ export function modelPriceDifferenceRows(
   ];
   const configuredCondition = tierConditionSignature(configured.billing_expr ?? "");
   const remoteCondition = tierConditionSignature(expected.billing_expr ?? "");
-  if (configuredCondition || remoteCondition) {
+  if (remote.time_pricing) {
+    const description = timePricingDescription(remote.time_pricing);
+    rows.splice(1, 0, {
+      label: "峰谷时段",
+      configured: configuredCondition === remoteCondition ? description : "未配置或与官方时段不同",
+      remote: description,
+      kind: "text",
+    });
+    for (const row of rows) {
+      if (row.kind === "decimal" && row.remote.includes(" / ")) row.label += "（高峰 / 空闲）";
+    }
+  } else if (remote.price_tiers?.length) {
+    const description = remote.price_tiers.map((tier) => tier.label).join(" / ");
+    rows.splice(1, 0, {
+      label: "官方阶梯",
+      configured:
+        configured.billing_expr?.replace(/\s+/g, "") === remote.billing_expr?.replace(/\s+/g, "")
+          ? description
+          : "未配置或与官方条件不同",
+      remote: description,
+      kind: "text",
+    });
+  } else if (configuredCondition || remoteCondition) {
     rows.splice(1, 0, {
       label: "阶梯条件",
       configured: configuredCondition,
@@ -1269,6 +1315,8 @@ export function modelPriceDifferenceRows(
 }
 
 function tierConditionSignature(expression: string): string {
+  if (/\b(?:hour|minute|weekday)\(/.test(expression))
+    return expression.split("?")[0].replace(/\s+/g, "");
   const match = /\blen\s*(<=|<|>=|>)\s*(\d+(?:\.\d+)?)/.exec(expression);
   if (!match?.[1] || !match[2]) return "";
   return `len ${match[1]} ${match[2]}`;

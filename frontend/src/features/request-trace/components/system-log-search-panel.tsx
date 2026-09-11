@@ -1,3 +1,4 @@
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { useState } from "react";
 import { Clock3, FileSearch, RefreshCw, RotateCcw, Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -10,7 +11,6 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 import { TraceAccountActions } from "./trace-account-actions";
 
 function emptySearch(): SystemLogSearchQuery {
@@ -319,10 +319,7 @@ export function SystemLogSearchPanel() {
       {submitted && (
         <DataTablePanel className="mt-3 flex-1 sm:mt-4">
           {logs.isLoading && (
-            <div className="text-muted-foreground flex min-h-28 items-center justify-center gap-2 text-sm">
-              <RefreshCw className="size-4 animate-spin" />
-              正在读取 Sub2API 系统日志
-            </div>
+            <PageLoadingSkeleton label="正在读取 Sub2API 系统日志" variant="list" />
           )}
           {!logs.isLoading && logPage && logPage.items.length > 0 && (
             <>
@@ -343,17 +340,6 @@ export function SystemLogSearchPanel() {
                 onPageSizeChange={changePageSize}
               />
             </>
-          )}
-          {logs.isError && !logPage && (
-            <div
-              role="alert"
-              className="flex min-h-28 flex-col items-center justify-center gap-2 px-4 py-6 text-center text-sm wrap-anywhere"
-            >
-              <p className="text-destructive">
-                {operationErrorMessage(logs.error, "Sub2API 系统日志查询失败")}
-              </p>
-              <p className="text-muted-foreground">请检查连接后点击“查询”重新查询。</p>
-            </div>
           )}
           {logs.isSuccess && !logPage?.items.length && (
             <div className="text-muted-foreground flex min-h-28 items-center justify-center text-sm">

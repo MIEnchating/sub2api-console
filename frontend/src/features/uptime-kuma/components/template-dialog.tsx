@@ -1,8 +1,9 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import { useQuery, useIsMutating } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { api, type KumaTemplate } from "@/api";
 import { Button } from "@/components/ui/button";
-import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import {
   Dialog,
   DialogContent,
@@ -53,7 +54,10 @@ export function TemplateDialog(props: {
           <DialogDescription>保存监控参数、请求头和请求体，供监控复用。</DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {loading && <PageLoadingSkeleton variant="form" label="正在读取模板内容…" />}
+          {loading && <ContentLoading label="正在读取模板内容…" />}
+          {!loading && !ready && detail.isError && (
+            <ContentRetry onRetry={() => void detail.refetch()} pending={detail.isFetching} />
+          )}
           {ready && (
             <TemplateEditorForm
               item={detail.data}
@@ -67,15 +71,6 @@ export function TemplateDialog(props: {
           <Button variant="outline" onClick={props.onClose} disabled={props.pending}>
             取消
           </Button>
-          {props.item && detail.isError && (
-            <Button
-              variant="outline"
-              onClick={() => void detail.refetch()}
-              disabled={detail.isFetching}
-            >
-              重新读取
-            </Button>
-          )}
           <Button
             type="submit"
             form="kuma-template"

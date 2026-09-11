@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Ban, RefreshCw } from "lucide-react";
 
 import { api } from "@/api";
+import { ContentLoading } from "@/components/content-loading";
 import { Button } from "@/components/ui/button";
 import { notifyOperationError } from "@/lib/operation-feedback";
 
@@ -22,7 +23,7 @@ export const taskStartupStateLayout = {
 } as const;
 
 export function TaskStartupState(props: Props) {
-  return <TaskProgressState message={props.message} progress={0} />;
+  return <ContentLoading label={props.message} compact className="min-h-12 text-sm" />;
 }
 
 export function TaskProgressState(props: ProgressProps) {
@@ -60,7 +61,7 @@ export function TaskCancelButton(props: { taskId: string; className?: string; co
   return (
     <Button
       type="button"
-      size={props.compact ? "icon-sm" : "default"}
+      size={props.compact ? "icon" : "default"}
       variant="outline"
       className={props.className}
       aria-label={props.compact ? cancelLabel(cancel.isPending, cancel.isSuccess) : undefined}

@@ -203,3 +203,27 @@ describe("账号设置保存流程", () => {
     ).rejects.toThrow("远端读回失败");
   });
 });
+
+it("账号设置读取中显示轻量提示并禁用保存，取消仍可操作", async () => {
+  const client = new QueryClient();
+  const cancel = vi.fn();
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AccountSettingsPanel
+        accountId="41"
+        query={{ isLoading: true, isError: false, error: null }}
+        onCancel={cancel}
+        onSaved={vi.fn()}
+      />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("status", { name: "正在读取账号设置" })).toHaveTextContent(
+    "正在读取账号设置",
+  );
+  expect(view.container.querySelector('[data-slot="skeleton"]')).toBeNull();
+  expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+  await userEvent.setup().click(screen.getByRole("button", { name: "取消" }));
+  expect(cancel).toHaveBeenCalledOnce();
+  view.unmount();
+  client.clear();
+});

@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCheck, CheckCircle2, CircleAlert, CircleSlash2, Search, XCircle } from "lucide-react";
@@ -33,7 +34,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
 
@@ -448,7 +448,11 @@ function ModelSyncDiscoveryState(props: {
     return <TaskProgressState message={props.task.message} progress={props.task.progress} />;
   }
   if (props.task.status === "failed" || props.task.status === "cancelled") {
-    return <ModelSyncError error={props.task.message} fallback="账号模型发现未完成" />;
+    return (
+      <p className="break-words text-sm text-destructive" role="alert">
+        {props.task.message || "账号模型发现未完成"}
+      </p>
+    );
   }
   const failed = modelSyncTaskItems(props.task).filter((item) => item.status !== "succeeded");
   if (failed.length === 0) return null;
@@ -1072,9 +1076,5 @@ function upstreamAPIErrorMessage(raw: string): string {
 }
 
 function ModelSyncError(props: { error: unknown; fallback: string }) {
-  return (
-    <p className="break-words text-sm text-destructive" role="alert">
-      {operationErrorMessage(props.error, props.fallback)}
-    </p>
-  );
+  return <QueryErrorToast error={props.error} fallback={props.fallback} />;
 }

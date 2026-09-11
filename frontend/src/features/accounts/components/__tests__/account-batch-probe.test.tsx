@@ -1,3 +1,4 @@
+import { Toaster, toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -72,6 +73,7 @@ function client(): QueryClient {
 }
 
 afterEach(() => {
+  toast.dismiss();
   for (const value of clients) value.clear();
   clients.length = 0;
   vi.restoreAllMocks();
@@ -85,6 +87,7 @@ function renderDialog(accounts: AccountStatus[]) {
   const onPendingChange = vi.fn();
   render(
     <QueryClientProvider client={queryClient}>
+      <Toaster />
       <AccountBatchProbeDialog
         open
         accounts={accounts}
@@ -145,7 +148,8 @@ describe("账号批量探活", () => {
       .mockRejectedValueOnce(new Error("账号 41 已删除，请刷新"));
     const view = renderDialog([account("41")]);
     fireEvent.click(screen.getByRole("button", { name: "确认探活" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("账号 41 已删除，请刷新");
+    expect(await screen.findByText("账号 41 已删除，请刷新")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(view.onStarted).not.toHaveBeenCalled();
     expect(view.onOpenChange).not.toHaveBeenCalled();
     run.mockResolvedValue(task());

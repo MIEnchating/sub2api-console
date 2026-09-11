@@ -33,7 +33,6 @@ export function NavigationSettingsCard<T extends string>(props: NavigationSettin
         </div>
         <Button
           type="button"
-          size="sm"
           variant="outline"
           disabled={props.hiddenItemIDs.size === 0}
           onClick={props.onReset}

@@ -11,13 +11,14 @@ describe("task startup state", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-  it("shows immediate task creation feedback with a progress track", () => {
-    const markup = renderToStaticMarkup(<TaskStartupState message="正在创建余额同步任务" />);
-
-    expect(markup).toContain("正在创建余额同步任务");
-    expect(markup).toContain("0%");
-    expect(markup).toContain('role="status"');
-    expect(markup).toContain('role="progressbar"');
+  it("任务创建尚未返回进度时只显示忙碌提示，不伪造 0% 进度", () => {
+    render(<TaskStartupState message="正在创建余额同步任务" />);
+    expect(screen.getByRole("status", { name: "正在创建余额同步任务" })).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    expect(screen.queryByText("0%")).not.toBeInTheDocument();
   });
 
   it("reserves stable content height before the first task response arrives", () => {

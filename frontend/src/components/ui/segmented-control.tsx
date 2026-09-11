@@ -53,12 +53,11 @@ export function SegmentedControlItem(
     <Button
       {...buttonProps}
       data-slot="segmented-control-item"
-      size="sm"
       variant={selected ? "secondary" : "ghost"}
       aria-pressed={props.role === "tab" ? undefined : selected}
       aria-selected={props.role === "tab" ? selected : props["aria-selected"]}
       tabIndex={tabIndex}
-      className={cn("h-7", selected && "bg-background shadow-xs", className)}
+      className={cn(selected && "bg-background shadow-xs", className)}
     />
   );
 }

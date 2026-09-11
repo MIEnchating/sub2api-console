@@ -68,14 +68,20 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
     retry: false,
     refetchOnWindowFocus: false,
   });
-  const refresh = (): Promise<void> => client.invalidateQueries({ queryKey: kumaQueryKey });
-  const detail = useMutation({
-    mutationFn: (id: number) => api.kumaResource(props.kind, id),
-    onSuccess: (item) => {
-      save.reset();
-      setEditor({ item });
-    },
-    onError: (error) => notifyOperationError(error, "编辑数据读取失败"),
+  const refresh = (): Promise<void> =>
+    client.invalidateQueries({
+      queryKey: kumaQueryKey,
+      predicate: (query) => query.queryKey[1] !== "resource-editor",
+    });
+  const detail = useQuery({
+    queryKey: ["uptime-kuma", "resource-editor", props.kind, editor?.item?.id],
+    queryFn: ({ signal }) => api.kumaResource(props.kind, editor!.item!.id, signal),
+    enabled: !!editor?.item,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const save = useMutation({
     mutationFn: (value: { id: number; input: KumaResourceWrite }) =>
@@ -91,7 +97,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
       await refresh();
     },
   });
-  const pending = save.isPending || detail.isPending;
+  const pending = save.isPending;
   const disabled = pending || query.isFetching || query.isError || !query.data || config.isError;
   const items = (query.data?.items ?? []).filter((item) =>
     `${item.name} ${item.type}`.toLowerCase().includes(search.trim().toLowerCase()),
@@ -99,7 +105,8 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
   const pagination = useClientPagination(items);
   const submit = (values: ResourceValues): void => {
     if (!config.data) return;
-    const item = editor?.item;
+    if (!editor || (editor.item && !detail.data)) return;
+    const item = detail.data;
     const input: KumaResourceWrite = {
       config_revision: config.data.revision,
       revision: item?.revision ?? "",
@@ -150,7 +157,6 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         {config.data?.management_configured && (
           <>
             {query.isPending && <PageLoadingSkeleton label="正在读取管理数据…" variant="table" />}
-            {detail.isPending && <PageLoadingSkeleton label="正在读取编辑配置…" variant="form" />}
             {!query.isPending && (
               <>
                 <TableFilterToolbar>
@@ -204,7 +210,10 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                                   disabled ||
                                   (props.kind === "notifications" && !notificationTypes[item.type])
                                 }
-                                onClick={() => detail.mutate(item.id)}
+                                onClick={() => {
+                                  save.reset();
+                                  setEditor({ item });
+                                }}
                               >
                                 <Pencil aria-hidden="true" />
                               </TableActionButton>
@@ -289,7 +298,10 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         <ResourceDialog
           key={`${props.kind}:${editor.item?.id ?? 0}`}
           kind={props.kind}
-          item={editor.item}
+          item={detail.data ?? editor.item}
+          loading={!!editor.item && detail.isPending}
+          loadError={detail.error}
+          onRetry={() => void detail.refetch()}
           options={query.data}
           pending={save.isPending}
           task={task.task}

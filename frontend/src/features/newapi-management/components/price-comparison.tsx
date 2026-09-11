@@ -381,7 +381,6 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
         </div>
         <Button
           className="ml-auto"
-          size="sm"
           disabled={!selectedUpstream || selectedModels.length === 0}
           onClick={compareSelectedModels}
         >
@@ -438,7 +437,6 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
                       </TableCell>
                       <TableCell className="text-right">
                         <Button
-                          size="sm"
                           variant="outline"
                           aria-label={`比对 ${model.model}`}
                           disabled={!selectedUpstream}

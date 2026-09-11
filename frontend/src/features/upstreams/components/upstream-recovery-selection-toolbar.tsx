@@ -33,7 +33,6 @@ export function UpstreamRecoverySelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-6"
                 aria-label="清空选择"
                 onClick={props.onClear}
               />
@@ -66,7 +65,6 @@ export function UpstreamRecoverySelectionToolbar(props: {
               <Button
                 type="button"
                 size="icon"
-                className="size-8"
                 aria-label={`恢复已选择的 ${props.selectedCount} 个上游鉴权`}
                 disabled={props.pending}
                 onClick={props.onRecover}

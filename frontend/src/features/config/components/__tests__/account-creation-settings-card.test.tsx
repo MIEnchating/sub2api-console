@@ -1,3 +1,4 @@
+import { Toaster, toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -44,7 +45,10 @@ const secondGroup: GroupStatus = {
 };
 
 beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  toast.dismiss();
+  vi.restoreAllMocks();
+});
 afterAll(() => vi.unstubAllGlobals());
 
 function renderCard(
@@ -66,6 +70,7 @@ function renderCard(
   );
   return render(
     <QueryClientProvider client={queryClient}>
+      <Toaster />
       <AccountCreationSettingsCard
         fallbackConcurrency={10}
         fallbackPriority={1}
@@ -237,7 +242,7 @@ describe("账号创建设置卡片", () => {
     expect(payload?.groups.find((item) => item.group_id === "7")?.concurrency).toBe(64);
   });
 
-  it("后端缺少账号设置接口时提示更新并重启服务", async () => {
+  it("后端缺少账号设置接口时仅悬浮提示请求失败", async () => {
     vi.spyOn(api, "accountCreationSettings").mockRejectedValue(
       new ApiError("请求失败（404）", "http_error", 404),
     );
@@ -247,12 +252,12 @@ describe("账号创建设置卡片", () => {
     queryClient.setQueryData(["groups"], [group]);
     render(
       <QueryClientProvider client={queryClient}>
+        <Toaster />
         <AccountCreationSettingsCard fallbackConcurrency={10} fallbackPriority={1} />
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "当前后端未加载账号设置接口，请更新并重启后端服务",
-    );
+    expect(await screen.findByText("请求失败（404）")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

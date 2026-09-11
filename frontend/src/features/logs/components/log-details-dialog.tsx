@@ -1,3 +1,4 @@
+import { ContentLoading } from "@/components/content-loading";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
@@ -457,7 +458,6 @@ export function LogDetailsContent(props: {
   entry: UnifiedLogEntry;
   details?: Record<string, unknown>;
   loading?: boolean;
-  loadFailed?: boolean;
 }): ReactElement {
   const details = logDisplayDetails(props.entry, props.details ?? props.entry.details);
   const duplicateKey = props.entry.kind === "task" ? "operation" : "event_type";
@@ -517,16 +517,7 @@ export function LogDetailsContent(props: {
         </dl>
       </section>
 
-      {props.loading ? (
-        <p className="text-muted-foreground text-xs" role="status">
-          正在读取完整任务结果…
-        </p>
-      ) : null}
-      {props.loadFailed ? (
-        <p className="text-destructive text-xs" role="alert">
-          完整任务结果读取失败，当前显示日志摘要。
-        </p>
-      ) : null}
+      {props.loading ? <ContentLoading label="正在读取完整任务结果…" compact /> : null}
 
       {detailRows.length > 0 ? (
         <section aria-labelledby="log-detail-heading">
@@ -664,7 +655,6 @@ export function LogDetailsDialog(props: {
             entry={currentEntry}
             details={details}
             loading={taskDetail.isLoading}
-            loadFailed={taskDetail.isError}
           />
         ) : null}
       </DialogContent>

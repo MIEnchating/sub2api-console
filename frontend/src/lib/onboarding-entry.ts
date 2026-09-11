@@ -65,6 +65,14 @@ export function onboardingPlatformNeedsProtocol(value: string | null | undefined
   return !compositeAccountPlatforms.has(normalizeOnboardingPlatform(value));
 }
 
+export function effectiveOnboardingPlatform(
+  catalogPlatform: string | null | undefined,
+  selectedPlatform: string | null | undefined,
+): string | null {
+  if (!onboardingPlatformNeedsProtocol(catalogPlatform)) return catalogPlatform ?? null;
+  return selectedPlatform ?? catalogPlatform ?? null;
+}
+
 export function onboardingProtocolReady(
   catalogPlatform: string | null | undefined,
   selectedPlatform: string | null | undefined,

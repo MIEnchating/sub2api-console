@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, Eye, HardDrive, MemoryStick, type LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -127,15 +129,18 @@ function TaskDetailsDialog(props: {
         <DialogHeader>
           <DialogTitle>任务详情</DialogTitle>
           <DialogDescription>
-            {task ? `${taskOperationLabel(task.operation)} · ${task.id}` : "正在读取任务详情"}
+            {task ? `${taskOperationLabel(task.operation)} · ${task.id}` : "查看任务状态与执行结果"}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid gap-4">
-          {detail.isLoading ? <Skeleton className="h-32 w-full" /> : null}
+          {detail.isLoading ? <ContentLoading label="正在读取任务详情" /> : null}
           {detail.error ? (
-            <p className="text-destructive text-sm" role="alert">
-              任务详情读取失败，请稍后重试。
-            </p>
+            <>
+              <QueryErrorToast error={detail.error} fallback="任务详情读取失败，请稍后重试" />
+              {!task && (
+                <ContentRetry onRetry={() => void detail.refetch()} pending={detail.isFetching} />
+              )}
+            </>
           ) : null}
           {task ? (
             <>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, type ReactElement } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Save, ShieldAlert } from "lucide-react";
+import { RotateCcw, Save } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
@@ -55,14 +55,9 @@ function LoadingPolicy(): ReactElement {
 
 function PolicyUnavailable(props: { isFetching: boolean; onRetry: () => void }): ReactElement {
   return (
-    <Card data-testid="alert-policy-load-error" role="alert">
+    <Card>
       <CardContent className="grid min-h-52 place-items-center p-6 text-center">
         <div>
-          <ShieldAlert className="text-destructive mx-auto mb-3 size-6" aria-hidden="true" />
-          <p className="text-sm font-medium">告警策略暂不可用</p>
-          <p className="text-muted-foreground mt-1 max-w-lg text-sm leading-6">
-            未能读取现有策略。为避免覆盖当前配置，读取成功前无法编辑或保存。
-          </p>
           <RefreshButton
             pending={props.isFetching}
             ariaLabel="刷新告警策略"

@@ -1,3 +1,4 @@
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
 import { useEffect } from "react";
 
@@ -167,19 +168,9 @@ function AccountMobileList(props: ModelCheckSelectionProps) {
 
 function accountEmptyState(props: ModelCheckSelectionProps) {
   if (props.accountsLoading) {
-    return (
-      <div className="text-muted-foreground grid min-h-40 place-items-center text-sm">
-        正在读取账号
-      </div>
-    );
+    return <PageLoadingSkeleton label="正在读取账号" variant="list" />;
   }
-  if (props.accountsError) {
-    return (
-      <div className="text-destructive grid min-h-40 place-items-center p-4 text-center text-sm">
-        {props.accountsError}
-      </div>
-    );
-  }
+  if (props.accountsError) return null;
   if (props.accounts.length === 0) {
     return (
       <div className="text-muted-foreground grid min-h-40 place-items-center text-sm">
@@ -193,6 +184,7 @@ function accountEmptyState(props: ModelCheckSelectionProps) {
 function AccountPanel(props: ModelCheckSelectionProps) {
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
+  const showAccounts = !emptyState && !props.accountsError;
   const selectableAccountCount = props.accounts.filter(
     (account) => account.manual_priority == null,
   ).length;
@@ -220,7 +212,6 @@ function AccountPanel(props: ModelCheckSelectionProps) {
         <div className="flex shrink-0 items-center gap-1.5">
           <Button
             type="button"
-            size="sm"
             variant="outline"
             disabled={props.disabled || selectableAccountCount === 0}
             onClick={props.onAccountsSelectAll}
@@ -232,7 +223,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
             <TooltipTrigger render={<span className="inline-flex" />}>
               <Button
                 type="button"
-                size="icon-sm"
+                size="icon"
                 variant="ghost"
                 disabled={
                   props.disabled ||
@@ -249,12 +240,12 @@ function AccountPanel(props: ModelCheckSelectionProps) {
         </div>
       </div>
       {emptyState ? <div className="min-h-0 flex-1">{emptyState}</div> : null}
-      {!emptyState ? (
+      {showAccounts ? (
         <div className="min-h-0 flex-1 overflow-auto md:hidden">
           <AccountMobileList {...props} accounts={pagination.visibleItems} />
         </div>
       ) : null}
-      {!emptyState ? (
+      {showAccounts ? (
         <Table
           containerClassName="hidden min-h-0 flex-1 overflow-auto md:block"
           className="min-w-[860px]"
@@ -315,7 +306,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
           </TableBody>
         </Table>
       ) : null}
-      {!emptyState ? (
+      {showAccounts ? (
         <DataTablePagination
           currentPage={pagination.currentPage}
           totalPages={pagination.totalPages}
@@ -339,19 +330,9 @@ function ModelList(props: ModelCheckSelectionProps) {
     );
   }
   if (props.modelsLoading) {
-    return (
-      <div className="text-muted-foreground grid h-full min-h-32 place-items-center p-4 text-sm">
-        正在读取共同模型
-      </div>
-    );
+    return <PageLoadingSkeleton label="正在读取共同模型" variant="list" />;
   }
-  if (props.modelsError && props.models.length === 0) {
-    return (
-      <div className="text-destructive grid h-full min-h-32 place-items-center p-4 text-center text-sm">
-        {props.modelsError}
-      </div>
-    );
-  }
+  if (props.modelsError && props.models.length === 0) return null;
   if (props.models.length === 0) {
     return (
       <div className="text-muted-foreground grid h-full min-h-32 place-items-center p-4 text-center text-sm">
@@ -423,7 +404,6 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
         <div className="flex items-center gap-1">
           <Button
             type="button"
-            size="xs"
             variant="ghost"
             disabled={props.disabled || props.models.length === 0}
             onClick={props.onModelsSelectAll}
@@ -440,11 +420,6 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
         </div>
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0!">
-        {props.modelsError && props.models.length > 0 ? (
-          <p role="alert" className="shrink-0 px-3 py-2 text-xs text-destructive">
-            {props.modelsError}。当前保留上次模型列表，请刷新后再检测。
-          </p>
-        ) : null}
         <ModelList {...props} />
       </CardContent>
       <div className="border-border/70 shrink-0 border-t p-3">

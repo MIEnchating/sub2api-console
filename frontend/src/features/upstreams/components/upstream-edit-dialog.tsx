@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, LoaderCircle, RefreshCw, Save, Trash2 } from "lucide-react";
@@ -27,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { TableActionButton } from "@/components/data-table/table-action-button";
@@ -401,6 +402,8 @@ export function UpstreamEditDialog(props: Props) {
     queryFn: () => api.upstreamConfiguration(props.host!),
     enabled: props.host !== null,
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
   const vaultConfiguration = useQuery({
     queryKey: ["auth-recovery-config"],
@@ -566,17 +569,19 @@ export function UpstreamEditDialog(props: Props) {
           <DialogTitle>编辑上游</DialogTitle>
         </DialogHeader>
         <DialogBody className={upstreamEditDialogLayout.scrollArea}>
-          {configuration.isLoading && (
-            <div className="grid gap-3" aria-label="正在读取上游配置">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-32 w-full" />
-              <Skeleton className="h-44 w-full" />
-            </div>
-          )}
+          {configuration.isLoading && <ContentLoading label="正在读取上游配置" />}
           {!configuration.isLoading && configuration.error && (
-            <QueryErrorToast error={configuration.error} fallback="上游配置读取失败" />
+            <>
+              <QueryErrorToast error={configuration.error} fallback="上游配置读取失败" />
+              {!configuration.data && (
+                <ContentRetry
+                  onRetry={() => void configuration.refetch()}
+                  pending={configuration.isFetching}
+                />
+              )}
+            </>
           )}
-          {!configuration.isLoading && !configuration.error && (
+          {configuration.data && (
             <form
               id={upstreamEditFormID}
               className={upstreamEditDialogLayout.form}

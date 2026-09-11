@@ -19,7 +19,7 @@ export function RefreshButton(props: RefreshButtonProps) {
         <Button
           type="button"
           variant="outline"
-          size="icon-sm"
+          size="icon"
           aria-label={props.ariaLabel ?? "刷新"}
           data-testid={props.testId}
           disabled={props.disabled || props.pending}

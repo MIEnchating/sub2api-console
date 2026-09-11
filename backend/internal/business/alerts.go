@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,17 +15,18 @@ import (
 )
 
 type AlertIncident struct {
-	IncidentKey    string  `json:"incident_key"`
-	EventType      string  `json:"event_type"`
-	ObjectKind     string  `json:"object_kind"`
-	ObjectID       string  `json:"object_id"`
-	ObjectName     *string `json:"object_name,omitempty"`
-	CauseCode      string  `json:"cause_code"`
-	Status         string  `json:"status"`
-	FirstSeenAt    string  `json:"first_seen_at"`
-	LastSeenAt     string  `json:"last_seen_at"`
-	DeliveryStatus *string `json:"delivery_status"`
-	LastError      *string `json:"last_error"`
+	IncidentKey    string   `json:"incident_key"`
+	EventType      string   `json:"event_type"`
+	ObjectKind     string   `json:"object_kind"`
+	ObjectID       string   `json:"object_id"`
+	ObjectName     *string  `json:"object_name,omitempty"`
+	GroupNames     []string `json:"group_names,omitempty"`
+	CauseCode      string   `json:"cause_code"`
+	Status         string   `json:"status"`
+	FirstSeenAt    string   `json:"first_seen_at"`
+	LastSeenAt     string   `json:"last_seen_at"`
+	DeliveryStatus *string  `json:"delivery_status"`
+	LastError      *string  `json:"last_error"`
 }
 
 type AlertDeliveryPlan struct {
@@ -641,7 +643,9 @@ func (s *Store) deliveryIncidents(ctx context.Context) ([]AlertIncident, error) 
 
 func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string) ([]AlertIncident, error) {
 	query := `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
-		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error FROM alert_incidents i
+		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error,
+		(SELECT json_group_array(group_name ORDER BY group_name) FROM account_groups
+		 WHERE i.object_kind='account' AND account_id=i.object_id) FROM alert_incidents i
 		LEFT JOIN accounts a ON i.object_kind='account' AND a.id=i.object_id
 		WHERE i.status IN ('firing','recovered')`
 	var args []any
@@ -658,9 +662,13 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 	for rows.Next() {
 		var item AlertIncident
 		var objectName, deliveryStatus, lastError sql.NullString
+		var groupNamesJSON string
 		if err := rows.Scan(&item.IncidentKey, &item.EventType, &item.ObjectKind, &item.ObjectID,
-			&objectName, &item.CauseCode, &item.Status, &item.FirstSeenAt, &item.LastSeenAt, &deliveryStatus, &lastError); err != nil {
+			&objectName, &item.CauseCode, &item.Status, &item.FirstSeenAt, &item.LastSeenAt, &deliveryStatus, &lastError, &groupNamesJSON); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(groupNamesJSON), &item.GroupNames); err != nil {
+			return nil, fmt.Errorf("读取告警账号分组失败: %w", err)
 		}
 		item.ObjectName = nullString(objectName)
 		item.DeliveryStatus = nullString(deliveryStatus)

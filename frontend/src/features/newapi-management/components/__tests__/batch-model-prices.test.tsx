@@ -1,11 +1,15 @@
+import { Toaster, toast } from "sonner";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { NewAPIRemoteSnapshot } from "@/api";
 import { NewAPIModelPrices } from "../model-prices";
 import userEvent from "@testing-library/user-event";
 
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  toast.dismiss();
+  vi.unstubAllGlobals();
+});
 
 const snapshot: NewAPIRemoteSnapshot = {
   groups: [],
@@ -29,6 +33,10 @@ const models = [
   { model: "model-a", input_ratio: "1", completion_ratio: "4" },
   { model: "model-missing", input_ratio: "1", completion_ratio: "4" },
 ];
+
+beforeEach(() => {
+  render(<Toaster />);
+});
 
 describe("批量模型价格同步", () => {
   it("勾选后先预览，确认时一次写入有效模型并跳过缺失价格", async () => {
@@ -191,7 +199,8 @@ describe("批量模型价格同步", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "选择本页模型" }));
     fireEvent.click(screen.getByRole("button", { name: "批量同步（2）" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("价格读取失败");
+    await waitFor(() => expect(screen.getByText("价格读取失败")).toBeVisible());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认同步 0 个模型" })).toBeDisabled();
   });
   it("参考价已过期时禁止批量写入并引导刷新", async () => {
@@ -205,7 +214,8 @@ describe("批量模型价格同步", () => {
     );
     fireEvent.click(screen.getByRole("checkbox", { name: "选择模型 model-a" }));
     fireEvent.click(screen.getByRole("button", { name: "批量同步（1）" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("请先强制刷新参考价格");
+    await waitFor(() => expect(screen.getByText(/请先强制刷新参考价格/)).toBeVisible());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认同步 0 个模型" })).toBeDisabled();
     expect(write).not.toHaveBeenCalled();
   });
@@ -237,7 +247,8 @@ describe("批量模型价格同步", () => {
     fireEvent.click(screen.getByRole("button", { name: "批量同步（1）" }));
     const confirm = await screen.findByRole("button", { name: "确认同步 1 个模型" });
     fireEvent.click(confirm);
-    expect(await screen.findByRole("alert")).toHaveTextContent("平台写入失败");
+    expect(await screen.findByText("平台写入失败")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(confirm).toBeEnabled();
     expect(screen.queryByText("同步成功并已读回")).not.toBeInTheDocument();
   });

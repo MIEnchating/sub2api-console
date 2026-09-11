@@ -159,7 +159,6 @@ export function NewAPIGroupBindings(props: Props) {
             <span className="text-destructive text-xs">Sub2API 管理平台倍率必须大于 0</span>
           ) : null}
           <Button
-            size="sm"
             onClick={save}
             disabled={props.pending || props.groups.length === 0 || hasInvalidRatio}
           >

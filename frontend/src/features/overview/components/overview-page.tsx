@@ -5,7 +5,6 @@ import { toast } from "sonner";
 
 import { api } from "@/api";
 import { RefreshButton } from "@/components/refresh-button";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
@@ -349,12 +348,6 @@ export function OverviewPage(props: OverviewPageProps) {
           className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
         >
           {loading && <MatrixSkeleton />}
-          {!loading && error && unavailable ? (
-            <div className="col-span-full flex min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm wrap-anywhere">
-              <p className="text-destructive">{operationErrorMessage(error, "运营数据读取失败")}</p>
-              <p className="text-muted-foreground">请检查连接后点击顶部刷新重试。</p>
-            </div>
-          ) : null}
           {!loading && !error && healthRows.length === 0 && (
             <div className="text-muted-foreground col-span-full flex min-h-48 items-center justify-center text-sm">
               暂无分组数据

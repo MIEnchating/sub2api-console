@@ -1,3 +1,4 @@
+import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -87,16 +88,30 @@ describe("分组策略编辑布局", () => {
   });
 
   it("调度策略包含全局默认且五个选项尺寸一致", () => {
-    const markup = renderToStaticMarkup(
-      <GroupPolicyEditorFields value={value} onChange={() => undefined} />,
+    render(<GroupPolicyEditorFields value={value} onChange={() => undefined} />);
+    const strategies = screen.getAllByRole("radio");
+    expect(strategies).toHaveLength(5);
+    for (const strategy of strategies) {
+      expect(strategy).toHaveClass("h-8", "w-full", "min-w-0");
+    }
+    expect(screen.getByRole("radiogroup", { name: "调度策略" })).toHaveClass("sm:grid-cols-5");
+    expect(screen.getByRole("radio", { name: "均衡" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("radio", { name: "全局默认" })).toHaveAttribute(
+      "aria-checked",
+      "false",
     );
-    const strategies = section(markup, "<fieldset", "保底可用账号数");
+  });
 
-    expect(strategies).toContain("sm:grid-cols-5");
-    expect(strategies.match(/h-9 w-full min-w-0/g)).toHaveLength(5);
-    expect(strategies.match(/role="radio"/g)).toHaveLength(5);
-    expect(strategies).toContain('aria-checked="true"');
-    expect(strategies).toContain('aria-checked="false"');
+  it("探活模型输入方式切换按钮与策略选项保持相同高度", () => {
+    render(<GroupPolicyEditorFields value={value} onChange={() => undefined} />);
+
+    for (const name of ["手动输入", "选择模型"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("h-8", "text-sm");
+    }
+    expect(screen.getByRole("button", { name: "手动输入" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("展示所选策略的实际计算公式", () => {

@@ -48,7 +48,7 @@ export function NotificationSettings(props: {
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   aria-label="管理通知渠道"
                   onClick={props.onOpenSettings}
                 />

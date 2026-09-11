@@ -1,3 +1,6 @@
+import { ContentLoading } from "@/components/content-loading";
+import { StartupLoading } from "@/components/startup-loading";
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
 import { useAccountResultEvents } from "@/features/accounts/hooks/use-account-result-events";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
@@ -363,6 +366,7 @@ import {
   candidateHasExistingBinding,
   candidateHasOnboardingChange,
   compatibleOnboardingLocalGroups,
+  effectiveOnboardingPlatform,
   inferOnboardingProtocol,
   onboardingPlatformNeedsProtocol,
   pendingOnboardingSelectionNeedsProtocol,
@@ -689,13 +693,13 @@ function App() {
   });
   useAutoInspectionEvents(session.data?.authenticated === true);
 
-  if (setup.isLoading) return <StartupState text="正在读取初始化状态…" />;
+  if (setup.isLoading) return <StartupLoading label="正在读取初始化状态…" />;
   if (setup.error)
     return (
-      <StartupState
-        text={setup.error instanceof Error ? setup.error.message : "控制台 API 不可用"}
-        error
-      />
+      <>
+        <QueryErrorToast error={setup.error} fallback="控制台 API 不可用" />
+        <StartupState text="Sub2API Console" onRetry={() => void setup.refetch()} />
+      </>
     );
   if (setup.data?.configuration_errors?.length)
     return (
@@ -711,13 +715,13 @@ function App() {
         }}
       />
     );
-  if (session.isLoading) return <StartupState text="正在验证登录状态…" />;
+  if (session.isLoading) return <StartupLoading label="正在验证登录状态…" />;
   if (session.error)
     return (
-      <StartupState
-        text={session.error instanceof Error ? session.error.message : "登录状态读取失败"}
-        error
-      />
+      <>
+        <QueryErrorToast error={session.error} fallback="登录状态读取失败" />
+        <StartupState text="Sub2API Console" onRetry={() => void session.refetch()} />
+      </>
     );
   if (!session.data?.authenticated)
     return (
@@ -757,7 +761,6 @@ function App() {
               <SchedulerHeaderControls />
               <Button
                 variant="ghost"
-                size="sm"
                 className="gap-1.5"
                 onClick={() => void navigate({ to: "/alerts" })}
               >
@@ -770,7 +773,7 @@ function App() {
                   render={
                     <Button
                       variant="ghost"
-                      size="icon-sm"
+                      size="icon"
                       aria-label={theme === "dark" ? "切换亮色主题" : "切换暗色主题"}
                       onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
                     />
@@ -784,7 +787,6 @@ function App() {
               </Tooltip>
               <Button
                 variant="ghost"
-                size="sm"
                 className="max-w-44 gap-1.5"
                 onClick={() => void navigate({ to: "/profile" })}
               >
@@ -796,7 +798,7 @@ function App() {
                   render={
                     <Button
                       variant="ghost"
-                      size="icon-sm"
+                      size="icon"
                       aria-label="退出登录"
                       onClick={async () => {
                         try {
@@ -1023,7 +1025,6 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant="ghost"
-            size="sm"
             className="gap-1.5"
             disabled={syncing}
             aria-label={syncing ? "正在同步账号与分组" : "同步账号与分组"}
@@ -1039,7 +1040,6 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant="ghost"
-            size="sm"
             className="gap-1.5"
             disabled={executing}
             aria-label={executing ? "巡检执行中" : "立即检查一轮到期任务"}
@@ -1055,7 +1055,6 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant={schedulingEnabled ? "destructive" : "default"}
-            size="sm"
             className="gap-1.5"
             disabled={status.isLoading || toggle.isPending}
             aria-label={schedulingEnabled ? "取消自动调度" : "启动自动调度"}
@@ -1165,7 +1164,7 @@ export function SchedulerSidebarStatus() {
   );
 }
 
-function StartupState(props: { text: string; error?: boolean }) {
+function StartupState(props: { text: string; error?: boolean; onRetry?: () => void }) {
   return (
     <div className="bg-background text-foreground grid min-h-svh place-items-center p-6">
       <Card className={cn("w-full max-w-md p-6", props.error && "border-destructive")}>
@@ -1175,9 +1174,15 @@ function StartupState(props: { text: string; error?: boolean }) {
           </span>
           <div>
             <strong className="block text-sm">{props.text}</strong>
-            <span className="text-muted-foreground mt-1 block text-xs">
-              {props.error ? "请检查 API 地址和服务状态。" : "Sub2API Console"}
-            </span>
+            {props.onRetry ? (
+              <Button className="mt-3" variant="outline" onClick={props.onRetry}>
+                重新连接
+              </Button>
+            ) : (
+              <span className="text-muted-foreground mt-1 block text-xs">
+                {props.error ? "请检查 API 地址和服务状态。" : "Sub2API Console"}
+              </span>
+            )}
           </div>
         </div>
       </Card>
@@ -1448,11 +1453,7 @@ export function LoginPage(props: { onLogin: () => void; reason?: string | null }
                 className="h-10 bg-card/35 px-3"
               />
             </FormField>
-            <Button
-              type="submit"
-              className="mt-2 h-10 w-full"
-              disabled={form.formState.isSubmitting}
-            >
+            <Button type="submit" className="mt-2 w-full" disabled={form.formState.isSubmitting}>
               <ShieldCheck size={16} />
               {form.formState.isSubmitting ? "登录中…" : "登录"}
             </Button>
@@ -2692,7 +2693,7 @@ export function UpstreamsPage() {
                                   <Button
                                     type="button"
                                     variant="ghost"
-                                    size="icon-xs"
+                                    size="icon"
                                     aria-label={`查看 ${host.name || host.host} 的分组绑定核对明细`}
                                     onClick={() => setGroupAuditDetailHost(host.host)}
                                   />
@@ -2779,7 +2780,7 @@ export function UpstreamsPage() {
                             render={
                               <Button
                                 variant="outline"
-                                size="icon-sm"
+                                size="icon"
                                 className="data-popup-open:bg-muted"
                                 aria-label="更多操作"
                               />
@@ -2902,9 +2903,7 @@ export function UpstreamsPage() {
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
             {groupHistoryOverview.isLoading ? (
-              <div className="flex h-full min-h-0 items-center justify-center">
-                <span className="text-muted-foreground text-sm">正在读取变化历史</span>
-              </div>
+              <ContentLoading label="正在读取变化历史" className="h-full" />
             ) : null}
             {!groupHistoryOverview.isLoading && groupHistoryOverview.isError ? (
               <QueryError
@@ -3158,10 +3157,7 @@ export function UpstreamsPage() {
           </DialogHeader>
           <DialogBody>
             {!deleteTaskId && deletePreview.isLoading && (
-              <div className="grid gap-3 py-2" aria-label="正在读取删除范围">
-                <Skeleton className="h-5 w-40" />
-                <Skeleton className="h-24 w-full" />
-              </div>
+              <ContentLoading label="正在读取删除范围" />
             )}
             {!deleteTaskId && deletePreview.error && (
               <QueryError error={deletePreview.error} fallback="删除范围读取失败" embedded />
@@ -3275,7 +3271,11 @@ export function UpstreamsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groups.isLoading && <TableLoadingRows columns={5} />}
+                    {groups.isLoading && (
+                      <TableMessageRow columns={5}>
+                        <ContentLoading label="正在读取上游分组" />
+                      </TableMessageRow>
+                    )}
                     {groups.isError && (
                       <TableMessageRow columns={5}>
                         <QueryError error={groups.error} fallback="分组目录读取失败" embedded />
@@ -3354,9 +3354,7 @@ export function UpstreamsPage() {
               </DataTablePanel>
             )}
             {groupDialogView !== "catalog" && groupHistory.isLoading && (
-              <div className="flex min-h-0 items-center justify-center">
-                <span className="text-muted-foreground text-sm">正在读取变化历史</span>
-              </div>
+              <ContentLoading label="正在读取变化历史" className="h-full" />
             )}
             {groupDialogView !== "catalog" && !groupHistory.isLoading && groupHistory.isError && (
               <QueryError error={groupHistory.error} fallback="上游分组变化历史读取失败" embedded />
@@ -3995,7 +3993,6 @@ export function AccountSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-6"
                 aria-label="清空选择"
                 onClick={props.onClear}
               />
@@ -4029,7 +4026,6 @@ export function AccountSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-8"
                 aria-label={`探活已选择的 ${props.selectedCount} 个账号`}
                 disabled={props.pending}
                 onClick={props.onProbe}
@@ -4047,7 +4043,6 @@ export function AccountSelectionToolbar(props: {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="size-8"
                 aria-label={`同步已选择的 ${props.selectedCount} 个账号模型`}
                 disabled={props.pending}
                 onClick={props.onSyncModels}
@@ -4065,7 +4060,6 @@ export function AccountSelectionToolbar(props: {
                 type="button"
                 variant="destructive"
                 size="icon"
-                className="size-8"
                 aria-label={`删除已选择的 ${props.selectedCount} 个账号`}
                 disabled={props.pending}
                 onClick={props.onDelete}
@@ -6122,6 +6116,7 @@ export function GroupsPage() {
         loading={allocation.isLoading}
         error={allocation.error}
         onClose={() => setAllocationGroup(null)}
+        onRetry={() => void allocation.refetch()}
       />
       <ConfirmActionDialog
         open={excludeTarget !== null}
@@ -6870,7 +6865,7 @@ export function OnboardingPage() {
       return;
     }
     const compatibleLocalGroups = compatibleOnboardingLocalGroups(
-      { platform: selectedPlatform ?? candidate.platform },
+      { platform: effectiveOnboardingPlatform(candidate.platform, selectedPlatform) },
       localGroups,
     );
     const selectedLocalGroups = localGroupIDs.flatMap((groupID) => {
@@ -6909,7 +6904,10 @@ export function OnboardingPage() {
       ? [
           {
             upstreamGroup: candidate.group_name,
-            platform: accountPlatformLabel(selectedPlatform ?? candidate.platform) ?? "未识别",
+            platform:
+              accountPlatformLabel(
+                effectiveOnboardingPlatform(candidate.platform, selectedPlatform),
+              ) ?? "未识别",
             multiplier: candidate.multiplier,
             localGroup: selectedLocalGroups.map((group) => group.name).join("、"),
             concurrency: request.concurrency ?? 0,
@@ -6919,7 +6917,10 @@ export function OnboardingPage() {
         ]
       : selectedLocalGroups.map((group) => ({
           upstreamGroup: candidate.group_name,
-          platform: accountPlatformLabel(selectedPlatform ?? candidate.platform) ?? "未识别",
+          platform:
+            accountPlatformLabel(
+              effectiveOnboardingPlatform(candidate.platform, selectedPlatform),
+            ) ?? "未识别",
           multiplier,
           localGroup: group.name,
           concurrency: request.concurrency ?? 0,
@@ -6951,7 +6952,7 @@ export function OnboardingPage() {
       const selectedPlatform = inferOnboardingProtocol(localGroupIDs, localGroups);
       if (!onboardingProtocolReady(candidate.platform, selectedPlatform)) return [];
       const compatibleLocalGroups = compatibleOnboardingLocalGroups(
-        { platform: selectedPlatform ?? candidate.platform },
+        { platform: effectiveOnboardingPlatform(candidate.platform, selectedPlatform) },
         localGroups,
       );
       const selectedLocalGroups = localGroupIDs.flatMap((groupID) => {
@@ -6985,7 +6986,10 @@ export function OnboardingPage() {
         request: expandedRequest,
         preview: {
           upstreamGroup: candidate.group_name,
-          platform: accountPlatformLabel(selectedPlatform ?? candidate.platform) ?? "未识别",
+          platform:
+            accountPlatformLabel(
+              effectiveOnboardingPlatform(candidate.platform, selectedPlatform),
+            ) ?? "未识别",
           multiplier,
           localGroup: existingBinding
             ? selectedLocalGroups.map((group) => group.name).join("、")
@@ -7096,7 +7100,7 @@ export function OnboardingPage() {
   const entryCompatibleLocalGroups = entryCandidate
     ? compatibleOnboardingLocalGroups(
         {
-          platform: entrySelectedPlatform ?? entryCandidate.platform,
+          platform: effectiveOnboardingPlatform(entryCandidate.platform, entrySelectedPlatform),
         },
         localGroups,
       )
@@ -7128,7 +7132,7 @@ export function OnboardingPage() {
   }
   const entryProbeTarget = onboardingProbeTarget(
     entryCandidate,
-    entrySelectedPlatform ?? entryCandidate?.platform,
+    effectiveOnboardingPlatform(entryCandidate?.platform, entrySelectedPlatform),
   );
   const candidateStats = onboardingCandidateStats(visibleCandidates);
   const batchBindingCount = visibleCandidates.reduce((count, candidate) => {
@@ -7137,7 +7141,7 @@ export function OnboardingPage() {
     const selectedPlatform = inferOnboardingProtocol(selected, localGroups);
     if (!onboardingProtocolReady(candidate.platform, selectedPlatform)) return count;
     const compatibleLocalGroups = compatibleOnboardingLocalGroups(
-      { platform: selectedPlatform ?? candidate.platform },
+      { platform: effectiveOnboardingPlatform(candidate.platform, selectedPlatform) },
       localGroups,
     );
     if (
@@ -7847,7 +7851,12 @@ export function OnboardingPage() {
                             ? inferOnboardingProtocol(selectedLocalGroupIDs, localGroups)
                             : null;
                           const compatibleLocalGroups = compatibleOnboardingLocalGroups(
-                            { platform: selectedPlatform ?? candidate.platform },
+                            {
+                              platform: effectiveOnboardingPlatform(
+                                candidate.platform,
+                                selectedPlatform,
+                              ),
+                            },
                             localGroups,
                           );
                           const canEdit =
@@ -7869,7 +7878,7 @@ export function OnboardingPage() {
                           );
                           const candidateProbeTarget = onboardingProbeTarget(
                             candidate,
-                            selectedPlatform ?? candidate.platform,
+                            effectiveOnboardingPlatform(candidate.platform, selectedPlatform),
                           );
                           return (
                             <TableRow
@@ -7895,14 +7904,20 @@ export function OnboardingPage() {
                                   required={onboardingPlatformNeedsProtocol(candidate.platform)}
                                   selectedCount={selectedLocalGroupIDs.length}
                                   platformLabel={accountPlatformLabel(
-                                    selectedPlatform ?? candidate.platform,
+                                    effectiveOnboardingPlatform(
+                                      candidate.platform,
+                                      selectedPlatform,
+                                    ),
                                   )}
                                 />
                               </TableCell>
                               <TableCell overflowTooltip={false}>
                                 <OnboardingGroupBindingSelect
                                   upstreamGroupName={candidate.group_name}
-                                  upstreamPlatform={selectedPlatform ?? candidate.platform}
+                                  upstreamPlatform={effectiveOnboardingPlatform(
+                                    candidate.platform,
+                                    selectedPlatform,
+                                  )}
                                   groups={localGroups}
                                   value={selectedLocalGroupIDs}
                                   disabled={!canEdit || onboardingPending}
@@ -7957,7 +7972,10 @@ export function OnboardingPage() {
                           <OnboardingGroupBindingSelect
                             upstreamGroupName={entryCandidate?.group_name ?? "当前上游分组"}
                             upstreamPlatform={
-                              entrySelectedPlatform ?? entryCandidate?.platform ?? null
+                              effectiveOnboardingPlatform(
+                                entryCandidate?.platform,
+                                entrySelectedPlatform,
+                              ) ?? null
                             }
                             groups={localGroups}
                             value={entryLocalGroupIDs}
@@ -7986,7 +8004,12 @@ export function OnboardingPage() {
                           <OnboardingInferredPlatformStatus
                             required={onboardingPlatformNeedsProtocol(entryCandidate?.platform)}
                             selectedCount={entryLocalGroupIDs.length}
-                            platformLabel={accountPlatformLabel(entrySelectedPlatform)}
+                            platformLabel={accountPlatformLabel(
+                              effectiveOnboardingPlatform(
+                                entryCandidate?.platform,
+                                entrySelectedPlatform,
+                              ),
+                            )}
                           />
                         </div>
                       </FormField>
@@ -8704,7 +8727,7 @@ export function AccountSyncTaskStatus(props: {
             </span>
           </div>
           <StatusPill label="失败" tone="danger" />
-          <Button variant="ghost" size="icon-sm" aria-label="关闭任务结果" onClick={props.onClose}>
+          <Button variant="ghost" size="icon" aria-label="关闭任务结果" onClick={props.onClose}>
             <X size={15} />
           </Button>
         </div>
@@ -8734,7 +8757,7 @@ function TaskProgress(props: { task: Task; onClose?: () => void }) {
         </div>
         {pending ? <TaskCancelButton taskId={props.task.id} /> : null}
         {!pending && props.onClose ? (
-          <Button variant="ghost" size="icon-sm" aria-label="关闭任务结果" onClick={props.onClose}>
+          <Button variant="ghost" size="icon" aria-label="关闭任务结果" onClick={props.onClose}>
             <X size={15} />
           </Button>
         ) : null}
@@ -9690,6 +9713,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   if (logCleanup.isLoading) logCleanupStatusLabel = "读取中";
   else if (logCleanup.error) logCleanupStatusLabel = "读取失败";
   else if (logCleanup.data?.enabled) logCleanupStatusLabel = "自动清理已开启";
+  const settingsLoading =
+    config.isLoading ||
+    (activeTab === "notifications" && notifications.isLoading) ||
+    (activeTab === "interface" && logCleanup.isLoading);
   if (config.error)
     return (
       <PageLayout fixedContent>
@@ -9744,13 +9771,16 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           id={`config-panel-${activeTab}`}
           className={cn(
             "grid min-h-0 flex-1 min-w-0 auto-rows-[100%] items-stretch gap-4 overflow-y-auto overscroll-contain xl:overflow-hidden",
-            activeTab === "interface" && "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]",
+            activeTab === "interface" &&
+              !settingsLoading &&
+              "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]",
           )}
           data-testid="system-settings-panel"
           role="tabpanel"
           aria-labelledby={`config-tab-${activeTab}`}
         >
-          {activeTab === "connection" ? (
+          {settingsLoading ? <PageLoadingSkeleton label="正在读取系统设置" variant="form" /> : null}
+          {activeTab === "connection" && !settingsLoading ? (
             <div
               className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.75fr)]"
               data-testid="connection-settings-layout"
@@ -9905,7 +9935,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </div>
           ) : null}
 
-          {activeTab === "accounts" ? (
+          {activeTab === "accounts" && !settingsLoading ? (
             <div
               className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)]"
               data-testid="account-settings-layout"
@@ -9918,7 +9948,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </div>
           ) : null}
 
-          {activeTab === "notifications" ? (
+          {activeTab === "notifications" && !settingsLoading ? (
             <Card size="sm" className="h-full min-h-0 min-w-0">
               <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -10125,7 +10155,6 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                               <Button
                                 type="button"
                                 variant="outline"
-                                size="sm"
                                 onClick={() => cancelNotificationTargetDiscovery.mutate()}
                                 disabled={cancelNotificationTargetDiscovery.isPending}
                               >
@@ -10182,7 +10211,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </Card>
           ) : null}
 
-          {activeTab === "interface" ? (
+          {activeTab === "interface" && !settingsLoading ? (
             <NavigationSettingsCard
               sections={navigationSettingsSections}
               hiddenItemIDs={props.hiddenNavigationItemIDs ?? emptyHiddenNavigationItemIDs}
@@ -10194,7 +10223,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             />
           ) : null}
 
-          {activeTab === "interface" ? (
+          {activeTab === "interface" && !settingsLoading ? (
             <Card size="sm" className="h-full min-h-0 min-w-0">
               <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -10786,7 +10815,7 @@ function InspectionTaskQueueStateIcon(props: { state: InspectionTaskQueueState }
 function AutoInspectionLiveTaskQueue(props: { task?: Task; loading?: boolean }) {
   if (!props.task) {
     return props.loading ? (
-      <TaskStartupState message="正在读取本轮任务队列" />
+      <ContentLoading label="正在读取本轮任务队列" />
     ) : (
       <p className="text-muted-foreground text-sm">正在生成本轮任务，任务建立后会显示执行队列。</p>
     );
@@ -11035,9 +11064,7 @@ function AutoInspectionOperationTimeline(props: {
               ) : null}
               {timing.operation === autoInspectionUpstreamSyncOperation &&
               props.upstreamSyncLoading ? (
-                <span className="text-muted-foreground mt-0.5 block truncate text-xs">
-                  正在读取同步统计…
-                </span>
+                <ContentLoading label="正在读取同步统计…" compact />
               ) : null}
             </div>
             <span className="text-foreground whitespace-nowrap pt-0.5 font-mono text-xs tabular-nums">
@@ -11348,7 +11375,7 @@ export function AutoInspectionHeartbeatDetails(props: {
             </details>
           )}
           {!props.accountRateSyncTask && props.accountRateSyncTaskLoading && (
-            <TaskStartupState message="正在读取独立任务记录" />
+            <ContentLoading label="正在读取独立任务记录" compact />
           )}
           {!props.accountRateSyncTask && !props.accountRateSyncTaskLoading && (
             <p className="text-muted-foreground text-xs leading-5">

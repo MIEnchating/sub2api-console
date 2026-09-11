@@ -1,6 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PricingChangeRecord, PricingSnapshot } from "@/api";
 import {
@@ -678,4 +680,52 @@ describe("PricingPage", () => {
     expect(decisions[1].eligible_groups).toEqual(["codex-pro-旗舰"]);
     expect(decisions[1].changed).toBe(true);
   });
+});
+
+let loadingClient: QueryClient | undefined;
+afterEach(() => {
+  cleanup();
+  loadingClient?.clear();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+it("价格变更记录首次读取显示轻量反馈，完成后展示空记录状态", async () => {
+  let resolve!: (value: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      () =>
+        new Promise<Response>((done) => {
+          resolve = done;
+        }),
+    ),
+  );
+  const matches = Element.prototype.matches;
+  vi.spyOn(Element.prototype, "matches").mockImplementation(function (
+    this: Element,
+    selector: string,
+  ) {
+    if ([":fullscreen", ":popover-open", ":modal"].includes(selector)) return false;
+    return matches.call(this, selector);
+  });
+  loadingClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  loadingClient.setQueryData(["pricing"], snapshot);
+  loadingClient.setQueryData(["pricing-backups"], []);
+  render(
+    <QueryClientProvider client={loadingClient}>
+      <PricingPage />
+    </QueryClientProvider>,
+  );
+  const user = userEvent.setup();
+  screen.getByRole("button", { name: "价格维护" }).focus();
+  await user.keyboard("{Enter}");
+  await user.click(await screen.findByRole("menuitem", { name: "变更记录" }));
+  expect(screen.getByRole("status", { name: "正在读取价格变更记录" })).toHaveTextContent(
+    "正在读取价格变更记录",
+  );
+  expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
+  await act(async () => resolve(Response.json([])));
+  expect(await screen.findByText("暂无账号分组变更")).toBeVisible();
 });

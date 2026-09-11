@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/officialpricing"
 )
 
 type pricingCacheStore interface {
@@ -36,7 +38,7 @@ func pricingCacheFresh(at, now time.Time) bool {
 func catalogCacheKey(platform configstore.NewAPIPlatform, target configstore.TargetSettings) string {
 	// A changed management target must never reuse another instance's prices.
 	digest := sha256.Sum256([]byte(platform.ID + "\n" + strings.TrimRight(platform.BaseURL, "/") + "\n" + strings.TrimRight(target.BaseURL, "/")))
-	return "catalog-v1:" + hex.EncodeToString(digest[:])
+	return "catalog-v4:" + hex.EncodeToString(digest[:])
 }
 
 func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, force bool) (ModelPriceCatalog, error) {
@@ -71,9 +73,20 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 		}
 	}
 	// Bound aggregate fallback lookup time, including retries, to a normal read request.
-	lookupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	lookupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	prices, source, remoteErr := s.loadRemotePricing(lookupCtx, force)
+	var prices []Sub2APIModelPrice
+	var source RemotePricingSource
+	var remoteErr, namesErr error
+	var names []string
+	var reads sync.WaitGroup
+	reads.Go(func() { prices, source, remoteErr = s.loadRemotePricing(lookupCtx, force) })
+	reads.Go(func() {
+		namesCtx, stop := context.WithTimeout(lookupCtx, 8*time.Second)
+		defer stop()
+		names, namesErr = s.pricingModelNames(namesCtx, *platform)
+	})
+	reads.Wait()
 	oldest := time.Now().UTC()
 	if at, err := time.Parse(time.RFC3339Nano, source.FetchedAt); err == nil && at.Before(oldest) {
 		oldest = at
@@ -94,15 +107,19 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 			}
 		}
 	}
-	names, namesErr := s.pricingModelNames(lookupCtx, *platform)
 	if namesErr != nil {
 		warnings = append(warnings, "平台模型目录读取失败，已保留可用缓存；请检查平台连接后刷新")
 	}
+	officialExpiry := s.mergeOfficialPricing(lookupCtx, store, byModel, names, previous, force, &warnings)
 	missing := []string{}
 	var fallbackErr error
 	var client *adminclient.Client
 	for _, name := range names {
 		if _, found := byModel[name]; found {
+			continue
+		}
+		if officialpricing.ProviderID(name) != "" {
+			missing = append(missing, name)
 			continue
 		}
 		if client == nil {
@@ -136,7 +153,7 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 			confirmedMissing[name] = true
 		}
 		for _, price := range previous.Models {
-			if _, found := byModel[price.Model]; !found && !confirmedMissing[price.Model] {
+			if _, found := byModel[price.Model]; !found && !confirmedMissing[price.Model] && (officialpricing.ProviderID(price.Model) == "" || price.Source == "official") {
 				byModel[price.Model] = price
 			}
 		}
@@ -146,6 +163,9 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 	}
 	now := time.Now().UTC()
 	result := ModelPriceCatalog{Models: make([]Sub2APIModelPrice, 0, len(byModel)), MissingModels: missing, FetchedAt: oldest.Format(time.RFC3339Nano), ExpiresAt: oldest.Add(24 * time.Hour).Format(time.RFC3339Nano), Stale: len(warnings) > 0, Warning: strings.Join(warnings, "；")}
+	if !officialExpiry.IsZero() && officialExpiry.Before(oldest.Add(24*time.Hour)) {
+		result.ExpiresAt = officialExpiry.Format(time.RFC3339Nano)
+	}
 	if result.Stale && previous.FetchedAt != "" {
 		result.FetchedAt, result.ExpiresAt = previous.FetchedAt, previous.ExpiresAt
 	}

@@ -1,3 +1,5 @@
+import { ContentLoading } from "@/components/content-loading";
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, LoaderCircle, RefreshCw } from "lucide-react";
@@ -7,7 +9,7 @@ import { api, type AccountControlAction } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
-import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
+import { notifyOperationError } from "@/lib/operation-feedback";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 
@@ -95,7 +97,6 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
         aria-label={`账号 ${props.accountId} 处置`}
       >
         <Button
-          size="sm"
           variant="outline"
           disabled={disabled || fused || paused}
           onClick={() => setConfirmation("fuse")}
@@ -104,7 +105,6 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
           手动熔断
         </Button>
         <Button
-          size="sm"
           variant="outline"
           disabled={disabled || (!fused && !paused && current?.schedulable !== false)}
           onClick={() => setConfirmation(recoverAction)}
@@ -113,16 +113,11 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
           {fused ? actionLabels.recover : actionLabels.resume}
         </Button>
       </div>
-      {account.isLoading ? (
-        <p role="status" className="text-muted-foreground text-xs">
-          正在读取账号状态
-        </p>
-      ) : null}
+      {account.isLoading ? <ContentLoading label="正在读取账号状态" compact /> : null}
       {account.isError ? (
         <div className="text-destructive flex flex-wrap items-center gap-2 text-xs">
-          <span>{operationErrorMessage(account.error, "账号状态读取失败，请重试")}</span>
+          <QueryErrorToast error={account.error} fallback="账号状态读取失败，请重试" />
           <Button
-            size="sm"
             variant="ghost"
             onClick={() => void account.refetch()}
             disabled={account.isFetching}
@@ -141,7 +136,7 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
       {pending ? (
         <p role="status" className="text-muted-foreground flex items-center gap-1 text-xs">
           <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
-          {task.isError ? "任务状态读取失败，正在重试" : "账号处置执行中"}
+          {task.isError ? "正在重新读取任务状态" : "账号处置执行中"}
         </p>
       ) : null}
       {!pending && task.data ? (

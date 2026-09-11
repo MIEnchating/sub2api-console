@@ -32,7 +32,7 @@ export function ConfigSectionTabs(props: {
             <SegmentedControlItem
               key={tab.value}
               id={`config-tab-${tab.value}`}
-              className="h-9 w-full justify-center gap-2"
+              className="w-full justify-center"
               type="button"
               role="tab"
               selected={props.activeTab === tab.value}

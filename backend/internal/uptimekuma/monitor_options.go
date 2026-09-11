@@ -213,15 +213,18 @@ func applyOptions(raw map[string]json.RawMessage, kind string, o *MonitorOptions
 		if o.Body != "" || o.ClearBody {
 			set("body", o.Body)
 		}
-		set("authMethod", o.AuthMethod)
 		if o.bodyEncoding != "" {
 			set("httpBodyEncoding", o.bodyEncoding)
 		}
-		if o.replaceAuth {
+		if unchangedMonitorAuth(raw, o) && !o.replaceAuth {
+			return
+		}
+		if o.replaceAuth || rawString(raw, "authMethod") != o.AuthMethod {
 			set("basic_auth_user", "")
 			set("basic_auth_pass", "")
 			set("bearer_token", "")
 		}
+		set("authMethod", o.AuthMethod)
 		if o.ClearAuth || o.AuthMethod == "none" {
 			set("basic_auth_user", "")
 			set("basic_auth_pass", "")

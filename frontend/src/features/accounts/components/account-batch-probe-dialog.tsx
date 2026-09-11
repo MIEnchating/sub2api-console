@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, LoaderCircle } from "lucide-react";
@@ -14,7 +15,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 import { notifyProbeTaskResult } from "@/lib/probe-task-feedback";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
@@ -121,9 +121,7 @@ export function AccountBatchProbeDialog(props: {
             </p>
           ) : null}
           {run.error ? (
-            <p role="alert" className="text-destructive text-sm break-words">
-              {operationErrorMessage(run.error, "批量探活启动失败，请重试")}
-            </p>
+            <QueryErrorToast error={run.error} fallback="批量探活启动失败，请重试" />
           ) : null}
         </DialogBody>
         <DialogFooter>

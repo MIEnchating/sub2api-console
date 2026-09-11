@@ -1,3 +1,4 @@
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
@@ -101,9 +102,10 @@ export function ModelSyncSettingsCard() {
               </p>
             ) : null}
             {settings.error ? (
-              <p className="text-destructive text-sm" role="alert">
-                全局屏蔽模型设置读取失败，请刷新后重试
-              </p>
+              <QueryErrorToast
+                error={settings.error}
+                fallback="全局屏蔽模型设置读取失败，请刷新后重试"
+              />
             ) : null}
           </div>
           <SettingsFooter>

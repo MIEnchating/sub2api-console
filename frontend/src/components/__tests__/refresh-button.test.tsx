@@ -9,7 +9,7 @@ describe("RefreshButton", () => {
 
     expect(markup).toContain('aria-label="刷新账号池"');
     expect(markup).toContain("刷新");
-    expect(markup).toContain("size-7");
+    expect(markup).toContain("size-8");
     expect(markup).not.toContain("重新加载");
     expect(markup).not.toContain("重试读取");
   });

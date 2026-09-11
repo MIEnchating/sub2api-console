@@ -93,7 +93,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
       data-testid="base-url-check-results"
     >
       <PageActions>
-        <Button variant="outline" size="sm" disabled={props.running} onClick={props.onRerun}>
+        <Button variant="outline" disabled={props.running} onClick={props.onRerun}>
           <Play size={15} aria-hidden="true" />
           重新运行
         </Button>
@@ -207,7 +207,6 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
                     <TableCell className="align-top text-right">
                       {currentRepairKind ? (
                         <Button
-                          size="sm"
                           variant="outline"
                           className="w-[120px] justify-center"
                           disabled={props.repairing}

@@ -166,7 +166,8 @@ test("重新获取渠道模型保留已有选择和背景数量，失败后禁�
   await expect(dialog.getByRole("status", { name: "正在从上游获取模型" })).toHaveCount(0);
   await expect(page.getByText("尚未选择模型")).toHaveCount(0);
   releaseRefresh();
-  await expect(dialog.getByRole("alert")).toContainText("上游连接失败");
+  await expect(page.locator("[data-sonner-toast]")).toContainText("上游连接失败");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect(selectedModel).toBeChecked();
   await expect(dialog.getByRole("button", { name: "确认模型" })).toBeDisabled();
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
@@ -264,7 +265,8 @@ test("Key 清理重新扫描不清空已显示预览，扫描失败后禁止删�
   await expect(dialog.getByText("正在扫描上游 Key 与绑定关系")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();
   releaseScan();
-  await expect(dialog.getByRole("alert")).toContainText("扫描连接失败");
+  await expect(page.locator("[data-sonner-toast]")).toContainText("扫描连接失败");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect(dialog.getByText("unused-key", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();
 });

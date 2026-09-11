@@ -1,3 +1,4 @@
+import { notifyOperationError } from "@/lib/operation-feedback";
 import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
@@ -250,6 +251,7 @@ export function NewAPIChannelForm(props: Props) {
         { shouldValidate: true },
       );
     } catch (error) {
+      notifyOperationError(error, "从上游获取模型失败");
       setModelError(requestErrorMessage(error));
     }
   }
@@ -300,7 +302,8 @@ export function NewAPIChannelForm(props: Props) {
                 newAPIGroupOptions={newAPIGroupOptions}
                 selectedGroups={field.value}
                 selectedModelCount={selectedModels.length}
-                modelError={modelError || channelForm.formState.errors.models?.message}
+                modelError={modelError ? undefined : channelForm.formState.errors.models?.message}
+                modelRequestFailed={Boolean(modelError)}
                 baseURLError={channelForm.formState.errors.base_url?.message}
                 groupError={channelForm.formState.errors.newapi_groups?.message}
                 pending={props.pending}
@@ -509,6 +512,7 @@ export function NewAPIChannelForm(props: Props) {
         pending={props.fetchingModels}
         error={modelError}
         onOpenChange={setModelDialogOpen}
+        onRetry={() => void fetchModels()}
         onSelectedChange={setDraftModels}
         onConfirm={() => {
           channelForm.setValue("models", draftModels, {

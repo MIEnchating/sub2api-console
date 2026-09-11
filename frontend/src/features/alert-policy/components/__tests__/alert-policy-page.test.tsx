@@ -146,7 +146,9 @@ describe("AlertPolicyPage", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('data-testid="alert-policy-load-error"');
+    expect(markup).not.toContain('role="alert"');
+    expect(markup).not.toContain("读取失败");
+    expect(markup).not.toContain("告警策略暂不可用");
     expect(markup).toContain('aria-label="刷新告警策略"');
     expect(markup).not.toContain('data-slot="alert-policy-columns"');
     expect(markup).toMatch(

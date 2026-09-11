@@ -22,7 +22,7 @@ export function TableActionButton(props: {
           <Button
             type="button"
             variant="outline"
-            size="icon-sm"
+            size="icon"
             aria-label={props.ariaLabel ?? props.label}
             disabled={props.disabled}
             onClick={props.onClick}

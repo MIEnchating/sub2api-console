@@ -1,3 +1,4 @@
+import { ContentLoading } from "@/components/content-loading";
 import { PricingCatalogActions } from "./pricing-catalog-actions";
 import { PricingSettingsPanel } from "./pricing-settings-panel";
 import type { PricingConfigDraft } from "../types";
@@ -68,7 +69,6 @@ import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { cn } from "@/lib/utils";
-import { operationErrorMessage } from "@/lib/operation-feedback";
 
 function percent(value: number) {
   return `${(value * 100)
@@ -638,7 +638,7 @@ export function PricingBackupList(props: {
             <TooltipTrigger render={<span className="inline-flex" />}>
               <Button
                 type="button"
-                size="icon-sm"
+                size="icon"
                 variant="ghost"
                 className="text-destructive"
                 aria-label={`删除备份 ${backup.name}`}
@@ -1068,7 +1068,6 @@ export function PricingPreviewTable(props: {
                       <TableCell className="align-top">
                         <Button
                           type="button"
-                          size="xs"
                           variant="ghost"
                           aria-expanded={expanded}
                           aria-controls={`pricing-basis-${decision.account_id}`}
@@ -1200,7 +1199,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
               render={
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   aria-label={`${expanded ? "收起" : "展开"}互换组 ${setNumber}`}
                   aria-expanded={expanded}
                   aria-controls={contentID}
@@ -1220,7 +1219,7 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
               render={
                 <Button
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   aria-label={`删除互换组 ${setNumber}`}
                   onClick={() => props.onRemove(props.setIndex)}
                 />
@@ -1588,17 +1587,6 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         <QueryErrorToast error={snapshot.error} fallback="价格数据读取失败" />
       ) : null}
       {!snapshot.data && !snapshot.error && <PricingLoading catalog={props.page === "catalog"} />}
-      {!snapshot.data && snapshot.error ? (
-        <div
-          data-testid="pricing-load-error"
-          className="flex h-full min-h-40 flex-col items-center justify-center gap-2 px-4 text-center"
-        >
-          <p className="text-destructive text-sm wrap-anywhere">
-            {operationErrorMessage(snapshot.error, "价格数据读取失败")}
-          </p>
-          <p className="text-muted-foreground text-sm">请检查服务连接后点击顶部刷新重试。</p>
-        </div>
-      ) : null}
       {!snapshot.isLoading && snapshot.data && props.page === "catalog" && (
         <div className="flex h-full min-h-0 flex-col" data-testid="pricing-page">
           <PricingCatalogTable
@@ -1639,7 +1627,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                   </CardDescription>
                 </div>
               </div>
-              <Button size="sm" variant="outline" onClick={addExchangeGroupSet}>
+              <Button variant="outline" onClick={addExchangeGroupSet}>
                 <Plus /> 添加互换组
               </Button>
             </CardHeader>
@@ -1658,7 +1646,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                       自动调价暂时不会调整账号所属分组。
                     </p>
                   </div>
-                  <Button size="sm" onClick={addExchangeGroupSet}>
+                  <Button onClick={addExchangeGroupSet}>
                     <Plus /> 创建第一个互换组
                   </Button>
                 </div>
@@ -1754,10 +1742,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             <DialogDescription>最近 100 批已完成的账号分组调整。</DialogDescription>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
-            {changes.error && (
+            {changes.error && !changes.data && (
               <div className="flex h-full min-h-40 flex-col items-center justify-center gap-3">
                 <QueryErrorToast error={changes.error} fallback="价格变更记录读取失败" />
-                <span className="text-muted-foreground text-sm">价格变更记录读取失败</span>
                 <RefreshButton
                   pending={changes.isFetching}
                   ariaLabel="刷新价格变更记录"
@@ -1766,15 +1753,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
               </div>
             )}
             {!changes.error && changes.isLoading && (
-              <div className="space-y-3" data-testid="pricing-changes-loading">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
-              </div>
+              <ContentLoading label="正在读取价格变更记录" className="h-full" />
             )}
-            {!changes.error && !changes.isLoading && (
-              <PricingChangeList records={changes.data ?? []} />
-            )}
+            {changes.data && <PricingChangeList records={changes.data ?? []} />}
           </DialogBody>
         </DialogContent>
       </Dialog>
@@ -1842,7 +1823,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             ) : (
               <>
                 {backups.isError ? (
-                  <p className="text-destructive text-sm">价格分组备份读取失败</p>
+                  <QueryErrorToast error={backups.error} fallback="价格分组备份读取失败" />
                 ) : null}
                 <PricingBackupList
                   backups={backups.data ?? []}

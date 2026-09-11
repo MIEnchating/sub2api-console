@@ -1,3 +1,4 @@
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fromDate } from "@internationalized/date";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -427,9 +428,7 @@ export function RevenueAnalysisPage() {
           </div>
         )}
         {!running && task.data?.status !== "failed" && !report && latest.isLoading && (
-          <div className="flex min-h-0 flex-1 items-center justify-center">
-            <span className="text-muted-foreground text-sm">正在读取最近一次分析</span>
-          </div>
+          <PageLoadingSkeleton label="正在读取最近一次分析" />
         )}
         {!running && task.data?.status !== "failed" && !report && !latest.isLoading && (
           <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm">

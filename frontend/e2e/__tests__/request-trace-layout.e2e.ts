@@ -66,8 +66,9 @@ test("查询失败时展示原因和重试提示，再次查询成功后才展�
   await page.getByRole("textbox", { name: "request_id" }).fill("req-layout");
   await page.getByRole("button", { name: "查询", exact: true }).click();
   const content = page.locator('[data-slot="page-content"]');
-  await expect(content.getByRole("alert")).toContainText("日志服务暂不可用");
-  await expect(content.getByRole("alert")).toContainText("重新查询");
+  await expect(page.locator("[data-sonner-toast]")).toContainText("日志服务暂不可用");
+  await expect(content.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "查询", exact: true })).toBeEnabled();
   await expect(page.getByText("没有匹配的系统日志", { exact: true })).toHaveCount(0);
   failed = false;
   await page.getByRole("button", { name: "查询", exact: true }).click();

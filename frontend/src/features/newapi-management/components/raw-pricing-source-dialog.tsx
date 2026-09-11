@@ -1,3 +1,5 @@
+import { ContentRetry } from "@/components/content-retry";
+import { ContentLoading } from "@/components/content-loading";
 import type { RemoteModelPricingSource } from "@/api";
 import {
   Dialog,
@@ -12,6 +14,7 @@ type RawPricingSourceContentProps = {
   source?: RemoteModelPricingSource;
   pending: boolean;
   error: string;
+  onRetry?: () => void;
 };
 
 function formatBytes(value: number): string {
@@ -31,19 +34,10 @@ function SourceMetadata(props: { label: string; value: string }) {
 
 export function RawPricingSourceContent(props: RawPricingSourceContentProps) {
   if (props.pending && !props.source) {
-    return (
-      <div className="text-muted-foreground grid min-h-80 place-items-center text-sm" role="status">
-        正在读取远程价卡原始文件
-      </div>
-    );
+    return <ContentLoading label="正在读取远程价卡原始文件" className="h-full" />;
   }
-  if (props.error && !props.source) {
-    return (
-      <div className="text-destructive grid min-h-80 place-items-center px-6 text-center text-sm">
-        {props.error}
-      </div>
-    );
-  }
+  if (props.error && !props.source)
+    return props.onRetry ? <ContentRetry onRetry={props.onRetry} /> : null;
   if (!props.source) {
     return (
       <div className="text-muted-foreground grid min-h-80 place-items-center text-sm">
@@ -55,9 +49,9 @@ export function RawPricingSourceContent(props: RawPricingSourceContentProps) {
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
       <div className="grid gap-2 lg:grid-cols-2">
-        {props.source.warning || props.error ? (
+        {props.source.warning ? (
           <p role="status" className="text-destructive text-xs lg:col-span-2">
-            {props.source.warning || props.error}
+            {props.source.warning}
           </p>
         ) : null}
         <SourceMetadata label="来源 URL" value={props.source.source_url} />
@@ -88,6 +82,7 @@ export function RawPricingSourceDialog(props: {
   source?: RemoteModelPricingSource;
   pending: boolean;
   error: string;
+  onRetry?: () => void;
   onOpenChange: (open: boolean) => void;
 }) {
   return (
@@ -102,6 +97,7 @@ export function RawPricingSourceDialog(props: {
             source={props.source}
             pending={props.pending}
             error={props.error}
+            onRetry={props.onRetry}
           />
         </DialogBody>
       </DialogContent>

@@ -270,3 +270,92 @@ func TestMonitorTemplateReadbackRetainsBindingAfterTemplateDeletionAndNormalEdit
 		t.Fatal("normal edit overwrote request configuration")
 	}
 }
+
+func TestEditingMonitorWithTemplatePreservesUnchangedAuthentication(t *testing.T) {
+	for _, scenario := range []struct {
+		name, method   string
+		withoutOptions bool
+	}{
+		{"basic", "basic", false}, {"bearer", "bearer", false}, {"other-auth", "ntlm", false},
+		{"headers", "none", false}, {"without-options", "basic", true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			f := resourceFixture(t)
+			c := f.configure(t, true)
+			ctx := context.Background()
+			var raw map[string]json.RawMessage
+			_ = json.Unmarshal([]byte(`{"id":19,"name":"API","type":"http","url":"https://monitor.example","interval":300,"authMethod":"basic","basic_auth_user":"original-user","basic_auth_pass":"original-pass","bearer_token":"original-token","authDomain":"original-domain","headers":"{\"Authorization\":\"Bearer original-header\",\"X-API-Key\":\"original-key\",\"X-Old\":\"old\"}"}`), &raw)
+			raw["authMethod"], _ = json.Marshal(scenario.method)
+			f.monitors["19"], _ = json.Marshal(raw)
+			current, _, err := decodeMonitor(f.monitors["19"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			template, err := f.service.SaveTemplate(ctx, "", TemplateInput{Name: "新模板", Method: "POST", Headers: `{"Authorization":"Bearer template-header","X-App":"new"}`, Body: `{"model":"new-model"}`, AuthMethod: "bearer", AuthPassword: "template-token"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := current.Options
+			options.Timeout = 42
+			if scenario.withoutOptions {
+				options = nil
+			}
+			_, err = f.service.Write(ctx, 19, WriteInput{Action: "edit", ConfigRevision: c.Revision, Revision: current.Revision, Monitor: MonitorInput{Name: "改名", Type: "http", Interval: 60, URL: "https://monitor.example/new", Options: options, TemplateID: template.ID, TemplateRevision: template.Revision, TemplateAuthOverride: !scenario.withoutOptions}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"authMethod", "basic_auth_user", "basic_auth_pass", "bearer_token", "authDomain"} {
+				if string(f.edited[key]) != string(raw[key]) {
+					t.Fatalf("unchanged authentication field %s was overwritten", key)
+				}
+			}
+			var headers map[string]string
+			if err := json.Unmarshal([]byte(rawString(f.edited, "headers")), &headers); err != nil {
+				t.Fatal(err)
+			}
+			if headers["Authorization"] != "Bearer original-header" || headers["X-API-Key"] != "original-key" || headers["X-App"] != "new" {
+				t.Fatal("template lost original authentication headers")
+			}
+			if rawString(f.edited, "body") != `{"model":"new-model"}` || rawString(f.edited, "method") != "POST" {
+				t.Fatal("template request settings were not applied")
+			}
+		})
+	}
+}
+
+func TestEditingTemplateAllowsPartialCredentialUpdateAndExplicitClear(t *testing.T) {
+	for _, scenario := range []struct {
+		name, password string
+		clear          bool
+	}{
+		{"password-only", "replacement", false}, {"clear", "", true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			f := resourceFixture(t)
+			c := f.configure(t, true)
+			ctx := context.Background()
+			f.monitors["19"] = json.RawMessage(`{"id":19,"name":"API","type":"http","url":"https://monitor.example","interval":300,"authMethod":"basic","basic_auth_user":"original-user","basic_auth_pass":"original-pass"}`)
+			current, _, err := decodeMonitor(f.monitors["19"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			template, err := f.service.SaveTemplate(ctx, "", TemplateInput{Name: "新模板", Method: "POST", AuthMethod: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			options := current.Options
+			options.AuthPassword, options.ClearAuth = scenario.password, scenario.clear
+			_, err = f.service.Write(ctx, 19, WriteInput{Action: "edit", ConfigRevision: c.Revision, Revision: current.Revision, Monitor: MonitorInput{Name: current.Name, Type: "http", Interval: 60, Options: options, TemplateID: template.ID, TemplateRevision: template.Revision, TemplateAuthOverride: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario.clear {
+				if rawString(f.edited, "basic_auth_user") != "" || rawString(f.edited, "basic_auth_pass") != "" {
+					t.Fatal("explicit clear was ignored")
+				}
+			} else if rawString(f.edited, "basic_auth_user") != "original-user" || rawString(f.edited, "basic_auth_pass") != "replacement" {
+				t.Fatal("partial credential update lost original username")
+			}
+		})
+	}
+}

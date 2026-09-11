@@ -1,3 +1,4 @@
+import { ContentLoading } from "@/components/content-loading";
 import { useMutation } from "@tanstack/react-query";
 import { Eye, EyeOff } from "lucide-react";
 import { api } from "@/api";
@@ -21,6 +22,7 @@ export function PushURL(props: { id: number; revision: string }) {
         {query.data ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
         {query.data ? "隐藏上报地址" : "显示上报地址"}
       </Button>
+      {query.isPending && <ContentLoading label="正在读取上报地址" compact />}
       {query.data && (
         <Input
           aria-label="Push 上报地址"
