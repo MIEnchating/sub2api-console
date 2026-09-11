@@ -4,7 +4,7 @@ import { z } from "zod";
 import { api, type OnboardingProbeMode, type Task } from "@/api";
 import { taskIsTerminal, taskPollInterval } from "@/lib/task-state";
 
-export const probeStepsSchema = z.array(
+const probeStepsSchema = z.array(
   z.object({
     stage: z.string(),
     status: z.enum(["running", "succeeded", "failed", "skipped"]),
