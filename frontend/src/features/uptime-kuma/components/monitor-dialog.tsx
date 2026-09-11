@@ -24,6 +24,7 @@ import { MonitorAuthForm } from "./monitor-auth-form";
 
 export function MonitorDialog(props: {
   monitor: KumaMonitor | null;
+  initialType?: "group";
   monitors: KumaMonitor[];
   templates?: KumaTemplate[];
   templatesPending?: boolean;
@@ -37,7 +38,7 @@ export function MonitorDialog(props: {
     resolver: zodResolver(monitorSchema),
     defaultValues: {
       name: props.monitor?.name ?? "",
-      type: props.monitor?.type ?? "http",
+      type: props.monitor?.type ?? props.initialType ?? "http",
       template_id: "",
       template_revision: 0,
       template_auth_override: false,
@@ -55,6 +56,8 @@ export function MonitorDialog(props: {
     },
   });
   const type = form.watch("type");
+  const isGroup = type === "group";
+  const entity = isGroup ? "分组" : "监控项";
   useEffect(() => {
     if (!props.error) return;
     const fields: Record<string, keyof MonitorValues> = {
@@ -85,6 +88,14 @@ export function MonitorDialog(props: {
       form.setError("url", { message: "请输入监控地址" });
       return;
     }
+    if (values.type === "group") {
+      values.template_id = "";
+      values.template_revision = 0;
+      values.template_auth_override = false;
+      values.template_settings_override = false;
+      values.options = undefined;
+      values.url = "";
+    }
     props.onSubmit(values);
   };
   return (
@@ -95,16 +106,18 @@ export function MonitorDialog(props: {
       }}
     >
       <DialogContent
-        width="wide"
+        width={isGroup ? "medium" : "wide"}
         showCloseButton={!props.pending}
         className="grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
       >
         <DialogHeader>
-          <DialogTitle>{props.monitor ? "编辑监控项" : "新增监控项"}</DialogTitle>
+          <DialogTitle>{`${props.monitor ? "编辑" : "新增"}${entity}`}</DialogTitle>
           <DialogDescription>
-            {props.monitor
-              ? "编辑监控参数和所属分组。敏感字段留空保留，勾选清空后才会删除已有配置。"
-              : "选择监控类型并配置检测与请求参数。"}
+            {isGroup && "设置分组名称和所属分组。"}
+            {!isGroup &&
+              (props.monitor
+                ? "编辑监控参数和所属分组。敏感字段留空保留，勾选清空后才会删除已有配置。"
+                : "选择监控类型并配置检测与请求参数。")}
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -114,21 +127,26 @@ export function MonitorDialog(props: {
                 form={form}
                 monitor={props.monitor}
                 monitors={props.monitors}
+                groupOnly={props.initialType === "group" || props.monitor?.type === "group"}
                 pending={props.pending}
               />
-              <TemplateSelector
-                form={form}
-                templates={props.templates ?? []}
-                disabled={props.pending || !!props.templatesPending}
-                editing={!!props.monitor}
-              />
+              {!isGroup && (
+                <TemplateSelector
+                  form={form}
+                  templates={props.templates ?? []}
+                  disabled={props.pending || !!props.templatesPending}
+                  editing={!!props.monitor}
+                />
+              )}
               {["http", "keyword"].includes(type) && (
                 <>
                   <MonitorRequestForm form={form} monitor={props.monitor} pending={props.pending} />
                   <MonitorAuthForm form={form} monitor={props.monitor} pending={props.pending} />
                 </>
               )}
-              <MonitorOptionsForm form={form} monitor={props.monitor} pending={props.pending} />
+              {!isGroup && (
+                <MonitorOptionsForm form={form} monitor={props.monitor} pending={props.pending} />
+              )}
             </fieldset>
           </form>
         </DialogBody>
@@ -138,7 +156,7 @@ export function MonitorDialog(props: {
           </Button>
           <Button type="submit" form="kuma-monitor" disabled={props.pending}>
             <Save aria-hidden="true" />
-            {props.pending ? "正在保存…" : "保存监控项"}
+            {props.pending ? "正在保存…" : `保存${entity}`}
           </Button>
         </OperationDialogFooter>
       </DialogContent>

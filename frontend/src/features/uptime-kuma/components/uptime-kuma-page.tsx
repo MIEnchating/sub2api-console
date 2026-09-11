@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { PageActions } from "@/components/page-actions";
 import { RefreshButton } from "@/components/refresh-button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { CirclePlus, ExternalLink } from "lucide-react";
+import { CirclePlus, ExternalLink, FolderPlus } from "lucide-react";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import {
   actionLabels,
@@ -40,11 +40,14 @@ export function UptimeKumaPage() {
     refetchInterval: 60_000,
     refetchOnWindowFocus: false,
   });
-  const [editor, setEditor] = useState<{ monitor: KumaMonitor | null } | null>(null);
+  const [editor, setEditor] = useState<{
+    monitor: KumaMonitor | null;
+    initialType?: "group";
+  } | null>(null);
   const templatesQuery = useQuery({
     queryKey: kumaTemplatesKey,
     queryFn: api.kumaTemplates,
-    enabled: !!editor && !!config?.management_configured,
+    enabled: !!editor && editor.initialType !== "group" && !!config?.management_configured,
     retry: false,
   });
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -123,6 +126,19 @@ export function UptimeKumaPage() {
             />
             {config?.management_configured && (
               <Button
+                variant="outline"
+                disabled={pending || stale}
+                onClick={() => {
+                  write.reset();
+                  setEditor({ monitor: null, initialType: "group" });
+                }}
+              >
+                <FolderPlus aria-hidden="true" />
+                新增分组
+              </Button>
+            )}
+            {config?.management_configured && (
+              <Button
                 disabled={pending || stale}
                 onClick={() => {
                   write.reset();
@@ -189,6 +205,7 @@ export function UptimeKumaPage() {
       {editor && (
         <MonitorDialog
           monitor={editor.monitor}
+          initialType={editor.initialType}
           monitors={monitors}
           templates={templatesQuery.data}
           templatesPending={templatesQuery.isPending || templatesQuery.isError}

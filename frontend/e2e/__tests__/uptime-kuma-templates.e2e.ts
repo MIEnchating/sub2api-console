@@ -71,9 +71,7 @@ test("HTTP 监控选择模板时提交稳定 ID 和版本，TCP 不使用请求�
   await dialog.getByLabel("请求头（JSON，留空保留）").fill("[]");
   await dialog.getByRole("combobox", { name: "功能模板" }).click();
   await page.getByRole("option", { name: "API JSON 模板", exact: true }).click();
-  await expect(dialog.getByRole("combobox", { name: "HTTP 鉴权方式" })).toContainText(
-    "使用模板鉴权",
-  );
+  await expect(dialog.getByRole("combobox", { name: "HTTP 鉴权方式" })).toContainText("无鉴权");
   await expect(dialog.getByLabel("请求头（JSON，留空保留）")).toHaveCount(0);
   await expect(dialog.getByRole("combobox", { name: "通知渠道" })).toHaveCount(0);
   await dialog.getByRole("button", { name: "保存监控项" }).click();

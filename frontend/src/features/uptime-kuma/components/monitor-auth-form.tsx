@@ -22,7 +22,6 @@ export function MonitorAuthForm(props: {
 }) {
   const form = props.form;
   const usingTemplate = !!form.watch("template_id");
-  const inherit = usingTemplate && !form.watch("template_auth_override");
   const method = form.watch("options.auth_method") ?? "none";
   const errors = form.formState.errors.options;
   const canPreserve = !usingTemplate && !!props.monitor;
@@ -30,8 +29,8 @@ export function MonitorAuthForm(props: {
   const passwordLabel = canPreserve ? "鉴权密码 / Token（留空保留）" : "鉴权密码 / Token";
   const changeMethod = (value: string | null): void => {
     if (!value) return;
-    form.setValue("template_auth_override", usingTemplate && value !== "template");
-    form.setValue("options.auth_method", value === "template" ? "none" : value);
+    form.setValue("template_auth_override", usingTemplate);
+    form.setValue("options.auth_method", value);
     form.setValue("options.auth_username", "");
     form.setValue("options.auth_password", "");
     form.setValue("options.clear_auth", false);
@@ -39,28 +38,18 @@ export function MonitorAuthForm(props: {
   };
   return (
     <MonitorFormSection title="鉴权设置">
-      <div
-        className={cn(
-          "grid gap-3 sm:grid-cols-2",
-          !inherit && method === "basic" && "lg:grid-cols-3",
-        )}
-      >
+      <div className={cn("grid gap-3 sm:grid-cols-2", method === "basic" && "lg:grid-cols-3")}>
         <FormField label="HTTP 鉴权方式" htmlFor="kuma-auth-method">
           <Select
-            value={inherit ? "template" : method}
+            value={method}
             onValueChange={changeMethod}
             disabled={props.pending}
-            itemToStringLabel={(value) =>
-              value === "template"
-                ? "使用模板鉴权"
-                : (requestAuthLabels[value ?? "none"] ?? "保留现有鉴权")
-            }
+            itemToStringLabel={(value) => requestAuthLabels[value ?? "none"] ?? "保留现有鉴权"}
           >
             <SelectTrigger id="kuma-auth-method">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {usingTemplate && <SelectItem value="template">使用模板鉴权</SelectItem>}
               {Object.entries(requestAuthLabels).map(([value, label]) => (
                 <SelectItem key={value} value={value}>
                   {label}
@@ -72,7 +61,7 @@ export function MonitorAuthForm(props: {
             </SelectContent>
           </Select>
         </FormField>
-        {!inherit && method === "basic" && (
+        {method === "basic" && (
           <FormField
             label={usernameLabel}
             htmlFor="kuma-auth-user"
@@ -86,7 +75,7 @@ export function MonitorAuthForm(props: {
             />
           </FormField>
         )}
-        {!inherit && ["basic", "bearer"].includes(method) && (
+        {["basic", "bearer"].includes(method) && (
           <FormField
             label={passwordLabel}
             htmlFor="kuma-auth-pass"
@@ -105,11 +94,6 @@ export function MonitorAuthForm(props: {
           </FormField>
         )}
       </div>
-      {usingTemplate && (
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          默认使用模板鉴权。单独设置只影响当前监控，并替换模板中的鉴权及 Authorization 请求头。
-        </p>
-      )}
       {canPreserve && (
         <label className="flex items-center gap-2 text-sm">
           <Controller

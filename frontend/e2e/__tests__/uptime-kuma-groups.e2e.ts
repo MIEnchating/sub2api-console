@@ -59,3 +59,36 @@ test("分组子项跨页时仍显示所属分组，不会成为无分组监控",
   await expect(row).toBeVisible();
   await expect(row.getByRole("cell", { name: "openai", exact: true })).toBeVisible();
 });
+
+test("页头新增分组支持创建子分组且不显示模板和请求设置", async ({ page }) => {
+  const fixture = await setupKuma(page);
+  await page.goto("/uptime-kuma");
+  const create = page.getByRole("button", { name: "新增分组", exact: true });
+  await expect(create).toBeEnabled();
+  await create.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "新增分组", exact: true });
+  await expect(dialog.getByRole("button", { name: "保存分组" })).toBeInViewport();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(dialog.getByRole("combobox", { name: "功能模板" })).toHaveCount(0);
+  await expect(dialog.getByRole("region", { name: "请求设置" })).toHaveCount(0);
+  await expect(dialog.getByRole("region", { name: "鉴权设置" })).toHaveCount(0);
+  await expect(dialog.getByRole("region", { name: "检测设置" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "保存分组" }).click();
+  await expect(dialog.getByLabel("分组名称")).toHaveAttribute("aria-invalid", "true");
+  expect(fixture.writes).toHaveLength(0);
+  await dialog.getByLabel("分组名称").fill("模型接口");
+  await dialog.getByRole("combobox", { name: "所属分组" }).click();
+  await page.getByRole("option", { name: "核心分组", exact: true }).click();
+  await dialog.getByRole("button", { name: "保存分组" }).click();
+  await expect(dialog).toBeHidden();
+  expect(fixture.writes[0]?.value).toMatchObject({
+    action: "create",
+    monitor: {
+      type: "group",
+      name: "模型接口",
+      parent: 7,
+      template_id: "",
+    },
+  });
+});

@@ -8,7 +8,6 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { requestAuthLabels } from "../constants";
 import type { MonitorValues } from "../lib/schemas";
 
 export function TemplateSelector(props: {
@@ -48,12 +47,13 @@ export function TemplateSelector(props: {
         props.form.setValue(`options.${name}`, m[name]);
       }
     }
-    props.form.setValue("template_auth_override", false);
-    props.form.setValue("options.clear_auth", false);
-    props.form.clearErrors(["options.auth_username", "options.auth_password"]);
+    const authMethod = props.form.getValues("options.auth_method") ?? "none";
+    props.form.setValue(
+      "template_auth_override",
+      !!item && (authMethod !== "none" || !!props.form.getValues("template_auth_override")),
+    );
     if (item) {
-      for (const field of ["headers", "body", "auth_username", "auth_password"] as const)
-        props.form.setValue(`options.${field}`, "");
+      for (const field of ["headers", "body"] as const) props.form.setValue(`options.${field}`, "");
       props.form.clearErrors("options.headers");
     }
   };
@@ -98,8 +98,7 @@ export function TemplateSelector(props: {
       {selected && (
         <p role="status" className="text-xs leading-relaxed text-muted-foreground">
           {selected.method} · 请求头{selected.headers_configured ? "已配置" : "为空"} · 请求体
-          {selected.body_configured ? "已配置" : "为空"} · {requestAuthLabels[selected.auth_method]}
-          。下方可单独设置鉴权；模板后续修改不会影响此监控。
+          {selected.body_configured ? "已配置" : "为空"}
         </p>
       )}
     </div>

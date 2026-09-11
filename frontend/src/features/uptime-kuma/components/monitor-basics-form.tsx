@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { monitorTypeLabels } from "../constants";
-import type { MonitorValues } from "../lib/schemas";
+import { defaultMonitorOptions, type MonitorValues } from "../lib/schemas";
 import { MonitorFormSection } from "./monitor-form-section";
 
 export function MonitorBasicsForm(props: {
@@ -18,6 +18,7 @@ export function MonitorBasicsForm(props: {
   monitor: KumaMonitor | null;
   monitors: KumaMonitor[];
   pending: boolean;
+  groupOnly?: boolean;
 }) {
   const form = props.form;
   const type = form.watch("type");
@@ -26,7 +27,7 @@ export function MonitorBasicsForm(props: {
       <div className="grid gap-3 sm:grid-cols-2">
         <FormField
           htmlFor="kuma-monitor-name"
-          label="监控项名称"
+          label={type === "group" ? "分组名称" : "监控项名称"}
           error={form.formState.errors.name?.message}
         >
           <Input
@@ -35,37 +36,45 @@ export function MonitorBasicsForm(props: {
             aria-invalid={!!form.formState.errors.name}
           />
         </FormField>
-        <FormField htmlFor="kuma-monitor-type" label="监控类型">
-          <Controller
-            control={form.control}
-            name="type"
-            render={({ field }) => (
-              <Select
-                value={field.value}
-                onValueChange={(value) => {
-                  field.onChange(value);
-                  form.setValue("template_id", "");
-                  form.setValue("template_revision", 0);
-                  form.setValue("template_settings_override", false);
-                  form.setValue("template_auth_override", false);
-                }}
-                disabled={props.pending || !!props.monitor}
-                itemToStringLabel={(value) => monitorTypeLabels[value] ?? value}
-              >
-                <SelectTrigger id="kuma-monitor-type" onBlur={field.onBlur} ref={field.ref}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(monitorTypeLabels).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          />
-        </FormField>
+        {!props.groupOnly && (
+          <FormField htmlFor="kuma-monitor-type" label="监控类型">
+            <Controller
+              control={form.control}
+              name="type"
+              render={({ field }) => (
+                <Select
+                  value={field.value}
+                  onValueChange={(value) => {
+                    field.onChange(value);
+                    if (value === "group") {
+                      form.setValue("options", { ...defaultMonitorOptions });
+                      form.setValue("interval", 60);
+                      form.setValue("url", "");
+                      form.clearErrors();
+                    }
+                    form.setValue("template_id", "");
+                    form.setValue("template_revision", 0);
+                    form.setValue("template_settings_override", false);
+                    form.setValue("template_auth_override", false);
+                  }}
+                  disabled={props.pending || !!props.monitor}
+                  itemToStringLabel={(value) => monitorTypeLabels[value] ?? value}
+                >
+                  <SelectTrigger id="kuma-monitor-type" onBlur={field.onBlur} ref={field.ref}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(monitorTypeLabels).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            />
+          </FormField>
+        )}
         {["http", "keyword"].includes(type) && (
           <FormField
             htmlFor="kuma-monitor-url"

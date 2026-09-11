@@ -66,10 +66,10 @@ export async function setupKuma(
     revision: 2,
     name: "API JSON 模板",
     method: "POST",
-    auth_method: "bearer",
+    auth_method: "none",
     headers_configured: true,
     body_configured: true,
-    auth_configured: true,
+    auth_configured: false,
   };
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
