@@ -76,7 +76,7 @@ for (const modelCount of [2, 16]) {
     await page.getByRole("checkbox", { name: "选择本页模型", exact: true }).check();
     await page.getByRole("button", { name: `批量同步（${modelCount}）` }).click();
     const dialog = page.getByRole("dialog", { name: "批量同步模型价格" });
-    await expect(dialog.getByRole("status")).toHaveText("正在准备批量价格预览…");
+    await expect(dialog.getByRole("status", { name: "正在准备批量价格预览" })).toBeVisible();
     releasePrices();
     await expect(
       dialog.getByRole("button", { name: `确认同步 ${modelCount} 个模型` }),
