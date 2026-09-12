@@ -530,7 +530,7 @@ func (repository *captureRepository) CleanupMissingBindings(_ context.Context, a
 	return business.MissingBindingCleanupResult{Cleaned: len(accountIDs), IDs: append([]string{}, accountIDs...)}, nil
 }
 
-func (repository *captureRepository) SyncManagementSnapshot(
+func (repository *captureRepository) SyncCompleteManagementSnapshot(
 	_ context.Context,
 	accounts []map[string]any,
 	groups []map[string]any,

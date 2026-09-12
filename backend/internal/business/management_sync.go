@@ -15,13 +15,14 @@ import (
 )
 
 type ManagementSyncResult struct {
-	Accounts      int   `json:"accounts"`
-	GroupLinks    int   `json:"group_links"`
-	Groups        int   `json:"groups"`
-	DeletedGroups int   `json:"deleted_groups"`
-	EventID       int64 `json:"event_id"`
-	RemoteWrite   bool  `json:"remote_write"`
-	ReadOnly      bool  `json:"read_only"`
+	Accounts        int   `json:"accounts"`
+	DeletedAccounts int   `json:"deleted_accounts"`
+	GroupLinks      int   `json:"group_links"`
+	Groups          int   `json:"groups"`
+	DeletedGroups   int   `json:"deleted_groups"`
+	EventID         int64 `json:"event_id"`
+	RemoteWrite     bool  `json:"remote_write"`
+	ReadOnly        bool  `json:"read_only"`
 }
 
 func (s *Store) ManagementAccountIDs(ctx context.Context) ([]string, error) {
@@ -179,6 +180,27 @@ func (s *Store) SyncManagementSnapshot(
 	groupRows []map[string]any,
 	actor string,
 ) (ManagementSyncResult, error) {
+	return s.syncManagementSnapshot(ctx, accountRows, groupRows, actor, false)
+}
+
+// SyncCompleteManagementSnapshot requires a fully read and validated account catalog.
+// Partial account updates must use SyncManagementSnapshot to preserve absent accounts.
+func (s *Store) SyncCompleteManagementSnapshot(
+	ctx context.Context,
+	accountRows []map[string]any,
+	groupRows []map[string]any,
+	actor string,
+) (ManagementSyncResult, error) {
+	return s.syncManagementSnapshot(ctx, accountRows, groupRows, actor, true)
+}
+
+func (s *Store) syncManagementSnapshot(
+	ctx context.Context,
+	accountRows []map[string]any,
+	groupRows []map[string]any,
+	actor string,
+	completeAccounts bool,
+) (ManagementSyncResult, error) {
 	groupsByID, groupsByName, err := managementGroupCatalog(groupRows)
 	if err != nil {
 		return ManagementSyncResult{}, err
@@ -311,6 +333,13 @@ func (s *Store) SyncManagementSnapshot(
 		}
 		accountCount++
 	}
+	deletedAccountIDs := []string{}
+	if completeAccounts {
+		deletedAccountIDs, err = s.pruneManagementDeletedAccounts(ctx, tx, seenAccounts, now)
+		if err != nil {
+			return ManagementSyncResult{}, fmt.Errorf("已删除账号清理失败：%w", err)
+		}
+	}
 	deletedGroups, err := pruneManagementDeletedGroups(ctx, s, tx, groupsByID, separatedDeletedIDs, now)
 	if err != nil {
 		return ManagementSyncResult{}, fmt.Errorf("已删除分组清理失败：%w", err)
@@ -323,9 +352,10 @@ func (s *Store) SyncManagementSnapshot(
 	payload := map[string]any{
 		"actor": strings.TrimSpace(actor), "accounts": accountCount, "groups": len(allGroupNames),
 		"group_links": groupLinks, "deleted_groups": deletedGroups, "remote_write": false,
+		"deleted_accounts": len(deletedAccountIDs), "deleted_account_ids": deletedAccountIDs,
 	}
 	if err := insertRuntimeEventWithStatus(ctx, tx, "management.snapshot.synced", "succeeded",
-		fmt.Sprintf("管理快照同步完成：账号 %d，分组 %d", accountCount, len(allGroupNames)), payload, now); err != nil {
+		fmt.Sprintf("管理快照同步完成：账号 %d，分组 %d，清理已删除账号 %d", accountCount, len(allGroupNames), len(deletedAccountIDs)), payload, now); err != nil {
 		return ManagementSyncResult{}, err
 	}
 	var eventID int64
@@ -337,7 +367,8 @@ func (s *Store) SyncManagementSnapshot(
 	}
 	return ManagementSyncResult{
 		Accounts: accountCount, GroupLinks: groupLinks, Groups: len(allGroupNames), DeletedGroups: deletedGroups, EventID: eventID,
-		RemoteWrite: false, ReadOnly: true,
+		DeletedAccounts: len(deletedAccountIDs),
+		RemoteWrite:     false, ReadOnly: true,
 	}, nil
 }
 

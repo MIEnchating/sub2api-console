@@ -34,7 +34,7 @@ type TargetStore interface {
 
 type Repository interface {
 	ManagementAccountIDs(context.Context) ([]string, error)
-	SyncManagementSnapshot(context.Context, []map[string]any, []map[string]any, string) (business.ManagementSyncResult, error)
+	SyncCompleteManagementSnapshot(context.Context, []map[string]any, []map[string]any, string) (business.ManagementSyncResult, error)
 	CommitAccountBaseURLObservations(context.Context, []business.AccountBaseURLObservation) error
 	BoundAccountsForMaintenance(context.Context, []string) ([]business.BoundAccountMaintenance, error)
 	CommitAccountRateObservations(context.Context, []business.AccountRateObservation) error
@@ -2801,8 +2801,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, actor str
 		task.Status, task.Message = "succeeded", "管理快照已同步到 Console 业务库"
 		task.Result = map[string]any{
 			"accounts": result.Accounts, "group_links": result.GroupLinks, "groups": result.Groups,
-			"deleted_groups": result.DeletedGroups,
-			"event_id":       result.EventID, "remote_write": result.RemoteWrite, "read_only": result.ReadOnly,
+			"deleted_groups":   result.DeletedGroups,
+			"deleted_accounts": result.DeletedAccounts,
+			"event_id":         result.EventID, "remote_write": result.RemoteWrite, "read_only": result.ReadOnly,
 		}
 	}
 	taskstore.MarkCancelled(ctx, &task, "管理快照同步已取消")
@@ -2905,7 +2906,7 @@ func (s *Service) Sync(ctx context.Context, actor string) (business.ManagementSy
 		return business.ManagementSyncResult{}, errors.New("获取账号租约后管理目录出现新的账号，请重试快照同步")
 	}
 	accounts = authoritativeManagementAccountGroups(accounts)
-	return s.repository.SyncManagementSnapshot(accountCtx, accounts, groups, actor)
+	return s.repository.SyncCompleteManagementSnapshot(accountCtx, accounts, groups, actor)
 }
 
 func authoritativeManagementAccountGroups(accounts []map[string]any) []map[string]any {

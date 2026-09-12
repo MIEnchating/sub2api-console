@@ -2011,6 +2011,8 @@ export const api = {
     ),
   allUpstreamGroupHistory: () =>
     request<UpstreamGroupChange[]>("/api/upstreams/group-history?limit=500"),
+  clearUpstreamGroupHistory: () =>
+    request<{ deleted: number }>("/api/upstreams/group-history", { method: "DELETE" }),
   upstreamDeletePreview: (host: string) =>
     request<UpstreamDeletePreview>(`/api/upstreams/${encodeURIComponent(host)}/delete-preview`),
   deleteUpstream: (host: string, expectedAccountIds: string[]) =>

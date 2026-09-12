@@ -1985,6 +1985,7 @@ function policyNumberInput(value: string): number | null {
 export function UpstreamsPage() {
   const navigate = useNavigate();
   const [groupHistoryOverviewOpen, setGroupHistoryOverviewOpen] = useState(false);
+  const [clearGroupHistoryDialogOpen, setClearGroupHistoryDialogOpen] = useState(false);
   const upstreams = useQuery({
     queryKey: ["upstreams"],
     queryFn: api.upstreams,
@@ -2002,6 +2003,15 @@ export function UpstreamsPage() {
     retry: false,
   });
   const queryClient = useQueryClient();
+  const clearGroupHistory = useMutation({
+    mutationFn: api.clearUpstreamGroupHistory,
+    onSuccess: async (result) => {
+      setClearGroupHistoryDialogOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ["upstream-group-history-overview"] });
+      toast.success(`已清空 ${result.deleted} 条上游分组变化记录`);
+    },
+    onError: (error) => notifyOperationError(error, "清空上游分组变化记录失败"),
+  });
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [syncTaskId, setSyncTaskId] = useState<string | null>(null);
   const syncUpstreams = useMutation({
@@ -2896,8 +2906,19 @@ export function UpstreamsPage() {
           height="tall"
           className="grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >
-          <DialogHeader>
+          <DialogHeader className="flex-row flex-wrap items-center justify-between gap-3 pr-10">
             <DialogTitle>上游分组变化</DialogTitle>
+            <Button
+              variant="outline"
+              disabled={clearGroupHistory.isPending}
+              onClick={() => {
+                clearGroupHistory.reset();
+                setClearGroupHistoryDialogOpen(true);
+              }}
+            >
+              <Trash2 aria-hidden="true" />
+              清空记录
+            </Button>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
             {groupHistoryOverview.isLoading ? (
@@ -2923,6 +2944,16 @@ export function UpstreamsPage() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+      <ConfirmActionDialog
+        open={clearGroupHistoryDialogOpen}
+        onOpenChange={setClearGroupHistoryDialogOpen}
+        title="清空上游分组变化记录"
+        description="将删除所有上游的分组变化记录，且无法恢复。确定继续吗？"
+        confirmLabel="确认清空"
+        pendingLabel="清空中…"
+        pending={clearGroupHistory.isPending}
+        onConfirm={() => clearGroupHistory.mutate()}
+      />
       <Dialog
         open={batchRecoveryDialogOpen}
         onOpenChange={(open) => {

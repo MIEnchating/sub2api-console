@@ -37,6 +37,14 @@ func (s *Store) AllUpstreamGroupHistory(ctx context.Context, limit int) ([]Upstr
 	return s.readUpstreamGroupHistory(ctx, nil, limit)
 }
 
+func (s *Store) ClearUpstreamGroupHistory(ctx context.Context) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM upstream_group_change_events`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) readUpstreamGroupHistory(ctx context.Context, upstreamID *string, limit int) ([]UpstreamGroupChange, error) {
 	query := `SELECT id,upstream_id,group_id,group_name,change_type,changed_at
 		FROM upstream_group_change_events`

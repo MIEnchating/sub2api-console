@@ -80,5 +80,8 @@ describe("上游分组变化汇总", () => {
     expect(within(dialog).getByText("示例上游")).toBeVisible();
     expect(within(dialog).getByText("api.example.test")).toBeVisible();
     expect(within(dialog).getByText("新分组")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "清空记录" }));
+    expect(screen.getByRole("dialog", { name: "清空上游分组变化记录" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
   });
 });

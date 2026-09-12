@@ -89,6 +89,7 @@ type Business interface {
 	UpstreamGroupBindingAudit(context.Context) (business.UpstreamGroupBindingAudit, error)
 	UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error)
 	AllUpstreamGroupHistory(context.Context, int) ([]business.UpstreamGroupChange, error)
+	ClearUpstreamGroupHistory(context.Context) (int64, error)
 	Events(context.Context, *int) ([]business.RunEvent, error)
 	Alerts(context.Context, *int) ([]business.AlertListItem, error)
 	ClearAlerts(context.Context) (int64, error)
@@ -732,6 +733,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/upstreams/sync", server.syncAllUpstreams)
 	authorized.GET("/upstreams/group-bindings/audit", server.upstreamGroupBindingAudit)
 	authorized.GET("/upstreams/group-history", server.allUpstreamGroupHistory)
+	authorized.DELETE("/upstreams/group-history", server.clearUpstreamGroupHistory)
 	authorized.POST("/upstreams/:host/rate-sync", server.syncUpstreamRates)
 	authorized.POST("/upstreams/:host/balance-sync", server.syncUpstreamBalance)
 	authorized.GET("/upstreams/:host/configuration", server.upstreamConfiguration)
@@ -4248,6 +4250,15 @@ func (s *Server) allUpstreamGroupHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, rows)
+}
+
+func (s *Server) clearUpstreamGroupHistory(c *gin.Context) {
+	deleted, err := s.business.ClearUpstreamGroupHistory(c.Request.Context())
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "上游分组变化记录清空失败")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
 func (s *Server) events(c *gin.Context) {

@@ -10,6 +10,7 @@ describe("terminal task refresh contract", () => {
     expect(failed).toEqual([
       ["accounts"],
       ["groups"],
+      ["policy"],
       ["upstreams"],
       ["logs"],
       ["overview"],
