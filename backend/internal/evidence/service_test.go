@@ -56,6 +56,37 @@ type lateTrafficRepository struct {
 	fetched []string
 }
 
+type localFreshTrafficRepository struct {
+	lateTrafficRepository
+	fresh bool
+}
+
+func (r *localFreshTrafficRepository) HasFreshTraffic(context.Context, string, time.Time, time.Time) (bool, error) {
+	return r.fresh, nil
+}
+
+func TestCollectSkipsProbeWhenLocalTrafficArrivesBeforeUpstreamRecheck(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-10 * time.Minute)
+	repository := &localFreshTrafficRepository{
+		lateTrafficRepository: lateTrafficRepository{targets: []business.EvidenceTarget{{
+			AccountID: "41", GroupName: "codex", TrafficAt: &old, ProbeAt: &old,
+		}}},
+		fresh: true,
+	}
+	admin := &lateTrafficAdmin{}
+	probes := &lateTrafficProbeRunner{}
+	result, err := New(repository, probes).Collect(context.Background(), testTrafficProbePolicy(), admin, Options{
+		FetchTraffic: true, ProbesAllowed: true, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProbesPersisted != 0 || result.EffectiveSource != "traffic" || admin.calls != 1 {
+		t.Fatalf("result=%#v upstream_calls=%d", result, admin.calls)
+	}
+}
+
 func (r *lateTrafficRepository) EvidenceTargets(context.Context, *string, *string) ([]business.EvidenceTarget, error) {
 	return r.targets, nil
 }

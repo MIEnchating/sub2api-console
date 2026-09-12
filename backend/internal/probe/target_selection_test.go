@@ -39,6 +39,21 @@ func TestExplicitProbeModelRunsOnlyAccountsThatHaveThatEnabledModel(t *testing.T
 	}
 }
 
+func TestBuildTargetsExcludesManuallyFusedAccounts(t *testing.T) {
+	targets, err := buildTargets([]business.ProbeCandidate{
+		{AccountID: "41", GroupName: "default", KnownModels: []string{"model-a"}, Metadata: map[string]any{}},
+		{AccountID: "42", GroupName: "default", KnownModels: []string{"model-a"}, Metadata: map[string]any{}},
+	}, map[string]any{
+		"scope": map[string]any{"manual_fused_account_ids": []any{"41"}},
+	}, targetOptions{probeModel: "model-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].AccountID != "42" {
+		t.Fatalf("manually fused account entered probe targets: %#v", targets)
+	}
+}
+
 func TestForcedPlatformProbeUsesInputModelWithoutCatalogPrecheck(t *testing.T) {
 	targets, err := buildTargets([]business.ProbeCandidate{
 		{AccountID: "41", GroupName: "default", KnownModels: []string{"model-a"}, Metadata: map[string]any{}},

@@ -25,9 +25,10 @@ LABEL org.opencontainers.image.title="Sub2API Console API" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$VCS_REF"
 ENV SUB2API_CONSOLE_VERSION="$VERSION"
-RUN apk add --no-cache ca-certificates su-exec tzdata \
+RUN apk add --no-cache ca-certificates su-exec tzdata chromium xvfb font-noto-cjk \
     && addgroup -g 10001 -S console \
-    && adduser -u 10001 -S -G console console
+    && adduser -u 10001 -S -G console console \
+    && adduser -u 10002 -S -G console browser
 WORKDIR /app
 COPY --from=builder /out/sub2api-console /usr/local/bin/sub2api-console
 COPY --from=frontend /frontend/dist /app/web

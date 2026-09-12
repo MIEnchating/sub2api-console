@@ -32,6 +32,55 @@ const placeholder: AccountRecentResult = {
 };
 
 describe("AccountRecentResults", () => {
+  it("真实流量详情隐藏总耗时，只展示已上报的首字延迟", () => {
+    render(
+      <AccountRecentResults
+        results={[{ ...traffic, result: "通过", event_type: "healthy", latency_ms: 552 }]}
+      />,
+    );
+    const block = screen.getByLabelText(/首字 552ms/);
+    expect(block).toHaveAccessibleName(/首字 552ms/);
+    expect(block).not.toHaveAccessibleName(/总耗时/);
+  });
+
+  it("真实流量未上报首字延迟时回退显示总耗时", () => {
+    render(
+      <AccountRecentResults
+        results={[{ ...traffic, result: "通过", event_type: "healthy", latency_ms: null }]}
+      />,
+    );
+    expect(screen.getByLabelText(/总耗时 2795ms/)).toBeVisible();
+  });
+
+  it("不同来源分别按行排列，最新结果位于各自行的最右侧", () => {
+    const olderTraffic = { ...traffic, id: "older", duration_ms: 1000 };
+    const newerTraffic = { ...traffic, id: "newer", duration_ms: 2000 };
+    render(<AccountRecentResults results={[newerTraffic, probe, olderTraffic]} limit={4} />);
+
+    const trafficBlock = screen.getAllByLabelText(/网关错误 · 25 分/)[0];
+    const trafficSlots = trafficBlock.parentElement!.children;
+    const probeBlock = screen.getByLabelText(/探测通过/);
+    const probeSlots = probeBlock.parentElement!.children;
+    expect(trafficSlots).toHaveLength(4);
+    expect(probeSlots).toHaveLength(4);
+    expect(trafficSlots[0]).toHaveAttribute("aria-hidden", "true");
+    expect(trafficSlots[1]).toHaveAttribute("aria-hidden", "true");
+    expect(trafficSlots[2]).toBe(trafficBlock);
+    expect(trafficSlots[3]).toHaveAccessibleName(/网关错误 · 25 分/);
+    expect(probeSlots[0]).toHaveAttribute("aria-hidden", "true");
+    expect(probeSlots[1]).toHaveAttribute("aria-hidden", "true");
+    expect(probeSlots[2]).toHaveAttribute("aria-hidden", "true");
+    expect(probeSlots[3]).toBe(probeBlock);
+  });
+
+  it("只有一条新探针时位于最右列，不显示成最旧结果", () => {
+    render(<AccountRecentResults results={[probe]} />);
+    const block = screen.getByLabelText(/探测通过/);
+    expect(block.parentElement!.children).toHaveLength(10);
+    expect(block.parentElement!.lastElementChild).toBe(block);
+    expect(block.previousElementSibling).toHaveAttribute("aria-hidden", "true");
+  });
+
   it("成功请求被判定为疑似空回复时显示异常颜色与分数", () => {
     render(
       <AccountRecentResults
@@ -54,16 +103,15 @@ describe("AccountRecentResults", () => {
     const second = { ...traffic, id: "2", observed_at: "2026-09-09T08:00:02Z", duration_ms: 2000 };
     const third = { ...traffic, id: "3", observed_at: "2026-09-09T08:00:03Z", duration_ms: 3000 };
     const view = render(<AccountRecentResults results={[second, first]} limit={2} />);
-    const retained = screen.getByLabelText(/总耗时 2000ms/);
+    const retained = screen.getByLabelText(/08:00:02.*网关错误 · 25 分/);
     view.rerender(<AccountRecentResults results={[third, second, first]} limit={2} />);
-    expect(screen.queryByLabelText(/总耗时 2795ms/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText(/总耗时 2000ms/)).toBe(retained);
+    expect(screen.getAllByLabelText(/网关错误 · 25 分/)).toHaveLength(2);
+    expect(retained).toBeInTheDocument();
     expect(retained).toHaveAttribute("tabindex", "0");
     const blocks = within(screen.getByRole("group", { name: "真实流量结果" })).getAllByLabelText(
       /网关错误/,
     );
-    expect(blocks[0]).toHaveAccessibleName(/总耗时 2000ms/);
-    expect(blocks[1]).toHaveAccessibleName(/总耗时 3000ms/);
+    expect(blocks).toHaveLength(2);
   });
 
   it("混合来源分成真实流量与探针两行，均以实心色块保留事件颜色", () => {

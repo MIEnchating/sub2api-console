@@ -94,6 +94,7 @@ export function ModelCheckPage() {
   const [configurationOpen, setConfigurationOpen] = useState(false);
   const [taskStreamConnected, setTaskStreamConnected] = useState(false);
   const [accountQuery, setAccountQuery] = useState("");
+  const [accountGroup, setAccountGroup] = useState<string | null>(null);
   const form = useForm<ModelCheckForm>({
     resolver: zodResolver(modelCheckSchema),
     defaultValues: defaults,
@@ -179,7 +180,8 @@ export function ModelCheckPage() {
     onSuccess: (created) => {
       setTaskID(created.id);
       queryClient.setQueryData(["model-check-task", created.id], created);
-      setResultOpen(true);
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      setResultOpen(false);
     },
     onError: (error) => notifyOperationError(error, "模型检测启动失败"),
   });
@@ -201,18 +203,20 @@ export function ModelCheckPage() {
   const filteredAccounts = useMemo(
     () =>
       (accounts.data ?? [])
-        .filter((account) =>
-          searchableAccount(
-            [
-              account.id,
-              account.name,
-              account.platform,
-              account.account_type,
-              account.upstream_host,
-              ...account.groups,
-            ],
-            accountQuery,
-          ),
+        .filter(
+          (account) =>
+            (accountGroup === null || account.groups.includes(accountGroup)) &&
+            searchableAccount(
+              [
+                account.id,
+                account.name,
+                account.platform,
+                account.account_type,
+                account.upstream_host,
+                ...account.groups,
+              ],
+              accountQuery,
+            ),
         )
         .map((account) => {
           const checkStatus = checkStatusByAccountID.get(account.id);
@@ -230,6 +234,7 @@ export function ModelCheckPage() {
       accountCheckStatuses.isError,
       accountCheckStatuses.isLoading,
       accountQuery,
+      accountGroup,
       accounts.data,
       checkStatusByAccountID,
     ],
@@ -290,6 +295,10 @@ export function ModelCheckPage() {
           accountsLoading={accounts.isLoading}
           accountsError={accounts.error instanceof Error ? accounts.error.message : null}
           accountQuery={accountQuery}
+          accountGroups={Array.from(
+            new Set((accounts.data ?? []).flatMap((account) => account.groups)),
+          ).sort()}
+          accountGroup={accountGroup}
           selectedAccountIDs={selectedAccountIDs}
           models={detectableModels}
           selectedModels={selectedModels}
@@ -312,6 +321,9 @@ export function ModelCheckPage() {
             combinationCount <= 100
           }
           onAccountQueryChange={setAccountQuery}
+          onAccountGroupChange={(value) => {
+            setAccountGroup(value);
+          }}
           onAccountToggle={toggleAccount}
           onAccountsSelectAll={() => {
             const selectableAccounts = filteredAccounts.filter(

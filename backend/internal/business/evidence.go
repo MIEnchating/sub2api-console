@@ -38,6 +38,22 @@ type TrafficSample struct {
 	Payload       map[string]any
 }
 
+// HasFreshTraffic is used immediately before a fallback probe so a request
+// persisted by another worker can suppress the probe without relying on an
+// eventually consistent upstream detail endpoint.
+func (s *Store) HasFreshTraffic(ctx context.Context, accountID string, since, until time.Time) (bool, error) {
+	var found int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM health_samples
+		WHERE account_id=? AND source='traffic' AND observed_at>=? AND observed_at<=?
+		ORDER BY observed_at DESC,id DESC LIMIT 1`,
+		strings.TrimSpace(accountID), since.UTC().Format(healthSampleTimeLayout), until.UTC().Format(healthSampleTimeLayout),
+	).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && found == 1, err
+}
+
 func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *string) ([]EvidenceTarget, error) {
 	clauses := []string{}
 	arguments := []any{}

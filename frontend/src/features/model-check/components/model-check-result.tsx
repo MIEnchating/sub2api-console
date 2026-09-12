@@ -177,6 +177,11 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
   if (completed >= total && total > 0) activeStep = 2;
   else if (phase === "testing") activeStep = 1;
   const steps = ["准备账号凭据", "并行执行检测", "汇总检测结果"];
+  const progress = Math.min(100, Math.max(0, numberValue(props.task.progress) ?? 0));
+  const active = objectValue(props.task.result.active);
+  const activeItems = Object.values(active).filter(
+    (item): item is ResultRecord => item !== null && typeof item === "object",
+  );
 
   return (
     <div
@@ -195,12 +200,44 @@ function LiveModelCheckResult(props: { task: Task; rows: ResultRecord[] }) {
         </div>
         <div className="flex items-center gap-3 sm:justify-end">
           <div className="text-left sm:text-right">
-            <strong className="text-lg tabular-nums">
-              {completed}/{total}
-            </strong>
-            <span className="text-muted-foreground ml-1 text-xs">个组合已完成</span>
+            <strong className="text-lg tabular-nums">{progress.toFixed(0)}%</strong>
+            <span className="text-muted-foreground ml-1 text-xs">
+              {completed}/{total} 个组合
+            </span>
           </div>
           <TaskCancelButton taskId={props.task.id} />
+        </div>
+      </div>
+
+      <div className="grid shrink-0 gap-2 rounded-md border px-3 py-2.5">
+        <div className="flex items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">总体进度</span>
+          <span className="font-medium tabular-nums">{progress.toFixed(0)}%</span>
+        </div>
+        <Progress value={progress} aria-label={`检测进度 ${progress.toFixed(0)}%`} />
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-xs">
+          {activeItems.length > 0 ? (
+            activeItems.map((item, index) => (
+              <div
+                key={`${textValue(item.account_id) ?? index}-${textValue(item.claimed_model) ?? index}`}
+                className="bg-muted/30 flex min-w-0 items-center gap-2 rounded px-2 py-1.5"
+              >
+                <LoaderCircle
+                  className="text-primary size-3.5 shrink-0 animate-spin"
+                  aria-hidden="true"
+                />
+                <span className="truncate">{textValue(item.account_name) ?? "账号"}</span>
+                <span className="text-muted-foreground truncate">
+                  {textValue(item.claimed_model) ?? "模型"}
+                </span>
+                <Badge variant="outline" className="ml-auto shrink-0">
+                  {textValue(item.mode) === "claude" ? "Claude" : "Responses"}
+                </Badge>
+              </div>
+            ))
+          ) : (
+            <span className="text-muted-foreground">等待检测任务开始…</span>
+          )}
         </div>
       </div>
 

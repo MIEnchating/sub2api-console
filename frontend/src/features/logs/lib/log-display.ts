@@ -28,6 +28,7 @@ const titleLabels: Record<string, string> = {
   "automatic-inspection": "自动巡检",
   "manual-inspection": "手动巡检",
   "recover-host": "鉴权恢复",
+  "browser-login": "浏览器手动鉴权",
   "management-snapshot-sync": "账号与分组同步",
   "account-rate-sync": "账号倍率同步",
   "upstream-balances-sync": "上游余额同步",

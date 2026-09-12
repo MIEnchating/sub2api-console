@@ -91,16 +91,39 @@ func (s *Store) ProbeCandidates(ctx context.Context, accountID, groupName, platf
 					continue
 				}
 			}
-			item.KnownModels = metadataStringList(item.Metadata["known_models"])
-			if _, present := item.Metadata["enabled_models"]; present {
-				item.KnownModels = metadataStringList(item.Metadata["enabled_models"])
-			}
+			item.KnownModels = probeModelCatalog(item.Metadata)
 		} else if platform != nil {
 			continue
 		}
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func probeModelCatalog(metadata map[string]any) []string {
+	known := metadataStringList(metadata["known_models"])
+	enabled := metadataStringList(metadata["enabled_models"])
+	if len(known) == 0 {
+		return enabled
+	}
+	if len(enabled) == 0 {
+		return known
+	}
+	knownAt, knownOK := metadataTime(metadata["known_models_synced_at"])
+	enabledAt, enabledOK := metadataTime(metadata["enabled_models_synced_at"])
+	if knownOK && enabledOK && knownAt.After(enabledAt) {
+		return known
+	}
+	return enabled
+}
+
+func metadataTime(value any) (time.Time, bool) {
+	text, ok := value.(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(text))
+	return parsed, err == nil
 }
 
 func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) (int, error) {

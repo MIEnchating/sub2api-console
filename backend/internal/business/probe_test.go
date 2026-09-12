@@ -103,6 +103,20 @@ func TestProbeCandidatesPreferEnabledModelsOverDiscoveredCatalog(t *testing.T) {
 	}
 }
 
+func TestProbeCandidatesUseNewerDiscoveredCatalogWhenEnabledCatalogIsStale(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_type,metadata_json,updated_at) VALUES
+		('41','alpha','sub2api','{"known_models":["model-new"],"known_models_synced_at":"2026-09-12T08:00:00Z","enabled_models":["model-old"],"enabled_models_synced_at":"2026-09-11T08:00:00Z"}','now');
+		INSERT INTO account_groups(account_id,group_name,group_id,group_rate) VALUES ('41','codex','7','0.1')`); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := store.ProbeCandidates(ctx, nil, nil, nil)
+	if err != nil || len(candidates) != 1 || !slices.Equal(candidates[0].KnownModels, []string{"model-new"}) {
+		t.Fatalf("candidates=%#v err=%v", candidates, err)
+	}
+}
+
 func TestProbeCandidatesFilterPlatformByExactCaseInsensitiveValue(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

@@ -135,7 +135,7 @@ docker compose up -d
 docker compose ps
 ```
 
-默认使用本仓库发布的 `mienvirtuoso/sub2api-console:latest` 多架构单体镜像。镜像地址直接写在 `docker-compose.yml` 中；按版本部署时，将 `image` 标签改为已发布版本。本地开发仍可使用 `docker compose up -d --build` 构建当前源码。
+默认使用本仓库发布的 `mienvirtuoso/sub2api-console:latest` 多架构单体镜像。镜像地址直接写在 `docker-compose.yml` 中；按版本部署时，将 `image` 标签改为已发布版本。日常本地开发请分别运行前端 Bun/Rsbuild 开发服务和后端 Go 进程；Docker Compose 仅用于部署、镜像构建或容器化验证。
 
 Compose 为单体服务配置自动重启和健康检查。容器启动时会调整挂载的 `./data` 目录权限，随后以非 root 用户运行；不要把其他目录挂载到 `/app/data`。
 
@@ -167,3 +167,13 @@ git config core.hooksPath .githooks
 `pre-commit` 会先检查暂存区空白错误，再执行与 CI 相同的前端格式检查。检查失败时提交会被阻止；运行 `cd frontend && bun run format` 修复格式后重新暂存并提交。
 
 Console 不提供外部运行库实时读取或同步接口。主动探测只使用 Console 私有配置库中的授权信息和业务库中的账号记录；探测结果写回 Console 业务库。业务写回按当前控制台策略和权限执行，与 skills 数据库没有关联。
+
+### 浏览器手动鉴权恢复
+
+Sub2API 上游遇到浏览器人机验证或会话网络绑定不匹配时，可在“恢复鉴权”中点击“打开浏览器手动验证”。在画面中自行完成官网验证、登录及所需协议确认，然后点击“登录完成，复核并保存”。Go 后端使用同一服务器出口及浏览器 User-Agent 复核登录凭据，复核通过才保存，并尝试重新同步分组和余额。若上游仍拒绝复用浏览器会话，会保留原凭据并显示具体失败原因；不保证所有上游风控均允许该流程。
+
+Compose 新增 `browser` 容器，与 API 使用相同版本镜像，通过私有 Unix Socket 通信，不开放浏览器调试端口。浏览器容器不挂载 `data/`，不接收控制台管理凭据或密码箱内容；只使用临时浏览器目录。部署时需同时更新 API 和 browser 服务。浏览器仅在手动操作期间启动，一次允许一个会话，最多持续 15 分钟；关闭弹窗会取消，异常断连则在到期后清理。画面及输入仅在当前登录会话可访问，不写入任务日志。
+
+当前支持 Sub2API 邮箱/密码登录页及同站点验证，允许加载 `challenges.cloudflare.com` 的验证资源；跨站 OAuth 登录不在支持范围。浏览器请求只允许公开 HTTPS 上游，浏览器与 API 需保持一致的出口网络；若单独给某个容器配置代理或不同出口，需要先统一出口。默认不持久化浏览器会话，后续 Token 续签仍由 Go 后端执行。
+
+隔离浏览器集成测试可运行 `CONSOLE_TEST_CHROMIUM=/path/to/chrome go test ./internal/browserlogin/__tests__`（工作目录 `backend`，需要 Xvfb）。测试只连接本地临时 HTTPS 站点，不连接生产上游。

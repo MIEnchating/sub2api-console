@@ -92,21 +92,51 @@ function observedAtLabel(value: string | null): string {
 }
 
 function resultDetail(result: AccountRecentResult): string {
+  const isTraffic = sourceLabel(result.source) === "真实流量";
+  let latencyDetail: string | null = null;
+  if (result.latency_ms !== null) {
+    latencyDetail = `首字 ${metric(result.latency_ms)}ms`;
+  } else if (isTraffic && result.duration_ms !== null && result.duration_ms !== undefined) {
+    latencyDetail = `总耗时 ${metric(result.duration_ms)}ms`;
+  }
   return [
     observedAtLabel(result.observed_at),
     eventLabel(result),
     result.score === null || result.score === undefined
       ? null
       : `${formatHealthScore(result.score)} 分`,
-    result.latency_ms === null ? null : `首字 ${metric(result.latency_ms)}ms`,
-    result.duration_ms === null || result.duration_ms === undefined
-      ? null
-      : `总耗时 ${metric(result.duration_ms)}ms`,
+    latencyDetail,
     sourceLabel(result.source),
     result.failure_reason,
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function tooltipDetail(result: AccountRecentResult): ReactElement {
+  const reason = result.failure_reason?.trim();
+  const compactReason = reason && reason.length > 180 ? `${reason.slice(0, 180)}…` : reason;
+  const summary = [
+    observedAtLabel(result.observed_at),
+    eventLabel(result),
+    result.score === null || result.score === undefined
+      ? null
+      : `${formatHealthScore(result.score)} 分`,
+    result.latency_ms === null ? null : `首字 ${metric(result.latency_ms)}ms`,
+    sourceLabel(result.source),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div className="grid w-fit max-w-[min(56rem,calc(100vw-1rem))] gap-1 text-xs leading-5">
+      <span className="whitespace-nowrap">{summary}</span>
+      {compactReason ? (
+        <span className="text-destructive/90 max-w-[min(56rem,calc(100vw-1rem))] break-all">
+          {compactReason}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 export function AccountRecentResults(props: AccountRecentResultsProps): ReactElement {
@@ -180,11 +210,22 @@ function ResultSourceRow(props: {
         role={props.results.length === 0 ? "img" : undefined}
         aria-label={props.results.length === 0 ? `${props.label}无结果` : undefined}
       >
-        {props.results.map((result, index) => {
+        {Array.from({ length: props.slots }, (_, slotIndex) => {
+          const resultIndex = slotIndex - (props.slots - props.results.length);
+          const result = props.results[resultIndex];
+          if (!result) {
+            return (
+              <span
+                key={`empty:${slotIndex}`}
+                className="bg-muted-foreground/20 h-4 w-2 shrink-0 rounded-[2px]"
+                aria-hidden="true"
+              />
+            );
+          }
           const detail = resultDetail(result);
           return (
             <Tooltip
-              key={result.id ?? `${result.source}:${result.observed_at ?? "unknown"}:${index}`}
+              key={result.id ?? `${result.source}:${result.observed_at ?? "unknown"}:${slotIndex}`}
             >
               <TooltipTrigger
                 render={
@@ -198,19 +239,12 @@ function ResultSourceRow(props: {
                   />
                 }
               />
-              <TooltipContent role="tooltip" className="max-w-sm break-words">
-                {detail}
+              <TooltipContent role="tooltip" className="max-w-[min(56rem,calc(100vw-1rem))] p-3">
+                {tooltipDetail(result)}
               </TooltipContent>
             </Tooltip>
           );
         })}
-        {Array.from({ length: Math.max(0, props.slots - props.results.length) }, (_, index) => (
-          <span
-            key={`empty:${index}`}
-            className="bg-muted-foreground/20 h-4 w-2 shrink-0 rounded-[2px]"
-            aria-hidden="true"
-          />
-        ))}
       </div>
     </div>
   );

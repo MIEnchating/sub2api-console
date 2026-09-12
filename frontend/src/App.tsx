@@ -1,3 +1,4 @@
+import { BrowserLogin } from "@/features/upstreams/components/browser-login/browser-login";
 import { ContentLoading } from "@/components/content-loading";
 import { StartupLoading } from "@/components/startup-loading";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
@@ -3764,6 +3765,9 @@ export function ManualAuthForm(props: {
         mutation.mutate(payload);
       }}
     >
+      {props.upstreamType.toLowerCase() === "sub2api" ? (
+        <BrowserLogin host={props.host} disabled={mutation.isPending || props.vaultPending} />
+      ) : null}
       <strong className="text-sm">选择鉴权方式</strong>
       <FormField label="鉴权方式" htmlFor={`${fieldID}-mode`}>
         <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>

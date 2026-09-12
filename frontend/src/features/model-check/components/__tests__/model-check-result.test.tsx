@@ -61,7 +61,7 @@ describe("模型检测结果", () => {
     expect(markup).toContain("并行执行检测");
     expect(markup).toContain("实时账号");
     expect(markup).toContain("取消任务");
-    expect(markup).not.toContain("14%");
+    expect(markup).toContain("14%");
     expect(markup).not.toContain('data-testid="model-check-result"');
     expect(markup).toContain('data-table-panel=""');
   });

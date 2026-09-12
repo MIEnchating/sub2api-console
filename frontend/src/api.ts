@@ -1068,6 +1068,28 @@ export type RunEvent = {
   payload: Record<string, unknown>;
 };
 
+export type BrowserLoginSession = {
+  id: string;
+  task_id: string;
+  host: string;
+  status: "starting" | "waiting" | "verifying" | "succeeded" | "failed" | "cancelled" | "expired";
+  message: string;
+  expires_at: string;
+  image?: string;
+  width: number;
+  height: number;
+};
+
+export type BrowserLoginInput = {
+  kind: "click" | "text" | "key" | "scroll";
+  x?: number;
+  y?: number;
+  text?: string;
+  key?: string;
+  delta?: number;
+  shift?: boolean;
+};
+
 export type CaptchaChallenge = {
   challenge_id: string;
   host: string;
@@ -2308,6 +2330,28 @@ export const api = {
     request<Task>("/api/model-checks", {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+  startBrowserLogin: (host: string) =>
+    request<BrowserLoginSession>("/api/auth-recovery/browser", {
+      method: "POST",
+      body: JSON.stringify({ host }),
+    }),
+  browserLogin: (id: string) =>
+    request<BrowserLoginSession>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`),
+  browserLoginInput: (id: string, input: BrowserLoginInput) =>
+    request<{ accepted: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}/input`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  finishBrowserLogin: (id: string) =>
+    request<{ accepted: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}/finish`, {
+      method: "POST",
+      body: "{}",
+    }),
+  cancelBrowserLogin: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      keepalive: true,
     }),
   authRecoveryConfig: () => request<PrivateAuthConfigStatus>("/api/auth-recovery/config"),
   verifyManualAuth: (payload: {

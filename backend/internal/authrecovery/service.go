@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
@@ -151,6 +152,7 @@ type BatchResult struct {
 }
 
 type Service struct {
+	browser       *browserlogin.Manager
 	repository    Repository
 	private       PrivateStore
 	authenticator Authenticator

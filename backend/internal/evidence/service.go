@@ -24,6 +24,10 @@ type Repository interface {
 	PersistTrafficFetches(context.Context, []string, time.Time) error
 }
 
+type freshTrafficReader interface {
+	HasFreshTraffic(context.Context, string, time.Time, time.Time) (bool, error)
+}
+
 type Admin interface {
 	RequestDetails(context.Context, string, int, int) ([]map[string]any, error)
 }
@@ -273,6 +277,19 @@ func (s *Service) freshTrafficCheck(
 		primary, found := primaryEvidenceMembership(memberships)
 		if !found || evidenceTargetFused(primary) {
 			return false, nil
+		}
+		// The local evidence store is authoritative for requests already seen by
+		// this console. Check it first to close the race between traffic
+		// collection and the queued probe's upstream recheck.
+		if reader, ok := s.repository.(freshTrafficReader); ok {
+			now := time.Now().UTC()
+			fresh, readErr := reader.HasFreshTraffic(ctx, accountID, now.Add(-policy.trafficFreshWindow), now.Add(time.Minute))
+			if readErr != nil {
+				return false, readErr
+			}
+			if fresh {
+				return true, nil
+			}
 		}
 
 		callsMutex.Lock()

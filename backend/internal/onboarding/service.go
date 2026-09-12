@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -674,6 +675,7 @@ func onboardingAccountCredentials(secret, baseURL string, models []string, polic
 }
 
 func applyAdaptiveProtocolCredentials(credentials map[string]any, platform, chatBaseURL string) {
+	chatBaseURL = normalizeCodexAPIBaseURL(chatBaseURL)
 	protocolURLs := map[string]any{"chat_completions": chatBaseURL}
 	switch normalizePlatform(platform) {
 	case "zhipu":
@@ -688,6 +690,22 @@ func applyAdaptiveProtocolCredentials(credentials map[string]any, platform, chat
 	credentials["api_protocol"] = "adaptive"
 	credentials["api_base_urls"] = protocolURLs
 	credentials["base_url"] = chatBaseURL
+}
+
+// normalizeCodexAPIBaseURL keeps the protocol endpoints for Codex API accounts
+// pointed at the service root. The Anthropic-compatible path is selected by
+// the downstream protocol adapter and must not be persisted as an account URL.
+func normalizeCodexAPIBaseURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() != "codexapis.com" {
+		return raw
+	}
+	path := strings.TrimRight(parsed.Path, "/")
+	if strings.EqualFold(path, "/api/anthropic") {
+		parsed.Path = ""
+		parsed.RawPath = ""
+	}
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 func onboardingMutationResources(host string, accountIDs []string) []string {

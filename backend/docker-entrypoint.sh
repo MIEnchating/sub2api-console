@@ -1,6 +1,13 @@
 #!/bin/sh
 set -eu
 
+if [ "${2:-}" = "browser-worker" ]; then
+  mkdir -p /run/browser
+  chown browser:console /run/browser
+  chmod 0770 /run/browser
+  exec su-exec browser:console "$@"
+fi
+
 data_dir="${SUB2API_CONSOLE_DATA_DIR:-/app/data}"
 mkdir -p "$data_dir"
 data_dir="$(realpath "$data_dir")"

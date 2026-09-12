@@ -20,6 +20,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
 	"github.com/MIEnchating/sub2api-console/backend/internal/api"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
+	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -56,6 +57,11 @@ func main() {
 }
 
 func run() error {
+	if len(os.Args) > 1 && os.Args[1] == "browser-worker" {
+		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
+		return browserlogin.RunWorker(ctx, "/run/browser/worker.sock", browserlogin.Chromium{})
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -180,6 +186,7 @@ func run() error {
 		captchaManager,
 	)
 	authRecoveryService.UsePlatformDetector(upstreamDetector)
+	authRecoveryService.UseBrowserLogin(browserlogin.New(browserlogin.NewRemote("/run/browser/worker.sock"), taskStore, liveTasks))
 	notificationTargetDiscovery.UseTaskRunner(backgroundTasks)
 	alertTasks.UseTaskRunner(backgroundTasks)
 	accountTasks.UseTaskRunner(backgroundTasks)

@@ -9,6 +9,9 @@ services:
       SUB2API_CONSOLE_SETUP_TOKEN: ${SUB2API_CONSOLE_SETUP_TOKEN:-}
     volumes:
       - ./data:/app/data
+      - browser-socket:/run/browser
+    depends_on:
+      - browser
     command: sub2api-console
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/setup/status"]
@@ -19,3 +22,32 @@ services:
 
     ports:
       - "${SUB2API_CONSOLE_FRONTEND_PORT:-3004}:8080"
+
+  browser:
+    image: mienvirtuoso/sub2api-console:latest
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["sub2api-console", "browser-worker"]
+    restart: unless-stopped
+    read_only: true
+    shm_size: "256mb"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    volumes:
+      - browser-socket:/run/browser
+    mem_limit: 1g
+    pids_limit: 256
+
+volumes:
+  browser-socket:

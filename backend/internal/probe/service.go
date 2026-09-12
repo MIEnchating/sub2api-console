@@ -955,7 +955,11 @@ func statusCodeSet(codes []int) map[int]struct{} {
 
 func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, options targetOptions) ([]Target, error) {
 	byAccount := map[string][]business.ProbeCandidate{}
+	manualFused := manualFusedAccountSet(policy)
 	for _, candidate := range candidates {
+		if _, fused := manualFused[candidate.AccountID]; fused {
+			continue
+		}
 		if options.applySchedulingPolicy && excludedByMetadata(candidate.Metadata) {
 			continue
 		}
@@ -1019,6 +1023,33 @@ func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, o
 		}
 	}
 	return result, nil
+}
+
+func manualFusedAccountSet(policy map[string]any) map[string]struct{} {
+	result := map[string]struct{}{}
+	scope, ok := policy["scope"].(map[string]any)
+	if !ok {
+		return result
+	}
+	raw, ok := scope["manual_fused_account_ids"]
+	if !ok {
+		return result
+	}
+	switch values := raw.(type) {
+	case []any:
+		for _, value := range values {
+			if id, ok := value.(string); ok && strings.TrimSpace(id) != "" {
+				result[strings.TrimSpace(id)] = struct{}{}
+			}
+		}
+	case []string:
+		for _, id := range values {
+			if strings.TrimSpace(id) != "" {
+				result[strings.TrimSpace(id)] = struct{}{}
+			}
+		}
+	}
+	return result
 }
 
 func accountProbeModel(options targetOptions, accountID string) string {

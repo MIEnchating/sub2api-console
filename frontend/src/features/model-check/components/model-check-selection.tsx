@@ -1,9 +1,10 @@
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import type { AccountStatus } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
+import { FilterMenu } from "@/components/data-table/filter-menu";
 import { RefreshButton } from "@/components/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,8 @@ export type ModelCheckSelectionProps = {
   accountsLoading: boolean;
   accountsError: string | null;
   accountQuery: string;
+  accountGroups?: string[];
+  accountGroup?: string | null;
   selectedAccountIDs: string[];
   models: string[];
   selectedModels: string[];
@@ -41,6 +44,7 @@ export type ModelCheckSelectionProps = {
   disabled: boolean;
   canSubmit: boolean;
   onAccountQueryChange: (value: string) => void;
+  onAccountGroupChange?: (value: string | null) => void;
   onAccountToggle: (id: string, checked: boolean) => void;
   onAccountsSelectAll: () => void;
   onClear: () => void;
@@ -182,6 +186,7 @@ function accountEmptyState(props: ModelCheckSelectionProps) {
 }
 
 function AccountPanel(props: ModelCheckSelectionProps) {
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
   const showAccounts = !emptyState && !props.accountsError;
@@ -195,21 +200,52 @@ function AccountPanel(props: ModelCheckSelectionProps) {
 
   return (
     <Card className="h-[32rem] gap-0 py-0 xl:h-full">
-      <div className="border-border/70 flex shrink-0 items-center gap-2 border-b p-2.5">
-        <div className="relative min-w-0 flex-1">
+      <div
+        role="group"
+        aria-label="账号搜索与选择"
+        className="border-border/70 flex shrink-0 flex-col gap-2 border-b p-2.5 sm:flex-row sm:items-center"
+      >
+        <div className="relative w-full min-w-0 sm:flex-1">
           <Search
             className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2"
             aria-hidden="true"
           />
           <Input
+            ref={searchInputRef}
             value={props.accountQuery}
             onChange={(event) => props.onAccountQueryChange(event.target.value)}
-            placeholder="搜索账号、平台或分组"
-            aria-label="搜索账号"
-            className="pl-8"
+            placeholder="搜索账号、ID、平台或 Host"
+            aria-label="搜索账号、ID、平台或 Host"
+            className="pr-9 pl-8"
           />
+          {props.accountQuery ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 size-7 -translate-y-1/2"
+              onClick={() => {
+                props.onAccountQueryChange("");
+                searchInputRef.current?.focus();
+              }}
+              aria-label="清除搜索"
+            >
+              <X aria-hidden="true" />
+            </Button>
+          ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          <FilterMenu
+            label="分组"
+            options={props.accountGroups ?? []}
+            value={props.accountGroup ?? null}
+            onValueChange={props.onAccountGroupChange ?? (() => undefined)}
+          />
+          {props.accountQuery && !props.accountsLoading && !props.accountsError ? (
+            <span role="status" className="text-muted-foreground text-xs tabular-nums">
+              匹配 {props.accounts.length} 个
+            </span>
+          ) : null}
           <Button
             type="button"
             variant="outline"

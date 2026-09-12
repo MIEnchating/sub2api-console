@@ -204,7 +204,7 @@ func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task,
 		Status: "queued", Progress: 0, Message: "账号模型检测已排队",
 		Result: map[string]any{
 			"account_ids": prepared.request.AccountIDs, "phase": "queued", "completed": 0,
-			"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+			"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{}, "system_info": true,
 			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 			"credentials_persisted": false,
 		}, CreatedAt: now, UpdatedAt: now,
@@ -313,7 +313,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	task.Status, task.Progress, task.Message = "running", 3, "正在准备账号凭据"
 	task.Result = map[string]any{
 		"account_ids": prepared.request.AccountIDs, "phase": "credentials", "completed": 0,
-		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{},
+		"total": len(prepared.accounts) * len(prepared.request.Models), "tests": []map[string]any{}, "system_info": true,
 		"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 		"credentials_persisted": false,
 	}
@@ -362,8 +362,13 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		index  int
 		result map[string]any
 	}
+	type activeCombination struct {
+		index int
+		value map[string]any
+	}
 	jobs := make(chan int)
 	outcomes := make(chan outcome, len(combinations))
+	activeEvents := make(chan activeCombination, len(combinations))
 	workers := min(2, len(combinations))
 	var workerGroup sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
@@ -375,6 +380,11 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					return
 				}
 				current := combinations[index]
+				activeEvents <- activeCombination{index: index, value: map[string]any{
+					"account_id": current.account.ID, "account_name": current.account.Name,
+					"claimed_model": current.model,
+					"mode":          checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile),
+				}}
 				credential := credentials[current.account.ID]
 				input := targetRequest{
 					AccountID: current.account.ID, AccountName: current.account.Name,
@@ -414,24 +424,40 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	go func() {
 		workerGroup.Wait()
 		close(outcomes)
+		close(activeEvents)
 	}()
 	results := make([]map[string]any, len(combinations))
 	completedResults := make([]map[string]any, 0, len(combinations))
 	completed := 0
-	for outcome := range outcomes {
-		results[outcome.index] = outcome.result
-		completedResults = append(completedResults, outcome.result)
-		completed++
-		task.Progress = 5 + completed*90/len(combinations)
-		task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
-		task.Result = map[string]any{
-			"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
-			"phase": "testing", "tests": completedResults,
-			"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
-			"credentials_persisted": credentialsPersisted,
+	active := map[int]map[string]any{}
+	for completed < len(combinations) {
+		select {
+		case current, ok := <-activeEvents:
+			if !ok {
+				activeEvents = nil
+				continue
+			}
+			active[current.index] = current.value
+		case outcome := <-outcomes:
+			if outcome.result == nil {
+				continue
+			}
+			delete(active, outcome.index)
+			results[outcome.index] = outcome.result
+			completedResults = append(completedResults, outcome.result)
+			completed++
+			task.Progress = 5 + completed*90/len(combinations)
+			task.Message = fmt.Sprintf("已完成 %d/%d 个账号模型组合", completed, len(combinations))
+			task.Result = map[string]any{
+				"account_ids": prepared.request.AccountIDs, "completed": completed, "total": len(combinations),
+				"phase": "testing", "tests": completedResults, "system_info": true,
+				"active":          active,
+				"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
+				"credentials_persisted": credentialsPersisted,
+			}
+			task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			taskstore.PersistProgress(s.tasks, task)
 		}
-		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		taskstore.PersistProgress(s.tasks, task)
 	}
 	if completed != len(combinations) {
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, errors.New("账号模型检测被中断"))
@@ -448,7 +474,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		"account_ids": prepared.request.AccountIDs,
 		"accounts":    len(prepared.accounts), "models": len(prepared.request.Models),
 		"combinations": len(combinations), "summary": summary, "tests": results,
-		"phase": "completed", "completed": len(combinations), "total": len(combinations),
+		"phase": "completed", "completed": len(combinations), "total": len(combinations), "system_info": true,
 		"profile_version": prepared.profileVersion, "profile_fingerprint": prepared.profileFingerprint,
 		"remote_write": false, "credentials_persisted": credentialsPersisted,
 	}

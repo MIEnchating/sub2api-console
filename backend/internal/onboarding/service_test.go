@@ -339,6 +339,26 @@ func TestOnboardingAccountCredentialsUseUpstreamBaseURLForEveryAdaptiveProtocol(
 	}
 }
 
+func TestOnboardingAccountCredentialsNormalizeCodexAPIAnthropicPath(t *testing.T) {
+	credentials := onboardingAccountCredentials(
+		"secret", "https://codexapis.com/api/anthropic", []string{"test-model"},
+		configstore.AccountCreationPolicy{}, "deepseek", "apikey",
+	)
+
+	if credentials["base_url"] != "https://codexapis.com" {
+		t.Fatalf("base_url=%v", credentials["base_url"])
+	}
+	urls, ok := credentials["api_base_urls"].(map[string]any)
+	if !ok {
+		t.Fatalf("api_base_urls=%#v", credentials["api_base_urls"])
+	}
+	for protocol, value := range urls {
+		if value != "https://codexapis.com" {
+			t.Errorf("api_base_urls[%q]=%v", protocol, value)
+		}
+	}
+}
+
 func TestOnboardKeepsNetworkOutsideTransactionsAndPersistsSecretOnlyInPrivateStore(t *testing.T) {
 	reads := 0
 	schedulableWrites := 0
