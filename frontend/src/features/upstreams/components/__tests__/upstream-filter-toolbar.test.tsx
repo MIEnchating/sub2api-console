@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterContextProvider } from "@tanstack/react-router";
+import { render, screen } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -7,6 +8,21 @@ import { UpstreamsPage } from "../../../../App";
 import { router } from "../../../../router";
 
 describe("上游管理筛选工具栏", () => {
+  it("余额筛选预留校验提示空间时，工具栏控件顶部对齐且允许窄屏换行", () => {
+    const queryClient = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RouterContextProvider router={router}>
+          <UpstreamsPage />
+        </RouterContextProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("form", { name: "上游筛选" })).toHaveClass("items-start", "flex-wrap");
+    view.unmount();
+    queryClient.clear();
+  });
+
   it("类型和状态使用统一筛选菜单且不显示全部选项", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(

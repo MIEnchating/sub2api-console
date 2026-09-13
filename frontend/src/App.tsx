@@ -2502,7 +2502,7 @@ export function UpstreamsPage() {
       {config.error && <QueryError error={config.error} fallback="运行模式读取失败" />}
       <div className="flex h-full min-h-0 flex-col gap-2.5 sm:gap-3">
         <form
-          className="flex w-full min-w-0 shrink-0 flex-wrap items-center gap-2"
+          className="flex w-full min-w-0 shrink-0 flex-wrap items-start gap-2"
           data-slot="table-filter-toolbar"
           aria-label="上游筛选"
           onSubmit={applyFilters}

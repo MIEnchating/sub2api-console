@@ -68,7 +68,7 @@ export function NumberRangeFilter(props: NumberRangeFilterProps) {
           className={cn("w-28", props.inputClassName)}
         />
       </div>
-      {"error" in props && <FieldError id={errorID} message={props.error} />}
+      {props.error && <FieldError id={errorID} message={props.error} />}
     </div>
   );
 }

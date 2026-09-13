@@ -56,12 +56,16 @@ export function DictionaryManagement() {
             字典值来自管理平台同步，本页仅调整展示顺序。
           </p>
         </div>
-        <div className="flex w-fit rounded-md border p-0.5" role="tablist" aria-label="字典类型">
+        <div
+          className="inline-flex w-fit rounded-lg border border-border/70 bg-muted/40 p-1"
+          role="tablist"
+          aria-label="字典类型"
+        >
           {(["platform", "group"] as const).map((value) => (
             <Button
               key={value}
               variant={kind === value ? "secondary" : "ghost"}
-              size="sm"
+              className="min-w-28 rounded-md px-4"
               role="tab"
               aria-selected={kind === value}
               onClick={() => {
