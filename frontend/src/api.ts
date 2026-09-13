@@ -692,6 +692,20 @@ export type GroupStatus = {
   override?: GroupPolicyOverride | null;
 };
 
+export type DictionaryKind = "platform" | "group";
+export type DictionaryEntry = {
+  id: string;
+  kind: DictionaryKind;
+  name: string;
+  value: string;
+  description: string;
+  enabled: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  version: number;
+};
+
 export type GroupAllocationChannel = {
   account_id: string;
   account_name: string;
@@ -1301,6 +1315,32 @@ export type SystemMetrics = {
     available_bytes: number;
     usage_percent: number;
   };
+};
+
+export type AnimationTarget = { account_id: string; model: string };
+export type AnimationRequest = { targets: AnimationTarget[]; timeout_seconds: number };
+export type AnimationResult = {
+  account_id: string;
+  account_name: string;
+  model: string;
+  response_model?: string;
+  request_id: string;
+  status: "succeeded" | "failed";
+  svg?: string;
+  error?: string;
+  duration_ms: number;
+  completed_at: string;
+};
+export type AnimationSchedule = {
+  account_id: string;
+  enabled: boolean;
+  model: string;
+  interval_minutes: number;
+  timeout_seconds: number;
+  version: number;
+  next_at?: string;
+  last_task_id?: string;
+  last_error?: string;
 };
 
 export type ModelCheckCapabilities = {
@@ -1989,6 +2029,13 @@ export const api = {
     }),
   latestRevenue: () => request<Task | null>("/api/pricing/revenue/latest"),
   groups: () => request<GroupStatus[]>("/api/groups"),
+  dictionaries: (kind: DictionaryKind) =>
+    request<{ items: DictionaryEntry[] }>(`/api/dictionaries?kind=${encodeURIComponent(kind)}`),
+  reorderDictionaries: (kind: DictionaryKind, ids: string[]) =>
+    request<void>("/api/dictionaries/reorder", {
+      method: "POST",
+      body: JSON.stringify({ kind, ids }),
+    }),
   updateGroupPolicy: (id: string, payload: GroupPolicyOverrideUpdate) =>
     request<GroupStatus>(`/api/groups/${encodeURIComponent(id)}/policy`, {
       method: "PUT",
@@ -2293,6 +2340,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload ?? {}),
     }),
+  animationHistory: () => request<Task[]>("/api/model-checks/animations"),
+  runAnimation: (payload: AnimationRequest) =>
+    request<Task>("/api/model-checks/animations", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  animationSchedules: () => request<AnimationSchedule[]>("/api/model-checks/animation-schedules"),
+  saveAnimationSchedule: (payload: AnimationSchedule) =>
+    request<AnimationSchedule[]>(
+      `/api/model-checks/animation-schedules/${encodeURIComponent(payload.account_id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
   modelCheckCapabilities: () => request<ModelCheckCapabilities>("/api/model-checks/capabilities"),
   modelCheckAccountStatuses: () =>
     request<ModelCheckAccountStatus[]>("/api/model-checks/account-statuses"),

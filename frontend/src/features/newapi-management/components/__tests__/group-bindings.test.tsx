@@ -91,4 +91,28 @@ describe("New API 分组绑定倍率", () => {
     expect(ratio).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByRole("button", { name: "保存绑定与倍率" })).toBeDisabled();
   });
+
+  it("倍率错误出现与修正时保留同一个固定高度提示区", async () => {
+    const user = userEvent.setup();
+    const view = render(
+      <NewAPIGroupBindings
+        groups={[groups[0]!]}
+        localGroups={localGroups}
+        bindings={[bindings[0]!]}
+        pending={false}
+        onSave={vi.fn()}
+      />,
+    );
+    const slot = view.container.querySelector('[data-slot="field-error"]');
+    expect(slot).toHaveClass("h-8", "shrink-0");
+    const ratio = screen.getByRole("textbox", { name: "VIP 的 Sub2API 管理平台倍率" });
+    await user.clear(ratio);
+    await user.type(ratio, "0");
+    expect(screen.getByRole("alert")).toHaveTextContent("倍率必须大于 0");
+    await user.clear(ratio);
+    await user.type(ratio, "1");
+    expect(view.container.querySelector('[data-slot="field-error"]')).toBe(slot);
+    expect(slot).toBeEmptyDOMElement();
+    expect(screen.getByRole("button", { name: "保存绑定与倍率" })).toBeEnabled();
+  });
 });

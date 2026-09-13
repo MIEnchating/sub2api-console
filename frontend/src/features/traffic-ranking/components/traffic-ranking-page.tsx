@@ -24,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
+import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
 
 import {
   formatTrafficCount,
@@ -74,6 +75,7 @@ function TrafficRankingSkeleton() {
 export function TrafficRankingPage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("24h");
   const [group, setGroup] = useState("all");
+  const [platform, setPlatform] = useState("all");
   const [sortBy, setSortBy] = useState<TrafficRankingSort>("traffic");
   const [search, setSearch] = useState("");
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
@@ -88,13 +90,31 @@ export function TrafficRankingPage() {
     refetchInterval: 60_000,
   });
   const visibleAccounts = useMemo(
-    () => (ranking.data?.accounts ?? []).filter((row) => trafficAccountMatches(row, search)),
-    [ranking.data?.accounts, search],
+    () =>
+      (ranking.data?.accounts ?? []).filter(
+        (row) =>
+          trafficAccountMatches(row, search) &&
+          (platform === "all" || row.platform?.trim().toLocaleLowerCase() === platform),
+      ),
+    [ranking.data?.accounts, platform, search],
+  );
+  const platformOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          (ranking.data?.accounts ?? [])
+            .flatMap((row) => (row.platform ? [row.platform.trim().toLocaleLowerCase()] : []))
+            .filter(Boolean),
+        ),
+      ]
+        .sort((a, b) => a.localeCompare(b, "zh-CN"))
+        .map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
+    [ranking.data?.accounts],
   );
   const pagination = useClientPagination(visibleAccounts);
   useEffect(
     () => pagination.setCurrentPage(1),
-    [pagination.setCurrentPage, search, timeRange, group, sortBy],
+    [pagination.setCurrentPage, search, timeRange, group, platform, sortBy],
   );
 
   return (
@@ -132,6 +152,15 @@ export function TrafficRankingPage() {
             options={(groups.data ?? []).map((item) => item.name)}
             value={group === "all" ? null : group}
             onValueChange={(value) => setGroup(value ?? "all")}
+          />
+          <FilterMenu
+            label="平台"
+            options={platformOptions.map((option) => option.value)}
+            value={platform === "all" ? null : platform}
+            onValueChange={(value) => setPlatform(value ?? "all")}
+            optionLabel={(value) =>
+              platformOptions.find((option) => option.value === value)?.label ?? value
+            }
           />
           <FilterMenu
             label="排行维度"

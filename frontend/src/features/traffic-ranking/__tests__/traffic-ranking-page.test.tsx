@@ -86,6 +86,7 @@ describe("流量排行页面", () => {
     expect(markup).toContain("无样本");
     expect(markup).toContain('aria-label="时间范围筛选"');
     expect(markup).toContain('aria-label="账号分组筛选"');
+    expect(markup).toContain('aria-label="平台筛选"');
     expect(markup).toContain('aria-label="排行维度筛选"');
     expect(markup).toContain("最近 24 小时");
     expect(markup).not.toContain("全部分组");

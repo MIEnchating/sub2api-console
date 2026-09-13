@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -9,9 +9,11 @@ import {
   accountModelSyncDialogLayout,
   availableUnifiedProbeModels,
   modelSyncProbeItems,
+  modelSyncPlatformGroups,
   modelSyncTaskItems,
   preferredAccountProbeModel,
   selectedAccountModels,
+  shouldShowModelSupportingAccounts,
   successfulModelSyncAccountIDs,
 } from "../account-model-sync-dialog";
 
@@ -497,6 +499,82 @@ describe("账号批量模型同步", () => {
     await userEvent.click(screen.getByRole("tab", { name: /基础组/ }));
     expect(screen.getByRole("checkbox", { name: "同步模型 common-model" })).not.toBeChecked();
     expect(screen.getByTestId("unified-probe-models")).toHaveClass("self-start");
+  });
+
+  it("模型卡片悬浮时仅在支持账号少于五个时显示账号名单", async () => {
+    const accountIds = ["41", "42", "43", "44", "45", "46"];
+    const discovery = task(
+      accountIds.map((accountId, index) => ({
+        account_id: accountId,
+        account_name: `账号 ${index + 1}`,
+        status: "succeeded",
+      })),
+    );
+    const preview: AccountModelSyncPreview = {
+      account_count: accountIds.length,
+      accounts_with_catalog: accountIds.length,
+      blocked_patterns: [],
+      blocked_models: [],
+      models: [
+        { model: "sparse-model", account_count: 2 },
+        { model: "popular-model", account_count: accountIds.length },
+      ],
+      accounts: accountIds.map((accountId, index) => ({
+        account_id: accountId,
+        account_name: `账号 ${index + 1}`,
+        platform: "openai",
+        models: index < 2 ? ["sparse-model", "popular-model"] : ["popular-model"],
+        probe_model: "popular-model",
+      })),
+      fingerprint: "catalog-fingerprint",
+    };
+    vi.spyOn(api, "discoverAccountModels").mockResolvedValue(discovery);
+    vi.spyOn(api, "task").mockResolvedValue(discovery);
+    vi.spyOn(api, "previewAccountModels").mockResolvedValue(preview);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const grouped = modelSyncPlatformGroups(
+      preview,
+      new Map(accountIds.map((accountId) => [accountId, "openai"])),
+      new Map(accountIds.map((accountId) => [accountId, ["默认组"]])),
+    );
+    const models = grouped[0]?.groups[0]?.models ?? [];
+    expect(models.find((item) => item.model === "sparse-model")?.supportingAccounts).toEqual([
+      { accountId: "41", accountName: "账号 1", platform: "OpenAI" },
+      { accountId: "42", accountName: "账号 2", platform: "OpenAI" },
+    ]);
+    expect(shouldShowModelSupportingAccounts(2)).toBe(true);
+    expect(shouldShowModelSupportingAccounts(5)).toBe(false);
+    expect(shouldShowModelSupportingAccounts(6)).toBe(false);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AccountModelSyncDialog
+          open
+          accountIds={accountIds}
+          accountPlatforms={new Map(accountIds.map((accountId) => [accountId, "openai"]))}
+          accountGroups={new Map(accountIds.map((accountId) => [accountId, ["默认组"]]))}
+          onOpenChange={() => undefined}
+          onCompleted={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+
+    const sparseCard = await screen.findByRole("group", { name: "模型 sparse-model" });
+    expect(sparseCard).toHaveAttribute("data-model-support-tooltip-trigger");
+    fireEvent.mouseEnter(sparseCard);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("账号 1 · OpenAI");
+    expect(tooltip).toHaveTextContent("账号 2 · OpenAI");
+    expect(tooltip).toHaveClass("bottom-full", "mb-1");
+
+    fireEvent.mouseLeave(sparseCard);
+    const popularCard = screen.getByRole("group", { name: "模型 popular-model" });
+    expect(popularCard).not.toHaveAttribute("data-model-support-tooltip-trigger");
+    fireEvent.mouseEnter(popularCard);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("提交时目录发生变化会自动刷新预览并提示重新确认", async () => {

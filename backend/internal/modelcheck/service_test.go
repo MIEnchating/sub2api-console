@@ -413,7 +413,7 @@ func TestPrepareRejectsMissingAndUnsupportedSelections(t *testing.T) {
 	}
 }
 
-func TestPrepareRejectsManualPriorityAccounts(t *testing.T) {
+func TestPrepareAllowsManualPriorityAccounts(t *testing.T) {
 	priority := int64(3)
 	service, err := New(
 		&recordingTasks{terminal: make(chan taskstore.Task, 1)},
@@ -425,8 +425,8 @@ func TestPrepareRejectsManualPriorityAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = service.prepare(context.Background(), Request{AccountIDs: []string{"41"}, Models: []string{"gpt-5.6-sol"}})
-	if err == nil || !strings.Contains(err.Error(), "人工优先位") {
-		t.Fatalf("manual priority error=%v", err)
+	if err != nil {
+		t.Fatalf("manual priority account should be selectable: %v", err)
 	}
 }
 

@@ -1,4 +1,5 @@
 import { ContentRetry } from "@/components/content-retry";
+import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -335,11 +336,7 @@ export function AccountSettingsPanel(props: {
                   {modelsButtonLabel}
                 </Button>
               </div>
-              {form.formState.errors.testModel?.message ? (
-                <span className="text-destructive text-xs">
-                  {form.formState.errors.testModel.message}
-                </span>
-              ) : null}
+              <FieldError message={form.formState.errors.testModel?.message} />
               {modelsLoaded ? (
                 <p className="text-muted-foreground text-xs" role="status">
                   {fetchedModelCount > 0
@@ -375,7 +372,7 @@ function SettingsField(props: {
     <div className="grid min-w-0 gap-1.5 text-sm">
       <FieldLabel label={props.label} description={!props.error ? props.hint : undefined} />
       {props.children}
-      {props.error ? <span className="text-destructive text-xs">{props.error}</span> : null}
+      <FieldError message={props.error} />
     </div>
   );
 }

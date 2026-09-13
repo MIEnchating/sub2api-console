@@ -1,4 +1,5 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Activity, LoaderCircle } from "lucide-react";
@@ -215,15 +216,6 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
         </TableBody>
       </Table>
     </div>
-  );
-}
-
-function FieldError(props: { message?: string }) {
-  if (!props.message) return null;
-  return (
-    <p className="text-destructive text-xs" role="alert">
-      {props.message}
-    </p>
   );
 }
 

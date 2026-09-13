@@ -1,4 +1,5 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
+import { FieldError } from "@/components/field-error";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eraser, KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -223,11 +224,7 @@ function VaultField(props: {
     <div className="grid min-w-0 gap-1.5 text-sm">
       <FieldLabel label={props.label} description={props.hint} htmlFor={props.htmlFor} />
       {props.children}
-      {props.error ? (
-        <span className="text-xs text-destructive" role="alert">
-          {props.error}
-        </span>
-      ) : null}
+      <FieldError message={props.error} />
     </div>
   );
 }

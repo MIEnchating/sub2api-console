@@ -204,6 +204,9 @@ func run() error {
 	managementTasks.UseUpstreamAuthResolver(authRecoveryService)
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
+	if err := modelChecks.StartAnimationScheduler(); err != nil {
+		return err
+	}
 	logService := consolelogs.New(businessStore, taskStore)
 	logService.UseTaskRunner(backgroundTasks)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)

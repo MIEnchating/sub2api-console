@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link2, Save } from "lucide-react";
+import { FieldError } from "@/components/field-error";
 
 import type {
   NewAPIGroupBinding,
@@ -96,10 +98,21 @@ export function updateBoundGroupRatioSync(
 }
 
 export function NewAPIGroupBindings(props: Props) {
+  const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<string, DraftBinding>>(() =>
     createDraftBindings(props.groups, props.localGroups, props.bindings),
   );
-  const pagination = useClientPagination(props.groups);
+  const filteredGroups = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    if (!query) return props.groups;
+    return props.groups.filter((group) =>
+      `${group.id} ${group.name}`.toLocaleLowerCase().includes(query),
+    );
+  }, [props.groups, search]);
+  const pagination = useClientPagination(filteredGroups);
+  useEffect(() => {
+    pagination.setCurrentPage(1);
+  }, [pagination.setCurrentPage, search]);
   const localGroupLabels = useMemo(
     () =>
       new Map(
@@ -118,6 +131,21 @@ export function NewAPIGroupBindings(props: Props) {
   const allBoundGroupsSyncRatio =
     boundDrafts.length > 0 && boundDrafts.every((draft) => draft.syncRatio);
   const hasInvalidRatio = boundDrafts.some((draft) => !validSub2APIRatio(draft.sub2APIRatio));
+  let content: ReactNode = null;
+  if (props.groups.length === 0) {
+    content = (
+      <div className="text-muted-foreground flex min-h-52 flex-col items-center justify-center gap-2 px-6 text-sm">
+        <Link2 className="size-8 opacity-45" aria-hidden="true" />
+        <span>尚未读取到 New API 分组</span>
+      </div>
+    );
+  } else if (filteredGroups.length === 0) {
+    content = (
+      <div className="text-muted-foreground flex min-h-52 items-center justify-center px-6 text-sm">
+        没有匹配的 New API 分组
+      </div>
+    );
+  }
 
   useEffect(() => {
     setDrafts(createDraftBindings(props.groups, props.localGroups, props.bindings));
@@ -143,6 +171,13 @@ export function NewAPIGroupBindings(props: Props) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <TableFilterToolbar aria-label="分组绑定操作">
+        <Input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="搜索 New API 分组或 ID"
+          aria-label="搜索 New API 分组或 ID"
+          className="w-64"
+        />
         <div className="flex items-center gap-2">
           <span className="text-sm">统一倍率同步</span>
           <Switch
@@ -155,9 +190,6 @@ export function NewAPIGroupBindings(props: Props) {
           />
         </div>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {hasInvalidRatio ? (
-            <span className="text-destructive text-xs">Sub2API 管理平台倍率必须大于 0</span>
-          ) : null}
           <Button
             onClick={save}
             disabled={props.pending || props.groups.length === 0 || hasInvalidRatio}
@@ -167,13 +199,9 @@ export function NewAPIGroupBindings(props: Props) {
           </Button>
         </div>
       </TableFilterToolbar>
+      <FieldError message={hasInvalidRatio ? "Sub2API 管理平台倍率必须大于 0" : undefined} />
       <DataTablePanel className="flex-1">
-        {props.groups.length === 0 ? (
-          <div className="text-muted-foreground flex min-h-52 flex-col items-center justify-center gap-2 px-6 text-sm">
-            <Link2 className="size-8 opacity-45" aria-hidden="true" />
-            <span>尚未读取到 New API 分组</span>
-          </div>
-        ) : (
+        {content ?? (
           <>
             <Table containerClassName="min-h-0 flex-1 overflow-auto">
               <TableHeader>
@@ -269,7 +297,7 @@ export function NewAPIGroupBindings(props: Props) {
             <DataTablePagination
               currentPage={pagination.currentPage}
               totalPages={pagination.totalPages}
-              totalItems={props.groups.length}
+              totalItems={filteredGroups.length}
               pageSize={pagination.pageSize}
               pageSizes={[10, 20, 50, 100]}
               onPageChange={pagination.setCurrentPage}

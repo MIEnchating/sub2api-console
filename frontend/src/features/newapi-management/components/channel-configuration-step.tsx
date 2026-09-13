@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { FieldError } from "@/components/field-error";
 import { RadioTower, RefreshCw } from "lucide-react";
 
 import { MultiSelect } from "@/components/multi-select";
@@ -123,9 +124,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
                 placeholder="https://api.example.com"
               />
             ) : null}
-            {props.baseURLError ? (
-              <span className="text-destructive text-xs">{props.baseURLError}</span>
-            ) : null}
+            <FieldError message={props.baseURLError} />
           </div>
 
           <div className="grid gap-1.5 text-sm">
@@ -141,9 +140,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               maxVisibleChips={6}
               disabled={props.newAPIGroupOptions.length === 0}
             />
-            {props.groupError ? (
-              <span className="text-destructive text-xs">{props.groupError}</span>
-            ) : null}
+            <FieldError message={props.groupError} />
           </div>
         </div>
 
@@ -168,9 +165,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               {props.fetchingModels ? "正在获取" : "从上游获取"}
             </Button>
           </div>
-          {props.modelError ? (
-            <span className="text-destructive text-xs">{props.modelError}</span>
-          ) : null}
+          <FieldError message={props.modelError} />
         </div>
       </div>
 

@@ -113,6 +113,7 @@ describe("New API 分组绑定", () => {
     );
 
     expect(markup).toContain("分组绑定");
+    expect(markup).toContain('placeholder="搜索 New API 分组或 ID"');
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('aria-label="默认 的 Sub2API 分组"');
     expect(markup).toContain('aria-label="VIP 倍率同步"');

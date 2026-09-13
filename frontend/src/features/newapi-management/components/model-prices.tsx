@@ -1,4 +1,5 @@
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -797,11 +798,7 @@ function ModelPriceAdjustmentDialog(props: {
                 %
               </span>
             </div>
-            {form.formState.errors.percentage?.message ? (
-              <span className="text-destructive text-xs" role="alert">
-                {form.formState.errors.percentage.message}
-              </span>
-            ) : null}
+            <FieldError message={form.formState.errors.percentage?.message} />
           </form>
         </DialogBody>
         <DialogFooter>

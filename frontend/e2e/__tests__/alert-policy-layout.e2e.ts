@@ -105,3 +105,31 @@ test("大屏暗色主题使用紧凑的开关行", async ({ page }) => {
   });
   await page.screenshot({ path: test.info().outputPath("alert-policy-desktop-dark.png") });
 });
+
+test("阈值和发送频率校验失败时，错误不推动其他字段或扩大页面", async ({ page }) => {
+  await page.goto("/alert-policy");
+  const threshold = page.getByRole("textbox", { name: "余额告警阈值 1", exact: true });
+  await expect(threshold).toBeVisible();
+  const columns = page.locator('[data-slot="alert-policy-columns"]');
+  const geometry = (): Promise<number[]> =>
+    columns.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return [
+        bounds.width,
+        bounds.height,
+        ...Array.from(
+          element.querySelectorAll<HTMLInputElement>('input[data-slot="input"]'),
+        ).flatMap((input) => {
+          const box = input.getBoundingClientRect();
+          return [box.x - bounds.x, box.y - bounds.y, box.width, box.height];
+        }),
+      ].map((value) => Math.round(value));
+    });
+  const initial = await geometry();
+  await threshold.fill("无效阈值");
+  await page.getByRole("spinbutton", { name: "重复提醒间隔（分钟）", exact: true }).fill("-1");
+  await page.getByRole("button", { name: "保存策略", exact: true }).click();
+  await expect(threshold).toHaveAttribute("aria-invalid", "true");
+  expect(await geometry()).toEqual(initial);
+  await expect(page.getByRole("alert").first()).toBeVisible();
+});

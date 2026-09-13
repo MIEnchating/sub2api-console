@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { FieldError } from "@/components/field-error";
 import { Save } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
@@ -219,7 +220,7 @@ function SettingsField(props: {
     <div className="grid min-w-0 gap-1.5 text-sm">
       <FieldLabel label={props.label} description={!props.error ? props.description : undefined} />
       {props.children}
-      {props.error ? <span className="text-destructive text-xs">{props.error}</span> : null}
+      <FieldError message={props.error} />
     </div>
   );
 }

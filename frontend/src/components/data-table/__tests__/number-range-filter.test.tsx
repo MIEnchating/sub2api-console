@@ -24,6 +24,27 @@ function NumberRangeFilterHarness() {
 }
 
 describe("NumberRangeFilter", () => {
+  it("范围校验变化时保持提示占位，并向两个输入框关联同一错误", () => {
+    const props = {
+      label: "余额",
+      minimumValue: "20",
+      maximumValue: "5",
+      onMinimumValueChange: () => {},
+      onMaximumValueChange: () => {},
+    };
+    const view = render(<NumberRangeFilter {...props} error={undefined} />);
+    const slot = view.container.querySelector('[data-slot="field-error"]');
+    expect(slot).toHaveClass("h-8", "shrink-0");
+    view.rerender(<NumberRangeFilter {...props} error="最低余额不能大于最高余额" />);
+    const alert = screen.getByRole("alert");
+    for (const input of screen.getAllByRole("spinbutton")) {
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(input).toHaveAttribute("aria-describedby", alert.id);
+    }
+    view.rerender(<NumberRangeFilter {...props} error={undefined} />);
+    expect(slot).toBeEmptyDOMElement();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
   it("横向排列标签、两个固定宽度输入框和分隔文本", () => {
     const markup = renderToStaticMarkup(
       <NumberRangeFilter

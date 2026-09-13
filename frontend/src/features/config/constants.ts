@@ -3,6 +3,7 @@ export const configTabs = [
   { value: "accounts", label: "账号设置" },
   { value: "notifications", label: "通知设置" },
   { value: "interface", label: "界面与日志" },
+  { value: "dictionaries", label: "字典管理" },
 ] as const;
 
 export type ConfigTab = (typeof configTabs)[number]["value"];

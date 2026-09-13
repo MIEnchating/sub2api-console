@@ -494,6 +494,7 @@ function SyncModelEditor(props: {
   const [activePlatform, setActivePlatform] = useState(platforms[0]?.key ?? "");
   const [activeGroup, setActiveGroup] = useState(platforms[0]?.groups[0]?.key ?? "");
   const [modelSearch, setModelSearch] = useState("");
+  const [hoveredModel, setHoveredModel] = useState<string | null>(null);
   const currentPlatform =
     platforms.find((platform) => platform.key === activePlatform) ?? platforms[0];
   const currentGroup =
@@ -634,19 +635,32 @@ function SyncModelEditor(props: {
                 >
                   {visibleModels.map((item) => {
                     const included = !currentScopeExclusions?.has(item.model.toLocaleLowerCase());
-                    return (
+                    const showsSupportingAccounts = shouldShowModelSupportingAccounts(
+                      item.supportingAccounts.length,
+                    );
+                    const card = (
                       <div
                         className={cn(
-                          "flex min-w-0 items-start gap-2 rounded-md border bg-background px-3 py-2.5 transition-colors",
+                          "relative flex min-w-0 items-start gap-2 rounded-md border bg-background px-3 py-2.5 transition-colors",
                           props.disabled
                             ? "cursor-not-allowed"
                             : "cursor-pointer hover:border-primary/50 hover:bg-muted/40",
                           included && "border-primary/40",
+                          hoveredModel === item.model && "z-10",
                         )}
                         key={item.model}
                         role="group"
                         aria-label={`模型 ${item.model}`}
                         aria-disabled={props.disabled}
+                        data-model-support-tooltip-trigger={
+                          showsSupportingAccounts ? "" : undefined
+                        }
+                        onMouseEnter={() => {
+                          if (showsSupportingAccounts) setHoveredModel(item.model);
+                        }}
+                        onMouseLeave={() => {
+                          if (hoveredModel === item.model) setHoveredModel(null);
+                        }}
                         onClick={() => {
                           if (props.disabled) return;
                           props.onModelExcluded(currentGroup.scopeKey, item.model, included);
@@ -672,8 +686,26 @@ function SyncModelEditor(props: {
                             {item.accountCount}/{currentGroup.accountCount} 个账号支持
                           </span>
                         </span>
+                        {showsSupportingAccounts && hoveredModel === item.model ? (
+                          <div
+                            className="bg-popover text-popover-foreground border-border pointer-events-none absolute bottom-full left-0 z-20 mb-1 grid max-w-sm gap-1 rounded-md border px-3 py-1.5 text-xs shadow-md"
+                            role="tooltip"
+                          >
+                            <span className="font-medium">支持账号</span>
+                            {item.supportingAccounts.map((account) => (
+                              <span className="text-xs" key={account.accountId}>
+                                {account.accountName}
+                                {account.platform ? ` · ${account.platform}` : ""}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     );
+                    if (!showsSupportingAccounts) {
+                      return card;
+                    }
+                    return card;
                   })}
                   {visibleModels.length === 0 ? (
                     <p className="text-muted-foreground col-span-full flex h-14 items-center justify-center px-3 text-center text-sm">
@@ -702,10 +734,26 @@ type ModelSyncGroup = {
   scopeKey: string;
   label: string;
   accountCount: number;
-  models: Array<{ model: string; accountCount: number }>;
+  models: ModelSyncModel[];
 };
 
-function modelSyncPlatformGroups(
+type ModelSyncSupportingAccount = {
+  accountId: string;
+  accountName: string;
+  platform: string | null;
+};
+
+type ModelSyncModel = {
+  model: string;
+  accountCount: number;
+  supportingAccounts: ModelSyncSupportingAccount[];
+};
+
+export function shouldShowModelSupportingAccounts(accountCount: number): boolean {
+  return accountCount > 0 && accountCount < 5;
+}
+
+export function modelSyncPlatformGroups(
   preview: AccountModelSyncPreview,
   accountPlatforms: ReadonlyMap<string, string | null>,
   accountGroups: ReadonlyMap<string, string[]>,
@@ -720,7 +768,7 @@ function modelSyncPlatformGroups(
         {
           label: string;
           accountCount: number;
-          models: Map<string, { model: string; accountCount: number }>;
+          models: Map<string, ModelSyncModel>;
         }
       >;
     }
@@ -738,6 +786,12 @@ function modelSyncPlatformGroups(
       groups.set(key, group);
     }
     group.accountCount++;
+    const accountPlatformName = key === "unclassified" ? null : (accountPlatformLabel(key) ?? key);
+    const supportingAccount = {
+      accountId: account.account_id,
+      accountName: account.account_name || `账号 #${account.account_id}`,
+      platform: accountPlatformName,
+    } satisfies ModelSyncSupportingAccount;
     const memberships = uniqueAccountGroups(accountGroups.get(account.account_id));
     for (const membership of memberships) {
       const groupKey = membership.toLocaleLowerCase();
@@ -750,8 +804,16 @@ function modelSyncPlatformGroups(
       for (const model of account.models) {
         const modelKey = model.toLocaleLowerCase();
         const coverage = membershipGroup.models.get(modelKey);
-        if (coverage) coverage.accountCount++;
-        else membershipGroup.models.set(modelKey, { model, accountCount: 1 });
+        if (coverage) {
+          coverage.accountCount++;
+          coverage.supportingAccounts.push(supportingAccount);
+        } else {
+          membershipGroup.models.set(modelKey, {
+            model,
+            accountCount: 1,
+            supportingAccounts: [supportingAccount],
+          });
+        }
       }
     }
   }

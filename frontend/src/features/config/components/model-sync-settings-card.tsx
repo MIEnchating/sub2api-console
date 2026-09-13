@@ -1,4 +1,5 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save } from "lucide-react";
@@ -96,11 +97,7 @@ export function ModelSyncSettingsCard() {
                 placeholder={"例如：\nclaude-*\ngemini-*\n*-image-*"}
               />
             </label>
-            {error ? (
-              <p className="text-destructive text-sm" id="model-sync-blocked-patterns-error">
-                {error}
-              </p>
-            ) : null}
+            <FieldError id="model-sync-blocked-patterns-error" message={error} />
             {settings.error ? (
               <QueryErrorToast
                 error={settings.error}

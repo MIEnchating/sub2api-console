@@ -1,4 +1,5 @@
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { FieldError } from "@/components/field-error";
 import { useEffect, useMemo, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
@@ -399,11 +400,7 @@ export function NewAPIChannelForm(props: Props) {
                       </Select>
                     )}
                   />
-                  {keyForm.formState.errors.vault_entry ? (
-                    <span className="text-destructive text-xs">
-                      {keyForm.formState.errors.vault_entry.message}
-                    </span>
-                  ) : null}
+                  <FieldError message={keyForm.formState.errors.vault_entry?.message} />
                 </div>
               ) : (
                 <div className="grid min-w-0 gap-3 sm:grid-cols-2">
@@ -418,11 +415,7 @@ export function NewAPIChannelForm(props: Props) {
                       aria-invalid={Boolean(keyForm.formState.errors.username)}
                       {...keyForm.register("username")}
                     />
-                    {keyForm.formState.errors.username ? (
-                      <span className="text-destructive text-xs">
-                        {keyForm.formState.errors.username.message}
-                      </span>
-                    ) : null}
+                    <FieldError message={keyForm.formState.errors.username?.message} />
                   </div>
                   <div className="grid gap-1.5 text-sm">
                     <label className="font-medium" htmlFor="newapi-channel-password">
@@ -435,11 +428,7 @@ export function NewAPIChannelForm(props: Props) {
                       aria-invalid={Boolean(keyForm.formState.errors.password)}
                       {...keyForm.register("password")}
                     />
-                    {keyForm.formState.errors.password ? (
-                      <span className="text-destructive text-xs">
-                        {keyForm.formState.errors.password.message}
-                      </span>
-                    ) : null}
+                    <FieldError message={keyForm.formState.errors.password?.message} />
                   </div>
                 </div>
               )}
@@ -477,11 +466,7 @@ export function NewAPIChannelForm(props: Props) {
                     </Select>
                   )}
                 />
-                {keyForm.formState.errors.sub2api_group_id ? (
-                  <span className="text-destructive text-xs">
-                    {keyForm.formState.errors.sub2api_group_id.message}
-                  </span>
-                ) : null}
+                <FieldError message={keyForm.formState.errors.sub2api_group_id?.message} />
               </div>
             </fieldset>
           </div>

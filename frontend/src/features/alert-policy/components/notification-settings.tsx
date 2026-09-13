@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { FieldError } from "@/components/field-error";
 import { BellRing, Settings2 } from "lucide-react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { NotificationStatus } from "@/api";
@@ -108,11 +109,7 @@ export function NotificationSettings(props: {
               disabled={!enabled || !deliveryEnabled}
               {...form.register("repeat_interval_minutes", { valueAsNumber: true })}
             />
-            {form.formState.errors.repeat_interval_minutes && (
-              <p className="text-destructive mt-1 text-xs">
-                {form.formState.errors.repeat_interval_minutes.message}
-              </p>
-            )}
+            <FieldError floating message={form.formState.errors.repeat_interval_minutes?.message} />
           </div>
           <div>
             <FieldLabel
@@ -129,11 +126,10 @@ export function NotificationSettings(props: {
               disabled={!enabled || !deliveryEnabled}
               {...form.register("state_change_cooldown_minutes", { valueAsNumber: true })}
             />
-            {form.formState.errors.state_change_cooldown_minutes && (
-              <p className="text-destructive mt-1 text-xs">
-                {form.formState.errors.state_change_cooldown_minutes.message}
-              </p>
-            )}
+            <FieldError
+              floating
+              message={form.formState.errors.state_change_cooldown_minutes?.message}
+            />
           </div>
           <div>
             <FieldLabel
@@ -150,11 +146,7 @@ export function NotificationSettings(props: {
               disabled={!enabled || !deliveryEnabled}
               {...form.register("merge_threshold", { valueAsNumber: true })}
             />
-            {form.formState.errors.merge_threshold && (
-              <p className="text-destructive mt-1 text-xs">
-                {form.formState.errors.merge_threshold.message}
-              </p>
-            )}
+            <FieldError floating message={form.formState.errors.merge_threshold?.message} />
           </div>
         </div>
         <div

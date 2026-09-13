@@ -1,5 +1,6 @@
 import { BrowserLogin } from "@/features/upstreams/components/browser-login/browser-login";
 import { ContentLoading } from "@/components/content-loading";
+import { FieldError } from "@/components/field-error";
 import { StartupLoading } from "@/components/startup-loading";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
@@ -261,6 +262,7 @@ import { AccountCreationSettingsCard } from "./features/config/components/accoun
 import { SettingsFooter } from "./features/config/components/settings-footer";
 import { ModelSyncSettingsCard } from "./features/config/components/model-sync-settings-card";
 import { ConfigSectionTabs } from "./features/config/components/config-section-tabs";
+import { DictionaryManagement } from "./features/config/components/dictionary-management";
 import type { ConfigTab } from "./features/config/constants";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
@@ -1478,19 +1480,8 @@ export function FormField(props: {
     <div className="grid gap-1.5 text-sm font-medium">
       <FieldLabel label={props.label} description={props.description} htmlFor={props.htmlFor} />
       {props.children}
-      {props.reserveErrorSpace ? (
-        <span
-          className="text-destructive min-h-4 text-xs leading-4 font-normal break-words"
-          role={props.error ? "alert" : undefined}
-        >
-          {props.error ?? ""}
-        </span>
-      ) : (
-        props.error && (
-          <span className="text-destructive text-xs leading-4 font-normal break-words" role="alert">
-            {props.error}
-          </span>
-        )
+      {((props.reserveErrorSpace ?? "error" in props) || props.error) && (
+        <FieldError message={props.error} />
       )}
     </div>
   );
@@ -3560,15 +3551,7 @@ export function ManualAuthHeadersEditor(props: {
         onChange={(event) => props.onChange(event.target.value)}
         placeholder='例如 {"Authorization":"Bearer ..."}'
       />
-      {props.error ? (
-        <span
-          id={`${fieldID}-error`}
-          role="alert"
-          className="text-destructive text-xs leading-4 font-normal break-words"
-        >
-          {props.error}
-        </span>
-      ) : null}
+      <FieldError id={`${fieldID}-error`} message={props.error} />
     </FormField>
   );
 }
@@ -10238,6 +10221,8 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </Card>
           ) : null}
 
+          {activeTab === "dictionaries" && !settingsLoading ? <DictionaryManagement /> : null}
+
           {activeTab === "interface" && !settingsLoading ? (
             <NavigationSettingsCard
               sections={navigationSettingsSections}
@@ -11728,9 +11713,11 @@ function AutoInspectionCard() {
                       <span className="text-muted-foreground text-sm">秒</span>
                     </div>
                   </SettingsControlRow>
-                  {!intervalValid && saveAttempted && (
-                    <p className="text-destructive text-xs">调度心跳必须为 15 到 86400 秒</p>
-                  )}
+                  <FieldError
+                    message={
+                      !intervalValid && saveAttempted ? "调度心跳必须为 15 到 86400 秒" : undefined
+                    }
+                  />
                 </div>
               ) : null}
             </CardContent>

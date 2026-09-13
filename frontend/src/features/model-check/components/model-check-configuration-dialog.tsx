@@ -1,4 +1,5 @@
 import { ContentRetry } from "@/components/content-retry";
+import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -217,11 +218,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
                     aria-invalid={Boolean(form.formState.errors.note)}
                     {...form.register("note")}
                   />
-                  {form.formState.errors.note ? (
-                    <p className="text-destructive text-xs" role="alert">
-                      {form.formState.errors.note.message}
-                    </p>
-                  ) : null}
+                  <FieldError message={form.formState.errors.note?.message} />
                 </div>
 
                 <div className="grid min-h-96 gap-2">
@@ -250,11 +247,7 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
                     aria-invalid={Boolean(form.formState.errors.payload_json)}
                     {...form.register("payload_json")}
                   />
-                  {form.formState.errors.payload_json ? (
-                    <p className="text-destructive text-xs" role="alert">
-                      {form.formState.errors.payload_json.message}
-                    </p>
-                  ) : null}
+                  <FieldError message={form.formState.errors.payload_json?.message} />
                 </div>
 
                 <section

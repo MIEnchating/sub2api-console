@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeConfigTab } from "../../constants";
 
 describe("normalizeConfigTab", () => {
-  it.each(["connection", "accounts", "notifications", "interface"])(
+  it.each(["connection", "accounts", "notifications", "interface", "dictionaries"])(
     "保留有效页签参数 %s",
     (tab) => {
       expect(normalizeConfigTab(tab)).toBe(tab);

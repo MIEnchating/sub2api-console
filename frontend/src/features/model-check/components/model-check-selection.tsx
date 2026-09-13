@@ -1,4 +1,5 @@
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { FieldError } from "@/components/field-error";
 import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -107,11 +108,7 @@ function accountSelectionDisabled(
   props: ModelCheckSelectionProps,
 ): boolean {
   const checked = props.selectedAccountIDs.includes(account.id);
-  return (
-    props.disabled ||
-    account.manual_priority != null ||
-    (!checked && props.selectedAccountIDs.length >= 20)
-  );
+  return props.disabled || (!checked && props.selectedAccountIDs.length >= 20);
 }
 
 function AccountIdentity(props: { account: AccountStatus }) {
@@ -190,9 +187,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
   const showAccounts = !emptyState && !props.accountsError;
-  const selectableAccountCount = props.accounts.filter(
-    (account) => account.manual_priority == null,
-  ).length;
+  const selectableAccountCount = props.accounts.length;
 
   useEffect(() => {
     pagination.setCurrentPage(1);
@@ -316,10 +311,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
                   <TableCell>
                     <label
                       htmlFor={`model-check-account-${account.id}`}
-                      className={cn(
-                        "block min-w-0",
-                        account.manual_priority == null ? "cursor-pointer" : "cursor-not-allowed",
-                      )}
+                      className="block min-w-0 cursor-pointer"
                     >
                       <AccountIdentity account={account} />
                     </label>
@@ -513,11 +505,7 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
             <span className="text-muted-foreground text-[11px]">组合</span>
           </div>
         </div>
-        {props.selectionError ? (
-          <p className="text-destructive mb-2 text-xs" role="alert">
-            {props.selectionError}
-          </p>
-        ) : null}
+        <FieldError message={props.selectionError} className="mb-2" />
         <Button
           type="button"
           className="w-full"

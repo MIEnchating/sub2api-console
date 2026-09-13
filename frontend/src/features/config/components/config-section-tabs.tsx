@@ -1,4 +1,4 @@
-import { BellRing, Link2, SlidersHorizontal, UsersRound } from "lucide-react";
+import { BellRing, BookOpen, Link2, SlidersHorizontal, UsersRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
@@ -9,6 +9,7 @@ const tabIcons: Record<ConfigTab, LucideIcon> = {
   accounts: UsersRound,
   notifications: BellRing,
   interface: SlidersHorizontal,
+  dictionaries: BookOpen,
 };
 
 export function ConfigSectionTabs(props: {
@@ -22,7 +23,7 @@ export function ConfigSectionTabs(props: {
       aria-label="系统设置分类导航"
     >
       <SegmentedControl
-        className="grid w-full grid-cols-2 sm:grid-cols-4"
+        className="grid w-full grid-cols-2 sm:grid-cols-5"
         role="tablist"
         aria-label="系统设置分类"
       >

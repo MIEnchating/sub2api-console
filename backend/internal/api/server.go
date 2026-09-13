@@ -632,6 +632,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/config/account-settings", server.updateAccountCreationSettings)
 	authorized.POST("/config/account-settings/pool-mode/apply", server.syncExistingAccountPoolMode)
 	authorized.GET("/config/model-sync", server.modelSyncSettings)
+	authorized.GET("/dictionaries", server.listDictionaries)
+	authorized.POST("/dictionaries/reorder", server.reorderDictionaries)
 	authorized.PUT("/config/model-sync", server.updateModelSyncSettings)
 	authorized.POST("/config/target", server.updateAdminTarget)
 	authorized.GET("/notifications/status", server.notificationStatus)
@@ -766,6 +768,10 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/model-checks/configuration/discard", server.discardModelCheckDraft)
 	authorized.POST("/model-checks/configuration/restore", server.restoreModelCheckVersion)
 	authorized.POST("/model-checks", server.runModelCheck)
+	authorized.GET("/model-checks/animations", server.animationCheckHistory)
+	authorized.POST("/model-checks/animations", server.runAnimationCheck)
+	authorized.GET("/model-checks/animation-schedules", server.animationCheckSchedules)
+	authorized.PUT("/model-checks/animation-schedules/:id", server.saveAnimationCheckSchedule)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
 	authorized.PUT("/inspection/automation", server.updateAutoInspection)
 	authorized.GET("/inspection/automation/events", server.autoInspectionEvents)
@@ -5854,4 +5860,106 @@ func writeError(c *gin.Context, status int, detail string) {
 		code = "internal_error"
 	}
 	c.JSON(status, gin.H{"code": code, "detail": detail})
+}
+
+func (s *Server) listDictionaries(c *gin.Context) {
+	kind := strings.TrimSpace(c.Query("kind"))
+	if kind == "" {
+		kind = "platform"
+	}
+	if s.business != nil {
+		values := make([]configstore.DictionaryEntry, 0)
+		if kind == "group" {
+			if groups, err := s.business.Groups(c.Request.Context()); err == nil {
+				for _, group := range groups {
+					if group.ID != nil && strings.TrimSpace(*group.ID) != "" {
+						values = append(values, configstore.DictionaryEntry{Name: group.Name, Value: *group.ID})
+					}
+				}
+			}
+		} else if accounts, err := s.business.Accounts(c.Request.Context()); err == nil {
+			seen := map[string]bool{}
+			for _, account := range accounts {
+				if account.Platform != nil && strings.TrimSpace(*account.Platform) != "" && !seen[*account.Platform] {
+					seen[*account.Platform] = true
+					values = append(values, configstore.DictionaryEntry{Name: *account.Platform, Value: *account.Platform})
+				}
+			}
+		}
+		if err := s.private.SyncDictionaryValues(c.Request.Context(), kind, values); err != nil {
+			writeError(c, http.StatusInternalServerError, "字典同步失败")
+			return
+		}
+	}
+	items, err := s.private.ListDictionaries(c.Request.Context(), kind)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (s *Server) saveDictionary(c *gin.Context) {
+	var payload struct {
+		Kind        string `json:"kind"`
+		Name        string `json:"name"`
+		Value       string `json:"value"`
+		Description string `json:"description"`
+		Enabled     *bool  `json:"enabled"`
+		SortOrder   int    `json:"sort_order"`
+		Version     int    `json:"version"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		return
+	}
+	d := configstore.DictionaryEntry{ID: c.Param("id"), Kind: payload.Kind, Name: payload.Name, Value: payload.Value, Description: payload.Description, SortOrder: payload.SortOrder, Version: payload.Version, Enabled: true}
+	if payload.Enabled != nil {
+		d.Enabled = *payload.Enabled
+	}
+	item, err := s.private.SaveDictionary(c.Request.Context(), d, payload.Version)
+	if err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, configstore.ErrDictionaryConflict) {
+			code = http.StatusConflict
+		}
+		c.JSON(code, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+func (s *Server) deleteDictionary(c *gin.Context) {
+	var payload struct {
+		Version int `json:"version"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		return
+	}
+	if err := s.private.DeleteDictionary(c.Request.Context(), c.Param("id"), payload.Version); err != nil {
+		code := http.StatusBadRequest
+		if errors.Is(err, configstore.ErrDictionaryConflict) {
+			code = http.StatusConflict
+		}
+		c.JSON(code, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (s *Server) reorderDictionaries(c *gin.Context) {
+	var payload struct {
+		Kind string   `json:"kind"`
+		IDs  []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+		return
+	}
+	if err := s.private.ReorderDictionaries(c.Request.Context(), payload.Kind, payload.IDs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }

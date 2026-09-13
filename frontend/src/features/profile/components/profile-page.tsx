@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { KeyRound, Save, ShieldCheck, UserRound } from "lucide-react";
@@ -54,7 +55,7 @@ function Field(props: { id: string; label: string; error?: string; children: Rea
         {props.label}
       </label>
       {props.children}
-      {props.error ? <p className="text-destructive text-xs">{props.error}</p> : null}
+      <FieldError id={`${props.id}-error`} message={props.error} />
     </div>
   );
 }
@@ -167,6 +168,9 @@ export function ProfilePage() {
                   id="profile-username"
                   autoComplete="username"
                   aria-invalid={Boolean(form.formState.errors.username)}
+                  aria-describedby={
+                    form.formState.errors.username ? "profile-username-error" : undefined
+                  }
                   {...form.register("username")}
                 />
               </Field>
@@ -180,6 +184,11 @@ export function ProfilePage() {
                   type="password"
                   autoComplete="current-password"
                   aria-invalid={Boolean(form.formState.errors.current_password)}
+                  aria-describedby={
+                    form.formState.errors.current_password
+                      ? "profile-current-password-error"
+                      : undefined
+                  }
                   {...form.register("current_password")}
                 />
               </Field>
@@ -195,6 +204,9 @@ export function ProfilePage() {
                     autoComplete="new-password"
                     placeholder="不修改请留空"
                     aria-invalid={Boolean(form.formState.errors.new_password)}
+                    aria-describedby={
+                      form.formState.errors.new_password ? "profile-new-password-error" : undefined
+                    }
                     {...form.register("new_password")}
                   />
                 </Field>
@@ -209,6 +221,11 @@ export function ProfilePage() {
                     autoComplete="new-password"
                     disabled={!changingPassword}
                     aria-invalid={Boolean(form.formState.errors.confirm_password)}
+                    aria-describedby={
+                      form.formState.errors.confirm_password
+                        ? "profile-confirm-password-error"
+                        : undefined
+                    }
                     {...form.register("confirm_password")}
                   />
                 </Field>

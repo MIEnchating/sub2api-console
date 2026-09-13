@@ -1,4 +1,5 @@
 import { ContentRetry } from "@/components/content-retry";
+import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -107,14 +108,7 @@ function Field(props: { label: string; htmlFor?: string; error?: string; childre
         <span className="font-medium">{props.label}</span>
       )}
       {props.children}
-      {props.error ? (
-        <span
-          id={props.htmlFor ? `${props.htmlFor}-error` : undefined}
-          className="text-destructive text-xs"
-        >
-          {props.error}
-        </span>
-      ) : null}
+      <FieldError id={props.htmlFor ? `${props.htmlFor}-error` : undefined} message={props.error} />
     </div>
   );
 }

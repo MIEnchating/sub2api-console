@@ -101,6 +101,7 @@ type Service struct {
 	profileRepository configurationRepository
 	taskRunner        taskrunner.Runner
 	taskTimeout       time.Duration
+	animation         animationState
 }
 
 func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, keys KeyRevealer) (*Service, error) {
@@ -138,6 +139,9 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 			service.configuration = state
 			service.claudeProfiles, service.solProfile = activeClaude, activeSol
 		}
+	}
+	if err := service.loadAnimationConfiguration(context.Background()); err != nil {
+		return nil, err
 	}
 	return service, nil
 }
@@ -259,34 +263,39 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	if request.TimeoutSeconds < 5 || request.TimeoutSeconds > 120 {
 		return preparedRun{}, errors.New("单次请求超时必须在 5 到 120 秒之间")
 	}
-	rows, err := s.accounts.Accounts(ctx)
+	selected, err := s.selectCheckAccounts(ctx, request.AccountIDs)
 	if err != nil {
-		return preparedRun{}, errors.New("账号列表读取失败")
-	}
-	byID := make(map[string]business.AccountStatus, len(rows))
-	for _, row := range rows {
-		byID[row.ID] = row
-	}
-	selected := make([]selectedAccount, 0, len(request.AccountIDs))
-	for _, accountID := range request.AccountIDs {
-		row, found := byID[accountID]
-		if !found {
-			return preparedRun{}, fmt.Errorf("账号 %s 不存在", accountID)
-		}
-		if row.ManualPriority != nil {
-			return preparedRun{}, fmt.Errorf("账号 %s 处于人工优先位，模型检测已禁用", accountID)
-		}
-		detail, detailErr := s.accounts.Account(ctx, accountID)
-		if detailErr != nil {
-			return preparedRun{}, fmt.Errorf("账号 %s 详情读取失败", accountID)
-		}
-		selected = append(selected, directAccountSelection(row, detail))
+		return preparedRun{}, err
 	}
 	return preparedRun{
 		request: request, accounts: selected,
 		claudeProfiles: claudeProfiles, solProfile: solProfile,
 		profileVersion: profileVersion, profileFingerprint: profileFingerprint,
 	}, nil
+}
+
+func (s *Service) selectCheckAccounts(ctx context.Context, accountIDs []string) ([]selectedAccount, error) {
+	rows, err := s.accounts.Accounts(ctx)
+	if err != nil {
+		return nil, errors.New("账号列表读取失败")
+	}
+	byID := make(map[string]business.AccountStatus, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	selected := make([]selectedAccount, 0, len(accountIDs))
+	for _, accountID := range accountIDs {
+		row, found := byID[accountID]
+		if !found {
+			return nil, fmt.Errorf("账号 %s 不存在", accountID)
+		}
+		detail, detailErr := s.accounts.Account(ctx, accountID)
+		if detailErr != nil {
+			return nil, fmt.Errorf("账号 %s 详情读取失败", accountID)
+		}
+		selected = append(selected, directAccountSelection(row, detail))
+	}
+	return selected, nil
 }
 
 func (s *Service) checkerForModel(model string) string {
@@ -511,9 +520,6 @@ func (s *Service) acquirePreparedAccounts(
 		}
 		if detail == nil {
 			return fail(fmt.Errorf("账号 %s 在模型检测排队后已被删除", queued.ID))
-		}
-		if detail.ManualPriority != nil {
-			return fail(fmt.Errorf("账号 %s 在模型检测排队后进入人工优先位，检测已取消", queued.ID))
 		}
 		if current := directAccountSelection(detail.AccountStatus, detail); current != queued {
 			return fail(fmt.Errorf("账号 %s 在模型检测排队后配置或 Key 绑定已变化，请重新提交", queued.ID))

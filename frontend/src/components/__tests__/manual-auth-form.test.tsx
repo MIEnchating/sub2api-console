@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -49,17 +50,16 @@ describe("manual upstream authentication form", () => {
   });
 
   it("uses the dialog as the only scroll container for long headers", () => {
-    const markup = renderToStaticMarkup(
-      <ManualAuthHeadersEditor value="long-token" onChange={() => undefined} />,
+    render(<ManualAuthHeadersEditor value="long-token" onChange={() => undefined} />);
+    const headers = screen.getByRole("textbox", { name: "Headers JSON" });
+    expect(headers).toHaveAttribute("wrap", "soft");
+    expect(headers).toHaveClass(
+      "max-h-none",
+      "overflow-hidden",
+      "resize-none",
+      "[overflow-wrap:anywhere]",
     );
-
-    expect(markup).toContain('wrap="soft"');
-    expect(markup).toContain("max-h-none");
-    expect(markup).toContain("overflow-hidden");
-    expect(markup).toContain("resize-none");
-    expect(markup).toContain("[overflow-wrap:anywhere]");
-    expect(markup).not.toContain("max-h-96");
-    expect(markup).not.toContain("overflow-y-auto");
+    expect(headers).not.toHaveClass("max-h-96", "overflow-y-auto");
   });
 
   it("requires an unchecked explicit consent control before accepting an upstream agreement", () => {

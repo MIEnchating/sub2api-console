@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { FieldError } from "@/components/field-error";
 
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -67,11 +68,7 @@ export function NumberRangeFilter(props: NumberRangeFilterProps) {
           className={cn("w-28", props.inputClassName)}
         />
       </div>
-      {props.error ? (
-        <span id={errorID} role="alert" className="text-destructive text-xs">
-          {props.error}
-        </span>
-      ) : null}
+      {"error" in props && <FieldError id={errorID} message={props.error} />}
     </div>
   );
 }

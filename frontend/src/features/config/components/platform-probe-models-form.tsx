@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { FieldError } from "@/components/field-error";
 import { Save } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
@@ -77,7 +78,7 @@ export function PlatformProbeModelsForm(props: {
                 placeholder="留空则自动选择"
                 {...form.register(platform.value)}
               />
-              {error ? <span className="text-destructive text-xs">{error}</span> : null}
+              <FieldError message={error} />
             </label>
           );
         })}

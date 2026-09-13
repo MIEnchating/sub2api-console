@@ -1,4 +1,5 @@
 import type { ReactElement } from "react";
+import { FieldError } from "@/components/field-error";
 import { Plus, SlidersHorizontal, Trash2 } from "lucide-react";
 import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
 import { FieldLabel } from "@/components/field-help-tooltip";
@@ -78,19 +79,18 @@ export function ThresholdSettings(props: {
                     <Trash2 size={15} />
                   </Button>
                 </div>
-                {form.formState.errors.balance_thresholds?.[index]?.value && (
-                  <p className="text-destructive mt-1 text-xs">
-                    {form.formState.errors.balance_thresholds[index]?.value?.message}
-                  </p>
-                )}
+                <FieldError
+                  floating
+                  message={
+                    form.formState.errors.balance_thresholds?.[index]?.value?.message ??
+                    (index === 0
+                      ? form.formState.errors.balance_thresholds?.root?.message
+                      : undefined)
+                  }
+                />
               </div>
             ))}
           </div>
-          {form.formState.errors.balance_thresholds?.root && (
-            <p className="text-destructive mt-1 text-xs">
-              {form.formState.errors.balance_thresholds.root.message}
-            </p>
-          )}
         </div>
         <div>
           <FieldLabel
@@ -107,11 +107,7 @@ export function ThresholdSettings(props: {
             disabled={!enabled || !probeEnabled}
             {...form.register("probe_failure_streak", { valueAsNumber: true })}
           />
-          {form.formState.errors.probe_failure_streak && (
-            <p className="text-destructive mt-1 text-xs">
-              {form.formState.errors.probe_failure_streak.message}
-            </p>
-          )}
+          <FieldError floating message={form.formState.errors.probe_failure_streak?.message} />
         </div>
         <div>
           <FieldLabel
@@ -128,11 +124,7 @@ export function ThresholdSettings(props: {
             disabled={!enabled || !probeEnabled}
             {...form.register("probe_recovery_streak", { valueAsNumber: true })}
           />
-          {form.formState.errors.probe_recovery_streak && (
-            <p className="text-destructive mt-1 text-xs">
-              {form.formState.errors.probe_recovery_streak.message}
-            </p>
-          )}
+          <FieldError floating message={form.formState.errors.probe_recovery_streak?.message} />
         </div>
         <div className="sm:col-span-2">
           <FieldLabel
