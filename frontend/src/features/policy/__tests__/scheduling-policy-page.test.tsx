@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import type { ReactElement } from "react";
 
 import {
   navItems,
@@ -133,6 +134,14 @@ function renderPolicyPage(snapshot: PolicySnapshot = policy) {
   );
 }
 
+function renderPolicyStatic(element: ReactElement) {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(["dictionaries", "platform"], { items: [] });
+  return renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>{element}</QueryClientProvider>,
+  );
+}
+
 function renderOperationsSection(
   section: "routing" | "health" | "sampling",
   snapshot: PolicySnapshot = policy,
@@ -239,7 +248,7 @@ describe("调度策略入口", () => {
     delete legacy.advanced_policy.account_rate_sync;
 
     const markup = renderPolicyPage(legacy);
-    const schedule = renderToStaticMarkup(
+    const schedule = renderPolicyStatic(
       <PolicyInspectionSchedule value={policyDraft(legacy)} onChange={() => undefined} />,
     );
 
@@ -257,7 +266,7 @@ describe("调度策略入口", () => {
       },
     } satisfies PolicySnapshot;
     const cleared = policyDraft(clearedSnapshot);
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyInspectionSchedule value={cleared} onChange={() => undefined} />,
     );
     const pageMarkup = renderPolicyPage(clearedSnapshot);
@@ -321,10 +330,10 @@ describe("调度策略入口", () => {
     const routing = renderOperationsSection("routing");
     const health = renderOperationsSection("health");
     const sampling = renderOperationsSection("sampling");
-    const rules = renderToStaticMarkup(
+    const rules = renderPolicyStatic(
       <PolicyRulesEditor value={policyDraft(policy)} onChange={() => undefined} />,
     );
-    const scope = renderToStaticMarkup(
+    const scope = renderPolicyStatic(
       <PolicyScopeLayout
         value={policyDraft(policy)}
         onChange={() => undefined}
@@ -351,7 +360,7 @@ describe("调度策略入口", () => {
   it("加载完整策略前显示稳定页面骨架", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(["config"], config);
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <QueryClientProvider client={queryClient}>
         <PolicyPage />
       </QueryClientProvider>,
@@ -367,7 +376,7 @@ describe("调度策略入口", () => {
     const routing = renderOperationsSection("routing");
     const health = renderOperationsSection("health");
     const sampling = renderOperationsSection("sampling");
-    const inspectionIntervals = renderToStaticMarkup(
+    const inspectionIntervals = renderPolicyStatic(
       <PolicyInspectionSchedule value={policyDraft(policy)} onChange={() => undefined} />,
     );
     const global = policySection(markup, "全局默认策略", "自动执行范围");
@@ -572,7 +581,7 @@ describe("调度策略入口", () => {
         },
       },
     });
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyRulesEditor value={value} onChange={() => undefined} />,
     );
 
@@ -589,7 +598,7 @@ describe("调度策略入口", () => {
   });
 
   it("守护范围使用可搜索选项并提供交还控制权", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyScopeEditor
         value={policyDraft(policy)}
         onChange={() => undefined}
@@ -632,7 +641,7 @@ describe("调度策略入口", () => {
         },
       },
     });
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyScopeEditor
         value={configured}
         onChange={() => undefined}
@@ -657,7 +666,7 @@ describe("调度策略入口", () => {
 
   it("关闭全部分组后按稳定 ID 展示并保存可选分组", () => {
     const selected = withManagedGroupScope(policyDraft(policy), "selected", ["6"]);
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyScopeEditor
         value={selected}
         onChange={() => undefined}
@@ -679,7 +688,7 @@ describe("调度策略入口", () => {
   });
 
   it("账号托管默认开启并说明人工优先级例外", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyScopeEditor
         value={policyDraft(policy)}
         onChange={() => undefined}
@@ -700,7 +709,7 @@ describe("调度策略入口", () => {
   });
 
   it("守护范围在宽屏保持同排卡片等高并让账号操作占满整行", () => {
-    const markup = renderToStaticMarkup(
+    const markup = renderPolicyStatic(
       <PolicyScopeLayout
         value={policyDraft(policy)}
         onChange={() => undefined}

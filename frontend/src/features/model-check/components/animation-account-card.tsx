@@ -12,6 +12,7 @@ import { AnimationAccountResult } from "./animation-account-result";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 
@@ -59,9 +60,14 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
             onCheckedChange={(checked) => props.onToggle(props.account.id, checked)}
             aria-label={`检测 ${props.account.name}`}
           />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium" title={props.account.name}>
-            {props.account.name}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="min-w-0 flex-1 truncate text-sm font-medium" />}
+            >
+              {props.account.name}
+            </TooltipTrigger>
+            <TooltipContent>{props.account.name}</TooltipContent>
+          </Tooltip>
           <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
         </label>
         <div className="flex min-w-0 items-center gap-1.5">
@@ -69,16 +75,21 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           {props.account.manual_priority != null ? (
             <Badge variant="secondary">人工优先</Badge>
           ) : null}
-          <span className="min-w-0 truncate text-xs text-muted-foreground" title={groups}>
-            {groups}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className="min-w-0 truncate text-xs text-muted-foreground" />}
+            >
+              {groups}
+            </TooltipTrigger>
+            <TooltipContent>{groups || "未加入分组"}</TooltipContent>
+          </Tooltip>
         </div>
-        <p
-          className="truncate text-xs text-muted-foreground"
-          title={props.account.upstream_host ?? undefined}
-        >
-          {props.account.upstream_host || "未配置 Host"}
-        </p>
+        <Tooltip>
+          <TooltipTrigger render={<p className="truncate text-xs text-muted-foreground" />}>
+            {props.account.upstream_host || "未配置 Host"}
+          </TooltipTrigger>
+          <TooltipContent>{props.account.upstream_host || "未配置 Host"}</TooltipContent>
+        </Tooltip>
       </header>
       <div className="min-h-0 flex-1 px-3 pb-2">
         {props.result ? (
@@ -97,27 +108,39 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
         )}
       </div>
       <footer className="flex h-11 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3">
-        <p
-          role={running && props.result ? "status" : undefined}
-          className={cn(
-            "min-w-0 truncate text-xs text-muted-foreground",
-            props.schedule?.last_error && "text-destructive",
-          )}
-          title={scheduleLabel}
-        >
-          {scheduleLabel}
-        </p>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="自动检测设置"
-          title="自动检测设置"
-          disabled={!props.schedulesReady || unavailable}
-          onClick={() => props.onSchedule(props.account)}
-        >
-          <Settings2 aria-hidden="true" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <p
+                role={running && props.result ? "status" : undefined}
+                className={cn(
+                  "min-w-0 truncate text-xs text-muted-foreground",
+                  props.schedule?.last_error && "text-destructive",
+                )}
+              />
+            }
+          >
+            {scheduleLabel}
+          </TooltipTrigger>
+          <TooltipContent>{scheduleLabel}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="自动检测设置"
+                disabled={!props.schedulesReady || unavailable}
+                onClick={() => props.onSchedule(props.account)}
+              />
+            }
+          >
+            <Settings2 aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>自动检测设置</TooltipContent>
+        </Tooltip>
       </footer>
     </article>
   );
@@ -131,15 +154,8 @@ function AnimationCardState(props: {
   if (props.activity) {
     let label = "生成中，等待动画结果";
     if (props.activity.status === "starting") label = "正在启动检测";
-    else if (props.activity.batchSize && props.activity.completed !== undefined)
-      label = `生成中，已完成 ${props.activity.completed}/${props.activity.batchSize} 个账号`;
     return (
-      <ContentLoading
-        compact
-        label={label}
-        ariaLabel="生成中，等待动画结果"
-        className="h-full justify-center"
-      />
+      <ContentLoading compact label={label} ariaLabel={label} className="h-full justify-center" />
     );
   }
   if (props.status === "queued" || props.status === "running" || props.status === "waiting_input")

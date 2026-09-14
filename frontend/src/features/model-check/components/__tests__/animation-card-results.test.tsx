@@ -11,7 +11,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup(task: Task, previous?: Task): () => void {
+function setup(
+  task: Task,
+  previous?: Task,
+): { dispose: () => void; client: ReturnType<typeof createConsoleQueryClient> } {
   const client = createConsoleQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   client.setQueryData(
@@ -31,9 +34,12 @@ function setup(task: Task, previous?: Task): () => void {
       <AnimationCheckPanel />
     </QueryClientProvider>,
   );
-  return () => {
-    view.unmount();
-    client.clear();
+  return {
+    dispose: () => {
+      view.unmount();
+      client.clear();
+    },
+    client,
   };
 }
 const task: Task = {
@@ -77,7 +83,7 @@ const task: Task = {
 };
 
 it("检测结果顺序与账号不同，仍在对应账号卡片中展示动画或失败原因", () => {
-  const dispose = setup(task);
+  const { dispose } = setup(task);
   const cards = screen.getAllByRole("article");
   const first = cards.find((card) =>
     within(card).queryByRole("checkbox", { name: /检测 甲账号/ }),
@@ -93,7 +99,7 @@ it("检测结果顺序与账号不同，仍在对应账号卡片中展示动画�
 });
 
 it("已有结果自动展示且不提供历史切换，无记录账号显示待检测引导", () => {
-  const dispose = setup(task);
+  const { dispose } = setup(task);
   expect(screen.queryByRole("button", { name: "仅看本次检测" })).not.toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "最近检测任务" })).not.toBeInTheDocument();
   expect(screen.queryByText(/匹配.*个账号/)).not.toBeInTheDocument();
@@ -106,7 +112,7 @@ it("已有结果自动展示且不提供历史切换，无记录账号显示待�
 });
 
 it("搜索和操作分行，开始检测位于顶部，分页独立于卡片滚动区域", () => {
-  const dispose = setup(task);
+  const { dispose } = setup(task);
   const filters = screen.getByRole("group", { name: "动画账号筛选" });
   const operations = screen.getByRole("group", { name: "动画检测操作" });
   expect(
@@ -122,11 +128,11 @@ it("搜索和操作分行，开始检测位于顶部，分页独立于卡片滚�
 });
 
 it.each([
-  ["running", "正在检测，等待动画结果"],
+  ["running", "生成中，等待动画结果"],
   ["cancelled", "检测已取消，未返回动画"],
   ["failed", "本次检测未返回动画"],
 ] as const)("任务为 %s 且账号未返回结果时，仅任务内卡片展示对应状态", (status, label) => {
-  const dispose = setup({ ...task, status, result: { ...task.result, animations: [] } });
+  const { dispose } = setup({ ...task, status, result: { ...task.result, animations: [] } });
   const first = screen.getByRole("article", { name: "账号 甲账号" });
   const unrelated = screen.getByRole("article", { name: "账号 丙账号" });
   expect(within(first).getByText(label)).toBeVisible();
@@ -167,7 +173,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
       ],
     },
   };
-  const dispose = setup(task, previous);
+  const { dispose } = setup(task, previous);
   expect(screen.queryByText("outdated-model")).not.toBeInTheDocument();
   expect(screen.getByText("previous-model")).toBeVisible();
   expect(screen.getByRole("img", { name: /甲账号生成/ })).toBeVisible();
@@ -181,7 +187,7 @@ it("较旧任务补充其他账号结果，同一账号保留最新结果", () =
 });
 
 it.each([0, 50])("任务进度为 %s 时仅卡片显示检测状态，取消入口留在操作行", (progress) => {
-  const dispose = setup({
+  const { dispose } = setup({
     ...task,
     status: "running",
     progress,
@@ -194,9 +200,7 @@ it.each([0, 50])("任务进度为 %s 时仅卡片显示检测状态，取消入�
   expect(within(settings).queryByRole("progressbar")).not.toBeInTheDocument();
   expect(within(operations).getByRole("button", { name: "取消任务" })).toBeEnabled();
   expect(
-    within(screen.getByRole("article", { name: "账号 甲账号" })).getByText(
-      "正在检测，等待动画结果",
-    ),
+    within(screen.getByRole("article", { name: "账号 甲账号" })).getByText("生成中，等待动画结果"),
   ).toBeVisible();
   dispose();
 });
@@ -213,7 +217,7 @@ it("在操作行取消动画任务后恢复开始检测入口", async () => {
     return Response.json(cancelled);
   });
   vi.stubGlobal("fetch", fetch);
-  const dispose = setup({
+  const { dispose } = setup({
     ...task,
     status: "running",
     progress: 0,
@@ -245,9 +249,13 @@ it("检测记录读取失败时在操作行提供重试，恢复后保留卡片�
       return Response.json([task]);
     }),
   );
-  const dispose = setup(task);
+  const { dispose, client } = setup(task);
   const operations = screen.getByRole("group", { name: "动画检测操作" });
   const preview = screen.getByRole("img", { name: /甲账号生成/ });
+  await client.invalidateQueries({
+    queryKey: ["model-animation", "history"],
+    refetchType: "active",
+  });
   const retry = await within(operations).findByRole("button", { name: "重新读取检测记录" });
   failed = false;
   fireEvent.click(retry);

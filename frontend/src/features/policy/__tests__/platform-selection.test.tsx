@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { PolicyScopeEditor, policyDraft } from "@/App";
@@ -24,15 +25,18 @@ afterEach(() => {
 
 function renderScope(accounts: AccountStatus[] = [], platforms: string[] = []) {
   const onChange = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
-    <PolicyScopeEditor
-      value={policyDraft({ ...policy, advanced_policy: { scope: { platforms } } })}
-      onChange={onChange}
-      groups={[]}
-      accounts={accounts}
-      onRestoreControl={() => undefined}
-      restorePending={false}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <PolicyScopeEditor
+        value={policyDraft({ ...policy, advanced_policy: { scope: { platforms } } })}
+        onChange={onChange}
+        groups={[]}
+        accounts={accounts}
+        onRestoreControl={() => undefined}
+        restorePending={false}
+      />
+    </QueryClientProvider>,
   );
   return onChange;
 }

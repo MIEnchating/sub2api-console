@@ -7,9 +7,10 @@ import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { animationSchema, type AnimationForm } from "../lib/animation-schema";
 import { AnimationSelection } from "./animation-selection";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AnimationScheduleDialog } from "./animation-schedule-dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
   const tasks = useAnimationTasks(props.active);
@@ -65,19 +66,39 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
           busyIDs={tasks.busyIDs}
           onRetry={retry}
           taskRetry={
-            tasks.historyError ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label="重新读取检测记录"
-                title="重新读取检测记录"
-                disabled={tasks.retryingHistory}
-                onClick={tasks.retryHistory}
-              >
-                <RefreshCw aria-hidden="true" />
-              </Button>
-            ) : null
+            <>
+              {tasks.historyError ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        aria-label="重新读取检测记录"
+                        disabled={tasks.retryingHistory}
+                        onClick={tasks.retryHistory}
+                      />
+                    }
+                  >
+                    <RefreshCw aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipContent>重新读取检测记录</TooltipContent>
+                </Tooltip>
+              ) : null}
+              {tasks.activeTaskIDs.size > 0 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label="取消任务"
+                  disabled={tasks.cancelling}
+                  onClick={() => void tasks.cancelActive()}
+                >
+                  <X aria-hidden="true" />
+                  取消任务
+                </Button>
+              ) : null}
+            </>
           }
           form={form}
           accounts={accounts}

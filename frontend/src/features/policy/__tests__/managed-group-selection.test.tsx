@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -29,28 +30,32 @@ function ManagedGroups(props: { selected: string[]; onChange: (value: Draft) => 
     },
   });
   return (
-    <PolicyScopeEditor
-      value={draft}
-      onChange={(value) => {
-        setDraft(value);
-        props.onChange(value);
-      }}
-      groups={[
-        {
-          id: "6",
-          name: "主力组",
-          platforms: ["openai"],
-          strategy: "balanced",
-          strategy_source: "global_default",
-          participation_status: "participating",
-          participation_reason: null,
-          account_count: 1,
-        },
-      ]}
-      accounts={[]}
-      onRestoreControl={() => undefined}
-      restorePending={false}
-    />
+    <QueryClientProvider
+      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+    >
+      <PolicyScopeEditor
+        value={draft}
+        onChange={(value) => {
+          setDraft(value);
+          props.onChange(value);
+        }}
+        groups={[
+          {
+            id: "6",
+            name: "主力组",
+            platforms: ["openai"],
+            strategy: "balanced",
+            strategy_source: "global_default",
+            participation_status: "participating",
+            participation_reason: null,
+            account_count: 1,
+          },
+        ]}
+        accounts={[]}
+        onRestoreControl={() => undefined}
+        restorePending={false}
+      />
+    </QueryClientProvider>
   );
 }
 

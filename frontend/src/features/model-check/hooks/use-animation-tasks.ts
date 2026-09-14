@@ -13,6 +13,7 @@ export function useAnimationTasks(active = true) {
   const history = useQuery({
     queryKey: ["model-animation", "history"],
     queryFn: api.animationHistory,
+    refetchOnMount: (query) => (query.state.data === undefined ? "always" : false),
     refetchInterval: active ? 15_000 : false,
   });
   const ids = useMemo(
@@ -40,6 +41,15 @@ export function useAnimationTasks(active = true) {
       void client.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (error) => notifyOperationError(error, "动画检测启动失败"),
+  });
+  const cancel = useMutation({
+    mutationFn: api.cancelTask,
+    onSuccess: (_result, taskID) => {
+      void client.invalidateQueries({ queryKey: ["model-animation", "task", taskID] });
+      void client.invalidateQueries({ queryKey: ["model-animation", "history"] });
+      void client.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    onError: (error) => notifyOperationError(error, "动画检测取消失败"),
   });
   const mutateAsync = run.mutateAsync;
   const start = useCallback(
@@ -70,6 +80,10 @@ export function useAnimationTasks(active = true) {
     },
     [client, ids, mutateAsync],
   );
+  const cancelActive = useCallback(async (): Promise<void> => {
+    const taskIDs = [...state.activeTaskIDs];
+    await Promise.all(taskIDs.map((taskID) => cancel.mutateAsync(taskID).catch(() => undefined)));
+  }, [cancel, state.activeTaskIDs]);
   return {
     ...state,
     start,
@@ -79,6 +93,8 @@ export function useAnimationTasks(active = true) {
       if (history.isError) void history.refetch();
       for (const query of queries) if (query.isError) void query.refetch();
     },
+    cancelActive,
+    cancelling: cancel.isPending,
   };
 }
 

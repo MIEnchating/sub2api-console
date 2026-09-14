@@ -1,6 +1,6 @@
 import type { AnimationResult, Task } from "@/api";
 
-export function animationTaskResults(task?: Task): Map<string, AnimationResult> {
+function animationTaskResults(task?: Task): Map<string, AnimationResult> {
   const results = new Map<string, AnimationResult>();
   if (!Array.isArray(task?.result.animations)) return results;
   for (const item of task.result.animations) {
@@ -18,7 +18,7 @@ export function animationTaskResults(task?: Task): Map<string, AnimationResult> 
   return results;
 }
 
-export function animationTaskAccountIDs(task?: Task): Set<string> {
+function animationTaskAccountIDs(task?: Task): Set<string> {
   const ids = new Set(animationTaskResults(task).keys());
   if (Array.isArray(task?.result.account_ids)) {
     for (const id of task.result.account_ids) if (typeof id === "string") ids.add(id);
@@ -43,6 +43,7 @@ export function collectAnimationTasks(tasks: (Task | undefined)[], submitting: S
   const statuses = new Map<string, Task["status"]>();
   const activities = new Map<string, AnimationActivity>();
   const busyIDs = new Set(submitting);
+  const activeTaskIDs = new Set<string>();
   const sorted = tasks
     .filter((task): task is Task => task !== undefined)
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
@@ -57,6 +58,7 @@ export function collectAnimationTasks(tasks: (Task | undefined)[], submitting: S
     for (const id of ids) statuses.set(id, task.status);
     if (task.status !== "queued" && task.status !== "running" && task.status !== "waiting_input")
       continue;
+    activeTaskIDs.add(task.id);
     for (const id of ids) {
       // The backend reserves the batch's accounts until the entire task finishes.
       busyIDs.add(id);
@@ -70,5 +72,5 @@ export function collectAnimationTasks(tasks: (Task | undefined)[], submitting: S
     }
   }
   for (const id of submitting) activities.set(id, { status: "starting" });
-  return { results, statuses, activities, busyIDs };
+  return { results, statuses, activities, busyIDs, activeTaskIDs };
 }

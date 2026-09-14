@@ -2,6 +2,7 @@ import { useQueries } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode, type ReactElement } from "react";
 import { useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
+import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -85,6 +86,13 @@ export function AnimationModelSettings(props: {
                 获取模型
               </Button>
             </div>
+            {state.errors.unified_model ? (
+              <FieldError
+                id="animation-unified-model-error"
+                message={state.errors.unified_model.message}
+                className="mt-1"
+              />
+            ) : null}
             <datalist id="animation-common-models">
               {options.map((model) => (
                 <option key={model} value={model} />

@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { BrowserLoginInput, BrowserLoginSession } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 const browserKeys = new Set([
   "Enter",
@@ -41,7 +42,7 @@ export function BrowserSurface(props: {
           className="relative w-full min-w-160 cursor-crosshair focus-visible:ring-2 focus-visible:ring-ring"
           onClick={(event) => {
             if (props.disabled) return;
-            event.currentTarget.focus();
+            focusWithoutScroll(event.currentTarget);
             const rect = event.currentTarget.getBoundingClientRect();
             send({
               kind: "click",

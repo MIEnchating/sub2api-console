@@ -98,7 +98,7 @@ it("选择多个账号和统一模型后先展示影响范围，再按稳定 ID 
   ).toBeEnabled();
   expect(
     within(screen.getByRole("article", { name: "账号 甲账号" })).getByRole("status", {
-      name: "正在检测，等待动画结果",
+      name: "生成中，等待动画结果",
     }),
   ).toBeVisible();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();

@@ -3,6 +3,7 @@ import type { AnimationResult, AnimationTarget } from "@/api";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { AnimationPreview } from "./animation-preview";
 
@@ -61,9 +62,12 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
         )}
       </div>
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs">
-        <p className="min-w-0 truncate font-medium" title={modelLabel}>
-          {modelLabel}
-        </p>
+        <Tooltip>
+          <TooltipTrigger render={<p className="min-w-0 truncate font-medium" />}>
+            {modelLabel}
+          </TooltipTrigger>
+          <TooltipContent>{modelLabel}</TooltipContent>
+        </Tooltip>
         <span
           className={cn(
             "shrink-0",
@@ -75,20 +79,23 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
           {resultStatusLabels[result.status]}
         </span>
       </div>
-      <p
-        className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
-        title={`请求 ID：${result.request_id}`}
-      >
-        请求 ID：{result.request_id}
-      </p>
-      <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
-        <time
-          className="min-w-0 truncate"
-          dateTime={result.completed_at}
-          title={`完成于 ${completedAt.toLocaleString("zh-CN")}`}
+      <Tooltip>
+        <TooltipTrigger
+          render={<p className="min-w-0 truncate font-mono text-[11px] text-muted-foreground" />}
         >
-          {compactTimeFormat.format(completedAt)}
-        </time>
+          请求 ID：{result.request_id}
+        </TooltipTrigger>
+        <TooltipContent>请求 ID：{result.request_id}</TooltipContent>
+      </Tooltip>
+      <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
+        <Tooltip>
+          <TooltipTrigger
+            render={<time className="min-w-0 truncate" dateTime={result.completed_at} />}
+          >
+            {compactTimeFormat.format(completedAt)}
+          </TooltipTrigger>
+          <TooltipContent>完成于 {completedAt.toLocaleString("zh-CN")}</TooltipContent>
+        </Tooltip>
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
       </div>
     </div>

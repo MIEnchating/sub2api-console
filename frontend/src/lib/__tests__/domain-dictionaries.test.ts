@@ -3,6 +3,7 @@ import {
   dictionaryLabel,
   groupStatusDictionary,
   orderedDictionaryOptions,
+  runtimeStatusDictionary,
   schedulingStrategyDictionary,
   taskStatusDictionary,
 } from "../domain-dictionaries";
@@ -15,6 +16,10 @@ describe("领域字典", () => {
 
   it("保留状态字典的展示色调", () => {
     expect(groupStatusDictionary.rate_limited).toEqual({ label: "限流中", tone: "warning" });
+  });
+
+  it("提供运行状态的统一展示名", () => {
+    expect(runtimeStatusDictionary.running).toBe("运行中");
   });
 
   it("未知或空值使用稳定回退文案", () => {

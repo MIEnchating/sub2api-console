@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { cn } from "@/lib/utils";
+import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 export type ModelCheckSelectionProps = {
   accounts: AccountStatus[];
@@ -221,7 +222,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
               className="text-muted-foreground hover:text-foreground absolute top-1/2 right-1 size-7 -translate-y-1/2"
               onClick={() => {
                 props.onAccountQueryChange("");
-                searchInputRef.current?.focus();
+                focusWithoutScroll(searchInputRef.current);
               }}
               aria-label="清除搜索"
             >

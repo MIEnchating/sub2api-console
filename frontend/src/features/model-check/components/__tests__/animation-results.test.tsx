@@ -84,5 +84,5 @@ it("动画在模型和时间之前展示，紧凑时间保留完整时间提示"
   expect(preview.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   const time = screen.getByText("09/13 00:00");
   expect(time).toHaveAttribute("datetime", result.completed_at);
-  expect(time).toHaveAttribute("title", expect.stringContaining("2026"));
+  expect(time).not.toHaveAttribute("title");
 });
