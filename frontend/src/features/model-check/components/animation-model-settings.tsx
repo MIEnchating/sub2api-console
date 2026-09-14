@@ -6,6 +6,7 @@ import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { LoaderCircle, RefreshCw } from "lucide-react";
 import type { AnimationForm } from "../lib/animation-schema";
 
 export function AnimationModelSettings(props: {
@@ -73,6 +74,8 @@ export function AnimationModelSettings(props: {
               <Button
                 type="button"
                 variant="outline"
+                aria-label="获取模型"
+                aria-busy={loading}
                 disabled={props.pending || !selected.length || loading}
                 onClick={() => {
                   if (!selected.length) {
@@ -83,6 +86,13 @@ export function AnimationModelSettings(props: {
                   if (requested) void Promise.all(queries.map((query) => query.refetch()));
                 }}
               >
+                {loading ? (
+                  <span role="status" aria-label="正在读取共同模型">
+                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  </span>
+                ) : (
+                  <RefreshCw aria-hidden="true" />
+                )}
                 获取模型
               </Button>
             </div>
@@ -90,7 +100,7 @@ export function AnimationModelSettings(props: {
               <FieldError
                 id="animation-unified-model-error"
                 message={state.errors.unified_model.message}
-                className="mt-1"
+                className="w-40"
               />
             ) : null}
             <datalist id="animation-common-models">

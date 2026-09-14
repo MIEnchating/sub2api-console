@@ -102,7 +102,7 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   });
   await expect(dialog.getByRole("article")).toHaveCount(1);
   await expect(accountCard.getByRole("checkbox", { name: /检测 动画检测/ })).toBeChecked();
-  await expect(accountCard.getByText("正在检测，等待动画结果", { exact: true })).toBeVisible();
+  await expect(accountCard.getByText("生成中，等待动画结果", { exact: true })).toBeVisible();
   const operations = settings.getByRole("group", { name: "动画检测操作" });
   await expect(operations.getByRole("button", { name: "取消任务", exact: true })).toBeInViewport({
     ratio: 1,
@@ -125,7 +125,8 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   expect((await region.boundingBox())!.y).toBe(regionTop);
   await expect(accountCard).toHaveCSS("height", "360px");
   await expect(accountCard.getByRole("button", { name: /收起动画|重新展示动画/ })).toHaveCount(0);
-  expect((await image.boundingBox())!.height).toBeGreaterThanOrEqual(180);
+  const previewButton = accountCard.getByRole("button", { name: /放大查看/ });
+  expect((await image.boundingBox())!.height).toBe((await previewButton.boundingBox())!.height);
   await expect(accountCard.locator("footer")).toHaveCSS("height", "44px");
   await expect(image).toHaveJSProperty("complete", true);
   expect(await image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(

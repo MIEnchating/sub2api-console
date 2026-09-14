@@ -115,10 +115,10 @@ test("动画检测校验、账号计数和模型读取状态变化时列表与�
   const startBox = await start.boundingBox();
   await first.check();
   await first.uncheck();
-  await expect(page.getByText("请选择至少一个账号", { exact: true })).toBeVisible();
+  await expect(start).toBeDisabled();
   expect(await region.boundingBox()).toEqual(regionBox);
   await first.check();
-  await expect(page.getByText("请选择至少一个账号", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /开始检测/ })).toBeEnabled();
   await start.click();
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveAttribute(
     "aria-invalid",
@@ -130,7 +130,9 @@ test("动画检测校验、账号计数和模型读取状态变化时列表与�
   await expect(page.getByRole("status", { name: "正在读取共同模型" })).toBeVisible();
   expect(await region.boundingBox()).toEqual(regionBox);
   releaseModels();
-  await expect(page.getByText(/没有共同模型，可以手动输入/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "获取模型", exact: true })).toBeEnabled();
+  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("fixture-model");
+  await expect(page.locator("#animation-common-models option")).toHaveCount(0);
   expect(await region.boundingBox()).toEqual(regionBox);
   await page.getByRole("button", { name: "选择前 20 个账号" }).click();
   await expect(start).toHaveText("开始检测（20 个账号）");

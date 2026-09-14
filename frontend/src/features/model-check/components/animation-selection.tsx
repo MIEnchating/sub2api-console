@@ -178,7 +178,7 @@ export function AnimationSelection(props: {
         {props.accounts.isSuccess && filtered.length === 0 ? (
           <p className="text-muted-foreground text-sm">没有匹配的账号</p>
         ) : null}
-        <div className="grid items-start gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid items-start gap-3 md:grid-cols-2 lg:grid-cols-4">
           {pagination.visibleItems.map((account) => (
             <AnimationAccountCard
               key={account.id}

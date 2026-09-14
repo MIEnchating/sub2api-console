@@ -365,7 +365,7 @@ func usageField(row, extra map[string]any, names ...string) *string {
 	return nil
 }
 func usageAvailable(row, extra map[string]any) bool {
-	return usageField(row, extra, "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "cache_read_tokens", "cache_creation_tokens", "cache_write_tokens") != nil
+	return usageField(row, extra, "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "cache_read_tokens", "cache_read_input_tokens", "cache_creation_tokens", "cache_write_tokens") != nil
 }
 
 func groupName(row map[string]any, detail *business.AccountDetail) *string {

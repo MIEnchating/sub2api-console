@@ -31,7 +31,7 @@ export function FieldError(props: {
       id={props.id}
       data-slot="field-error"
       className={cn(
-        "text-destructive block h-8 min-h-8 min-w-0 shrink-0 overflow-y-auto overscroll-contain text-xs leading-4 font-normal wrap-anywhere focus-visible:outline-2 focus-visible:outline-offset-2",
+        "text-destructive block h-8 min-h-8 min-w-0 shrink-0 overflow-y-auto text-xs leading-4 font-normal wrap-anywhere focus-visible:outline-2 focus-visible:outline-offset-2",
         props.className,
       )}
       role={props.message ? "alert" : undefined}

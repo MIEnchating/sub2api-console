@@ -107,7 +107,7 @@ test("设置分类在键盘切换前后保持统一按钮高度", async ({ page 
   const connection = tabs.getByRole("tab", { name: "连接设置" });
   await connection.focus();
   await connection.press("End");
-  const selected = tabs.getByRole("tab", { name: "界面与日志" });
+  const selected = tabs.getByRole("tab", { name: "字典管理" });
   await expect(selected).toHaveAttribute("aria-selected", "true");
   await expect(selected).toBeFocused();
   await expect(selected).toHaveCSS("height", "32px");

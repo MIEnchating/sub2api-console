@@ -83,6 +83,15 @@ func TestUsageRecordPreservesTokenUsageAndAvailability(t *testing.T) {
 	}
 }
 
+func TestCacheOnlyUsageAliasIsAvailable(t *testing.T) {
+	row := map[string]any{"request_id": "cache-only", "cache_read_input_tokens": 4}
+	for _, record := range []business.UsageRecord{usageRecord(1, row, nil, nil), systemLogRecord(1, row, nil, nil)} {
+		if !record.UsageAvailable || record.CacheReadTokens == nil || *record.CacheReadTokens != "4" {
+			t.Fatalf("cache-only record=%#v", record)
+		}
+	}
+}
+
 func TestRequestTraceFallsBackToIndexedSystemLogs(t *testing.T) {
 	paths := []string{}
 	var systemLogWindow time.Duration

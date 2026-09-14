@@ -24,7 +24,7 @@ export function MonitorBasicsForm(props: {
   const type = form.watch("type");
   return (
     <MonitorFormSection title="基本信息">
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid items-start gap-3 sm:grid-cols-2">
         <FormField
           htmlFor="kuma-monitor-name"
           label={type === "group" ? "分组名称" : "监控项名称"}

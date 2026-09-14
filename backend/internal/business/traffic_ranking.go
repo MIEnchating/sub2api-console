@@ -65,17 +65,21 @@ type TrafficRankingRow struct {
 }
 
 type trafficRankingAccumulator struct {
-	row              TrafficRankingRow
-	latencies        latencySampleMaxHeap
-	latencySum       float64
-	latencyCount     int
-	activeBuckets    map[string]struct{}
-	latest           time.Time
-	inputTokens      int64
-	outputTokens     int64
-	cacheReadTokens  int64
-	cacheWriteTokens int64
-	usageAvailable   bool
+	row                TrafficRankingRow
+	latencies          latencySampleMaxHeap
+	latencySum         float64
+	latencyCount       int
+	activeBuckets      map[string]struct{}
+	latest             time.Time
+	inputTokens        int64
+	outputTokens       int64
+	cacheReadTokens    int64
+	cacheWriteTokens   int64
+	usageAvailable     bool
+	inputReported      bool
+	outputReported     bool
+	cacheReadReported  bool
+	cacheWriteReported bool
 }
 
 type latencySample struct {
@@ -266,18 +270,22 @@ func (s *Store) accumulateTrafficRanking(
 			if value, present := trafficToken(payload, "input_tokens", "prompt_tokens"); present {
 				account.inputTokens += value
 				account.usageAvailable = true
+				account.inputReported = true
 			}
 			if value, present := trafficToken(payload, "output_tokens", "completion_tokens"); present {
 				account.outputTokens += value
 				account.usageAvailable = true
+				account.outputReported = true
 			}
 			if value, present := trafficToken(payload, "cache_read_tokens", "cache_read_input_tokens"); present {
 				account.cacheReadTokens += value
 				account.usageAvailable = true
+				account.cacheReadReported = true
 			}
 			if value, present := trafficToken(payload, "cache_creation_tokens", "cache_write_tokens"); present {
 				account.cacheWriteTokens += value
 				account.usageAvailable = true
+				account.cacheWriteReported = true
 			}
 		}
 		if latency == nil {
@@ -307,10 +315,18 @@ func finalizeTrafficRankingAccount(account *trafficRankingAccumulator) {
 		outputTokens := account.outputTokens
 		cacheReadTokens := account.cacheReadTokens
 		cacheWriteTokens := account.cacheWriteTokens
-		account.row.InputTokens = &inputTokens
-		account.row.OutputTokens = &outputTokens
-		account.row.CacheReadTokens = &cacheReadTokens
-		account.row.CacheWriteTokens = &cacheWriteTokens
+		if account.inputReported {
+			account.row.InputTokens = &inputTokens
+		}
+		if account.outputReported {
+			account.row.OutputTokens = &outputTokens
+		}
+		if account.cacheReadReported {
+			account.row.CacheReadTokens = &cacheReadTokens
+		}
+		if account.cacheWriteReported {
+			account.row.CacheWriteTokens = &cacheWriteTokens
+		}
 	}
 	account.row.ActiveBuckets = len(account.activeBuckets)
 	if account.row.Requests > 0 {
