@@ -1,5 +1,6 @@
 import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
-import { ArrowUp, ArrowDown, CirclePlus, Trash2 } from "lucide-react";
+import { ArrowUp, ArrowDown, CirclePlus, GripVertical, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { FormField } from "@/App";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardAction, CardContent } from "@/components/ui/card";
@@ -20,6 +21,7 @@ export function StatusPageForm(props: {
     name: "status_page.groups",
     keyName: "formKey",
   });
+  const [draggingGroup, setDraggingGroup] = useState<number | null>(null);
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -83,9 +85,39 @@ export function StatusPageForm(props: {
         />
       </div>
       {groups.fields.map((group, index) => (
-        <Card size="sm" key={group.formKey}>
+        <Card
+          size="sm"
+          key={group.formKey}
+          draggable={!props.pending}
+          aria-grabbed={draggingGroup === index}
+          onDragStart={(event) => {
+            if (props.pending) return;
+            setDraggingGroup(index);
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", String(index));
+          }}
+          onDragEnd={() => setDraggingGroup(null)}
+          onDragOver={(event) => {
+            if (draggingGroup !== null && draggingGroup !== index) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const source = Number(event.dataTransfer.getData("text/plain"));
+            if (
+              Number.isInteger(source) &&
+              source >= 0 &&
+              source < groups.fields.length &&
+              source !== index
+            )
+              groups.move(source, index);
+            setDraggingGroup(null);
+          }}
+        >
           <CardHeader>
-            <CardTitle>展示分组 {index + 1}</CardTitle>
+            <CardTitle className="flex items-center gap-2">
+              <GripVertical aria-hidden="true" className="text-muted-foreground" />
+              展示分组 {index + 1}
+            </CardTitle>
             <CardAction>
               <Button
                 type="button"

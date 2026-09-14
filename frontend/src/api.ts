@@ -692,7 +692,17 @@ export type GroupStatus = {
   override?: GroupPolicyOverride | null;
 };
 
-export type DictionaryKind = "platform" | "group";
+export type DictionaryKind =
+  | "platform"
+  | "group"
+  | "account_type"
+  | "upstream_type"
+  | "auth_status"
+  | "scheduling_strategy"
+  | "task_status"
+  | "account_status"
+  | "alert_status"
+  | "kuma_monitor_type";
 export type DictionaryEntry = {
   id: string;
   kind: DictionaryKind;
@@ -1158,6 +1168,11 @@ export type UsageRecord = {
   error_reason: string | null;
   first_token_ms: string | null;
   duration_ms: string | null;
+  input_tokens?: string | null;
+  output_tokens?: string | null;
+  cache_read_tokens?: string | null;
+  cache_write_tokens?: string | null;
+  usage_available?: boolean;
   summary: string | null;
   observed_at: string | null;
   source: string;
@@ -1446,6 +1461,11 @@ export type TrafficRankingRow = {
   active_buckets: number;
   total_buckets: number;
   latest_at: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  usage_available: boolean;
 };
 
 export type TrafficRanking = {

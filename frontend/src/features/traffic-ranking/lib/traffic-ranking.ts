@@ -4,6 +4,10 @@ export function formatTrafficCount(value: number): string {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
+export function formatTrafficTokens(value: number | null): string {
+  return value === null ? "未提供" : formatTrafficCount(value);
+}
+
 export function formatTrafficPercent(value: number | null): string {
   return value === null ? "-" : `${value.toFixed(2)}%`;
 }

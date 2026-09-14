@@ -9,6 +9,7 @@ import {
   type AccountModelSelection,
   type AccountModelSyncAccount,
   type AccountModelSyncPreview,
+  type DictionaryEntry,
   type Task,
 } from "@/api";
 import { FieldLabel } from "@/components/field-help-tooltip";
@@ -34,6 +35,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
+import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
 
@@ -178,6 +180,10 @@ export function AccountModelSyncDialog(props: {
   onCompleted: () => void;
 }) {
   const queryClient = useQueryClient();
+  const platformDictionary = useQuery({
+    queryKey: ["dictionaries", "platform"],
+    queryFn: () => api.dictionaries("platform"),
+  });
   const [discoveryTaskId, setDiscoveryTaskId] = useState<string | null>(null);
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [scopeExclusions, setScopeExclusions] = useState<Map<string, Set<string>>>(() => new Map());
@@ -384,6 +390,7 @@ export function AccountModelSyncDialog(props: {
               preview={preview.data}
               accountPlatforms={props.accountPlatforms}
               accountGroups={props.accountGroups}
+              dictionaryEntries={platformDictionary.data?.items}
               scopeExclusions={scopeExclusions}
               probeModels={probeModels}
               probeModelOptions={probeModelOptions}
@@ -480,6 +487,7 @@ function SyncModelEditor(props: {
   preview: AccountModelSyncPreview;
   accountPlatforms: ReadonlyMap<string, string | null>;
   accountGroups: ReadonlyMap<string, string[]>;
+  dictionaryEntries?: readonly DictionaryEntry[];
   scopeExclusions: ScopeModelExclusions;
   probeModels: string[];
   probeModelOptions: string[];
@@ -488,8 +496,14 @@ function SyncModelEditor(props: {
   onModelExcluded: (scope: string, model: string, excluded: boolean) => void;
 }) {
   const platforms = useMemo(
-    () => modelSyncPlatformGroups(props.preview, props.accountPlatforms, props.accountGroups),
-    [props.preview, props.accountPlatforms, props.accountGroups],
+    () =>
+      modelSyncPlatformGroups(
+        props.preview,
+        props.accountPlatforms,
+        props.accountGroups,
+        props.dictionaryEntries,
+      ),
+    [props.preview, props.accountPlatforms, props.accountGroups, props.dictionaryEntries],
   );
   const [activePlatform, setActivePlatform] = useState(platforms[0]?.key ?? "");
   const [activeGroup, setActiveGroup] = useState(platforms[0]?.groups[0]?.key ?? "");
@@ -757,6 +771,7 @@ export function modelSyncPlatformGroups(
   preview: AccountModelSyncPreview,
   accountPlatforms: ReadonlyMap<string, string | null>,
   accountGroups: ReadonlyMap<string, string[]>,
+  dictionaryEntries?: readonly DictionaryEntry[],
 ): ModelSyncPlatformGroup[] {
   const groups = new Map<
     string,
@@ -817,7 +832,7 @@ export function modelSyncPlatformGroups(
       }
     }
   }
-  return Array.from(groups, ([key, group]) => ({
+  const result = Array.from(groups, ([key, group]) => ({
     key,
     label: group.label,
     accountCount: group.accountCount,
@@ -830,7 +845,20 @@ export function modelSyncPlatformGroups(
         left.model.localeCompare(right.model),
       ),
     })).sort((left, right) => left.label.localeCompare(right.label)),
-  })).sort((left, right) => left.label.localeCompare(right.label));
+  }));
+  const ordered = orderedDictionaryOptions(
+    dictionaryEntries,
+    result.map((item) => ({ value: item.key, label: item.label })),
+  );
+  const rank = new Map(ordered.map((item, index) => [item.value, index]));
+  return result.sort((left, right) => {
+    const leftRank = rank.get(left.key);
+    const rightRank = rank.get(right.key);
+    if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
+    if (leftRank !== undefined) return -1;
+    if (rightRank !== undefined) return 1;
+    return left.label.localeCompare(right.label);
+  });
 }
 
 function uniqueAccountGroups(groups: string[] | undefined): string[] {

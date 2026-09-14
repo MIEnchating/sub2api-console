@@ -6,13 +6,14 @@ import { cn } from "@/lib/utils";
 /** 弹窗及局部内容读取；页面首次加载使用 PageLoadingSkeleton。 */
 export function ContentLoading(props: {
   label: string;
+  ariaLabel?: string;
   compact?: boolean;
   className?: string;
 }): ReactElement {
   return (
     <div
       role="status"
-      aria-label={props.label}
+      aria-label={props.ariaLabel ?? props.label}
       aria-busy="true"
       className={cn(
         "text-muted-foreground flex min-h-40 min-w-0 flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm",

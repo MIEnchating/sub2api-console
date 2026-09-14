@@ -1,4 +1,5 @@
 import type { AlertIncident } from "@/api";
+import { alertObjectKindDictionary, alertStatusDictionary } from "@/lib/domain-dictionaries";
 
 const alertTypeLabels: Record<string, string> = {
   "upstream.configuration": "上游配置有问题",
@@ -58,18 +59,8 @@ const causeLabels: Record<string, string> = {
   APPLY_FAILED: "自动执行未成功",
 };
 
-const objectKindLabels: Record<string, string> = {
-  account: "账号",
-  host: "上游",
-  group: "分组",
-};
-
-const alertStatusLabels: Record<string, string> = {
-  firing: "告警中",
-  recovered: "已恢复",
-  suppressed: "规则已停用",
-  closed: "已关闭",
-};
+const objectKindLabels = alertObjectKindDictionary;
+const alertStatusLabels = alertStatusDictionary;
 
 const deliveryStatusLabels: Record<string, string> = {
   sent: "通知已发送",

@@ -7,7 +7,7 @@ import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 
-import { api, type AccountStatus, type Task, type TaskSummary } from "@/api";
+import { api, type AccountStatus, type DictionaryEntry, type Task, type TaskSummary } from "@/api";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +40,7 @@ import {
 import { accountPlatformLabel } from "../lib/account-labels";
 import { platformProbeSchema, type PlatformProbeForm } from "../lib/platform-probe-schema";
 import { formatProbeDuration } from "@/lib/probe-task-feedback";
+import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
 
 export type PlatformProbeOption = {
   value: string;
@@ -65,7 +66,10 @@ export function platformProbeRequest(values: PlatformProbeForm): {
   return { platform: values.platform.trim().toLocaleLowerCase(), model: values.model.trim() };
 }
 
-export function platformProbeOptions(accounts: AccountStatus[]): PlatformProbeOption[] {
+export function platformProbeOptions(
+  accounts: AccountStatus[],
+  dictionaryEntries?: readonly DictionaryEntry[],
+): PlatformProbeOption[] {
   const counts = new Map<string, number>();
   for (const account of accounts) {
     if (account.manual_priority != null) continue;
@@ -73,13 +77,18 @@ export function platformProbeOptions(accounts: AccountStatus[]): PlatformProbeOp
     if (!platform) continue;
     counts.set(platform, (counts.get(platform) ?? 0) + 1);
   }
-  return [...counts.entries()]
+  const discovered = [...counts.entries()]
     .map(([value, accountCount]) => ({
       value,
       label: accountPlatformLabel(value) ?? value,
       accountCount,
     }))
     .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+  const ordered = orderedDictionaryOptions(dictionaryEntries, discovered);
+  return ordered.flatMap((option) => {
+    const accountCount = counts.get(option.value);
+    return accountCount === undefined ? [] : [{ ...option, accountCount }];
+  });
 }
 
 function optionalString(value: unknown): string {
@@ -222,10 +231,14 @@ export function PlatformProbeResultTable(props: { results: PlatformProbeResult[]
 export function PlatformProbeDialog(props: {
   open: boolean;
   accounts: AccountStatus[];
+  platformDictionary?: readonly DictionaryEntry[];
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
-  const options = useMemo(() => platformProbeOptions(props.accounts), [props.accounts]);
+  const options = useMemo(
+    () => platformProbeOptions(props.accounts, props.platformDictionary),
+    [props.accounts, props.platformDictionary],
+  );
   const onlyPlatform = options.length === 1 ? options[0].value : "";
   const form = useForm<PlatformProbeForm>({
     resolver: zodResolver(platformProbeSchema),

@@ -303,6 +303,7 @@ func systemLogRecord(id int64, row map[string]any, detail *business.AccountDetai
 		ID: id, RequestID: strings.TrimSpace(text(row["request_id"])), AccountID: accountID,
 		AccountName: accountName, GroupName: groupName(row, detail), IsError: boolPointer(isError),
 		ErrorReason: conditionalText(isError, message), FirstTokenMS: firstToken, DurationMS: duration,
+		InputTokens: usageField(row, extra, "input_tokens", "prompt_tokens"), OutputTokens: usageField(row, extra, "output_tokens", "completion_tokens"), CacheReadTokens: usageField(row, extra, "cache_read_tokens", "cache_read_input_tokens"), CacheWriteTokens: usageField(row, extra, "cache_creation_tokens", "cache_write_tokens"), UsageAvailable: usageAvailable(row, extra),
 		Summary: message, ObservedAt: optionalText(row["created_at"]), Source: "system-log", Payload: row,
 	}
 }
@@ -326,6 +327,7 @@ func (s *Service) adminClient(ctx context.Context) (*adminclient.Client, error) 
 }
 
 func usageRecord(id int64, row map[string]any, detail *business.AccountDetail, accountName *string) business.UsageRecord {
+	extra, _ := row["extra"].(map[string]any)
 	accountID := optionalText(row["account_id"])
 	groupName := groupName(row, detail)
 	kind := strings.ToLower(strings.TrimSpace(text(row["kind"])))
@@ -337,9 +339,33 @@ func usageRecord(id int64, row map[string]any, detail *business.AccountDetail, a
 	return business.UsageRecord{
 		ID: id, RequestID: strings.TrimSpace(text(row["request_id"])), AccountID: accountID,
 		AccountName: accountName, GroupName: groupName, IsError: boolPointer(isError), ErrorReason: reason,
-		DurationMS: optionalText(row["duration_ms"]), ObservedAt: optionalText(row["created_at"]),
+		DurationMS: optionalText(row["duration_ms"]), InputTokens: usageField(row, extra, "input_tokens", "prompt_tokens"), OutputTokens: usageField(row, extra, "output_tokens", "completion_tokens"), CacheReadTokens: usageField(row, extra, "cache_read_tokens", "cache_read_input_tokens"), CacheWriteTokens: usageField(row, extra, "cache_creation_tokens", "cache_write_tokens"), UsageAvailable: usageAvailable(row, extra), ObservedAt: optionalText(row["created_at"]),
 		Source: "traffic", Payload: row,
 	}
+}
+
+func usageField(row, extra map[string]any, names ...string) *string {
+	maps := []map[string]any{row}
+	if usage, ok := row["token_usage"].(map[string]any); ok {
+		maps = append(maps, usage)
+	}
+	if extra != nil {
+		maps = append(maps, extra)
+		if usage, ok := extra["token_usage"].(map[string]any); ok {
+			maps = append(maps, usage)
+		}
+	}
+	for _, values := range maps {
+		for _, name := range names {
+			if value := optionalText(values[name]); value != nil {
+				return value
+			}
+		}
+	}
+	return nil
+}
+func usageAvailable(row, extra map[string]any) bool {
+	return usageField(row, extra, "input_tokens", "prompt_tokens", "output_tokens", "completion_tokens", "cache_read_tokens", "cache_creation_tokens", "cache_write_tokens") != nil
 }
 
 func groupName(row map[string]any, detail *business.AccountDetail) *string {

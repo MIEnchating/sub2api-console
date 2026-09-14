@@ -1,5 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FieldError } from "@/components/field-error";
+import { useQuery } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
@@ -7,6 +8,8 @@ import { useForm } from "react-hook-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { groupPlatformOptions } from "@/features/accounts/lib/account-labels";
+import { api } from "@/api";
+import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
 import { SettingsFooter } from "./settings-footer";
 import {
   platformProbeModelsSchema,
@@ -24,6 +27,10 @@ const emptyPlatformProbeModels: PlatformProbeModelsValues = {
   deepseek: "",
   composite: "",
 };
+
+function isPlatformProbeKey(value: string): value is keyof PlatformProbeModelsValues {
+  return value in emptyPlatformProbeModels;
+}
 
 function platformProbeModelFormValues(models: Record<string, string>): PlatformProbeModelsValues {
   return {
@@ -48,6 +55,10 @@ export function PlatformProbeModelsForm(props: {
   disabled?: boolean;
   onSubmit: (models: Record<string, string>) => void;
 }) {
+  const platformDictionary = useQuery({
+    queryKey: ["dictionaries", "platform"],
+    queryFn: () => api.dictionaries("platform"),
+  });
   const form = useForm<PlatformProbeModelsValues>({
     resolver: zodResolver(platformProbeModelsSchema),
     defaultValues: platformProbeModelFormValues(props.models),
@@ -56,6 +67,12 @@ export function PlatformProbeModelsForm(props: {
   useEffect(() => {
     form.reset(platformProbeModelFormValues(props.models));
   }, [form, props.models]);
+  const platformOptions = orderedDictionaryOptions(
+    platformDictionary.data?.items,
+    groupPlatformOptions,
+  ).flatMap((option) =>
+    isPlatformProbeKey(option.value) ? [{ ...option, value: option.value }] : [],
+  );
 
   return (
     <form
@@ -66,7 +83,7 @@ export function PlatformProbeModelsForm(props: {
         data-slot="settings-scroll"
         className="grid min-h-0 flex-1 content-start gap-x-4 gap-y-3 overflow-y-auto overscroll-contain px-3 py-3 sm:grid-cols-2 lg:grid-cols-3"
       >
-        {groupPlatformOptions.map((platform) => {
+        {platformOptions.map((platform) => {
           const error = form.formState.errors[platform.value]?.message;
           return (
             <label className="grid min-w-0 gap-1.5 text-sm" key={platform.value}>

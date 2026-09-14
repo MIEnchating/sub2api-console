@@ -1,5 +1,6 @@
 import type { TaskSummary } from "@/api";
 import type { StatusVariant } from "@/components/status-badge";
+import { taskStatusDictionary } from "@/lib/domain-dictionaries";
 
 export const activeTaskStatuses = new Set<TaskSummary["status"]>([
   "queued",
@@ -8,13 +9,13 @@ export const activeTaskStatuses = new Set<TaskSummary["status"]>([
 ]);
 
 const taskStatusLabels: Record<TaskSummary["status"], string> = {
-  queued: "排队中",
-  running: "进行中",
-  waiting_input: "等待输入",
-  succeeded: "已成功",
-  partial: "部分完成",
-  failed: "已失败",
-  cancelled: "已取消",
+  queued: taskStatusDictionary.queued ?? "排队中",
+  running: taskStatusDictionary.running ?? "进行中",
+  waiting_input: taskStatusDictionary.waiting_input ?? "等待输入",
+  succeeded: taskStatusDictionary.succeeded ?? "已成功",
+  partial: taskStatusDictionary.partial ?? "部分完成",
+  failed: taskStatusDictionary.failed ?? "已失败",
+  cancelled: taskStatusDictionary.cancelled ?? "已取消",
 };
 
 const taskStatusVariants: Record<TaskSummary["status"], StatusVariant> = {

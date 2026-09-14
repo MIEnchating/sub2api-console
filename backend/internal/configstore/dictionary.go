@@ -84,7 +84,14 @@ func (s *Store) SyncDictionaryValues(ctx context.Context, kind string, values []
 	return nil
 }
 
-func validDictionaryKind(k string) bool { return k == "platform" || k == "group" }
+func validDictionaryKind(k string) bool {
+	switch k {
+	case "platform", "group", "account_type", "upstream_type", "auth_status", "scheduling_strategy", "task_status", "account_status", "alert_status", "kuma_monitor_type":
+		return true
+	default:
+		return false
+	}
+}
 
 func (s *Store) ListDictionaries(ctx context.Context, kind string) ([]DictionaryEntry, error) {
 	if !validDictionaryKind(kind) {

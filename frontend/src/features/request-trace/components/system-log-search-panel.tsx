@@ -78,6 +78,39 @@ function readableDuration(value: string): string {
   return `${seconds} 秒 (${milliseconds} ms)`;
 }
 
+function readableTokens(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "未提供";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value;
+  return new Intl.NumberFormat("zh-CN").format(number);
+}
+
+export type ReadableUsage = {
+  input: string;
+  output: string;
+  cacheRead: string;
+  cacheWrite: string;
+};
+
+export function readableUsage(
+  record: Pick<
+    UsageRecord,
+    | "usage_available"
+    | "input_tokens"
+    | "output_tokens"
+    | "cache_read_tokens"
+    | "cache_write_tokens"
+  >,
+): ReadableUsage | null {
+  if (!record.usage_available) return null;
+  return {
+    input: readableTokens(record.input_tokens),
+    output: readableTokens(record.output_tokens),
+    cacheRead: readableTokens(record.cache_read_tokens),
+    cacheWrite: readableTokens(record.cache_write_tokens),
+  };
+}
+
 export type ReadableSystemLog = {
   title: string;
   status: string;
@@ -184,6 +217,7 @@ function DetailItem(props: { label: string; value: string; wide?: boolean; mono?
 
 function SystemLogResult(props: { record: UsageRecord }) {
   const log = readableSystemLog(props.record);
+  const usage = readableUsage(props.record);
   let statusLabel = "已完成";
   if (log.status) statusLabel = `HTTP ${log.status}`;
   else if (props.record.is_error) statusLabel = "失败";
@@ -225,6 +259,15 @@ function SystemLogResult(props: { record: UsageRecord }) {
         <DetailItem label="客户端 IP" value={log.ip} />
         <DetailItem label="HTTP 协议" value={log.protocol} />
       </dl>
+
+      {usage ? (
+        <dl className="grid min-w-0 grid-cols-2 gap-x-5 gap-y-3 border-t pt-3 sm:grid-cols-4">
+          <DetailItem label="输入 Token" value={usage.input} />
+          <DetailItem label="输出 Token" value={usage.output} />
+          <DetailItem label="缓存读取 Token" value={usage.cacheRead} />
+          <DetailItem label="缓存写入 Token" value={usage.cacheWrite} />
+        </dl>
+      ) : null}
 
       {props.record.summary ? (
         <div className="bg-muted/60 min-w-0 rounded-md px-3 py-2.5">

@@ -145,6 +145,10 @@ import {
   upstreamAuthStatuses,
   upstreamTypeLabel as displayUpstreamType,
   upstreamTypeOptions,
+  schedulingStrategyDictionary,
+  fallbackModeDictionary,
+  autoApplyFieldDictionary,
+  orderedDictionaryOptions,
 } from "./lib/domain-dictionaries";
 import { SystemLogSearchPanel } from "./features/request-trace/components/system-log-search-panel";
 import { GroupAllocationDialog } from "./features/groups/components/group-allocation-dialog";
@@ -1497,34 +1501,10 @@ function searchable(values: Array<string | number | null | undefined>, query: st
     )
   );
 }
-const strategyLabels: Record<string, string> = {
-  balanced: "均衡",
-  price: "价格优先",
-  price_first: "价格优先",
-  speed: "速度优先",
-  latency_first: "速度优先",
-  speed_first: "速度优先",
-  cost_first: "价格优先",
-  reliability: "稳定优先",
-  reliability_first: "稳定优先",
-  stable: "稳定优先",
-  stability: "稳定优先",
-  stability_first: "稳定优先",
-  未参与: "未参与",
-  配置错误: "配置错误",
-};
+const strategyLabels = schedulingStrategyDictionary;
 export { schedulingStrategyOptions };
-const fallbackLabels: Record<string, string> = {
-  current_cost_wall: "回退当前成本墙",
-  fail_closed: "严格关闭",
-  fail_open: "允许继续",
-};
-const autoApplyLabels: Record<string, string> = {
-  schedulable: "调度状态",
-  priority: "优先级",
-  load_factor: "负载因子",
-  concurrency: "并发上限",
-};
+const fallbackLabels = fallbackModeDictionary;
+const autoApplyLabels = autoApplyFieldDictionary;
 const statusLabels: Record<string, string> = {
   manual_priority: "人工优先位",
   ok: "正常",
@@ -4093,6 +4073,10 @@ export function AccountSelectionToolbar(props: {
 
 export function AccountsPage() {
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const platformDictionary = useQuery({
+    queryKey: ["dictionaries", "platform"],
+    queryFn: () => api.dictionaries("platform"),
+  });
   const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
   const queryClient = useQueryClient();
   const rows = accounts.data ?? [];
@@ -4149,17 +4133,18 @@ export function AccountsPage() {
   const groupOptions = Array.from(new Set(rows.flatMap((account) => account.groups))).sort((a, b) =>
     a.localeCompare(b),
   );
-  const platformOptions = Array.from(
-    new Set([
-      ...concreteAccountPlatformOptions.map((option) => option.value),
-      ...rows.flatMap((account) => {
-        const platform = account.platform?.trim().toLowerCase();
-        return platform ? [platform] : [];
-      }),
-    ]),
-  ).sort((left, right) =>
-    (accountPlatformLabel(left) ?? left).localeCompare(accountPlatformLabel(right) ?? right),
-  );
+  const platformOptions = orderedDictionaryOptions(
+    platformDictionary.data?.items,
+    Array.from(
+      new Set([
+        ...concreteAccountPlatformOptions.map((option) => option.value),
+        ...rows.flatMap((account) => {
+          const platform = account.platform?.trim().toLowerCase();
+          return platform ? [platform] : [];
+        }),
+      ]),
+    ).map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
+  ).map((option) => option.value);
   const filteredRows = useMemo(
     () =>
       sortAccounts(
@@ -4672,7 +4657,12 @@ export function AccountsPage() {
         onCompleted={() => setSelectedAccountIds(new Set())}
       />
       {platformProbeOpen ? (
-        <PlatformProbeDialog open accounts={rows} onOpenChange={setPlatformProbeOpen} />
+        <PlatformProbeDialog
+          open
+          accounts={rows}
+          platformDictionary={platformDictionary.data?.items}
+          onOpenChange={setPlatformProbeOpen}
+        />
       ) : null}
       <Dialog
         open={baseURLCheckOpen}
@@ -13654,6 +13644,7 @@ function policyScopeValueOptions(
   availableValues: string[],
   selectedValues: string[],
   label: (value: string, stale: boolean) => string,
+  sortAlphabetically = true,
 ) {
   const available = new Set(
     availableValues.map((value) => value.trim().toLocaleLowerCase()).filter(Boolean),
@@ -13662,9 +13653,13 @@ function policyScopeValueOptions(
     ...available,
     ...selectedValues.map((value) => value.trim().toLocaleLowerCase()).filter(Boolean),
   ]);
-  return [...values]
-    .map((value) => ({ value, label: label(value, !available.has(value)) }))
-    .sort((left, right) => left.label.localeCompare(right.label, "zh-CN"));
+  const options = [...values].map((value) => ({
+    value,
+    label: label(value, !available.has(value)),
+  }));
+  return sortAlphabetically
+    ? options.sort((left, right) => left.label.localeCompare(right.label, "zh-CN"))
+    : options;
 }
 
 function policyScopeEntityOptions(
@@ -13711,6 +13706,10 @@ export function PolicyScopeLayout(props: PolicyScopeEditorProps) {
 }
 
 export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
+  const platformDictionary = useQuery({
+    queryKey: ["dictionaries", "platform"],
+    queryFn: () => api.dictionaries("platform"),
+  });
   const set = (section: string, path: string, value: unknown) =>
     props.onChange(withPolicyAdvancedValue(props.value, section, path, value));
   const configuredMode = policyAdvancedValue(props.value, "scope", "managed_group_mode");
@@ -13745,16 +13744,22 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
       `${accountTypeLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
   );
   const platformOptions = policyScopeValueOptions(
-    [
-      ...concreteAccountPlatformOptions.map((option) => option.value),
-      ...props.accounts.flatMap((account) => {
-        const value = account.platform?.trim().toLocaleLowerCase();
-        return value ? [value] : [];
-      }),
-    ],
+    orderedDictionaryOptions(
+      platformDictionary.data?.items,
+      [
+        ...new Set([
+          ...concreteAccountPlatformOptions.map((option) => option.value),
+          ...props.accounts.flatMap((account) => {
+            const value = account.platform?.trim().toLocaleLowerCase();
+            return value ? [value] : [];
+          }),
+        ]),
+      ].map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
+    ).map((option) => option.value),
     selectedPlatforms,
     (value, stale) =>
       `${accountPlatformLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+    false,
   );
   const excludedGroupOptions = policyScopeEntityOptions(
     props.groups.flatMap((group) =>

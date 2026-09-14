@@ -25,6 +25,7 @@ import { groupStatusMeta } from "@/lib/group-policy-display";
 import { schedulingMetric } from "@/lib/scheduling-display";
 import { schedulingStrategyLabel } from "@/lib/scheduling-strategy";
 import { cn } from "@/lib/utils";
+import { accountStateDictionary } from "@/lib/domain-dictionaries";
 
 type Props = {
   group: GroupStatus | null;
@@ -50,20 +51,7 @@ export const groupAllocationLayout = {
   tableContainer: "h-full min-h-0 overflow-auto overscroll-contain",
 } as const;
 
-const stateLabels: Record<string, string> = {
-  manual_priority: "人工优先位",
-  healthy: "健康",
-  active: "健康",
-  available: "可用",
-  degraded: "降级",
-  survivor: "保底",
-  fused: "熔断",
-  cost_blocked: "成本墙拦截",
-  paused: "暂停",
-  disabled: "不可用",
-  excluded: "已排除",
-  unknown: "待探测",
-};
+const stateLabels = accountStateDictionary;
 
 function integer(value: number): string {
   return Number.isFinite(value) ? Math.max(0, Math.trunc(value)).toLocaleString("zh-CN") : "—";

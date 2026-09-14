@@ -148,6 +148,37 @@ func TestTrafficRankingCountsSharedRequestOnlyOnceAcrossGroups(t *testing.T) {
 	}
 }
 
+func TestTrafficRankingAggregatesTokenUsageAndDistinguishesMissingFromZero(t *testing.T) {
+	store := openPolicyStore(t)
+	ctx := context.Background()
+	end := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES
+		('41','with usage','{}','now'),('42','without usage','{}','now');
+		INSERT INTO usage_records(request_id,account_id,account_name,is_error,observed_at,source,payload_json) VALUES
+		('one','41','with usage',0,?,'traffic','{"token_usage":{"input_tokens":0,"output_tokens":12,"cache_read_tokens":4,"cache_creation_tokens":1}}'),
+		('two','41','with usage',0,?,'traffic','{"extra":{"token_usage":{"prompt_tokens":3,"completion_tokens":0}}}'),
+		('three','42','without usage',0,?,'traffic','{}')`,
+		end.Add(-3*time.Hour).Format(time.RFC3339Nano), end.Add(-2*time.Hour).Format(time.RFC3339Nano), end.Add(-time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.TrafficRanking(ctx, TrafficRankingQuery{StartAt: end.Add(-6 * time.Hour), EndAt: end})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]TrafficRankingRow{}
+	for _, row := range result.Accounts {
+		rows[row.AccountID] = row
+	}
+	withUsage := rows["41"]
+	if !withUsage.UsageAvailable || withUsage.InputTokens == nil || *withUsage.InputTokens != 3 || withUsage.OutputTokens == nil || *withUsage.OutputTokens != 12 || withUsage.CacheReadTokens == nil || *withUsage.CacheReadTokens != 4 || withUsage.CacheWriteTokens == nil || *withUsage.CacheWriteTokens != 1 {
+		t.Fatalf("with usage=%#v", withUsage)
+	}
+	withoutUsage := rows["42"]
+	if withoutUsage.UsageAvailable || withoutUsage.InputTokens != nil || withoutUsage.OutputTokens != nil || withoutUsage.CacheReadTokens != nil || withoutUsage.CacheWriteTokens != nil {
+		t.Fatalf("without usage=%#v", withoutUsage)
+	}
+}
+
 func TestTrafficRankingAverageIncludesRecordsBeyondLatencySampleLimit(t *testing.T) {
 	store := openPolicyStore(t)
 	ctx := context.Background()

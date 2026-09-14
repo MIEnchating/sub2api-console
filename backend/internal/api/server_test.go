@@ -46,6 +46,32 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
+func TestSortGroupsByDictionaryUsesEnabledStableIDs(t *testing.T) {
+	groupID := func(value string) *string { return &value }
+	rows := []business.GroupStatus{
+		{Name: "未配置", ID: groupID("30")},
+		{Name: "第二组", ID: groupID("20")},
+		{Name: "第一组", ID: groupID("10")},
+		{Name: "无 ID"},
+	}
+	entries := []configstore.DictionaryEntry{
+		{Value: "10", Enabled: true, SortOrder: 0},
+		{Value: "20", Enabled: false, SortOrder: 1},
+		{Value: "30", Enabled: true, SortOrder: 2},
+	}
+
+	sortGroupsByDictionary(rows, entries)
+
+	got := make([]string, 0, len(rows))
+	for _, row := range rows {
+		got = append(got, row.Name)
+	}
+	want := []string{"第一组", "未配置", "无 ID", "第二组"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sorted groups = %v, want %v", got, want)
+	}
+}
+
 type writeDeadlineRecorder struct {
 	*httptest.ResponseRecorder
 	deadline time.Time

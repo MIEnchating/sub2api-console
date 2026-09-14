@@ -32,8 +32,6 @@ export function schedulingStrategyDescription(value: string): string {
 }
 
 export function schedulingStrategyLabel(value: string): string {
-  return (
-    schedulingStrategyOptions.find((option) => option.value === value)?.label ??
-    schedulingStrategyOptions[0].label
-  );
+  return schedulingStrategyDictionary[value] ?? schedulingStrategyOptions[0].label;
 }
+import { schedulingStrategyDictionary } from "./domain-dictionaries";

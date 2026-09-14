@@ -129,8 +129,18 @@ function AnimationCardState(props: {
   unavailable: boolean;
 }): ReactElement {
   if (props.activity) {
-    const label = props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果";
-    return <ContentLoading compact label={label} className="h-full justify-center" />;
+    let label = "生成中，等待动画结果";
+    if (props.activity.status === "starting") label = "正在启动检测";
+    else if (props.activity.batchSize && props.activity.completed !== undefined)
+      label = `生成中，已完成 ${props.activity.completed}/${props.activity.batchSize} 个账号`;
+    return (
+      <ContentLoading
+        compact
+        label={label}
+        ariaLabel="生成中，等待动画结果"
+        className="h-full justify-center"
+      />
+    );
   }
   if (props.status === "queued" || props.status === "running" || props.status === "waiting_input")
     return (

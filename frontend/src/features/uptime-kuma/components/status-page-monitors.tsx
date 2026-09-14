@@ -1,4 +1,5 @@
-import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Trash2 } from "lucide-react";
+import { useState } from "react";
 import type { KumaMonitor } from "@/api";
 import { FormField } from "@/App";
 import { MultiSelect } from "@/components/multi-select";
@@ -16,6 +17,7 @@ export function StatusPageMonitors(props: {
   onChange: (value: PublicMonitors) => void;
 }) {
   const names = new Map(props.monitors.map((monitor) => [monitor.id, monitor.name]));
+  const [draggingId, setDraggingId] = useState<number | null>(null);
   const nameOf = (id: number): string => names.get(id) ?? `监控项 #${id}`;
   const move = (index: number, target: number): void => {
     if (props.pending || target < 0 || target >= props.value.length) return;
@@ -58,8 +60,30 @@ export function StatusPageMonitors(props: {
           <li
             key={monitor.id}
             className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center"
+            draggable={!props.pending}
+            aria-grabbed={draggingId === monitor.id}
+            onDragStart={(event) => {
+              if (props.pending) return;
+              setDraggingId(monitor.id);
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", String(monitor.id));
+            }}
+            onDragEnd={() => setDraggingId(null)}
+            onDragOver={(event) => {
+              if (draggingId !== null && draggingId !== monitor.id) event.preventDefault();
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const sourceId = Number(event.dataTransfer.getData("text/plain"));
+              const sourceIndex = props.value.findIndex((item) => item.id === sourceId);
+              const targetIndex = props.value.findIndex((item) => item.id === monitor.id);
+              if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex)
+                move(sourceIndex, targetIndex);
+              setDraggingId(null);
+            }}
           >
-            <span className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere]">
+            <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-sm [overflow-wrap:anywhere]">
+              <GripVertical aria-hidden="true" className="shrink-0 text-muted-foreground" />
               {nameOf(monitor.id)}
             </span>
             <div className="flex shrink-0 flex-wrap items-center gap-2">

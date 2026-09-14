@@ -25,31 +25,26 @@ import {
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
+import {
+  orderedDictionaryOptions,
+  trafficRankingSortOptions,
+  trafficTimeRangeOptions,
+} from "@/lib/domain-dictionaries";
 
 import {
   formatTrafficCount,
   formatTrafficLatency,
   formatTrafficPercent,
+  formatTrafficTokens,
   trafficAccountMatches,
   trafficStabilityLabel,
 } from "../lib/traffic-ranking";
 
 type TimeRange = "1h" | "6h" | "24h" | "7d" | "30d";
 
-const timeRanges: Array<{ value: TimeRange; label: string }> = [
-  { value: "1h", label: "最近 1 小时" },
-  { value: "6h", label: "最近 6 小时" },
-  { value: "24h", label: "最近 24 小时" },
-  { value: "7d", label: "最近 7 天" },
-  { value: "30d", label: "最近 30 天" },
-];
-
-const rankingSorts: Array<{ value: TrafficRankingSort; label: string }> = [
-  { value: "traffic", label: "按流量" },
-  { value: "stability", label: "按稳定性" },
-  { value: "success_rate", label: "按成功率" },
-  { value: "latency", label: "按 P95 延迟" },
-];
+const timeRanges: ReadonlyArray<{ value: TimeRange; label: string }> = trafficTimeRangeOptions;
+const rankingSorts: ReadonlyArray<{ value: TrafficRankingSort; label: string }> =
+  trafficRankingSortOptions;
 
 function latestTrafficLabel(value: string | null): string {
   if (value === null) return "-";
@@ -79,6 +74,10 @@ export function TrafficRankingPage() {
   const [sortBy, setSortBy] = useState<TrafficRankingSort>("traffic");
   const [search, setSearch] = useState("");
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
+  const platformDictionary = useQuery({
+    queryKey: ["dictionaries", "platform"],
+    queryFn: () => api.dictionaries("platform"),
+  });
   const ranking = useQuery({
     queryKey: ["traffic-ranking", timeRange, group, sortBy],
     queryFn: () =>
@@ -98,19 +97,16 @@ export function TrafficRankingPage() {
       ),
     [ranking.data?.accounts, platform, search],
   );
-  const platformOptions = useMemo(
-    () =>
-      [
-        ...new Set(
-          (ranking.data?.accounts ?? [])
-            .flatMap((row) => (row.platform ? [row.platform.trim().toLocaleLowerCase()] : []))
-            .filter(Boolean),
-        ),
-      ]
-        .sort((a, b) => a.localeCompare(b, "zh-CN"))
-        .map((value) => ({ value, label: accountPlatformLabel(value) ?? value })),
-    [ranking.data?.accounts],
-  );
+  const platformOptions = useMemo(() => {
+    const discovered = [
+      ...new Set(
+        (ranking.data?.accounts ?? [])
+          .flatMap((row) => (row.platform ? [row.platform.trim().toLocaleLowerCase()] : []))
+          .filter(Boolean),
+      ),
+    ].map((value) => ({ value, label: accountPlatformLabel(value) ?? value }));
+    return orderedDictionaryOptions(platformDictionary.data?.items, discovered);
+  }, [platformDictionary.data?.items, ranking.data?.accounts]);
   const pagination = useClientPagination(visibleAccounts);
   useEffect(
     () => pagination.setCurrentPage(1),
@@ -180,7 +176,7 @@ export function TrafficRankingPage() {
           ) : (
             <>
               <div className="min-h-0 flex-1 overflow-hidden">
-                <Table containerClassName="h-full overflow-auto" className="min-w-[980px]">
+                <Table containerClassName="h-full overflow-auto" className="min-w-[1120px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-14 text-center">排名</TableHead>
@@ -191,11 +187,13 @@ export function TrafficRankingPage() {
                       <TableHead className="w-40 text-right">平均 / P95</TableHead>
                       <TableHead className="w-28 text-right">活跃时段</TableHead>
                       <TableHead className="w-32 text-right">最后流量</TableHead>
+                      <TableHead className="w-48 text-right">Token 用量</TableHead>
+                      <TableHead className="w-48 text-right">缓存读取 / 写入</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {pagination.visibleItems.length === 0 ? (
-                      <TableEmptyState columns={8}>当前范围没有匹配的账号流量</TableEmptyState>
+                      <TableEmptyState columns={10}>当前范围没有匹配的账号流量</TableEmptyState>
                     ) : (
                       pagination.visibleItems.map((row) => {
                         const stability = trafficStabilityLabel(row.stability_score);
@@ -243,6 +241,26 @@ export function TrafficRankingPage() {
                             </TableCell>
                             <TableCell className="text-right">
                               {latestTrafficLabel(row.latest_at)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {row.usage_available ? (
+                                <>
+                                  <div className="font-medium">
+                                    {formatTrafficTokens(row.input_tokens)} /{" "}
+                                    {formatTrafficTokens(row.output_tokens)}
+                                  </div>
+                                  <div className="text-muted-foreground text-xs">输入 / 输出</div>
+                                </>
+                              ) : (
+                                <span className="text-muted-foreground">未提供</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {row.usage_available ? (
+                                `${formatTrafficTokens(row.cache_read_tokens)} / ${formatTrafficTokens(row.cache_write_tokens)}`
+                              ) : (
+                                <span className="text-muted-foreground">未提供</span>
+                              )}
                             </TableCell>
                           </TableRow>
                         );

@@ -24,7 +24,7 @@ func TestHistoryReadModelsPreserveNullabilityAndSurfaceDamagedJSON(t *testing.T)
 		`INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json) VALUES(-1,'test','now','succeeded','ok','not-json')`,
 		`INSERT INTO health_samples(account_id,group_name,result,latency_p95,observed_at,source,evidence_key,payload_json) VALUES('41','codex','success','120','now','traffic','request-1','{}')`,
 		`INSERT INTO routing_decisions(account_id,group_name,schedulable,updated_at,payload_json) VALUES('41','codex',2,'now','{}')`,
-		`INSERT INTO usage_records(request_id,account_id,account_name,group_name,is_error,error_reason,observed_at,source,payload_json) VALUES('req/1','41','example-0.1','codex',1,'HTTP 500','now','traffic','{}')`,
+		`INSERT INTO usage_records(request_id,account_id,account_name,group_name,is_error,error_reason,observed_at,source,payload_json) VALUES('req/1','41','example-0.1','codex',1,'HTTP 500','now','traffic','{"token_usage":{"input_tokens":0,"output_tokens":12,"cache_read_tokens":4,"cache_creation_tokens":0}}')`,
 		`INSERT INTO alert_incidents(incident_key,event_type,object_kind,object_id,cause_code,status,first_seen_at,last_seen_at) VALUES('a','account.probe','account','41','PROBE','firing','now','now')`,
 		`INSERT INTO operation_audit(source_id,operation_id,operation_type,state,phase,remote_confirmed,readback_confirmed,object_type,object_id,group_names_json,writeback,created_at) VALUES(-1,'op','routing.writeback','failed','writeback',0,NULL,'account','41','["codex"]',1,'now')`,
 	}
@@ -48,6 +48,10 @@ func TestHistoryReadModelsPreserveNullabilityAndSurfaceDamagedJSON(t *testing.T)
 	trace, err := store.RequestTrace(ctx, "req/1")
 	if err != nil || !trace.Matched || len(trace.Records) != 1 || len(trace.RecentErrors) != 1 {
 		t.Fatalf("unexpected trace: %#v err=%v", trace, err)
+	}
+	record := trace.Records[0]
+	if !record.UsageAvailable || record.InputTokens == nil || *record.InputTokens != "0" || record.OutputTokens == nil || *record.OutputTokens != "12" || record.CacheReadTokens == nil || *record.CacheReadTokens != "4" || record.CacheWriteTokens == nil || *record.CacheWriteTokens != "0" {
+		t.Fatalf("token usage was not mapped: %#v", record)
 	}
 	alerts, err := store.Alerts(ctx, nil)
 	if err != nil || len(alerts) != 1 || alerts[0].ObjectName == nil || *alerts[0].ObjectName != "example-0.1" {

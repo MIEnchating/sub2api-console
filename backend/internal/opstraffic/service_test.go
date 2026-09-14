@@ -69,6 +69,20 @@ func TestRequestTraceReadsSuccessAndErrorsOnlyFromOpsRequests(t *testing.T) {
 	}
 }
 
+func TestUsageRecordPreservesTokenUsageAndAvailability(t *testing.T) {
+	record := usageRecord(1, map[string]any{
+		"request_id": "req-usage", "account_id": 42, "created_at": "2026-08-27T10:00:00Z",
+		"prompt_tokens": 0, "completion_tokens": "12", "extra": map[string]any{"cache_read_tokens": 4},
+	}, nil, nil)
+	if !record.UsageAvailable || record.InputTokens == nil || *record.InputTokens != "0" || record.OutputTokens == nil || *record.OutputTokens != "12" || record.CacheReadTokens == nil || *record.CacheReadTokens != "4" {
+		t.Fatalf("record=%#v", record)
+	}
+	record = usageRecord(2, map[string]any{"request_id": "req-missing"}, nil, nil)
+	if record.UsageAvailable || record.InputTokens != nil || record.OutputTokens != nil || record.CacheReadTokens != nil || record.CacheWriteTokens != nil {
+		t.Fatalf("missing usage=%#v", record)
+	}
+}
+
 func TestRequestTraceFallsBackToIndexedSystemLogs(t *testing.T) {
 	paths := []string{}
 	var systemLogWindow time.Duration

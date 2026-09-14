@@ -38,6 +38,11 @@ const ranking: TrafficRanking = {
       active_buckets: 22,
       total_buckets: 24,
       latest_at: "2026-08-31T11:58:00Z",
+      input_tokens: 120000,
+      output_tokens: 45000,
+      cache_read_tokens: 8000,
+      cache_write_tokens: 1200,
+      usage_available: true,
     },
     {
       rank: 2,
@@ -57,6 +62,11 @@ const ranking: TrafficRanking = {
       active_buckets: 0,
       total_buckets: 24,
       latest_at: null,
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      cache_write_tokens: null,
+      usage_available: false,
     },
   ],
 };
@@ -82,6 +92,9 @@ describe("流量排行页面", () => {
     expect(markup).toContain("99.08%");
     expect(markup).toContain("820 ms / 1.45 s");
     expect(markup).toContain("22 / 24");
+    expect(markup).toContain("120,000 / 45,000");
+    expect(markup).toContain("8,000 / 1,200");
+    expect(markup).toContain("未提供");
     expect(markup).toContain("待接入账号");
     expect(markup).toContain("无样本");
     expect(markup).toContain('aria-label="时间范围筛选"');
@@ -93,7 +106,7 @@ describe("流量排行页面", () => {
     expect(markup).toContain("按流量");
     expect(markup).not.toContain('data-appearance="faceted"');
     expect(markup).toContain("共</span><span");
-    expect(markup).toContain("min-w-[980px]");
+    expect(markup).toContain("min-w-[1120px]");
     expect(markup).toContain("overflow-auto");
   });
 

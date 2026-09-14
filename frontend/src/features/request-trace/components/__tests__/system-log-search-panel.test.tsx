@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   nextSystemLogSubmission,
   readableSystemLog,
+  readableUsage,
   SystemLogSearchPanel,
 } from "../system-log-search-panel";
 
@@ -113,6 +114,30 @@ describe("SystemLogSearchPanel", () => {
 
     expect(log.title).toBe("账号测试失败");
     expect(log.account).toBe("星筱 AI-2（ID：298）");
+  });
+
+  it("formats available token usage for request result details", () => {
+    expect(
+      readableUsage({
+        usage_available: true,
+        input_tokens: "1000",
+        output_tokens: "25",
+        cache_read_tokens: "500",
+        cache_write_tokens: "0",
+      }),
+    ).toEqual({ input: "1,000", output: "25", cacheRead: "500", cacheWrite: "0" });
+  });
+
+  it("does not render an empty usage section when usage is unavailable", () => {
+    expect(
+      readableUsage({
+        usage_available: false,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cache_write_tokens: null,
+      }),
+    ).toBeNull();
   });
 
   it("creates a new execution when the same search is submitted again", () => {

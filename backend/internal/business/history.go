@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -70,19 +71,24 @@ type OperationalSnapshot struct {
 }
 
 type UsageRecord struct {
-	ID           int64          `json:"id"`
-	RequestID    string         `json:"request_id"`
-	AccountID    *string        `json:"account_id"`
-	AccountName  *string        `json:"account_name"`
-	GroupName    *string        `json:"group_name"`
-	IsError      *bool          `json:"is_error"`
-	ErrorReason  *string        `json:"error_reason"`
-	FirstTokenMS *string        `json:"first_token_ms"`
-	DurationMS   *string        `json:"duration_ms"`
-	Summary      *string        `json:"summary"`
-	ObservedAt   *string        `json:"observed_at"`
-	Source       string         `json:"source"`
-	Payload      map[string]any `json:"payload"`
+	ID               int64          `json:"id"`
+	RequestID        string         `json:"request_id"`
+	AccountID        *string        `json:"account_id"`
+	AccountName      *string        `json:"account_name"`
+	GroupName        *string        `json:"group_name"`
+	IsError          *bool          `json:"is_error"`
+	ErrorReason      *string        `json:"error_reason"`
+	FirstTokenMS     *string        `json:"first_token_ms"`
+	DurationMS       *string        `json:"duration_ms"`
+	InputTokens      *string        `json:"input_tokens"`
+	OutputTokens     *string        `json:"output_tokens"`
+	CacheReadTokens  *string        `json:"cache_read_tokens"`
+	CacheWriteTokens *string        `json:"cache_write_tokens"`
+	UsageAvailable   bool           `json:"usage_available"`
+	Summary          *string        `json:"summary"`
+	ObservedAt       *string        `json:"observed_at"`
+	Source           string         `json:"source"`
+	Payload          map[string]any `json:"payload"`
 }
 
 type RequestTrace struct {
@@ -379,9 +385,23 @@ func (s *Store) UsageRecords(ctx context.Context, limit *int, requestID, account
 		item.AccountID, item.AccountName, item.GroupName = nullString(account), nullString(name), nullString(group)
 		item.IsError, item.ErrorReason, item.FirstTokenMS, item.ObservedAt = strictBool(isError), nullString(reason), nullString(token), nullString(observed)
 		item.Payload = decodedObjectOrMarker(payload, "usage_records.payload_json")
+		item.InputTokens = usageRecordToken(item.Payload, "input_tokens", "prompt_tokens")
+		item.OutputTokens = usageRecordToken(item.Payload, "output_tokens", "completion_tokens")
+		item.CacheReadTokens = usageRecordToken(item.Payload, "cache_read_tokens", "cache_read_input_tokens")
+		item.CacheWriteTokens = usageRecordToken(item.Payload, "cache_creation_tokens", "cache_write_tokens")
+		item.UsageAvailable = item.InputTokens != nil || item.OutputTokens != nil || item.CacheReadTokens != nil || item.CacheWriteTokens != nil
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func usageRecordToken(payload map[string]any, names ...string) *string {
+	value, ok := trafficToken(payload, names...)
+	if !ok {
+		return nil
+	}
+	result := strconv.FormatInt(value, 10)
+	return &result
 }
 
 func (s *Store) RequestTrace(ctx context.Context, requestID string) (RequestTrace, error) {

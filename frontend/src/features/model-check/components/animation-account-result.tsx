@@ -75,6 +75,12 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
           {resultStatusLabels[result.status]}
         </span>
       </div>
+      <p
+        className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+        title={`请求 ID：${result.request_id}`}
+      >
+        请求 ID：{result.request_id}
+      </p>
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs text-muted-foreground tabular-nums">
         <time
           className="min-w-0 truncate"

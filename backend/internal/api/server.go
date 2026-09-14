@@ -3067,7 +3067,37 @@ func (s *Server) groups(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "分组列表读取失败")
 		return
 	}
+	if entries, dictionaryErr := s.private.ListDictionaries(c.Request.Context(), "group"); dictionaryErr == nil {
+		sortGroupsByDictionary(rows, entries)
+	}
 	c.JSON(http.StatusOK, rows)
+}
+
+func sortGroupsByDictionary(rows []business.GroupStatus, entries []configstore.DictionaryEntry) {
+	order := make(map[string]int, len(entries))
+	for index, entry := range entries {
+		if entry.Enabled {
+			order[strings.TrimSpace(entry.Value)] = index
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, lok := order[groupDictionaryValue(rows[i])]
+		right, rok := order[groupDictionaryValue(rows[j])]
+		if lok != rok {
+			return lok
+		}
+		if lok {
+			return left < right
+		}
+		return rows[i].Name < rows[j].Name
+	})
+}
+
+func groupDictionaryValue(row business.GroupStatus) string {
+	if row.ID != nil {
+		return strings.TrimSpace(*row.ID)
+	}
+	return strings.TrimSpace(row.Name)
 }
 
 func (s *Server) groupAllocation(c *gin.Context) {
@@ -5877,18 +5907,22 @@ func (s *Server) listDictionaries(c *gin.Context) {
 					}
 				}
 			}
-		} else if accounts, err := s.business.Accounts(c.Request.Context()); err == nil {
-			seen := map[string]bool{}
-			for _, account := range accounts {
-				if account.Platform != nil && strings.TrimSpace(*account.Platform) != "" && !seen[*account.Platform] {
-					seen[*account.Platform] = true
-					values = append(values, configstore.DictionaryEntry{Name: *account.Platform, Value: *account.Platform})
+		} else if kind == "platform" {
+			if accounts, err := s.business.Accounts(c.Request.Context()); err == nil {
+				seen := map[string]bool{}
+				for _, account := range accounts {
+					if account.Platform != nil && strings.TrimSpace(*account.Platform) != "" && !seen[*account.Platform] {
+						seen[*account.Platform] = true
+						values = append(values, configstore.DictionaryEntry{Name: *account.Platform, Value: *account.Platform})
+					}
 				}
 			}
 		}
-		if err := s.private.SyncDictionaryValues(c.Request.Context(), kind, values); err != nil {
-			writeError(c, http.StatusInternalServerError, "字典同步失败")
-			return
+		if kind == "group" || kind == "platform" {
+			if err := s.private.SyncDictionaryValues(c.Request.Context(), kind, values); err != nil {
+				writeError(c, http.StatusInternalServerError, "字典同步失败")
+				return
+			}
 		}
 	}
 	items, err := s.private.ListDictionaries(c.Request.Context(), kind)

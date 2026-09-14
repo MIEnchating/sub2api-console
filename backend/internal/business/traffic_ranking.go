@@ -40,32 +40,42 @@ type TrafficRanking struct {
 }
 
 type TrafficRankingRow struct {
-	Rank           int      `json:"rank"`
-	AccountID      string   `json:"account_id"`
-	AccountName    string   `json:"account_name"`
-	UpstreamHost   string   `json:"upstream_host"`
-	Platform       string   `json:"platform"`
-	Groups         []string `json:"groups"`
-	Requests       int      `json:"requests"`
-	Successful     int      `json:"successful"`
-	Failed         int      `json:"failed"`
-	TrafficShare   *float64 `json:"traffic_share"`
-	SuccessRate    *float64 `json:"success_rate"`
-	StabilityScore *float64 `json:"stability_score"`
-	AverageLatency *float64 `json:"average_latency_ms"`
-	P95Latency     *float64 `json:"p95_latency_ms"`
-	ActiveBuckets  int      `json:"active_buckets"`
-	TotalBuckets   int      `json:"total_buckets"`
-	LatestAt       *string  `json:"latest_at"`
+	Rank             int      `json:"rank"`
+	AccountID        string   `json:"account_id"`
+	AccountName      string   `json:"account_name"`
+	UpstreamHost     string   `json:"upstream_host"`
+	Platform         string   `json:"platform"`
+	Groups           []string `json:"groups"`
+	Requests         int      `json:"requests"`
+	Successful       int      `json:"successful"`
+	Failed           int      `json:"failed"`
+	TrafficShare     *float64 `json:"traffic_share"`
+	SuccessRate      *float64 `json:"success_rate"`
+	StabilityScore   *float64 `json:"stability_score"`
+	AverageLatency   *float64 `json:"average_latency_ms"`
+	P95Latency       *float64 `json:"p95_latency_ms"`
+	ActiveBuckets    int      `json:"active_buckets"`
+	TotalBuckets     int      `json:"total_buckets"`
+	LatestAt         *string  `json:"latest_at"`
+	InputTokens      *int64   `json:"input_tokens"`
+	OutputTokens     *int64   `json:"output_tokens"`
+	CacheReadTokens  *int64   `json:"cache_read_tokens"`
+	CacheWriteTokens *int64   `json:"cache_write_tokens"`
+	UsageAvailable   bool     `json:"usage_available"`
 }
 
 type trafficRankingAccumulator struct {
-	row           TrafficRankingRow
-	latencies     latencySampleMaxHeap
-	latencySum    float64
-	latencyCount  int
-	activeBuckets map[string]struct{}
-	latest        time.Time
+	row              TrafficRankingRow
+	latencies        latencySampleMaxHeap
+	latencySum       float64
+	latencyCount     int
+	activeBuckets    map[string]struct{}
+	latest           time.Time
+	inputTokens      int64
+	outputTokens     int64
+	cacheReadTokens  int64
+	cacheWriteTokens int64
+	usageAvailable   bool
 }
 
 type latencySample struct {
@@ -253,6 +263,22 @@ func (s *Store) accumulateTrafficRanking(
 		var latency *string
 		if decodeErr := decoder.Decode(&payload); decodeErr == nil {
 			latency = trafficPayloadLatency(payload)
+			if value, present := trafficToken(payload, "input_tokens", "prompt_tokens"); present {
+				account.inputTokens += value
+				account.usageAvailable = true
+			}
+			if value, present := trafficToken(payload, "output_tokens", "completion_tokens"); present {
+				account.outputTokens += value
+				account.usageAvailable = true
+			}
+			if value, present := trafficToken(payload, "cache_read_tokens", "cache_read_input_tokens"); present {
+				account.cacheReadTokens += value
+				account.usageAvailable = true
+			}
+			if value, present := trafficToken(payload, "cache_creation_tokens", "cache_write_tokens"); present {
+				account.cacheWriteTokens += value
+				account.usageAvailable = true
+			}
 		}
 		if latency == nil {
 			latency = firstToken
@@ -275,6 +301,17 @@ func (s *Store) accumulateTrafficRanking(
 }
 
 func finalizeTrafficRankingAccount(account *trafficRankingAccumulator) {
+	account.row.UsageAvailable = account.usageAvailable
+	if account.usageAvailable {
+		inputTokens := account.inputTokens
+		outputTokens := account.outputTokens
+		cacheReadTokens := account.cacheReadTokens
+		cacheWriteTokens := account.cacheWriteTokens
+		account.row.InputTokens = &inputTokens
+		account.row.OutputTokens = &outputTokens
+		account.row.CacheReadTokens = &cacheReadTokens
+		account.row.CacheWriteTokens = &cacheWriteTokens
+	}
 	account.row.ActiveBuckets = len(account.activeBuckets)
 	if account.row.Requests > 0 {
 		rate := roundTrafficMetric(float64(account.row.Successful) * 100 / float64(account.row.Requests))
@@ -296,6 +333,65 @@ func finalizeTrafficRankingAccount(account *trafficRankingAccumulator) {
 		latest := account.latest.Format(time.RFC3339Nano)
 		account.row.LatestAt = &latest
 	}
+}
+
+func trafficToken(payload map[string]any, names ...string) (int64, bool) {
+	if value, ok := trafficTokenValue(payload, names...); ok {
+		return value, true
+	}
+	if usage, ok := payload["token_usage"].(map[string]any); ok {
+		if value, found := trafficTokenValue(usage, names...); found {
+			return value, true
+		}
+	}
+	extra, _ := payload["extra"].(map[string]any)
+	if value, ok := trafficTokenValue(extra, names...); ok {
+		return value, true
+	}
+	if usage, ok := extra["token_usage"].(map[string]any); ok {
+		return trafficTokenValue(usage, names...)
+	}
+	return 0, false
+}
+
+func trafficTokenValue(payload map[string]any, names ...string) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	for _, name := range names {
+		value, ok := payload[name]
+		if !ok || value == nil {
+			continue
+		}
+		var parsed int64
+		valid := false
+		switch raw := value.(type) {
+		case json.Number:
+			var err error
+			parsed, err = raw.Int64()
+			valid = err == nil
+		case float64:
+			if raw >= 0 && raw <= math.MaxInt64 && math.Trunc(raw) == raw {
+				parsed, valid = int64(raw), true
+			}
+		case int:
+			if raw >= 0 {
+				parsed, valid = int64(raw), true
+			}
+		case int64:
+			if raw >= 0 {
+				parsed, valid = raw, true
+			}
+		case string:
+			var err error
+			parsed, err = strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+			valid = err == nil && parsed >= 0
+		}
+		if valid && parsed >= 0 {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func addTrafficLatencySample(account *trafficRankingAccumulator, accountID, requestID string, value float64) {
