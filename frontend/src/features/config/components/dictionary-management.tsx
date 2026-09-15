@@ -159,7 +159,11 @@ export function DictionaryManagement() {
           onMove={(from, to) => moveTo(entries[from].id, entries[to].id)}
         >
           <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-            <Table className="min-w-[760px]" containerClassName="min-h-0 flex-1 overflow-auto">
+            <Table
+              actionColumn
+              className="min-w-[760px]"
+              containerClassName="min-h-0 flex-1 overflow-auto"
+            >
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-16">序号</TableHead>

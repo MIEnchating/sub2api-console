@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
@@ -69,7 +69,7 @@ test("个人信息多字段校验及错误换行时，字段和保存按钮相�
   expect(await positions()).toEqual(initial);
 });
 
-test("动画检测校验、账号计数和模型读取状态变化时列表与操作按钮保持原位", async ({ page }) => {
+test("动画检测错误显示在字段下方且无重叠，清除错误后恢复紧凑布局", async ({ page }) => {
   let releaseModels: () => void = () => {};
   const modelsReady = new Promise<void>((resolve) => {
     releaseModels = resolve;
@@ -108,8 +108,9 @@ test("动画检测校验、账号计数和模型读取状态变化时列表与�
   await expect(first).toBeVisible();
   const start = page.getByRole("button", { name: /开始检测/ });
   const operations = page.getByRole("group", { name: "动画检测操作", exact: true });
-  // Empty feedback must not reserve a third toolbar row.
-  expect((await operations.boundingBox())!.height).toBeLessThanOrEqual(58);
+  const settings = page.getByRole("group", { name: "动画筛选与模型", exact: true });
+  await expect(operations.getByRole("button", { name: "清空选择" })).toBeInViewport();
+  await expect(operations.getByRole("button", { name: "选择前 20 个账号" })).toBeInViewport();
   await expect(page.locator('[data-slot="animation-settings-feedback"]')).toHaveCount(0);
   const regionBox = await region.boundingBox();
   const startBox = await start.boundingBox();
@@ -119,13 +120,34 @@ test("动画检测校验、账号计数和模型读取状态变化时列表与�
   expect(await region.boundingBox()).toEqual(regionBox);
   await first.check();
   await expect(page.getByRole("button", { name: /开始检测/ })).toBeEnabled();
+  const timeoutInput = page.getByRole("spinbutton", { name: "请求超时（秒）" });
+  await timeoutInput.fill("1");
   await start.click();
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveAttribute(
     "aria-invalid",
     "true",
   );
-  expect(await region.boundingBox()).toEqual(regionBox);
+  const modelInput = page.getByRole("combobox", { name: "检测模型" });
+  const modelError = page.locator("#animation-unified-model-error");
+  await expect(modelError).toBeVisible();
+  await expect(modelInput).toHaveAccessibleDescription("请输入模型 ID");
+  await expect(timeoutInput).toHaveAccessibleDescription("超时不能小于 5 秒");
+  const timeoutBox = (await timeoutInput.boundingBox())!;
+  const timeoutErrorBox = (await page.locator("#animation-timeout-error").boundingBox())!;
+  expect(timeoutErrorBox.y).toBeGreaterThanOrEqual(timeoutBox.y + timeoutBox.height);
+  const inputBox = (await modelInput.boundingBox())!;
+  const errorBox = (await modelError.boundingBox())!;
+  expect(errorBox.y).toBeGreaterThanOrEqual(inputBox.y + inputBox.height);
+  expect(errorBox.x).toBe(inputBox.x);
+  expect(errorBox.y + errorBox.height).toBeLessThanOrEqual(
+    (await settings.boundingBox())!.y + (await settings.boundingBox())!.height,
+  );
+  await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("validation-error.png"), fullPage: true });
   await page.getByRole("combobox", { name: "检测模型" }).fill("fixture-model");
+  await timeoutInput.fill("120");
+  await expect(page.locator("#animation-timeout-error")).toHaveCount(0);
+  await expect(modelError).toHaveCount(0);
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   await expect(page.getByRole("status", { name: "正在读取共同模型" })).toBeVisible();
   expect(await region.boundingBox()).toEqual(regionBox);
@@ -137,5 +159,74 @@ test("动画检测校验、账号计数和模型读取状态变化时列表与�
   await page.getByRole("button", { name: "选择前 20 个账号" }).click();
   await expect(start).toHaveText("开始检测（20 个账号）");
   expect(await start.boundingBox()).toEqual(startBox);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
   await page.screenshot({ path: test.info().outputPath("validation-stable.png"), fullPage: true });
+});
+
+async function openAnimationLayoutFixture(page: Page): Promise<void> {
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const fixtures: Record<string, unknown> = {
+      ...pageFixtures,
+      "/api/setup/status": { initialized: true, configuration_errors: [] },
+      "/api/auth/session": { authenticated: true, username: "布局测试" },
+      "/api/accounts": [{ ...account, id: "41", name: "布局账号", platform: "openai" }],
+      "/api/model-checks/capabilities": { claude_standards: [], sol_models: [] },
+      "/api/model-checks/account-statuses": [],
+      "/api/model-checks/animation-schedules": [],
+      "/api/model-checks/animations": [],
+    };
+    if (path.endsWith("/events"))
+      await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
+    else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
+    else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
+  });
+  await page.goto("/model-check");
+  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+}
+
+test("动画工具栏在桌面合并筛选与模型，窄屏换行并保留卡片可滚动区域", async ({ page }) => {
+  await openAnimationLayoutFixture(page);
+  const settings = page.getByRole("group", { name: "动画筛选与模型", exact: true });
+  const search = settings.getByRole("textbox", { name: "搜索动画检测账号", exact: true });
+  const model = settings.getByRole("combobox", { name: "检测模型", exact: true });
+  await expect(model).toBeVisible();
+  const modelBox = (await model.boundingBox())!;
+  const searchBox = (await search.boundingBox())!;
+  if (page.viewportSize()!.width >= 1024) {
+    expect(Math.abs(modelBox.y - searchBox.y)).toBeLessThanOrEqual(1);
+    expect(modelBox.width).toBeLessThanOrEqual(300);
+    expect((await settings.boundingBox())!.height).toBeLessThanOrEqual(82);
+  } else {
+    expect(modelBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
+    const region = page.getByRole("region", { name: "动画账号卡片", exact: true });
+    expect((await region.boundingBox())!.height).toBeGreaterThanOrEqual(320);
+    expect(await region.evaluate((element) => getComputedStyle(element).overflowY)).toBe("visible");
+    const form = page.locator("#animation-check-form");
+    expect(await form.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+      true,
+    );
+    await page
+      .getByRole("article", { name: "账号 布局账号", exact: true })
+      .scrollIntoViewIfNeeded();
+    await expect(page.getByRole("checkbox", { name: /^检测 布局账号/ })).toBeInViewport();
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({ path: test.info().outputPath("animation-toolbar.png"), fullPage: true });
+});
+
+test("仅一个账号时在宽桌面保留卡片列宽，不拉伸到整行", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 960 });
+  await openAnimationLayoutFixture(page);
+  const card = page.getByRole("article", { name: "账号 布局账号", exact: true });
+  await expect(card).toBeVisible();
+  expect((await card.boundingBox())!.width).toBeLessThanOrEqual(500);
+  await page.screenshot({
+    path: test.info().outputPath("animation-single-account.png"),
+    fullPage: true,
+  });
 });

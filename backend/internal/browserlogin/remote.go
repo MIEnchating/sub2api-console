@@ -9,37 +9,27 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
-
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 // Remote talks only over the private shared Unix socket, never a browser URL.
 type Remote struct{ client *http.Client }
-type remoteBrowser struct {
-	remote    *Remote
-	id        string
-	challenge atomic.Pointer[string]
-}
 type remoteOAuthBrowser struct {
 	remote *Remote
 	id     string
 	state  string
 }
 type wireResponse struct {
-	ID                 string                  `json:"id,omitempty"`
-	Image              []byte                  `json:"image,omitempty"`
-	ChallengeCode      string                  `json:"challenge_code,omitempty"`
-	Record             *configstore.AuthRecord `json:"record,omitempty"`
-	Error              string                  `json:"error,omitempty"`
-	Code               string                  `json:"code,omitempty"`
-	OAuth              *OAuthResult            `json:"oauth,omitempty"`
-	AuthPage           *AuthPage               `json:"auth_page,omitempty"`
-	SecurityIdentity   *SecurityIdentity       `json:"security_identity,omitempty"`
-	SecurityEnrollment *SecurityEnrollment     `json:"security_enrollment,omitempty"`
-	Enabled            *bool                   `json:"enabled,omitempty"`
-	Checkpoint         *OAuthCheckpoint        `json:"checkpoint,omitempty"`
+	ID                 string              `json:"id,omitempty"`
+	Image              []byte              `json:"image,omitempty"`
+	Error              string              `json:"error,omitempty"`
+	Code               string              `json:"code,omitempty"`
+	OAuth              *OAuthResult        `json:"oauth,omitempty"`
+	AuthPage           *AuthPage           `json:"auth_page,omitempty"`
+	SecurityIdentity   *SecurityIdentity   `json:"security_identity,omitempty"`
+	SecurityEnrollment *SecurityEnrollment `json:"security_enrollment,omitempty"`
+	Enabled            *bool               `json:"enabled,omitempty"`
+	Checkpoint         *OAuthCheckpoint    `json:"checkpoint,omitempty"`
 }
 
 func NewRemote(socket string) *Remote {
@@ -103,51 +93,6 @@ func (r *Remote) call(ctx context.Context, method, path string, payload any) (wi
 	}
 	return value, nil
 }
-func (r *Remote) Open(ctx context.Context, record configstore.AuthRecord) (Browser, error) {
-	// Do not send existing credentials to the browser worker.
-	candidate := configstore.AuthRecord{Host: record.Host, BaseURL: record.BaseURL, UpstreamType: record.UpstreamType}
-	value, err := r.call(ctx, http.MethodPost, "/sessions", candidate)
-	if err != nil {
-		return nil, err
-	}
-	if len(value.ID) != 48 || strings.ContainsAny(value.ID, "/\\") {
-		return nil, errors.New("验证浏览器会话响应无效")
-	}
-	return &remoteBrowser{remote: r, id: value.ID}, nil
-}
-func (b *remoteBrowser) Screenshot(ctx context.Context) ([]byte, error) {
-	v, err := b.remote.call(ctx, http.MethodGet, "/sessions/"+b.id, nil)
-	if err == nil {
-		b.challenge.Store(&v.ChallengeCode)
-	}
-	return v.Image, err
-}
-func (b *remoteBrowser) ChallengeCode() string {
-	if code := b.challenge.Load(); code != nil {
-		return *code
-	}
-	return ""
-}
-func (b *remoteBrowser) Input(ctx context.Context, v Input) error {
-	_, err := b.remote.call(ctx, http.MethodPost, "/sessions/"+b.id+"/input", v)
-	return err
-}
-func (b *remoteBrowser) Credentials(ctx context.Context) (configstore.AuthRecord, error) {
-	v, err := b.remote.call(ctx, http.MethodPost, "/sessions/"+b.id+"/credentials", nil)
-	if err != nil {
-		return configstore.AuthRecord{}, err
-	}
-	if v.Record == nil {
-		return configstore.AuthRecord{}, errors.New("浏览器尚未取得登录凭据")
-	}
-	return *v.Record, nil
-}
-func (b *remoteBrowser) Close() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_, _ = b.remote.call(ctx, http.MethodDelete, "/sessions/"+b.id, nil)
-}
-
 func (r *Remote) OpenOAuth(ctx context.Context, options OAuthOptions) (OAuthBrowser, error) {
 	if err := options.Validate(); err != nil {
 		return nil, err

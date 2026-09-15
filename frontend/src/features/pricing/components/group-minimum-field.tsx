@@ -25,7 +25,7 @@ export function GroupMinimumField(props: {
   }, [form, props.value]);
   const inputID = `pricing-group-minimum-${props.groupID}`;
   return (
-    <div className="min-w-0 border-t px-3 py-2.5" data-slot="group-minimum-field">
+    <div className="min-w-0 border-t bg-muted/10 px-3.5 py-3" data-slot="group-minimum-field">
       <Controller
         name="minimum"
         control={form.control}

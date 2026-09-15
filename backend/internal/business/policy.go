@@ -561,11 +561,13 @@ type advancedRule struct {
 }
 
 var advancedRules = map[string]map[string]advancedRule{
-	"selection": {},
+	"selection":            {},
+	"upstream_concurrency": {"enabled": {kind: "bool"}},
+	"cost_wall":            {"enabled": {kind: "bool"}, "fallback_enabled": {kind: "bool"}, "stop_auto_probe": {kind: "bool"}},
 	"weights": {
 		"enabled": {kind: "bool"}, "budget": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"gate_floor": {kind: "number", minimum: 0, maximum: 100}, "price_exp": {kind: "positive_number", maximum: 100},
-		"speed_exp": {kind: "positive_number", maximum: 100}, "balanced_price_ratio": {kind: "ratio"},
+		"speed_exp": {kind: "positive_number", maximum: 100}, "balanced_price_ratio": {kind: "number", minimum: 0, maximum: 1},
 		"performance_min_samples": {kind: "int", minimum: 1, maximum: 200}, "speed_advantage_cap": {kind: "number", minimum: 1, maximum: 100},
 		"min_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000}, "max_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000},
 	},
@@ -887,23 +889,25 @@ func valueStringSet(values ...string) map[string]struct{} {
 }
 
 var advancedPolicyCoreFields = map[string]map[string]struct{}{
-	"selection":           {"strategy": {}},
-	"weights":             {"scheduling_missing_rate_fallback": {}, "change_threshold": {}, "cooldown_seconds": {}},
-	"manual_priority":     {},
-	"scope":               {"excluded_group_ids": {}},
-	"probe":               {"interval_seconds": {}, "model": {}},
-	"traffic":             {"enabled": {}, "lookback_minutes": {}, "max_samples_per_account": {}},
-	"scoring":             {},
-	"breaker":             {},
-	"degrade":             {},
-	"recovery":            {},
-	"scaling":             {},
-	"cleanup":             {},
-	"upstream_multiplier": {},
-	"account_rate_sync":   {},
-	"price_management":    {},
-	"writeback":           {},
-	"classify":            {},
+	"selection":            {"strategy": {}},
+	"weights":              {"scheduling_missing_rate_fallback": {}, "change_threshold": {}, "cooldown_seconds": {}},
+	"manual_priority":      {},
+	"scope":                {"excluded_group_ids": {}},
+	"probe":                {"interval_seconds": {}, "model": {}},
+	"traffic":              {"enabled": {}, "lookback_minutes": {}, "max_samples_per_account": {}},
+	"scoring":              {},
+	"breaker":              {},
+	"degrade":              {},
+	"recovery":             {},
+	"scaling":              {},
+	"cleanup":              {},
+	"upstream_multiplier":  {},
+	"upstream_concurrency": {},
+	"cost_wall":            {},
+	"account_rate_sync":    {},
+	"price_management":     {},
+	"writeback":            {},
+	"classify":             {},
 }
 
 var autoApplyFields = valueStringSet("schedulable", "priority", "load_factor", "concurrency")

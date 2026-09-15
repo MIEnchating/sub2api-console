@@ -101,6 +101,13 @@ function renderDialog(accounts: AccountStatus[]) {
 }
 
 describe("账号批量探活", () => {
+  it("批量范围长账号名限制在可滚动列表中并保持操作栏独立", async () => {
+    renderDialog([{ ...account("41"), name: "很长的账号名称".repeat(60) }]);
+    const list = screen.getByRole("list", { name: "本次探活账号" });
+    expect(list).toHaveClass("overflow-y-auto", "overscroll-contain");
+    expect(list.querySelector("li")).toHaveClass("min-w-0");
+    expect(list).not.toContainElement(screen.getByRole("button", { name: "确认探活" }));
+  });
   it("在账号页勾选账号后通过批量探活入口确认准确的处理范围", async () => {
     vi.stubGlobal("PointerEvent", MouseEvent);
     vi.spyOn(api, "accounts").mockResolvedValue([account("41"), account("42")]);

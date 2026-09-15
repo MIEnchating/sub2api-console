@@ -26,6 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
+import { astraSourceLabels } from "../constants";
 
 type ResultRecord = Record<string, unknown>;
 
@@ -161,6 +162,30 @@ function Metric(props: { label: string; value: number | null }) {
 }
 
 function ResultMetrics(props: { result: ResultRecord }) {
+  if (props.result.checker === "astra") {
+    const source = textValue(props.result.access_source) ?? "inconclusive";
+    const checks = resultRows(props.result.checks).filter(
+      (check) => check.id === "juice-low" || check.id === "juice-mid",
+    );
+    return (
+      <div className="space-y-1 text-xs">
+        <p>
+          题目通过 {numberValue(props.result.identity_passed) ?? 0}/
+          {numberValue(props.result.identity_total) ?? 0}
+        </p>
+        <p>{astraSourceLabels[source] ?? astraSourceLabels.inconclusive}</p>
+        {checks.map((check, index) => (
+          <p
+            key={`${check.round}-${check.id}-${index}`}
+            className="text-muted-foreground break-words"
+          >
+            第 {numberValue(check.round) ?? 1} 轮 · {check.id === "juice-low" ? "low" : "mid"}：
+            {numberValue(check.number) ?? "无法判定"}
+          </p>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-1 2xl:grid-cols-2">
       <Metric label="相似度" value={similarity(props.result)} />

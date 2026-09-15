@@ -80,7 +80,7 @@ export function ThresholdSettings(props: {
                   </Button>
                 </div>
                 <FieldError
-                  floating
+                  className="mt-1"
                   message={
                     form.formState.errors.balance_thresholds?.[index]?.value?.message ??
                     (index === 0
@@ -107,7 +107,10 @@ export function ThresholdSettings(props: {
             disabled={!enabled || !probeEnabled}
             {...form.register("probe_failure_streak", { valueAsNumber: true })}
           />
-          <FieldError floating message={form.formState.errors.probe_failure_streak?.message} />
+          <FieldError
+            className="mt-1"
+            message={form.formState.errors.probe_failure_streak?.message}
+          />
         </div>
         <div>
           <FieldLabel
@@ -124,7 +127,10 @@ export function ThresholdSettings(props: {
             disabled={!enabled || !probeEnabled}
             {...form.register("probe_recovery_streak", { valueAsNumber: true })}
           />
-          <FieldError floating message={form.formState.errors.probe_recovery_streak?.message} />
+          <FieldError
+            className="mt-1"
+            message={form.formState.errors.probe_recovery_streak?.message}
+          />
         </div>
         <div className="sm:col-span-2">
           <FieldLabel

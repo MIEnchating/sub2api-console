@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -56,13 +55,13 @@ func (f Chromium) openSecurity(ctx context.Context, options SecurityOptions, see
 	if seed != nil {
 		navigateURL = securityCheckpointBootstrapURL
 	}
-	base, err := f.openChromium(ctx, configstore.AuthRecord{BaseURL: "https://chatgpt.com", Host: "chatgpt.com"}, navigateURL, []string{
+	base, err := f.openChromium(ctx, "https://chatgpt.com", navigateURL, []string{
 		"https://chatgpt.com", "https://auth.openai.com", "https://cdn.oaistatic.com", "https://images.openai.com", "https://cdn.auth0.com", "https://static.cloudflareinsights.com",
 	}, nil, options.ProxyURL, chromiumSessionState{security: b, seed: seed})
 	if err != nil {
 		return nil, err
 	}
-	b.chromiumBrowser = base.(*chromiumBrowser)
+	b.chromiumBrowser = base
 	if err := b.run(ctx, fetch.Enable().WithPatterns([]*fetch.RequestPattern{
 		{URLPattern: "https://auth.openai.com/api/accounts/password/add", RequestStage: fetch.RequestStageResponse},
 		{URLPattern: "*", RequestStage: fetch.RequestStageRequest},

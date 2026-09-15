@@ -31,7 +31,7 @@ func (k *keyClient) RevealKey(_ context.Context, _ configstore.AuthRecord, _, _ 
 }
 
 // Both HTTP endpoints and both databases belong exclusively to each test.
-func newService(t *testing.T, adminURL, baseURL string) (*onboarding.Service, *business.Store, *keyClient, onboarding.Request) {
+func newService(t *testing.T, adminURL, baseURL string, wrapRepository ...func(*business.Store) onboarding.Repository) (*onboarding.Service, *business.Store, *keyClient, onboarding.Request) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -74,7 +74,11 @@ func newService(t *testing.T, adminURL, baseURL string) (*onboarding.Service, *b
 		t.Fatal(err)
 	}
 	keys := &keyClient{}
-	return onboarding.New(repo, private, keys, nil), repo, keys, onboarding.Request{Host: "upstream.test", UpstreamType: "sub2api", UpstreamGroupID: "6", LocalGroupID: "3", BaseURL: &baseURL, Actor: "test"}
+	var repository onboarding.Repository = repo
+	if len(wrapRepository) > 0 {
+		repository = wrapRepository[0](repo)
+	}
+	return onboarding.New(repository, private, keys, nil), repo, keys, onboarding.Request{Host: "upstream.test", UpstreamType: "sub2api", UpstreamGroupID: "6", LocalGroupID: "3", BaseURL: &baseURL, Actor: "test"}
 }
 
 func TestModelDiscoveryPrefersPreviewAndFallsBackToAccountURLOnFailure(t *testing.T) {

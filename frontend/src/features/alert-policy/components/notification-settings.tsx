@@ -109,7 +109,10 @@ export function NotificationSettings(props: {
               disabled={!enabled || !deliveryEnabled}
               {...form.register("repeat_interval_minutes", { valueAsNumber: true })}
             />
-            <FieldError floating message={form.formState.errors.repeat_interval_minutes?.message} />
+            <FieldError
+              className="mt-1"
+              message={form.formState.errors.repeat_interval_minutes?.message}
+            />
           </div>
           <div>
             <FieldLabel
@@ -127,7 +130,7 @@ export function NotificationSettings(props: {
               {...form.register("state_change_cooldown_minutes", { valueAsNumber: true })}
             />
             <FieldError
-              floating
+              className="mt-1"
               message={form.formState.errors.state_change_cooldown_minutes?.message}
             />
           </div>
@@ -146,7 +149,7 @@ export function NotificationSettings(props: {
               disabled={!enabled || !deliveryEnabled}
               {...form.register("merge_threshold", { valueAsNumber: true })}
             />
-            <FieldError floating message={form.formState.errors.merge_threshold?.message} />
+            <FieldError className="mt-1" message={form.formState.errors.merge_threshold?.message} />
           </div>
         </div>
         <div

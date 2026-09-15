@@ -4,16 +4,7 @@ import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onbo
 import { ProbeProgressSummary } from "./probe-task-timeline";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  CheckCircle2,
-  Grid2X2,
-  LoaderCircle,
-  MessageCircle,
-  Play,
-  RefreshCw,
-  XCircle,
-} from "lucide-react";
+import { Activity, CheckCircle2, LoaderCircle, Play, RefreshCw, XCircle } from "lucide-react";
 
 import {
   api,
@@ -246,7 +237,10 @@ function AccountProbeSession(props: {
   const runDisabled = selectDisabled || modelsLoading || selectedModel === noModelSelected;
   let pendingMessage: string | undefined;
   if (closing || cancelProbe.isPending) pendingMessage = "正在取消探活并清理临时 Key";
-  else if ((modelsLoading || runProbe.isPending) && progress.history.length === 0)
+  else if (
+    (modelsLoading || runProbe.isPending) &&
+    (progress.starting || progress.history.length === 0)
+  )
     pendingMessage = "正在创建探活任务";
   async function closeProbe() {
     if (closing) return;
@@ -268,136 +262,123 @@ function AccountProbeSession(props: {
         height={accountProbeDialogLayout.height}
         className={`${accountProbeDialogLayout.content} gap-0 p-0`}
       >
-        <DialogHeader className="min-w-0 border-b px-6 py-5 pr-12">
+        <DialogHeader className="min-w-0 border-b px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="min-w-0 break-words">测试账号连接</DialogTitle>
         </DialogHeader>
-        <DialogBody className="grid gap-4 px-6 py-4">
-          <ProbeAccountCard target={props.target} status={progress.task?.status} />
-          <div className="grid min-w-0 gap-1.5">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <span className="text-sm font-medium">选择测试模型</span>
-              {loadModels.isSuccess ? (
-                <span className="text-muted-foreground text-xs">已读取 {models.length} 个模型</span>
-              ) : null}
+        <DialogBody className="grid min-w-0 content-start gap-3 px-4 py-3 sm:px-5 [scrollbar-gutter:stable]">
+          <ProbeAccountCard target={props.target} />
+          <div className="grid min-w-0 grid-cols-1 gap-3" role="group" aria-label="探活参数">
+            <div className="grid min-w-0 gap-1.5">
+              <span className="text-sm font-medium">模型</span>
+              <div
+                role="group"
+                aria-label="测试模型选择与获取"
+                className="flex min-w-0 items-center gap-1.5"
+              >
+                <Select
+                  value={selectedModel}
+                  itemToStringLabel={(value) =>
+                    value === noModelSelected ? "选择上游模型" : String(value)
+                  }
+                  disabled={selectDisabled}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    modelSelectionEdited.current = true;
+                    setSelectedModel(value);
+                    setResult(null);
+                    runProbe.reset();
+                  }}
+                >
+                  <SelectTrigger className="min-w-0 flex-1" aria-label="选择测试模型">
+                    <SelectValue placeholder="选择上游模型" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelsLoading ? (
+                      <SelectItem value={noModelSelected} disabled>
+                        正在获取上游模型
+                      </SelectItem>
+                    ) : null}
+                    {!modelsLoading && options.length === 0 ? (
+                      <SelectItem value={noModelSelected} disabled>
+                        {loadModels.isError ? "—" : "暂无可用模型"}
+                      </SelectItem>
+                    ) : null}
+                    {options.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <ProbeModelLoadButton
+                  pending={modelsLoading}
+                  succeeded={loadModels.isSuccess}
+                  disabled={selectDisabled}
+                  onLoad={startModelLoad}
+                />
+              </div>
             </div>
-            <div
-              role="group"
-              aria-label="测试模型选择与获取"
-              className="flex min-w-0 items-center gap-2"
-            >
+            {loadModels.isError ? (
+              <QueryErrorToast error={loadModels.error} fallback="上游模型获取失败" />
+            ) : null}
+            <div className="grid min-w-0 gap-1.5">
+              <span className="text-sm font-medium">模式</span>
               <Select
-                value={selectedModel}
+                value={selectedMode}
                 itemToStringLabel={(value) =>
-                  value === noModelSelected ? "选择上游模型" : String(value)
+                  onboardingProbeModeOptions.find((option) => option.value === value)?.label ??
+                  String(value)
                 }
                 disabled={selectDisabled}
                 onValueChange={(value) => {
-                  if (!value) return;
-                  modelSelectionEdited.current = true;
-                  setSelectedModel(value);
+                  if (value !== "stream" && value !== "default") return;
+                  setSelectedMode(value);
                   setResult(null);
                   runProbe.reset();
                 }}
               >
-                <SelectTrigger className="min-w-0 flex-1" aria-label="选择测试模型">
-                  <SelectValue placeholder="选择上游模型" />
+                <SelectTrigger className="w-full min-w-0" aria-label="选择测试模式">
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {modelsLoading ? (
-                    <SelectItem value={noModelSelected} disabled>
-                      正在获取上游模型
-                    </SelectItem>
-                  ) : null}
-                  {!modelsLoading && options.length === 0 ? (
-                    <SelectItem value={noModelSelected} disabled>
-                      {loadModels.isError ? "—" : "暂无可用模型"}
-                    </SelectItem>
-                  ) : null}
-                  {options.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {model}
+                  {onboardingProbeModeOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <ProbeModelLoadButton
-                pending={modelsLoading}
-                succeeded={loadModels.isSuccess}
-                disabled={selectDisabled}
-                onLoad={startModelLoad}
-              />
             </div>
-          </div>
-          {loadModels.isError ? (
-            <QueryErrorToast error={loadModels.error} fallback="上游模型获取失败" />
-          ) : null}
-          <div className="grid min-w-0 gap-1.5">
-            <span className="text-sm font-medium">测试模式</span>
-            <Select
-              value={selectedMode}
-              itemToStringLabel={(value) =>
-                onboardingProbeModeOptions.find((option) => option.value === value)?.label ??
-                String(value)
-              }
-              disabled={selectDisabled}
-              onValueChange={(value) => {
-                if (value !== "stream" && value !== "default") return;
-                setSelectedMode(value);
-                setResult(null);
-                runProbe.reset();
-              }}
-            >
-              <SelectTrigger className="w-full min-w-0" aria-label="选择测试模式">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {onboardingProbeModeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
           <section aria-label="测试模型响应" className="grid min-w-0 gap-2">
-            <div className="text-muted-foreground flex min-w-0 items-center justify-between gap-3 text-xs">
-              <span className="inline-flex items-center gap-1.5">
-                <Grid2X2 className="size-3.5" aria-hidden="true" />
-                测试模型
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <MessageCircle className="size-3.5" aria-hidden="true" />
-                提示词："hi"
-              </span>
-            </div>
-            <div role="region" aria-label="探活进度" className="flex min-w-0 items-start gap-2">
-              <div className="min-w-0 flex-1">
-                <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage} />
-              </div>
+            <div role="region" aria-label="探活进度" className="min-w-0">
+              <ProbeProgressSummary steps={progress.history} pendingMessage={pendingMessage}>
+                <ProbeResultSlot
+                  pending={runProbe.isPending}
+                  pendingLabel="当前阶段见上方"
+                  error={null}
+                  result={result}
+                  requestModel={selectedModel === noModelSelected ? null : selectedModel}
+                />
+              </ProbeProgressSummary>
+              {runProbe.isError ? (
+                <QueryErrorToast error={runProbe.error} fallback="探活请求失败" />
+              ) : null}
               {progress.queryError ? (
                 <Button variant="outline" onClick={() => void progress.refetch()}>
                   重新读取探活状态
                 </Button>
               ) : null}
             </div>
-            <ProbeResultSlot
-              pending={runProbe.isPending}
-              pendingLabel="探活处理中，当前阶段见上方"
-              error={runProbe.isError ? runProbe.error : null}
-              result={result}
-              requestModel={selectedModel === noModelSelected ? null : selectedModel}
-            />
+            <p className="text-muted-foreground text-xs">使用已配置的探活提示词</p>
           </section>
         </DialogBody>
         <ProbeDialogActions
           runDisabled={runDisabled}
           probePending={runProbe.isPending}
+          modelsPending={modelsLoading}
           hasResult={result !== null}
           closing={closing}
-          cancelDisabled={
-            closing || cancelProbe.isPending || !(modelsLoading || runProbe.isPending)
-          }
-          onCancel={() => cancelProbe.mutate()}
           onClose={closeProbe}
           onRun={() => runProbe.mutate()}
         />
@@ -419,13 +400,13 @@ export function ProbeModelLoadButton(props: {
     <Button
       type="button"
       variant="outline"
-      className="shrink-0"
+      size="icon"
+      className="shrink-0 overflow-hidden"
       aria-label={label}
       disabled={props.disabled || props.pending}
       onClick={props.onLoad}
     >
       <RefreshCw className={props.pending ? "animate-spin" : undefined} aria-hidden="true" />
-      <span className="hidden sm:inline">{label}</span>
     </Button>
   );
 }
@@ -437,52 +418,100 @@ export function ProbeResultSlot(props: {
   requestModel?: string | null;
   pendingLabel?: string;
 }) {
-  if (!props.pending && !props.error && !props.result)
-    return (
-      <div className="grid min-w-0 gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 text-xs text-zinc-300">
-        <p className="break-words text-cyan-300">使用模型：{props.requestModel ?? "待选择"}</p>
-        <p>点击“开始测试”查看响应</p>
-      </div>
-    );
-
-  let content = null;
+  const result = props.pending ? null : props.result;
+  const passed = result?.status === "passed";
+  let status = "待开始";
+  let tone = "text-zinc-400";
   if (props.pending) {
-    content = (
-      <div
-        className="max-w-full min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100"
-        aria-live="polite"
-      >
-        <div className="grid gap-2 font-mono text-xs">
-          <p className="text-cyan-300">使用模型：{props.requestModel ?? "正在确认"}</p>
-          <p className="text-zinc-400">发送测试消息："hi"</p>
-          <p className="text-amber-300">响应：</p>
-          <p className="inline-flex items-center gap-2 text-zinc-400">
-            <LoaderCircle className="size-3.5 animate-spin text-cyan-400" aria-hidden="true" />
-            {props.pendingLabel ?? "等待上游响应"}
+    status = "测试中";
+    tone = "text-cyan-300";
+  } else if (result) {
+    status = passed ? "测试完成！" : "测试失败";
+    tone = passed ? "text-emerald-300" : "text-red-300";
+  } else if (props.error) status = "未完成";
+  return (
+    <div
+      className="flex h-full min-h-36 min-w-0 flex-col gap-3 overflow-hidden bg-zinc-950 p-3 font-mono text-xs text-zinc-300"
+      aria-live="polite"
+    >
+      {props.error ? <QueryErrorToast error={props.error} fallback="探活请求失败" /> : null}
+      <div className="grid shrink-0 gap-1">
+        <p className="line-clamp-2 break-words text-cyan-300 [overflow-wrap:anywhere]">
+          使用模型：{result?.request_model || props.requestModel || "待选择"}
+        </p>
+        {result?.actual_model && result.actual_model !== result.request_model ? (
+          <p className="line-clamp-2 break-words text-zinc-400 [overflow-wrap:anywhere]">
+            响应模型：{result.actual_model}
           </p>
-        </div>
-        <div className="mt-3 flex items-center gap-2 border-t border-zinc-700 pt-3 font-mono text-xs text-cyan-300">
-          <LoaderCircle className="size-4 animate-spin" aria-hidden="true" />
-          测试中
-        </div>
+        ) : null}
       </div>
-    );
-  } else if (props.error) {
-    return <QueryErrorToast error={props.error} fallback="探活请求失败" />;
-  } else if (props.result) {
-    content = <ProbeResultPanel result={props.result} />;
-  }
-
-  return <div className="grid min-h-36 min-w-0 [&>*]:min-h-36">{content}</div>;
+      <div
+        role="region"
+        aria-label="探活响应内容"
+        tabIndex={0}
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words outline-offset-2 [overflow-wrap:anywhere] [scrollbar-gutter:stable]"
+      >
+        {result ? (
+          <>
+            <p className="mb-2 text-zinc-500">响应</p>
+            <p className={passed ? "text-emerald-300" : "text-red-300"}>
+              {result.response_text || result.message}
+            </p>
+            {!passed && result.response_text ? (
+              <p className="mt-2 text-red-300">{result.message}</p>
+            ) : null}
+          </>
+        ) : null}
+        {props.pending ? (
+          <div className="grid gap-2 py-2">
+            <p>正在发送探活请求</p>
+            <p className="text-zinc-500">{props.pendingLabel ?? "等待上游响应"}</p>
+          </div>
+        ) : null}
+        {!props.pending && !result ? (
+          <p className="py-2 text-zinc-400">
+            {props.error ? "响应尚未返回" : "点击“开始测试”查看响应"}
+          </p>
+        ) : null}
+      </div>
+      <div
+        className={`flex min-h-5 shrink-0 flex-wrap items-center gap-2 border-t border-zinc-800 pt-2 ${tone}`}
+      >
+        {props.pending ? (
+          <span className="flex size-4 shrink-0 overflow-hidden">
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-4 animate-spin motion-reduce:animate-none"
+            />
+          </span>
+        ) : null}
+        {result ? (
+          <>
+            {passed ? (
+              <CheckCircle2 aria-hidden="true" className="size-4 shrink-0" />
+            ) : (
+              <XCircle aria-hidden="true" className="size-4 shrink-0" />
+            )}
+          </>
+        ) : null}
+        <span>{status}</span>
+        {result ? (
+          <span className="ml-auto text-zinc-400">
+            HTTP {result.http_status > 0 ? result.http_status : "-"}
+            {result.latency_ms > 0 ? ` · ${result.latency_ms} 毫秒` : ""}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function ProbeDialogActions(props: {
   runDisabled: boolean;
   probePending: boolean;
+  modelsPending?: boolean;
   hasResult: boolean;
   closing?: boolean;
-  cancelDisabled?: boolean;
-  onCancel?: () => void;
   onClose: () => void;
   onRun: () => void;
 }) {
@@ -490,27 +519,32 @@ export function ProbeDialogActions(props: {
   if (props.probePending) actionLabel = "测试中";
   else if (props.hasResult) actionLabel = "重试";
   let actionIcon = <Activity />;
-  if (props.probePending) actionIcon = <LoaderCircle className="animate-spin" />;
+  if (props.probePending)
+    actionIcon = (
+      <span className="flex size-4 shrink-0 overflow-hidden">
+        <LoaderCircle
+          aria-hidden="true"
+          className="size-4 animate-spin motion-reduce:animate-none"
+        />
+      </span>
+    );
   else if (props.hasResult) actionIcon = <RefreshCw />;
+  let closeLabel = "关闭";
+  if (props.closing) closeLabel = "正在关闭";
+  else if (props.probePending || props.modelsPending) closeLabel = "取消并关闭";
   return (
     <DialogFooter
       role="group"
       aria-label="探活操作"
-      className="mx-0 mb-0 min-w-0 flex-row rounded-none bg-transparent px-6 py-4"
+      className="mx-0 mb-0 min-w-0 flex-row flex-wrap justify-end gap-2 rounded-none border-t bg-transparent px-4 py-3 sm:px-5"
     >
-      {props.onCancel ? (
-        <Button
-          variant="ghost"
-          className="mr-auto"
-          onClick={props.onCancel}
-          disabled={props.cancelDisabled}
-        >
-          <XCircle aria-hidden="true" />
-          取消探活
-        </Button>
-      ) : null}
-      <Button variant="outline" onClick={props.onClose} aria-busy={props.closing}>
-        关闭
+      <Button
+        variant="outline"
+        onClick={props.onClose}
+        aria-busy={props.closing}
+        disabled={props.closing}
+      >
+        {closeLabel}
       </Button>
       <Button disabled={props.runDisabled} onClick={props.onRun}>
         {actionIcon}
@@ -520,67 +554,21 @@ export function ProbeDialogActions(props: {
   );
 }
 
-function ProbeResultPanel(props: { result: ProbeResult }) {
-  const passed = props.result.status === "passed";
+function ProbeAccountCard(props: { target: ProbeDialogTarget }) {
   return (
-    <div
-      className="max-w-full min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100"
-      aria-live="polite"
-    >
-      <div className="grid gap-2 font-mono text-xs">
-        <p className="text-cyan-300">使用模型：{props.result.request_model || "未返回"}</p>
-        <p className="text-zinc-400">发送测试消息："hi"</p>
-        <p className="text-amber-300">响应：</p>
-        <p className="min-w-0 whitespace-pre-wrap break-words text-emerald-300 [overflow-wrap:anywhere]">
-          {props.result.response_text || props.result.message}
-        </p>
-        {!passed && props.result.response_text ? (
-          <p className="text-red-300 break-words">{props.result.message}</p>
-        ) : null}
-      </div>
-      <div className="mt-3 flex items-center gap-2 border-t border-zinc-700 pt-3 font-mono text-xs">
-        {passed ? (
-          <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />
-        ) : (
-          <XCircle className="text-destructive size-4 shrink-0" />
-        )}
-        <span className={passed ? "text-emerald-400" : "text-destructive"}>
-          {passed ? "测试完成！" : "测试失败"}
-        </span>
-        <span className="ml-auto text-zinc-500">
-          HTTP {props.result.http_status > 0 ? props.result.http_status : "-"}
-          {props.result.latency_ms > 0 ? ` · ${props.result.latency_ms} 毫秒` : ""}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function ProbeAccountCard(props: { target: ProbeDialogTarget; status?: string }) {
-  const statusLabels: Record<string, string> = {
-    queued: "已排队",
-    running: "进行中",
-    succeeded: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-  };
-  return (
-    <div className="flex min-w-0 items-center gap-3 rounded-lg border bg-muted/20 px-3 py-3">
-      <div className="bg-primary flex size-10 shrink-0 items-center justify-center rounded-md text-primary-foreground">
-        <Play className="size-5 fill-current" aria-hidden="true" />
+    <div className="flex min-w-0 items-center gap-2.5">
+      <div className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
+        <Play className="size-4" aria-hidden="true" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold">{props.target.name}</p>
-        <div className="text-muted-foreground mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          <span className="rounded bg-muted px-1.5 py-0.5 font-medium uppercase">APIKEY</span>
-          <span className="shrink-0">账号</span>
-          {props.target.platform ? <span className="truncate">{props.target.platform}</span> : null}
-          <span className="truncate">{props.target.host}</span>
-        </div>
+        <p className="truncate text-sm font-medium">{props.target.name}</p>
+        <p className="text-muted-foreground truncate text-xs">{props.target.host}</p>
       </div>
-      <span className="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-        {statusLabels[props.status ?? ""] ?? "待测试"}
-      </span>
+      {props.target.platform ? (
+        <span className="text-muted-foreground max-w-24 truncate rounded-md border px-2 py-1 text-xs">
+          {props.target.platform}
+        </span>
+      ) : null}
     </div>
   );
 }

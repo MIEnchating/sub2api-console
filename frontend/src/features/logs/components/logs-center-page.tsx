@@ -1,182 +1,32 @@
 import { useDeferredValue, useEffect, useState } from "react";
-import { Eye } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import {
   api,
-  type GroupStatus,
   type UnifiedLogEntry,
   type UnifiedLogEventLevel,
   type UnifiedLogKind,
   type UnifiedLogState,
 } from "@/api";
-import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
-import { TableEmptyState } from "@/components/data-table/empty-state";
-import { ContentRetry } from "@/components/content-retry";
-import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePagination } from "@/components/data-table/pagination";
-import { SearchField } from "@/components/data-table/search-field";
 import { DataTablePanel } from "@/components/data-table/table-panel";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import { TableActionButton } from "@/components/data-table/table-action-button";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
-import { StatusBadge } from "@/components/status-badge";
-import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  formatLogDate,
-  logEventLevel,
-  logEventLevelLabel,
-  logKindLabel,
-  logSourceLabel,
-  logStateLabel,
-  logStatusLabel,
-  logStatusVariant,
-  logTitleLabel,
-} from "../lib/log-display";
 import { LogDetailsDialog } from "./log-details-dialog";
-
-const kinds: UnifiedLogKind[] = ["all", "task", "event", "change"];
-const states: UnifiedLogState[] = ["all", "active", "failed", "warning", "succeeded"];
-const eventLevels: UnifiedLogEventLevel[] = ["all", "info", "warning", "error"];
-
-function normalizedKind(value: unknown): UnifiedLogKind {
-  return typeof value === "string" && kinds.includes(value as UnifiedLogKind)
-    ? (value as UnifiedLogKind)
-    : "all";
-}
-
-export function LogKindFilter(props: {
-  value: UnifiedLogKind;
-  onChange: (value: UnifiedLogKind) => void;
-}) {
-  return (
-    <SegmentedControl role="tablist" aria-label="记录类型">
-      {kinds.map((option) => {
-        const selected = props.value === option;
-        return (
-          <SegmentedControlItem
-            key={option}
-            id={`logs-kind-tab-${option}`}
-            type="button"
-            role="tab"
-            selected={selected}
-            aria-controls="logs-results-panel"
-            onClick={() => props.onChange(option)}
-          >
-            {logKindLabel(option)}
-          </SegmentedControlItem>
-        );
-      })}
-    </SegmentedControl>
-  );
-}
-
-function LogStateFilter(props: {
-  value: UnifiedLogState;
-  onChange: (value: UnifiedLogState) => void;
-}) {
-  return (
-    <FilterMenu
-      label="执行结果"
-      options={states.filter((option) => option !== "all")}
-      value={props.value === "all" ? null : props.value}
-      onValueChange={(value) => props.onChange(value ?? "all")}
-      optionLabel={logStateLabel}
-    />
-  );
-}
-
-function EventLevelFilter(props: {
-  value: UnifiedLogEventLevel;
-  onChange: (value: UnifiedLogEventLevel) => void;
-}) {
-  return (
-    <FilterMenu
-      label="事件级别"
-      options={eventLevels.filter((option) => option !== "all")}
-      value={props.value === "all" ? null : props.value}
-      onValueChange={(value) => props.onChange(value ?? "all")}
-      optionLabel={logEventLevelLabel}
-    />
-  );
-}
-
-function EventGroupFilter(props: {
-  value: string;
-  groups: GroupStatus[];
-  onChange: (value: string) => void;
-}) {
-  return (
-    <FilterMenu
-      label="事件分组"
-      options={props.groups.map((group) => group.name)}
-      value={props.value === "all" ? null : props.value}
-      onValueChange={(value) => props.onChange(value ?? "all")}
-    />
-  );
-}
-
-export function LogsFilterToolbar(props: {
-  search: string;
-  kind: UnifiedLogKind;
-  state: UnifiedLogState;
-  eventLevel: UnifiedLogEventLevel;
-  eventGroup: string;
-  groups: GroupStatus[];
-  truncated: boolean;
-  onSearchChange: (value: string) => void;
-  onKindChange: (value: UnifiedLogKind) => void;
-  onStateChange: (value: UnifiedLogState) => void;
-  onEventLevelChange: (value: UnifiedLogEventLevel) => void;
-  onEventGroupChange: (value: string) => void;
-}) {
-  return (
-    <TableFilterToolbar className="min-w-0" data-testid="logs-filter-toolbar" aria-label="日志筛选">
-      <SearchField
-        value={props.search}
-        onChange={props.onSearchChange}
-        placeholder="搜索任务、对象或原因"
-      />
-      <LogKindFilter value={props.kind} onChange={props.onKindChange} />
-      {props.kind === "event" ? (
-        <>
-          <EventLevelFilter value={props.eventLevel} onChange={props.onEventLevelChange} />
-          <EventGroupFilter
-            value={props.eventGroup}
-            groups={props.groups}
-            onChange={props.onEventGroupChange}
-          />
-        </>
-      ) : (
-        <LogStateFilter value={props.state} onChange={props.onStateChange} />
-      )}
-      {props.truncated && (
-        <Badge variant="outline" className="sm:ml-auto">
-          仅显示最近记录
-        </Badge>
-      )}
-    </TableFilterToolbar>
-  );
-}
+import { logKinds, LogsFilterToolbar } from "./logs-filter-toolbar";
+import { LogsTable } from "./logs-table";
 
 export function LogsCenterPage() {
   const searchParams = useSearch({ strict: false }) as { kind?: unknown };
   const navigate = useNavigate();
-  const kind = normalizedKind(searchParams.kind);
+  const kind =
+    typeof searchParams.kind === "string" && logKinds.includes(searchParams.kind as UnifiedLogKind)
+      ? (searchParams.kind as UnifiedLogKind)
+      : "all";
   const [state, setState] = useState<UnifiedLogState>("all");
   const [eventLevel, setEventLevel] = useState<UnifiedLogEventLevel>("all");
   const [eventGroup, setEventGroup] = useState("all");
@@ -279,91 +129,18 @@ export function LogsCenterPage() {
           className="flex-1"
           data-testid="logs-table-shell"
         >
-          <div className="min-h-0 flex-1 overflow-hidden" data-testid="logs-table-scroll-region">
-            <Table
-              containerClassName="h-full min-h-0 overflow-auto overscroll-contain"
-              className="min-w-[920px]"
-            >
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-40">时间</TableHead>
-                  <TableHead className="w-28">类型</TableHead>
-                  <TableHead>记录</TableHead>
-                  <TableHead className="w-44">对象 / 执行人</TableHead>
-                  <TableHead className="w-24">{kind === "event" ? "级别" : "状态"}</TableHead>
-                  <TableHead className="w-16 text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {logs.isLoading &&
-                  Array.from({ length: 6 }, (_, index) => (
-                    <TableRow key={index} aria-label="正在加载日志">
-                      {Array.from({ length: 6 }, (_, column) => (
-                        <TableCell key={column}>
-                          <Skeleton className="h-4 w-4/5" />
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                {!logs.data && logs.isError && (
-                  <TableEmptyState columns={6}>
-                    <ContentRetry pending={logs.isFetching} onRetry={() => void logs.refetch()} />
-                  </TableEmptyState>
-                )}
-                {logs.data && !logs.data.items.length && (
-                  <TableEmptyState columns={6}>
-                    {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
-                      ? "没有匹配的记录"
-                      : "暂无日志记录"}
-                  </TableEmptyState>
-                )}
-                {logs.data?.items.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="text-xs">{formatLogDate(entry.occurred_at)}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{logKindLabel(entry.kind)}</Badge>
-                    </TableCell>
-                    <TableCell tooltipContent={`${logTitleLabel(entry.title)}：${entry.summary}`}>
-                      <div className="grid min-w-0 gap-0.5">
-                        <span className="truncate font-medium">{logTitleLabel(entry.title)}</span>
-                        <span className="text-muted-foreground truncate text-xs">
-                          {entry.summary}
-                          {entry.related_count > 0 ? ` · 关联 ${entry.related_count} 条` : ""}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell
-                      tooltipContent={[entry.object_label, entry.actor].filter(Boolean).join(" · ")}
-                    >
-                      <div className="grid min-w-0 gap-0.5">
-                        <span className={entry.object_label ? "truncate" : "text-muted-foreground"}>
-                          {entry.object_label ?? "未记录对象"}
-                        </span>
-                        <span className="text-muted-foreground truncate text-xs">
-                          {entry.actor ? `执行人：${entry.actor}` : logSourceLabel(entry.source)}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell overflowTooltip={false}>
-                      <StatusBadge
-                        label={
-                          entry.kind === "event"
-                            ? logEventLevelLabel(logEventLevel(entry.status))
-                            : logStatusLabel(entry.status)
-                        }
-                        variant={logStatusVariant(entry.status)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right" overflowTooltip={false}>
-                      <TableActionButton label="查看日志详情" onClick={() => setSelected(entry)}>
-                        <Eye />
-                      </TableActionButton>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <LogsTable
+            items={logs.data?.items ?? []}
+            kind={kind}
+            loading={logs.isLoading}
+            unavailable={!logs.data && logs.isError}
+            refreshing={logs.isFetching}
+            filtered={Boolean(
+              search || state !== "all" || eventLevel !== "all" || eventGroup !== "all",
+            )}
+            onRetry={() => void logs.refetch()}
+            onSelect={setSelected}
+          />
           {(logs.data?.total ?? 0) > 0 && (
             <div className="shrink-0" data-testid="logs-pagination-region">
               <DataTablePagination

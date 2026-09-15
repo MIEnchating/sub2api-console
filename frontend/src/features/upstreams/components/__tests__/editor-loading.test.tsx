@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { UpstreamEditDialog } from "../upstream-edit-dialog";
@@ -26,6 +26,7 @@ it("上游配置读取中显示轻量提示，禁止保存且可用键盘取消"
   expect(status).toHaveTextContent("正在读取上游配置");
   expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
   expect(screen.getByRole("button", { name: "保存并重算" })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole("heading", { name: "编辑上游" })).toHaveFocus());
   screen.getByRole("button", { name: "取消" }).focus();
   await userEvent.setup().keyboard("{Enter}");
   expect(onOpenChange).toHaveBeenCalledWith(false);

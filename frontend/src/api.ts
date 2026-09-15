@@ -346,6 +346,11 @@ type UpstreamHost = {
   recharge_rate: string;
   balance_status: string;
   checked_at: string | null;
+  concurrency_limit?: number | null;
+  concurrency_status?: "known" | "unlimited" | "unknown" | "stale";
+  concurrency_checked_at?: string | null;
+  allocated_concurrency?: number | null;
+  target_concurrency?: number | null;
   last_auth_success_method?: string | null;
   last_auth_recovery_method?: string | null;
   last_auth_success_at?: string | null;
@@ -431,6 +436,11 @@ export type UpstreamConfiguration = {
   recharge_rate: string;
   raw_balance: string | null;
   balance: string | null;
+  concurrency_limit?: number | null;
+  concurrency_status?: UpstreamSummary["hosts"][number]["concurrency_status"];
+  concurrency_checked_at?: string | null;
+  allocated_concurrency?: number | null;
+  target_concurrency?: number | null;
   has_access_token: boolean;
   has_refresh_token: boolean;
   has_admin_key: boolean;
@@ -513,6 +523,7 @@ export type OnboardingRequest = {
   extra?: Record<string, unknown>;
   priority?: number;
   concurrency?: number;
+  test_models?: string[];
   schedulable?: boolean;
 };
 
@@ -757,7 +768,7 @@ export type GroupAllocation = {
   pending_accounts: number;
   highest_health_score: number | null;
   average_health_score: number | null;
-  assigned_concurrency: number;
+  assigned_concurrency: number | null;
   channels: GroupAllocationChannel[];
 };
 
@@ -1094,21 +1105,14 @@ export type RunEvent = {
   payload: Record<string, unknown>;
 };
 
-export type BrowserLoginSession = {
-  id: string;
-  task_id: string;
-  host: string;
-  status: "starting" | "waiting" | "verifying" | "succeeded" | "failed" | "cancelled" | "expired";
-  message: string;
-  expires_at: string;
+export type BrowserFrame = {
   image?: string;
-  challenge_code?: string;
   width: number;
   height: number;
 };
 
-export type BrowserLoginInput = {
-  kind: "click" | "text" | "key" | "scroll" | "reload";
+export type BrowserInput = {
+  kind: "click" | "text" | "key" | "scroll";
   x?: number;
   y?: number;
   text?: string;
@@ -1240,6 +1244,7 @@ export type AlertPolicy = {
   rate_sync_enabled: boolean;
   multiplier_increase_enabled: boolean;
   multiplier_decrease_enabled: boolean;
+  cost_traffic_enabled: boolean;
   balance_enabled: boolean;
   probe_enabled: boolean;
   routing_breaker_enabled: boolean;
@@ -1266,6 +1271,7 @@ export type AlertPolicy = {
     | "routing_survivor"
     | "group_unavailable"
     | "group_survivor"
+    | "cost_traffic"
     | "apply_failure"
   >;
   repeat_interval_minutes: number;
@@ -1336,6 +1342,7 @@ export type SystemMetrics = {
 };
 
 export type AnimationTarget = { account_id: string; model: string };
+export type PrecheckQuestionID = "candy" | "knowledge-cutoff";
 export type AnimationCustomEndpoint = {
   base_url: string;
   api_key: string;
@@ -1343,11 +1350,25 @@ export type AnimationCustomEndpoint = {
   model: string;
 };
 export type AnimationRequest = {
+  precheck_questions?: PrecheckQuestionID[];
+  mode?: "animation" | "precheck";
   targets: AnimationTarget[];
   timeout_seconds: number;
   custom?: AnimationCustomEndpoint;
 };
 export type AnimationResult = {
+  mode?: "animation" | "precheck";
+  precheck?: {
+    verdict: "passed" | "not_passed" | "inconclusive" | "error";
+    profile_version: string;
+    questions: Array<{
+      id: string;
+      verdict: "passed" | "not_passed" | "inconclusive" | "error";
+      answer?: string;
+      error?: string;
+      request_id: string;
+    }>;
+  };
   account_id: string;
   account_name: string;
   model: string;
@@ -1360,6 +1381,8 @@ export type AnimationResult = {
   completed_at: string;
 };
 export type AnimationSchedule = {
+  precheck_questions?: PrecheckQuestionID[];
+  mode?: "animation" | "precheck" | "both";
   account_id: string;
   enabled: boolean;
   model: string;
@@ -1374,6 +1397,13 @@ export type AnimationSchedule = {
 export type ModelCheckCapabilities = {
   claude_standards: string[];
   sol_models: string[];
+  astra_models?: string[];
+};
+
+export type ModelCheckAstraProfile = {
+  model: string;
+  version: string;
+  questions: Array<{ id: string; question: string; effort: "low" | "medium"; expected: string }>;
 };
 
 export type ModelCheckAccountStatus = {
@@ -1449,6 +1479,7 @@ type ModelCheckConfigurationVersionSummary = Omit<ModelCheckConfigurationVersion
 };
 
 export type ModelCheckConfiguration = {
+  builtin_astra_profile?: ModelCheckAstraProfile;
   active: ModelCheckConfigurationVersion;
   draft: ModelCheckConfigurationVersion | null;
   history: ModelCheckConfigurationVersionSummary[];
@@ -2240,6 +2271,8 @@ export type WorkbenchPendingUpload = {
 };
 
 export type WorkbenchMaintenance = {
+  running?: boolean;
+  next_run_at?: string;
   pending_uploads?: WorkbenchPendingUpload[];
   reauthorize_with_profiles?: boolean;
   enabled: boolean;
@@ -2506,7 +2539,7 @@ export const api = {
       signal,
       cache: "no-store",
     }),
-  workbenchSecurityInput: (id: string, input: BrowserLoginInput) =>
+  workbenchSecurityInput: (id: string, input: BrowserInput) =>
     request<{ accepted: boolean }>(
       `/api/account-workbench/security/${encodeURIComponent(id)}/input`,
       {
@@ -2683,6 +2716,12 @@ export const api = {
       body: JSON.stringify({ account_ids: accountIds }),
       cache: "no-store",
     }),
+  workbenchBatchExportPreview: (sourceTaskId: string) =>
+    request<WorkbenchExportPreview>("/api/account-workbench/exports/preview", {
+      method: "POST",
+      body: JSON.stringify({ source_task_id: sourceTaskId }),
+      cache: "no-store",
+    }),
   discardWorkbenchExportPreview: (id: string) =>
     request<{ deleted: boolean }>(
       `/api/account-workbench/exports/preview/${encodeURIComponent(id)}`,
@@ -2721,7 +2760,7 @@ export const api = {
       signal,
       cache: "no-store",
     }),
-  workbenchOAuthInput: (id: string, input: BrowserLoginInput) =>
+  workbenchOAuthInput: (id: string, input: BrowserInput) =>
     request<{ accepted: boolean }>(`/api/account-workbench/oauth/${encodeURIComponent(id)}/input`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -3588,30 +3627,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  startBrowserLogin: (host: string) =>
-    request<BrowserLoginSession>("/api/auth-recovery/browser", {
-      method: "POST",
-      body: JSON.stringify({ host }),
-    }),
-  browserLogin: (id: string, signal?: AbortSignal) =>
-    request<BrowserLoginSession>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`, {
-      signal,
-    }),
-  browserLoginInput: (id: string, input: BrowserLoginInput) =>
-    request<{ accepted: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}/input`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
-  finishBrowserLogin: (id: string) =>
-    request<{ accepted: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}/finish`, {
-      method: "POST",
-      body: "{}",
-    }),
-  cancelBrowserLogin: (id: string) =>
-    request<{ cancelled: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      keepalive: true,
-    }),
   authRecoveryConfig: () => request<PrivateAuthConfigStatus>("/api/auth-recovery/config"),
   verifyManualAuth: (payload: {
     host: string;
@@ -3726,10 +3741,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ items }),
     }),
-  prepareOnboarding: (host: string) =>
+  prepareOnboarding: (host: string, signal?: AbortSignal) =>
     request<OnboardingContext>("/api/onboarding/prepare", {
       method: "POST",
       body: JSON.stringify({ host }),
+      signal,
     }),
   previewUnboundUpstreamKeys: (host: string) =>
     request<KeyCleanupPreview>("/api/onboarding/keys/cleanup-preview", {
@@ -3747,7 +3763,7 @@ export const api = {
       body: JSON.stringify({ host, group_id: groupId }),
     }),
   startOnboardingProbeTask: (
-    action: "models" | "probe" | "cleanup",
+    action: "models" | "model-options" | "probe" | "cleanup",
     host: string,
     groupId: string,
     model?: string,

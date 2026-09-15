@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import type { ReactElement } from "react";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import { FieldError } from "@/components/field-error";
@@ -12,6 +13,11 @@ import {
 import type { CustomAnimationForm } from "../lib/animation-schema";
 import { CustomAnimationModelField } from "./custom-animation-model-field";
 
+const platforms = [
+  { value: "openai", label: "OpenAI" },
+  { value: "anthropic", label: "Anthropic" },
+] as const;
+
 const fields = [
   { name: "timeout_seconds", label: "请求超时（秒）", type: "number", placeholder: "120" },
   { name: "base_url", label: "Base URL", type: "url", placeholder: "https://api.example.com/v1" },
@@ -23,6 +29,7 @@ export function CustomAnimationFields(props: {
   form: UseFormReturn<CustomAnimationForm>;
   disabled: boolean;
 }): ReactElement {
+  const orderedPlatforms = useDictionaryOrder("platform", platforms, (platform) => platform.value);
   return (
     <fieldset
       disabled={props.disabled}
@@ -41,8 +48,11 @@ export function CustomAnimationFields(props: {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="anthropic">Anthropic</SelectItem>
+                {orderedPlatforms.map((platform) => (
+                  <SelectItem key={platform.value} value={platform.value}>
+                    {platform.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           )}

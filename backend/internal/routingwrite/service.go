@@ -109,10 +109,12 @@ type routingEventContext struct {
 }
 
 type writePolicy struct {
-	autoApply        map[string]bool
-	changeThreshold  *big.Rat
-	maxConcurrency   int
-	verifyAfterWrite bool
+	autoApply                map[string]bool
+	upstreamReductionEnabled bool
+	respectExternalControl   bool
+	changeThreshold          *big.Rat
+	maxConcurrency           int
+	verifyAfterWrite         bool
 }
 
 func New(targets TargetStore, repository Repository) *Service {
@@ -269,6 +271,11 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	}
 	orderedIDs := orderedTargetIDs(targets)
 	resources := routingMutationResources(orderedIDs, targets)
+	capacityPlan, capacityResources, err := prepareUpstreamCapacity(ctx, s.repository, targets, policy, policyDocument)
+	if err != nil {
+		return Result{}, err
+	}
+	resources = append(resources, capacityResources...)
 	var guardedCtx context.Context
 	var release func() error
 	if s.admin == nil {
@@ -297,7 +304,7 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		}
 	}()
 	ctx = guardedCtx
-	mode, err = s.repository.Mode(ctx)
+	mode, err = s.recheckWriteAuthorization(ctx, policyDocument)
 	if err != nil {
 		return Result{}, err
 	}
@@ -320,6 +327,21 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		return Result{}, err
 	}
 	admin = limitAdmin(admin, policy.maxConcurrency)
+	capacityGuard, err := capacityPlan.recheck(ctx, admin, policyDocument)
+	if err != nil {
+		return Result{}, err
+	}
+	authorize := func() error {
+		mode, err := s.recheckWriteAuthorization(ctx, policyDocument)
+		if err != nil {
+			return err
+		}
+		capabilities, _ := runtimepolicy.For(mode)
+		if !capabilities.AutomaticRemoteApply {
+			return fmt.Errorf("运行模式已变为%s，本批次自动写回已停止", mode)
+		}
+		return nil
+	}
 	items := make([]AccountResult, len(orderedIDs))
 	regularCount := len(orderedIDs)
 	for index, accountID := range orderedIDs {
@@ -332,7 +354,9 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		if start >= end {
 			return nil
 		}
-		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite)
+		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite || hasUpstreamReduction(targets))
+		coordinator.capacity = capacityGuard
+		coordinator.authorize = authorize
 		var wait sync.WaitGroup
 		for index := start; index < end; index++ {
 			index, accountID := index, orderedIDs[index]
@@ -372,6 +396,28 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		result.Succeeded++
 	}
 	return result, nil
+}
+
+func (s *Service) recheckWriteAuthorization(ctx context.Context, expectedPolicy map[string]any) (string, error) {
+	mode, err := s.repository.Mode(ctx)
+	if err != nil {
+		return "", err
+	}
+	capabilities, valid := runtimepolicy.For(mode)
+	if !valid {
+		return mode, fmt.Errorf("运行模式无效：%s", mode)
+	}
+	if !capabilities.AutomaticRemoteApply {
+		return mode, nil
+	}
+	latestPolicy, err := s.repository.ControlPolicy(ctx)
+	if err != nil {
+		return mode, err
+	}
+	if !reflect.DeepEqual(expectedPolicy, latestPolicy) {
+		return mode, errors.New("等待写回期间策略已变化，请重新计算调度")
+	}
+	return mode, nil
 }
 
 func (s *Service) recordRoutingApplyEvent(ctx context.Context, target business.AccountRoutingTarget, result AccountResult) {
@@ -563,8 +609,16 @@ func (s *Service) applyAccountCoordinated(
 		}
 	}()
 	result := AccountResult{AccountID: target.AccountID}
+	if target.UpstreamReductionID != "" && (target.CleanupAction != nil || target.ReleaseControl || target.AbandonControl) {
+		return failedResult(result, errors.New("上游并发下调不能合并清理或交还控制权操作"))
+	}
 	operationID, err := randomOperationID("routing-writeback")
 	if err != nil {
+		return failedResult(result, err)
+	}
+	if target.ConfigurationError != nil && strings.TrimSpace(*target.ConfigurationError) != "" {
+		err := errors.New(*target.ConfigurationError)
+		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
 	if len(target.GroupNames) == 0 {
@@ -585,13 +639,24 @@ func (s *Service) applyAccountCoordinated(
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
-	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
-		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload)
-	}
 	current, err := remoteValues(currentPayload)
 	if err != nil {
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
+	}
+	if policy.respectExternalControl && !target.AbandonControl {
+		baseline, found, err := s.baseline(ctx, target.AccountID, targetFingerprint)
+		if err != nil {
+			return failedResult(result, err)
+		}
+		if found && baseline.OwnershipVersion == 2 {
+			reason := "账号已交还外部控制，本轮自动变更已跳过"
+			result.Skipped, result.Reason, result.Effective = true, &reason, current.asMap()
+			return result
+		}
+		if found && !target.ReleaseControl && externallyModifiedBaseline(baseline, current) {
+			target.AbandonControl, target.DesiredHealth = true, "external_control"
+		}
 	}
 	result.Before = current.asMap()
 	if target.AbandonControl {
@@ -604,6 +669,28 @@ func (s *Service) applyAccountCoordinated(
 		reason := "检测到 Sub2API 人工修改，已保留当前值并停止 Console 托管"
 		result.Reason = &reason
 		return result
+	}
+	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
+		if coordinator.authorize != nil {
+			if err := coordinator.authorize(); err != nil {
+				return failedResult(result, err)
+			}
+		}
+		return s.deleteCleanupAccount(ctx, admin, target, actor, operationID, currentPayload)
+	}
+	if target.UpstreamReductionID != "" {
+		if !policy.upstreamReductionEnabled {
+			return failedResult(result, errors.New("上游共享并发自动下调已关闭，请重新计算调度"))
+		}
+		needed, checkErr := coordinator.capacity.checkReduction(target, current)
+		if checkErr != nil {
+			return failedResult(result, checkErr)
+		}
+		if !needed {
+			reason := "上游当前已无可确认的超额或账号已暂停，本轮下调已跳过"
+			result.Skipped, result.Reason = true, &reason
+			return result
+		}
 	}
 	desired, err := desiredValues(target, policy, current)
 	if err != nil {
@@ -695,15 +782,23 @@ func (s *Service) applyAccountCoordinated(
 		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), desired, false, true, nil))
 		return result
 	}
+	if err := coordinator.capacity.reserve(target.AccountID, current, desired); err != nil {
+		var wait *upstreamCapacityWait
+		if errors.As(err, &wait) {
+			return s.skipCapacityWait(ctx, result, target, current, desired, operationID, actor, wait)
+		}
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, false, err))
+		return failedResult(result, err)
+	}
 	if !target.ReleaseControl {
 		if err := s.captureRoutingBaseline(ctx, target, policy, current, targetFingerprint); err != nil {
 			s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, "ownership-capture", err)
 			return failedResult(result, err)
 		}
 	}
-	result.RemoteWrite = true
 	submitted = true
 	write := coordinator.Submit(ctx, target.AccountID, desired, current)
+	result.RemoteWrite = !write.writePrevented
 	if cause := contextCause(ctx); cause != nil {
 		return failedResult(result, cause)
 	}
@@ -774,7 +869,7 @@ func (s *Service) captureRoutingBaseline(
 
 func managedIntentForTarget(target business.AccountRoutingTarget, policy writePolicy) business.RoutingManagedIntent {
 	result := business.RoutingManagedIntent{}
-	if policy.autoApply["schedulable"] {
+	if policy.autoApply["schedulable"] || independentPause(target, policy) {
 		result.Schedulable = cloneBool(target.Schedulable)
 	}
 	if policy.autoApply["priority"] {
@@ -783,7 +878,7 @@ func managedIntentForTarget(target business.AccountRoutingTarget, policy writePo
 	if policy.autoApply["load_factor"] {
 		result.LoadFactor = cloneString(target.LoadFactor)
 	}
-	if policy.autoApply["concurrency"] {
+	if policy.autoApply["concurrency"] || independentReduction(target, policy) {
 		result.Concurrency = cloneInt(target.Concurrency)
 	}
 	return result
@@ -791,7 +886,7 @@ func managedIntentForTarget(target business.AccountRoutingTarget, policy writePo
 
 func confirmedManagedIntent(target business.AccountRoutingTarget, policy writePolicy, actual values) business.RoutingManagedIntent {
 	result := business.RoutingManagedIntent{}
-	if policy.autoApply["schedulable"] && sameBool(target.Schedulable, actual.schedulable) {
+	if (policy.autoApply["schedulable"] || independentPause(target, policy)) && sameBool(target.Schedulable, actual.schedulable) {
 		result.Schedulable = cloneBool(actual.schedulable)
 	}
 	if policy.autoApply["priority"] && sameInt64(target.Priority, actual.priority) {
@@ -805,7 +900,7 @@ func confirmedManagedIntent(target business.AccountRoutingTarget, policy writePo
 			}
 		}
 	}
-	if policy.autoApply["concurrency"] && sameInt64(target.Concurrency, actual.concurrency) {
+	if (policy.autoApply["concurrency"] || independentReduction(target, policy)) && sameInt64(target.Concurrency, actual.concurrency) {
 		result.Concurrency = cloneInt(actual.concurrency)
 	}
 	return result
@@ -1090,6 +1185,24 @@ func writeRoutingValues(ctx context.Context, admin Admin, accountID string, desi
 		result.err = errors.Join(errorsByStep...)
 		return result
 	}
+	if schedulable && len(errorsByStep) > 0 {
+		result.err = errors.Join(errorsByStep...)
+		return result
+	}
+	if requiresConcurrencyConfirmation(desired) {
+		payload, err := admin.Account(ctx, accountID)
+		if err == nil {
+			var confirmed values
+			confirmed, err = remoteValues(payload)
+			if err == nil {
+				err = verifyReadback(map[string]any{"concurrency": fields["concurrency"]}, confirmed)
+			}
+		}
+		if err != nil {
+			result.err = fmt.Errorf("恢复前并发读回未确认，账号保持暂停：%w", err)
+			return result
+		}
+	}
 	if payload, err := writeSchedulablePayload(ctx, admin, accountID, schedulable); err != nil {
 		errorsByStep = append(errorsByStep, fmt.Errorf("写回可调度状态失败：%w", err))
 	} else {
@@ -1186,7 +1299,7 @@ func remoteValues(raw map[string]any) (values, error) {
 
 func desiredValues(target business.AccountRoutingTarget, policy writePolicy, current values) (map[string]any, error) {
 	result := map[string]any{}
-	if policy.autoApply["schedulable"] && target.Schedulable != nil {
+	if (policy.autoApply["schedulable"] || independentPause(target, policy)) && target.Schedulable != nil {
 		result["schedulable"] = *target.Schedulable
 	}
 	if policy.autoApply["priority"] && target.Priority != nil {
@@ -1195,7 +1308,7 @@ func desiredValues(target business.AccountRoutingTarget, policy writePolicy, cur
 		}
 		result["priority"] = *target.Priority
 	}
-	if !target.ScalingCooldown && policy.autoApply["concurrency"] && target.Concurrency != nil {
+	if ((!target.ScalingCooldown && policy.autoApply["concurrency"]) || independentReduction(target, policy)) && target.Concurrency != nil {
 		if *target.Concurrency < 0 {
 			return nil, errors.New("目标并发不能为负数")
 		}
@@ -1223,6 +1336,32 @@ func desiredValues(target business.AccountRoutingTarget, policy writePolicy, cur
 
 func parseWritePolicy(document map[string]any) (writePolicy, error) {
 	result := writePolicy{autoApply: map[string]bool{}, changeThreshold: big.NewRat(1, 10), maxConcurrency: 4}
+	if raw, exists := document["scope"]; exists {
+		section, ok := raw.(map[string]any)
+		if !ok {
+			return writePolicy{}, errors.New("策略字段 scope 必须是对象")
+		}
+		if rawManageAll, exists := section["manage_all_accounts"]; exists {
+			manageAll, valid := rawManageAll.(bool)
+			if !valid {
+				return writePolicy{}, errors.New("策略字段 scope.manage_all_accounts 必须是布尔值")
+			}
+			result.respectExternalControl = !manageAll
+		}
+	}
+	if raw, exists := document["upstream_concurrency"]; exists {
+		section, ok := raw.(map[string]any)
+		if !ok {
+			return writePolicy{}, errors.New("策略字段 upstream_concurrency 必须是对象")
+		}
+		if rawEnabled, exists := section["enabled"]; exists {
+			var valid bool
+			result.upstreamReductionEnabled, valid = rawEnabled.(bool)
+			if !valid {
+				return writePolicy{}, errors.New("策略字段 upstream_concurrency.enabled 必须是布尔值")
+			}
+		}
+	}
 	rawApply, ok := document["auto_apply"].(map[string]any)
 	if !ok {
 		return writePolicy{}, errors.New("策略字段 auto_apply 必须是对象")
@@ -1448,6 +1587,13 @@ func restorableBaselineValues(value business.RoutingBaseline, current values) (m
 		}
 	}
 	return result, conflicts
+}
+
+func externallyModifiedBaseline(baseline business.RoutingBaseline, current values) bool {
+	return baseline.ManagedSchedulable != nil && !sameBool(baseline.ManagedSchedulable, current.schedulable) ||
+		baseline.ManagedPriority != nil && !sameInt64(baseline.ManagedPriority, current.priority) ||
+		baseline.ManagedLoadFactor != nil && !sameString(baseline.ManagedLoadFactor, current.loadFactor) ||
+		baseline.ManagedConcurrency != nil && !sameInt64(baseline.ManagedConcurrency, current.concurrency)
 }
 
 func (v values) baseline(accountID, targetFingerprint string, now time.Time) business.RoutingBaseline {

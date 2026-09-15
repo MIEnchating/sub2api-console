@@ -1,7 +1,11 @@
-import type { ModelCheckProfilePayload } from "@/api";
+import type { ModelCheckAstraProfile, ModelCheckProfilePayload } from "@/api";
 
-export type RuleProbe = ModelCheckProfilePayload["sol_profile"]["quick"][number];
+export type RuleProbe = Omit<ModelCheckProfilePayload["sol_profile"]["quick"][number], "kind"> & {
+  kind: "choice" | "numeric" | "text";
+  expected?: string;
+};
 export type DetectionRule = {
+  builtinVersion?: string;
   id: string;
   label: string;
   family: "Claude" | "GPT";
@@ -19,7 +23,10 @@ function percent(value: number): string {
   return `${Number((value * 100).toFixed(2))}%`;
 }
 
-export function detectionRules(payload: ModelCheckProfilePayload): DetectionRule[] {
+export function detectionRules(
+  payload: ModelCheckProfilePayload,
+  astra?: ModelCheckAstraProfile,
+): DetectionRule[] {
   const rules: DetectionRule[] = Object.entries(payload.claude_profiles)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([model, profile]) => ({
@@ -74,6 +81,39 @@ export function detectionRules(payload: ModelCheckProfilePayload): DetectionRule
         ...sol.quick.map((probe) => ({ stage: "首轮题目", probe })),
         ...sol.reserve.map((probe) => ({ stage: "补充题目", probe })),
       ],
+    });
+  }
+  if (astra) {
+    rules.push({
+      id: `astra:${astra.model}`,
+      label: astra.model,
+      family: "GPT",
+      models: [astra.model],
+      candidates: [astra.model],
+      identityGroup: [],
+      builtinVersion: astra.version,
+      criteria: [
+        {
+          stage: "固定规则",
+          values: [
+            { label: "糖果题", value: "21" },
+            { label: "知识截止日期", value: "无法提供日期，且不回答任何日期" },
+            { label: "订阅特征", value: "low = 2，mid = 4" },
+            { label: "官 Key 特征", value: "low = 4，mid = 10" },
+            { label: "来源判定", value: "每轮两档均匹配同一来源，否则无法判定" },
+          ],
+        },
+      ],
+      questions: astra.questions.map((question) => ({
+        stage: question.effort === "medium" ? "mid（medium）" : "low",
+        probe: {
+          id: question.id,
+          kind: "text",
+          question: question.question,
+          expected: question.expected,
+          weights: {},
+        },
+      })),
     });
   }
   return rules;

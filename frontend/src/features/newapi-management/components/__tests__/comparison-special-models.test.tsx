@@ -22,7 +22,7 @@ it("批量比对名为__proto__的模型时正常显示匹配状态", () => {
   };
   render(<NewAPIPriceComparison snapshot={snapshot} />);
   fireEvent.click(screen.getByRole("combobox", { name: "比对上游" }));
-  fireEvent.click(screen.getByRole("option", { name: /upstream.example/ }));
+  fireEvent.click(screen.getByRole("option", { name: "上游 · Sub2API" }));
   fireEvent.click(screen.getByRole("checkbox", { name: "选择当前页全部模型" }));
   fireEvent.click(screen.getByRole("button", { name: "批量比对" }));
   expect(screen.getByLabelText("__proto__ 比对结果")).toHaveTextContent("一致");

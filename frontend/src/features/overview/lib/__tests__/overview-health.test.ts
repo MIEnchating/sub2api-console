@@ -69,6 +69,35 @@ function group(overrides: Partial<GroupStatus> = {}): GroupStatus {
 }
 
 describe("overview health calculations", () => {
+  it("等待并发额度的账号单独计数并列为待关注，已有健康分不受容量不足影响", () => {
+    const limited = account({
+      health: "concurrency_limited",
+      routing_state: "concurrency_limited",
+      schedulable: false,
+      health_score: 98,
+      recent_results: [
+        {
+          result: "失败",
+          observed_at: "2026-09-15T00:00:00Z",
+          failure_reason: "旧故障",
+          latency_ms: null,
+          source: "traffic",
+        },
+      ],
+    });
+
+    expect(buildOverviewMetrics([limited], [group()])).toMatchObject({
+      concurrencyLimitedAccounts: 1,
+      pausedAccounts: 0,
+      fusedAccounts: 0,
+      unknownAccounts: 0,
+      averageHealthScore: 98,
+    });
+    const attention = buildAttentionAccounts([limited], [group()]);
+    expect(attention).toHaveLength(1);
+    expect(attention[0].state).toBe("concurrency_limited");
+    expect(attention[0].reason).toContain("同步并发额度后重新计算调度");
+  });
   it("策略值与对象原型属性同名时按原始文本显示", () => {
     expect(strategyLabel("__proto__")).toBe("__proto__");
     expect(strategyLabel("constructor")).toBe("constructor");
@@ -227,6 +256,7 @@ describe("overview health calculations", () => {
       healthyAccounts: 0,
       degradedAccounts: 0,
       costBlockedAccounts: 0,
+      concurrencyLimitedAccounts: 0,
       fusedAccounts: 0,
       survivorAccounts: 0,
       pausedAccounts: 0,

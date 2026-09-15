@@ -107,14 +107,13 @@ it("检测结果顺序与账号不同，仍在对应账号卡片中展示动画�
   dispose();
 });
 
-it("已有结果自动展示且不提供历史切换，无记录账号显示待检测引导", () => {
+it("已有结果自动展示且不提供历史切换，无记录账号显示待检测状态", () => {
   const { dispose } = setup(task);
   expect(screen.queryByRole("button", { name: "仅看本次检测" })).not.toBeInTheDocument();
   expect(screen.queryByRole("combobox", { name: "最近检测任务" })).not.toBeInTheDocument();
   expect(screen.queryByText(/匹配.*个账号/)).not.toBeInTheDocument();
   const emptyCard = screen.getByRole("article", { name: "账号 丙账号" });
   expect(within(emptyCard).getByText("尚未检测")).toBeVisible();
-  expect(within(emptyCard).getByText("勾选账号后，在顶部开始检测")).toBeVisible();
   expect(within(emptyCard).queryByRole("button", { name: /放大查看/ })).not.toBeInTheDocument();
   expect(screen.getAllByRole("article")).toHaveLength(3);
   dispose();
@@ -129,10 +128,10 @@ it("搜索和操作分行，开始检测位于顶部，分页独立于卡片滚�
   ).toBeTruthy();
   expect(within(operations).getByRole("button", { name: /开始检测/ })).toBeVisible();
   const region = screen.getByRole("region", { name: "动画账号卡片" });
-  expect(region).toHaveClass("overflow-y-auto");
+  expect(region).toHaveClass("overflow-visible", "md:overflow-y-auto");
   expect(within(region).queryByRole("button", { name: "转到下一页" })).not.toBeInTheDocument();
   for (const card of screen.getAllByRole("article"))
-    expect(card).toHaveClass("h-[360px]", "overflow-hidden");
+    expect(card).toHaveClass("h-auto", "overflow-hidden");
   dispose();
 });
 

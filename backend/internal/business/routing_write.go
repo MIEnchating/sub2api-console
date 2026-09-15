@@ -62,13 +62,13 @@ func (s *Store) RoutingBaseline(ctx context.Context, accountID string) (RoutingB
 func (s *Store) routingBaselines(ctx context.Context, accountID *string) ([]RoutingBaseline, error) {
 	query := `SELECT account_id,target_fingerprint,schedulable,priority,load_factor,concurrency,status,captured_at,
 		ownership_version,managed_schedulable,managed_priority,managed_load_factor,managed_concurrency,managed_status
-		FROM routing_baselines WHERE ownership_version<>2`
+		FROM routing_baselines`
 	arguments := []any{}
 	if accountID != nil {
-		query += ` AND account_id=?`
+		query += ` WHERE account_id=?`
 		arguments = append(arguments, *accountID)
 	} else {
-		query += ` ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`
+		query += ` WHERE ownership_version<>2 ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`
 	}
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {

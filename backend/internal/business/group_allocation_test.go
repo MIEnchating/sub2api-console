@@ -86,7 +86,7 @@ func TestGroupAllocationUsesCurrentGroupDecisionMetrics(t *testing.T) {
 		channel.Weight == nil || *channel.Weight != 117 {
 		t.Fatalf("decision metrics missing: %#v", channel)
 	}
-	if channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 || allocation.AssignedConcurrency != 32 {
+	if channel.AssignedConcurrency == nil || *channel.AssignedConcurrency != 32 || allocation.AssignedConcurrency == nil || *allocation.AssignedConcurrency != 32 {
 		t.Fatalf("assigned concurrency missing: %#v", allocation)
 	}
 	if channel.Rate == nil || *channel.Rate != "0.17" || channel.Priority == nil || *channel.Priority != 136 {

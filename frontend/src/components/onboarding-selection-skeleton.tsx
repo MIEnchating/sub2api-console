@@ -1,7 +1,13 @@
 import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
-const candidateColumns = ["上游分组", "平台", "介绍", "账号成本", "本地分组", "状态", "操作"];
+const candidateColumns = [
+  { label: "上游分组", className: "w-[30%]" },
+  { label: "账号成本", className: "w-[10%]" },
+  { label: "账号类型", className: "w-[14%]" },
+  { label: "本地分组", className: "w-[32%]" },
+  { label: "操作", className: "w-[14%] text-right" },
+];
 
 export function OnboardingSelectionSkeleton(props: {
   fillAvailableHeight: boolean;
@@ -47,8 +53,9 @@ export function OnboardingSelectionSkeleton(props: {
         </div>
       ) : (
         <Table
+          actionColumn
           aria-label="正在加载上游分组"
-          className="min-w-[1120px]"
+          className="min-w-[800px]"
           containerClassName={
             props.fillAvailableHeight
               ? "min-h-0 overflow-auto rounded-lg border"
@@ -59,7 +66,9 @@ export function OnboardingSelectionSkeleton(props: {
           <TableHeader>
             <TableRow>
               {candidateColumns.map((column) => (
-                <TableHead key={column}>{column}</TableHead>
+                <TableHead key={column.label} className={column.className}>
+                  {column.label}
+                </TableHead>
               ))}
             </TableRow>
           </TableHeader>
@@ -67,8 +76,8 @@ export function OnboardingSelectionSkeleton(props: {
             {Array.from({ length: 6 }, (_, row) => (
               <TableRow aria-label="正在加载分组" key={row}>
                 {candidateColumns.map((column, columnIndex) => (
-                  <TableCell key={column}>
-                    <Skeleton className={columnIndex === 1 ? "h-4 w-full" : "h-4 w-3/4"} />
+                  <TableCell key={column.label}>
+                    <Skeleton className={columnIndex === 4 ? "ml-auto h-8 w-16" : "h-4 w-3/4"} />
                   </TableCell>
                 ))}
               </TableRow>

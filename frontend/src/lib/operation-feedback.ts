@@ -39,3 +39,9 @@ export function notifyOperationError(
   }
   toast.error(message, { id: `operation-error:${message}` });
 }
+
+export function dismissOperationError(error: unknown, fallback: string): void {
+  const detail = operationErrorMessage(error, fallback);
+  const message = detail;
+  toast.dismiss(`operation-error:${message}`);
+}

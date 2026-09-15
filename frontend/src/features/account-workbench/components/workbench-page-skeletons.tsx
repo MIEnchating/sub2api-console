@@ -26,22 +26,31 @@ function ChoiceSkeleton(): ReactElement {
 export function WorkbenchImportSkeleton(): ReactElement {
   return (
     <WorkbenchLoading label="正在读取账号导入配置">
-      <div
-        data-slot="workbench-form-skeleton"
-        className="grid min-w-0 gap-4 rounded-lg border bg-card p-4"
-      >
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <FormFieldsSkeleton fields={1} className="sm:w-44" />
-          <FormFieldsSkeleton fields={1} className="min-w-0 flex-1" />
+      <div data-slot="workbench-form-skeleton" className="@container/import grid min-w-0 gap-3">
+        <div
+          data-slot="workbench-import-columns"
+          className="grid min-w-0 items-start gap-5 @3xl/import:grid-cols-[minmax(0,1fr)_20rem]"
+        >
+          <div className="grid min-w-0 gap-3">
+            <div className="grid min-w-0 gap-1.5">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton data-slot="file-upload-skeleton" className="h-16 w-full" />
+            </div>
+            <div className="grid min-w-0 gap-1.5">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton data-slot="skeleton-textarea" className="h-64 w-full" />
+            </div>
+          </div>
+          <div
+            data-slot="workbench-import-options-skeleton"
+            className="grid min-w-0 gap-4 border-t pt-5 @3xl/import:border-t-0 @3xl/import:border-l @3xl/import:pt-0 @3xl/import:pl-5"
+          >
+            <FormFieldsSkeleton fields={1} />
+            <ChoiceSkeleton />
+            <Skeleton className="h-5 w-full" />
+          </div>
         </div>
-        <div className="grid min-w-0 gap-1.5">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton data-slot="skeleton-textarea" className="h-64 w-full" />
-        </div>
-        <FormFieldsSkeleton fields={2} className="gap-4 sm:grid-cols-2" />
-        <ChoiceSkeleton />
-        <Skeleton className="h-5 w-3/4" />
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Skeleton className="h-8 w-28" />
           <Skeleton className="h-8 w-24" />
         </div>
@@ -53,26 +62,13 @@ export function WorkbenchImportSkeleton(): ReactElement {
 export function WorkbenchMaintenanceSkeleton(): ReactElement {
   return (
     <WorkbenchLoading label="正在读取账号维护设置">
-      <div
-        data-slot="workbench-form-skeleton"
-        className="grid min-w-0 gap-4 rounded-lg border bg-card p-4"
-      >
+      <div data-slot="workbench-form-skeleton" className="grid min-w-0 gap-4">
         <Skeleton className="h-5 w-32" />
         <Skeleton className="h-5 w-3/4" />
         <ChoiceSkeleton />
         <div data-slot="maintenance-parameters" className="grid gap-3 sm:grid-cols-2">
           <FormFieldsSkeleton fields={1} />
           <FormFieldsSkeleton fields={1} />
-        </div>
-        <div className="min-w-0 space-y-2">
-          <Skeleton data-slot="maintenance-group-label" className="h-5 w-24" />
-          <div
-            data-slot="maintenance-group-options"
-            className="grid max-h-44 gap-2 overflow-y-auto rounded-md border p-3 sm:grid-cols-2"
-          >
-            <ChoiceSkeleton />
-            <ChoiceSkeleton />
-          </div>
         </div>
         <ChoiceSkeleton />
         <FormFieldsSkeleton fields={1} />
@@ -92,13 +88,9 @@ export function WorkbenchTemplatesSkeleton(): ReactElement {
         <Skeleton className="h-5 w-full max-w-xl" />
         <Skeleton className="h-8 w-28" />
       </div>
-      <div data-slot="workbench-template-grid" className="grid min-w-0 gap-3 lg:grid-cols-2">
+      <div data-slot="workbench-template-grid" className="grid min-w-0 grid-cols-1 divide-y">
         {[0, 1].map((item) => (
-          <div
-            key={item}
-            data-slot="workbench-template-card"
-            className="grid min-w-0 gap-3 rounded-lg border bg-card p-4"
-          >
+          <div key={item} data-slot="workbench-template-card" className="grid min-w-0 gap-3 py-3">
             <div className="flex justify-between gap-2">
               <Skeleton className="h-5 w-40" />
               <Skeleton className="size-8" />

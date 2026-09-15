@@ -77,7 +77,7 @@ func (s *Service) restoreOAuthCheckpoint(ctx context.Context, owner, id string, 
 	binding.Lease = lease
 	payload.Options.Recovery = &binding
 	restore := browserlogin.OAuthRestoreOptions{Checkpoint: browserlogin.OAuthCheckpointRef{ID: record.WorkerID, Owner: record.OwnerHash, Lease: record.WorkerLease}, Lease: lease, Options: payload.Options, Revision: record.WorkerRevision}
-	view := OAuthView{Scope: input.Scope, View: browserlogin.View{ID: taskID, TaskID: taskID, Host: "auth.openai.com", Status: "starting", Message: "正在恢复授权检查点，等待人工接管", ExpiresAt: record.ExpiresAt, Width: browserlogin.Width, Height: browserlogin.Height}}
+	view := OAuthView{Scope: input.Scope, ID: taskID, TaskID: taskID, Host: "auth.openai.com", Status: "starting", Message: "正在恢复授权检查点，等待人工接管", ExpiresAt: record.ExpiresAt, Width: browserlogin.Width, Height: browserlogin.Height}
 	value := &oauthSession{owner: owner, scope: input.Scope, batchID: activeBatchID, view: view, target: target, expires: expires, finish: make(chan struct{}, 1), done: make(chan struct{}), assistPaused: true, options: payload.Options, verifier: payload.Verifier, expectedEmail: payload.ExpectedEmail, expectedWorkspace: payload.ExpectedWorkspace, restore: &restore}
 	value.smsOriginTaskID = payload.SMSOriginTaskID
 	if value.smsOriginTaskID == "" {

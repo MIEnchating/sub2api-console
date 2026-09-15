@@ -28,7 +28,7 @@ const statusLabels: Record<string, string> = {
 export function WorkbenchMixedRows(props: { rows: WorkbenchRunRow[] }): ReactElement {
   return (
     <Table
-      aria-label="混合运行账号"
+      aria-label="本批账号"
       className="min-w-[34rem]"
       containerClassName="max-h-72 overflow-auto"
     >

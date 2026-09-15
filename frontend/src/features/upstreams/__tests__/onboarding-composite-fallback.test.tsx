@@ -58,5 +58,5 @@ it("仅选择 Composite 本地分组时按 OpenAI 账号类型启用预览", asy
   fireEvent.click(preview);
 
   const confirmation = await screen.findByRole("dialog", { name: "确认账号绑定变更" });
-  expect(within(confirmation).getByRole("cell", { name: "OpenAI" })).toBeVisible();
+  expect(within(confirmation).getByText("OpenAI", { exact: true })).toBeVisible();
 });

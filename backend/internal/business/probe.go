@@ -147,7 +147,7 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		sample.ObservedAt = observedAt.UTC().Format(healthSampleTimeLayout)
 		payloadValue := map[string]any{
 			"status_code": sample.StatusCode, "request_model": sample.RequestModel, "actual_model": sample.ActualModel,
-			"latency_metric": "first_token", "latency_source": "account_test.first_content", "latency_unit": "ms",
+			"latency_metric": "first_token", "latency_source": "upstream_direct.first_content", "latency_unit": "ms",
 		}
 		if sample.Attempts > 1 || len(sample.AttemptStatusCodes) > 1 {
 			payloadValue["attempt_status_codes"] = sample.AttemptStatusCodes
@@ -176,7 +176,7 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		}
 		if sample.RequestModel != "" && sample.ActualModel != "" && sample.RequestModel != sample.ActualModel {
 			if err := insertRuntimeEventWithStatus(ctx, tx, "probe_model_rewritten", "warning",
-				fmt.Sprintf("账号 %s 指定探测模型 %q，但 Sub2API 实际使用了 %q", sample.AccountID, sample.RequestModel, sample.ActualModel),
+				fmt.Sprintf("账号 %s 指定探测模型 %q，上游实际返回模型 %q", sample.AccountID, sample.RequestModel, sample.ActualModel),
 				map[string]any{"account_id": sample.AccountID, "group_name": sample.GroupName, "requested_model": sample.RequestModel, "actual_model": sample.ActualModel},
 				sample.ObservedAt); err != nil {
 				return 0, err

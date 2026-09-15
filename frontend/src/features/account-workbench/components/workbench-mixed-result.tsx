@@ -13,6 +13,7 @@ export function WorkbenchMixedResult(props: {
   disabled: boolean;
   onTask: (task: Task) => void;
   onBusy: (busy: boolean) => void;
+  autoLoad?: boolean;
 }): ReactElement {
   const [preview, setPreview] = useState<WorkbenchPreview | null>(null);
   const [converting, setConverting] = useState(false);
@@ -43,7 +44,7 @@ export function WorkbenchMixedResult(props: {
         setPreview(value);
       }
     },
-    onError: (error) => notifyOperationError(error, "混合运行结果预览失败，请重试"),
+    onError: (error) => notifyOperationError(error, "账号批次结果预览失败，请重试"),
   });
   const create = useMutation({
     mutationFn: (id: string) => api.importWorkbenchPreview(id),
@@ -54,7 +55,7 @@ export function WorkbenchMixedResult(props: {
     },
     onError: (error) => {
       clear();
-      notifyOperationError(error, "混合运行导入任务创建失败，请重新预览");
+      notifyOperationError(error, "账号批次导入任务创建失败，请重新预览");
     },
   });
   const busy = parse.isPending || create.isPending || converting;
@@ -69,6 +70,10 @@ export function WorkbenchMixedResult(props: {
       clear();
     };
   }, [clear]);
+  const load = parse.mutate;
+  useEffect(() => {
+    if (props.autoLoad) load();
+  }, [props.autoLoad, load]);
   return (
     <div className="grid min-w-0 gap-3">
       {!preview && !parse.isPending && (
@@ -80,12 +85,12 @@ export function WorkbenchMixedResult(props: {
               parse.mutate();
             }}
           >
-            {props.exportOnly ? "预览私有转换结果" : "预览可导入账号"}
+            {props.exportOnly ? "预览可导出账号" : "预览可导入账号"}
           </Button>
         </div>
       )}
-      {parse.isPending && <ContentLoading label="正在生成混合运行结果预览" />}
-      {create.isPending && <TaskStartupState message="正在创建混合运行导入任务" />}
+      {parse.isPending && <ContentLoading label="正在生成账号批次结果预览" />}
+      {create.isPending && <TaskStartupState message="正在创建账号批次导入任务" />}
       {preview && (
         <WorkbenchPreviewPanel
           preview={preview}

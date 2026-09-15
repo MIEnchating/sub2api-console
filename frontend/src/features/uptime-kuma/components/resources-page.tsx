@@ -177,6 +177,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                 </TableFilterToolbar>
                 <DataTablePanel className="flex-1">
                   <Table
+                    actionColumn
                     aria-label={resourceTitles[props.kind]}
                     className="min-w-[42rem]"
                     containerClassName="min-h-0 flex-1 overflow-auto"

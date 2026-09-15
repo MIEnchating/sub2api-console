@@ -454,36 +454,6 @@ describe("自动巡检页面", () => {
     expect(markup).not.toContain("调度心跳必须为 15 到 86400 秒");
   });
 
-  it("在宽屏固定工作区内分别滚动任务队列和心跳记录", () => {
-    const markup = renderPage();
-
-    expect(markup).toContain('data-testid="auto-inspection-layout"');
-    expect(markup).toContain("flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden");
-    expect(markup).toContain('data-testid="auto-inspection-overview"');
-    expect(markup).toContain("grid shrink-0 items-stretch gap-3");
-    expect(markup).not.toContain("max-w-3xl");
-    expect(markup).not.toContain("xl:grid-cols-[minmax(20rem,0.75fr)_minmax(0,1.75fr)]");
-    expect(markup).toContain('data-testid="auto-inspection-settings"');
-    expect(markup).toContain('class="grid gap-2.5 lg:grid-cols-2"');
-    expect(markup).not.toContain('data-testid="inspection-summary-grid"');
-    expect(markup).not.toContain("2xl:grid-cols-8");
-    expect(markup).not.toContain("grid grid-cols-2 divide-x divide-y");
-    expect(markup).toContain('data-testid="auto-inspection-workspace"');
-    expect(markup).toContain("min-h-0 flex-1 grid items-start gap-3 overflow-y-auto");
-    expect(markup).toContain("content-start");
-    expect(markup).toContain("xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)]");
-    expect(markup).toContain('data-testid="auto-inspection-queue-scroll-area"');
-    expect(markup).toContain('data-testid="auto-inspection-heartbeat-table"');
-    expect(markup).toContain("max-h-[min(30rem,55vh)]");
-    expect(markup).toContain("overflow-y-auto overscroll-contain");
-    expect(markup).toMatch(/data-slot="table-container" class="[^"]*overflow-auto[^"]*"/);
-    expect(markup).toContain("xl:h-full xl:max-h-none");
-    expect(markup).not.toContain("max-h-[42rem]");
-    expect(markup).not.toContain("max-w-5xl");
-    expect(markup).not.toContain("max-w-7xl");
-    expect(markup).not.toContain("border-t pt-3 xl:col-span-3");
-  });
-
   it("详情弹窗由受高度约束的内容区滚动到底部数据", () => {
     expect(autoInspectionDetailDialogLayout.content).toContain("grid-rows-[auto_minmax(0,1fr)]");
     expect(autoInspectionDetailDialogLayout.content).toContain("overflow-hidden");
@@ -758,7 +728,7 @@ describe("自动巡检页面", () => {
     );
 
     expect(markup).not.toContain("执行部分失败");
-    expect(markup).toContain("异常信息");
+    expect(markup).toContain("账号倍率与名称同步部分失败：缺失 0，失败 23");
     expect(markup).toContain("text-warning");
     expect(details).toContain("部分失败");
     expect(details).toContain("需处理的失败项");

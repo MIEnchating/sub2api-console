@@ -758,11 +758,6 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/auth-recovery/run-batch", server.runAuthRecoveryBatch)
 	authorized.POST("/auth-recovery/captcha/submit", server.submitAuthCaptcha)
 	authorized.POST("/auth-recovery/captcha/cancel", server.cancelAuthCaptcha)
-	authorized.POST("/auth-recovery/browser", server.startBrowserLogin)
-	authorized.GET("/auth-recovery/browser/:id", server.readBrowserLogin)
-	authorized.POST("/auth-recovery/browser/:id/input", server.inputBrowserLogin)
-	authorized.POST("/auth-recovery/browser/:id/finish", server.finishBrowserLogin)
-	authorized.DELETE("/auth-recovery/browser/:id", server.cancelBrowserLogin)
 	authorized.GET("/events", server.events)
 	authorized.POST("/inspection/run", server.runInspection)
 	authorized.POST("/inspection/probe", server.runActiveProbe)
@@ -2835,7 +2830,7 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 	allowed := map[string]struct{}{
 		"host": {}, "upstream_type": {}, "base_url": {}, "platform": {}, "account_type": {}, "notes": {},
 		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
-		"priority": {}, "concurrency": {}, "schedulable": {},
+		"priority": {}, "concurrency": {}, "schedulable": {}, "test_models": {},
 	}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
@@ -2877,6 +2872,27 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 		Host: host, UpstreamType: strings.ToLower(upstreamType),
 		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
 		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
+	}
+	if raw, present := payload["test_models"]; present {
+		values, ok := raw.([]any)
+		if !ok {
+			return onboarding.Request{}, errors.New("test_models 必须是探活模型字符串数组；空数组表示使用默认模型")
+		}
+		requested := make([]string, 0, len(values))
+		for _, rawModel := range values {
+			model, ok := rawModel.(string)
+			if !ok {
+				return onboarding.Request{}, errors.New("test_models 必须是探活模型字符串数组")
+			}
+			requested = append(requested, model)
+		}
+		result.TestModels, err = onboarding.NormalizeProbeModels(requested)
+		if err != nil {
+			return onboarding.Request{}, err
+		}
+		if len(accountIDs) > 0 && len(result.TestModels) > 0 {
+			return onboarding.Request{}, errors.New("探活模型只能随新增账号保存")
+		}
 	}
 	for field, target := range map[string]**string{
 		"base_url": &result.BaseURL, "platform": &result.Platform, "account_type": &result.AccountType, "notes": &result.Notes,

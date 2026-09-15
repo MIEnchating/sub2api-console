@@ -348,7 +348,11 @@ export function NewAPIManagementPage(props: Props) {
       <PageHeading
         eyebrow="运营管理"
         title={pageTitles[props.view]}
-        description=""
+        description={
+          props.view === "channels"
+            ? "使用 Sub2API 分组密钥创建渠道，配置调用地址、可用模型与 New API 分组。"
+            : ""
+        }
         action={
           !workspace.data || (selectedPlatform && !needsRemoteSnapshot) ? undefined : (
             <NewAPIHeadingAction
@@ -389,7 +393,7 @@ export function NewAPIManagementPage(props: Props) {
             <div
               className={
                 props.view === "channels"
-                  ? "min-h-0 flex-1 overflow-y-auto"
+                  ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-px"
                   : "flex min-h-0 flex-1 flex-col overflow-hidden"
               }
             >

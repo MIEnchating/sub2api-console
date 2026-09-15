@@ -1,5 +1,7 @@
-import { BrowserLogin } from "@/features/upstreams/components/browser-login/browser-login";
+import { useOnboardingPreparation } from "@/features/upstreams/hooks/use-onboarding-preparation";
 import { inspectionAuthRecoveryActions } from "@/features/auto-inspection/constants";
+import { ServiceSettings } from "@/features/auto-inspection/components/service-settings";
+import { InspectionQueueRound } from "@/features/auto-inspection/components/inspection-queue-round";
 import { LoginPage } from "@/features/auth/components/login-page";
 
 import { ContentLoading } from "@/components/content-loading";
@@ -19,6 +21,15 @@ import {
   PolicyCategoryNavigation,
   type PolicyCategory,
 } from "./features/policy/components/policy-category-navigation";
+import {
+  policyCleanupActionLabel,
+  policyCleanupActionOptions,
+  policyScalingDescription,
+} from "./features/policy/constants";
+import { PolicyConfigCard } from "./features/policy/components/policy-config-card";
+import { PolicySwitchRow } from "./features/policy/components/policy-switch-row";
+import { UpstreamConcurrencyPolicyCard } from "./features/policy/components/upstream-concurrency-policy-card";
+import { CostWallPolicyCard } from "./features/policy/components/cost-wall-policy-card";
 import { GroupBatchDialog } from "./features/groups/components/group-batch-dialog";
 import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
 import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
@@ -141,11 +152,16 @@ import { Switch } from "./components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip";
 import { UpstreamIdentity } from "./features/upstreams/components/upstream-identity";
 import {
+  UpstreamConcurrency,
+  UpstreamConcurrencyHeading,
+} from "./features/upstreams/components/upstream-concurrency";
+import {
   UpstreamGroupDialogHeader,
   type UpstreamGroupDialogView,
 } from "./features/upstreams/components/upstream-group-dialog-header";
 import {
   accountTypeLabel,
+  concurrencyLimitedLabel,
   alertStatusDictionary,
   accountTypeOptions,
   accountTypeValue,
@@ -309,6 +325,11 @@ import {
   type OnboardingBindingPreview,
 } from "./features/upstreams/components/onboarding-confirm-dialog";
 import { expandOnboardingCreationRequests } from "./features/upstreams/lib/onboarding-requests";
+import {
+  withOnboardingProbeModels,
+  onboardingAccountPreviewID,
+  type OnboardingAccountProbeModels,
+} from "./features/upstreams/lib/onboarding-probe-models";
 import {
   defaultOnlyShowEnabledOnboardingGroups,
   filterOnboardingCandidates,
@@ -1472,6 +1493,7 @@ const statusLabels: Record<string, string> = {
   degraded: "降级",
   fused: "熔断",
   cost_blocked: "成本墙拦截",
+  concurrency_limited: concurrencyLimitedLabel,
   survivor: "保底",
   paused: "已暂停",
   excluded: "已排除",
@@ -1802,6 +1824,13 @@ export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
   const accountRateInterval = policyAdvancedValue(value, "account_rate_sync", "interval_seconds");
   const accountRateBatchSize = policyAdvancedValue(value, "account_rate_sync", "batch_size");
   const accountRateBatchPercent = policyAdvancedValue(value, "account_rate_sync", "batch_percent");
+  const upstreamConcurrencyEnabled = policyAdvancedValue(value, "upstream_concurrency", "enabled");
+  if (upstreamConcurrencyEnabled !== undefined && typeof upstreamConcurrencyEnabled !== "boolean")
+    return null;
+  for (const field of ["enabled", "fallback_enabled", "stop_auto_probe"]) {
+    const configured = policyAdvancedValue(value, "cost_wall", field);
+    if (configured !== undefined && typeof configured !== "boolean") return null;
+  }
   for (const [section, field, maximum] of [
     ["probe", "freshness_seconds", 86400],
     ["scoring", "history_window_minutes", 10080],
@@ -2392,7 +2421,7 @@ export function UpstreamsPage() {
       <PageHeading
         eyebrow="UPSTREAM / MANAGEMENT"
         title="上游管理"
-        description="管理上游 Host、鉴权方式、倍率、余额和关联账号。"
+        description="管理上游 Host、鉴权方式、倍率、余额、并发和关联账号。"
         action={
           <UpstreamsPageActions
             refreshing={upstreams.isFetching}
@@ -2530,7 +2559,11 @@ export function UpstreamsPage() {
           </div>
         ) : null}
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1240px]">
+          <Table
+            actionColumn
+            containerClassName="min-h-0 flex-1 overflow-auto"
+            className="min-w-[1440px]"
+          >
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
                 <TableHead className="w-10 px-3">
@@ -2551,20 +2584,23 @@ export function UpstreamsPage() {
                     }
                   />
                 </TableHead>
-                <TableHead className="w-[30%]">上游</TableHead>
-                <TableHead className="w-[9%]">类型</TableHead>
-                <TableHead className="w-[6%]">分组</TableHead>
-                <TableHead className="w-[7%]">已绑定</TableHead>
-                <TableHead className="w-[15%]">分组核对</TableHead>
-                <TableHead className="w-[22%]">状态</TableHead>
-                <TableHead className="w-[11%]">余额</TableHead>
-                <TableHead className="w-[12%] text-right">操作</TableHead>
+                <TableHead className="w-[23%]">上游</TableHead>
+                <TableHead className="w-[7%]">类型</TableHead>
+                <TableHead className="w-[5%]">分组</TableHead>
+                <TableHead className="w-[6%]">已绑定</TableHead>
+                <TableHead className="w-[11%]">分组核对</TableHead>
+                <TableHead className="w-[16%]">状态</TableHead>
+                <TableHead className="w-[10%]">余额</TableHead>
+                <TableHead className="w-[12%]">
+                  <UpstreamConcurrencyHeading />
+                </TableHead>
+                <TableHead className="w-40 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {upstreams.isLoading && <TableLoadingRows columns={9} />}
+              {upstreams.isLoading && <TableLoadingRows columns={10} />}
               {!upstreams.isLoading && !upstreams.error && !hosts.length && (
-                <TableMessageRow columns={9}>
+                <TableMessageRow columns={10}>
                   <EmptyRow
                     text={hasActiveFilters ? "没有匹配的上游 Host" : "当前业务库没有上游 Host"}
                   />
@@ -2686,8 +2722,16 @@ export function UpstreamsPage() {
                         )}
                       </div>
                     </TableCell>
+                    <TableCell overflowTooltip={false}>
+                      <UpstreamConcurrency
+                        limit={host.concurrency_limit}
+                        status={host.concurrency_status}
+                        allocated={host.allocated_concurrency}
+                        target={host.target_concurrency}
+                      />
+                    </TableCell>
                     <TableCell className="text-right" overflowTooltip={false}>
-                      <div className="flex min-w-[7.75rem] items-center justify-end gap-1">
+                      <div className="flex min-w-35 items-center justify-end gap-1">
                         <TableActionButton
                           label="添加账号"
                           onClick={() =>
@@ -3686,9 +3730,6 @@ export function ManualAuthForm(props: {
         mutation.mutate(payload);
       }}
     >
-      {props.upstreamType.toLowerCase() === "sub2api" ? (
-        <BrowserLogin host={props.host} disabled={mutation.isPending || props.vaultPending} />
-      ) : null}
       <strong className="text-sm">选择鉴权方式</strong>
       <FormField label="鉴权方式" htmlFor={`${fieldID}-mode`}>
         <Select value={authMode} onValueChange={(value) => value && setAuthMode(value)}>
@@ -4421,6 +4462,7 @@ export function AccountsPage() {
         </TableFilterToolbar>
         <DataTablePanel className="flex-1">
           <Table
+            actionColumn
             containerClassName="min-h-0 flex-1 overflow-auto"
             uniformTextSize={false}
             className="min-w-[1336px] [&_td]:py-3"
@@ -4489,25 +4531,24 @@ export function AccountsPage() {
                   onValueChange={changeAccountSort}
                 />
                 <TableHead className="w-52">状态</TableHead>
-                <TableHead className="right-0 z-20! w-28 text-right shadow-[-1px_0_0_var(--border)]">
-                  操作
-                </TableHead>
+                <TableHead className="w-28 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {accounts.isLoading &&
                 Array.from({ length: 6 }, (_, row) => (
-                  <TableRow key={`loading:${row}`}>
-                    <TableCell colSpan={10}>
-                      <div className="flex items-center gap-3 py-2">
-                        {Array.from({ length: 9 }, (_, column) => (
-                          <Skeleton
-                            className={cn("h-4", column === 0 ? "w-44" : "w-20")}
-                            key={column}
-                          />
-                        ))}
-                      </div>
-                    </TableCell>
+                  <TableRow key={`loading:${row}`} aria-label="正在加载账号">
+                    {Array.from({ length: 10 }, (_, column) => (
+                      <TableCell key={column} overflowTooltip={false}>
+                        <Skeleton
+                          className={cn(
+                            "h-4 max-w-full",
+                            column === 0 ? "w-4" : "w-20",
+                            column === 9 && "ml-auto",
+                          )}
+                        />
+                      </TableCell>
+                    ))}
                   </TableRow>
                 ))}
               {!accounts.data && accounts.isError && (
@@ -5604,10 +5645,7 @@ function AccountRow(props: {
         <TableCell className="align-middle">
           <AccountStateCell account={account} compact />
         </TableCell>
-        <TableCell
-          className="sticky right-0 z-10 bg-card align-middle text-right shadow-[-1px_0_0_var(--border)] group-hover:[background-color:color-mix(in_oklch,var(--muted)_50%,var(--background))] group-data-[state=selected]:bg-muted"
-          overflowTooltip={false}
-        >
+        <TableCell className="align-middle text-right" overflowTooltip={false}>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
             <AccountTaskCancelButton
               taskId={taskId}
@@ -5833,7 +5871,7 @@ export function GroupsPage() {
     });
     setEditingGroup(group);
   };
-  const rows = groups.data ?? [];
+  const rows = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const [search, setSearch] = useState("");
   const filteredRows = rows.filter((group) =>
     searchable(
@@ -5898,7 +5936,11 @@ export function GroupsPage() {
           />
         </TableFilterToolbar>
         <DataTablePanel className="flex-1">
-          <Table containerClassName="min-h-0 flex-1 overflow-auto" className="min-w-[1160px]">
+          <Table
+            actionColumn
+            containerClassName="min-h-0 flex-1 overflow-auto"
+            className="min-w-[1160px]"
+          >
             <TableHeader className="sticky top-0 z-10">
               <TableRow>
                 <TableHead className="w-10">
@@ -6537,23 +6579,19 @@ export function OnboardingPage() {
     enabled: onboardingMaintenanceTaskId !== null,
     refetchInterval: (query) => taskPollInterval(query, 300),
   });
-  const prepare = useMutation({
-    mutationFn: api.prepareOnboarding,
-    onSuccess: (context, requestedHost) => {
-      if (
-        activeEntryHost.current !== null &&
-        activeEntryHost.current.toLocaleLowerCase() !== requestedHost.trim().toLocaleLowerCase()
-      ) {
-        return;
-      }
-      setVerifiedUpstream(context.upstream);
-      setSelectedGroupId(null);
-      setBatchBindings({});
-      setOnboardingConfirmation(null);
-      setTaskId(null);
-    },
-    onError: (error) => notifyOperationError(error, "上游信息获取失败"),
-  });
+  const prepare = useOnboardingPreparation();
+  useEffect(() => {
+    if (!prepare.data || prepare.isPending || prepare.error) return;
+    if (
+      activeEntryHost.current !== null &&
+      activeEntryHost.current.toLocaleLowerCase() !== prepare.host?.trim().toLocaleLowerCase()
+    ) {
+      return;
+    }
+    setVerifiedUpstream(prepare.data.upstream);
+    setOnboardingConfirmation(null);
+    setTaskId(null);
+  }, [prepare.data, prepare.host, prepare.isPending, prepare.error]);
   const createUpstream = useMutation({
     mutationFn: api.createUpstream,
     onSuccess: (upstream) => {
@@ -6561,8 +6599,7 @@ export function OnboardingPage() {
       if (!form.getFieldState("account_base_url").isDirty) {
         form.resetField("account_base_url", { defaultValue: upstream.account_base_url });
       }
-      prepare.reset();
-      prepare.mutate(upstream.host);
+      prepare.load(upstream.host);
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({
         queryKey: ["auth-recovery-config"],
@@ -6620,8 +6657,7 @@ export function OnboardingPage() {
     if (preparedEntryHost.current === entryHost) return;
     preparedEntryHost.current = entryHost;
     setSelectedGroupId(null);
-    prepare.reset();
-    prepare.mutate(entryHost);
+    prepare.load(entryHost);
   }, [entryConfiguration.data, entryHost]);
   const upstreamType = form.watch("upstream_type");
   const authModes = authModesForPlatform(upstreamType);
@@ -6732,8 +6768,7 @@ export function OnboardingPage() {
         setRechargeRate(configuration.recharge_rate || "1");
         setAuthMode(configuration.auth_mode);
         setSelectedGroupId(null);
-        prepare.reset();
-        prepare.mutate(configuration.host);
+        prepare.load(configuration.host);
       } catch (error) {
         notifyOperationError(error, "已有上游读取失败");
       }
@@ -6888,7 +6923,12 @@ export function OnboardingPage() {
     setOnboardingConfirmation({
       mode: requests.length === 1 ? "single" : "batch",
       requests,
-      previews,
+      previews: previews.map((preview, index) => ({
+        ...preview,
+        id: onboardingAccountPreviewID(requests[index]!),
+        host: requests[index]!.host,
+        upstreamGroupId: requests[index]!.upstream_group_id,
+      })),
     });
   }
   async function executeBatch() {
@@ -6943,6 +6983,9 @@ export function OnboardingPage() {
       return requests.map((expandedRequest, index) => ({
         request: expandedRequest,
         preview: {
+          id: onboardingAccountPreviewID(expandedRequest),
+          host: expandedRequest.host,
+          upstreamGroupId: expandedRequest.upstream_group_id,
           upstreamGroup: candidate.group_name,
           platform:
             accountPlatformLabel(
@@ -6968,14 +7011,15 @@ export function OnboardingPage() {
       previews: selections.map((selection) => selection.preview),
     });
   }
-  async function confirmOnboarding() {
+  async function confirmOnboarding(probeModels: OnboardingAccountProbeModels) {
     if (!onboardingConfirmation || onboardingSubmitting) return;
     setOnboardingSubmitting(true);
     try {
+      const requests = withOnboardingProbeModels(onboardingConfirmation.requests, probeModels);
       const created =
         onboardingConfirmation.mode === "single"
-          ? await api.onboard(onboardingConfirmation.requests[0]!)
-          : await api.onboardBatch(onboardingConfirmation.requests);
+          ? await api.onboard(requests[0]!)
+          : await api.onboardBatch(requests);
       setOnboardingConfirmation(null);
       setTaskId(created.id);
     } catch (error) {
@@ -6999,14 +7043,14 @@ export function OnboardingPage() {
         queryKey: ["upstream-configuration", host],
       }),
     ]);
-    prepare.mutate(host);
+    prepare.load(host);
   }, [balanceTask.data?.status, queryClient, verifiedUpstream?.host]);
   useEffect(() => {
     const keys = terminalRefreshKeys("upstream-key-cleanup", keyCleanupTask.data);
     if (keys.length === 0) return;
     void Promise.all(keys.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
     const host = verifiedUpstream?.host;
-    if (host) prepare.mutate(host);
+    if (host) prepare.load(host);
   }, [keyCleanupTask.data?.status, queryClient, verifiedUpstream?.host]);
   useEffect(() => {
     if (!taskStopsPolling(onboardingMaintenanceTask.data)) return;
@@ -7016,11 +7060,11 @@ export function OnboardingPage() {
       queryClient.invalidateQueries({ queryKey: ["upstreams"] }),
       queryClient.invalidateQueries({ queryKey: ["onboarding-candidates"] }),
     ]);
-    if (host) prepare.mutate(host);
+    if (host) prepare.load(host);
   }, [onboardingMaintenanceTask.data?.status]);
   const prepareMatchesEntry =
     entryHost === null ||
-    prepare.variables?.trim().toLocaleLowerCase() === entryHost.toLocaleLowerCase();
+    prepare.host?.trim().toLocaleLowerCase() === entryHost.toLocaleLowerCase();
   const preparedData = prepareMatchesEntry ? prepare.data : undefined;
   const preparedError = prepareMatchesEntry ? prepare.error : null;
   const preparing = prepareMatchesEntry && prepare.isPending;
@@ -7634,7 +7678,7 @@ export function OnboardingPage() {
                   ) : null}
                   {!preparedData ? (
                     <Button
-                      onClick={() => prepare.mutate(verifiedUpstream.host)}
+                      onClick={() => prepare.load(verifiedUpstream.host)}
                       disabled={preparing}
                     >
                       <RefreshCw className={preparing ? "animate-spin" : undefined} size={16} />
@@ -7683,6 +7727,18 @@ export function OnboardingPage() {
             ) : null}
             {entryConfiguration.error && !verifiedUpstream ? (
               <QueryError error={entryConfiguration.error} fallback="已选上游读取失败" embedded />
+            ) : null}
+            {entryConfiguration.error && !verifiedUpstream ? (
+              <ContentRetry
+                pending={entryConfiguration.isFetching}
+                onRetry={() => void entryConfiguration.refetch()}
+              />
+            ) : null}
+            {preparedError && verifiedUpstream ? (
+              <ContentRetry
+                pending={preparing}
+                onRetry={() => prepare.load(verifiedUpstream.host)}
+              />
             ) : null}
             {verifiedUpstream && !preparedData && !preparedError && !preparing ? (
               <div className="text-muted-foreground rounded-lg border border-dashed px-4 py-8 text-center text-sm">
@@ -7770,6 +7826,7 @@ export function OnboardingPage() {
                 {!entryGroupId ? (
                   <div className={selectionLayout.tablePanelClassName}>
                     <Table
+                      actionColumn
                       className="min-w-[800px] table-fixed"
                       containerClassName={selectionLayout.tableContainerClassName}
                     >
@@ -8057,6 +8114,7 @@ export function OnboardingPage() {
                           htmlFor={`${fieldID}-concurrency`}
                           label="并发"
                           error={form.formState.errors.concurrency?.message}
+                          reserveErrorSpace={false}
                         >
                           <Input
                             id={`${fieldID}-concurrency`}
@@ -8072,6 +8130,7 @@ export function OnboardingPage() {
                           htmlFor={`${fieldID}-priority`}
                           label="优先级"
                           error={form.formState.errors.priority?.message}
+                          reserveErrorSpace={false}
                         >
                           <Input
                             id={`${fieldID}-priority`}
@@ -8144,7 +8203,7 @@ export function OnboardingPage() {
           setKeyCleanupTaskId(null);
           keyCleanup.reset();
           const host = verifiedUpstream?.host;
-          if (host) prepare.mutate(host);
+          if (host) prepare.load(host);
         }}
       />
 
@@ -8155,7 +8214,7 @@ export function OnboardingPage() {
         onOpenChange={(open) => {
           if (!open) setOnboardingConfirmation(null);
         }}
-        onConfirm={() => void confirmOnboarding()}
+        onConfirm={(models) => void confirmOnboarding(models)}
       />
 
       <Dialog
@@ -8355,7 +8414,7 @@ export function OnboardingPage() {
             setTaskId(null);
             setBatchBindings({});
             const host = verifiedUpstream?.host;
-            if (host) prepare.mutate(host);
+            if (host) prepare.load(host);
           }
         }}
       >
@@ -8382,7 +8441,7 @@ export function OnboardingPage() {
                   setTaskId(null);
                   setBatchBindings({});
                   const host = verifiedUpstream?.host;
-                  if (host) prepare.mutate(host);
+                  if (host) prepare.load(host);
                 }}
               >
                 <Check size={16} />
@@ -10532,10 +10591,6 @@ function autoInspectionQueueState(value: AutoInspectionStatus["queue"][number]) 
   return { label: "未启用", tone: "neutral" as const };
 }
 
-function AutoInspectionTaskIcon() {
-  return <Activity size={15} aria-hidden="true" />;
-}
-
 function autoInspectionHeartbeatState(record: AutoInspectionStatus["heartbeat_history"][number]) {
   if (record.status === "running") return { label: "执行中", tone: "info" as const };
   if (record.status === "succeeded") return { label: "正常", tone: "success" as const };
@@ -11815,7 +11870,7 @@ function AutoInspectionCard() {
               }}
               disabled={!current || save.isPending}
             >
-              <Save size={16} />
+              <Save size={16} aria-hidden="true" />
               <span className="hidden sm:inline">
                 {save.isPending ? "保存中…" : "保存自动巡检"}
               </span>
@@ -11824,256 +11879,124 @@ function AutoInspectionCard() {
         }
       />
       <div
-        className="flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden"
+        className="@container/inspection flex h-full min-h-0 w-full flex-col gap-3 overflow-hidden"
         data-testid="auto-inspection-layout"
       >
         <div className="grid shrink-0 items-stretch gap-3" data-testid="auto-inspection-overview">
-          <Card size="sm">
-            <CardHeader>
+          <Card size="sm" className="@3xl/inspection:flex-row @3xl/inspection:items-center">
+            <CardHeader className="@3xl/inspection:w-28 @3xl/inspection:border-r @3xl/inspection:border-b-0 @3xl/inspection:py-4">
               <CardTitle>巡检服务</CardTitle>
             </CardHeader>
-            <CardContent>
-              {status.error && (
+            <CardContent className="flex-1">
+              {status.error ? (
                 <QueryError error={status.error} fallback="自动巡检状态读取失败" embedded />
-              )}
+              ) : null}
               {status.isLoading && !current ? (
                 <div
                   role="status"
                   aria-label="正在读取巡检服务"
                   aria-busy="true"
-                  className="grid gap-2.5 lg:grid-cols-2"
+                  className="grid gap-3 sm:grid-cols-2"
                 >
                   {[0, 1].map((index) => (
-                    <div
-                      key={index}
-                      className="flex min-w-0 items-center gap-3 rounded-lg border p-3"
-                    >
-                      <div className="grid min-w-0 flex-1 gap-2">
-                        <Skeleton className="h-4 w-24" />
-                        <Skeleton className="h-4 w-3/4" />
-                      </div>
-                      <Skeleton className="h-8 w-20" />
+                    <div key={index} className="flex min-h-8 items-center justify-between gap-3">
+                      <Skeleton className="h-4 w-28" />
+                      <Skeleton className="h-8 w-24" />
                     </div>
                   ))}
                 </div>
               ) : null}
               {current ? (
-                <div className="grid gap-2.5 lg:grid-cols-2" data-testid="auto-inspection-settings">
-                  <PolicySwitchRow
-                    label="启用自动巡检"
-                    description="开启后由后台持续检查到期任务，不依赖浏览器登录状态。"
-                    checked={current.enabled}
-                    disabled={save.isPending}
-                    onCheckedChange={(enabled) => setDraft({ ...current, enabled })}
-                  />
-                  <SettingsControlRow
-                    title="调度心跳"
-                    description="每次心跳只检查任务是否到期，不会立即检查全部账号。"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Input
-                        className="w-24"
-                        type="number"
-                        min={15}
-                        max={86400}
-                        value={current.interval_seconds ?? ""}
-                        aria-label="调度心跳周期"
-                        disabled={save.isPending}
-                        onChange={(event) =>
-                          setDraft({
-                            ...current,
-                            interval_seconds:
-                              event.target.value === "" ? null : Number(event.target.value),
-                          })
-                        }
-                      />
-                      <span className="text-muted-foreground text-sm">秒</span>
-                    </div>
-                  </SettingsControlRow>
-                  <FieldError
-                    message={
-                      !intervalValid && saveAttempted ? "调度心跳必须为 15 到 86400 秒" : undefined
-                    }
-                  />
-                </div>
+                <ServiceSettings
+                  enabled={current.enabled}
+                  intervalSeconds={current.interval_seconds}
+                  disabled={save.isPending}
+                  error={
+                    !intervalValid && saveAttempted ? "调度心跳必须为 15 到 86400 秒" : undefined
+                  }
+                  onEnabledChange={(enabled) => setDraft({ ...current, enabled })}
+                  onIntervalChange={(interval_seconds) =>
+                    setDraft({ ...current, interval_seconds })
+                  }
+                />
+              ) : null}
+              {status.isError && !current ? (
+                <ContentRetry onRetry={() => void status.refetch()} pending={status.isFetching} />
               ) : null}
             </CardContent>
           </Card>
         </div>
 
         <div
-          className="min-h-0 flex-1 grid items-start gap-3 overflow-y-auto content-start overscroll-contain grid-cols-1 auto-rows-max xl:auto-rows-fr xl:grid-cols-[minmax(36rem,0.95fr)_minmax(0,1.55fr)] xl:items-stretch"
+          className="grid min-h-0 flex-1 grid-cols-1 auto-rows-max content-start items-start gap-3 overflow-y-auto overscroll-contain @5xl/inspection:auto-rows-fr @5xl/inspection:grid-cols-[20rem_minmax(0,1fr)] @5xl/inspection:items-stretch"
           data-testid="auto-inspection-workspace"
         >
-          <Card size="sm" className="min-w-0 xl:min-h-0">
+          <Card size="sm" className="min-w-0 @5xl/inspection:min-h-0">
             <CardHeader>
               <CardTitle>任务队列</CardTitle>
             </CardHeader>
-            <CardContent className="p-0 group-data-[size=sm]/card:p-0 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 @5xl/inspection:min-h-0 @5xl/inspection:flex-1 @5xl/inspection:overflow-hidden">
               <div
+                role="region"
+                aria-label="巡检任务队列"
+                tabIndex={0}
                 data-slot="queue-list"
-                className="divide-border/70 max-h-[min(30rem,55vh)] divide-y overflow-y-auto overscroll-contain [scrollbar-gutter:stable] xl:h-full xl:max-h-none"
+                className="divide-border/70 max-h-[min(30rem,55vh)] divide-y overflow-x-hidden overflow-y-auto overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring [scrollbar-gutter:stable] @5xl/inspection:h-full @5xl/inspection:max-h-none"
                 data-testid="auto-inspection-queue-scroll-area"
               >
                 {status.isLoading ? <LoadingRows columns={1} rows={4} /> : null}
                 {!status.isLoading && !status.data?.queue.length ? (
                   <EmptyRow text="暂无调度计划，自动巡检状态更新后会显示任务计划" />
                 ) : null}
-                {status.data?.queue.map((item) => {
-                  const state = autoInspectionQueueState(item);
-                  const operations = item.operations ?? [];
-                  let dueIndex = 0;
-                  return (
-                    <section key={item.task_type} data-slot="queue-round">
-                      <div className="grid gap-3 px-3 py-3 sm:grid-cols-[minmax(12rem,1fr)_auto_auto_auto] sm:items-center sm:px-4">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
-                            <AutoInspectionTaskIcon />
-                          </span>
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                              <strong className="font-medium">{item.label}</strong>
-                              <span className="text-primary border-primary/25 bg-primary/5 rounded-full border px-1.5 py-0.5 text-[11px] font-medium">
-                                主巡检任务
-                              </span>
-                              {item.target_count !== null ? (
-                                <span className="text-muted-foreground text-xs">
-                                  {item.target_count} 个目标
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                        <StatusPill label={state.label} tone={state.tone} />
-                        <div className="sm:min-w-40 sm:text-right">
-                          {item.scheduled_for ? (
-                            <>
-                              <div className="text-sm font-medium">
-                                {formatAutoInspectionCountdown(item.scheduled_for, durationClock)}
-                              </div>
-                              <div className="text-muted-foreground mt-0.5 font-mono text-xs">
-                                {formatDate(item.scheduled_for, true)}
-                              </div>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground text-sm">等待排期</span>
-                          )}
-                        </div>
-                        {operations.length ? (
-                          <TableActionButton
-                            label="查看任务详情"
-                            onClick={() => setSelectedQueueItem(item)}
-                            className="justify-self-end"
-                          >
-                            <Eye />
-                          </TableActionButton>
-                        ) : (
-                          <span className="text-muted-foreground justify-self-end text-sm">—</span>
-                        )}
-                      </div>
-
-                      {operations.length ? (
-                        <div data-slot="queue-operations" className="border-border/70 border-t">
-                          <div className="text-muted-foreground hidden min-h-9 grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] items-center gap-3 px-4 text-xs font-medium sm:grid">
-                            <span className="text-center">顺序</span>
-                            <span>操作</span>
-                            <span>执行周期</span>
-                            <span className="text-right">本轮安排</span>
-                          </div>
-                          <ol className="divide-border/60 divide-y">
-                            {operations.map((operation) => {
-                              const operationDue = operation.due ?? item.state === "ready";
-                              if (operationDue) dueIndex += 1;
-                              return (
-                                <li
-                                  key={operation.operation}
-                                  data-slot="queue-operation"
-                                  className="grid min-h-12 grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 px-3 py-2.5 sm:grid-cols-[2.5rem_minmax(10rem,1fr)_minmax(13rem,1.2fr)_7rem] sm:px-4"
-                                >
-                                  <span
-                                    data-sequence={operationDue ? dueIndex : undefined}
-                                    className={cn(
-                                      "flex size-6 items-center justify-center justify-self-center rounded-full font-mono text-xs",
-                                      operationDue
-                                        ? "bg-primary/10 text-primary font-medium"
-                                        : "bg-muted text-muted-foreground",
-                                    )}
-                                  >
-                                    {operationDue ? dueIndex : "—"}
-                                  </span>
-                                  <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <span className="text-sm font-medium">{operation.label}</span>
-                                      <span className="text-muted-foreground rounded-full border px-1.5 py-0.5 text-[11px]">
-                                        {autoInspectionOperationKind(operation.operation)}
-                                      </span>
-                                    </div>
-                                    {operation.target_count !== null ? (
-                                      <span className="text-muted-foreground mt-0.5 block text-xs">
-                                        {operation.target_count} 个账号
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                  <span className="text-muted-foreground col-span-2 col-start-2 text-xs leading-5 sm:col-span-1 sm:col-start-auto">
-                                    {operation.cycle || "继承调度策略"}
-                                  </span>
-                                  <span
-                                    className={cn(
-                                      "row-start-1 text-right text-xs font-medium sm:row-auto",
-                                      operationDue ? "text-primary" : "text-muted-foreground",
-                                    )}
-                                  >
-                                    {operationDue ? "本轮执行" : "本轮不执行"}
-                                  </span>
-                                </li>
-                              );
-                            })}
-                          </ol>
-                        </div>
-                      ) : (
-                        <div className="border-border/70 text-muted-foreground border-t px-4 py-4 text-sm">
-                          {item.state === "disabled"
-                            ? "启用自动巡检后才会生成执行计划"
-                            : "当前没有可执行操作"}
-                        </div>
-                      )}
-                    </section>
-                  );
-                })}
+                {status.data?.queue.map((item) => (
+                  <InspectionQueueRound
+                    key={item.task_type}
+                    item={item}
+                    state={autoInspectionQueueState(item)}
+                    countdown={formatAutoInspectionCountdown(item.scheduled_for, durationClock)}
+                    scheduledAt={item.scheduled_for ? formatDate(item.scheduled_for, true) : ""}
+                    operationKind={autoInspectionOperationKind}
+                    onDetails={() => setSelectedQueueItem(item)}
+                  />
+                ))}
               </div>
             </CardContent>
           </Card>
 
-          <Card size="sm" className="min-w-0 xl:min-h-0">
+          <Card size="sm" className="min-w-0 @5xl/inspection:min-h-0">
             <CardHeader>
               <CardTitle>心跳记录</CardTitle>
             </CardHeader>
-            <CardContent className="p-0 group-data-[size=sm]/card:p-0 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
+            <CardContent className="p-0 group-data-[size=sm]/card:p-0 @5xl/inspection:min-h-0 @5xl/inspection:flex-1 @5xl/inspection:overflow-hidden">
               <Table
-                className="min-w-[900px]"
-                containerClassName="max-h-[min(30rem,55vh)] overflow-auto overscroll-contain [scrollbar-gutter:stable] xl:h-full xl:max-h-none"
+                actionColumn
+                aria-label="巡检心跳记录"
+                className="min-w-[640px]"
+                uniformTextSize={false}
+                containerClassName="max-h-[min(30rem,55vh)] overflow-auto overscroll-contain [scrollbar-gutter:stable] @5xl/inspection:h-full @5xl/inspection:max-h-none"
                 data-testid="auto-inspection-heartbeat-table"
               >
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[18%]">检查时间</TableHead>
-                    <TableHead className="w-[10%]">结果</TableHead>
-                    <TableHead className="w-[10%]">总耗时</TableHead>
-                    <TableHead className="w-[32%]">执行概况</TableHead>
-                    <TableHead className="w-[24%]">异常信息</TableHead>
-                    <TableHead className="w-[6%] text-right">操作</TableHead>
+                    <TableHead className="w-36">检查时间</TableHead>
+                    <TableHead className="w-22">结果</TableHead>
+                    <TableHead className="w-20">总耗时</TableHead>
+                    <TableHead>执行概况</TableHead>
+                    <TableHead className="w-14 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {status.isLoading && <TableLoadingRows columns={6} />}
+                  {status.isLoading && <TableLoadingRows columns={5} />}
                   {!status.isLoading && !status.data?.heartbeat_history.length ? (
-                    <TableMessageRow columns={6}>
+                    <TableMessageRow columns={5}>
                       <EmptyRow text="暂无心跳记录，启用自动巡检后会记录每次调度检查" />
                     </TableMessageRow>
                   ) : null}
                   {status.data?.heartbeat_history.map((record) => (
                     <TableRow key={`${record.checked_at}:${record.task_id ?? "skipped"}`}>
-                      <TableCell>{formatDate(record.checked_at, true)}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {formatDate(record.checked_at, true)}
+                      </TableCell>
                       <TableCell>
                         <StatusPill {...autoInspectionHeartbeatState(record)} />
                       </TableCell>
@@ -12089,19 +12012,21 @@ function AutoInspectionCard() {
                           )}
                         </span>
                       </TableCell>
-                      <TableCell
-                        tooltipContent={autoInspectionOperationSummary(record, runningTask.data)}
-                      >
-                        {autoInspectionOperationSummary(record, runningTask.data)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          record.error && record.status === "partial" && "text-warning",
-                          record.error && record.status !== "partial" && "text-destructive",
-                        )}
-                        tooltipContent={record.error ?? "—"}
-                      >
-                        {record.error ?? "—"}
+                      <TableCell className="whitespace-normal" overflowTooltip={false}>
+                        <div className="text-sm leading-5 wrap-anywhere">
+                          {autoInspectionOperationSummary(record, runningTask.data)}
+                        </div>
+                        {record.error ? (
+                          <p
+                            className={cn(
+                              "mt-1 line-clamp-2 text-xs leading-5 wrap-anywhere",
+                              record.status === "partial" ? "text-warning" : "text-destructive",
+                            )}
+                            title={record.error}
+                          >
+                            {record.error}
+                          </p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-right" overflowTooltip={false}>
                         {record.error ||
@@ -12218,23 +12143,24 @@ function PolicyPageLoading() {
       aria-busy="true"
       aria-label="正在加载调度策略"
     >
-      <Card size="sm">
+      <Card className="@container/policy-card">
         <CardHeader>
           <Skeleton className="h-5 w-32" />
           <Skeleton className="h-4 w-full max-w-lg" />
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <FormFieldsSkeleton fields={1} />
-          <FormFieldsSkeleton fields={1} />
-          <FormFieldsSkeleton fields={1} />
+        <CardContent>
+          <FormFieldsSkeleton
+            fields={8}
+            className="grid-cols-1 gap-5 @min-[28rem]/policy-card:grid-cols-2 @min-[56rem]/policy-card:grid-cols-3"
+          />
         </CardContent>
       </Card>
-      <Card size="sm">
+      <Card className="@container/policy-card">
         <CardHeader>
           <Skeleton className="h-5 w-28" />
           <Skeleton className="h-4 w-full max-w-sm" />
         </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        <CardContent className="grid gap-5 @min-[28rem]/policy-card:grid-cols-2">
           <FormFieldsSkeleton fields={1} />
           <FormFieldsSkeleton fields={1} />
         </CardContent>
@@ -12378,7 +12304,7 @@ export function PolicyPage() {
           </PageActions>
         }
       />
-      <div className="w-full space-y-3" data-testid="policy-page-layout">
+      <div className="w-full min-w-0 space-y-4" data-testid="policy-page-layout">
         {data?.configuration_errors?.length ? (
           <div className="border-warning/40 bg-warning/10 text-warning rounded-lg border px-3 py-2 text-sm">
             策略配置存在无效值：{data.configuration_errors.join("、")}
@@ -12401,16 +12327,15 @@ export function PolicyPage() {
         >
           {policy.isLoading && !current ? <PolicyPageLoading /> : null}
           {category === "routing" && current ? (
-            <div className="flex flex-col gap-3" data-testid="policy-operations-layout">
+            <div className="flex min-w-0 flex-col gap-4" data-testid="policy-operations-layout">
               <div className="grid items-stretch gap-3" data-testid="policy-routing-overview">
                 {current && (
-                  <Card size="sm">
-                    <CardHeader className="bg-muted/20">
-                      <CardTitle>全局默认策略</CardTitle>
-                      <CardDescription className="mt-1 text-xs leading-5">
-                        分组没有单独设置时使用；分组级选择在分组管理中配置。
-                      </CardDescription>
-                      <details className="group text-muted-foreground mt-2 text-xs leading-6">
+                  <PolicyConfigCard
+                    title="全局默认策略"
+                    description="分组没有单独设置时使用；分组级选择在分组管理中配置。"
+                    columns={3}
+                    help={
+                      <details className="group text-muted-foreground text-xs leading-6">
                         <summary className="focus-visible:ring-ring w-fit cursor-pointer rounded-sm font-medium outline-none focus-visible:ring-2">
                           查看权重计算说明
                         </summary>
@@ -12418,142 +12343,136 @@ export function PolicyPage() {
                           {schedulingWeightFormula}
                         </p>
                       </details>
-                    </CardHeader>
-                    <CardContent className="grid gap-x-5 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-                      <FormField
-                        label="全局默认策略"
-                        description={schedulingStrategyDescription(current.global_strategy)}
+                    }
+                  >
+                    <FormField
+                      label="全局默认策略"
+                      description={schedulingStrategyDescription(current.global_strategy)}
+                    >
+                      <Select
+                        value={current.global_strategy}
+                        onValueChange={(value) =>
+                          value && setDraft({ ...current, global_strategy: value })
+                        }
                       >
-                        <Select
-                          value={current.global_strategy}
-                          onValueChange={(value) =>
-                            value && setDraft({ ...current, global_strategy: value })
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            {orderedStrategies.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                      <FormField label="倍率缺失回退" description="账号没有倍率数据时采用的策略">
-                        <Select
-                          value={current.missing_rate_fallback}
-                          onValueChange={(value) =>
-                            value && setDraft({ ...current, missing_rate_fallback: value })
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue>
-                              {displayFallback(current.missing_rate_fallback)}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
-                            <SelectItem value="fail_closed">停止调度</SelectItem>
-                            <SelectItem value="fail_open">允许继续</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </FormField>
-                      <PolicyNumberField
-                        label="每组总权重预算"
-                        description="由同一分组内参与调度的账号按策略共享"
-                        min={1}
-                        max={1000000}
-                        value={policyAdvancedValue(current, "weights", "budget")}
-                        onChange={(value) =>
-                          setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
+                        <SelectTrigger>
+                          <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          {orderedStrategies.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    <FormField label="倍率缺失回退" description="账号没有倍率数据时采用的策略">
+                      <Select
+                        value={current.missing_rate_fallback}
+                        onValueChange={(value) =>
+                          value && setDraft({ ...current, missing_rate_fallback: value })
                         }
-                      />
-                      <PolicyNumberField
-                        label="人工优先位范围"
-                        description="保留优先级 1 至 N；自动调度从 N+1 开始"
-                        min={1}
-                        max={1000}
-                        value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
-                        onChange={(value) =>
-                          setDraft(
-                            withPolicyAdvancedValue(
-                              current,
-                              "manual_priority",
-                              "reserved_max",
-                              value,
-                            ),
-                          )
-                        }
-                      />
-                      <PolicyNumberField
-                        label="权重健康闸门"
-                        unit="分"
-                        min={0}
-                        max={100}
-                        step="any"
-                        value={policyAdvancedValue(current, "weights", "gate_floor")}
-                        onChange={(value) =>
-                          setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
-                        }
-                      />
-                      <PolicyNumberField
-                        label="均衡中价格占比"
-                        min={0}
-                        max={1}
-                        value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
-                        step="0.05"
-                        onChange={(value) =>
-                          setDraft(
-                            withPolicyAdvancedValue(
-                              current,
-                              "weights",
-                              "balanced_price_ratio",
-                              value,
-                            ),
-                          )
-                        }
-                      />
-                      <PolicyNumberField
-                        label="性能最小样本数"
-                        description="不足时向同模型组内基准收缩，避免偶然快请求占优"
-                        unit="次"
-                        min={1}
-                        max={200}
-                        value={policyAdvancedValue(current, "weights", "performance_min_samples")}
-                        onChange={(value) =>
-                          setDraft(
-                            withPolicyAdvancedValue(
-                              current,
-                              "weights",
-                              "performance_min_samples",
-                              value,
-                            ),
-                          )
-                        }
-                      />
-                      <PolicyNumberField
-                        label="速度优势上限"
-                        description="限制异常低延迟相对组内基准的最大优势"
-                        min={1}
-                        max={100}
-                        step="any"
-                        value={policyAdvancedValue(current, "weights", "speed_advantage_cap")}
-                        onChange={(value) =>
-                          setDraft(
-                            withPolicyAdvancedValue(
-                              current,
-                              "weights",
-                              "speed_advantage_cap",
-                              value,
-                            ),
-                          )
-                        }
-                      />
-                    </CardContent>
-                  </Card>
+                      >
+                        <SelectTrigger>
+                          <SelectValue>
+                            {displayFallback(current.missing_rate_fallback)}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="current_cost_wall">回退当前成本墙</SelectItem>
+                          <SelectItem value="fail_closed">停止调度</SelectItem>
+                          <SelectItem value="fail_open">允许继续</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                    <PolicyNumberField
+                      label="每组总权重预算"
+                      description="由同一分组内参与调度的账号按策略共享"
+                      min={1}
+                      max={1000000}
+                      value={policyAdvancedValue(current, "weights", "budget")}
+                      onChange={(value) =>
+                        setDraft(withPolicyAdvancedValue(current, "weights", "budget", value))
+                      }
+                    />
+                    <PolicyNumberField
+                      label="人工优先位范围"
+                      description="保留优先级 1 至 N；自动调度从 N+1 开始"
+                      min={1}
+                      max={1000}
+                      value={policyAdvancedValue(current, "manual_priority", "reserved_max")}
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "manual_priority",
+                            "reserved_max",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                    <PolicyNumberField
+                      label="权重健康闸门"
+                      unit="分"
+                      min={0}
+                      max={100}
+                      step="any"
+                      value={policyAdvancedValue(current, "weights", "gate_floor")}
+                      onChange={(value) =>
+                        setDraft(withPolicyAdvancedValue(current, "weights", "gate_floor", value))
+                      }
+                    />
+                    <PolicyNumberField
+                      label="均衡中价格占比"
+                      min={0}
+                      max={1}
+                      value={policyAdvancedValue(current, "weights", "balanced_price_ratio")}
+                      step="0.05"
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "weights",
+                            "balanced_price_ratio",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                    <PolicyNumberField
+                      label="性能最小样本数"
+                      description="不足时向同模型组内基准收缩，避免偶然快请求占优"
+                      unit="次"
+                      min={1}
+                      max={200}
+                      value={policyAdvancedValue(current, "weights", "performance_min_samples")}
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "weights",
+                            "performance_min_samples",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                    <PolicyNumberField
+                      label="速度优势上限"
+                      description="限制异常低延迟相对组内基准的最大优势"
+                      min={1}
+                      max={100}
+                      step="any"
+                      value={policyAdvancedValue(current, "weights", "speed_advantage_cap")}
+                      onChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(current, "weights", "speed_advantage_cap", value),
+                        )
+                      }
+                    />
+                  </PolicyConfigCard>
                 )}
               </div>
               {current ? (
@@ -12569,7 +12488,7 @@ export function PolicyPage() {
             </div>
           ) : null}
           {category === "health" && current ? (
-            <div className="flex flex-col gap-3" data-testid="policy-health-layout">
+            <div className="flex min-w-0 flex-col gap-4" data-testid="policy-health-layout">
               <PolicyRulesEditor value={current} onChange={setDraft} />
               <PolicyOperationsEditor
                 section="health"
@@ -12582,7 +12501,7 @@ export function PolicyPage() {
             </div>
           ) : null}
           {category === "sampling" && current ? (
-            <div className="flex flex-col gap-3" data-testid="policy-sampling-layout">
+            <div className="flex min-w-0 flex-col gap-4" data-testid="policy-sampling-layout">
               <PolicyInspectionSchedule value={current} onChange={setDraft} />
               <PolicyOperationsEditor
                 section="sampling"
@@ -12907,104 +12826,6 @@ function PolicyNumberField(props: {
   );
 }
 
-function PolicySwitchRow(props: {
-  label: string;
-  description: string;
-  checked: boolean;
-  disabled?: boolean;
-  onCheckedChange: (value: boolean) => void;
-}) {
-  const switchId = React.useId();
-  return (
-    <SettingsControlRow
-      title={props.label}
-      description={props.description}
-      controlId={switchId}
-      controlDisabled={props.disabled}
-    >
-      <Switch
-        id={switchId}
-        checked={props.checked}
-        disabled={props.disabled}
-        aria-label={props.label}
-        onCheckedChange={props.onCheckedChange}
-      />
-    </SettingsControlRow>
-  );
-}
-
-function PolicyConfigCard(props: {
-  title: string;
-  description: string;
-  children: React.ReactNode;
-  columns?: 2 | 3;
-  wide?: boolean;
-  switchAction?: {
-    checked: boolean;
-    label: string;
-    text?: string;
-    disabled?: boolean;
-    onCheckedChange: (value: boolean) => void;
-  };
-}) {
-  const switchId = React.useId();
-  const heading = (
-    <>
-      <CardTitle>{props.title}</CardTitle>
-      <CardDescription className="mt-1 text-xs leading-5">{props.description}</CardDescription>
-    </>
-  );
-  return (
-    <Card size="sm" className={cn(props.wide && "xl:col-span-2")} data-policy-section={props.title}>
-      <CardHeader className="bg-muted/20 flex items-start justify-between gap-4">
-        {props.switchAction ? (
-          <label
-            className={cn(
-              "min-w-0",
-              props.switchAction.disabled ? "cursor-not-allowed" : "cursor-pointer",
-            )}
-            htmlFor={switchId}
-          >
-            {heading}
-          </label>
-        ) : (
-          <div className="min-w-0">{heading}</div>
-        )}
-        {props.switchAction ? (
-          <div className="flex shrink-0 items-center gap-2">
-            <Switch
-              id={switchId}
-              checked={props.switchAction.checked}
-              disabled={props.switchAction.disabled}
-              aria-label={props.switchAction.label}
-              onCheckedChange={props.switchAction.onCheckedChange}
-            />
-            {props.switchAction.text ? (
-              <label
-                className={cn(
-                  "text-muted-foreground text-sm font-medium whitespace-nowrap",
-                  props.switchAction.disabled ? "cursor-not-allowed" : "cursor-pointer",
-                )}
-                htmlFor={switchId}
-              >
-                {props.switchAction.text}
-              </label>
-            ) : null}
-          </div>
-        ) : null}
-      </CardHeader>
-      <CardContent
-        className={cn(
-          "grid gap-x-5 gap-y-4 sm:grid-cols-2",
-          props.columns === 3 && "lg:grid-cols-3",
-        )}
-      >
-        {props.children}
-      </CardContent>
-    </Card>
-  );
-}
-
 export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
   const set = (section: string, path: string, value: unknown) =>
     props.onChange(withPolicyAdvancedValue(props.value, section, path, value));
@@ -13012,7 +12833,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
   const retrySource = String(policyAdvancedValue(props.value, "probe", "retry_source") ?? "fixed");
   return (
     <div
-      className="grid items-stretch gap-3 xl:grid-cols-2"
+      className="grid min-w-0 items-stretch gap-4 xl:grid-cols-2"
       data-testid={`policy-${props.section}-sections`}
     >
       {props.section === "routing" ? (
@@ -13021,51 +12842,45 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
           description="关闭某一项后仍计算期望值，但不自动应用到 Sub2API。"
           wide
         >
-          <div className="col-span-full grid gap-2 sm:grid-cols-2" data-testid="policy-auto-apply">
+          <div
+            className="col-span-full grid gap-3 @min-[28rem]/policy-card:grid-cols-2 @min-[60rem]/policy-card:grid-cols-4"
+            data-testid="policy-auto-apply"
+          >
             {Object.entries(autoApplyLabels).map(([key, label]) => (
-              <SettingsControlRow
+              <PolicySwitchRow
                 key={key}
-                title={label}
+                label={label}
                 description={`控制是否自动执行${label}变更`}
-                controlId={`policy-auto-apply-${key}`}
-              >
-                <Switch
-                  id={`policy-auto-apply-${key}`}
-                  checked={props.value.auto_apply?.[key] === true}
-                  aria-label={`${label}自动执行`}
-                  onCheckedChange={(enabled) =>
-                    props.onChange({
-                      ...props.value,
-                      auto_apply: {
-                        ...props.value.auto_apply,
-                        [key]: enabled,
-                      },
-                    })
-                  }
-                />
-              </SettingsControlRow>
-            ))}
-            <PolicyNumberField
-              label="调度写入并发"
-              unit="个账号"
-              min={1}
-              max={16}
-              value={policyAdvancedValue(props.value, "writeback", "concurrency")}
-              onChange={(value) => set("writeback", "concurrency", value)}
-            />
-            <SettingsControlRow
-              title="调度写后确认"
-              description="开启后只复核自动调度实际修改的字段。"
-              controlId="policy-writeback-verification"
-            >
-              <Switch
-                id="policy-writeback-verification"
-                checked={policyAdvancedValue(props.value, "writeback", "verification") === true}
-                aria-label="调度写后确认"
-                onCheckedChange={(value) => set("writeback", "verification", value)}
+                id={`policy-auto-apply-${key}`}
+                ariaLabel={`${label}自动执行`}
+                checked={props.value.auto_apply?.[key] === true}
+                onCheckedChange={(enabled) =>
+                  props.onChange({
+                    ...props.value,
+                    auto_apply: {
+                      ...props.value.auto_apply,
+                      [key]: enabled,
+                    },
+                  })
+                }
               />
-            </SettingsControlRow>
+            ))}
           </div>
+          <PolicyNumberField
+            label="调度写入并发"
+            unit="个账号"
+            min={1}
+            max={16}
+            value={policyAdvancedValue(props.value, "writeback", "concurrency")}
+            onChange={(value) => set("writeback", "concurrency", value)}
+          />
+          <PolicySwitchRow
+            label="调度写后确认"
+            description="开启后只复核自动调度实际修改的字段。"
+            id="policy-writeback-verification"
+            checked={policyAdvancedValue(props.value, "writeback", "verification") === true}
+            onCheckedChange={(value) => set("writeback", "verification", value)}
+          />
         </PolicyConfigCard>
       ) : null}
       {props.section === "health" ? (
@@ -13154,7 +12969,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
               numeric
               onChange={(values) => set("breaker", "instant_status_codes", values)}
             />
-            <div className="col-span-full grid gap-2 lg:grid-cols-3">
+            <div className="col-span-full grid gap-3 @min-[28rem]/policy-card:grid-cols-2 @min-[56rem]/policy-card:grid-cols-3">
               <PolicySwitchRow
                 label="凭据失效立即熔断"
                 description="认证失败无需累计；仍受保底池约束。"
@@ -13361,16 +13176,18 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
           <FormField label="处置动作">
             <Select
               value={String(policyAdvancedValue(props.value, "cleanup", "action") ?? "pause")}
+              itemToStringLabel={policyCleanupActionLabel}
               onValueChange={(value) => value && set("cleanup", "action", value)}
             >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">仅停止调度，不额外处置</SelectItem>
-                <SelectItem value="pause">暂停调度</SelectItem>
-                <SelectItem value="disable">停用账号</SelectItem>
-                <SelectItem value="delete">删除账号</SelectItem>
+                {policyCleanupActionOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </FormField>
@@ -13410,7 +13227,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             numeric
             onChange={(values) => set("cleanup", "trigger_status_codes", values)}
           />
-          <div className="col-span-full grid gap-2 sm:grid-cols-2">
+          <div className="col-span-full grid gap-3 @min-[28rem]/policy-card:grid-cols-2">
             <PolicySwitchRow
               label="保留分组内最后一个账号"
               description="避免自动处置清空整个分组。"
@@ -13427,9 +13244,27 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
         </PolicyConfigCard>
       ) : null}
       {props.section === "routing" ? (
+        <CostWallPolicyCard
+          enabled={policyAdvancedValue(props.value, "cost_wall", "enabled") !== false}
+          fallbackEnabled={
+            policyAdvancedValue(props.value, "cost_wall", "fallback_enabled") !== false
+          }
+          stopAutoProbe={policyAdvancedValue(props.value, "cost_wall", "stop_auto_probe") !== false}
+          onEnabledChange={(value) => set("cost_wall", "enabled", value)}
+          onFallbackEnabledChange={(value) => set("cost_wall", "fallback_enabled", value)}
+          onStopAutoProbeChange={(value) => set("cost_wall", "stop_auto_probe", value)}
+        />
+      ) : null}
+      {props.section === "routing" ? (
+        <UpstreamConcurrencyPolicyCard
+          enabled={policyAdvancedValue(props.value, "upstream_concurrency", "enabled") === true}
+          onEnabledChange={(value) => set("upstream_concurrency", "enabled", value)}
+        />
+      ) : null}
+      {props.section === "routing" ? (
         <PolicyConfigCard
           title="智能扩容"
-          description="已配置并发占全局并发上限的比例达到阈值时小步扩容，健康状态变差时按步长缩容。该比例表示配置容量，不代表实时请求利用率。"
+          description={policyScalingDescription}
           columns={3}
           switchAction={{
             checked: policyAdvancedValue(props.value, "scaling", "enabled") === true,
@@ -13594,7 +13429,10 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
               onChange={(event) => set("probe", "prompt", event.target.value)}
             />
           </FormField>
-          <div className="col-span-full space-y-3 border-y py-3" data-testid="policy-probe-retry">
+          <div
+            className="bg-muted/15 col-span-full space-y-4 rounded-lg border p-3 sm:p-4"
+            data-testid="policy-probe-retry"
+          >
             <PolicySwitchRow
               label="失败重试"
               description="主动探测失败后，按选定规则在同一账号上再次请求。"
@@ -13645,7 +13483,7 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
             ) : null}
           </div>
           <div
-            className="col-span-full grid gap-2 lg:grid-cols-3"
+            className="col-span-full grid gap-3 @min-[28rem]/policy-card:grid-cols-2 @min-[56rem]/policy-card:grid-cols-3"
             data-testid="policy-sampling-switches"
           >
             <PolicySwitchRow
@@ -13699,7 +13537,10 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
     typeof shortRatioValue === "number" ? shortRatioValue : Number(shortRatioValue);
   const longRatio = Number.isFinite(shortRatio) ? Math.max(0, 1 - shortRatio).toFixed(2) : "-";
   return (
-    <div className="grid items-stretch gap-3 xl:grid-cols-2" data-testid="policy-rules-sections">
+    <div
+      className="grid min-w-0 items-stretch gap-4 xl:grid-cols-2"
+      data-testid="policy-rules-sections"
+    >
       <PolicyConfigCard
         title="健康分公式"
         description="短期分按最新样本加权，最终分由短期分与长期分合成。"
@@ -13801,7 +13642,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
         description="401 或明确的鉴权失效关键字视为凭据失效；普通 403、客户端错误、余额不足、额度耗尽和限流不会直接判定凭据失效。"
         wide
       >
-        <div className="col-span-full">
+        <div className="min-w-0 @min-[28rem]/policy-card:row-span-2">
           <PolicyListField
             label="致命错误关键字（每行一个）"
             value={policyAdvancedValue(props.value, "classify", "fatal_patterns")}
@@ -13809,7 +13650,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
             onChange={(values) => set("classify", "fatal_patterns", values)}
           />
         </div>
-        <div className="sm:col-span-2">
+        <div className="min-w-0">
           <PolicyListField
             label="网关错误状态码"
             value={policyAdvancedValue(props.value, "classify", "gateway_status_codes")}
@@ -13817,7 +13658,7 @@ export function PolicyRulesEditor(props: PolicyEditorProps) {
             onChange={(values) => set("classify", "gateway_status_codes", values)}
           />
         </div>
-        <div className="sm:col-span-2">
+        <div className="min-w-0">
           <PolicyListField
             label="客户端错误状态码"
             description="这些真实请求错误只记录，不影响账号健康或恢复计数"
@@ -13894,7 +13735,10 @@ type PolicyScopeEditorProps = PolicyEditorProps & {
 
 export function PolicyScopeLayout(props: PolicyScopeEditorProps) {
   return (
-    <div className="grid items-stretch gap-3 xl:grid-cols-2" data-testid="policy-scope-layout">
+    <div
+      className="grid min-w-0 items-stretch gap-4 xl:grid-cols-2"
+      data-testid="policy-scope-layout"
+    >
       <PolicyScopeEditor
         value={props.value}
         onChange={props.onChange}
@@ -14046,7 +13890,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
         )}
         {selectedMode && props.groups.length > 0 && (
           <div
-            className="col-span-full grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
+            className="col-span-full grid gap-3 @min-[28rem]/policy-card:grid-cols-2 @min-[56rem]/policy-card:grid-cols-3"
             data-testid="managed-group-options"
           >
             {orderedGroups.map((group) => {
@@ -14095,7 +13939,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
         title="账号类型与平台"
         description="留空表示不限；选择后只有匹配的账号类型或平台会被守护。"
       >
-        <div className="sm:col-span-2">
+        <div className="col-span-full">
           <FormField label="账号类型">
             <MultiSelect
               options={accountTypeOptionsForScope}
@@ -14108,7 +13952,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
             />
           </FormField>
         </div>
-        <div className="sm:col-span-2">
+        <div className="col-span-full">
           <FormField label="平台">
             <MultiSelect
               options={platformOptions}
@@ -14146,7 +13990,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
         description="暂停账号不接流量但继续计分；排除账号完全不参与，并恢复接管前配置。"
         wide
       >
-        <div className="sm:col-span-2">
+        <div className="min-w-0">
           <FormField label="暂停调度的账号">
             <MultiSelect
               options={accountOptions}
@@ -14160,7 +14004,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
             />
           </FormField>
         </div>
-        <div className="sm:col-span-2">
+        <div className="min-w-0">
           <FormField label="排除的账号">
             <MultiSelect
               options={accountOptions}
@@ -14175,7 +14019,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
           </FormField>
         </div>
       </PolicyConfigCard>
-      <Card size="sm" className="border-destructive/40 xl:col-span-2">
+      <Card className="ring-destructive/25 xl:col-span-2">
         <CardHeader>
           <CardTitle className="text-destructive">交还控制权</CardTitle>
           <CardDescription>

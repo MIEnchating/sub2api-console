@@ -34,15 +34,15 @@ export function AnimationAccountsSkeleton(): ReactElement {
       aria-label="正在读取账号"
       aria-busy="true"
       data-slot="page-loading-skeleton"
-      className="grid min-w-0 items-start gap-3 md:grid-cols-2 lg:grid-cols-4"
+      className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] items-start gap-3"
     >
       {[0, 1, 2, 3].map((index) => (
         <div
           key={index}
           aria-hidden="true"
-          className="flex h-[360px] min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
+          className="flex h-auto min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
         >
-          <div className="grid gap-2 px-3 py-2">
+          <div className="grid h-[72px] shrink-0 content-center gap-1 px-3">
             <div className="flex items-center gap-2">
               <Skeleton className="size-4 shrink-0" />
               <Skeleton className="h-4 w-2/3" />
@@ -50,16 +50,16 @@ export function AnimationAccountsSkeleton(): ReactElement {
             <Skeleton className="h-4 w-3/4" />
             <Skeleton className="h-3 w-full" />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3">
-            <div className="flex min-h-0 flex-1 items-center justify-center rounded-md border bg-muted/10">
-              <Skeleton className="size-8" />
-            </div>
+          <Skeleton className="h-[180px] w-full shrink-0 rounded-none" />
+          <div className="flex h-11 shrink-0 items-center px-3">
             <Skeleton className="h-4 w-1/2" />
-            <Skeleton className="h-3 w-3/4" />
           </div>
-          <div className="flex shrink-0 items-center gap-2 border-t px-3 py-2">
+          <div className="grid h-[33px] shrink-0 content-center border-t px-3">
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+          <div className="flex h-10 shrink-0 items-center gap-2 border-t px-3">
             <Skeleton className="h-4 w-16" />
-            <Skeleton className="ml-auto h-8 w-20" />
+            <Skeleton className="ml-auto size-8" />
           </div>
         </div>
       ))}

@@ -1,10 +1,10 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type BrowserLoginInput, type WorkbenchSecuritySession } from "@/api";
+import { api, type BrowserInput, type WorkbenchSecuritySession } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { Button } from "@/components/ui/button";
-import { BrowserSurface } from "@/features/upstreams/components/browser-login/browser-surface";
+import { BrowserSurface } from "@/components/browser-surface/browser-surface";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { securityActiveStatuses } from "../hooks/use-workbench-security";
 
@@ -12,7 +12,7 @@ export function WorkbenchSecurityBrowser(props: { id: string; disabled?: boolean
   const client = useQueryClient();
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const active = useRef(true);
-  const inputPayload = useRef<BrowserLoginInput | null>(null);
+  const inputPayload = useRef<BrowserInput | null>(null);
   const query = useQuery({
     queryKey: ["account-workbench", "security-child", props.id],
     queryFn: (context) => api.workbenchSecurity(props.id, context.signal),

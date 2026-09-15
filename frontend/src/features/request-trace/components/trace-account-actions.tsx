@@ -8,6 +8,7 @@ import { api, type AccountControlAction } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
+import { accountConcurrencyLimitedHelp } from "@/features/accounts/constants";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
@@ -70,6 +71,7 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
   const state = current ? accountPoolState(current).value : null;
   const fused = state === "fused";
   const paused = state === "paused";
+  const concurrencyLimited = state === "concurrency_limited";
   const pending = control.isPending || taskIsPending(taskId, task);
   const disabled =
     pending ||
@@ -82,10 +84,11 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
   const recoverAction = fused || state === "cost_blocked" ? "recover" : "resume";
   const label = confirmation ? actionLabels[confirmation] : "账号处置";
   const identity = current ? `${current.name}（ID：${current.id}）` : `账号 ${props.accountId}`;
-  const description =
+  let description =
     confirmation === "fuse"
       ? `手动熔断“${identity}”后，该账号会立即停止接收流量，并持续保持熔断状态，直到手动解除。`
       : `确认恢复“${identity}”的调度？恢复后该账号可重新接收流量，后续仍受调度策略约束。`;
+  if (concurrencyLimited && confirmation !== "fuse") description = accountConcurrencyLimitedHelp;
 
   return (
     <div className="mt-2 grid min-w-0 gap-2">
@@ -104,7 +107,9 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
         </Button>
         <Button
           variant="outline"
-          disabled={disabled || (!fused && !paused && current?.schedulable !== false)}
+          disabled={
+            disabled || concurrencyLimited || (!fused && !paused && current?.schedulable !== false)
+          }
           onClick={() => setConfirmation(recoverAction)}
         >
           <RefreshCw aria-hidden="true" />
@@ -131,6 +136,9 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
       {state === "excluded" ? (
         <p className="text-muted-foreground text-xs">请先在账号管理恢复管控</p>
       ) : null}
+      {concurrencyLimited ? (
+        <p className="text-muted-foreground text-xs">{accountConcurrencyLimitedHelp}</p>
+      ) : null}
       {pending ? (
         <p role="status" className="text-muted-foreground flex items-center gap-1 text-xs">
           <LoaderCircle className="size-3 animate-spin" aria-hidden="true" />
@@ -148,11 +156,14 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
         description={description}
         confirmLabel={`确认${label}`}
         pending={control.isPending}
+        confirmDisabled={disabled || (confirmation !== "fuse" && concurrencyLimited)}
         onOpenChange={(open) => {
           if (!open) setConfirmation(null);
         }}
         onConfirm={() => {
-          if (confirmation && !disabled) control.mutate(confirmation);
+          if (confirmation && !disabled && (confirmation === "fuse" || !concurrencyLimited)) {
+            control.mutate(confirmation);
+          }
         }}
       />
     </div>

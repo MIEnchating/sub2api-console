@@ -12,6 +12,7 @@ import { taskIsTerminal, taskPollInterval } from "@/lib/task-state";
 import { taskStatusLabels, workbenchKeys } from "../constants";
 import { workbenchResultItems } from "../lib/task-results";
 import { WorkbenchTaskResults } from "./workbench-task-results";
+import { WorkbenchTaskFiles } from "./workbench-task-files";
 
 export function WorkbenchTask(props: {
   task: Task;
@@ -77,6 +78,7 @@ export function WorkbenchTask(props: {
           }
         />
       )}
+      {terminal && <WorkbenchTaskFiles task={task} />}
     </article>
   );
 }

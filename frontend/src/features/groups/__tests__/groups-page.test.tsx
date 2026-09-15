@@ -1,3 +1,4 @@
+import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -99,4 +100,22 @@ describe("分组管理页面", () => {
     expect(markup).not.toContain("分组 ID 8 位于排除分组列表中");
     expect(markup).toContain('data-table-panel=""');
   });
+});
+
+it("目录未刷新时分组表格也按字典逆序展示", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  client.setQueryData(["groups"], groups);
+  client.setQueryData(["dictionaries", "group"], {
+    items: ["10", "8", "6"].map((value) => ({ value, enabled: true })),
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <GroupsPage />
+    </QueryClientProvider>,
+  );
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("all-models")).toBeVisible();
+  expect(within(rows[1]).getByText("pro")).toBeVisible();
+  expect(within(rows[2]).getByText("codex")).toBeVisible();
+  client.clear();
 });

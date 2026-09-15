@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   api,
-  type BrowserLoginInput,
+  type BrowserInput,
   type WorkbenchSecurityInput,
   type WorkbenchSecuritySession,
 } from "@/api";
@@ -34,7 +34,7 @@ type WorkbenchSecurityControl = {
   retry: () => void;
   next: () => void;
   confirmIdentity: () => void;
-  send: (input: BrowserLoginInput) => Promise<unknown>;
+  send: (input: BrowserInput) => Promise<unknown>;
 };
 
 export function useWorkbenchSecurity(): WorkbenchSecurityControl {
@@ -45,7 +45,7 @@ export function useWorkbenchSecurity(): WorkbenchSecurityControl {
   const generation = useRef(0);
   const reported = useRef<string | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const inputPayload = useRef<{ id: string; payload: BrowserLoginInput } | null>(null);
+  const inputPayload = useRef<{ id: string; payload: BrowserInput } | null>(null);
   const query = useQuery({
     queryKey: sessionKey(initial?.id ?? null),
     queryFn: (context) => api.workbenchSecurity(initial!.id, context.signal),
@@ -195,7 +195,7 @@ export function useWorkbenchSecurity(): WorkbenchSecurityControl {
     confirmIdentity: (): void => {
       if (!query.isError && !confirm.isPending) confirm.mutate();
     },
-    send: (payload: BrowserLoginInput): Promise<unknown> => {
+    send: (payload: BrowserInput): Promise<unknown> => {
       const id = active.current;
       if (!id || session?.status !== "waiting" || next.isPending || query.isError)
         return Promise.resolve();

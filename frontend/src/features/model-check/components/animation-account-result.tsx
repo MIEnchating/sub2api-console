@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { AnimationPreview } from "./animation-preview";
+import { AnimationCardResult } from "./animation-card-result";
 
 const resultStatusLabels = { succeeded: "成功", failed: "失败" } as const;
 const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -18,17 +19,19 @@ const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
 
 export const AnimationAccountResult = memo(function AnimationAccountResult(props: {
   result: AnimationResult;
+  layout?: "card" | "fill";
   activity?: AnimationActivity;
   retryDisabled: boolean;
   onRetry: (target: AnimationTarget) => void;
 }): ReactElement {
+  if (props.layout === "card") return <AnimationCardResult {...props} />;
   const result = props.result;
   if (props.activity)
     return (
       <div
         role="status"
         aria-label={props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果"}
-        className="flex h-full items-center justify-center text-sm text-muted-foreground"
+        className={cn("flex items-center justify-center text-sm text-muted-foreground", "h-full")}
       >
         {props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果"}
       </div>
@@ -40,7 +43,7 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
       : "");
   const completedAt = new Date(result.completed_at);
   return (
-    <div aria-label="动画检测结果" className="flex h-full min-h-0 flex-col gap-1.5">
+    <div aria-label="动画检测结果" className="flex h-full min-h-0 min-w-0 flex-col gap-1.5">
       <div className="min-h-0 flex-1">
         {result.status === "succeeded" && result.svg ? (
           <AnimationPreview result={result} />

@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import type { Task, WorkbenchScope } from "@/api";
 import { Button } from "@/components/ui/button";
 import { ContentLoading } from "@/components/content-loading";
@@ -14,28 +14,51 @@ import { WorkbenchOAuthBatchBrowser } from "./workbench-oauth-batch-browser";
 import { WorkbenchTask } from "./workbench-task";
 import { WorkbenchQueueRecovery } from "./workbench-queue-recovery";
 
-export function WorkbenchMixed(props: { scope?: WorkbenchScope } = {}): ReactElement {
+export function WorkbenchMixed(
+  props: {
+    scope?: WorkbenchScope;
+    recoveryTaskId?: string;
+    onActiveTaskChange?: (id: string | null) => void;
+  } = {},
+): ReactElement {
   const flow = useWorkbenchMixed();
   const [closing, setClosing] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [task, setTask] = useState<Task | null>(null);
+  const [proceed, setProceed] = useState(false);
   const run = flow.run;
+  useEffect(() => {
+    props.onActiveTaskChange?.(run?.task_id ?? null);
+  }, [run?.task_id, props.onActiveTaskChange]);
   return (
     <div className="grid min-w-0 gap-4">
-      <div className="flex flex-wrap gap-2">
-        <WorkbenchQueueRecovery
-          kind="mixed"
+      {props.recoveryTaskId && (
+        <div className="flex flex-wrap gap-2">
+          <WorkbenchQueueRecovery
+            kind="mixed"
+            scope={props.scope}
+            taskId={props.recoveryTaskId}
+            disabled={flow.parsing || flow.starting || !!flow.preview || !!run}
+            onResume={flow.resume}
+          />
+        </div>
+      )}
+      {!props.recoveryTaskId && !flow.preview && !run && !flow.parsing && !flow.starting && (
+        <WorkbenchMixedForm
           scope={props.scope}
-          disabled={flow.parsing || flow.starting || !!flow.preview || !!run}
-          onResume={flow.resume}
+          onSubmit={(input) => {
+            setProceed(false);
+            flow.parse(input);
+          }}
+          onProceed={(input) => {
+            setProceed(true);
+            flow.parse(input);
+          }}
         />
-      </div>
-      {!flow.preview && !run && !flow.parsing && !flow.starting && (
-        <WorkbenchMixedForm scope={props.scope} onSubmit={flow.parse} />
       )}
       {flow.parsing && (
         <div className="grid gap-2">
-          <ContentLoading label="正在解析混合运行范围" />
+          <ContentLoading label="正在解析账号批次范围" />
           <div>
             <Button variant="outline" onClick={flow.discard}>
               取消解析
@@ -47,22 +70,23 @@ export function WorkbenchMixed(props: { scope?: WorkbenchScope } = {}): ReactEle
         <WorkbenchMixedPreview
           key={flow.preview.id}
           preview={flow.preview}
+          confirmInitially={proceed}
           pending={flow.starting}
           onStart={flow.start}
           onClose={flow.discard}
         />
       )}
-      {flow.starting && <TaskStartupState message="正在创建混合运行任务" />}
+      {flow.starting && <TaskStartupState message="正在创建账号批次任务" />}
       {run && (
-        <section aria-label="混合运行进度" className="grid min-w-0 gap-3">
+        <section aria-label="账号处理进度" className="grid min-w-0 gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-medium">混合运行进度</h2>
+            <h2 className="font-medium">账号处理进度</h2>
             <Button
               variant="outline"
               disabled={flow.cancelling || finalizing}
               onClick={() => setClosing(true)}
             >
-              结束混合运行
+              结束本批处理
             </Button>
           </div>
           <p role="status" className="text-sm wrap-anywhere">
@@ -70,7 +94,7 @@ export function WorkbenchMixed(props: { scope?: WorkbenchScope } = {}): ReactEle
           </p>
           <WorkbenchMixedRows rows={run.items} />
           {run.errors.length > 0 && (
-            <ul aria-label="混合运行问题" className="max-h-48 overflow-auto text-sm">
+            <ul aria-label="账号处理问题" className="max-h-48 overflow-auto text-sm">
               {run.errors.map((error) => (
                 <li key={`${error.index}-${error.message}`}>
                   第 {error.index + 1} 项：{error.message}
@@ -95,6 +119,7 @@ export function WorkbenchMixed(props: { scope?: WorkbenchScope } = {}): ReactEle
               key={run.id}
               id={run.id}
               exportOnly={run.export_only}
+              autoLoad={proceed}
               disabled={flow.failed || flow.cancelling}
               onBusy={setFinalizing}
               onTask={(value) => {
@@ -109,9 +134,9 @@ export function WorkbenchMixed(props: { scope?: WorkbenchScope } = {}): ReactEle
       {task && <WorkbenchTask task={task} />}
       <ConfirmActionDialog
         open={closing && !!run}
-        title="结束混合运行"
+        title="结束本批处理"
         description="将停止剩余授权并清除本批尚未导入或转换的账号结果，已创建的导入和私有转换任务仍继续执行。"
-        confirmLabel="结束并清除混合结果"
+        confirmLabel="结束并清除未用结果"
         pending={flow.cancelling}
         onOpenChange={setClosing}
         onConfirm={() => {

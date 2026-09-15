@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link2, Save } from "lucide-react";
@@ -101,6 +102,7 @@ export function updateBoundGroupRatioSync(
 }
 
 export function NewAPIGroupBindings(props: Props) {
+  const orderedLocalGroups = useDictionaryOrder("group", props.localGroups, (group) => group.id);
   const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<string, DraftBinding>>(() =>
     createDraftBindings(props.groups, props.localGroups, props.bindings),
@@ -220,11 +222,14 @@ export function NewAPIGroupBindings(props: Props) {
           </Button>
         </div>
       </TableFilterToolbar>
-      <FieldError message={hasInvalidRatio ? "Sub2API 管理平台倍率必须大于 0" : undefined} />
+      <FieldError
+        message={hasInvalidRatio ? "Sub2API 管理平台倍率必须大于 0" : undefined}
+        reserveSpace
+      />
       <DataTablePanel className="flex-1">
         {content ?? (
           <>
-            <Table containerClassName="min-h-0 flex-1 overflow-auto">
+            <Table actionColumn containerClassName="min-h-0 flex-1 overflow-auto">
               <TableHeader>
                 <TableRow>
                   <TableHead>New API 分组</TableHead>
@@ -270,7 +275,7 @@ export function NewAPIGroupBindings(props: Props) {
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value={unboundGroupValue}>不绑定</SelectItem>
-                            {props.localGroups.map((localGroup) => (
+                            {orderedLocalGroups.map((localGroup) => (
                               <SelectItem key={localGroup.id} value={localGroup.id}>
                                 {localGroup.name} · {localGroup.ratio ?? "无倍率"}
                               </SelectItem>

@@ -108,6 +108,8 @@ type HostResult struct {
 	Balance              *string                           `json:"balance,omitempty"`
 	DisplayBalance       *string                           `json:"display_balance,omitempty"`
 	BalanceUnit          *string                           `json:"balance_unit,omitempty"`
+	ConcurrencyLimit     *int64                            `json:"concurrency_limit"`
+	ConcurrencyStatus    string                            `json:"concurrency_status"`
 	GroupCount           int                               `json:"group_count"`
 	KeyCount             int                               `json:"key_count"`
 	AccountTotal         int                               `json:"account_total"`
@@ -549,6 +551,7 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 	return HostResult{
 		Host: host, Status: "succeeded", AuthStatus: status, BalanceStatus: persisted.BalanceStatus,
 		Balance: persisted.Balance, DisplayBalance: persisted.DisplayBalance, BalanceUnit: persisted.BalanceUnit,
+		ConcurrencyLimit: persisted.ConcurrencyLimit, ConcurrencyStatus: persisted.ConcurrencyStatus,
 		GroupCount: persisted.GroupCount, KeyCount: persisted.KeyCount,
 		AccountTotal: persisted.AccountTotal, AccountRateSucceeded: persisted.AccountRateSucceeded,
 		AccountRateFailed: persisted.AccountRateFailed, AuthRecovered: recovered,

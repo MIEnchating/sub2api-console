@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { WorkbenchMixedForm } from "../components/workbench-mixed-form";
 import { workbenchKeys } from "../constants";
@@ -23,5 +23,8 @@ it("托管模板查询失败的缓存不会阻止独立本地混合转换", asyn
       <WorkbenchMixedForm scope="local-export" onSubmit={() => {}} />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("button", { name: "解析混合运行范围" })).toBeEnabled();
+  fireEvent.change(screen.getByRole("textbox", { name: "账号内容" }), {
+    target: { value: "rt_fixture" },
+  });
+  expect(screen.getByRole("button", { name: "解析并预览" })).toBeEnabled();
 });

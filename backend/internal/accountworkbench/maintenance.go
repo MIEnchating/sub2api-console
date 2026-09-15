@@ -33,6 +33,8 @@ type MaintenanceView struct {
 	ReauthorizationAttached bool                           `json:"reauthorization_attached"`
 	LastRunAt               string                         `json:"last_run_at,omitempty"`
 	LastTaskID              string                         `json:"last_task_id,omitempty"`
+	NextRunAt               string                         `json:"next_run_at,omitempty"`
+	Running                 bool                           `json:"running"`
 }
 
 func (s *Service) Maintenance(ctx context.Context) (MaintenanceView, error) {
@@ -51,6 +53,12 @@ func (s *Service) Maintenance(ctx context.Context) (MaintenanceView, error) {
 	}
 	runtime, err := store.WorkbenchMaintenanceRuntime(ctx, target.BaseURL)
 	result.LastRunAt, result.LastTaskID = runtime.LastRunAt, runtime.LastTaskID
+	s.maintenanceMu.Lock()
+	result.Running = s.maintenanceRunning
+	if result.Enabled && !s.maintenanceNext.IsZero() && s.maintenanceScheduleKey == fmt.Sprintf("%s:%d", target.BaseURL, result.Revision) {
+		result.NextRunAt = s.maintenanceNext.UTC().Format(time.RFC3339)
+	}
+	s.maintenanceMu.Unlock()
 	if result.Enabled && result.ReauthorizeWithProfiles {
 		_, ownerErr := s.currentMaintenanceOwner(ctx, target, result.Revision)
 		result.ReauthorizationAttached = ownerErr == nil
@@ -132,6 +140,14 @@ func (s *Service) CheckMaintenance(ctx context.Context, revision int64, confirme
 		if err != nil || currentConfig.Revision != config.Revision {
 			return nil, errors.New("自动维护配置已变化，已停止旧任务")
 		}
+		runtime, err := store.WorkbenchMaintenanceRuntime(run, target.BaseURL)
+		if err != nil {
+			return nil, err
+		}
+		runtime.LastTaskID, runtime.LastRunAt = taskcontext.ID(run), time.Now().UTC().Format(time.RFC3339)
+		if err := store.SaveWorkbenchMaintenanceRuntime(run, target.BaseURL, runtime); err != nil {
+			return nil, err
+		}
 		client, err := s.clientFor(target)
 		if err != nil {
 			return nil, err
@@ -142,14 +158,6 @@ func (s *Service) CheckMaintenance(ctx context.Context, revision int64, confirme
 		}
 		accounts, err := client.Accounts(run)
 		if err != nil {
-			return nil, err
-		}
-		runtime, err := store.WorkbenchMaintenanceRuntime(run, target.BaseURL)
-		if err != nil {
-			return nil, err
-		}
-		runtime.LastTaskID = taskcontext.ID(run)
-		if err := store.SaveWorkbenchMaintenanceRuntime(run, target.BaseURL, runtime); err != nil {
 			return nil, err
 		}
 		for _, account := range accounts {
@@ -507,6 +515,7 @@ func maintenanceAccountSelected(account map[string]any, groups []string) bool {
 // RunScheduler uses the server lifecycle context; restart waits a complete interval.
 func (s *Service) RunScheduler(ctx context.Context) {
 	defer s.detachMaintenanceOwner()
+	defer s.setMaintenanceSchedule("", time.Time{})
 	ticks := s.maintenanceTicks
 	if ticks == nil {
 		ticker := time.NewTicker(time.Second * 30)
@@ -545,6 +554,7 @@ func (s *Service) RunScheduler(ctx context.Context) {
 			config, err := s.Maintenance(ctx)
 			if err != nil || !config.Enabled {
 				scheduledKey = ""
+				s.setMaintenanceSchedule("", time.Time{})
 				continue
 			}
 			target, err := s.private.TargetSettings(ctx)
@@ -555,6 +565,7 @@ func (s *Service) RunScheduler(ctx context.Context) {
 			if key != scheduledKey {
 				scheduledKey = key
 				next = now.Add(time.Duration(config.IntervalMinutes) * time.Minute)
+				s.setMaintenanceSchedule(key, next)
 				continue
 			}
 			if now.Before(next) {
@@ -562,9 +573,16 @@ func (s *Service) RunScheduler(ctx context.Context) {
 			}
 			if _, err := s.CheckMaintenance(ctx, config.Revision, true); err == nil {
 				next = now.Add(time.Duration(config.IntervalMinutes) * time.Minute)
+				s.setMaintenanceSchedule(key, next)
 			}
 		}
 	}
+}
+
+func (s *Service) setMaintenanceSchedule(key string, next time.Time) {
+	s.maintenanceMu.Lock()
+	defer s.maintenanceMu.Unlock()
+	s.maintenanceScheduleKey, s.maintenanceNext = key, next
 }
 
 // UseMaintenanceTicks replaces the scheduler clock in isolated tests.

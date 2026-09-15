@@ -23,6 +23,10 @@ func ExtractTemplate(account map[string]any) (TemplateConfig, error) {
 	config := TemplateConfig{}
 	for _, key := range transferableAccountFields {
 		if value, exists := account[key]; exists {
+			// The upstream DTO uses null for an unset note; template forms use text.
+			if key == "notes" && value == nil {
+				value = ""
+			}
 			if key == "rate_multiplier" || key == "load_factor" {
 				if _, lossy := value.(float64); lossy {
 					return nil, errors.New("来源倍率必须保留原始十进制精度")

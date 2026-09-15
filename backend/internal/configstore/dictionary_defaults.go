@@ -27,6 +27,7 @@ var builtInDictionaryValues = map[string][]DictionaryEntry{
 	"account_status": {
 		{Value: "manual_priority", Name: "人工优先位"}, {Value: "healthy", Name: "健康"},
 		{Value: "degraded", Name: "降级"}, {Value: "cost_blocked", Name: "成本墙拦截"},
+		{Value: "concurrency_limited", Name: "等待并发额度"},
 		{Value: "fused", Name: "已熔断"}, {Value: "survivor", Name: "保底强留"},
 		{Value: "paused", Name: "已暂停"}, {Value: "disabled", Name: "已停用"},
 		{Value: "excluded", Name: "已排除"}, {Value: "unknown", Name: "待探测"},

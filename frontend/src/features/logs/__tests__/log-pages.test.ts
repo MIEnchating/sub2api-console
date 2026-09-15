@@ -1,5 +1,5 @@
 import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test/dictionary";
 import { describe, expect, it } from "vitest";
 
 import type { UnifiedLogEntry } from "../../../api";
@@ -10,7 +10,7 @@ import {
   LogStructuredValue,
   logDetailsDialogWidth,
 } from "../components/log-details-dialog";
-import { LogKindFilter, LogsFilterToolbar } from "../components/logs-center-page";
+import { LogKindFilter, LogsFilterToolbar } from "../components/logs-filter-toolbar";
 import {
   formatLogValue,
   logDetailLabel,
@@ -111,7 +111,7 @@ describe("log center contracts", () => {
     expect(markup).not.toContain('data-slot="select-trigger"');
   });
 
-  it("places filters and refresh in one toolbar without a duplicate total", () => {
+  it("places record types before search conditions without a duplicate total", () => {
     const markup = renderToStaticMarkup(
       createElement(LogsFilterToolbar, {
         search: "",
@@ -136,8 +136,8 @@ describe("log center contracts", () => {
     expect(markup).toContain('aria-label="执行结果筛选"');
     expect(markup).not.toContain('aria-label="刷新日志"');
     expect(markup).not.toContain('data-slot="select-trigger"');
-    expect(markup.indexOf('aria-label="搜索任务、对象或原因"')).toBeLessThan(
-      markup.indexOf('aria-label="记录类型"'),
+    expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
+      markup.indexOf('aria-label="搜索任务、对象或原因"'),
     );
     expect(markup).not.toContain("条");
   });

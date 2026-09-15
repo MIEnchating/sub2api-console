@@ -9,13 +9,16 @@ import { smsReceiptActionLabels, smsReceiptStateLabels, workbenchKeys } from "..
 import { smsProviderOptions } from "../lib/oauth-sms-schema";
 import { WorkbenchSMSInspect } from "./workbench-sms-inspect";
 
-export function WorkbenchSMSReceipts(props: { scope?: WorkbenchScope } = {}): ReactElement {
+export function WorkbenchSMSReceipts(
+  props: { scope?: WorkbenchScope; taskId?: string } = {},
+): ReactElement {
   const [selected, setSelected] = useState<WorkbenchSMSReceipt | null>(null);
   const query = useQuery({
     queryKey: [...workbenchKeys.smsReceipts, props.scope ?? "managed"],
     queryFn: (context) => api.workbenchSMSReceipts(context.signal, props.scope),
     gcTime: 0,
   });
+  const receipts = query.data?.filter((item) => !props.taskId || item.task_id === props.taskId);
   return (
     <section aria-label="短信订单记录" className="grid min-w-0 gap-3">
       <h2 className="text-base font-medium">短信订单记录</h2>
@@ -28,11 +31,9 @@ export function WorkbenchSMSReceipts(props: { scope?: WorkbenchScope } = {}): Re
       {query.isError && (
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
       )}
-      {query.data?.length === 0 && (
-        <p className="text-sm text-muted-foreground">暂无短信订单记录</p>
-      )}
+      {receipts?.length === 0 && <p className="text-sm text-muted-foreground">暂无短信订单记录</p>}
       <ul className="divide-y">
-        {query.data?.map((receipt) => (
+        {receipts?.map((receipt) => (
           <li
             key={receipt.id}
             className="flex min-w-0 flex-wrap items-center justify-between gap-3 py-3"

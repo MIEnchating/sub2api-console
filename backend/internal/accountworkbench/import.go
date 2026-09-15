@@ -23,13 +23,14 @@ import (
 )
 
 type ResultItem struct {
-	Index     int            `json:"index"`
-	Name      string         `json:"name"`
-	Email     string         `json:"email,omitempty"`
-	Status    string         `json:"status"`
-	Message   string         `json:"message"`
-	AccountID string         `json:"account_id,omitempty"`
-	Report    map[string]any `json:"report,omitempty"`
+	Index        int            `json:"index"`
+	Name         string         `json:"name"`
+	Email        string         `json:"email,omitempty"`
+	Status       string         `json:"status"`
+	Message      string         `json:"message"`
+	AccountID    string         `json:"account_id,omitempty"`
+	Report       map[string]any `json:"report,omitempty"`
+	TemplateName string         `json:"template_name,omitempty"`
 }
 
 func (s *Service) Import(ctx context.Context, owner, previewID string, confirmed bool) (taskstore.Task, error) {
@@ -89,6 +90,7 @@ func (s *Service) Import(ctx context.Context, owner, previewID string, confirmed
 		rows := make([]ResultItem, len(prepared.items))
 		for i, item := range prepared.items {
 			rows[i] = ResultItem{Index: item.Index, Name: item.Name, Email: item.Email, Status: "queued", Message: "等待处理"}
+			rows[i].TemplateName = prepared.view.Items[i].TemplateName
 		}
 		if err := s.claimRetryExecution(run, prepared); err != nil {
 			return rows, err
@@ -106,6 +108,7 @@ func (s *Service) Import(ctx context.Context, owner, previewID string, confirmed
 			} else {
 				rows[i] = s.importItem(run, prepared, i, item)
 			}
+			rows[i].TemplateName = prepared.view.Items[i].TemplateName
 			prepared.execution.Items[i].Status = rows[i].Status
 			updateMaintenanceUploadItem(prepared.execution, i, rows[i])
 			if rows[i].AccountID != "" {
@@ -364,7 +367,7 @@ func (s *Service) checkAndPromote(ctx context.Context, prepared *preparedImport,
 		row.Message = "已隔离导入，行为检测服务尚未就绪"
 		return row
 	}
-	report, checkErr := s.checker.CheckOAuth(ctx, row.AccountID, row.Name, credentials, prepared.view.Model, 60)
+	report, checkErr := s.checkImportOAuth(ctx, prepared, row, credentials)
 	row.Report = publicReport(report)
 	for _, key := range []string{"access_token", "refresh_token", "id_token"} {
 		if secret := stringValue(credentials[key]); secret != "" {

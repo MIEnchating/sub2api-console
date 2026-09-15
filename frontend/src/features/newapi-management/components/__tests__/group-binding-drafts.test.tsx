@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render } from "@/test/dictionary";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { NewAPIGroupBindings } from "../group-bindings";
 

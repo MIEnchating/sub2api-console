@@ -1,14 +1,12 @@
 package probe
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -73,12 +71,13 @@ type Request struct {
 }
 
 type RunSummary struct {
-	Targets   int      `json:"targets"`
-	Persisted int      `json:"persisted"`
-	Passed    int      `json:"passed"`
-	Failed    int      `json:"failed"`
-	Skipped   int      `json:"skipped"`
-	Results   []Result `json:"results"`
+	SourceErrors []string `json:"source_errors,omitempty"`
+	Targets      int      `json:"targets"`
+	Persisted    int      `json:"persisted"`
+	Passed       int      `json:"passed"`
+	Failed       int      `json:"failed"`
+	Skipped      int      `json:"skipped"`
+	Results      []Result `json:"results"`
 }
 
 type Config struct {
@@ -105,6 +104,7 @@ type Target struct {
 }
 
 type Result struct {
+	FailureCode        string  `json:"failure_code,omitempty"`
 	AccountID          string  `json:"account_id"`
 	AccountName        string  `json:"account_name"`
 	GroupName          string  `json:"group_name"`
@@ -125,6 +125,7 @@ type Result struct {
 }
 
 type preparedRun struct {
+	keyResolver    adminclient.ProbeKeyResolver
 	request        Request
 	config         Config
 	target         configstore.TargetSettings
@@ -141,11 +142,12 @@ type targetOptions struct {
 }
 
 type Service struct {
-	repository Repository
-	settings   SettingsStore
-	tasks      TaskStore
-	taskRunner taskrunner.Runner
-	timeout    time.Duration
+	keyRevealer KeyRevealer
+	repository  Repository
+	settings    SettingsStore
+	tasks       TaskStore
+	taskRunner  taskrunner.Runner
+	timeout     time.Duration
 }
 
 func New(repository Repository, settings SettingsStore, tasks TaskStore) *Service {
@@ -255,8 +257,14 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		if err != nil {
 			return preparedRun{}, err
 		}
-	} else if err := applyRetryPolicy(&config, policy); err != nil {
-		return preparedRun{}, err
+	} else {
+		if err := applyRetryPolicy(&config, policy); err != nil {
+			return preparedRun{}, err
+		}
+		config.Prompt, err = probePrompt(policy)
+		if err != nil {
+			return preparedRun{}, err
+		}
 	}
 	candidates, err := s.repository.ProbeCandidates(ctx, request.AccountID, request.GroupName, request.Platform)
 	if err != nil {
@@ -355,7 +363,7 @@ func (s *Service) RunNow(ctx context.Context, request Request) (RunSummary, erro
 func (s *Service) execute(parent context.Context, task taskstore.Task, prepared preparedRun) {
 	ctx, cancel := context.WithTimeout(parent, s.timeout)
 	defer cancel()
-	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 15, "正在通过官方账号测试接口执行主动探测", time.Now().UTC().Format(time.RFC3339Nano)
+	task.Status, task.Progress, task.Message, task.UpdatedAt = "running", 15, "正在直连账号上游接口执行主动探测", time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
@@ -365,7 +373,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	if err != nil {
 		task.Status, task.Message = "failed", fmt.Sprintf("主动探测失败：%s；耗时 %d 毫秒", err.Error(), durationMS)
-		task.Result = map[string]any{"remote_write": false, "credentials_persisted": false, "error": err.Error(), "duration_ms": durationMS}
+		task.Result = map[string]any{"remote_write": false, "error": err.Error(), "duration_ms": durationMS}
 	} else {
 		switch {
 		case summary.Failed == 0:
@@ -375,13 +383,13 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		default:
 			task.Status = "failed"
 		}
-		task.Message = fmt.Sprintf("官方探测完成：通过 %d，失败 %d，跳过 %d；耗时 %d 毫秒", summary.Passed, summary.Failed, summary.Skipped, durationMS)
+		task.Message = fmt.Sprintf("直连探测完成：通过 %d，失败 %d，跳过 %d；耗时 %d 毫秒", summary.Passed, summary.Failed, summary.Skipped, durationMS)
 		task.Result = map[string]any{
-			"source": "official-account-test", "targets": summary.Targets, "persisted": summary.Persisted,
+			"source": "upstream-direct-probe", "targets": summary.Targets, "persisted": summary.Persisted,
 			"passed": summary.Passed, "failed": summary.Failed, "skipped": summary.Skipped,
 			"duration_ms":  durationMS,
 			"results":      summary.Results,
-			"remote_write": false, "credentials_persisted": false,
+			"remote_write": false,
 		}
 	}
 	if prepared.request.Platform != nil {
@@ -420,14 +428,22 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 	if err != nil {
 		return RunSummary{}, err
 	}
+	if err := s.applyCostWallProtections(ctx, &prepared); err != nil {
+		return RunSummary{}, err
+	}
+	prepared.keyResolver = s.resolveProbeKey
 	results, err := run(ctx, prepared)
 	if err != nil {
 		return RunSummary{}, err
 	}
 	samples := make([]business.ProbeSample, 0, len(results))
 	passed, skipped := 0, 0
+	sourceErrors := []string{}
 	for _, result := range results {
 		if result.Result == "跳过" {
+			if result.FailureCode != "" && result.FailureReason != nil {
+				sourceErrors = append(sourceErrors, fmt.Sprintf("账号 %s：%s", result.AccountID, *result.FailureReason))
+			}
 			skipped++
 			continue
 		}
@@ -447,7 +463,7 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 	if err != nil {
 		return RunSummary{}, err
 	}
-	return RunSummary{Targets: len(prepared.targets), Persisted: persisted, Passed: passed, Failed: len(results) - passed - skipped, Skipped: skipped, Results: results}, nil
+	return RunSummary{SourceErrors: sourceErrors, Targets: len(prepared.targets), Persisted: persisted, Passed: passed, Failed: len(results) - passed - skipped, Skipped: skipped, Results: results}, nil
 }
 
 func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
@@ -489,7 +505,7 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 				if prepared.config.RetrySource == "sub2api_pool" {
 					retry = prepared.retryByAccount[target.AccountID]
 				}
-				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, target, prepared.config, retry)}
+				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, target, prepared.config, retry, prepared.keyResolver)}
 			}
 		}()
 	}
@@ -528,20 +544,39 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 	return results, nil
 }
 
-func probeTarget(ctx context.Context, client *adminclient.Client, target Target, config Config, retry RetryConfig) Result {
+func probeTarget(ctx context.Context, client *adminclient.Client, target Target, config Config, retry RetryConfig, resolvers ...adminclient.ProbeKeyResolver) Result {
 	if target.SkipReason != nil {
 		return skippedProbeResult(target, *target.SkipReason)
+	}
+	if target.Model == nil {
+		return skippedProbeResult(target, "缺少探测模型，请配置后重试")
+	}
+	accountProbe, err := client.PrepareAccountProbe(ctx, target.AccountID, resolvers...)
+	if err != nil {
+		result := skippedProbeResult(target, err.Error())
+		var unavailable *adminclient.ProbeUnavailableError
+		if errors.As(err, &unavailable) {
+			result.FailureCode = unavailable.Code
+		}
+		return result
 	}
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	started := time.Now()
 	var lastStatus *int
-	var firstResponse bool
+	var firstResponse, measuredFirstToken bool
 	var lastReason, actualModel string
 	attempts := 0
 	attemptStatusCodes := []int{}
 	for {
 		attempts++
-		lastStatus, firstResponse, lastReason, actualModel = probeAttempt(ctx, client, target, config)
+		outcome := probeAttempt(ctx, accountProbe, target, config)
+		if outcome.unavailable {
+			result := skippedProbeResult(target, outcome.reason)
+			result.FailureCode = outcome.failureCode
+			return result
+		}
+		lastStatus, firstResponse, lastReason, actualModel = outcome.status, outcome.content, outcome.reason, outcome.model
+		measuredFirstToken = outcome.measuredFirstToken
 		if lastStatus != nil {
 			attemptStatusCodes = append(attemptStatusCodes, *lastStatus)
 		}
@@ -563,8 +598,12 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
 	durationMS := time.Since(started).Milliseconds()
 	if firstResponse {
-		latency := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
-		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: &latency, LatencyP95: &latency, LatencyP99: &latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
+		var latency *string
+		if measuredFirstToken {
+			value := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
+			latency = &value
+		}
+		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -598,147 +637,6 @@ func waitForRetry(ctx context.Context, delay time.Duration) bool {
 	case <-ctx.Done():
 		return false
 	}
-}
-
-func probeAttempt(ctx context.Context, client *adminclient.Client, target Target, config Config) (*int, bool, string, string) {
-	if target.Model == nil {
-		return nil, false, "缺少探测模型", ""
-	}
-	response, err := client.OpenAccountTest(ctx, target.AccountID, map[string]any{"model_id": *target.Model, "prompt": config.Prompt, "mode": "default"})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return nil, false, "主动探测超时", ""
-		}
-		return nil, false, "管理 API 异常", ""
-	}
-	defer response.Body.Close()
-	status := response.StatusCode
-	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 500))
-		return &status, false, failure(status, string(body)), ""
-	}
-	actualModel := ""
-	scanner := bufio.NewScanner(io.LimitReader(response.Body, 4<<20))
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-		data := line
-		if strings.HasPrefix(data, "data:") {
-			data = strings.TrimSpace(strings.TrimPrefix(data, "data:"))
-		}
-		if data == "[DONE]" {
-			break
-		}
-		decoder := json.NewDecoder(strings.NewReader(data))
-		decoder.UseNumber()
-		var event any
-		if err := decoder.Decode(&event); err != nil {
-			continue
-		}
-		if actualModel == "" {
-			actualModel = eventModel(event)
-		}
-		if reason := eventError(event); reason != "" {
-			if upstreamStatus, found := upstreamStatusFromError(reason); found {
-				status = upstreamStatus
-			}
-			return &status, false, reason, actualModel
-		}
-		if eventHasContent(event) {
-			return &status, true, "", actualModel
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return &status, false, "主动探测超时", actualModel
-		}
-		return &status, false, "管理 API 异常", actualModel
-	}
-	return &status, false, "官方探测流未返回有效文本", actualModel
-}
-
-func eventModel(value any) string {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return ""
-	}
-	model, _ := object["model"].(string)
-	return strings.TrimSpace(model)
-}
-
-func eventHasContent(value any) bool {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return false
-	}
-	eventType := strings.ToLower(strings.TrimSpace(fmt.Sprint(object["type"])))
-	if eventType == "content" || eventType == "image" {
-		return eventHasText(object)
-	}
-	for _, key := range []string{"choices", "output"} {
-		if child, present := object[key]; present && eventHasText(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func eventHasText(value any) bool {
-	switch item := value.(type) {
-	case string:
-		return strings.TrimSpace(item) != ""
-	case []any:
-		for _, child := range item {
-			if eventHasText(child) {
-				return true
-			}
-		}
-	case map[string]any:
-		for _, key := range []string{"delta", "text", "output_text", "content", "token"} {
-			if child, present := item[key]; present && eventHasText(child) {
-				return true
-			}
-		}
-		for _, key := range []string{"choices", "output"} {
-			if child, present := item[key]; present && eventHasText(child) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func eventError(value any) string {
-	object, ok := value.(map[string]any)
-	if !ok {
-		return ""
-	}
-	if raw, present := object["error"]; present && raw != nil && raw != "" {
-		if errorObject, ok := raw.(map[string]any); ok {
-			if message, present := errorObject["message"]; present {
-				return limitedText(message)
-			}
-			if code, present := errorObject["code"]; present {
-				return limitedText(code)
-			}
-			return "上游返回错误"
-		}
-		return limitedText(raw)
-	}
-	typeText := strings.ToLower(strings.TrimSpace(fmt.Sprint(object["type"])))
-	if strings.Contains(typeText, "error") || strings.Contains(typeText, "failed") {
-		if message, present := object["message"]; present {
-			return limitedText(message)
-		}
-		if detail, present := object["detail"]; present {
-			return limitedText(detail)
-		}
-		return typeText
-	}
-	return ""
 }
 
 var apiReturnedStatusPattern = regexp.MustCompile(`(?i)\bAPI returned\s+([1-5][0-9]{2})\b`)
@@ -786,21 +684,33 @@ func configFromPolicy(policy map[string]any) (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("探测配置无效：probe.concurrency")
 	}
-	prompt := "hi"
-	if raw, present := probeObject["prompt"]; present {
-		value, ok := raw.(string)
-		if !ok {
-			return Config{}, errors.New("探测配置无效：probe.prompt")
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			prompt = value
-		}
+	prompt, err := probePrompt(policy)
+	if err != nil {
+		return Config{}, err
 	}
 	config := Config{Timeout: time.Duration(timeout) * time.Second, MaxConcurrency: concurrency, Prompt: prompt}
 	if err := applyRetryPolicy(&config, policy); err != nil {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// Manual and automatic probes share the same explicit user prompt.
+func probePrompt(policy map[string]any) (string, error) {
+	probeObject, err := optionalObject(policy, "probe")
+	if err != nil {
+		return "", errors.New("探测配置无效：probe")
+	}
+	if raw, present := probeObject["prompt"]; present {
+		value, ok := raw.(string)
+		if !ok {
+			return "", errors.New("探测配置无效：probe.prompt")
+		}
+		if value = strings.TrimSpace(value); value != "" {
+			return value, nil
+		}
+	}
+	return "hi", nil
 }
 
 func defaultConfig() Config {

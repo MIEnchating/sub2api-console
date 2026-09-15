@@ -18,7 +18,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { animationScheduleSchema, type AnimationScheduleForm } from "../lib/animation-schema";
+import {
+  animationScheduleSchema,
+  scheduleDetectionTypes,
+  scheduleMode,
+  type AnimationScheduleForm,
+} from "../lib/animation-schema";
+import { allPrecheckQuestions, precheckQuestionSummary } from "../constants";
+import { PrecheckQuestionSelector } from "./precheck-question-selector";
 
 const numericFields = [
   { name: "interval_minutes", label: "检测间隔（分钟）", min: 1, max: 1440 },
@@ -33,7 +40,7 @@ export function AnimationScheduleDialog(props: {
   onClose: () => void;
 }): ReactElement {
   const client = useQueryClient();
-  const [confirmation, setConfirmation] = useState<AnimationScheduleForm | null>(null);
+  const [confirmation, setConfirmation] = useState<AnimationSchedule | null>(null);
   const form = useForm<AnimationScheduleForm>({
     resolver: zodResolver(animationScheduleSchema),
     defaultValues: props.schedule ?? {
@@ -45,6 +52,7 @@ export function AnimationScheduleDialog(props: {
       version: 0,
     },
   });
+  const selectedTypes = form.watch("detection_types") ?? scheduleDetectionTypes(form.watch("mode"));
   const save = useMutation({
     mutationFn: api.saveAnimationSchedule,
     onSuccess: (values) => {
@@ -58,8 +66,18 @@ export function AnimationScheduleDialog(props: {
     },
   });
   const submit = form.handleSubmit((value) => {
-    if (value.enabled) setConfirmation(value);
-    else save.mutate(value);
+    const { detection_types, ...schedule } = value;
+    const mode = scheduleMode(detection_types ?? scheduleDetectionTypes(value.mode));
+    const payload = {
+      ...schedule,
+      mode,
+      precheck_questions:
+        mode === "precheck" || mode === "both"
+          ? (value.precheck_questions ?? allPrecheckQuestions)
+          : undefined,
+    };
+    if (value.enabled) setConfirmation(payload);
+    else save.mutate(payload);
   });
   return (
     <>
@@ -76,7 +94,7 @@ export function AnimationScheduleDialog(props: {
               由服务器持续执行，关闭页面后仍会检测并产生 API 用量。服务器重启后重新等待设定间隔。
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={submit} className="contents">
+          <form onSubmit={submit} noValidate className="contents">
             <DialogBody className="space-y-4">
               <label className="flex items-center gap-2 text-sm">
                 <Checkbox
@@ -86,6 +104,59 @@ export function AnimationScheduleDialog(props: {
                 />
                 开启自动检测
               </label>
+              <div className="space-y-1 text-sm">
+                <p>检测内容</p>
+                <div role="group" aria-label="自动检测内容" className="flex flex-wrap gap-4 py-1">
+                  {(
+                    [
+                      { value: "precheck", label: "前置检测" },
+                      { value: "animation", label: "动画检测" },
+                    ] as const
+                  ).map((item) => (
+                    <label key={item.value} className="flex items-center gap-2">
+                      <Checkbox
+                        checked={selectedTypes.includes(item.value)}
+                        disabled={save.isPending}
+                        aria-invalid={!!form.formState.errors.detection_types}
+                        aria-describedby={
+                          form.formState.errors.detection_types
+                            ? "schedule-detection-types-error"
+                            : undefined
+                        }
+                        onCheckedChange={(checked) =>
+                          form.setValue(
+                            "detection_types",
+                            checked
+                              ? [...selectedTypes, item.value]
+                              : selectedTypes.filter((value) => value !== item.value),
+                            { shouldDirty: true, shouldValidate: true },
+                          )
+                        }
+                      />
+                      {item.label}
+                    </label>
+                  ))}
+                </div>
+                <FieldError
+                  id="schedule-detection-types-error"
+                  message={form.formState.errors.detection_types?.message}
+                />
+              </div>
+              {selectedTypes.includes("precheck") ? (
+                <div className="space-y-1">
+                  <PrecheckQuestionSelector
+                    value={form.watch("precheck_questions") ?? allPrecheckQuestions}
+                    onChange={(value) =>
+                      form.setValue("precheck_questions", value, {
+                        shouldDirty: true,
+                        shouldValidate: true,
+                      })
+                    }
+                    disabled={save.isPending}
+                  />
+                  <FieldError message={form.formState.errors.precheck_questions?.message} />
+                </div>
+              ) : null}
               <label className="block space-y-1 text-sm">
                 检测模型
                 <Input
@@ -137,7 +208,7 @@ export function AnimationScheduleDialog(props: {
       <ConfirmActionDialog
         open={confirmation !== null}
         title="确认开启自动检测"
-        description={`将对账号 ${props.accountName}（ID ${props.accountID}）使用模型 ${confirmation?.model ?? ""}，每 ${confirmation?.interval_minutes ?? 60} 分钟生成一次动画并产生 API 用量。`}
+        description={`将对账号 ${props.accountName}（ID ${props.accountID}）使用模型 ${confirmation?.model ?? ""}，每 ${confirmation?.interval_minutes ?? 60} 分钟${scheduleDescription(confirmation)}并产生 API 用量。`}
         confirmLabel="确认保存并开启"
         pending={save.isPending}
         onOpenChange={(open) => {
@@ -149,4 +220,12 @@ export function AnimationScheduleDialog(props: {
       />
     </>
   );
+}
+
+function scheduleDescription(schedule: AnimationSchedule | null): string {
+  if (schedule?.mode === "both")
+    return `执行${precheckQuestionSummary(schedule.precheck_questions)}，随后生成一次动画（前置检测不通过也会执行）`;
+  if (schedule?.mode === "precheck")
+    return `执行${precheckQuestionSummary(schedule.precheck_questions)}`;
+  return "生成一次动画";
 }

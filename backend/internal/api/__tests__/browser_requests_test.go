@@ -15,7 +15,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
-func TestBrowserInputRejectsMalformedJSONBeforeLookingUpBrowserSession(t *testing.T) {
+func TestRemovedUpstreamBrowserRoutesReturnNotFound(t *testing.T) {
 	private, err := configstore.Open(filepath.Join(t.TempDir(), "config.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -31,26 +31,26 @@ func TestBrowserInputRejectsMalformedJSONBeforeLookingUpBrowserSession(t *testin
 	}
 	service := authrecovery.New(nil, private, nil, nil, nil, nil)
 	router := api.New(config.Config{}, private, nil, api.Dependencies{AuthRecovery: service})
-	for _, input := range []struct {
-		name, body, contentType string
-		status                  int
+	for _, endpoint := range []struct {
+		method, path string
 	}{
-		{"trailing JSON", `{"kind":"key","key":"Tab"}{}`, "application/json", http.StatusUnprocessableEntity},
-		{"unknown field", `{"kind":"key","key":"Tab","unexpected":true}`, "application/json", http.StatusUnprocessableEntity},
-		{"non JSON content type", `{"kind":"key","key":"Tab"}`, "text/plain", http.StatusUnprocessableEntity},
-		{"valid input", `{"kind":"key","key":"Tab"}`, "application/json", http.StatusNotFound},
+		{http.MethodPost, "/api/auth-recovery/browser"},
+		{http.MethodGet, "/api/auth-recovery/browser/missing"},
+		{http.MethodPost, "/api/auth-recovery/browser/missing/input"},
+		{http.MethodPost, "/api/auth-recovery/browser/missing/finish"},
+		{http.MethodDelete, "/api/auth-recovery/browser/missing"},
 	} {
-		t.Run(input.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "http://console.test/api/auth-recovery/browser/missing/input", strings.NewReader(input.body))
+		t.Run(endpoint.method+" "+endpoint.path, func(t *testing.T) {
+			request := httptest.NewRequest(endpoint.method, "http://console.test"+endpoint.path, strings.NewReader(`{"host":"login.example.test"}`))
 			request.AddCookie(&http.Cookie{Name: "sub2api_console_session", Value: token})
-			request.Header.Set("Content-Type", input.contentType)
+			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Origin", "http://console.test")
 			response := httptest.NewRecorder()
 
 			router.ServeHTTP(response, request)
 
-			if response.Code != input.status {
-				t.Fatalf("browser input returned %d, want %d: %s", response.Code, input.status, response.Body.String())
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("removed route returned %d, want 404: %s", response.Code, response.Body.String())
 			}
 		})
 	}

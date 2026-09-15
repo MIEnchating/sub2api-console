@@ -26,7 +26,7 @@ func (c *Client) enrichRequestLatency(ctx context.Context, accountID string, sta
 		requestID, _ := row["request_id"].(string)
 		requestID = strings.TrimSpace(requestID)
 		_, hasUsage := usagequality.Normalize(row)
-		if fmt.Sprint(row["account_id"]) == accountID && row["kind"] == "success" && requestID != "" && (!validFirstToken(row["first_token_ms"]) || !hasUsage) {
+		if fmt.Sprint(row["account_id"]) == accountID && row["kind"] == "success" && requestID != "" && (!validFirstToken(row["first_token_ms"]) || !hasUsage || !stableID(fmt.Sprint(row["group_id"]))) {
 			pending[requestID] = append(pending[requestID], row)
 		}
 	}
@@ -50,6 +50,9 @@ func (c *Client) enrichRequestLatency(ctx context.Context, accountID string, sta
 		requestID, _ := item["request_id"].(string)
 		requestID = strings.TrimSpace(requestID)
 		for _, row := range pending[requestID] {
+			if !stableID(fmt.Sprint(row["group_id"])) && stableID(fmt.Sprint(item["group_id"])) {
+				row["group_id"] = item["group_id"]
+			}
 			if !validFirstToken(row["first_token_ms"]) && validFirstToken(item["first_token_ms"]) {
 				row["first_token_ms"] = item["first_token_ms"]
 				row["first_token_source"] = "usage.first_token_ms"

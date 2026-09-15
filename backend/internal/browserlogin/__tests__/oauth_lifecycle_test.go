@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 func startOAuthWorker(t *testing.T, factory *oauthFactoryFixture) *browserlogin.Remote {
@@ -58,37 +57,26 @@ func TestOAuthWorkerPreservesTypedCallbackErrors(t *testing.T) {
 	}
 }
 
-func TestOAuthWorkerRejectsRegularLoginWhileOAuthSessionIsActive(t *testing.T) {
-	factory := &oauthFactoryFixture{browser: &oauthBrowserFixture{closed: make(chan struct{})}, regular: &oauthBrowserFixture{closed: make(chan struct{})}, options: make(chan browserlogin.OAuthOptions, 1)}
+func TestOAuthWorkerRejectsConcurrentAuthorizationAndReleasesClosedSession(t *testing.T) {
+	factory := &oauthFactoryFixture{options: make(chan browserlogin.OAuthOptions, 2), open: func(context.Context) (browserlogin.OAuthBrowser, error) {
+		return &oauthBrowserFixture{closed: make(chan struct{})}, nil
+	}}
 	remote := startOAuthWorker(t, factory)
 	browser, err := remote.OpenOAuth(context.Background(), validOAuthOptions("state-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if regular, err := remote.Open(context.Background(), configstore.AuthRecord{BaseURL: "https://login.example.test"}); err == nil {
-		regular.Close()
-		t.Fatal("regular login replaced an active OAuth session")
+	defer browser.Close()
+	if concurrent, err := remote.OpenOAuth(context.Background(), validOAuthOptions("state-2")); err == nil {
+		concurrent.Close()
+		t.Fatal("concurrent authorization replaced an active OAuth session")
 	}
 	browser.Close()
-	regular, err := remote.Open(context.Background(), configstore.AuthRecord{BaseURL: "https://login.example.test"})
+	next, err := remote.OpenOAuth(context.Background(), validOAuthOptions("state-2"))
 	if err != nil {
 		t.Fatalf("closed OAuth session did not release browser: %v", err)
 	}
-	regular.Close()
-}
-
-func TestOAuthWorkerRejectsOAuthWhileRegularLoginIsActive(t *testing.T) {
-	factory := &oauthFactoryFixture{browser: &oauthBrowserFixture{closed: make(chan struct{})}, regular: &oauthBrowserFixture{closed: make(chan struct{})}, options: make(chan browserlogin.OAuthOptions, 1)}
-	remote := startOAuthWorker(t, factory)
-	regular, err := remote.Open(context.Background(), configstore.AuthRecord{BaseURL: "https://login.example.test"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer regular.Close()
-	if browser, err := remote.OpenOAuth(context.Background(), validOAuthOptions("state-1")); err == nil {
-		browser.Close()
-		t.Fatal("OAuth replaced an active regular login session")
-	}
+	next.Close()
 }
 
 func TestOAuthWorkerCloseCancelsInFlightScreenshot(t *testing.T) {

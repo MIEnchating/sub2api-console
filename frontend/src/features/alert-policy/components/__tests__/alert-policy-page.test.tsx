@@ -1,3 +1,4 @@
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -101,10 +102,12 @@ describe("AlertPolicyPage", () => {
     expect(markup).not.toContain("App ID");
     expect(markup).not.toContain("Client Secret");
     expect(markup).not.toContain("目标 ID");
-    for (const label of ["上游与余额", "账号健康", "分组状态", "自动执行"]) {
+    for (const label of ["上游与余额", "账号健康与成本", "分组状态", "自动执行"]) {
       expect(markup).toContain(`>${label}</h3>`);
     }
-    expect(markup.indexOf(">主动探测失败<")).toBeGreaterThan(markup.indexOf(">账号健康</h3>"));
+    expect(markup.indexOf(">主动探测失败<")).toBeGreaterThan(
+      markup.indexOf(">账号健康与成本</h3>"),
+    );
     expect(markup.indexOf(">主动探测失败<")).toBeLessThan(markup.indexOf(">分组状态</h3>"));
     expect(markup.indexOf(">分组无可调度账号<")).toBeGreaterThan(markup.indexOf(">分组状态</h3>"));
     expect(markup.indexOf(">自动执行失败<")).toBeGreaterThan(markup.indexOf(">自动执行</h3>"));
@@ -158,4 +161,23 @@ describe("AlertPolicyPage", () => {
       /<button(?=[^>]*data-testid="alert-policy-save")(?=[^>]*disabled="")[^>]*>/,
     );
   });
+});
+
+it("告警分组选择使用字典稳定 ID 顺序并保留原有选中状态", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  cacheAlertPolicyPageData(client);
+  client.setQueryData(["dictionaries", "group"], {
+    items: ["10", "8", "6"].map((value) => ({ value, enabled: true })),
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <AlertPolicyPage onOpenSettings={() => undefined} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "主动探测告警分组" }));
+  const options = await screen.findAllByRole("option");
+  expect(options.map((item) => item.textContent)).toEqual(["standard", "pro", "codex"]);
+  expect(options[0]).toHaveAttribute("aria-selected", "false");
+  expect(options[1]).toHaveAttribute("aria-selected", "true");
+  client.clear();
 });

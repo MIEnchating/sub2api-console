@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   accountTypeValue,
+  accountStateDictionary,
   dictionaryLabel,
   groupStatusDictionary,
   orderedDictionaryOptions,
@@ -21,6 +22,11 @@ describe("领域字典", () => {
 
   it("提供运行状态的统一展示名", () => {
     expect(runtimeStatusDictionary.running).toBe("运行中");
+  });
+
+  it("并发额度不足的运行状态和账号状态使用同一中文名称", () => {
+    expect(runtimeStatusDictionary.concurrency_limited).toBe("等待并发额度");
+    expect(accountStateDictionary.concurrency_limited).toBe("等待并发额度");
   });
 
   it("未知或空值使用稳定回退文案", () => {

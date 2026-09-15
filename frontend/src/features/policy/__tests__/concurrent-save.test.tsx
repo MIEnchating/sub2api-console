@@ -168,7 +168,7 @@ it("已有本地修改时保留原版本并展示并发冲突，不用新版本�
         <Toaster />
       </QueryClientProvider>,
     );
-    const scheduling = screen.getByRole("switch", { name: "调度状态" });
+    const scheduling = screen.getByRole("switch", { name: "调度状态自动执行" });
     fireEvent.click(scheduling);
     expect(scheduling).not.toBeChecked();
     latest = {

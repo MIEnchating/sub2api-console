@@ -57,6 +57,12 @@ export type CustomAnimationForm = z.infer<typeof customAnimationSchema>;
 
 export const animationScheduleSchema = z
   .object({
+    precheck_questions: z.array(z.enum(["candy", "knowledge-cutoff"])).optional(),
+    mode: z.enum(["animation", "precheck", "both"]).optional(),
+    detection_types: z
+      .array(z.enum(["animation", "precheck"]))
+      .min(1, "请选择至少一种检测内容")
+      .optional(),
     account_id: z.string().regex(/^[1-9]\d*$/),
     enabled: z.boolean(),
     model: z.string(),
@@ -69,6 +75,19 @@ export const animationScheduleSchema = z
     version: z.number().int().min(0),
   })
   .superRefine((value, context) => {
+    if (
+      (value.detection_types?.includes("precheck") ??
+        (value.mode === "precheck" || value.mode === "both")) &&
+      value.precheck_questions !== undefined &&
+      (value.precheck_questions.length === 0 ||
+        new Set(value.precheck_questions).size !== value.precheck_questions.length)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["precheck_questions"],
+        message: "请选择至少一道不重复的前置检测题目",
+      });
+    }
     if (value.enabled) {
       const parsed = modelID.safeParse(value.model);
       if (!parsed.success)
@@ -80,3 +99,17 @@ export const animationScheduleSchema = z
     }
   });
 export type AnimationScheduleForm = z.infer<typeof animationScheduleSchema>;
+
+export function scheduleDetectionTypes(
+  mode?: AnimationScheduleForm["mode"],
+): ("animation" | "precheck")[] {
+  if (mode === "both") return ["precheck", "animation"];
+  if (mode === "precheck") return ["precheck"];
+  return ["animation"];
+}
+
+export function scheduleMode(types: ("animation" | "precheck")[]): AnimationScheduleForm["mode"] {
+  if (!types.includes("precheck")) return undefined;
+  if (types.includes("animation")) return "both";
+  return "precheck";
+}

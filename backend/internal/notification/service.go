@@ -369,6 +369,7 @@ func routingIncidentGroup(incident business.AlertIncident) string {
 }
 
 var eventLabels = map[string]string{
+	"account.cost_traffic":         "无利润／亏损流量",
 	"upstream.configuration":       "上游配置有问题",
 	"upstream.auth":                "上游鉴权失败",
 	"upstream.rate_sync":           "上游倍率同步失败",
@@ -386,6 +387,7 @@ var eventLabels = map[string]string{
 }
 
 var causeLabels = map[string]string{
+	"COST_TRAFFIC":                        "账号倍率大于等于分组倍率且有实际调用",
 	"CONFIG":                              "上游配置有问题",
 	"CONFIG_METADATA_INVALID":             "上游返回信息无法识别",
 	"CONFIG_AUTH_STATUS_MISSING":          "上游没有返回鉴权状态",
@@ -674,6 +676,7 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	}
 	if incident.Status == "recovered" {
 		recoveredLabels := map[string]string{
+			"account.cost_traffic":      "无利润／亏损流量告警已解除",
 			"upstream.configuration":    "上游配置已恢复",
 			"upstream.auth":             "上游鉴权已恢复",
 			"upstream.rate_sync":        "上游倍率同步已恢复",
@@ -713,6 +716,7 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 		}
 	} else if incident.Status == "recovered" {
 		recoveredCauses := map[string]string{
+			"COST_TRAFFIC":                        "近期未再检测到账号倍率大于等于分组倍率的流量",
 			"CONFIG":                              "上游配置已恢复正常",
 			"AUTH":                                "上游鉴权已恢复",
 			"RATE_SYNC":                           "倍率同步已恢复",
@@ -878,7 +882,7 @@ func incidentTableRow(incident business.AlertIncident) string {
 
 func dynamicAlertCause(cause string) (string, string, bool) {
 	for _, code := range []string{
-		"AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
+		"COST_TRAFFIC", "AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
 		"ROUTING_BREAKER", "ROUTING_DEGRADED_HEALTH_SCORE", "ROUTING_DEGRADED_GATEWAY_ERROR_RATE",
 		"ROUTING_DEGRADED_LATENCY", "ROUTING_DEGRADED_OTHER", "ROUTING_DEGRADED",
 		"ROUTING_SURVIVOR", "BINDING_INVALID", "APPLY_FAILED",
@@ -893,6 +897,8 @@ func dynamicAlertCause(cause string) (string, string, bool) {
 
 func accountGroupIncidentPrefix(eventType, accountID string) string {
 	switch eventType {
+	case "account.cost_traffic":
+		return "console:cost-traffic:" + accountID + ":"
 	case "account.probe":
 		return "console:probe:" + accountID + ":"
 	case "account.routing_breaker":

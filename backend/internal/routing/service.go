@@ -93,117 +93,127 @@ type Service struct {
 }
 
 type engineConfig struct {
-	sampleClassification  scoringConfig
-	strategy              string
-	trafficEnabled        bool
-	trafficMaxAge         time.Duration
-	probeMaxAge           time.Duration
-	historyMaxAge         time.Duration
-	shortWindow           int
-	longWindow            int
-	breakerEnabled        bool
-	hardFatal             bool
-	httpWindow            int
-	httpFailures          int
-	httpScoreBelow        float64
-	transientFailures     int
-	latencyWindow         int
-	latencyOccurrences    int
-	latencyTTFBMS         float64
-	maxSwitch             int
-	minPool               int
-	minPoolScore          float64
-	fusedCooldown         time.Duration
-	instantCodes          map[int]struct{}
-	httpDegradeOnly       bool
-	latencyDegradeOnly    bool
-	degradeEnabled        bool
-	degradeThreshold      float64
-	degradePriorityStep   int64
-	degradeLoadRatio      float64
-	degradeMinLoad        int64
-	recoveryEnabled       bool
-	recoveryTarget        float64
-	recoverySuccesses     int
-	recoveryHold          time.Duration
-	weightsEnabled        bool
-	weightBudget          int64
-	manualPriorityMax     int64
-	manageAllAccounts     bool
-	gateFloor             float64
-	priceExp              float64
-	speedExp              float64
-	balancedPriceRatio    float64
-	performanceMinSamples int
-	speedAdvantageCap     float64
-	missingRateFallback   string
-	changeThreshold       *big.Rat
-	cooldown              time.Duration
-	minLoadFactor         int64
-	maxLoadFactor         int64
-	scalingEnabled        bool
-	scalingGlobalMax      int64
-	scalingMin            int64
-	scalingMax            int64
-	scalingUpRatio        float64
-	scalingStepUp         int64
-	scalingStepDown       int64
-	scalingCooldown       time.Duration
-	excludedGroups        map[string]struct{}
-	excludedAccounts      map[string]struct{}
-	pausedAccounts        map[string]struct{}
-	manualFusedAccounts   map[string]struct{}
-	managedMode           string
-	managedGroups         map[string]struct{}
-	accountTypes          map[string]struct{}
-	platforms             map[string]struct{}
-	groupBindings         map[string]any
-	cleanupEnabled        bool
-	cleanupAction         string
-	cleanupOccurrences    int
-	cleanupWindow         int
-	cleanupObservation    time.Duration
-	cleanupMaxPerRound    int
-	cleanupKeepLast       bool
-	cleanupOnlyAuth       bool
-	cleanupStatusCodes    map[int]struct{}
+	sampleClassification     scoringConfig
+	strategy                 string
+	trafficEnabled           bool
+	trafficMaxAge            time.Duration
+	probeMaxAge              time.Duration
+	historyMaxAge            time.Duration
+	shortWindow              int
+	longWindow               int
+	breakerEnabled           bool
+	hardFatal                bool
+	httpWindow               int
+	httpFailures             int
+	httpScoreBelow           float64
+	transientFailures        int
+	latencyWindow            int
+	latencyOccurrences       int
+	latencyTTFBMS            float64
+	maxSwitch                int
+	minPool                  int
+	minPoolScore             float64
+	fusedCooldown            time.Duration
+	instantCodes             map[int]struct{}
+	httpDegradeOnly          bool
+	latencyDegradeOnly       bool
+	degradeEnabled           bool
+	degradeThreshold         float64
+	degradePriorityStep      int64
+	degradeLoadRatio         float64
+	degradeMinLoad           int64
+	recoveryEnabled          bool
+	recoveryTarget           float64
+	recoverySuccesses        int
+	recoveryHold             time.Duration
+	weightsEnabled           bool
+	weightBudget             int64
+	manualPriorityMax        int64
+	manageAllAccounts        bool
+	gateFloor                float64
+	priceExp                 float64
+	speedExp                 float64
+	balancedPriceRatio       float64
+	performanceMinSamples    int
+	speedAdvantageCap        float64
+	missingRateFallback      string
+	changeThreshold          *big.Rat
+	cooldown                 time.Duration
+	minLoadFactor            int64
+	maxLoadFactor            int64
+	scalingEnabled           bool
+	upstreamReductionEnabled bool
+	costWallEnabled          bool
+	costWallFallbackEnabled  bool
+	costWallStopAutoProbe    bool
+	scalingGlobalMax         int64
+	scalingMin               int64
+	scalingMax               int64
+	scalingUpRatio           float64
+	scalingStepUp            int64
+	scalingStepDown          int64
+	scalingCooldown          time.Duration
+	applyConcurrency         bool
+	applySchedulable         bool
+	excludedGroups           map[string]struct{}
+	excludedAccounts         map[string]struct{}
+	pausedAccounts           map[string]struct{}
+	manualFusedAccounts      map[string]struct{}
+	managedMode              string
+	managedGroups            map[string]struct{}
+	accountTypes             map[string]struct{}
+	platforms                map[string]struct{}
+	groupBindings            map[string]any
+	cleanupEnabled           bool
+	cleanupAction            string
+	cleanupOccurrences       int
+	cleanupWindow            int
+	cleanupObservation       time.Duration
+	cleanupMaxPerRound       int
+	cleanupKeepLast          bool
+	cleanupOnlyAuth          bool
+	cleanupStatusCodes       map[int]struct{}
 }
 
 type candidate struct {
-	account            business.RoutingAccount
-	health             Health
-	routingHealth      float64
-	evidencePending    bool
-	rows               []business.RoutingSample
-	performanceP50MS   *float64
-	performanceP95MS   *float64
-	performanceSamples int
-	performanceModel   string
-	rankingLatencyMS   float64
-	rate               *big.Rat
-	rateText           *string
-	rateKnown          bool
-	rateReason         *string
-	costWall           *big.Rat
-	costWallText       *string
-	costTier           string
-	costTierRank       int
-	state              string
-	reason             string
-	schedulable        bool
-	fuseKind           string
-	strategy           string
-	quality            float64
-	weight             float64
-	rank               *int
-	desiredPriority    *int64
-	desiredLoad        *string
-	desiredConcurrency *int64
-	writeCooldown      bool
-	scalingCooldown    bool
-	stateSince         time.Time
-	fusedUntil         time.Time
-	cleanupAction      *string
+	account                       business.RoutingAccount
+	health                        Health
+	routingHealth                 float64
+	evidencePending               bool
+	rows                          []business.RoutingSample
+	performanceP50MS              *float64
+	performanceP95MS              *float64
+	performanceSamples            int
+	performanceModel              string
+	rankingLatencyMS              float64
+	rate                          *big.Rat
+	rateText                      *string
+	rateKnown                     bool
+	rateReason                    *string
+	costWall                      *big.Rat
+	costWallText                  *string
+	costTier                      string
+	costTierRank                  int
+	state                         string
+	reason                        string
+	schedulable                   bool
+	fuseKind                      string
+	strategy                      string
+	quality                       float64
+	weight                        float64
+	rank                          *int
+	desiredPriority               *int64
+	desiredLoad                   *string
+	desiredConcurrency            *int64
+	writeCooldown                 bool
+	scalingCooldown               bool
+	stateSince                    time.Time
+	fusedUntil                    time.Time
+	cleanupAction                 *string
+	concurrencyIssue              string
+	concurrencyConfigurationError *string
+	upstreamReductionID           string
+	upstreamReductionLimit        *int64
 }
 
 type strategyInputs struct {
@@ -238,7 +248,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	if config.trafficEnabled {
 		sampleSource = "traffic"
 	}
-	samples, err := s.repository.RoutingSamples(ctx, scope.AccountID, scope.GroupName, sampleSource, config.longWindow)
+	samples, err := s.repository.RoutingSamples(ctx, scope.AccountID, scope.GroupName, sampleSource, config.sampleWindow())
 	if err != nil {
 		return Result{}, err
 	}
@@ -322,10 +332,11 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			if groupConfig.trafficEnabled {
 				source = "traffic"
 			}
-			rows := filterAndLimitSamples(sampleMap[account.ID], source, groupConfig.longWindow*2)
+			rows := filterAndLimitSamples(sampleMap[account.ID], source, groupConfig.sampleWindow()*2)
 			healthRows, performanceRows := selectRoutingEvidence(
-				rows, now, groupConfig.trafficMaxAge, groupConfig.probeMaxAge, groupConfig.longWindow,
+				rows, now, groupConfig.trafficMaxAge, groupConfig.probeMaxAge, groupConfig.sampleWindow(),
 			)
+			performanceRows = performanceRows[:min(groupConfig.longWindow, len(performanceRows))]
 			if fusedRoutingState(account.EffectiveState) {
 				healthRows = withRecoveryProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, previousStateSince(prior))
 			}
@@ -366,13 +377,28 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	}
 	alignAccountStateToPrimary(byAccount, configsByGroup, previous, now)
 	applyFuseBudgets(candidatesByGroup, configsByGroup, byAccount, now)
+	costContext := accounts
+	if scope.AccountID != nil || scope.GroupName != nil {
+		costContext, err = s.repository.RoutingAccounts(ctx, nil, nil)
+		if err != nil {
+			return Result{}, fmt.Errorf("读取成本墙保底账号范围失败：%w", err)
+		}
+	}
+	applyCostWallFallbacks(candidatesByGroup, byAccount, costContext, config, now)
 	for groupName, candidates := range candidatesByGroup {
 		calculateGroupWeights(candidates, configsByGroup[groupName])
 	}
 	capacityAccounts := accounts
-	if scope.AccountID != nil || scope.GroupName != nil {
+	if reader, ok := s.repository.(interface {
+		RoutingCapacityAccounts(context.Context) ([]business.RoutingAccount, error)
+	}); ok {
+		capacityAccounts, err = reader.RoutingCapacityAccounts(ctx)
+		if err != nil {
+			return Result{}, fmt.Errorf("读取全局并发容量失败：%w", err)
+		}
+	} else if scope.AccountID != nil || scope.GroupName != nil {
 		for _, groupConfig := range configsByGroup {
-			if !groupConfig.scalingEnabled {
+			if !groupConfig.scalingEnabled && !groupConfig.upstreamReductionEnabled {
 				continue
 			}
 			// Capacity is global even when only one account or group is written.
@@ -386,7 +412,26 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	if assignAccountPlacements(candidatesByGroup, configsByGroup, byAccount, capacityAccounts...) {
 		result.ConfigurationErrors = append(result.ConfigurationErrors, "全局并发预算不足，部分账号暂时无法达到单账号下限；请调整全局上限或单账号下限")
 	}
+	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
+		item := primaryMembership(byAccount[accountID])
+		if item == nil {
+			continue
+		}
+		if item.concurrencyIssue != "" {
+			result.ConfigurationErrors = append(result.ConfigurationErrors, item.concurrencyIssue)
+		}
+		if item.concurrencyConfigurationError != nil {
+			result.ConfigurationErrors = append(result.ConfigurationErrors, *item.concurrencyConfigurationError)
+		}
+	}
+	result.ConfigurationErrors = uniqueSorted(result.ConfigurationErrors)
 	finalizeAccountStates(byAccount, configsByGroup, previous, now)
+	if persistDecisions {
+		runtimeEvents = append(runtimeEvents, routingStateTransitionEvents(byAccount, previous)...)
+		var cleanupEvents []business.RuntimeEventWrite
+		cleanupWrites, cleanupEvents = applyCleanupPolicy(byAccount, config, cleanupState, now)
+		runtimeEvents = append(runtimeEvents, cleanupEvents...)
+	}
 	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
 		primary := primaryMembership(byAccount[accountID])
 		if primary == nil {
@@ -419,10 +464,6 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	}
 	result.HealthEvaluations = len(evaluations)
 	if persistDecisions {
-		runtimeEvents = append(runtimeEvents, routingStateTransitionEvents(byAccount, previous)...)
-		var cleanupEvents []business.RuntimeEventWrite
-		cleanupWrites, cleanupEvents = applyCleanupPolicy(byAccount, config, cleanupState, now)
-		runtimeEvents = append(runtimeEvents, cleanupEvents...)
 		result.AccountTargets = aggregateTargets(byAccount)
 		for accountID, memberships := range externalReleaseAccounts {
 			groupNames := make([]string, 0, len(memberships))
@@ -581,7 +622,7 @@ func alignAccountStateToPrimary(
 		primary.fusedUntil = time.Time{}
 		prior, _ := previousDecision(previous, primary.account.ID, primary.account.GroupName)
 		applyInitialState(primary, configs[primary.account.GroupName], prior, now)
-		applyAccountCostWall(primary, memberships, now)
+		applyAccountCostWall(primary, memberships, configs[primary.account.GroupName], now)
 		for _, item := range memberships {
 			if item == primary {
 				continue
@@ -593,25 +634,31 @@ func alignAccountStateToPrimary(
 	}
 }
 
-func applyAccountCostWall(primary *candidate, memberships []*candidate, now time.Time) {
-	allAbove := len(memberships) > 0
+func applyAccountCostWall(primary *candidate, memberships []*candidate, config engineConfig, now time.Time) {
+	allAbove := config.costWallEnabled && len(memberships) > 0
 	for _, item := range memberships {
-		if item.costTier != "above" {
+		if !costWallReached(item.costTier) {
 			allAbove = false
 			break
 		}
 	}
-	stateCanBeCostBlocked := primary.state == "healthy" || primary.state == "degraded" || primary.state == "unknown"
+	stateCanBeCostBlocked := primary.state == "healthy" || primary.state == "degraded" || primary.state == "unknown" || primary.state == "survivor"
 	previouslyCostBlocked := strings.EqualFold(strings.TrimSpace(primary.account.EffectiveState), "cost_blocked")
-	if allAbove && stateCanBeCostBlocked && (remoteSchedulable(primary.account) || previouslyCostBlocked) {
+	if allAbove && stateCanBeCostBlocked && primary.account.Schedulable != nil {
 		primary.state = "cost_blocked"
 		primary.schedulable = false
-		primary.reason = "所有受管分组的倍率均超过当前成本墙"
+		primary.reason = "所有受管分组的倍率均达到或超过当前成本墙，停止调度"
+		if config.costWallStopAutoProbe {
+			primary.reason += "与自动探活"
+		}
 		return
 	}
-	if !allAbove && stateCanBeCostBlocked && previouslyCostBlocked && costWallRecoveryAllowed(primary.account, now) {
+	if !allAbove && stateCanBeCostBlocked && previouslyCostBlocked && primary.account.Schedulable != nil && costWallRecoveryAllowed(primary.account, now) {
 		primary.schedulable = true
-		primary.reason = "至少一个受管分组的倍率已回到成本墙范围"
+		primary.reason = "至少一个受管分组的倍率已低于当前成本墙"
+		if !config.costWallEnabled {
+			primary.reason = "成本墙拦截已关闭，恢复正常调度评估"
+		}
 	}
 }
 
@@ -663,6 +710,18 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		return engineConfig{}, err
 	}
 	scaling, err := requiredObject(policy, "scaling")
+	if err != nil {
+		return engineConfig{}, err
+	}
+	autoApply, err := optionalObject(policy, "auto_apply")
+	if err != nil {
+		return engineConfig{}, err
+	}
+	upstreamConcurrency, err := optionalObject(policy, "upstream_concurrency")
+	if err != nil {
+		return engineConfig{}, err
+	}
+	costWall, err := optionalObject(policy, "cost_wall")
 	if err != nil {
 		return engineConfig{}, err
 	}
@@ -748,8 +807,8 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		fusedCooldown: time.Duration(reader.integer(breaker, "breaker.fused_cooldown_seconds", "fused_cooldown_seconds", 180, 0, 86400)) * time.Second,
 		instantCodes:  instantCodes, httpDegradeOnly: reader.boolean(breaker, "breaker.http_degrade_only", "http_degrade_only", true), latencyDegradeOnly: reader.boolean(breaker, "breaker.latency_degrade_only", "latency_degrade_only", true),
 		degradeEnabled: reader.boolean(degrade, "degrade.enabled", "enabled", true), degradeThreshold: reader.number(degrade, "degrade.score_threshold", "score_threshold", 75, 0, 100),
-		degradePriorityStep: int64(reader.integer(degrade, "degrade.priority_step", "priority_step", 10, 1, 100000)), degradeLoadRatio: reader.number(degrade, "degrade.load_factor_ratio", "load_factor_ratio", .5, math.SmallestNonzeroFloat64, 1),
-		degradeMinLoad:  int64(reader.integer(degrade, "degrade.min_load_factor", "min_load_factor", 1, 1, 100000)),
+		degradePriorityStep: int64(reader.integer(degrade, "degrade.priority_step", "priority_step", 10, 1, 1_000_000)), degradeLoadRatio: reader.number(degrade, "degrade.load_factor_ratio", "load_factor_ratio", .5, math.SmallestNonzeroFloat64, 1),
+		degradeMinLoad:  int64(reader.integer(degrade, "degrade.min_load_factor", "min_load_factor", 1, 1, 1_000_000)),
 		recoveryEnabled: reader.boolean(recovery, "recovery.enabled", "enabled", true), recoveryTarget: reader.number(recovery, "recovery.target_score", "target_score", 75, 0, 100),
 		recoverySuccesses: reader.integer(recovery, "recovery.success_count", "success_count", 2, 1, 10000), recoveryHold: time.Duration(reader.integer(recovery, "recovery.hold_seconds", "hold_seconds", 60, 0, 86400)) * time.Second,
 		weightsEnabled: reader.boolean(weights, "weights.enabled", "enabled", true), weightBudget: int64(reader.integer(weights, "weights.budget", "budget", 400, 1, 1_000_000)),
@@ -762,10 +821,16 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		cooldown:              time.Duration(reader.integer(weights, "weights.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
 		minLoadFactor:         int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
 		scalingEnabled: reader.boolean(scaling, "scaling.enabled", "enabled", false), scalingGlobalMax: int64(reader.integer(scaling, "scaling.global_max_concurrency", "global_max_concurrency", 900, 1, 10_000_000)),
-		scalingMin: int64(reader.integer(scaling, "scaling.min_per_account", "min_per_account", 3, 1, 1_000_000)), scalingMax: int64(reader.integer(scaling, "scaling.max_per_account", "max_per_account", 250, 1, 1_000_000)),
+		upstreamReductionEnabled: reader.boolean(upstreamConcurrency, "upstream_concurrency.enabled", "enabled", false),
+		costWallEnabled:          reader.boolean(costWall, "cost_wall.enabled", "enabled", true),
+		costWallFallbackEnabled:  reader.boolean(costWall, "cost_wall.fallback_enabled", "fallback_enabled", true),
+		costWallStopAutoProbe:    reader.boolean(costWall, "cost_wall.stop_auto_probe", "stop_auto_probe", true),
+		scalingMin:               int64(reader.integer(scaling, "scaling.min_per_account", "min_per_account", 3, 1, 1_000_000)), scalingMax: int64(reader.integer(scaling, "scaling.max_per_account", "max_per_account", 250, 1, 1_000_000)),
 		scalingUpRatio: reader.number(scaling, "scaling.scale_up_ratio", "scale_up_ratio", .8, math.SmallestNonzeroFloat64, 1), scalingStepUp: int64(reader.integer(scaling, "scaling.step_up", "step_up", 5, 1, 1_000_000)),
 		scalingStepDown:  int64(reader.integer(scaling, "scaling.step_down", "step_down", 5, 1, 1_000_000)),
 		scalingCooldown:  time.Duration(reader.integer(scaling, "scaling.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
+		applyConcurrency: reader.boolean(autoApply, "auto_apply.concurrency", "concurrency", false),
+		applySchedulable: reader.boolean(autoApply, "auto_apply.schedulable", "schedulable", false),
 		excludedGroups:   reader.stringSet(scope, "scope.excluded_group_ids", "excluded_group_ids"),
 		excludedAccounts: reader.stringSet(scope, "scope.excluded_account_ids", "excluded_account_ids"),
 		pausedAccounts:   reader.stringSet(scope, "scope.paused_account_ids", "paused_account_ids"), manualFusedAccounts: reader.stringSet(scope, "scope.manual_fused_account_ids", "manual_fused_account_ids"),
@@ -786,6 +851,11 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		return engineConfig{}, errors.New("调度策略阈值关系无效")
 	}
 	return config, nil
+}
+
+func (c engineConfig) sampleWindow() int {
+	// Safety and recovery thresholds have independent windows from scoring.
+	return max(c.longWindow, c.httpWindow, c.latencyWindow, c.transientFailures, c.recoverySuccesses, c.cleanupWindow)
 }
 
 func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
@@ -950,7 +1020,7 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 		item.reason = ""
 		applyPendingHealthReason(item, true)
 	}
-	if config.manageAllAccounts && managedAccountCanReceiveTraffic(item, now) {
+	if (config.manageAllAccounts || previouslyConcurrencyLimited(item.account)) && managedAccountCanReceiveTraffic(item, now) {
 		item.schedulable = true
 	}
 }
@@ -1359,6 +1429,7 @@ func assignAccountPlacements(
 	}
 	sort.Strings(groupNames)
 	budget := newScalingBudget(capacityInventory, fallbackConcurrency)
+	upstreamPools := newUpstreamScalingPools(capacityInventory)
 	minimumLimited := false
 	for _, groupName := range groupNames {
 		members := groups[groupName]
@@ -1416,10 +1487,17 @@ func assignAccountPlacements(
 		}
 		// Scaling is also account-level and is therefore evaluated only once,
 		// by the same primary group that owns priority and load factor.
-		if applyScalingWithBudget(owned, config, &budget) {
+		legacyScaling := make([]*candidate, 0, len(owned))
+		for _, item := range owned {
+			if !upstreamPools.manages(item.account) {
+				legacyScaling = append(legacyScaling, item)
+			}
+		}
+		if applyScalingWithBudget(legacyScaling, config, &budget) {
 			minimumLimited = true
 		}
 	}
+	upstreamPools.apply(primary, configs, &budget)
 
 	for accountID, memberships := range byAccount {
 		owner := primary[accountID]
@@ -1542,8 +1620,12 @@ func newScalingBudget(accounts []business.RoutingAccount, fallback int64) scalin
 	byID := make(map[string]int64, len(accounts))
 	for _, account := range accounts {
 		current := fallback
-		if account.Concurrency != nil && *account.Concurrency > 0 {
+		if confirmedConcurrencyPause(account) {
+			current = 0
+		} else if account.Concurrency != nil && *account.Concurrency > 0 {
 			current = *account.Concurrency
+		} else if sub2APIUpstreamID(account) != "" {
+			current = math.MaxInt64
 		}
 		byID[account.ID] = max(byID[account.ID], current)
 	}
@@ -1627,7 +1709,7 @@ func applyDeadband(items []*candidate, previous map[string]business.PreviousRout
 				item.desiredPriority = cloneInt64(item.account.Priority)
 			}
 		}
-		if !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.scalingCooldown {
+		if item.upstreamReductionID == "" && !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.scalingCooldown {
 			item.scalingCooldown = true
 			item.desiredConcurrency = nil
 		}
@@ -1951,6 +2033,8 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 			Priority: cloneInt64(primary.desiredPriority), LoadFactor: cloneString(primary.desiredLoad),
 			Concurrency: cloneInt64(primary.desiredConcurrency), WriteCooldown: primary.writeCooldown,
 			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction),
+			ConfigurationError:  cloneString(primary.concurrencyConfigurationError),
+			UpstreamReductionID: primary.upstreamReductionID, UpstreamReductionLimit: cloneInt64(primary.upstreamReductionLimit),
 		}
 		if primary.state != "excluded" {
 			schedulable := primary.schedulable
@@ -2149,7 +2233,7 @@ func strategyQuality(item *candidate, config engineConfig, benchmark strategyInp
 	default:
 		quality = (priceScore*config.balancedPriceRatio + speedScore*(1-config.balancedPriceRatio)) * healthGate
 	}
-	if item.costTier == "above" {
+	if config.costWallEnabled && costWallReached(item.costTier) && item.state != "survivor" {
 		return 0
 	}
 	return max(0.0, quality)
@@ -2236,6 +2320,14 @@ func withRecoveryProbeEvidence(
 	probeMaxAge time.Duration,
 	fusedSince time.Time,
 ) []business.RoutingSample {
+	postFuseRows := make([]business.RoutingSample, 0, len(healthRows))
+	for _, row := range healthRows {
+		observed, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
+		if err == nil && observed.After(fusedSince) {
+			postFuseRows = append(postFuseRows, row)
+		}
+	}
+	healthRows = postFuseRows
 	cutoff := fusedSince
 	for _, row := range healthRows {
 		if !strings.EqualFold(strings.TrimSpace(row.Source), "traffic") {

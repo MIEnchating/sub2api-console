@@ -65,7 +65,7 @@ func (w *worker) handleOAuthRecovery(r *http.Request) (wireResponse, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.id != "" || w.securityID != "" {
+	if w.securityID != "" {
 		return wireResponse{}, errors.New("验证浏览器正在使用中")
 	}
 	if w.oauthID != "" {

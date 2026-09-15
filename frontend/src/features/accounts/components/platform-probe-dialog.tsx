@@ -280,14 +280,18 @@ export function PlatformProbeDialog(props: {
 
   return (
     <Dialog open={props.open} onOpenChange={changeOpen}>
-      <DialogContent width="wide" height="adaptive">
+      <DialogContent
+        width="progress"
+        height="adaptive"
+        className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+      >
         <DialogHeader>
           <DialogTitle>平台模型探活</DialogTitle>
           <DialogDescription>对所选平台下每个可探活账号真实请求一次输入模型。</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="contents">
-          <DialogBody className="grid gap-4 py-1">
-            <div className="grid gap-4 sm:grid-cols-2">
+          <DialogBody className="grid min-w-0 gap-4 py-1">
+            <div className="grid min-w-0 gap-4 sm:grid-cols-2">
               <label className="grid gap-1.5 text-sm font-medium">
                 平台
                 <Select
@@ -331,7 +335,7 @@ export function PlatformProbeDialog(props: {
               <p className="text-muted-foreground text-sm">当前没有可探活且带平台标识的账号。</p>
             ) : null}
             {options.length > 0 && selectedOption ? (
-              <p className="text-muted-foreground text-sm">
+              <p className="bg-muted/40 rounded-lg border px-3 py-2.5 text-sm">
                 本次将探活 {selectedOption.label} 下的 {selectedOption.accountCount} 个账号。
               </p>
             ) : null}

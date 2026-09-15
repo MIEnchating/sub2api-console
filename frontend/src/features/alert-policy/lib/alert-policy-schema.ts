@@ -18,6 +18,7 @@ const recoveryNotificationTypeSchema = z.enum([
   "routing_survivor",
   "group_unavailable",
   "group_survivor",
+  "cost_traffic",
   "apply_failure",
 ]);
 
@@ -28,6 +29,7 @@ export const alertPolicyFormSchema = z.object({
   rate_sync_enabled: z.boolean(),
   multiplier_increase_enabled: z.boolean(),
   multiplier_decrease_enabled: z.boolean(),
+  cost_traffic_enabled: z.boolean(),
   balance_enabled: z.boolean(),
   probe_enabled: z.boolean(),
   routing_breaker_enabled: z.boolean(),
@@ -84,6 +86,7 @@ export const defaultAlertPolicyForm: AlertPolicyFormValues = {
   rate_sync_enabled: true,
   multiplier_increase_enabled: true,
   multiplier_decrease_enabled: true,
+  cost_traffic_enabled: true,
   balance_enabled: true,
   probe_enabled: true,
   routing_breaker_enabled: true,

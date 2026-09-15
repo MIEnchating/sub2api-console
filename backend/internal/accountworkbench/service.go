@@ -43,38 +43,40 @@ type OAuthChecker interface {
 }
 
 type Service struct {
-	private            privateStore
-	tasks              taskRepository
-	repository         any
-	checker            OAuthChecker
-	runner             taskrunner.Runner
-	transport          http.RoundTripper
-	mu                 sync.Mutex
-	previews           map[string]*preparedImport
-	exportState        *exportState
-	maintenanceMu      sync.Mutex
-	maintenanceRunning bool
-	maintenanceOwner   *maintenanceOwner
-	maintenanceTicks   <-chan time.Time
-	syncAccounts       func(context.Context, string) (business.ManagementSyncResult, error)
-	oauthFactory       browserlogin.OAuthFactory
-	oauthTransport     http.RoundTripper
-	providerTransport  http.RoundTripper
-	oauthAssistTicks   <-chan time.Time
-	smsPool            *workbenchprovider.SMSPool
-	oauthMu            sync.Mutex
-	oauthBusy          bool
-	oauthBatchID       string
-	oauthSessions      map[string]*oauthSession
-	batches            *oauthBatches
-	securityFactory    browserlogin.SecurityFactory
-	securityStorage    *securityStorage
-	securityMu         sync.Mutex
-	securitySessions   map[string]*securitySession
-	securityBatches    *securityBatches
-	mixed              *workbenchRuns
-	cleanupMu          sync.RWMutex
-	cleanupPreviews    map[string]*preparedCleanup
+	private                privateStore
+	tasks                  taskRepository
+	repository             any
+	checker                OAuthChecker
+	runner                 taskrunner.Runner
+	transport              http.RoundTripper
+	mu                     sync.Mutex
+	previews               map[string]*preparedImport
+	exportState            *exportState
+	maintenanceMu          sync.Mutex
+	maintenanceRunning     bool
+	maintenanceOwner       *maintenanceOwner
+	maintenanceTicks       <-chan time.Time
+	maintenanceNext        time.Time
+	maintenanceScheduleKey string
+	syncAccounts           func(context.Context, string) (business.ManagementSyncResult, error)
+	oauthFactory           browserlogin.OAuthFactory
+	oauthTransport         http.RoundTripper
+	providerTransport      http.RoundTripper
+	oauthAssistTicks       <-chan time.Time
+	smsPool                *workbenchprovider.SMSPool
+	oauthMu                sync.Mutex
+	oauthBusy              bool
+	oauthBatchID           string
+	oauthSessions          map[string]*oauthSession
+	batches                *oauthBatches
+	securityFactory        browserlogin.SecurityFactory
+	securityStorage        *securityStorage
+	securityMu             sync.Mutex
+	securitySessions       map[string]*securitySession
+	securityBatches        *securityBatches
+	mixed                  *workbenchRuns
+	cleanupMu              sync.RWMutex
+	cleanupPreviews        map[string]*preparedCleanup
 }
 
 func New(private privateStore, tasks taskRepository, repository any, checker OAuthChecker, runner taskrunner.Runner) *Service {
@@ -107,6 +109,7 @@ type PreviewInput struct {
 	TemplateID       string      `json:"template_id"`
 	CheckAfterImport bool        `json:"check_after_import"`
 	Model            string      `json:"model"`
+	ProxyURL         string      `json:"proxy_url,omitempty"`
 }
 
 type PreviewItem struct {
@@ -138,6 +141,7 @@ type Preview struct {
 }
 
 type preparedImport struct {
+	proxyURL           string
 	maintenanceBatchID string
 	maintenanceRetry   bool
 	completion         chan taskstore.Task
@@ -193,6 +197,9 @@ func (s *Service) Preview(ctx context.Context, owner string, input PreviewInput)
 // previewItems accepts private validated inputs, preserving original indexes
 // for mixed batches while sharing the ordinary preview validation boundary.
 func (s *Service) previewItems(ctx context.Context, owner string, input PreviewInput, items []InputItem) (Preview, error) {
+	if err := browserlogin.ValidateProxyURL(input.ProxyURL); err != nil {
+		return Preview{}, err
+	}
 	if input.Scope == ScopeLocalExport {
 		return s.previewLocalItems(ctx, owner, input, items)
 	}
@@ -232,7 +239,7 @@ func (s *Service) previewItems(ctx context.Context, owner string, input PreviewI
 			return view, publicError(err)
 		}
 	}
-	prepared := &preparedImport{owner: owner, target: target, items: items, expires: time.Now().Add(10 * time.Minute)}
+	prepared := &preparedImport{owner: owner, target: target, items: items, proxyURL: input.ProxyURL, expires: time.Now().Add(10 * time.Minute)}
 	accountIdentities := newAccountIdentityIndex(accounts)
 	identities := make(map[string]bool)
 	for itemIndex := range items {

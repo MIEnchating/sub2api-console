@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import type { ReactElement } from "react";
 import type { GroupStatus } from "@/api";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,7 +9,11 @@ export function WorkbenchGroupPicker(props: {
   onChange: (value: string[]) => void;
   disabled?: boolean;
 }): ReactElement {
-  const groups = props.groups.filter((group) => group.id !== null);
+  const groups = useDictionaryOrder(
+    "group",
+    props.groups.filter((group) => group.id !== null),
+    (group) => group.id!,
+  );
   return (
     <fieldset disabled={props.disabled} className="min-w-0 space-y-2">
       <legend className="mb-2 text-sm font-medium">分组范围</legend>

@@ -1,10 +1,11 @@
 import { useQueries } from "@tanstack/react-query";
-import { useState, type ReactNode, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import type { AnimationForm } from "../lib/animation-schema";
@@ -12,7 +13,6 @@ import type { AnimationForm } from "../lib/animation-schema";
 export function AnimationModelSettings(props: {
   form: UseFormReturn<AnimationForm>;
   pending: boolean;
-  children?: ReactNode;
 }): ReactElement {
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
   const state = useFormState({
@@ -43,90 +43,94 @@ export function AnimationModelSettings(props: {
         .sort()
     : [];
   return (
-    <div className="relative min-w-0">
-      <div className="overflow-x-auto">
-        <div className="flex w-max min-w-full items-center gap-3">
-          <div className="flex items-center gap-2">
-            <label
-              htmlFor="animation-unified-model"
-              className="shrink-0 whitespace-nowrap text-xs font-medium"
-            >
-              检测模型
-            </label>
-            <div className="flex gap-2">
-              <Input
-                className="w-56"
-                id="animation-unified-model"
-                {...props.form.register("unified_model")}
-                list="animation-common-models"
-                disabled={props.pending}
-                placeholder="输入模型 ID，或获取共同模型"
-                aria-invalid={!!state.errors.unified_model}
-                aria-describedby={
-                  state.errors.unified_model ? "animation-unified-model-error" : undefined
-                }
-              />
-              <Button
-                type="button"
-                variant="outline"
-                aria-label="获取模型"
-                aria-busy={loading}
-                disabled={props.pending || !selected.length || loading}
-                onClick={() => {
-                  if (!selected.length) {
-                    toast.error("请先选择至少一个账号");
-                    return;
-                  }
-                  setRequested(true);
-                  if (requested) void Promise.all(queries.map((query) => query.refetch()));
-                }}
-              >
-                {loading ? (
-                  <span role="status" aria-label="正在读取共同模型">
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  </span>
-                ) : (
-                  <RefreshCw aria-hidden="true" />
-                )}
-                获取模型
-              </Button>
-            </div>
-            {state.errors.unified_model ? (
-              <FieldError
-                id="animation-unified-model-error"
-                message={state.errors.unified_model.message}
-                className="w-40"
-              />
-            ) : null}
-            <datalist id="animation-common-models">
-              {options.map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
-          </div>
-          <div className="flex items-center gap-2">
-            <label
-              htmlFor="animation-timeout"
-              className="shrink-0 whitespace-nowrap text-xs font-medium"
-            >
-              请求超时（秒）
-            </label>
-            <Input
-              className="w-20"
-              id="animation-timeout"
-              type="number"
-              min={5}
-              max={120}
-              {...props.form.register("timeout_seconds", { valueAsNumber: true })}
-              disabled={props.pending}
-              aria-invalid={!!state.errors.timeout_seconds}
-              aria-describedby={
-                state.errors.timeout_seconds ? "animation-timeout-error" : undefined
+    <div
+      role="group"
+      aria-label="动画模型参数"
+      className="grid w-full max-w-full min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_7rem] items-start gap-3 sm:w-[27rem]"
+    >
+      <div role="group" aria-label="检测模型设置" className="grid min-w-0 gap-1.5">
+        <label
+          htmlFor="animation-unified-model"
+          className="shrink-0 whitespace-nowrap text-xs font-medium"
+        >
+          检测模型
+        </label>
+        <div className="flex min-w-0 gap-2">
+          <Input
+            className="min-w-0 flex-1"
+            id="animation-unified-model"
+            {...props.form.register("unified_model")}
+            list="animation-common-models"
+            disabled={props.pending}
+            placeholder="输入模型 ID，或获取共同模型"
+            aria-invalid={!!state.errors.unified_model}
+            aria-describedby={
+              state.errors.unified_model ? "animation-unified-model-error" : undefined
+            }
+          />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="获取模型"
+                  aria-busy={loading}
+                  disabled={props.pending || !selected.length || loading}
+                  onClick={() => {
+                    if (!selected.length) {
+                      toast.error("请先选择至少一个账号");
+                      return;
+                    }
+                    setRequested(true);
+                    if (requested) void Promise.all(queries.map((query) => query.refetch()));
+                  }}
+                />
               }
-            />
-          </div>
-          <div className="ml-auto flex items-center gap-2 border-l pl-3">{props.children}</div>
+            >
+              {loading ? (
+                <span role="status" aria-label="正在读取共同模型">
+                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                </span>
+              ) : (
+                <RefreshCw aria-hidden="true" />
+              )}
+            </TooltipTrigger>
+            <TooltipContent>获取模型</TooltipContent>
+          </Tooltip>
         </div>
+        {state.errors.unified_model ? (
+          <FieldError
+            id="animation-unified-model-error"
+            message={state.errors.unified_model.message}
+          />
+        ) : null}
+        <datalist id="animation-common-models">
+          {options.map((model) => (
+            <option key={model} value={model} />
+          ))}
+        </datalist>
+      </div>
+      <div className="grid min-w-0 gap-1.5">
+        <label
+          htmlFor="animation-timeout"
+          className="shrink-0 whitespace-nowrap text-xs font-medium"
+        >
+          请求超时（秒）
+        </label>
+        <Input
+          className="w-full"
+          id="animation-timeout"
+          type="number"
+          min={5}
+          max={120}
+          {...props.form.register("timeout_seconds", { valueAsNumber: true })}
+          disabled={props.pending}
+          aria-invalid={!!state.errors.timeout_seconds}
+          aria-describedby={state.errors.timeout_seconds ? "animation-timeout-error" : undefined}
+        />
+        <FieldError id="animation-timeout-error" message={state.errors.timeout_seconds?.message} />
       </div>
     </div>
   );

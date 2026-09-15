@@ -1,5 +1,6 @@
 import type { UnifiedLogEntry, UnifiedLogEventLevel, UnifiedLogKind, UnifiedLogState } from "@/api";
 import type { StatusVariant } from "@/components/status-badge";
+import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
 
 const kindLabels: Record<UnifiedLogKind, string> = {
   all: "全部记录",
@@ -29,7 +30,6 @@ const titleLabels: Record<string, string> = {
   "automatic-inspection": "自动巡检",
   "manual-inspection": "手动巡检",
   "recover-host": "鉴权恢复",
-  "browser-login": "浏览器手动鉴权",
   "management-snapshot-sync": "账号与分组同步",
   "account-rate-sync": "账号倍率同步",
   "upstream-balances-sync": "上游余额同步",
@@ -165,6 +165,7 @@ const sourceValueLabels: Record<string, string> = {
   console: "控制台",
   "console-domain-db": "Console 业务数据库",
   "official-account-test": "官方账号测试",
+  "upstream-direct-probe": "上游直连探测",
   upstream_live: "上游实时数据",
   explicit: "显式配置",
   fixed: "固定配置",
@@ -193,6 +194,7 @@ const commonValueLabels: Record<string, string> = {
   degraded: "降级",
   fused: "已熔断",
   cost_blocked: "成本墙拦截",
+  concurrency_limited: concurrencyLimitedLabel,
   observing: "观察中",
   paused: "已暂停",
   excluded: "已排除",

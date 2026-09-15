@@ -137,7 +137,7 @@ test("任务明细读取失败后保留关闭和重试入口，重新读取成�
   await expect(dialog.getByRole("button", { name: "重新读取", exact: true })).toHaveCount(0);
 });
 
-test("鉴权恢复触发人机验证时展示最终原因及浏览器验证指引且弹窗不横向溢出", async ({ page }) => {
+test("鉴权恢复触发人机验证时展示最终原因及凭据恢复指引且弹窗不横向溢出", async ({ page }) => {
   await page.route(`**/api/tasks/${task.id}`, async (route) => {
     await route.fulfill({
       json: {
@@ -174,7 +174,8 @@ test("鉴权恢复触发人机验证时展示最终原因及浏览器验证指�
   const failures = dialog.getByRole("alert");
   await expect(dialog).toHaveCSS("position", "fixed");
   await expect(failures.getByText("登录触发浏览器人机验证", { exact: true })).toBeVisible();
-  await expect(failures.getByText(/恢复鉴权.*打开浏览器手动验证/)).toBeVisible();
+  await expect(failures.getByText(/恢复鉴权.*Token.*刷新 Token/)).toBeVisible();
+  await expect(failures.getByText(/打开浏览器手动验证/)).toHaveCount(0);
   await expect(failures.getByText("refresh token 已失效", { exact: true })).toHaveCount(0);
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeInViewport({

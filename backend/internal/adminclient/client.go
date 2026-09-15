@@ -1012,22 +1012,6 @@ func (c *Client) DeleteAccountWithVerification(ctx context.Context, accountID st
 	return nil, &AccountStillReadableError{AccountID: accountID, DeleteErr: deleteErr}
 }
 
-func (c *Client) OpenAccountTest(ctx context.Context, accountID string, body map[string]any) (*http.Response, error) {
-	if !stableID(accountID) {
-		return nil, errors.New("账号 ID 必须是稳定数字 ID")
-	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/v1/admin/accounts/"+accountID+"/test", bytes.NewReader(encoded))
-	if err != nil {
-		return nil, err
-	}
-	c.headers(request)
-	return c.http.Do(request)
-}
-
 func (c *Client) fetchPaged(ctx context.Context, path, label string) ([]map[string]any, error) {
 	result := []map[string]any{}
 	seen := map[string]struct{}{}

@@ -2,6 +2,7 @@ import type { AlertIncident } from "@/api";
 import { alertObjectKindDictionary, alertStatusDictionary } from "@/lib/domain-dictionaries";
 
 const alertTypeLabels: Record<string, string> = {
+  "account.cost_traffic": "无利润／亏损流量",
   "upstream.configuration": "上游配置有问题",
   "upstream.auth": "上游鉴权失败",
   "upstream.rate_sync": "上游倍率同步失败",
@@ -19,6 +20,7 @@ const alertTypeLabels: Record<string, string> = {
 };
 
 const alertSubjectLabels: Record<string, string> = {
+  "account.cost_traffic": "账号成本流量",
   "upstream.configuration": "上游配置",
   "upstream.auth": "上游鉴权",
   "upstream.rate_sync": "上游倍率同步",
@@ -36,6 +38,7 @@ const alertSubjectLabels: Record<string, string> = {
 };
 
 const causeLabels: Record<string, string> = {
+  COST_TRAFFIC: "账号倍率大于等于分组倍率且有实际调用",
   CONFIG: "上游配置有问题",
   CONFIG_METADATA_INVALID: "上游返回信息无法识别",
   CONFIG_AUTH_STATUS_MISSING: "上游没有返回鉴权状态",
@@ -78,6 +81,7 @@ const deliveryStatusLabels: Record<string, string> = {
   通知发送已关闭: "通知发送已关闭",
   恢复通知已关闭: "恢复通知已关闭",
   规则已停用: "告警规则已停用",
+  "等待并发额度，已转为调度等待记录": "等待并发额度，不发送通知",
   告警总开关已关闭: "告警总开关已关闭",
   停用期间异常已消失: "停用期间异常已消失",
   告警档位已变化: "告警档位已变化",
@@ -136,6 +140,7 @@ function compactRateSyncReason(value: string): string {
 export function alertTypeLabel(eventType: string, status?: string): string {
   if (status === "recovered") {
     const recoveredLabels: Record<string, string> = {
+      "account.cost_traffic": "无利润／亏损流量告警已解除",
       "upstream.configuration": "上游配置已恢复",
       "upstream.auth": "上游鉴权已恢复",
       "upstream.rate_sync": "上游倍率同步已恢复",
@@ -188,6 +193,7 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
   if (status === "recovered") {
     const code = causeCode.split(":", 1)[0];
     const recoveredCauses: Record<string, string> = {
+      COST_TRAFFIC: "近期未再检测到账号倍率大于等于分组倍率的流量",
       CONFIG: "上游配置已恢复正常",
       AUTH: "上游鉴权已恢复",
       RATE_SYNC: "倍率同步已恢复",
@@ -211,6 +217,7 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
     return compactRateSyncReason(reason);
   }
   for (const code of [
+    "COST_TRAFFIC",
     "AUTH",
     "PROBE",
     "CONFIG_AUTH_STATUS_UNKNOWN",
@@ -238,6 +245,7 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
 
 function accountGroupPrefix(eventType: string, objectId: string): string {
   const prefixes: Record<string, string> = {
+    "account.cost_traffic": "console:cost-traffic:",
     "account.probe": "console:probe:",
     "account.routing_breaker": "console:routing:breaker:",
     "account.routing_degraded": "console:routing:degraded:",

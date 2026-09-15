@@ -1,4 +1,5 @@
-import { useEffect, useMemo, type ReactElement } from "react";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { useEffect, type ReactElement } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Save } from "lucide-react";
@@ -48,10 +49,8 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
     queryFn: api.notificationStatus,
   });
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
-  const groupOptions = useMemo(
-    () => (groups.data ?? []).map((group) => ({ value: group.name, label: group.name })),
-    [groups.data],
-  );
+  const orderedGroups = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
+  const groupOptions = orderedGroups.map((group) => ({ value: group.name, label: group.name }));
   const form = useForm<AlertPolicyFormValues>({
     resolver: zodResolver(alertPolicyFormSchema),
     defaultValues: policy.data ? policyToForm(policy.data) : defaultAlertPolicyForm,

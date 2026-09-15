@@ -1,11 +1,35 @@
 import type { TrafficRankingRow } from "@/api";
 
+const tokenMillionsFormatter = new Intl.NumberFormat("zh-CN", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export function formatTrafficCount(value: number): string {
   return new Intl.NumberFormat("zh-CN").format(value);
 }
 
 export function formatTrafficTokens(value: number | null): string {
-  return value === null ? "未提供" : formatTrafficCount(value);
+  if (value === null) return "未提供";
+  if (value > 0 && value < 10_000) return "<0.01 M";
+  return `${tokenMillionsFormatter.format(value / 1_000_000)} M`;
+}
+
+export function formatTrafficCachePercent(
+  usage: Pick<TrafficRankingRow, "input_tokens" | "cache_read_tokens" | "cache_write_tokens">,
+  field: "cache_read_tokens" | "cache_write_tokens",
+): string {
+  if (
+    usage.input_tokens === null ||
+    usage.cache_read_tokens === null ||
+    usage.cache_write_tokens === null
+  ) {
+    return "未提供";
+  }
+  const total = usage.input_tokens + usage.cache_read_tokens + usage.cache_write_tokens;
+  if (total === 0) return "-";
+  const cached = field === "cache_read_tokens" ? usage.cache_read_tokens : usage.cache_write_tokens;
+  return formatTrafficPercent((cached / total) * 100);
 }
 
 export function formatTrafficPercent(value: number | null): string {

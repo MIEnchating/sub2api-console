@@ -64,7 +64,8 @@ export const templateSchema = z.object({
     extra: z.record(z.string(), z.unknown()).optional(),
   }),
 });
-export type TemplateValues = z.infer<typeof templateSchema>;
+export const templateNameSchema = templateSchema.pick({ name: true });
+export type TemplateNameValues = z.infer<typeof templateNameSchema>;
 export const maintenanceSchema = z
   .object({
     reauthorize_with_profiles: z.boolean().optional(),

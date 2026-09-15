@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render } from "@/test/dictionary";
+import { screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
 import { ModelCheckSelection } from "../model-check-selection";

@@ -498,11 +498,11 @@ func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) ([]UpstreamPric
 					items <- item
 					continue
 				}
-				models, err := s.fetchUpstreamPriceCatalog(ctx, *record)
+				catalog, err := s.fetchUpstreamPriceCatalog(ctx, *record)
 				if err != nil {
 					item.warning = err.Error()
 				} else {
-					item.catalog.Models = models
+					item.catalog = catalog
 				}
 				items <- item
 			}
@@ -529,7 +529,10 @@ func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) ([]UpstreamPric
 	return result, strings.Join(warnings, "\n")
 }
 
-func (s *Service) fetchUpstreamPriceCatalog(ctx context.Context, record configstore.AuthRecord) ([]ModelPrice, error) {
+var errUpstreamPriceEndpointUnavailable = errors.New("上游价格接口未开放或不存在（HTTP 404）")
+
+func (s *Service) fetchUpstreamPriceCatalog(ctx context.Context, record configstore.AuthRecord) (UpstreamPriceCatalog, error) {
+	catalog := UpstreamPriceCatalog{Host: record.Host, Name: record.Host, UpstreamType: record.UpstreamType}
 	var path string
 	switch strings.ToLower(strings.TrimSpace(record.UpstreamType)) {
 	case "sub2api":
@@ -537,22 +540,42 @@ func (s *Service) fetchUpstreamPriceCatalog(ctx context.Context, record configst
 	case "newapi", "oneapi":
 		path = "/api/pricing"
 	default:
-		return nil, errors.New("当前平台类型不支持价卡读取，请检查上游平台类型配置")
+		return catalog, errors.New("当前平台类型不支持价卡读取，请检查上游平台类型配置")
 	}
 	payload, err := s.requestUpstream(ctx, record, path)
+	if path == "/api/v1/model-plaza" && errors.Is(err, errUpstreamPriceEndpointUnavailable) {
+		return s.fetchAvailableChannelPrices(ctx, record, catalog, err)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("%s：%w", path, err)
+		return catalog, fmt.Errorf("%s：%w", path, err)
 	}
-	var models []ModelPrice
 	if path == "/api/v1/model-plaza" {
-		models = sub2APIModelRatios(decodeSub2APIModelPlaza(payload))
+		catalog.Models = sub2APIModelRatios(decodeSub2APIModelPlaza(payload))
 	} else {
-		models = decodePricingCatalog(payload)
+		catalog.Models = decodePricingCatalog(payload)
 	}
-	if len(models) == 0 {
-		return nil, errors.New("上游未返回有效模型价格，请检查价卡内容及当前账号可见分组后刷新")
+	if len(catalog.Models) == 0 {
+		return catalog, errors.New("上游未返回有效模型价格，请检查价卡内容及当前账号可见分组后刷新")
 	}
-	return models, nil
+	return catalog, nil
+}
+
+func (s *Service) fetchAvailableChannelPrices(ctx context.Context, record configstore.AuthRecord, catalog UpstreamPriceCatalog, plazaErr error) (UpstreamPriceCatalog, error) {
+	// Older Sub2API versions and sites with the optional plaza disabled may
+	// still expose the authenticated, read-only available-channel catalog.
+	const path = "/api/v1/channels/available"
+	payload, err := s.requestUpstream(ctx, record, path)
+	if err == nil {
+		catalog.Models, err = decodeSub2APIAvailableChannelPricing(payload)
+	}
+	if err == nil && len(catalog.Models) == 0 {
+		err = errors.New("上游未返回可比对的渠道价格，请确认站点已启用“可用渠道”，且当前账号可见分组包含有效模型价格")
+	}
+	if err != nil {
+		return catalog, fmt.Errorf("/api/v1/model-plaza：%w；%s：%w", plazaErr, path, err)
+	}
+	catalog.Name = record.Host + "（渠道价卡）"
+	return catalog, nil
 }
 
 func (s *Service) requestUpstream(ctx context.Context, record configstore.AuthRecord, path string) (any, error) {
@@ -579,9 +602,12 @@ func (s *Service) requestUpstream(ctx context.Context, record configstore.AuthRe
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		if path == "/api/v1/model-plaza" {
-			return nil, errors.New("上游价格接口未开放或不存在（HTTP 404），请确认站点版本支持并启用“模型广场”，同时检查平台类型和上游地址")
+			return nil, fmt.Errorf("%w，请确认站点版本支持并启用“模型广场”，同时检查平台类型和上游地址", errUpstreamPriceEndpointUnavailable)
 		}
-		return nil, errors.New("上游价格接口未开放或不存在（HTTP 404），请检查平台类型、上游地址及站点是否支持 /api/pricing")
+		if path == "/api/v1/channels/available" {
+			return nil, fmt.Errorf("%w，请确认站点版本支持“可用渠道”，同时检查平台类型和上游地址", errUpstreamPriceEndpointUnavailable)
+		}
+		return nil, fmt.Errorf("%w，请检查平台类型、上游地址及站点是否支持 /api/pricing", errUpstreamPriceEndpointUnavailable)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("上游价格获取失败（HTTP %d），请检查上游服务后刷新", resp.StatusCode)

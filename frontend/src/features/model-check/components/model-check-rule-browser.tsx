@@ -20,7 +20,10 @@ export const ModelCheckRuleBrowser = memo(function ModelCheckRuleBrowser(props: 
     version === "draft" && props.configuration.draft
       ? props.configuration.draft
       : props.configuration.active;
-  const rules = useMemo(() => detectionRules(current.payload), [current.payload]);
+  const rules = useMemo(
+    () => detectionRules(current.payload, props.configuration.builtin_astra_profile),
+    [current.payload, props.configuration.builtin_astra_profile],
+  );
   const [ruleID, setRuleID] = useState("");
   const selected = rules.find((rule) => rule.id === ruleID) ?? rules[0];
   return (

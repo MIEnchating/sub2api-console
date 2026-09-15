@@ -20,7 +20,8 @@ beforeEach(() => {
       disconnect(): void {}
     },
   );
-  // JSDOM has no top layer. NWSAPI 2.2.27 recurses into matches for these states.
+  // Keep this JSDOM polyfill through teardown: pending Floating UI promises
+  // can query top-layer state after cleanup, when NWSAPI would recurse.
   Element.prototype.matches = function matches(selector: string): boolean {
     if (selector === ":modal" || selector === ":fullscreen" || selector === ":popover-open") {
       return false;
@@ -31,7 +32,6 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  Element.prototype.matches = nativeMatches;
   Reflect.deleteProperty(Range.prototype, "getClientRects");
   Reflect.deleteProperty(Range.prototype, "getBoundingClientRect");
   vi.unstubAllGlobals();

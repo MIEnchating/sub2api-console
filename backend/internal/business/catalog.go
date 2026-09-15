@@ -39,6 +39,11 @@ type UpstreamHost struct {
 	LastAuthSuccessMethod  *string  `json:"last_auth_success_method"`
 	LastAuthRecoveryMethod *string  `json:"last_auth_recovery_method"`
 	LastAuthSuccessAt      *string  `json:"last_auth_success_at"`
+	ConcurrencyLimit       *int64   `json:"concurrency_limit"`
+	ConcurrencyStatus      string   `json:"concurrency_status"`
+	ConcurrencyCheckedAt   *string  `json:"concurrency_checked_at"`
+	AllocatedConcurrency   *int64   `json:"allocated_concurrency"`
+	TargetConcurrency      *int64   `json:"target_concurrency"`
 }
 
 type UpstreamSummary struct {
@@ -163,6 +168,10 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 	if err != nil {
 		return UpstreamSummary{}, err
 	}
+	concurrencyTotals, err := s.upstreamConcurrencyTotals(ctx)
+	if err != nil {
+		return UpstreamSummary{}, err
+	}
 	result := UpstreamSummary{Hosts: []UpstreamHost{}, Source: "Console 业务库"}
 	for rows.Next() {
 		var item UpstreamHost
@@ -176,6 +185,15 @@ func (s *Store) Upstreams(ctx context.Context) (UpstreamSummary, error) {
 			return UpstreamSummary{}, err
 		}
 		metadata, metadataErr := decodeObject(metadataRaw)
+		concurrency := readUpstreamConcurrency(item.UpstreamType, metadata)
+		item.ConcurrencyLimit, item.ConcurrencyStatus, item.ConcurrencyCheckedAt = concurrency.limit, concurrency.status, concurrency.checkedAt
+		total := concurrencyTotals[item.UpstreamID]
+		if !total.unknown {
+			item.AllocatedConcurrency = &total.allocated
+		}
+		if total.hasTarget && !total.targetUnknown {
+			item.TargetConcurrency = &total.target
+		}
 		item.AccountBaseURL = strings.TrimRight(strings.TrimSpace(stringValue(metadata["account_base_url"])), "/")
 		if item.AccountBaseURL == "" {
 			item.AccountBaseURL = item.BaseURL
@@ -926,7 +944,7 @@ func classifyGroupAccount(group *GroupStatus, account accountProjection, now tim
 	case "cost_blocked":
 		group.DegradedAccounts++
 		return
-	case "paused":
+	case "paused", AccountStateConcurrencyLimited:
 		group.PausedAccounts++
 		return
 	case "disabled":
@@ -980,7 +998,7 @@ func availableGroupAccounts(accounts []accountProjection, groupName string, minS
 			continue
 		}
 		switch account.Health {
-		case "fused", "cost_blocked", "paused", "disabled", "excluded":
+		case "fused", "cost_blocked", AccountStateConcurrencyLimited, "paused", "disabled", "excluded":
 			continue
 		}
 		metadata, err := decodeObject(account.metadataRaw)

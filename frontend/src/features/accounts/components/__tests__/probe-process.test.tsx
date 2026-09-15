@@ -79,7 +79,7 @@ it("Key 创建未完成时只显示后端实际阶段，禁止提前探活且保
   expect(within(timeline).getByText("进行中")).toBeInTheDocument();
   expect(within(timeline).queryByText("获取上游模型列表")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "开始测试" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "取消探活" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "取消并关闭" })).toBeEnabled();
   vi.spyOn(api, "cancelTask").mockResolvedValue({ cancelled: true });
   cleanup();
   view.client.clear();
@@ -116,14 +116,14 @@ it("任务创建期间关闭弹窗会在拿到任务 ID 后取消并等待清理
   const progress = screen.getByRole("region", { name: "探活进度" });
   expect(within(progress).getByRole("status", { name: "正在创建探活任务" })).toBeVisible();
   const actions = screen.getByRole("group", { name: "探活操作" });
-  expect(within(actions).getByRole("button", { name: "取消探活" })).toBeEnabled();
-  await userEvent.keyboard("{Escape}");
+  expect(within(actions).getByRole("button", { name: "取消并关闭" })).toBeEnabled();
+  await userEvent.click(within(actions).getByRole("button", { name: "取消并关闭" }));
   expect(view.close).not.toHaveBeenCalled();
   expect(screen.getAllByRole("status")).toHaveLength(1);
   expect(
     within(progress).getByRole("status", { name: "正在取消探活并清理临时 Key" }),
   ).toBeVisible();
-  expect(within(actions).getByRole("button", { name: "关闭" })).toHaveAttribute(
+  expect(within(actions).getByRole("button", { name: "正在关闭" })).toHaveAttribute(
     "aria-busy",
     "true",
   );

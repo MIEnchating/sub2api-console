@@ -1,10 +1,10 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type BrowserLoginInput } from "@/api";
+import { api, type BrowserInput } from "@/api";
 import { Button } from "@/components/ui/button";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
-import { BrowserSurface } from "@/features/upstreams/components/browser-login/browser-surface";
+import { BrowserSurface } from "@/components/browser-surface/browser-surface";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { oauthPollingStatuses, oauthStatusLabels, workbenchKeys } from "../constants";
 import { WorkbenchOAuthSMSAttachment } from "./workbench-oauth-sms-attachment";
@@ -13,7 +13,7 @@ export function WorkbenchOAuthBatchBrowser(props: { id: string; disabled: boolea
   const client = useQueryClient();
   const mounted = useRef(true);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
-  const nextInput = useRef<BrowserLoginInput | null>(null);
+  const nextInput = useRef<BrowserInput | null>(null);
   const query = useQuery({
     queryKey: workbenchKeys.oauth(props.id),
     queryFn: (context) => api.workbenchOAuth(props.id, context.signal),
@@ -56,7 +56,7 @@ export function WorkbenchOAuthBatchBrowser(props: { id: string; disabled: boolea
   const session = query.data;
   const waiting =
     session?.status === "waiting" && !finish.isPending && !query.isError && !props.disabled;
-  function send(input: BrowserLoginInput): Promise<unknown> {
+  function send(input: BrowserInput): Promise<unknown> {
     if (!waiting) return Promise.resolve();
     const next = queue.current
       .catch(() => undefined)

@@ -53,8 +53,10 @@ export const groupAllocationLayout = {
 
 const stateLabels = accountStateDictionary;
 
-function integer(value: number): string {
-  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)).toLocaleString("zh-CN") : "—";
+function integer(value: number | null): string {
+  return value !== null && Number.isFinite(value)
+    ? Math.max(0, Math.trunc(value)).toLocaleString("zh-CN")
+    : "—";
 }
 
 function latency(value: number | null): string {
@@ -96,7 +98,8 @@ function GroupHeader(props: { allocation: GroupAllocation }) {
 
 function stateVariant(state: string): StatusVariant {
   if (["healthy", "active", "available"].includes(state)) return "success";
-  if (["degraded", "survivor", "cost_blocked"].includes(state)) return "warning";
+  if (["degraded", "survivor", "cost_blocked", "concurrency_limited"].includes(state))
+    return "warning";
   if (["fused", "disabled"].includes(state)) return "danger";
   return "neutral";
 }

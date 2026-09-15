@@ -98,6 +98,30 @@ describe("平台模型探活", () => {
     });
   });
 
+  it("平台探活表单按视口限制宽高并将操作栏保留在滚动正文外", () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <PlatformProbeDialog
+          open
+          accounts={[account("41", "openai")]}
+          onOpenChange={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "平台模型探活" });
+    expect(dialog).toHaveClass(
+      "w-[min(38rem,calc(100vw-2rem))]",
+      "grid-rows-[auto_minmax(0,1fr)_auto]",
+      "overflow-hidden",
+    );
+    const model = screen.getByRole("textbox", { name: "输入探活模型" });
+    const body = model.closest('[data-slot="dialog-body"]');
+    expect(body).toHaveClass("min-w-0", "overflow-y-auto");
+    expect(body).not.toContainElement(screen.getByRole("button", { name: "开始探活" }));
+    queryClient.clear();
+  });
+
   it("创建任务后立即关闭弹窗并加入系统信息进行中任务", async () => {
     const queuedTask: Task = {
       ...completedTask(),

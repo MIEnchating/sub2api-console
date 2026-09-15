@@ -3,12 +3,19 @@ import { Tabs } from "@base-ui/react/tabs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
-import { api, type AccountStatus, type AnimationRequest, type AnimationTarget } from "@/api";
+import {
+  api,
+  type AccountStatus,
+  type AnimationRequest,
+  type AnimationTarget,
+  type PrecheckQuestionID,
+} from "@/api";
+import { allPrecheckQuestions, precheckQuestionSummary } from "../constants";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { animationSchema, type AnimationForm } from "../lib/animation-schema";
 import { AnimationSelection } from "./animation-selection";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AnimationScheduleDialog } from "./animation-schedule-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,6 +25,8 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
   const tasks = useAnimationTasks(props.active);
   const [scheduleAccount, setScheduleAccount] = useState<AccountStatus | null>(null);
   const [confirmation, setConfirmation] = useState<AnimationRequest | null>(null);
+  const [precheckQuestions, setPrecheckQuestions] =
+    useState<PrecheckQuestionID[]>(allPrecheckQuestions);
   const form = useForm<AnimationForm>({
     resolver: zodResolver(animationSchema),
     defaultValues: {
@@ -36,8 +45,9 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
     mutationFn: tasks.start,
     onSuccess: () => setConfirmation(null),
   });
-  const submit = (value: AnimationForm): void => {
+  const submit = (value: AnimationForm, mode?: "precheck"): void => {
     setConfirmation({
+      ...(mode ? { mode, precheck_questions: precheckQuestions } : {}),
       targets: value.account_ids
         .filter((id) => !tasks.busyIDs.has(id))
         .map((id) => ({
@@ -78,6 +88,11 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
           </Tabs.List>
           <Tabs.Panel value="accounts" keepMounted className="min-h-0 flex-1 data-[hidden]:hidden">
             <AnimationSelection
+              precheckQuestions={precheckQuestions}
+              onPrecheckQuestionsChange={setPrecheckQuestions}
+              precheckResults={tasks.precheckResults}
+              precheckStatuses={tasks.precheckStatuses}
+              onPrecheck={(value) => submit(value, "precheck")}
               results={tasks.results}
               statuses={tasks.statuses}
               activities={tasks.activities}
@@ -105,16 +120,23 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
                     </Tooltip>
                   ) : null}
                   {tasks.activeTaskIDs.size > 0 ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      aria-label="取消任务"
-                      disabled={tasks.cancelling}
-                      onClick={() => void tasks.cancelActive()}
-                    >
-                      <X aria-hidden="true" />
-                      取消任务
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            aria-label="取消任务"
+                            disabled={tasks.cancelling}
+                            onClick={() => void tasks.cancelActive()}
+                          />
+                        }
+                      >
+                        <Square aria-hidden="true" />
+                      </TooltipTrigger>
+                      <TooltipContent>取消任务</TooltipContent>
+                    </Tooltip>
                   ) : null}
                 </>
               }
@@ -122,7 +144,7 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
               accounts={accounts}
               schedules={schedules}
               pending={run.isPending}
-              onSubmit={submit}
+              onSubmit={(value) => submit(value)}
               onSchedule={setScheduleAccount}
             />
           </Tabs.Panel>
@@ -133,8 +155,8 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
       </div>
       <ConfirmActionDialog
         open={confirmation !== null}
-        title="确认动画检测范围"
-        description={`将检测 ${confirmation?.targets.length ?? 0} 个账号并产生 API 用量：${confirmation?.targets.map((target) => `${accounts.data?.find((account) => account.id === target.account_id)?.name ?? target.account_id}（ID ${target.account_id}）→ ${target.model}`).join("；") ?? ""}。`}
+        title={confirmation?.mode === "precheck" ? "确认前置检测范围" : "确认动画检测范围"}
+        description={`将${confirmation?.mode === "precheck" ? `对每个账号执行${precheckQuestionSummary(confirmation.precheck_questions)}，` : ""}检测 ${confirmation?.targets.length ?? 0} 个账号并产生 API 用量：${confirmation?.targets.map((target) => `${accounts.data?.find((account) => account.id === target.account_id)?.name ?? target.account_id}（ID ${target.account_id}）→ ${target.model}`).join("；") ?? ""}。`}
         confirmLabel="确认并开始检测"
         pending={run.isPending}
         onOpenChange={(open) => {

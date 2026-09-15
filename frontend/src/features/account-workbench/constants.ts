@@ -16,18 +16,13 @@ export const workbenchKeys = {
   batch: (id: string | null) => ["account-workbench", "oauth-batch", id] as const,
   run: (id: string | null) => ["account-workbench", "run", id] as const,
 };
-export const workbenchTabs = [
-  { id: "import", label: "导入账号" },
-  { id: "mixed", label: "混合运行" },
-  { id: "oauth", label: "授权登录" },
+export const workbenchPrimaryTabs = [
+  { id: "accounts", label: "导入账号" },
   { id: "templates", label: "配置模板" },
-  { id: "exports", label: "私有导出" },
-  { id: "local", label: "本地导出" },
-  { id: "security", label: "账号安全" },
   { id: "history", label: "处理记录" },
   { id: "maintenance", label: "自动维护" },
 ] as const;
-export type WorkbenchTab = (typeof workbenchTabs)[number]["id"];
+export type WorkbenchPrimaryTab = (typeof workbenchPrimaryTabs)[number]["id"];
 export const oauthStatusLabels: Record<WorkbenchOAuthSession["status"], string> = {
   starting: "正在启动授权浏览器",
   waiting: "等待完成授权登录",
@@ -45,6 +40,17 @@ export const oauthPollingStatuses = new Set<WorkbenchOAuthSession["status"]>([
   "verifying",
 ]);
 export const maxInputBytes = 2 * 1024 * 1024;
+export const behaviorVerdictLabels: Record<string, string> = {
+  SOL_CONSISTENT: "Sol 行为一致",
+  LUNA_LIKE: "更接近 Luna",
+  TERRA_LIKE: "更接近 Terra",
+  NOT_SOL: "与 Sol 不符",
+  SOL_INCONSISTENT: "与 Sol 不符",
+  INCONCLUSIVE: "证据不足",
+  ERROR: "检测请求失败",
+  MATCH: "行为匹配",
+  MISMATCH: "行为不匹配",
+};
 export const batchStatusLabels: Record<WorkbenchOAuthBatch["status"], string> = {
   queued: "等待批量授权",
   running: "正在逐项授权",
@@ -87,7 +93,7 @@ export const workbenchOperationLabels: Record<string, string> = {
   "account-workbench-convert": "输入转换",
   "account-workbench-profile-export": "登录资料导出",
   "account-workbench-regenerate": "重新生成授权",
-  "account-workbench-mixed": "混合运行",
+  "account-workbench-mixed": "账号批次处理",
   "account-workbench-security": "账号安全",
   "account-workbench-security-password": "设置账号密码",
   "account-workbench-security-totp": "启用账号双重验证",

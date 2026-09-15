@@ -22,9 +22,7 @@ it("渠道首次读取时显示一张包含步骤和凭据分栏的卡片", () =
   render(<NewAPIRemoteLoading label="正在加载渠道管理" view="channels" />);
   const loading = screen.getByRole("status", { name: "正在加载渠道管理" });
   expect(loading.querySelectorAll('[data-slot="card"]')).toHaveLength(1);
-  expect(loading.querySelector("[data-channel-credentials-layout]")).toHaveClass(
-    "lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)]",
-  );
+  expect(loading.querySelector("[data-channel-credentials-layout]")).toHaveClass("grid-cols-1");
   expect(loading.querySelector('[data-slot="skeleton-pagination"]')).toBeNull();
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });

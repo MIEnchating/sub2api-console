@@ -78,7 +78,8 @@ describe("账号导入预览与确认", () => {
     );
     const user = userEvent.setup();
     mount(<WorkbenchImport />);
-    await user.type(await screen.findByRole("textbox", { name: "账号内容" }), "rt_private_token");
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.paste("rt_private_token");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     expect(await screen.findByRole("table", { name: "账号预览" })).toBeInTheDocument();
     expect(requests.some((request) => request.path.endsWith("/import"))).toBe(false);
@@ -88,7 +89,11 @@ describe("账号导入预览与确认", () => {
     expect(dialog).toHaveTextContent("Plus 配置");
     expect(dialog).toHaveTextContent("分组 ID：7");
     await user.click(within(dialog).getByRole("button", { name: "创建导入任务" }));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveValue(""));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveTextContent(
+        /^账号 JSON 或 rt_ 刷新令牌$/,
+      ),
+    );
     expect(requests.find((request) => request.path.endsWith("/import"))?.body).toEqual({
       preview_id: "preview-1",
       confirmed: true,
@@ -114,10 +119,12 @@ describe("账号导入预览与确认", () => {
     const user = userEvent.setup();
     mount(<WorkbenchImport />);
     const input = await screen.findByRole("textbox", { name: "账号内容" });
-    await user.type(input, "rt_original");
+    await user.click(input);
+    await user.paste("rt_original");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
-    await user.type(input, "_changed");
+    await user.click(input);
+    await user.paste("_changed");
     expect(screen.queryByRole("table", { name: "账号预览" })).not.toBeInTheDocument();
     expect(revoked).toEqual(["/api/account-workbench/preview/preview-1"]);
   });

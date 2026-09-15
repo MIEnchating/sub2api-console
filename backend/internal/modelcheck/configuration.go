@@ -87,9 +87,10 @@ type ConfigurationVersionSummary struct {
 }
 
 type ConfigurationView struct {
-	Active  ConfigurationVersion          `json:"active"`
-	Draft   *ConfigurationVersion         `json:"draft"`
-	History []ConfigurationVersionSummary `json:"history"`
+	BuiltinAstraProfile AstraProfile                  `json:"builtin_astra_profile"`
+	Active              ConfigurationVersion          `json:"active"`
+	Draft               *ConfigurationVersion         `json:"draft"`
+	History             []ConfigurationVersionSummary `json:"history"`
 }
 
 type SaveDraftRequest struct {
@@ -354,7 +355,7 @@ func configurationView(state configurationState) ConfigurationView {
 		cloned := cloneConfigurationVersion(*state.Draft)
 		draft = &cloned
 	}
-	return ConfigurationView{Active: active, Draft: draft, History: history}
+	return ConfigurationView{Active: active, Draft: draft, History: history, BuiltinAstraProfile: builtinAstraProfile()}
 }
 
 func cloneConfigurationVersion(version ConfigurationVersion) ConfigurationVersion {

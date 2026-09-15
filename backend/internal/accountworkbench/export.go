@@ -27,7 +27,8 @@ var (
 )
 
 type ExportPreviewInput struct {
-	AccountIDs []string `json:"account_ids"`
+	AccountIDs   []string `json:"account_ids"`
+	SourceTaskID string   `json:"source_task_id,omitempty"`
 }
 
 type ExportPreviewItem struct {
@@ -118,6 +119,21 @@ func (s *Service) PreviewExport(ctx context.Context, owner string, input ExportP
 	if owner == "" {
 		return ExportPreview{}, ErrExportPreview
 	}
+	var identities map[string]string
+	if input.SourceTaskID != "" {
+		if len(input.AccountIDs) != 0 {
+			return ExportPreview{}, errors.New("本批导出不能同时指定其他账号")
+		}
+		var err error
+		ctx, err = targetguard.Capture(ctx, s.private)
+		if err != nil {
+			return ExportPreview{}, err
+		}
+		input.AccountIDs, identities, err = s.batchExportAccounts(ctx, input.SourceTaskID)
+		if err != nil {
+			return ExportPreview{}, err
+		}
+	}
 	ids, err := exportAccountIDs(input.AccountIDs)
 	if err != nil {
 		return ExportPreview{}, err
@@ -151,6 +167,12 @@ func (s *Service) PreviewExport(ctx context.Context, owner string, input ExportP
 		}
 		if stringValue(account["id"]) != id {
 			return ExportPreview{}, errors.New("管理接口返回的账号 ID 与选择不符，请重新同步账号")
+		}
+		if identities != nil {
+			credentials, _ := account["credentials"].(map[string]any)
+			if identities[id] == "" || inputIdentity(credentials).key() != identities[id] {
+				return ExportPreview{}, errors.New("本批账号的官方身份已变化，未生成导出预览")
+			}
 		}
 		payload, payloadErr := exportAccountPayload(account)
 		if payloadErr != nil {

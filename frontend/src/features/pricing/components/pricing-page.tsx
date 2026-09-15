@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { PricingCatalogActions } from "./pricing-catalog-actions";
@@ -5,7 +6,7 @@ import { PricingSettingsPanel } from "./pricing-settings-panel";
 import { PricingConfigLayout } from "./pricing-config-layout";
 import { PricingConfigSkeleton } from "./pricing-config-skeleton";
 import { PricingCatalogSkeleton } from "./pricing-table-skeleton";
-import { GroupMinimumField } from "./group-minimum-field";
+import { ExchangeGroupSetEditor } from "./exchange-group-set-editor";
 import {
   cleanGroupMinimums,
   groupMeetsMinimumCost,
@@ -68,7 +69,6 @@ import { DataTablePanel } from "@/components/data-table/table-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -855,15 +855,16 @@ function PricingCatalogTable(props: {
   const tableRef = useRef<HTMLDivElement>(null);
   const costsByGroup = useMemo(() => groupAccountCostsByID(props.decisions), [props.decisions]);
   const [selectedGroup, setSelectedGroup] = useState<PricingGroup | null>(null);
+  const orderedGroups = useDictionaryOrder("group", props.groups, (group) => group.id);
   const filteredGroups = useMemo(() => {
     const query = props.search.trim().toLocaleLowerCase();
-    if (!query) return props.groups;
-    return props.groups.filter((group) =>
+    if (!query) return orderedGroups;
+    return orderedGroups.filter((group) =>
       [group.id, group.name, group.platform, group.status, group.reason].some((value) =>
         value?.toLocaleLowerCase().includes(query),
       ),
     );
-  }, [props.groups, props.search]);
+  }, [orderedGroups, props.search]);
   const pagination = useClientPagination(filteredGroups);
   useEffect(() => {
     pagination.setCurrentPage(1);
@@ -1022,6 +1023,7 @@ export function PricingPreviewTable(props: {
       </TableFilterToolbar>
       <DataTablePanel className="flex-1">
         <Table
+          actionColumn
           className="min-w-[68rem] table-fixed"
           containerClassName="min-h-0 flex-1 overflow-auto"
           overflowTooltip={false}
@@ -1145,218 +1147,6 @@ export function PricingPreviewTable(props: {
         />
       </DataTablePanel>
     </div>
-  );
-}
-
-type ExchangeGroupSetEditorProps = {
-  setIndex: number;
-  name: string;
-  groupSet: string[];
-  groups: PricingGroup[];
-  exchangeSetByGroup: Map<string, number>;
-  exchangeSetNames: string[];
-  groupMinimums?: Record<string, string>;
-  onMinimumChange: (groupID: string, value: string) => void;
-  onToggle: (setIndex: number, groupID: string, checked: boolean) => void;
-  onNameChange: (setIndex: number, name: string) => void;
-  onRemove: (setIndex: number) => void;
-};
-
-function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
-  const [expanded, setExpanded] = useState(true);
-  const setNumber = props.setIndex + 1;
-  const contentID = `exchange-set-content-${setNumber}`;
-  const selectedPlatforms = new Set(
-    props.groups
-      .filter((group) => props.groupSet.includes(group.id))
-      .map((group) => group.platform || "未标注平台"),
-  );
-  const selectedPlatform = selectedPlatforms.size === 1 ? [...selectedPlatforms][0] : undefined;
-  const platformMismatch = selectedPlatforms.size > 1;
-  const visibleGroups = selectedPlatform
-    ? props.groups.filter(
-        (group) =>
-          props.groupSet.includes(group.id) ||
-          (group.platform || "未标注平台") === selectedPlatform,
-      )
-    : props.groups;
-  const sections = new Map<string, PricingGroup[]>();
-  for (const group of visibleGroups) {
-    const platform = group.platform || "未标注平台";
-    const section = sections.get(platform) ?? [];
-    section.push(group);
-    sections.set(platform, section);
-  }
-  const complete = props.groupSet.length >= 2 && !platformMismatch;
-  let statusLabel = `已选 ${props.groupSet.length} / 至少 2 个`;
-  if (platformMismatch) {
-    statusLabel = "平台混用";
-  } else if (complete) {
-    statusLabel = `${props.groupSet.length} 个分组`;
-  }
-
-  return (
-    <section
-      className="overflow-hidden rounded-lg border"
-      data-testid={`exchange-set-${setNumber}`}
-      aria-labelledby={`exchange-set-title-${setNumber}`}
-    >
-      <div className="bg-muted/30 flex min-h-12 flex-wrap items-start justify-between gap-2 border-b px-3 py-3">
-        <div className="flex min-w-0 flex-1 basis-48 flex-wrap items-center gap-2">
-          <span
-            id={`exchange-set-title-${setNumber}`}
-            className="text-muted-foreground shrink-0 text-xs font-medium"
-          >
-            规则 {setNumber}
-          </span>
-          <Input
-            className="h-8 min-w-0 max-w-64 flex-1 basis-36 font-medium"
-            value={props.name}
-            maxLength={64}
-            aria-label={`互换组 ${setNumber} 规则名称`}
-            placeholder={`互换组 ${setNumber}`}
-            onChange={(event) => props.onNameChange(props.setIndex, event.target.value)}
-          />
-          <Badge variant={complete ? "outline" : "warning"}>{statusLabel}</Badge>
-          {selectedPlatform ? <Badge variant="secondary">{selectedPlatform}</Badge> : null}
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {visibleGroups.filter((group) => group.available).length} 个可用
-          </span>
-        </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`${expanded ? "收起" : "展开"}互换组 ${setNumber}`}
-                  aria-expanded={expanded}
-                  aria-controls={contentID}
-                  onClick={() => setExpanded((value) => !value)}
-                />
-              }
-            >
-              <ChevronDown
-                className={cn("transition-transform", expanded && "rotate-180")}
-                aria-hidden="true"
-              />
-            </TooltipTrigger>
-            <TooltipContent>{expanded ? "收起互换组" : "展开互换组"}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`删除互换组 ${setNumber}`}
-                  onClick={() => props.onRemove(props.setIndex)}
-                />
-              }
-            >
-              <Trash2 />
-            </TooltipTrigger>
-            <TooltipContent>删除互换组</TooltipContent>
-          </Tooltip>
-        </div>
-      </div>
-
-      <div
-        id={contentID}
-        className="space-y-3 px-3 py-2.5"
-        data-testid={`exchange-set-options-${setNumber}`}
-        role="group"
-        aria-label={`互换组 ${setNumber} 可选分组`}
-        hidden={!expanded}
-      >
-        {[...sections.entries()].map(([platform, groups]) => (
-          <div key={platform} data-platform-section={platform} className="space-y-1.5">
-            {sections.size > 1 || !selectedPlatform ? (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground text-xs font-medium">{platform}</span>
-                <span className="bg-border h-px min-w-4 flex-1" aria-hidden="true" />
-                <span className="text-muted-foreground text-xs tabular-nums">
-                  {groups.filter((group) => group.available).length} 个可用
-                </span>
-              </div>
-            ) : null}
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
-              {groups.map((group) => {
-                const assignedSet = props.exchangeSetByGroup.get(group.id);
-                const selected = assignedSet === props.setIndex;
-                const assignedElsewhere = assignedSet !== undefined && !selected;
-                const groupPlatform = group.platform || "未标注平台";
-                const wrongPlatform = Boolean(
-                  selectedPlatform && groupPlatform !== selectedPlatform,
-                );
-                const disabled =
-                  !selected && (assignedElsewhere || !group.available || wrongPlatform);
-                let detail = group.rate_multiplier
-                  ? `售价 ${group.rate_multiplier}`
-                  : `#${group.id}`;
-                if (!group.available) detail = "不可用";
-                if (assignedElsewhere)
-                  detail = props.exchangeSetNames[assignedSet] || `互换组 ${assignedSet + 1}`;
-                if (wrongPlatform) detail = "其他平台";
-                return (
-                  <div
-                    key={`${props.setIndex}:${group.id}`}
-                    data-selected={selected ? "true" : "false"}
-                    className={cn(
-                      "min-w-0 overflow-hidden rounded-lg border text-sm transition-colors focus-within:ring-2 focus-within:ring-ring",
-                      selected ? "border-primary/50 bg-primary/5" : "hover:bg-muted/40",
-                      disabled
-                        ? "bg-muted/20 text-muted-foreground cursor-not-allowed"
-                        : "cursor-pointer",
-                    )}
-                  >
-                    <label
-                      data-slot="exchange-group-option"
-                      data-selected={selected ? "true" : "false"}
-                      className={cn(
-                        "flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-2.5",
-                        disabled ? "cursor-not-allowed" : "cursor-pointer",
-                      )}
-                    >
-                      <Checkbox
-                        checked={selected}
-                        disabled={disabled}
-                        onCheckedChange={(checked) =>
-                          props.onToggle(props.setIndex, group.id, checked)
-                        }
-                        aria-label={`互换组 ${props.setIndex + 1} 分组 ${group.name}`}
-                      />
-                      <span className="min-w-0 flex-1 break-words font-medium [overflow-wrap:anywhere]">
-                        {group.name}
-                      </span>
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <span className="text-muted-foreground max-w-28 shrink-0 truncate text-xs tabular-nums" />
-                          }
-                        >
-                          {detail}
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-sm">{detail}</TooltipContent>
-                      </Tooltip>
-                    </label>
-                    {selected ? (
-                      <GroupMinimumField
-                        groupID={group.id}
-                        groupName={group.name}
-                        value={props.groupMinimums?.[group.id]}
-                        onChange={props.onMinimumChange}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }
 
@@ -1661,8 +1451,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
 
           <Card size="sm" role="region" aria-labelledby="pricing-exchange-title">
             <CardHeader className="bg-muted/20 flex flex-wrap items-start justify-between gap-3 sm:flex-row sm:items-center">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
+              <div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
+                <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-md">
                   <ArrowLeftRight className="size-4" aria-hidden="true" />
                 </span>
                 <div className="min-w-0">
@@ -1673,32 +1463,32 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                     账号互换范围
                     <Badge variant="secondary">{current.exchange_group_sets.length} 组</Badge>
                   </CardTitle>
-                  <CardDescription>
+                  <CardDescription className="mt-1 text-xs leading-5">
                     同一互换组仅允许选择相同平台的分组，各组之间完全隔离。
                   </CardDescription>
                 </div>
               </div>
               <Button variant="outline" onClick={addExchangeGroupSet}>
-                <Plus /> 添加互换组
+                <Plus aria-hidden="true" /> 添加互换组
               </Button>
             </CardHeader>
             <CardContent className="space-y-3">
               {current.exchange_group_sets.length === 0 ? (
                 <div
-                  className="flex min-h-28 flex-wrap items-center justify-center gap-x-4 gap-y-3 px-4 py-5"
+                  className="bg-muted/10 flex min-h-40 flex-col items-center justify-center gap-3 rounded-lg border border-dashed px-4 py-6"
                   data-testid="exchange-groups-empty"
                 >
                   <span className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md">
                     <ArrowLeftRight className="size-4" aria-hidden="true" />
                   </span>
-                  <div className="min-w-0 text-center sm:text-left">
+                  <div className="min-w-0 space-y-1 text-center">
                     <p className="font-medium">还没有互换组</p>
                     <p className="text-muted-foreground text-xs">
                       自动调价暂时不会调整账号所属分组。
                     </p>
                   </div>
                   <Button onClick={addExchangeGroupSet}>
-                    <Plus /> 创建第一个互换组
+                    <Plus aria-hidden="true" /> 创建第一个互换组
                   </Button>
                 </div>
               ) : (

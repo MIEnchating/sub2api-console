@@ -25,13 +25,20 @@ func selectScoringHistory(rows, current []business.RoutingSample, now time.Time,
 // scoreRoutingHealth separates historical scores from current safety evidence.
 // Only fresh evidence can establish fatal status and failure/recovery streaks.
 func scoreRoutingHealth(current, history []business.RoutingSample, policy map[string]any) (Health, error) {
-	health, err := scoreRoutingRows(current, policy)
-	if err != nil || health.SampleCount == 0 {
-		return health, err
-	}
-	historical, err := scoreRoutingRows(history, policy)
+	config, err := parseScoringConfig(policy)
 	if err != nil {
 		return Health{}, err
+	}
+	currentConfig := config
+	currentConfig.longWindow = max(config.longWindow, len(current))
+	health := scoreRoutingRows(current, currentConfig)
+	if health.SampleCount == 0 {
+		return health, nil
+	}
+	historical := scoreRoutingRows(history, config)
+	if historical.SampleCount == 0 {
+		// A shorter history window must not discard still-fresh safety evidence.
+		historical = scoreRoutingRows(current, config)
 	}
 	currentScore := health.HealthScore
 	health.ShortScore, health.LongScore, health.HealthScore = historical.ShortScore, historical.LongScore, historical.HealthScore
@@ -43,10 +50,10 @@ func scoreRoutingHealth(current, history []business.RoutingSample, policy map[st
 	return health, nil
 }
 
-func scoreRoutingRows(rows []business.RoutingSample, policy map[string]any) (Health, error) {
+func scoreRoutingRows(rows []business.RoutingSample, config scoringConfig) Health {
 	samples := make([]Sample, 0, len(rows))
 	for _, row := range rows {
 		samples = append(samples, Sample{Result: row.Result, FailureReason: row.FailureReason, Source: row.Source, LatencyP95: row.LatencyP95, StatusCode: routingSampleStatus(row), Payload: row.Payload})
 	}
-	return HealthScore(samples, policy)
+	return healthScore(samples, config)
 }

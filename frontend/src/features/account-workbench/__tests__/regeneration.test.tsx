@@ -6,7 +6,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WorkbenchRegeneration } from "../components/workbench-regeneration";
 import { WorkbenchExports } from "../components/workbench-exports";
-import { WorkbenchHistory } from "../components/workbench-history";
 
 const clients: QueryClient[] = [];
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
@@ -139,10 +138,13 @@ it("开发模式重挂载效果不会重复创建或撤销仍在使用的再生�
 
 it("已结束转换记录用来源任务ID读取再生范围", async () => {
   const requests = network();
-  mount(<WorkbenchHistory />);
-  const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "查看任务 original-convert" }));
-  await user.click(screen.getByRole("button", { name: "从此记录重新生成授权文件" }));
+  mount(
+    <WorkbenchRegeneration
+      source={{ source_task_id: "original-convert" }}
+      onClose={() => undefined}
+      onCreated={() => undefined}
+    />,
+  );
   await screen.findByText(/第 8 项：重新生成账号/);
   expect(requests).toEqual([
     {

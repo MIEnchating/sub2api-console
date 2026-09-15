@@ -12,7 +12,6 @@ import {
   defaultProbeModelForPlatform,
   onboardingProbeModeOptions,
   onboardingProbeModelOptions,
-  ProbeDialogActions,
   ProbeModelLoadButton,
   ProbeResultSlot,
   shouldLoadProbeModels,
@@ -189,16 +188,16 @@ describe("账号探活弹窗", () => {
     expect(markup).not.toContain("animate-spin");
   });
 
-  it("测试中复用深色结果面板并预先显示模型和测试消息", () => {
+  it("测试中复用深色结果面板并显示请求模型和等待状态", () => {
     const markup = renderToStaticMarkup(
       <ProbeResultSlot pending error={null} result={null} requestModel="gpt-5.6-sol" />,
     );
 
     expect(markup).toContain("bg-zinc-950");
     expect(markup).toContain("使用模型：gpt-5.6-sol");
-    expect(markup).toContain("发送测试消息");
+    expect(markup).toContain("正在发送探活请求");
     expect(markup).toContain("等待上游响应");
-    expect(markup).toContain("[&amp;&gt;*]:min-h-36");
+    expect(markup).toContain("h-full");
     expect(markup).not.toContain("弹窗会在测试完成后显示详细结果");
   });
 
@@ -232,7 +231,7 @@ describe("账号探活弹窗", () => {
         }}
       />,
     );
-    for (const text of ["Hi! How can I help?", "使用模型", "发送测试消息", "响应", "测试完成"]) {
+    for (const text of ["Hi! How can I help?", "使用模型", "响应模型", "响应", "测试完成"]) {
       expect(markup).toContain(text);
     }
     expect(markup).toContain("[overflow-wrap:anywhere]");
@@ -263,23 +262,5 @@ describe("账号探活弹窗", () => {
 
     expect(markup).toContain("待选择");
     expect(markup).toContain("点击“开始测试”查看响应");
-  });
-
-  it("探活进行中允许关闭弹窗并阻止重复测试", () => {
-    const markup = renderToStaticMarkup(
-      <ProbeDialogActions
-        runDisabled
-        probePending
-        hasResult={false}
-        onClose={() => undefined}
-        onRun={() => undefined}
-      />,
-    );
-    const closeButton = markup.match(/<button[^>]*>关闭<\/button>/)?.[0];
-    const probeButton = markup.match(/<button[^>]*disabled=""[^>]*>.*测试中<\/button>/)?.[0];
-
-    expect(closeButton).toBeDefined();
-    expect(closeButton).not.toContain(' disabled=""');
-    expect(probeButton).toBeDefined();
   });
 });

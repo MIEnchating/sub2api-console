@@ -80,7 +80,7 @@ export function useWorkbenchMixed(): {
         setPreview(value);
       }
     },
-    onError: (error) => notifyOperationError(error, "混合运行预览失败，请重新填写并检查账号资料"),
+    onError: (error) => notifyOperationError(error, "账号内容预览失败，请重新填写并检查账号资料"),
   });
   const start = useMutation({
     gcTime: 0,
@@ -112,7 +112,7 @@ export function useWorkbenchMixed(): {
     },
     onError: (error) => {
       discard();
-      notifyOperationError(error, "混合运行未启动，请重新填写账号并预览");
+      notifyOperationError(error, "账号批次未启动，请重新填写账号并预览");
     },
   });
   const close = useMutation({
@@ -126,7 +126,7 @@ export function useWorkbenchMixed(): {
       void client.invalidateQueries({ queryKey: workbenchKeys.history });
       void client.invalidateQueries({ queryKey: workbenchKeys.queueRecoveries });
     },
-    onError: (error) => notifyOperationError(error, "结束混合运行失败，请重试"),
+    onError: (error) => notifyOperationError(error, "结束本批处理失败，请重试"),
   });
   const release = useCallback((): void => {
     generation.current += 1;
@@ -179,7 +179,7 @@ export function useWorkbenchMixed(): {
             available: 0,
             current_oauth_id: undefined,
             status: "cancelled",
-            message: "混合运行已到期，请重新填写资料",
+            message: "账号批次已到期，请重新填写资料",
           }
         : current,
     parsing: parse.isPending,

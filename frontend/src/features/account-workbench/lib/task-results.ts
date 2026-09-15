@@ -5,6 +5,7 @@ export type WorkbenchResultItem = {
   status: string;
   message: string;
   accountId: string;
+  templateName?: string;
   report: Record<string, unknown> | null;
 };
 
@@ -28,6 +29,7 @@ export function workbenchResultItems(result: Record<string, unknown>): Workbench
         status: typeof item.status === "string" ? item.status : "",
         message: typeof item.message === "string" ? item.message : "",
         accountId: typeof item.account_id === "string" ? item.account_id : "",
+        templateName: typeof item.template_name === "string" ? item.template_name : "",
         report,
       },
     ];

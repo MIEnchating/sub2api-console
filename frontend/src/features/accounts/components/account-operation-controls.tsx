@@ -58,7 +58,7 @@ function accountActions(props: AccountOperationProps): {
   const state = accountPoolState(props.account).value;
   const paused = state === "paused";
   const fused = state === "fused";
-  const policyStopped = state === "cost_blocked" || fused;
+  const policyStopped = state === "cost_blocked" || state === "concurrency_limited" || fused;
   const resumable = paused || (!policyStopped && props.account.schedulable === false);
   const manualControlled = props.account.manual_priority != null;
   const controls: AccountAction[] = [];

@@ -84,6 +84,7 @@ type OnboardingProjection struct {
 	Priority          *int64
 	Concurrency       *int64
 	Models            []string
+	TestModels        []string
 	Notes             string
 	Actor             string
 	ReadbackConfirmed bool
@@ -349,6 +350,10 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	probeModels, err := normalizeAccountTestModels(value.TestModels)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO accounts(id,name,upstream_host,upstream_type,schedulable,priority,concurrency,
 		multiplier,paused,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,0,?,?)
 		ON CONFLICT(id) DO UPDATE SET name=excluded.name,upstream_host=excluded.upstream_host,
@@ -411,6 +416,27 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	}
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err
+	}
+	if len(probeModels) > 0 {
+		document, err := s.readPolicyDocument(ctx, tx, "control-plane")
+		if err != nil {
+			return err
+		}
+		if document == nil {
+			return errors.New("控制面策略记录不存在，不能保存新增账号探活模型")
+		}
+		models, ok := document["account_test_models"].(map[string]any)
+		if !ok {
+			return errors.New("账号探活模型配置无效")
+		}
+		values := make([]any, len(probeModels))
+		for index, model := range probeModels {
+			values[index] = model
+		}
+		models[value.AccountID] = values
+		if err := s.writePolicyDocument(ctx, tx, "control-plane", document, now); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM onboarding_pending WHERE operation_id=?`, value.OperationID); err != nil {
 		return err

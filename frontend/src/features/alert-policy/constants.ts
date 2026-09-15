@@ -13,6 +13,7 @@ export const alertRuleFields: Array<{
     | "routing_survivor_enabled"
     | "group_unavailable_enabled"
     | "group_survivor_enabled"
+    | "cost_traffic_enabled"
     | "apply_failure_enabled";
   label: string;
   description: string;
@@ -51,6 +52,11 @@ export const alertRuleFields: Array<{
     description: "账号本应熔断，但为避免分组断供而继续保留",
   },
   {
+    name: "cost_traffic_enabled",
+    label: "无利润／亏损流量",
+    description: "最近 5 分钟有实际请求，且当前账号倍率大于等于请求所属分组倍率；不含主动探测",
+  },
+  {
     name: "group_unavailable_enabled",
     label: "分组无可调度账号",
     description: "本轮调度判定后，分组内没有账号可以接收流量",
@@ -72,9 +78,9 @@ export const alertRuleGroups: Array<{
   fields: typeof alertRuleFields;
 }> = [
   { label: "上游与余额", fields: alertRuleFields.slice(0, 6) },
-  { label: "账号健康", fields: alertRuleFields.slice(6, 9) },
-  { label: "分组状态", fields: alertRuleFields.slice(9, 11) },
-  { label: "自动执行", fields: alertRuleFields.slice(11) },
+  { label: "账号健康与成本", fields: alertRuleFields.slice(6, 10) },
+  { label: "分组状态", fields: alertRuleFields.slice(10, 12) },
+  { label: "自动执行", fields: alertRuleFields.slice(12) },
 ];
 
 export const routingDegradedFields: Array<{
@@ -111,6 +117,11 @@ export const recoveryNotificationFields: Array<{
 }> = [
   { value: "configuration", label: "配置异常恢复", description: "配置或数据格式重新可用" },
   { value: "auth", label: "鉴权恢复", description: "上游鉴权重新通过" },
+  {
+    value: "cost_traffic",
+    label: "成本流量告警解除",
+    description: "近期未再检测到账号倍率大于等于分组倍率的流量",
+  },
   { value: "rate_sync", label: "倍率同步恢复", description: "倍率同步任务重新成功" },
   { value: "balance", label: "余额恢复", description: "余额离开告警区间或解除硬关闭" },
   {

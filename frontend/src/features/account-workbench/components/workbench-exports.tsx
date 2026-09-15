@@ -15,9 +15,13 @@ import { WorkbenchExportArtifacts } from "./workbench-export-artifacts";
 import { WorkbenchTask } from "./workbench-task";
 import { WorkbenchRegeneration } from "./workbench-regeneration";
 
-export function WorkbenchExports(): ReactElement {
+export function WorkbenchExports(props: { sourceTaskId?: string } = {}): ReactElement {
   const client = useQueryClient();
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: api.accounts,
+    enabled: !props.sourceTaskId,
+  });
   const [preview, setPreview] = useState<WorkbenchExportPreview | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [regenerating, setRegenerating] = useState<string[] | null>(null);
@@ -35,7 +39,9 @@ export function WorkbenchExports(): ReactElement {
     gcTime: 0,
     mutationFn: async (ids: string[]) => {
       const requestedGeneration = generation.current;
-      const value = await api.workbenchExportPreview(ids);
+      const value = props.sourceTaskId
+        ? await api.workbenchBatchExportPreview(props.sourceTaskId)
+        : await api.workbenchExportPreview(ids);
       if (!mounted.current || generation.current !== requestedGeneration) {
         await api.discardWorkbenchExportPreview(value.id);
         return null;
@@ -70,24 +76,40 @@ export function WorkbenchExports(): ReactElement {
       if (id) void api.discardWorkbenchExportPreview(id).catch(() => undefined);
     };
   }, []);
-  if (accounts.isPending) return <WorkbenchExportsSkeleton />;
-  if (!accounts.data)
+  if (!props.sourceTaskId && accounts.isPending) return <WorkbenchExportsSkeleton />;
+  if (!props.sourceTaskId && !accounts.data)
     return <ContentRetry pending={accounts.isFetching} onRetry={() => void accounts.refetch()} />;
   return (
     <div className="grid min-w-0 gap-4">
-      <WorkbenchExportSelection
-        accounts={accounts.data}
-        disabled={parse.isPending || create.isPending}
-        onChange={discard}
-        onRegenerate={(ids) => {
-          discard();
-          setRegenerating(ids);
-        }}
-        onSubmit={(ids) => {
-          discard();
-          parse.mutate(ids);
-        }}
-      />
+      {props.sourceTaskId && !preview && !task && (
+        <div>
+          <Button
+            variant="outline"
+            disabled={parse.isPending || create.isPending}
+            onClick={() => {
+              discard();
+              parse.mutate([]);
+            }}
+          >
+            导出本批结果
+          </Button>
+        </div>
+      )}
+      {!props.sourceTaskId && (
+        <WorkbenchExportSelection
+          accounts={accounts.data ?? []}
+          disabled={parse.isPending || create.isPending}
+          onChange={discard}
+          onRegenerate={(ids) => {
+            discard();
+            setRegenerating(ids);
+          }}
+          onSubmit={(ids) => {
+            discard();
+            parse.mutate(ids);
+          }}
+        />
+      )}
       {parse.isPending && (
         <div className="grid gap-2">
           <ContentLoading label="正在生成导出预览" />
@@ -121,7 +143,7 @@ export function WorkbenchExports(): ReactElement {
           onCreated={setTask}
         />
       )}
-      <WorkbenchExportArtifacts />
+      {!props.sourceTaskId && <WorkbenchExportArtifacts />}
     </div>
   );
 }

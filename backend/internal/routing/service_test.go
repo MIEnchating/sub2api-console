@@ -414,14 +414,17 @@ func TestStrategyQualityFallsBackFromP95ToP50(t *testing.T) {
 	}
 }
 
-func TestCostWallStopsSchedulingWhenEveryManagedMembershipIsAboveWall(t *testing.T) {
+func TestCostWallStopsSchedulingWhenEveryManagedMembershipIsAboveWallAndPeerIsAvailable(t *testing.T) {
 	policy := routingPolicy()
 	schedulable := true
-	accountMultiplier, costWall := "2", "1"
+	accountMultiplier, costWall, affordable := "2", "1", "0.5"
 	repository := &routingRepositoryStub{
 		policy: policy,
 		accounts: []business.RoutingAccount{{
 			ID: "41", Name: "above-wall", GroupName: "codex", Multiplier: &accountMultiplier,
+			GroupCostWall: &costWall, Schedulable: &schedulable, Metadata: map[string]any{},
+		}, {
+			ID: "42", Name: "affordable", GroupName: "codex", Multiplier: &affordable,
 			GroupCostWall: &costWall, Schedulable: &schedulable, Metadata: map[string]any{},
 		}},
 		samples: []business.RoutingSample{{

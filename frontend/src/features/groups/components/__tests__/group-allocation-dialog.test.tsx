@@ -88,6 +88,32 @@ const allocation: GroupAllocation = {
 };
 
 describe("group allocation detail", () => {
+  it("分配并发总量未知时显示未确认值而不是零", () => {
+    render(<GroupAllocationContent allocation={{ ...allocation, assigned_concurrency: null }} />);
+
+    expect(screen.getByText("—")).toBeVisible();
+  });
+
+  it("分组中等待并发额度的账号展示中文状态", () => {
+    render(
+      <GroupAllocationContent
+        allocation={{
+          ...allocation,
+          channels: [
+            {
+              ...allocation.channels[0],
+              health: "concurrency_limited",
+              reason: "上游可用并发不足",
+              schedulable: false,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("等待并发额度")).toBeVisible();
+    expect(screen.queryByText("concurrency_limited")).not.toBeInTheDocument();
+  });
   it("prioritizes actionable allocation status and removes secondary summary details", () => {
     const markup = renderToStaticMarkup(<GroupAllocationContent allocation={allocation} />);
 

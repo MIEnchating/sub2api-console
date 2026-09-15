@@ -109,11 +109,15 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 	if err != nil {
 		return Health{}, err
 	}
+	return healthScore(samples, config), nil
+}
+
+func healthScore(samples []Sample, config scoringConfig) Health {
 	if len(samples) > config.longWindow {
 		samples = samples[:config.longWindow]
 	}
 	if len(samples) == 0 {
-		return Health{LatestEvent: EventUnknown, Events: []Event{}}, nil
+		return Health{LatestEvent: EventUnknown, Events: []Event{}}
 	}
 	allClassified := make([]Classified, len(samples))
 	classified := make([]Classified, 0, len(samples))
@@ -132,7 +136,7 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 		effectiveSamples = append(effectiveSamples, samples[index])
 	}
 	if len(classified) == 0 {
-		return Health{NeutralCount: len(samples), LatestEvent: latestEvent, Events: []Event{}}, nil
+		return Health{NeutralCount: len(samples), LatestEvent: latestEvent, Events: []Event{}}
 	}
 	shortCount := min(len(classified), config.shortWindow)
 	short := classified[:shortCount]
@@ -205,7 +209,7 @@ func HealthScore(samples []Sample, policy map[string]any) (Health, error) {
 		SampleCount: len(classified), NeutralCount: len(samples) - len(classified), LatestEvent: classified[0].Event, Fatal: classified[0].Fatal,
 		FailureStreak: failureStreak, RecoveryPassStreak: recoveryStreak, P50MS: roundedPointer(p50), P95MS: roundedPointer(p95),
 		Events: events, GatewayFailures: gatewayFailures, RateLimited: rateLimited,
-	}, nil
+	}
 }
 
 func ClassifySample(sample Sample, policy map[string]any) (Classified, error) {
@@ -446,7 +450,7 @@ func sampleStatus(sample Sample, text string) int {
 func healthLatencyMS(sample Sample) *float64 {
 	source := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(sample.Source)), "_", "-")
 	if source == "active-probe" || source == "probe" {
-		if sample.Payload["latency_source"] != "account_test.first_content" {
+		if sample.Payload["latency_source"] != "account_test.first_content" && sample.Payload["latency_source"] != "upstream_direct.first_content" {
 			return nil
 		}
 		return measuredFirstTokenMS(sample)

@@ -10,8 +10,8 @@ import {
 
 export const accountDetailDialogLayout = {
   width: "progress",
-  content: "grid gap-3 overflow-visible",
-  body: "min-w-0 overflow-visible pr-1 text-sm",
+  content: "grid gap-3",
+  body: "min-w-0 pr-1 text-sm",
 } as const;
 
 export function AccountDetailDialog(props: {

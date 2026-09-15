@@ -102,28 +102,33 @@ type Input struct {
 }
 
 type Configuration struct {
-	UpstreamID        string                   `json:"upstream_id"`
-	Host              string                   `json:"host"`
-	Name              string                   `json:"name"`
-	BaseURL           string                   `json:"base_url"`
-	AccountBaseURL    string                   `json:"account_base_url"`
-	UpstreamType      string                   `json:"upstream_type"`
-	AuthMode          string                   `json:"auth_mode"`
-	RechargeRate      string                   `json:"recharge_rate"`
-	RawBalance        *string                  `json:"raw_balance"`
-	Balance           *string                  `json:"balance"`
-	HasAccessToken    bool                     `json:"has_access_token"`
-	HasRefreshToken   bool                     `json:"has_refresh_token"`
-	HasAdminKey       bool                     `json:"has_admin_key"`
-	HasUserID         bool                     `json:"has_user_id"`
-	Headers           map[string]string        `json:"headers"`
-	HeaderNames       []string                 `json:"header_names"`
-	CookieNames       []string                 `json:"cookie_names"`
-	Groups            []business.UpstreamGroup `json:"groups"`
-	RateSyncTaskID    *string                  `json:"rate_sync_task_id,omitempty"`
-	RateSyncError     *string                  `json:"rate_sync_error,omitempty"`
-	BaseURLSyncTaskID *string                  `json:"base_url_sync_task_id,omitempty"`
-	BaseURLSyncError  *string                  `json:"base_url_sync_error,omitempty"`
+	UpstreamID           string                   `json:"upstream_id"`
+	Host                 string                   `json:"host"`
+	Name                 string                   `json:"name"`
+	BaseURL              string                   `json:"base_url"`
+	AccountBaseURL       string                   `json:"account_base_url"`
+	UpstreamType         string                   `json:"upstream_type"`
+	AuthMode             string                   `json:"auth_mode"`
+	RechargeRate         string                   `json:"recharge_rate"`
+	RawBalance           *string                  `json:"raw_balance"`
+	Balance              *string                  `json:"balance"`
+	ConcurrencyLimit     *int64                   `json:"concurrency_limit"`
+	ConcurrencyStatus    string                   `json:"concurrency_status"`
+	ConcurrencyCheckedAt *string                  `json:"concurrency_checked_at"`
+	AllocatedConcurrency *int64                   `json:"allocated_concurrency"`
+	TargetConcurrency    *int64                   `json:"target_concurrency"`
+	HasAccessToken       bool                     `json:"has_access_token"`
+	HasRefreshToken      bool                     `json:"has_refresh_token"`
+	HasAdminKey          bool                     `json:"has_admin_key"`
+	HasUserID            bool                     `json:"has_user_id"`
+	Headers              map[string]string        `json:"headers"`
+	HeaderNames          []string                 `json:"header_names"`
+	CookieNames          []string                 `json:"cookie_names"`
+	Groups               []business.UpstreamGroup `json:"groups"`
+	RateSyncTaskID       *string                  `json:"rate_sync_task_id,omitempty"`
+	RateSyncError        *string                  `json:"rate_sync_error,omitempty"`
+	BaseURLSyncTaskID    *string                  `json:"base_url_sync_task_id,omitempty"`
+	BaseURLSyncError     *string                  `json:"base_url_sync_error,omitempty"`
 }
 
 func New(businessStore Business, privateStore PrivateStore, verifier Verifier, schedulers ...AccountRateSyncScheduler) *Service {
@@ -166,6 +171,8 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		UpstreamID: public.UpstreamID, Host: host, Name: public.Name, BaseURL: public.BaseURL, AccountBaseURL: public.AccountBaseURL, UpstreamType: public.UpstreamType,
 		AuthMode: "custom_headers", RechargeRate: public.RechargeRate, RawBalance: public.RawBalance,
 		Balance: public.Balance, Headers: map[string]string{}, HeaderNames: []string{}, CookieNames: []string{}, Groups: groups,
+		ConcurrencyLimit: public.ConcurrencyLimit, ConcurrencyStatus: public.ConcurrencyStatus,
+		ConcurrencyCheckedAt: public.ConcurrencyCheckedAt, AllocatedConcurrency: public.AllocatedConcurrency, TargetConcurrency: public.TargetConcurrency,
 	}
 	if record != nil {
 		result.BaseURL, result.UpstreamType, result.AuthMode = record.BaseURL, record.UpstreamType, record.AuthMode

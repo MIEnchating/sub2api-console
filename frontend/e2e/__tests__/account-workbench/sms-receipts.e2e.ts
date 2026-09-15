@@ -15,6 +15,7 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
   const receipts: WorkbenchSMSReceipt[] = [
     {
       id: "receipt-original",
+      scope: "managed",
       task_id: "oauth-original-task",
       provider: "smsbower",
       order_id: orderID,
@@ -26,7 +27,8 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
     },
     {
       id: "receipt-ended",
-      task_id: "oauth-ended-task",
+      scope: "managed",
+      task_id: "oauth-original-task",
       provider: "luban",
       order_id: "ended-order",
       phone: "+447700900456",
@@ -36,7 +38,7 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
       can_inspect: false,
     },
   ];
-  await page.route("**/api/account-workbench/sms/receipts", (route) =>
+  await page.route("**/api/account-workbench/sms/receipts?scope=managed", (route) =>
     route.fulfill({ json: receipts }),
   );
   let release: (() => void) | undefined;
@@ -45,7 +47,7 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
   });
   const requests: unknown[] = [];
   await page.route(
-    "**/api/account-workbench/sms/receipts/receipt-original/inspect",
+    "**/api/account-workbench/sms/receipts/receipt-original/inspect?scope=managed",
     async (route) => {
       requests.push(route.request().postDataJSON() as unknown);
       await pending;
@@ -58,9 +60,26 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
       });
     },
   );
+  const task = {
+    id: "oauth-original-task",
+    skill: "account-workbench",
+    operation: "account-workbench-oauth",
+    status: "failed",
+    progress: 100,
+    message: "等待核对短信订单",
+    created_at: "",
+    updated_at: "",
+    result: {},
+  };
+  await page.route("**/api/account-workbench/history", (route) => route.fulfill({ json: [task] }));
+  await page.route("**/api/tasks/oauth-original-task", (route) => route.fulfill({ json: task }));
+  await page.route("**/api/account-workbench/sms/receipts?scope=local-export", (route) =>
+    route.fulfill({ json: [] }),
+  );
   await page.goto("/account-workbench");
-  await page.getByRole("tab", { name: "授权登录", exact: true }).click();
-  await page.getByRole("tab", { name: "短信订单", exact: true }).click();
+  await page.getByRole("tab", { name: "处理记录", exact: true }).click();
+  await page.getByRole("button", { name: "查看任务 oauth-original-task" }).click();
+  await page.getByRole("button", { name: "本次授权短信订单" }).click();
   const records = page.getByRole("region", { name: "短信订单记录" });
   await expect(records.getByRole("listitem")).toHaveCount(2);
   const ended = records.getByRole("listitem").filter({ hasText: "ended-order" });
@@ -78,7 +97,7 @@ test("短信原订单核对在桌面与移动端清除提交密钥，结束订�
   await expect(key).toHaveAttribute("type", "password");
   await key.fill("sms-isolated-api-key-20260914");
   const request = page.waitForRequest(
-    "**/api/account-workbench/sms/receipts/receipt-original/inspect",
+    "**/api/account-workbench/sms/receipts/receipt-original/inspect?scope=managed",
   );
   await dialog.getByRole("button", { name: "查询原订单" }).click();
   await request;

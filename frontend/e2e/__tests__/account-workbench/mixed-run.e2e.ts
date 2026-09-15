@@ -10,7 +10,7 @@ import type {
 import { installWorkbenchFixture } from "./fixture";
 
 for (const exportOnly of [false, true]) {
-  test(`混合运行${exportOnly ? "私有转换" : "线上导入"}保持原序号并完成授权后统一确认`, async ({
+  test(`账号批次${exportOnly ? "私有转换" : "线上导入"}保持原序号并完成授权后统一确认`, async ({
     page,
     colorScheme,
   }) => {
@@ -63,7 +63,7 @@ for (const exportOnly of [false, true]) {
       operation: exportOnly ? "account-workbench-convert" : "account-workbench-import",
       status: "queued",
       progress: 0,
-      message: "等待执行混合运行结果",
+      message: "等待执行账号批次结果",
       result: {},
       created_at: "2026-09-14T00:00:00Z",
       updated_at: "2026-09-14T00:00:00Z",
@@ -76,6 +76,7 @@ for (const exportOnly of [false, true]) {
         target: "https://sub2api.example.test",
         expires_at: expires(),
         export_only: exportOnly,
+        scope: exportOnly ? "local-export" : undefined,
         items: rows,
         errors: [],
       };
@@ -90,6 +91,7 @@ for (const exportOnly of [false, true]) {
         message: "等待登录账号完成授权",
         expires_at: expires(),
         export_only: exportOnly,
+        scope: exportOnly ? "local-export" : undefined,
         current_oauth_id: "oauth-fixture",
         available: 2,
         items: rows,
@@ -105,6 +107,7 @@ for (const exportOnly of [false, true]) {
         message: ready ? "全部账号准备完成" : "等待登录账号完成授权",
         expires_at: expires(),
         export_only: exportOnly,
+        scope: exportOnly ? "local-export" : undefined,
         current_oauth_id: ready ? undefined : "oauth-fixture",
         available: ready ? 3 : 2,
         items: rows,
@@ -124,8 +127,9 @@ for (const exportOnly of [false, true]) {
         target: "https://sub2api.example.test",
         expires_at: expires(),
         export_only: exportOnly,
-        check_after_import: false,
-        model: "",
+        scope: exportOnly ? "local-export" : undefined,
+        check_after_import: !exportOnly,
+        model: exportOnly ? "" : "gpt-5.6-sol",
         errors: [],
         items: [
           {
@@ -154,51 +158,71 @@ for (const exportOnly of [false, true]) {
     });
     await page.route("**/api/tasks/mixed-final-task", (route) => route.fulfill({ json: task }));
     await page.goto("/account-workbench");
-    const mode = page.getByRole("tab", { name: "混合运行", exact: true });
-    await mode.focus();
-    await page.keyboard.press("Enter");
-    await expect(mode).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("region", { name: "账号内容与文件", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "输入格式" })).toHaveCount(0);
     if (exportOnly) {
-      await page.getByRole("combobox", { name: "处理方式" }).click();
-      await page.getByRole("option", { name: "生成私有 JSON", exact: true }).click();
+      await page.getByRole("button", { name: "仅导出 JSON", exact: true }).click();
     }
     const content =
       '{"access_token":"fixture-access"}\nrt_fixture_refresh\noperator@example.test----fixture-password';
-    await page.getByRole("textbox", { name: "混合账号内容" }).fill(content);
+    if (exportOnly) {
+      await page.getByLabel("从文件读取（最大 2 MB）").setInputFiles({
+        name: "accounts.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(content),
+      });
+      await expect(page.getByRole("textbox", { name: "账号内容" })).toHaveValue(content);
+    } else {
+      await page.getByRole("textbox", { name: "账号内容" }).fill(content);
+    }
+    await page.getByRole("button", { name: "高级设置" }).click();
     await page
-      .getByLabel("本批登录代理", { exact: true })
+      .getByLabel("登录 / 检测代理", { exact: true })
       .fill("https://user:fixture-secret@proxy.example.test:443");
-    await page.getByRole("button", { name: "解析混合运行范围" }).click();
-    const preview = page.getByRole("region", { name: "混合运行预览" });
-    await expect(preview).toBeVisible();
-    await expect(page.getByRole("textbox", { name: "混合账号内容" })).toHaveCount(0);
+    await page
+      .getByRole("button", { name: exportOnly ? "解析并预览" : "导入并检测", exact: true })
+      .click();
+    const preview = page.getByRole("region", { name: "账号内容预览", includeHidden: true });
+    if (exportOnly) await expect(preview).toBeVisible();
+    else await expect(page.getByRole("dialog", { name: "确认处理账号" })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "账号内容" })).toHaveCount(0);
     expect(inputs[0]).toMatchObject({
       content,
       export_only: exportOnly,
       proxy_url: "https://user:fixture-secret@proxy.example.test:443",
+      check_after_import: !exportOnly,
+      model: exportOnly ? "" : "gpt-5.6-sol",
     });
+    if (exportOnly) {
+      expect(inputs[0]?.scope).toBe("local-export");
+      expect(inputs[0]?.template_id).toBeUndefined();
+    }
     expect(starts).toHaveLength(0);
     expect(await preview.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
       true,
     );
-    await preview.getByRole("button", { name: "确认处理 3 项" }).click();
-    const confirm = page.getByRole("dialog", { name: "确认开始混合运行" });
+    if (exportOnly) await preview.getByRole("button", { name: "确认处理 3 项" }).click();
+    const confirm = page.getByRole("dialog", { name: "确认处理账号" });
     await expect(confirm).toContainText("3 项账号资料");
-    await expect(confirm.getByRole("button", { name: "开始混合运行" })).toBeInViewport();
+    await expect(confirm.getByRole("button", { name: "开始处理" })).toBeInViewport();
     await page.screenshot({
       path: test.info().outputPath("mixed-run-confirm.png"),
       animations: "disabled",
     });
-    await confirm.getByRole("button", { name: "开始混合运行" }).click();
+    await confirm.getByRole("button", { name: "开始处理" }).click();
     expect(starts).toEqual([{ preview_id: "mixed-preview", confirmed: true }]);
     await expect(page.getByRole("button", { name: "上游登录页面" })).toBeVisible();
+    await page.getByRole("tab", { name: "处理记录", exact: true }).click();
+    await page.getByRole("button", { name: "继续当前批次" }).click();
+    expect(starts).toHaveLength(1);
     await page.getByRole("button", { name: "登录完成，验证授权" }).click();
-    await page
-      .getByRole("button", {
-        name: exportOnly ? "预览私有转换结果" : "预览可导入账号",
-        exact: true,
-      })
-      .click();
+    if (exportOnly)
+      await page
+        .getByRole("button", {
+          name: exportOnly ? "预览可导出账号" : "预览可导入账号",
+          exact: true,
+        })
+        .click();
     if (exportOnly) {
       await expect(page.getByRole("button", { name: "确认导入 1 个账号" })).toHaveCount(0);
       await page.getByRole("button", { name: "生成私有 JSON 文件" }).click();
@@ -209,13 +233,13 @@ for (const exportOnly of [false, true]) {
       expect(writes).toHaveLength(0);
       await page.getByRole("button", { name: "创建导入任务" }).click();
     }
-    await expect(page.getByRole("status", { name: "等待执行混合运行结果" })).toBeVisible();
+    await expect(page.getByRole("status", { name: "等待执行账号批次结果" })).toBeVisible();
     expect(writes).toEqual([
       {
         kind: exportOnly ? "convert" : "import",
         body: { preview_id: "mixed-result", confirmed: true },
       },
     ]);
-    await expect(page.getByRole("textbox", { name: "混合账号内容" })).toHaveValue("");
+    await expect(page.getByRole("textbox", { name: "账号内容" })).toHaveValue("");
   });
 }

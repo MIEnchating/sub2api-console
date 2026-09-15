@@ -14,7 +14,7 @@ it.each(["__proto__", "constructor", "toString"])(
       />,
     );
 
-    expect(screen.getByRole("list", { name: "账号处理结果" })).toHaveTextContent(status);
+    expect(screen.getByRole("table", { name: "账号处理结果" })).toHaveTextContent(status);
   },
 );
 
@@ -27,5 +27,5 @@ it("任务返回已知失败状态时显示约定中文状态", () => {
     />,
   );
 
-  expect(screen.getByRole("list", { name: "账号处理结果" })).toHaveTextContent("处理失败");
+  expect(screen.getByRole("table", { name: "账号处理结果" })).toHaveTextContent("处理失败");
 });

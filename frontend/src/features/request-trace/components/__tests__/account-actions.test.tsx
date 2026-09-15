@@ -109,6 +109,46 @@ afterEach(() => {
 });
 
 describe("请求查询账号处置", () => {
+  it("账号等待并发额度时禁用恢复调度并提示同步额度后重新计算", async () => {
+    const network = mockNetwork(
+      account({
+        health: "concurrency_limited",
+        routing_state: "concurrency_limited",
+        schedulable: false,
+      }),
+    );
+    const user = userEvent.setup();
+    renderActions();
+
+    expect(await screen.findByText(/请在上游管理同步并发额度后重新计算调度/)).toBeVisible();
+    const resume = screen.getByRole("button", { name: "恢复调度" });
+    expect(resume).toBeDisabled();
+    await user.click(resume);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(network.writes).toEqual([]);
+  });
+
+  it("恢复确认期间账号变为等待并发额度时禁用确认且不提交旧操作", async () => {
+    const current = account({ schedulable: false });
+    const network = mockNetwork(current);
+    const user = userEvent.setup();
+    const client = renderActions();
+    await waitFor(() => expect(screen.getByRole("button", { name: "恢复调度" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "恢复调度" }));
+
+    current.health = "concurrency_limited";
+    current.routing_state = "concurrency_limited";
+    await client.invalidateQueries({ queryKey: ["account-detail", "206"] });
+
+    const dialog = within(screen.getByRole("dialog", { name: "恢复调度" }));
+    await waitFor(() =>
+      expect(dialog.getByRole("button", { name: "确认恢复调度" })).toBeDisabled(),
+    );
+    expect(dialog.getByText(/同步并发额度后重新计算调度/)).toBeVisible();
+    await user.click(dialog.getByRole("button", { name: "确认恢复调度" }));
+    expect(network.writes).toEqual([]);
+  });
+
   it("账号状态加载时保留可换行的操作区并禁用处置", () => {
     mockNetwork();
     renderActions();

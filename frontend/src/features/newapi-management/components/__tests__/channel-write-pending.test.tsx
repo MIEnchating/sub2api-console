@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render } from "@/test/dictionary";
+import { fireEvent, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { NewAPIChannelForm } from "../channel-form";
 import { NewAPIChannelConfigurationStep } from "../channel-configuration-step";

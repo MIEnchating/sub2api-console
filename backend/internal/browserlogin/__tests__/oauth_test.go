@@ -2,7 +2,6 @@ package browserlogin_test
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 type oauthBrowserFixture struct {
@@ -22,10 +20,6 @@ type oauthBrowserFixture struct {
 	result browserlogin.OAuthResult
 	err    error
 	frame  func(context.Context) ([]byte, error)
-}
-
-func (b *oauthBrowserFixture) Credentials(context.Context) (configstore.AuthRecord, error) {
-	return configstore.AuthRecord{}, nil
 }
 
 func (b *oauthBrowserFixture) Screenshot(ctx context.Context) ([]byte, error) {
@@ -43,16 +37,9 @@ func (b *oauthBrowserFixture) Close() { b.once.Do(func() { close(b.closed) }) }
 type oauthFactoryFixture struct {
 	browser *oauthBrowserFixture
 	options chan browserlogin.OAuthOptions
-	regular *oauthBrowserFixture
 	open    func(context.Context) (browserlogin.OAuthBrowser, error)
 }
 
-func (f *oauthFactoryFixture) Open(context.Context, configstore.AuthRecord) (browserlogin.Browser, error) {
-	if f.regular != nil {
-		return f.regular, nil
-	}
-	return nil, errors.New("not used")
-}
 func (f *oauthFactoryFixture) OpenOAuth(ctx context.Context, options browserlogin.OAuthOptions) (browserlogin.OAuthBrowser, error) {
 	if err := options.Validate(); err != nil {
 		return nil, err

@@ -25,6 +25,30 @@ func sourceTemplateInput(source accountworkbench.TemplateSource) accountworkbenc
 	return accountworkbench.TemplateInput{Name: "Source template", Config: source.Config, Match: source.Match, Priority: source.Priority, SourceAccountID: source.AccountID, SourceRevision: source.SourceRevision, Preferred: &preferred}
 }
 
+func TestTemplateSourceWithNullNotesCanBePreviewedAndSaved(t *testing.T) {
+	f := newImportFixture(t, nil)
+	f.remote.accounts["101"] = exportAccount("101", "Source account")
+	f.remote.accounts["101"]["notes"] = nil
+	source, err := f.service.TemplateFromAccount(context.Background(), "101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(source.Config["notes"]) != `""` {
+		t.Fatalf("null source notes should become empty text, got %s", source.Config["notes"])
+	}
+	saved, err := f.service.SaveTemplate(context.Background(), "", sourceTemplateInput(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := f.private.WorkbenchTemplate(context.Background(), f.server.URL, saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stored.Config["notes"]) != `""` {
+		t.Fatal("saved template did not retain empty notes")
+	}
+}
+
 func TestTemplateSourcePreviewIsReadOnlyAndSavePreservesIdentityAndDecimalPrecision(t *testing.T) {
 	f := newImportFixture(t, nil)
 	f.remote.accounts["101"] = exportAccount("101", "Source account")

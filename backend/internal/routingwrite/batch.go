@@ -111,6 +111,7 @@ type coordinatedWriteRequest struct {
 type coordinatedWriteOutcome struct {
 	remoteConfirmed   bool
 	readbackConfirmed bool
+	writePrevented    bool
 	after             values
 	err               error
 }
@@ -120,6 +121,8 @@ type batchWriteCoordinator struct {
 	admin        Admin
 	verification bool
 	remaining    int
+	capacity     *upstreamCapacityGuard
+	authorize    func() error
 
 	mu       sync.Mutex
 	pending  map[string]coordinatedWriteRequest
@@ -169,6 +172,17 @@ func (c *batchWriteCoordinator) arrive(request *coordinatedWriteRequest) {
 
 func (c *batchWriteCoordinator) execute() {
 	groups := c.groups()
+	if c.authorize != nil {
+		if err := c.authorize(); err != nil {
+			for _, group := range groups {
+				for _, request := range group {
+					c.setOutcome(request.accountID, coordinatedWriteOutcome{writePrevented: true, err: err})
+				}
+			}
+			close(c.done)
+			return
+		}
+	}
 	var wait sync.WaitGroup
 	for _, group := range groups {
 		group := group
@@ -211,7 +225,8 @@ func (c *batchWriteCoordinator) groups() [][]coordinatedWriteRequest {
 func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	// Sub2API's bulk service drops a zero load factor before reaching the
 	// repository. Clear it through the individual route, which supports NULL.
-	if clearsLoadFactor(group[0].desired) {
+	// Recovery also needs an individual concurrency read before enabling traffic.
+	if clearsLoadFactor(group[0].desired) || requiresConcurrencyConfirmation(group[0].desired) {
 		var wait sync.WaitGroup
 		for _, request := range group {
 			wait.Go(func() { c.executeSingle(request) })
@@ -510,6 +525,12 @@ func clearsLoadFactor(desired map[string]any) bool {
 	}
 	value, err := optionalNonnegativeIntegerText(raw)
 	return err == nil && value != nil && *value == "0"
+}
+
+func requiresConcurrencyConfirmation(desired map[string]any) bool {
+	enabled, _ := desired["schedulable"].(bool)
+	_, changesConcurrency := desired["concurrency"]
+	return enabled && changesConcurrency
 }
 
 func mutationResponseValues(payload map[string]any, accountID string) (values, bool) {

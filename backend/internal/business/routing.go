@@ -12,35 +12,38 @@ import (
 )
 
 type RoutingAccount struct {
-	ID                   string
-	Name                 string
-	GroupName            string
-	GroupID              *string
-	GroupCostWall        *string
-	ProfitEnabled        *bool
-	ProfitMinMargin      *string
-	ProfitSafetyBuffer   *string
-	UpstreamHost         *string
-	UpstreamType         *string
-	UpstreamAuthStatus   *string
-	Schedulable          *bool
-	Priority             *int64
-	ManualPriority       *int64
-	BaselinePriority     *int64
-	ManagedSchedulable   *bool
-	ManagedPriority      *int64
-	ManagedLoadFactor    *string
-	ManagedConcurrency   *int64
-	ExternalControl      bool
-	LoadFactor           *string
-	Concurrency          *int64
-	Multiplier           *string
-	Paused               bool
-	PausedReason         *string
-	EffectiveState       string
-	CatalogBindingState  string
-	CatalogBindingReason *string
-	Metadata             map[string]any
+	ID                        string
+	Name                      string
+	GroupName                 string
+	GroupID                   *string
+	GroupCostWall             *string
+	ProfitEnabled             *bool
+	ProfitMinMargin           *string
+	ProfitSafetyBuffer        *string
+	UpstreamHost              *string
+	UpstreamID                string
+	UpstreamConcurrencyLimit  *int64
+	UpstreamConcurrencyStatus string
+	UpstreamType              *string
+	UpstreamAuthStatus        *string
+	Schedulable               *bool
+	Priority                  *int64
+	ManualPriority            *int64
+	BaselinePriority          *int64
+	ManagedSchedulable        *bool
+	ManagedPriority           *int64
+	ManagedLoadFactor         *string
+	ManagedConcurrency        *int64
+	ExternalControl           bool
+	LoadFactor                *string
+	Concurrency               *int64
+	Multiplier                *string
+	Paused                    bool
+	PausedReason              *string
+	EffectiveState            string
+	CatalogBindingState       string
+	CatalogBindingReason      *string
+	Metadata                  map[string]any
 }
 
 type RoutingSample struct {
@@ -104,19 +107,21 @@ type RuntimeEventWrite struct {
 }
 
 type AccountRoutingTarget struct {
-	AccountID          string   `json:"account_id"`
-	Priority           *int64   `json:"target_priority"`
-	LoadFactor         *string  `json:"target_load_factor"`
-	Schedulable        *bool    `json:"target_schedulable"`
-	Concurrency        *int64   `json:"target_concurrency"`
-	GroupNames         []string `json:"group_names"`
-	DesiredHealth      string   `json:"desired_health"`
-	WriteCooldown      bool     `json:"write_cooldown_active"`
-	ScalingCooldown    bool     `json:"scaling_cooldown_active"`
-	ReleaseControl     bool     `json:"release_control,omitempty"`
-	AbandonControl     bool     `json:"abandon_control,omitempty"`
-	CleanupAction      *string  `json:"cleanup_action,omitempty"`
-	ConfigurationError *string  `json:"configuration_error,omitempty"`
+	AccountID              string   `json:"account_id"`
+	Priority               *int64   `json:"target_priority"`
+	LoadFactor             *string  `json:"target_load_factor"`
+	Schedulable            *bool    `json:"target_schedulable"`
+	Concurrency            *int64   `json:"target_concurrency"`
+	GroupNames             []string `json:"group_names"`
+	DesiredHealth          string   `json:"desired_health"`
+	WriteCooldown          bool     `json:"write_cooldown_active"`
+	ScalingCooldown        bool     `json:"scaling_cooldown_active"`
+	ReleaseControl         bool     `json:"release_control,omitempty"`
+	AbandonControl         bool     `json:"abandon_control,omitempty"`
+	CleanupAction          *string  `json:"cleanup_action,omitempty"`
+	ConfigurationError     *string  `json:"configuration_error,omitempty"`
+	UpstreamReductionID    string   `json:"upstream_reduction_id,omitempty"`
+	UpstreamReductionLimit *int64   `json:"upstream_reduction_limit,omitempty"`
 }
 
 func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *string) ([]RoutingAccount, error) {
@@ -195,7 +200,19 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if err != nil {
 		return nil, err
 	}
+	capacity, err := s.routingCapacityInventory(ctx)
+	if err != nil {
+		return nil, err
+	}
 	for index := range result {
+		if account, found := capacity[result[index].ID]; found {
+			result[index].UpstreamID = account.UpstreamID
+			if account.UpstreamType != nil {
+				result[index].UpstreamType = account.UpstreamType
+			}
+			result[index].UpstreamConcurrencyLimit = account.UpstreamConcurrencyLimit
+			result[index].UpstreamConcurrencyStatus = account.UpstreamConcurrencyStatus
+		}
 		if state, found := states[result[index].ID]; found {
 			result[index].CatalogBindingState = state.Status
 			result[index].CatalogBindingReason = stringPointer(state.Reason)

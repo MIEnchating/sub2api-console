@@ -15,7 +15,15 @@ import (
 )
 
 type OAuthView struct {
-	browserlogin.View
+	ID              string      `json:"id"`
+	TaskID          string      `json:"task_id"`
+	Host            string      `json:"host"`
+	Status          string      `json:"status"`
+	Message         string      `json:"message"`
+	ExpiresAt       string      `json:"expires_at"`
+	Image           string      `json:"image,omitempty"`
+	Width           int         `json:"width"`
+	Height          int         `json:"height"`
 	Scope           ExportScope `json:"scope"`
 	RecoveryEnabled bool        `json:"recovery_enabled,omitempty"`
 	CheckpointID    string      `json:"checkpoint_id,omitempty"`
@@ -144,7 +152,7 @@ func (s *Service) startOAuthWithInput(ctx context.Context, owner string, input O
 		}
 		options.Recovery.AutoCheckpoint = true
 	}
-	view := OAuthView{Scope: input.Scope, View: browserlogin.View{ID: id, TaskID: id, Host: "auth.openai.com", Status: "starting", Message: "正在启动授权浏览器", ExpiresAt: now.Add(browserlogin.Lifetime).Format(time.RFC3339Nano), Width: browserlogin.Width, Height: browserlogin.Height}}
+	view := OAuthView{Scope: input.Scope, ID: id, TaskID: id, Host: "auth.openai.com", Status: "starting", Message: "正在启动授权浏览器", ExpiresAt: now.Add(browserlogin.Lifetime).Format(time.RFC3339Nano), Width: browserlogin.Width, Height: browserlogin.Height}
 	value := &oauthSession{owner: owner, scope: input.Scope, batchID: batchID, view: view, target: target, expires: now.Add(browserlogin.Lifetime), finish: make(chan struct{}, 1), done: make(chan struct{}), profile: profile}
 	value.callbacks = input.callbacks
 	value.smsOriginTaskID = id

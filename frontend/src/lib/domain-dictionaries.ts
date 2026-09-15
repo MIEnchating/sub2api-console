@@ -61,6 +61,8 @@ export const taskStatusDictionary: Readonly<Record<string, string>> = {
   cancelled: "已取消",
 } as const;
 
+export const concurrencyLimitedLabel = "等待并发额度";
+
 export const runtimeStatusDictionary: Readonly<Record<string, string>> = {
   manual_priority: "人工优先位",
   ok: "正常",
@@ -78,6 +80,7 @@ export const runtimeStatusDictionary: Readonly<Record<string, string>> = {
   degraded: "降级",
   fused: "熔断",
   cost_blocked: "成本墙拦截",
+  concurrency_limited: concurrencyLimitedLabel,
   survivor: "保底",
   paused: "已暂停",
   excluded: "已排除",
@@ -165,6 +168,7 @@ export const accountStateDictionary: Readonly<Record<string, string>> = {
   survivor: "保底",
   fused: "熔断",
   cost_blocked: "成本墙拦截",
+  concurrency_limited: concurrencyLimitedLabel,
   paused: "暂停",
   disabled: "不可用",
   excluded: "已排除",

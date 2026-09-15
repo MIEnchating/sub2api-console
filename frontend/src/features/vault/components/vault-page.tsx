@@ -157,6 +157,7 @@ export function VaultEntryTable(props: {
 }) {
   return (
     <Table
+      actionColumn
       overflowTooltip={false}
       containerClassName="min-h-0 flex-1 overflow-auto"
       className="min-w-[980px]"
@@ -445,7 +446,7 @@ export function VaultPage() {
         <DataTablePanel className="flex-1">
           {config.error && <QueryErrorToast error={config.error} fallback="密码箱读取失败" />}
           {config.isLoading && (
-            <Table containerClassName="min-h-0 flex-1 overflow-auto">
+            <Table actionColumn containerClassName="min-h-0 flex-1 overflow-auto">
               <TableBody>
                 {Array.from({ length: 4 }, (_, row) => (
                   <TableRow key={row}>

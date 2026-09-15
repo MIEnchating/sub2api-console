@@ -3,6 +3,7 @@ package probe_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -66,11 +67,24 @@ func TestQueuedProbeSkipsNewlyProtectedAccountsWithoutHealthEvidence(t *testing.
 			}
 			var protectedCalls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if strings.Contains(r.URL.Path, "/41/") {
+				if strings.Contains(r.URL.Path, "/accounts/41") || r.Header.Get("Authorization") == "Bearer probe-account-41" {
 					protectedCalls.Add(1)
 				}
+				if r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/42" {
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+						"id": "42", "type": "apikey", "platform": "openai",
+						"credentials": map[string]any{"base_url": "http://" + r.Host, "api_key": "probe-account-42"},
+					}})
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer probe-account-42" {
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = w.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 			}))
 			t.Cleanup(server.Close)
 			runner, tasks := &protectionRunner{}, &protectionTasks{}

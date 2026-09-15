@@ -96,6 +96,23 @@ describe("MultiSelect", () => {
     expect(markup).toContain('data-disabled=""');
   });
 
+  it("associates a form field with its visible validation message", () => {
+    const markup = renderToStaticMarkup(
+      <MultiSelect
+        options={[]}
+        selected={[]}
+        onChange={() => undefined}
+        id="probe-models"
+        ariaLabel="探活模型"
+        ariaInvalid
+        ariaDescribedBy="probe-models-error"
+      />,
+    );
+    expect(markup).toContain('id="probe-models"');
+    expect(markup).toContain('aria-invalid="true"');
+    expect(markup).toContain('aria-describedby="probe-models-error"');
+  });
+
   it("can limit visible chips without discarding selected values", () => {
     const markup = renderToStaticMarkup(
       <MultiSelect

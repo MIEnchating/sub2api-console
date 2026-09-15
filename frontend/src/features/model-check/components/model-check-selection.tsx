@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { FieldError } from "@/components/field-error";
 import { ContentRetry } from "@/components/content-retry";
@@ -191,6 +192,13 @@ function accountEmptyState(props: ModelCheckSelectionProps) {
 }
 
 function AccountPanel(props: ModelCheckSelectionProps) {
+  const accountGroups = useDictionaryOrder(
+    "group",
+    props.accountGroups ?? [],
+    (group) => group,
+    "name",
+  );
+
   const searchInputRef = useRef<HTMLInputElement>(null);
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
@@ -240,7 +248,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           <FilterMenu
             label="分组"
-            options={props.accountGroups ?? []}
+            options={accountGroups}
             value={props.accountGroup ?? null}
             onValueChange={props.onAccountGroupChange ?? (() => undefined)}
           />

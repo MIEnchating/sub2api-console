@@ -91,6 +91,7 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   const region = dialog.getByRole("region", { name: "动画账号卡片", exact: true });
   const settingsHeight = (await settings.boundingBox())!.height;
   const regionTop = (await region.boundingBox())!.y;
+  const regionOffset = regionTop - (await settings.boundingBox())!.y;
   await start.click();
   const confirmation = page.getByRole("dialog", { name: "确认动画检测范围" });
   await expect(confirmation).toContainText("API 用量");
@@ -108,7 +109,7 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
     ratio: 1,
   });
   expect((await settings.boundingBox())!.height).toBe(settingsHeight);
-  expect((await region.boundingBox())!.y).toBe(regionTop);
+  expect((await region.boundingBox())!.y - (await settings.boundingBox())!.y).toBe(regionOffset);
   currentTask = { ...currentTask, progress: 50, message: "正在生成鹈鹕骑自行车动画，已完成一半" };
   await page.waitForResponse(
     async (response) =>
@@ -117,23 +118,25 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   );
   await expect(settings.getByText(/正在生成鹈鹕骑自行车动画/)).toHaveCount(0);
   expect((await settings.boundingBox())!.height).toBe(settingsHeight);
-  expect((await region.boundingBox())!.y).toBe(regionTop);
+  expect((await region.boundingBox())!.y - (await settings.boundingBox())!.y).toBe(regionOffset);
   currentTask = task;
   const image = accountCard.getByRole("img", { name: /生成的鹈鹕骑自行车动画/ });
+  await image.scrollIntoViewIfNeeded();
   await expect(image).toBeInViewport();
   expect((await settings.boundingBox())!.height).toBe(settingsHeight);
-  expect((await region.boundingBox())!.y).toBe(regionTop);
-  await expect(accountCard).toHaveCSS("height", "360px");
+  expect((await region.boundingBox())!.y - (await settings.boundingBox())!.y).toBe(regionOffset);
+  expect((await accountCard.boundingBox())!.height).toBeLessThanOrEqual(450);
   await expect(accountCard.getByRole("button", { name: /收起动画|重新展示动画/ })).toHaveCount(0);
   const previewButton = accountCard.getByRole("button", { name: /放大查看/ });
   expect((await image.boundingBox())!.height).toBe((await previewButton.boundingBox())!.height);
-  await expect(accountCard.locator("footer")).toHaveCSS("height", "44px");
+  await expect(accountCard.locator("footer")).toHaveCSS("height", "40px");
   await expect(image).toHaveJSProperty("complete", true);
   expect(await image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBeGreaterThan(
     0,
   );
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await expect(dialog.getByRole("button", { name: /开始检测/ })).toBeInViewport({ ratio: 1 });
+  if (page.viewportSize()!.width >= 768)
+    await expect(dialog.getByRole("button", { name: /开始检测/ })).toBeInViewport({ ratio: 1 });
   const originalSource = (await image.getAttribute("src"))!;
   const originalHeight = (await image.boundingBox())!.height;
   await image.click();
@@ -226,16 +229,16 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   const firstCardBox = (await accountCards.nth(0).boundingBox())!;
   if ((page.viewportSize()?.width ?? 0) >= 1024) {
     expect((await accountCards.nth(1).boundingBox())!.y).toBe(firstCardBox.y);
-    expect((await accountCards.nth(2).boundingBox())!.y).toBe(firstCardBox.y);
-    expect((await accountCards.nth(3).boundingBox())!.y).toBe(firstCardBox.y);
-    expect((await accountCards.nth(4).boundingBox())!.y).toBeGreaterThan(firstCardBox.y);
+    expect((await accountCards.nth(2).boundingBox())!.y).toBeGreaterThan(firstCardBox.y);
+    expect((await accountCards.nth(3).boundingBox())!.y).toBe(
+      (await accountCards.nth(2).boundingBox())!.y,
+    );
   } else {
     expect((await accountCards.nth(1).boundingBox())!.y).toBeGreaterThan(firstCardBox.y);
   }
 
   const emptyCard = dialog.getByRole("article", { name: "账号 批量账号 3", exact: true });
   await expect(emptyCard.getByText("尚未检测", { exact: true })).toBeVisible();
-  await expect(emptyCard.getByText("勾选账号后，在顶部开始检测", { exact: true })).toBeVisible();
   await expect(emptyCard.getByRole("button", { name: /放大查看/ })).toHaveCount(0);
   await cards.first().focus();
   await page.keyboard.press("Space");
@@ -251,22 +254,38 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   const pagination = dialog.getByRole("navigation", { name: "动画账号分页", exact: true });
   const filterBox = (await filters.boundingBox())!;
   const operationBox = (await operations.boundingBox())!;
-  expect(filterBox.y + filterBox.height).toBeLessThanOrEqual(operationBox.y);
+  expect(filterBox.y).toBeLessThanOrEqual(operationBox.y);
   const operationStart = operations.getByRole("button", { name: /开始检测/ });
   await expect(operationStart).toBeInViewport({ ratio: 1 });
-  await expect(pagination).toBeInViewport({ ratio: 1 });
-  const startBefore = (await operationStart.boundingBox())!;
-  const footerBefore = (await pagination.boundingBox())!;
-  await region.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-  });
-  expect(await region.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  expect((await operationStart.boundingBox())!.y).toBe(startBefore.y);
-  expect((await pagination.boundingBox())!.y).toBe(footerBefore.y);
+  if (page.viewportSize()!.width >= 768) {
+    await expect(pagination).toBeInViewport({ ratio: 1 });
+    const startBefore = (await operationStart.boundingBox())!;
+    const footerBefore = (await pagination.boundingBox())!;
+    await region.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    expect(await region.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    expect((await operationStart.boundingBox())!.y).toBe(startBefore.y);
+    expect((await pagination.boundingBox())!.y).toBe(footerBefore.y);
+  } else {
+    await expect(region).toHaveCSS("overflow-y", "visible");
+    await accountCards.first().scrollIntoViewIfNeeded();
+    await expect(accountCards.first().getByRole("checkbox")).toBeInViewport({ ratio: 1 });
+    await expect(accountCards.first().locator("footer")).toBeInViewport({ ratio: 1 });
+    await pagination.scrollIntoViewIfNeeded();
+    await expect(pagination).toBeInViewport({ ratio: 1 });
+    expect(
+      await page.locator("#animation-check-form").evaluate((element) => element.scrollTop),
+    ).toBeGreaterThan(0);
+  }
   for (const card of await dialog.getByRole("article").all())
-    await expect(card).toHaveCSS("height", "360px");
+    expect((await card.boundingBox())!.height).toBeLessThanOrEqual(450);
   await dialog.getByRole("button", { name: "转到下一页" }).click();
   await expect.poll(() => region.evaluate((element) => element.scrollTop)).toBe(0);
+  if (page.viewportSize()!.width < 768) {
+    await expect(accountCards.first().getByRole("checkbox")).toBeInViewport({ ratio: 1 });
+    await expect(accountCards.first().locator("footer")).toBeInViewport({ ratio: 1 });
+  }
   await dialog.getByRole("button", { name: "转到上一页" }).click();
   await expect(
     dialog.getByRole("article", { name: "账号 批量账号 1", exact: true }).getByRole("img"),
@@ -292,6 +311,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await expect(cards.first()).toBeChecked();
   await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("shared-model");
   const start = dialog.getByRole("button", { name: "开始检测（2 个账号）" });
+  await start.scrollIntoViewIfNeeded();
   await expect(start).toBeInViewport({ ratio: 1 });
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await start.click();

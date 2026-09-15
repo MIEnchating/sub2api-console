@@ -44,6 +44,12 @@ function openingTag(markup: string, attribute: string): string {
 }
 
 describe("LogsCenterPage layout", () => {
+  it("keeps secondary log text smaller instead of forcing every descendant to the title size", () => {
+    const markup = renderLogsPage();
+
+    expect(openingTag(markup, 'data-slot="table"')).not.toContain("[&amp;_td_*]:text-sm");
+  });
+
   it("places the log filter toolbar above the table card", () => {
     const markup = renderLogsPage();
     const toolbarStart = markup.indexOf('data-slot="table-filter-toolbar"');
@@ -60,8 +66,8 @@ describe("LogsCenterPage layout", () => {
     expect(markup.indexOf('aria-label="刷新日志"')).toBeLessThan(toolbarStart);
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-label="记录类型"');
-    expect(markup.indexOf('aria-label="搜索任务、对象或原因"')).toBeLessThan(
-      markup.indexOf('aria-label="记录类型"'),
+    expect(markup.indexOf('aria-label="记录类型"')).toBeLessThan(
+      markup.indexOf('aria-label="搜索任务、对象或原因"'),
     );
   });
 
@@ -123,10 +129,10 @@ describe("LogsCenterPage layout", () => {
   it("preserves stable widths for metadata and action columns", () => {
     const markup = renderLogsPage();
 
-    expect(markup).toMatch(/class="[^"]*w-40[^"]*"[^>]*>时间<\/th>/);
+    expect(markup).toMatch(/class="[^"]*w-28[^"]*"[^>]*>时间<\/th>/);
     expect(markup).toMatch(/class="[^"]*w-28[^"]*"[^>]*>类型<\/th>/);
     expect(markup).toMatch(/class="[^"]*w-44[^"]*"[^>]*>对象 \/ 执行人<\/th>/);
-    expect(markup).toMatch(/class="[^"]*w-24[^"]*"[^>]*>状态<\/th>/);
+    expect(markup).toMatch(/class="[^"]*w-32[^"]*"[^>]*>状态<\/th>/);
     expect(markup).toMatch(/class="[^"]*w-16[^"]*"[^>]*>操作<\/th>/);
     expect(openingTag(markup, 'data-slot="table"')).toContain("min-w-[920px]");
   });
@@ -157,7 +163,8 @@ describe("LogsCenterPage layout", () => {
     });
 
     expect(markup).toContain("批量自动执行");
-    expect(markup).toContain("共 3 个账号：成功 2，失败 1 · 关联 3 条");
+    expect(markup).toContain("共 3 个账号：成功 2，失败 1");
+    expect(markup).toContain("关联 3 条");
     expect(markup).toContain("执行人：自动巡检");
     expect(markup.match(/>3 个账号<\/span>/g)).toHaveLength(1);
   });

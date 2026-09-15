@@ -1,6 +1,7 @@
 import type { AccountStatus, GroupStatus } from "@/api";
 import { effectiveAccountState } from "@/features/accounts/lib/account-state";
 import { groupPlatformSummary } from "@/features/accounts/lib/account-labels";
+import { accountConcurrencyLimitedHelp } from "@/features/accounts/constants";
 
 export type HealthTone = "healthy" | "warning" | "critical";
 
@@ -26,6 +27,7 @@ export type OverviewMetrics = {
   healthyAccounts: number;
   degradedAccounts: number;
   costBlockedAccounts: number;
+  concurrencyLimitedAccounts: number;
   fusedAccounts: number;
   survivorAccounts: number;
   pausedAccounts: number;
@@ -42,6 +44,7 @@ export type AttentionState =
   | "apply_pending"
   | "fused"
   | "cost_blocked"
+  | "concurrency_limited"
   | "survivor"
   | "degraded"
   | "paused"
@@ -104,6 +107,7 @@ function attentionState(account: AccountStatus): AttentionState | null {
   const state = effectiveAccountState(account);
   if (state === "fused") return "fused";
   if (state === "cost_blocked") return "cost_blocked";
+  if (state === "concurrency_limited") return "concurrency_limited";
   if (state === "paused") return "paused";
   if (state === "disabled") return "disabled";
   if (state === "survivor") return "survivor";
@@ -117,12 +121,14 @@ function attentionReason(account: AccountStatus, state: AttentionState): string 
   )?.failure_reason;
   if (account.apply_error) return account.apply_error;
   if (account.decision_reason) return account.decision_reason;
+  if (state === "concurrency_limited") return accountConcurrencyLimitedHelp;
   if (recentFailure) return recentFailure;
 
   const fallbacks: Record<AttentionState, string> = {
     apply_pending: "调度结果等待自动执行",
     fused: "渠道已熔断，等待恢复检测",
     cost_blocked: "渠道倍率超过当前成本墙",
+    concurrency_limited: accountConcurrencyLimitedHelp,
     survivor: "渠道处于保底运行状态",
     degraded: "近期健康表现下降",
     paused: "渠道已被人工暂停，需要手动恢复",
@@ -139,6 +145,7 @@ export function buildAttentionAccounts(
     apply_pending: 0,
     fused: 1,
     cost_blocked: 2,
+    concurrency_limited: 2,
     disabled: 3,
     paused: 4,
     survivor: 5,
@@ -261,6 +268,7 @@ export function buildOverviewMetrics(
     ).length,
     degradedAccounts: states.filter((state) => state === "degraded").length,
     costBlockedAccounts: states.filter((state) => state === "cost_blocked").length,
+    concurrencyLimitedAccounts: states.filter((state) => state === "concurrency_limited").length,
     fusedAccounts: states.filter((state) => state === "fused").length,
     survivorAccounts: states.filter((state) => state === "survivor").length,
     pausedAccounts: states.filter((state) => state === "paused").length,

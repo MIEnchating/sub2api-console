@@ -57,6 +57,7 @@ type Request struct {
 }
 
 type Capabilities struct {
+	AstraModels     []string `json:"astra_models"`
 	ClaudeStandards []string `json:"claude_standards"`
 	SolModels       []string `json:"sol_models"`
 }
@@ -161,7 +162,7 @@ func (s *Service) Capabilities() Capabilities {
 		standards = append(standards, standard)
 	}
 	sort.Strings(standards)
-	return Capabilities{ClaudeStandards: standards, SolModels: append([]string(nil), s.solProfile.Models...)}
+	return Capabilities{ClaudeStandards: standards, SolModels: append([]string(nil), s.solProfile.Models...), AstraModels: []string{astraModel}}
 }
 
 func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, error) {
@@ -306,6 +307,9 @@ func (s *Service) checkerForModel(model string) string {
 }
 
 func checkerForModel(model string, claudeProfiles map[string]claudeProfile, solProfile solProfile) string {
+	if model == astraModel {
+		return "astra"
+	}
 	if inferClaudeStandard(model, claudeProfiles) != "" {
 		return "claude"
 	}
@@ -405,6 +409,8 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 				var runErr error
 				if credential.err != nil {
 					runErr = credential.err
+				} else if current.model == astraModel {
+					result, runErr = runAstraCheck(ctx, directBundleSender{client: client, credential: credential.value}, input)
 				} else if checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
 					result, runErr = runClaudeCheck(ctx, directBundleSender{client: client, credential: credential.value}, prepared.claudeProfiles, input)
 				} else {

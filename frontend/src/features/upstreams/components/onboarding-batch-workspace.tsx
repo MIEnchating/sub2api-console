@@ -181,11 +181,16 @@ export function OnboardingBatchActionBar(props: {
     <div
       role="toolbar"
       aria-label="批量添加账号"
-      className="bg-card/95 sticky bottom-0 z-20 -mx-1 flex flex-col gap-3 border-t px-1 pt-3 pb-1 backdrop-blur-sm lg:flex-row lg:items-end"
+      className="@container/onboarding-batch bg-card/95 sticky bottom-0 z-20 -mx-1 flex shrink-0 flex-wrap items-end gap-3 border-t px-1 pt-3 pb-1 backdrop-blur-sm"
     >
-      <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-3">{props.controls}</div>
-      <div className="flex shrink-0 items-center justify-between gap-3 lg:justify-end">
-        <span className="text-muted-foreground text-sm tabular-nums" aria-live="polite">
+      <div className="grid min-w-0 flex-1 basis-[26rem] grid-cols-2 gap-3 @min-[40rem]/onboarding-batch:grid-cols-[minmax(10rem,1fr)_7rem_7rem] [&>div:first-child]:col-span-2 @min-[40rem]/onboarding-batch:[&>div:first-child]:col-span-1">
+        {props.controls}
+      </div>
+      <div className="flex flex-1 basis-52 items-center justify-between gap-3 @min-[40rem]/onboarding-batch:flex-none">
+        <span
+          className="text-muted-foreground text-sm whitespace-nowrap tabular-nums"
+          aria-live="polite"
+        >
           {props.selectedCount} 项待提交
         </span>
         <Button type="button" disabled={props.disabled || props.pending} onClick={props.onSubmit}>

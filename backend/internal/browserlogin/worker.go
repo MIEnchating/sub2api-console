@@ -12,16 +12,12 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 type worker struct {
 	ctx        context.Context
-	factory    Factory
+	factory    OAuthFactory
 	mu         sync.Mutex
-	id         string
-	browser    Browser
 	oauthID    string
 	oauth      OAuthBrowser
 	securityID string
@@ -29,7 +25,7 @@ type worker struct {
 	cancel     context.CancelFunc
 }
 
-func RunWorker(ctx context.Context, socket string, factory Factory) error {
+func RunWorker(ctx context.Context, socket string, factory OAuthFactory) error {
 	ctx, cancelWorker := context.WithCancel(ctx)
 	defer cancelWorker()
 	if cleaner, ok := factory.(interface{ PruneOAuthCheckpoints() error }); ok {
@@ -72,27 +68,21 @@ func RunWorker(ctx context.Context, socket string, factory Factory) error {
 func (w *worker) close(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if id != "" && w.id != id && w.oauthID != id && w.securityID != id {
+	if id != "" && w.oauthID != id && w.securityID != id {
 		return
 	}
 	w.closeLocked()
 }
 
-func (w *worker) deleteSession(id string, oauth bool) error {
+func (w *worker) deleteOAuthSession(id string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	active := w.id
-	if oauth {
-		active = w.oauthID
-	}
-	if active == "" || active != id {
+	if w.oauthID == "" || w.oauthID != id {
 		return ErrSession
 	}
-	if oauth {
-		if current, ok := w.oauth.(*chromiumBrowser); ok {
-			if err := current.discardAutomaticCheckpoint(); err != nil {
-				return err
-			}
+	if current, ok := w.oauth.(*chromiumBrowser); ok {
+		if err := current.discardAutomaticCheckpoint(); err != nil {
+			return err
 		}
 	}
 	w.closeLocked()
@@ -103,19 +93,14 @@ func (w *worker) closeLocked() {
 	if w.cancel != nil {
 		w.cancel()
 	}
-	if w.browser != nil {
-		w.browser.Close()
-	}
 	if w.oauth != nil {
 		w.oauth.Close()
 	}
 	if w.security != nil {
 		w.security.Close()
 	}
-	w.browser = nil
 	w.oauth = nil
 	w.cancel = nil
-	w.id = ""
 	w.oauthID = ""
 	w.security = nil
 	w.securityID = ""
@@ -163,86 +148,7 @@ func (w *worker) handle(r *http.Request) (wireResponse, error) {
 	if strings.HasPrefix(r.URL.Path, "/oauth/") {
 		return w.handleOAuth(r)
 	}
-	if r.URL.Path == "/sessions" && r.Method == http.MethodPost {
-		var record configstore.AuthRecord
-		if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 16384)).Decode(&record); err != nil {
-			return wireResponse{}, errors.New("浏览器启动参数无效")
-		}
-		w.mu.Lock()
-		defer w.mu.Unlock()
-		if w.id != "" || w.oauthID != "" || w.securityID != "" {
-			return wireResponse{}, errors.New("验证浏览器正在使用中")
-		}
-		ctx, cancel := context.WithTimeout(w.ctx, Lifetime)
-		// If startup is abandoned, abort it instead of keeping an orphan browser.
-		stop := context.AfterFunc(r.Context(), cancel)
-		b, err := w.factory.Open(ctx, record)
-		stop()
-		if err == nil {
-			err = ctx.Err()
-		}
-		if err == nil {
-			err = r.Context().Err()
-		}
-		if err != nil {
-			cancel()
-			if b != nil {
-				b.Close()
-			}
-			return wireResponse{}, err
-		}
-		if b == nil {
-			cancel()
-			return wireResponse{}, errors.New("验证浏览器启动失败")
-		}
-		raw := make([]byte, 24)
-		if _, err = rand.Read(raw); err != nil {
-			cancel()
-			b.Close()
-			return wireResponse{}, err
-		}
-		id := hex.EncodeToString(raw)
-		w.id = id
-		w.browser = b
-		w.cancel = cancel
-		go func() { <-ctx.Done(); w.close(id) }()
-		return wireResponse{ID: id}, nil
-	}
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 2 || len(parts) > 3 || parts[0] != "sessions" {
-		return wireResponse{}, ErrSession
-	}
-	if r.Method == http.MethodDelete && len(parts) == 2 {
-		return wireResponse{}, w.deleteSession(parts[1], false)
-	}
-	w.mu.Lock()
-	if w.id != parts[1] || w.browser == nil {
-		w.mu.Unlock()
-		return wireResponse{}, ErrSession
-	}
-	browser := w.browser
-	w.mu.Unlock()
-	if len(parts) == 2 && r.Method == http.MethodGet {
-		image, err := browser.Screenshot(r.Context())
-		return wireResponse{Image: image, ChallengeCode: challengeCode(browser)}, err
-	}
-	if len(parts) == 3 && r.Method == http.MethodPost {
-		switch parts[2] {
-		case "input":
-			var input Input
-			if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 32768)).Decode(&input); err != nil {
-				return wireResponse{}, errors.New("浏览器操作参数无效")
-			}
-			if err := input.Validate(); err != nil {
-				return wireResponse{}, err
-			}
-			return wireResponse{}, browser.Input(r.Context(), input)
-		case "credentials":
-			record, err := browser.Credentials(r.Context())
-			return wireResponse{Record: &record}, err
-		}
-	}
-	return wireResponse{}, errors.New("不支持的浏览器操作")
+	return wireResponse{}, ErrSession
 }
 
 func (w *worker) handleOAuth(r *http.Request) (wireResponse, error) {
@@ -250,10 +156,6 @@ func (w *worker) handleOAuth(r *http.Request) (wireResponse, error) {
 		return w.handleOAuthRecovery(r)
 	}
 	if r.URL.Path == "/oauth/sessions" && r.Method == http.MethodPost {
-		factory, ok := w.factory.(OAuthFactory)
-		if !ok {
-			return wireResponse{}, errors.New("OAuth 浏览器工厂未配置")
-		}
 		var options OAuthOptions
 		if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 32768)).Decode(&options); err != nil {
 			return wireResponse{}, errors.New("OAuth 启动参数无效")
@@ -263,7 +165,7 @@ func (w *worker) handleOAuth(r *http.Request) (wireResponse, error) {
 		}
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		if w.id != "" || w.oauthID != "" || w.securityID != "" {
+		if w.oauthID != "" || w.securityID != "" {
 			return wireResponse{}, errors.New("验证浏览器正在使用中")
 		}
 		expires := time.Now().Add(Lifetime)
@@ -272,7 +174,7 @@ func (w *worker) handleOAuth(r *http.Request) (wireResponse, error) {
 		}
 		ctx, cancel := context.WithDeadline(w.ctx, expires)
 		stop := context.AfterFunc(r.Context(), cancel)
-		browser, err := factory.OpenOAuth(ctx, options)
+		browser, err := w.factory.OpenOAuth(ctx, options)
 		stop()
 		if err == nil {
 			err = ctx.Err()
@@ -319,7 +221,7 @@ func (w *worker) handleOAuth(r *http.Request) (wireResponse, error) {
 		return wireResponse{}, nil
 	}
 	if r.Method == http.MethodDelete && len(parts) == 3 {
-		return wireResponse{}, w.deleteSession(parts[2], true)
+		return wireResponse{}, w.deleteOAuthSession(parts[2])
 	}
 	w.mu.Lock()
 	if w.oauthID != parts[2] || w.oauth == nil {

@@ -57,7 +57,13 @@ describe("upstream edit dialog", () => {
   });
 
   it("places recharge conversion directly above current upstream accounts", () => {
-    expect(upstreamEditSectionOrder).toEqual(["connection", "recharge", "accounts"]);
+    expect(upstreamEditSectionOrder).toEqual([
+      "concurrency",
+      "connection",
+      "authentication",
+      "recharge",
+      "accounts",
+    ]);
   });
 
   it("shows every binding under the current upstream and marks duplicate accounts", () => {
@@ -238,7 +244,7 @@ describe("upstream edit dialog", () => {
   it("keeps vertical scrolling without exposing a horizontal scroll area", () => {
     const content = dialogContentClass("wide", "tall", upstreamEditDialogLayout.content);
     expect(content).toContain("overflow-hidden");
-    expect(content).toContain("w-[min(64rem,calc(100vw-2rem))]");
+    expect(content).toContain("w-[min(48rem,calc(100vw-2rem))]");
     expect(content).toContain("max-h-[min(44rem,calc(100svh-2rem))]");
     expect(dialogBodyLayout).toContain("min-w-0");
     expect(dialogBodyLayout).toContain("overflow-y-auto");

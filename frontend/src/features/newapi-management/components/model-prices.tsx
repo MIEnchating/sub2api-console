@@ -452,7 +452,7 @@ export function NewAPIModelPrices(props: PriceProps) {
         ) : null}
         {(tab === "models" || tab === "unset") && activeRows.length > 0 ? (
           <DataTablePanel className="flex-1">
-            <Table containerClassName="min-h-0 flex-1 overflow-auto">
+            <Table actionColumn containerClassName="min-h-0 flex-1 overflow-auto">
               <TableHeader className="sticky top-0 z-10 bg-background">
                 <TableRow>
                   {batchEnabled ? (
@@ -854,6 +854,7 @@ export function RemoteModelPricesTable(props: {
       )}
       {props.prices.length > 0 && (
         <Table
+          actionColumn={Boolean(props.onWritePrice)}
           containerClassName="min-h-0 flex-1 overflow-auto"
           overflowTooltip={false}
           className="min-w-[64rem]"

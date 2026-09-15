@@ -71,6 +71,9 @@ func (s *Service) retryPreview(ctx context.Context, owner string, input RetryPre
 	if err != nil {
 		return view, err
 	}
+	if err := browserlogin.ValidateProxyURL(record.ProxyURL); err != nil {
+		return view, err
+	}
 	if maintenance != nil && (record.Maintenance == nil || record.Maintenance.Revision != maintenance.Revision || record.Maintenance.Model != maintenance.Model || record.Maintenance.CheckAfterImport != maintenance.CheckAfterRepair) {
 		return view, errors.New("待上传任务的维护配置已变化，请人工核对")
 	}
@@ -94,6 +97,7 @@ func (s *Service) retryPreview(ctx context.Context, owner string, input RetryPre
 		return view, err
 	}
 	prepared := &preparedImport{owner: owner, target: target, expires: time.Now().Add(10 * time.Minute), retry: &retryPreparation{source: record, positions: positions}}
+	prepared.proxyURL = record.ProxyURL
 	prepared.maintenanceRetry = maintenance != nil
 	if maintenance != nil {
 		view.CheckAfterImport = maintenance.CheckAfterRepair
@@ -389,6 +393,7 @@ func (s *Service) saveExecution(ctx context.Context, prepared *preparedImport) e
 
 func (s *Service) initializeExecution(ctx context.Context, prepared *preparedImport, taskID string) error {
 	record := &configstore.WorkbenchExecution{ID: taskID, TargetURL: prepared.target.BaseURL, TargetFingerprint: executionTargetFingerprint(prepared.target)}
+	record.ProxyURL = prepared.proxyURL
 	if prepared.retry != nil {
 		record.SourceID = prepared.retry.source.ID
 	}

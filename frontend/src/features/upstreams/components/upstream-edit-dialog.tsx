@@ -19,6 +19,7 @@ import {
   Dialog,
   DialogBody,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -32,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { JsonEditorField } from "@/components/json-editor/form-field";
 import { TableActionButton } from "@/components/data-table/table-action-button";
 import { TaskCancelButton } from "@/components/task-startup-state";
@@ -45,12 +47,14 @@ import {
   type UpstreamEditValues,
 } from "../lib/upstream-edit-schema";
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
+import { UpstreamConcurrencyDetails } from "./upstream-concurrency";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
 import { notifyProbeTaskResult } from "@/lib/probe-task-feedback";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 import { configurableUpstreamTypeOptions } from "@/lib/domain-dictionaries";
 import { terminalRefreshKeys } from "@/lib/task-refresh";
+import { cn } from "@/lib/utils";
 import { taskIsPending, taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import {
   defaultVaultEntryForHost,
@@ -65,12 +69,19 @@ type Props = {
 };
 
 export const upstreamEditDialogLayout = {
-  content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+  content:
+    "grid w-[min(48rem,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
   scrollArea: "overflow-x-clip",
-  form: "grid min-w-0 max-w-full gap-5",
+  form: "grid min-w-0 max-w-full gap-4 overflow-x-clip",
 } as const;
 
-export const upstreamEditSectionOrder = ["connection", "recharge", "accounts"] as const;
+export const upstreamEditSectionOrder = [
+  "concurrency",
+  "connection",
+  "authentication",
+  "recharge",
+  "accounts",
+] as const;
 
 const upstreamEditConnectionLabels = {
   upstreamAddress: "上游地址",
@@ -98,18 +109,35 @@ const emptyValues: UpstreamEditValues = {
   entry: "",
 };
 
-function Field(props: { label: string; htmlFor?: string; error?: string; children: ReactNode }) {
+function Field(props: {
+  label: string;
+  htmlFor?: string;
+  description?: string;
+  error?: string;
+  children: ReactNode;
+}) {
+  let label: ReactNode = <span className="font-medium">{props.label}</span>;
+  if (props.description) {
+    label = (
+      <FieldLabel label={props.label} htmlFor={props.htmlFor} description={props.description} />
+    );
+  } else if (props.htmlFor) {
+    label = (
+      <label className="font-medium" htmlFor={props.htmlFor}>
+        {props.label}
+      </label>
+    );
+  }
   return (
     <div className="grid min-w-0 gap-1.5 text-sm">
-      {props.htmlFor ? (
-        <label className="font-medium" htmlFor={props.htmlFor}>
-          {props.label}
-        </label>
-      ) : (
-        <span className="font-medium">{props.label}</span>
-      )}
+      {label}
       {props.children}
-      <FieldError id={props.htmlFor ? `${props.htmlFor}-error` : undefined} message={props.error} />
+      {props.error ? (
+        <FieldError
+          id={props.htmlFor ? `${props.htmlFor}-error` : undefined}
+          message={props.error}
+        />
+      ) : null}
     </div>
   );
 }
@@ -120,14 +148,6 @@ function configured(value: boolean): string {
 
 function displayNumber(value: string | null): string {
   return value === null || value === "" ? "未读取" : value;
-}
-
-function authModeLabel(value: string): string {
-  return (
-    authModesForPlatform("sub2api")
-      .concat(authModesForPlatform("newapi"), authModesForPlatform("custom"))
-      .find((item) => item.value === value)?.label ?? value
-  );
 }
 
 export function upstreamEditPresentation(data: UpstreamConfiguration) {
@@ -312,15 +332,12 @@ export function UpstreamAccounts(props: {
 }) {
   const summary = currentUpstreamBindings(props.groups);
   return (
-    <section className="grid min-w-0 gap-3 border-t pt-4" aria-labelledby="upstream-accounts">
+    <section className="grid min-w-0 gap-3" aria-labelledby="upstream-accounts">
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 id="upstream-accounts" className="text-sm font-semibold">
             当前上游账号
           </h3>
-          <p className="text-muted-foreground mt-1 text-xs">
-            逐条显示当前上游所有分组中的账号绑定，重复账号会保留并标记。
-          </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Badge variant="secondary">{summary.bindings.length} 条绑定</Badge>
@@ -386,6 +403,9 @@ export function UpstreamAccounts(props: {
 }
 
 export function UpstreamEditDialog(props: Props) {
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [tab, setTab] = useState<"configuration" | "accounts">("configuration");
   const orderedUpstreamTypes = useDictionaryOrder(
     "upstream_type",
     configurableUpstreamTypeOptions,
@@ -418,6 +438,10 @@ export function UpstreamEditDialog(props: Props) {
   const platform = form.watch("upstream_type");
   const authMode = form.watch("auth_mode");
   const authModes = useMemo(() => authModesForPlatform(platform), [platform]);
+
+  useEffect(() => {
+    setTab("configuration");
+  }, [props.host]);
 
   useEffect(() => {
     if (props.host === null) {
@@ -583,11 +607,51 @@ export function UpstreamEditDialog(props: Props) {
 
   return (
     <Dialog open={props.host !== null} onOpenChange={props.onOpenChange}>
-      <DialogContent width="wide" height="tall" className={upstreamEditDialogLayout.content}>
+      <DialogContent
+        width="wide"
+        height="tall"
+        className={upstreamEditDialogLayout.content}
+        initialFocus={titleRef}
+      >
         <DialogHeader>
-          <DialogTitle>编辑上游</DialogTitle>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="min-w-0">
+              <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">
+                编辑上游
+              </DialogTitle>
+              <DialogDescription className="truncate text-xs" title={props.host || undefined}>
+                {props.host}
+              </DialogDescription>
+            </div>
+            <SegmentedControl role="tablist" aria-label="上游编辑分类" className="shrink-0">
+              <SegmentedControlItem
+                id="upstream-editor-tab-configuration"
+                role="tab"
+                aria-controls="upstream-editor-panel-configuration"
+                selected={tab === "configuration"}
+                onClick={() => {
+                  setTab("configuration");
+                  if (bodyRef.current) bodyRef.current.scrollTop = 0;
+                }}
+              >
+                配置
+              </SegmentedControlItem>
+              <SegmentedControlItem
+                id="upstream-editor-tab-accounts"
+                role="tab"
+                aria-controls="upstream-editor-panel-accounts"
+                selected={tab === "accounts"}
+                onClick={() => {
+                  setTab("accounts");
+                  if (bodyRef.current) bodyRef.current.scrollTop = 0;
+                }}
+              >
+                关联账号
+              </SegmentedControlItem>
+            </SegmentedControl>
+          </div>
         </DialogHeader>
-        <DialogBody className={upstreamEditDialogLayout.scrollArea}>
+        <DialogBody ref={bodyRef} className={upstreamEditDialogLayout.scrollArea}>
           {configuration.isLoading && <ContentLoading label="正在读取上游配置" />}
           {!configuration.isLoading && configuration.error && (
             <>
@@ -606,299 +670,396 @@ export function UpstreamEditDialog(props: Props) {
               className={upstreamEditDialogLayout.form}
               onSubmit={form.handleSubmit(onSubmit)}
             >
-              <section className="grid min-w-0 gap-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">连接与鉴权</h3>
-                  <Badge variant="outline">{authModeLabel(authMode)}</Badge>
-                </div>
-                <div className="grid min-w-0 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <Field label="名称" error={form.formState.errors.name?.message}>
-                    <Input {...form.register("name")} />
-                  </Field>
-                  <Field
-                    label={upstreamEditConnectionLabels.upstreamAddress}
-                    htmlFor="upstream-edit-address"
-                    error={form.formState.errors.base_url?.message}
+              <div
+                id="upstream-editor-panel-configuration"
+                role="tabpanel"
+                aria-labelledby="upstream-editor-tab-configuration"
+                hidden={tab !== "configuration"}
+                className={cn("min-w-0 gap-4", tab === "configuration" ? "grid" : "hidden")}
+              >
+                {platform === "sub2api" ? (
+                  <UpstreamConcurrencyDetails
+                    limit={data?.concurrency_limit}
+                    status={data?.concurrency_status}
+                    allocated={data?.allocated_concurrency}
+                    target={data?.target_concurrency}
+                  />
+                ) : null}
+                <div
+                  className="grid min-w-0 grid-cols-1 gap-4"
+                  data-testid="upstream-editor-sections"
+                >
+                  <section
+                    className="grid min-w-0 gap-3"
+                    aria-labelledby="upstream-connection-title"
                   >
-                    <Input
-                      id="upstream-edit-address"
-                      {...form.register("base_url")}
-                      placeholder="https://api.example.com"
-                      aria-invalid={Boolean(form.formState.errors.base_url)}
-                      aria-describedby={
-                        form.formState.errors.base_url ? "upstream-edit-address-error" : undefined
-                      }
-                    />
-                  </Field>
-                  <Field
-                    label={upstreamEditConnectionLabels.accountBaseURL}
-                    htmlFor="upstream-edit-account-base-url"
-                    error={form.formState.errors.account_base_url?.message}
-                  >
-                    <Input
-                      id="upstream-edit-account-base-url"
-                      {...form.register("account_base_url")}
-                      placeholder="https://api.example.com"
-                    />
-                  </Field>
-                  <Field label="平台" error={form.formState.errors.upstream_type?.message}>
-                    <Controller
-                      control={form.control}
-                      name="upstream_type"
-                      render={({ field }) => (
-                        <Select
-                          value={field.value}
-                          onValueChange={(value) => value && field.onChange(value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {orderedUpstreamTypes.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
-                  </Field>
-                  <Field label="鉴权方式" error={form.formState.errors.auth_mode?.message}>
-                    <Controller
-                      control={form.control}
-                      name="auth_mode"
-                      render={({ field }) => (
-                        <Select
-                          value={field.value}
-                          onValueChange={(value) => value && field.onChange(value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {authModes.map((item) => (
-                              <SelectItem key={item.value} value={item.value}>
-                                {item.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    />
-                  </Field>
-                  {showAccessToken ? (
-                    <Field label={`Token（${presentation?.accessTokenState ?? "未配置"}）`}>
-                      <Input
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder={sensitiveFieldPlaceholder(
-                          data?.has_access_token === true,
-                          "输入 Token",
-                        )}
-                        {...form.register("access_token")}
-                      />
-                    </Field>
-                  ) : null}
-                  {showRefreshToken ? (
-                    <Field
-                      label={`Refresh Token（${presentation?.refreshTokenState ?? "未配置"}）`}
+                    <div>
+                      <h3 id="upstream-connection-title" className="text-sm font-semibold">
+                        连接设置
+                      </h3>
+                    </div>
+                    <div
+                      className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2"
+                      data-testid="upstream-connection-fields"
                     >
-                      <Input
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder={sensitiveFieldPlaceholder(
-                          data?.has_refresh_token === true,
-                          "输入 Refresh Token",
-                        )}
-                        {...form.register("refresh_token")}
-                      />
-                    </Field>
-                  ) : null}
-                  {showAdminKey ? (
-                    <Field label={`Admin Key（${presentation?.adminKeyState ?? "未配置"}）`}>
-                      <Input
-                        type="password"
-                        autoComplete="new-password"
-                        placeholder={sensitiveFieldPlaceholder(
-                          data?.has_admin_key === true,
-                          "输入 Admin Key",
-                        )}
-                        {...form.register("admin_key")}
-                      />
-                    </Field>
-                  ) : null}
-                  {showUserId ? (
-                    <Field label={`User ID（${presentation?.userIdState ?? "未配置"}）`}>
-                      <Input
-                        placeholder={sensitiveFieldPlaceholder(
-                          data?.has_user_id === true,
-                          "输入 User ID",
-                        )}
-                        {...form.register("user_id")}
-                      />
-                    </Field>
-                  ) : null}
-                  {showVaultLogin ? (
-                    <Field label="密码箱密码项" error={form.formState.errors.entry?.message}>
-                      <Select
-                        value={form.watch("entry")}
-                        onValueChange={(value) => {
-                          if (!value) return;
-                          form.setValue("entry", value);
-                        }}
+                      <Field
+                        label="名称"
+                        htmlFor="upstream-edit-name"
+                        error={form.formState.errors.name?.message}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择密码箱项" />
-                        </SelectTrigger>
-                        <SelectContent className="min-w-[20rem]">
-                          {vaultOptions.map((item) => (
-                            <SelectItem key={item.entry} value={item.entry}>
-                              {vaultEntryLabel(item)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  ) : null}
-                  {showManualLogin ? (
-                    <>
-                      <Field label="用户名">
-                        <Input autoComplete="username" {...form.register("username")} />
+                        <Input id="upstream-edit-name" {...form.register("name")} />
                       </Field>
-                      <Field label="密码">
+                      <Field
+                        label="平台"
+                        htmlFor="upstream-edit-platform"
+                        error={form.formState.errors.upstream_type?.message}
+                      >
+                        <Controller
+                          control={form.control}
+                          name="upstream_type"
+                          render={({ field }) => (
+                            <Select
+                              value={field.value}
+                              onValueChange={(value) => value && field.onChange(value)}
+                            >
+                              <SelectTrigger id="upstream-edit-platform">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {orderedUpstreamTypes.map((option) => (
+                                  <SelectItem key={option.value} value={option.value}>
+                                    {option.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          )}
+                        />
+                      </Field>
+                      <Field
+                        label={upstreamEditConnectionLabels.upstreamAddress}
+                        htmlFor="upstream-edit-address"
+                        error={form.formState.errors.base_url?.message}
+                      >
                         <Input
-                          type="password"
-                          autoComplete="current-password"
-                          {...form.register("password")}
+                          id="upstream-edit-address"
+                          {...form.register("base_url")}
+                          placeholder="https://api.example.com"
+                          aria-invalid={Boolean(form.formState.errors.base_url)}
+                          aria-describedby={
+                            form.formState.errors.base_url
+                              ? "upstream-edit-address-error"
+                              : undefined
+                          }
                         />
                       </Field>
-                      <div className="flex items-center gap-2 sm:col-span-2">
-                        <Switch
-                          id="upstream-edit-save-to-vault"
-                          checked={form.watch("save_to_vault")}
-                          onCheckedChange={(checked) => form.setValue("save_to_vault", checked)}
-                          aria-label="登录成功后保存到密码箱"
+                      <Field
+                        label={upstreamEditConnectionLabels.accountBaseURL}
+                        htmlFor="upstream-edit-account-base-url"
+                        error={form.formState.errors.account_base_url?.message}
+                      >
+                        <Input
+                          id="upstream-edit-account-base-url"
+                          {...form.register("account_base_url")}
+                          placeholder="https://api.example.com"
                         />
-                        <label
-                          className="cursor-pointer text-sm"
-                          htmlFor="upstream-edit-save-to-vault"
+                      </Field>
+                    </div>
+                  </section>
+                  <section
+                    className="grid min-w-0 gap-3 border-t pt-4"
+                    aria-labelledby="upstream-auth-title"
+                  >
+                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <h3 id="upstream-auth-title" className="text-sm font-semibold">
+                        鉴权配置
+                      </h3>
+                      <p className="text-muted-foreground text-xs">凭据留空保留</p>
+                    </div>
+                    <div className="grid min-w-0 gap-x-4 gap-y-3 sm:grid-cols-2">
+                      <div className="sm:col-span-2">
+                        <Field
+                          label="鉴权方式"
+                          htmlFor="upstream-edit-auth-mode"
+                          error={form.formState.errors.auth_mode?.message}
                         >
-                          登录成功后自动保存到密码箱
-                        </label>
+                          <Controller
+                            control={form.control}
+                            name="auth_mode"
+                            render={({ field }) => (
+                              <Select
+                                value={field.value}
+                                onValueChange={(value) => value && field.onChange(value)}
+                              >
+                                <SelectTrigger id="upstream-edit-auth-mode">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {authModes.map((item) => (
+                                    <SelectItem key={item.value} value={item.value}>
+                                      {item.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                          />
+                        </Field>
                       </div>
-                      {form.watch("save_to_vault") ? (
-                        <Field label="凭据名称（可选）">
-                          <Input placeholder="默认使用 Host" {...form.register("entry")} />
+                      {showAccessToken ? (
+                        <Field label="Token" htmlFor="upstream-edit-token">
+                          <Input
+                            id="upstream-edit-token"
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder={sensitiveFieldPlaceholder(
+                              data?.has_access_token === true,
+                              "输入 Token",
+                            )}
+                            {...form.register("access_token")}
+                          />
                         </Field>
                       ) : null}
-                    </>
-                  ) : null}
-                  {headersAvailable ? (
-                    <div className="grid min-w-0 gap-2 sm:col-span-2">
-                      <div className="flex min-w-0 items-center justify-between gap-3">
-                        <FieldLabel
-                          label="自定义 Headers"
-                          description={
-                            data?.header_names.length
-                              ? `已配置：${data.header_names.join("、")}。留空保留，填写 JSON 替换全部 Header，关闭开关清空。`
-                              : "填写 JSON 添加自定义 Header。"
-                          }
-                          htmlFor="upstream-edit-custom-headers"
-                          className="cursor-pointer text-sm"
-                        />
-                        <Switch
-                          id="upstream-edit-custom-headers"
-                          checked={showHeadersEditor}
-                          onCheckedChange={(checked) => {
-                            setShowHeadersEditor(checked);
-                            setClearHeaders(!checked);
-                            if (!checked) {
-                              form.setValue("headers", "", { shouldDirty: true });
-                            }
-                          }}
-                          aria-label="添加自定义 Headers"
-                        />
-                      </div>
-                      {showHeadersEditor ? (
+                      {showRefreshToken ? (
+                        <Field label="Refresh Token" htmlFor="upstream-edit-refresh-token">
+                          <Input
+                            id="upstream-edit-refresh-token"
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder={sensitiveFieldPlaceholder(
+                              data?.has_refresh_token === true,
+                              "输入 Refresh Token",
+                            )}
+                            {...form.register("refresh_token")}
+                          />
+                        </Field>
+                      ) : null}
+                      {showAdminKey ? (
+                        <Field label="Admin Key" htmlFor="upstream-edit-admin-key">
+                          <Input
+                            id="upstream-edit-admin-key"
+                            type="password"
+                            autoComplete="new-password"
+                            placeholder={sensitiveFieldPlaceholder(
+                              data?.has_admin_key === true,
+                              "输入 Admin Key",
+                            )}
+                            {...form.register("admin_key")}
+                          />
+                        </Field>
+                      ) : null}
+                      {showUserId ? (
+                        <Field label="User ID" htmlFor="upstream-edit-user-id">
+                          <Input
+                            id="upstream-edit-user-id"
+                            placeholder={sensitiveFieldPlaceholder(
+                              data?.has_user_id === true,
+                              "输入 User ID",
+                            )}
+                            {...form.register("user_id")}
+                          />
+                        </Field>
+                      ) : null}
+                      {showVaultLogin ? (
                         <Field
-                          label="Headers JSON"
-                          htmlFor="upstream-edit-headers-json"
-                          error={form.formState.errors.headers?.message}
+                          label="密码箱密码项"
+                          htmlFor="upstream-edit-vault-entry"
+                          error={form.formState.errors.entry?.message}
+                        >
+                          <Select
+                            value={form.watch("entry")}
+                            onValueChange={(value) => {
+                              if (!value) return;
+                              form.setValue("entry", value);
+                            }}
+                          >
+                            <SelectTrigger id="upstream-edit-vault-entry">
+                              <SelectValue placeholder="选择密码箱项" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {vaultOptions.map((item) => (
+                                <SelectItem key={item.entry} value={item.entry}>
+                                  {vaultEntryLabel(item)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </Field>
+                      ) : null}
+                      {showManualLogin ? (
+                        <>
+                          <Field label="用户名" htmlFor="upstream-edit-username">
+                            <Input
+                              id="upstream-edit-username"
+                              autoComplete="username"
+                              {...form.register("username")}
+                            />
+                          </Field>
+                          <Field label="密码" htmlFor="upstream-edit-password">
+                            <Input
+                              id="upstream-edit-password"
+                              type="password"
+                              autoComplete="current-password"
+                              {...form.register("password")}
+                            />
+                          </Field>
+                          <div className="flex min-w-0 items-center gap-2 sm:col-span-2">
+                            <Switch
+                              id="upstream-edit-save-to-vault"
+                              checked={form.watch("save_to_vault")}
+                              onCheckedChange={(checked) => form.setValue("save_to_vault", checked)}
+                              aria-label="登录成功后保存到密码箱"
+                            />
+                            <label
+                              className="min-w-0 cursor-pointer text-sm"
+                              htmlFor="upstream-edit-save-to-vault"
+                            >
+                              登录成功后自动保存到密码箱
+                            </label>
+                          </div>
+                          {form.watch("save_to_vault") ? (
+                            <Field label="凭据名称（可选）" htmlFor="upstream-edit-entry">
+                              <Input
+                                id="upstream-edit-entry"
+                                placeholder="默认使用 Host"
+                                {...form.register("entry")}
+                              />
+                            </Field>
+                          ) : null}
+                        </>
+                      ) : null}
+                      {headersAvailable ? (
+                        <div className="grid min-w-0 gap-2 sm:col-span-2">
+                          <div className="flex min-w-0 items-center justify-between gap-3">
+                            <FieldLabel
+                              label="自定义 Headers"
+                              description={
+                                data?.header_names.length
+                                  ? `已配置：${data.header_names.join("、")}。留空保留，填写 JSON 替换全部 Header，关闭开关清空。`
+                                  : "填写 JSON 添加自定义 Header。"
+                              }
+                              htmlFor="upstream-edit-custom-headers"
+                              className="cursor-pointer text-sm"
+                            />
+                            <Switch
+                              id="upstream-edit-custom-headers"
+                              checked={showHeadersEditor}
+                              onCheckedChange={(checked) => {
+                                setShowHeadersEditor(checked);
+                                setClearHeaders(!checked);
+                                if (!checked) {
+                                  form.setValue("headers", "", { shouldDirty: true });
+                                }
+                              }}
+                              aria-label="添加自定义 Headers"
+                            />
+                          </div>
+                          {showHeadersEditor ? (
+                            <Field
+                              label="Headers JSON"
+                              htmlFor="upstream-edit-headers-json"
+                              error={form.formState.errors.headers?.message}
+                            >
+                              <JsonEditorField
+                                id="upstream-edit-headers-json"
+                                aria-label="Headers JSON"
+                                aria-invalid={Boolean(form.formState.errors.headers)}
+                                placeholder={sensitiveFieldPlaceholder(
+                                  Boolean(data?.header_names.length),
+                                  '例如 {"Authorization":"Bearer ..."}',
+                                )}
+                                control={form.control}
+                                name="headers"
+                                disabled={save.isPending}
+                              />
+                            </Field>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {showCookies ? (
+                        <Field
+                          label="Cookies JSON"
+                          htmlFor="upstream-edit-cookies-json"
+                          error={form.formState.errors.cookies?.message}
                         >
                           <JsonEditorField
-                            id="upstream-edit-headers-json"
-                            aria-label="Headers JSON"
-                            aria-invalid={Boolean(form.formState.errors.headers)}
+                            id="upstream-edit-cookies-json"
+                            aria-label="Cookies JSON"
                             placeholder={sensitiveFieldPlaceholder(
-                              Boolean(data?.header_names.length),
-                              '例如 {"Authorization":"Bearer ..."}',
+                              Boolean(data?.cookie_names.length),
+                              '例如 {"session":"..."}',
                             )}
                             control={form.control}
-                            name="headers"
+                            name="cookies"
                             disabled={save.isPending}
                           />
                         </Field>
                       ) : null}
                     </div>
-                  ) : null}
-                  {showCookies ? (
+                  </section>
+                </div>
+
+                <section
+                  className="grid min-w-0 gap-3 border-t pt-4"
+                  aria-labelledby="upstream-recharge-title"
+                >
+                  <h3 id="upstream-recharge-title" className="sr-only">
+                    充值换算
+                  </h3>
+                  <div className="grid min-w-0 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
                     <Field
-                      label={`Cookies JSON（${data?.cookie_names.length ? data.cookie_names.join("、") : "未配置"}）`}
-                      error={form.formState.errors.cookies?.message}
+                      label="充值比例"
+                      description={upstreamRateLabels.mappingFormula}
+                      htmlFor="upstream-edit-recharge-rate"
+                      error={form.formState.errors.recharge_rate?.message}
                     >
-                      <JsonEditorField
-                        aria-label="Cookies JSON"
-                        placeholder={sensitiveFieldPlaceholder(
-                          Boolean(data?.cookie_names.length),
-                          '例如 {"session":"..."}',
-                        )}
-                        control={form.control}
-                        name="cookies"
-                        disabled={save.isPending}
+                      <Input
+                        id="upstream-edit-recharge-rate"
+                        inputMode="decimal"
+                        {...form.register("recharge_rate")}
                       />
                     </Field>
-                  ) : null}
-                </div>
-              </section>
-
-              <section className="grid min-w-0 gap-3 border-t pt-4">
-                <div>
-                  <h3 className="text-sm font-semibold">充值换算</h3>
-                  <p className="text-muted-foreground mt-1 text-xs">
-                    {upstreamRateLabels.mappingFormula}
-                  </p>
-                </div>
-                <div className="grid min-w-0 items-end gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-                  <Field label="充值比例" error={form.formState.errors.recharge_rate?.message}>
-                    <Input inputMode="decimal" {...form.register("recharge_rate")} />
-                  </Field>
-                  <div className="grid min-w-0 grid-cols-2 divide-x overflow-hidden rounded-lg border text-sm">
-                    <div className="grid min-w-0 gap-1 px-3 py-2">
-                      <span className="text-muted-foreground text-xs">
-                        {upstreamRateLabels.rawBalance}
-                      </span>
-                      <strong className="font-medium">
-                        {presentation?.rawBalance ?? "未读取"}
-                      </strong>
-                    </div>
-                    <div className="grid min-w-0 gap-1 px-3 py-2">
-                      <span className="text-muted-foreground text-xs">
-                        {upstreamRateLabels.mappedBalance}
-                      </span>
-                      <strong className="font-medium">
-                        {presentation?.mappedBalance ?? "未读取"}
-                      </strong>
+                    <div className="grid min-w-0 grid-cols-2 gap-3 text-sm">
+                      <div className="grid min-w-0 gap-1 py-1">
+                        <span className="text-muted-foreground text-xs">
+                          {upstreamRateLabels.rawBalance}
+                        </span>
+                        <strong
+                          aria-label={upstreamRateLabels.rawBalance}
+                          className="min-w-0 font-medium break-all tabular-nums"
+                        >
+                          {presentation?.rawBalance ?? "未读取"}
+                        </strong>
+                      </div>
+                      <div className="grid min-w-0 gap-1 py-1">
+                        <span className="text-muted-foreground text-xs">
+                          {upstreamRateLabels.mappedBalance}
+                        </span>
+                        <strong
+                          aria-label={upstreamRateLabels.mappedBalance}
+                          className="min-w-0 font-medium break-all tabular-nums"
+                        >
+                          {presentation?.mappedBalance ?? "未读取"}
+                        </strong>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              </div>
 
-              <UpstreamAccounts
-                groups={data?.groups ?? []}
-                interactive
-                onChanged={() => void configuration.refetch()}
-              />
+              <div
+                id="upstream-editor-panel-accounts"
+                role="tabpanel"
+                aria-labelledby="upstream-editor-tab-accounts"
+                hidden={tab !== "accounts"}
+                className={cn("min-w-0", tab !== "accounts" && "hidden")}
+              >
+                <UpstreamAccounts
+                  groups={data?.groups ?? []}
+                  interactive
+                  onChanged={() => void configuration.refetch()}
+                />
+              </div>
             </form>
           )}
         </DialogBody>
@@ -906,14 +1067,16 @@ export function UpstreamEditDialog(props: Props) {
           <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
             取消
           </Button>
-          <Button
-            type="submit"
-            form={upstreamEditFormID}
-            disabled={save.isPending || configuration.isLoading || Boolean(configuration.error)}
-          >
-            {save.isPending ? <RefreshCw className="animate-spin" /> : <Save />}
-            {save.isPending ? "保存中…" : "保存并重算"}
-          </Button>
+          {tab === "configuration" ? (
+            <Button
+              type="submit"
+              form={upstreamEditFormID}
+              disabled={save.isPending || configuration.isLoading || Boolean(configuration.error)}
+            >
+              {save.isPending ? <RefreshCw className="animate-spin" /> : <Save />}
+              {save.isPending ? "保存中…" : "保存并重算"}
+            </Button>
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -88,6 +89,7 @@ type Request struct {
 	Extra           map[string]any
 	Priority        *int64
 	Concurrency     *int64
+	TestModels      []string
 	Schedulable     bool
 	Actor           string
 }
@@ -630,7 +632,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		UpstreamKeyID: key.KeyID, UpstreamKeyName: key.Name, UpstreamGroupID: validated.candidateID(),
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
 		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: validated.request.Schedulable,
-		Priority: &priority, Concurrency: &concurrency, Models: models, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
+		Priority: &priority, Concurrency: &concurrency, Models: models, TestModels: validated.request.TestModels, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
@@ -711,7 +713,7 @@ func normalizeCodexAPIBaseURL(raw string) string {
 func onboardingMutationResources(host string, accountIDs []string) []string {
 	resources := make([]string, 0, len(accountIDs)+2)
 	if len(accountIDs) == 0 {
-		return append(resources, mutationguard.UpstreamKeyCatalog(host))
+		return append(resources, mutationguard.UpstreamKeyCatalog(host), "routing-global-concurrency")
 	} else {
 		for _, accountID := range accountIDs {
 			resources = append(resources, mutationguard.Account(accountID))
@@ -755,6 +757,7 @@ type frozenOnboardingIntent struct {
 	Priority             int64              `json:"priority"`
 	Concurrency          int64              `json:"concurrency"`
 	Models               []string           `json:"models"`
+	TestModels           []string           `json:"test_models,omitempty"`
 	LoadFactor           *string            `json:"load_factor"`
 	PoolMode             bool               `json:"pool_mode"`
 	PoolRetryCount       int                `json:"pool_retry_count"`
@@ -791,6 +794,7 @@ func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName
 		AccountName:   accountName, AccountType: accountType, Platform: platform, Notes: notes, Extra: validated.request.Extra,
 		LocalGroups: locals, Multiplier: validated.multiplier, Priority: priority, Concurrency: concurrency,
 		Models: append([]string{}, policy.Models...), LoadFactor: policy.LoadFactor, PoolMode: policy.PoolMode,
+		TestModels:     append([]string{}, validated.request.TestModels...),
 		PoolRetryCount: policy.PoolModeRetryCount, PoolRetryStatusCodes: append([]int{}, policy.PoolModeRetryStatusCodes...),
 		Schedulable: validated.request.Schedulable,
 	}
@@ -810,6 +814,14 @@ func createKey(ctx context.Context, client KeyClient, record configstore.AuthRec
 }
 
 func (s *Service) validate(ctx context.Context, request Request) (validatedRequest, error) {
+	models, err := NormalizeProbeModels(request.TestModels)
+	if err != nil {
+		return validatedRequest{}, err
+	}
+	request.TestModels = models
+	if len(request.AccountIDs) > 0 && len(models) > 0 {
+		return validatedRequest{}, errors.New("探活模型只能随新增账号保存；已有账号请在账号设置中修改")
+	}
 	if request.Priority != nil && (*request.Priority < 1 || *request.Priority > 10_000_000) {
 		return validatedRequest{}, errors.New("优先级必须是 1 到 10000000 之间的整数")
 	}
@@ -904,6 +916,25 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 		return validatedRequest{}, err
 	}
 	return validated, nil
+}
+
+func NormalizeProbeModels(requested []string) ([]string, error) {
+	if len(requested) > 20 {
+		return nil, errors.New("探活模型最多 20 个")
+	}
+	models := make([]string, 0, len(requested))
+	seen := map[string]bool{}
+	for _, raw := range requested {
+		model := strings.TrimSpace(raw)
+		if model == "" || utf8.RuneCountInString(model) > 256 {
+			return nil, errors.New("探活模型必须是 1 到 256 个字符的非空名称")
+		}
+		key := strings.ToLower(model)
+		if !seen[key] {
+			models, seen[key] = append(models, model), true
+		}
+	}
+	return models, nil
 }
 
 func validatedBoundAccountIDs(requested []string, candidate business.OnboardingCandidate) ([]string, error) {

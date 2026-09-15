@@ -113,7 +113,7 @@ func (s *Service) PreviewWorkbenchRun(ctx context.Context, owner string, input W
 	}
 	expires := time.Now().Add(10 * time.Minute)
 	view.ExpiresAt, view.Target = expires.UTC().Format(time.RFC3339Nano), target.BaseURL
-	prepared := &preparedWorkbenchRun{owner: owner, target: target, expires: expires, entries: entries, options: PreviewInput{Scope: scope, TemplateID: input.TemplateID, Model: model, ExportOnly: input.ExportOnly, CheckAfterImport: input.CheckAfterImport && !input.ExportOnly}, oauthPreviewID: oauthPreviewID, view: view, loadedTemplates: versions}
+	prepared := &preparedWorkbenchRun{owner: owner, target: target, expires: expires, entries: entries, options: PreviewInput{Scope: scope, TemplateID: input.TemplateID, Model: model, ProxyURL: input.ProxyURL, ExportOnly: input.ExportOnly, CheckAfterImport: input.CheckAfterImport && !input.ExportOnly}, oauthPreviewID: oauthPreviewID, view: view, loadedTemplates: versions}
 	if oauthPreviewID != "" {
 		s.batches.mu.Lock()
 		prepared.oauth = s.batches.previews[oauthPreviewID]

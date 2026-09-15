@@ -13,6 +13,7 @@ import { AccountRecoveryStatus } from "./account-recovery-status";
 import { accountIdentityMeta } from "@/features/accounts/lib/account-labels";
 import { cn } from "@/lib/utils";
 import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
+import { accountConcurrencyLimitedHelp, accountConcurrencyLimitedReason } from "../constants";
 
 export { AccountLatencyCell } from "./account-latency-cell";
 
@@ -290,6 +291,7 @@ function accountStateReasonLabel(state: ReturnType<typeof accountPoolState>["val
   const labels: Partial<Record<ReturnType<typeof accountPoolState>["value"], string>> = {
     degraded: "降级原因",
     cost_blocked: "拦截原因",
+    concurrency_limited: "等待原因",
     fused: "熔断原因",
     survivor: "保底原因",
     paused: "暂停原因",
@@ -306,6 +308,12 @@ function accountStateReason(
 ): string | null {
   if (state === "paused") return account.paused_reason?.trim() || null;
   if (state === "disabled") return account.upstream_block_reason?.trim() || null;
+  if (state === "concurrency_limited") {
+    if (account.decision_state === state && account.decision_reason?.trim()) {
+      return account.decision_reason.trim();
+    }
+    return accountConcurrencyLimitedReason;
+  }
   if (account.decision_state !== state) return null;
   return account.decision_reason?.trim() || null;
 }
@@ -319,7 +327,7 @@ function accountSchedulingStopReason(
   account: AccountStatus,
   state: ReturnType<typeof accountPoolState>["value"],
 ): { label: "停止原因" | "停止原因未记录"; reason: string } | null {
-  if (state === "paused" || state === "disabled" || state === "excluded") return null;
+  if (["paused", "disabled", "excluded", "concurrency_limited"].includes(state)) return null;
   if (!account.upstream_block && account.schedulable !== false) return null;
   if (
     ["fused", "cost_blocked"].includes(account.decision_state ?? "") &&
@@ -419,6 +427,9 @@ export function AccountStateCell(props: {
           </span>
         </div>
         {summary ? <AccountStateDetail tone={tone}>{summary}</AccountStateDetail> : null}
+        {state.value === "concurrency_limited" ? (
+          <AccountStateDetail tone="warning">{accountConcurrencyLimitedHelp}</AccountStateDetail>
+        ) : null}
         {props.account.recovery ? (
           <AccountRecoveryStatus recovery={props.account.recovery} />
         ) : null}
@@ -456,6 +467,11 @@ export function AccountStateCell(props: {
           tone={state.value === "degraded" || evidencePending ? "warning" : "default"}
         >
           {stateReason}
+        </AccountStateDetail>
+      ) : null}
+      {state.value === "concurrency_limited" ? (
+        <AccountStateDetail expanded={props.expanded} tone="warning">
+          {accountConcurrencyLimitedHelp}
         </AccountStateDetail>
       ) : null}
       {props.account.recovery ? (

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -240,23 +241,23 @@ func TestQueuedProbeRejectsManagementTargetChangeBeforeRemoteAccess(t *testing.T
 	}
 }
 
-func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
+func TestActiveProbeUsesDirectStreamAndPersistsConfirmedSample(t *testing.T) {
 	requestCount := 0
 	streamRelease := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requestCount++
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/admin/accounts/41/test" || request.Header.Get("X-API-Key") != "secret" {
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer probe-account-41" {
 			t.Fatalf("unexpected request: %s %s headers=%#v", request.Method, request.URL.Path, request.Header)
 		}
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"test_start\",\"model\":\"mapped-model\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"model\":\"mapped-model\"}}\n\n"))
 		_, _ = response.Write([]byte("data: {\"type\":\"status\",\"text\":\"正在请求上游\"}\n\n"))
 		_, _ = response.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"))
 		if flusher, ok := response.(http.Flusher); ok {
 			flusher.Flush()
 		}
 		<-streamRelease
-		_, _ = response.Write([]byte("data: {\"type\":\"test_complete\",\"success\":true}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	defer close(streamRelease)
@@ -301,10 +302,10 @@ func TestActiveProbeUsesOfficialStreamAndPersistsConfirmedSample(t *testing.T) {
 }
 
 func TestActiveProbeTaskStatusReflectsTargetResults(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41", "42"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
-		if strings.Contains(request.URL.Path, "/41/test") {
-			_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		if request.Header.Get("Authorization") == "Bearer probe-account-41" {
+			_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 			return
 		}
 		_, _ = response.Write([]byte("data: {\"type\":\"error\",\"error\":{\"message\":\"API returned 502: upstream authentication failed\"}}\n\n"))
@@ -374,14 +375,14 @@ func TestActiveProbeTaskStatusReflectsTargetResults(t *testing.T) {
 func TestAutomaticProbeSkipsQueuedTargetWhenFreshTrafficAppearsBeforeDispatch(t *testing.T) {
 	var probeRequests atomic.Int32
 	var trafficAppeared atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/api/v1/admin/accounts/41/test" {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/responses" {
 			t.Fatalf("unexpected probe request: %s", request.URL.Path)
 		}
 		probeRequests.Add(1)
 		trafficAppeared.Store(true)
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -424,10 +425,10 @@ func TestAutomaticProbeSkipsQueuedTargetWhenFreshTrafficAppearsBeforeDispatch(t 
 
 func TestAutomaticProbeContinuesWhenFreshTrafficCheckFails(t *testing.T) {
 	var probeRequests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		probeRequests.Add(1)
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -463,16 +464,16 @@ func TestAutomaticProbeContinuesWhenFreshTrafficCheckFails(t *testing.T) {
 func TestPlatformModelProbeActuallyRequestsEveryAccountWithUnlistedModel(t *testing.T) {
 	requestedModels := map[string]string{}
 	var requestedModelsMu sync.Mutex
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41", "42"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
 		requestedModelsMu.Lock()
-		requestedModels[strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/api/v1/admin/accounts/"), "/test")] = fmt.Sprint(body["model_id"])
+		requestedModels[strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer probe-account-")] = fmt.Sprint(body["model"])
 		requestedModelsMu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -503,9 +504,9 @@ func TestPlatformModelProbeActuallyRequestsEveryAccountWithUnlistedModel(t *test
 
 func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requestCount++
-		if request.URL.Path != "/api/v1/admin/accounts/41/test" {
+		if request.URL.Path != "/v1/responses" {
 			t.Fatalf("unexpected request path %s", request.URL.Path)
 		}
 		if requestCount < 3 {
@@ -514,7 +515,7 @@ func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 			return
 		}
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -543,7 +544,7 @@ func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 
 func TestFixedRetryExhaustsStatusReportedInsideStream(t *testing.T) {
 	requestCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		requestCount++
 		response.Header().Set("Content-Type", "text/event-stream")
 		_, _ = response.Write([]byte("data: {\"type\":\"error\",\"error\":{\"message\":\"API returned 503: service temporarily unavailable\"}}\n\n"))
@@ -572,10 +573,10 @@ func TestFixedRetryExhaustsStatusReportedInsideStream(t *testing.T) {
 }
 
 func TestActiveProbeRejectsRedirectBodyThatLooksLikeAValidStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
 		response.WriteHeader(http.StatusFound)
-		_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -602,7 +603,7 @@ func TestFixedRetryDoesNotRunForUnconfiguredStatusOrDisabledSwitch(t *testing.T)
 	for name, retryEnabled := range map[string]bool{"unconfigured status": true, "disabled": false} {
 		t.Run(name, func(t *testing.T) {
 			requestCount := 0
-			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 				requestCount++
 				response.WriteHeader(http.StatusInternalServerError)
 			}))
@@ -631,7 +632,7 @@ func TestSub2APIPoolRetryLoadsDirectoryOnceAndAppliesPerAccountRules(t *testing.
 	var mutex sync.Mutex
 	directoryRequests := 0
 	probeRequests := map[string]int{}
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+	server := newDirectProbeTestServer(t, []string{"41", "42"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		mutex.Lock()
 		defer mutex.Unlock()
 		switch request.URL.Path {
@@ -639,19 +640,19 @@ func TestSub2APIPoolRetryLoadsDirectoryOnceAndAppliesPerAccountRules(t *testing.
 			directoryRequests++
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = response.Write([]byte(`{"success":true,"data":{"items":[{"id":41,"credentials":{"pool_mode":true,"pool_mode_retry_count":1,"pool_mode_retry_status_codes":[502]}},{"id":42,"credentials":{"pool_mode":false}}],"total":2}}`))
-		case "/api/v1/admin/accounts/41/test", "/api/v1/admin/accounts/42/test":
-			accountID := strings.Split(request.URL.Path, "/")[5]
+		case "/v1/responses":
+			accountID := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer probe-account-")
 			probeRequests[accountID]++
 			if accountID == "41" && probeRequests[accountID] > 1 {
 				response.Header().Set("Content-Type", "text/event-stream")
-				_, _ = response.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+				_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 				return
 			}
 			response.WriteHeader(http.StatusBadGateway)
 		default:
 			t.Fatalf("unexpected request path %s", request.URL.Path)
 		}
-	}))
+	}), true)
 	defer server.Close()
 	repository := &fakeRepository{
 		policy: map[string]any{"probe": map[string]any{
@@ -708,7 +709,7 @@ func TestAutomaticProbeRejectsDisabledConfigurationBeforeCreatingTask(t *testing
 	}
 }
 
-func TestManualProbeIgnoresAutomaticSchedulingFiltersButUsesRetryPolicy(t *testing.T) {
+func TestManualProbeIgnoresAutomaticSchedulingFiltersButUsesConfiguredPromptAndRetryPolicy(t *testing.T) {
 	groupID := "7"
 	repository := &fakeRepository{
 		policy: map[string]any{
@@ -739,8 +740,11 @@ func TestManualProbeIgnoresAutomaticSchedulingFiltersButUsesRetryPolicy(t *testi
 	if len(prepared.targets) != 1 || prepared.targets[0].Model == nil || *prepared.targets[0].Model != "manual-model" {
 		t.Fatalf("manual probe was filtered or used an automatic model: %#v", prepared.targets)
 	}
-	if prepared.config.Timeout != 60*time.Second || prepared.config.MaxConcurrency != 4 || prepared.config.Prompt != "hi" {
-		t.Fatalf("manual probe inherited automatic execution settings: %#v", prepared.config)
+	if prepared.config.Timeout != 60*time.Second || prepared.config.MaxConcurrency != 4 {
+		t.Fatalf("manual probe inherited automatic timeout or concurrency: %#v", prepared.config)
+	}
+	if prepared.config.Prompt != "automatic" {
+		t.Fatalf("manual probe did not use the configured prompt: %#v", prepared.config)
 	}
 	if !prepared.config.RetryEnabled || prepared.config.RetrySource != "fixed" || prepared.config.Retry.Count != 2 {
 		t.Fatalf("manual probe did not inherit retry settings: %#v", prepared.config)
@@ -881,25 +885,59 @@ func TestConfigFromPolicyRejectsConcurrencyAboveExecutionLimit(t *testing.T) {
 }
 
 func TestEventParserDoesNotTreatMetadataOnlyEventAsFirstResponse(t *testing.T) {
-	if eventHasText(map[string]any{"type": "response.created", "model": "gpt-test"}) {
+	if eventHasContent(map[string]any{"type": "response.created", "model": "gpt-test"}) {
 		t.Fatal("metadata-only event was treated as first response")
 	}
-	if !eventHasText(map[string]any{"output": []any{map[string]any{"content": []any{map[string]any{"text": "ok"}}}}}) {
+	if !eventHasContent(map[string]any{"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "ok"}}}}}) {
 		t.Fatal("nested output text was not detected")
 	}
 }
 
-func TestEventParserUsesContentEventsAndReadsActualModel(t *testing.T) {
-	start := map[string]any{"type": "test_start", "model": "mapped-model"}
+func TestEventParserUsesDirectContentEventsAndReadsActualModel(t *testing.T) {
+	start := map[string]any{"type": "response.created", "response": map[string]any{"model": "mapped-model"}}
 	status := map[string]any{"type": "status", "text": "正在请求上游"}
-	content := map[string]any{"type": "content", "text": "pong"}
+	content := map[string]any{"type": "response.output_text.delta", "delta": "pong"}
 	if eventModel(start) != "mapped-model" {
 		t.Fatalf("actual model=%q", eventModel(start))
 	}
 	if eventHasContent(start) || eventHasContent(status) {
-		t.Fatal("test_start/status must not be treated as first content")
+		t.Fatal("response.created/status must not be treated as first content")
 	}
 	if !eventHasContent(content) {
 		t.Fatal("content event was not detected")
 	}
+}
+
+// newDirectProbeTestServer serves isolated account credentials and checks that
+// only the requested accounts' API keys reach the direct generation endpoint.
+func newDirectProbeTestServer(t *testing.T, accountIDs []string, generation http.HandlerFunc, allowDirectory ...bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/admin/accounts/") {
+			accountID := strings.TrimPrefix(r.URL.Path, "/api/v1/admin/accounts/")
+			if !slices.Contains(accountIDs, accountID) {
+				t.Errorf("unexpected account credential request: %s", r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"id": accountID, "type": "apikey", "platform": "openai",
+				"credentials": map[string]any{"base_url": "http://" + r.Host, "api_key": "probe-account-" + accountID},
+			}})
+			return
+		}
+		if len(allowDirectory) == 1 && allowDirectory[0] && r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts" {
+			generation(w, r)
+			return
+		}
+		accountID := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer probe-account-")
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" ||
+			!slices.Contains(accountIDs, accountID) || r.Header.Get("X-API-Key") != "" {
+			t.Errorf("unexpected direct request: %s %s account=%q", r.Method, r.URL.Path, accountID)
+			http.NotFound(w, r)
+			return
+		}
+		generation(w, r)
+	}))
 }

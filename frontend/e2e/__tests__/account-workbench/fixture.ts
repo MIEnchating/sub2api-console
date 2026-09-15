@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type {
-  BrowserLoginInput,
+  BrowserInput,
   Task,
   WorkbenchOAuthSession,
   WorkbenchPreview,
@@ -10,7 +10,7 @@ import { pageFixtures } from "../fixtures/page-shell";
 
 export const longTemplateName = "团队共享账号配置_" + "OpenAIWorkspace".repeat(8);
 export type WorkbenchFixture = {
-  inputs: BrowserLoginInput[];
+  inputs: BrowserInput[];
   imports: Array<{ preview_id: string; confirmed: boolean }>;
   cancelled: string[];
   discarded: string[];
@@ -73,8 +73,11 @@ export async function installWorkbenchFixture(page: Page): Promise<WorkbenchFixt
       image:
         status === "waiting" ? `data:image/png;base64,${bitmap.toString("base64")}` : undefined,
     };
-    if (path === "/api/account-workbench/oauth/oauth-fixture/input") {
-      fixture.inputs.push(route.request().postDataJSON() as BrowserLoginInput);
+    if (path === "/api/account-workbench/templates/template-team/preference" && method === "PUT") {
+      template.preferred = true;
+      await route.fulfill({ json: template });
+    } else if (path === "/api/account-workbench/oauth/oauth-fixture/input") {
+      fixture.inputs.push(route.request().postDataJSON() as BrowserInput);
       await route.fulfill({ json: { accepted: true } });
     } else if (path === "/api/account-workbench/oauth/oauth-fixture/finish") {
       status = "authorized";
@@ -144,6 +147,11 @@ export async function installWorkbenchFixture(page: Page): Promise<WorkbenchFixt
         "/api/account-workbench/templates": [template],
         "/api/account-workbench/history": [],
         "/api/groups": [],
+        "/api/model-checks/capabilities": {
+          sol_models: ["gpt-5.6-sol"],
+          claude_standards: [],
+          astra_models: [],
+        },
       };
       if (path in responses) await route.fulfill({ json: responses[path] });
       else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });

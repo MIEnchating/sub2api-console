@@ -1,6 +1,7 @@
 import type { AccountStatus } from "@/api";
 import type { StatusVariant } from "@/components/status-badge";
 import { effectiveAccountState } from "@/features/accounts/lib/account-state";
+import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
 
 export type AccountPoolFilter =
   | "all"
@@ -8,6 +9,7 @@ export type AccountPoolFilter =
   | "healthy"
   | "degraded"
   | "cost_blocked"
+  | "concurrency_limited"
   | "survivor"
   | "fused"
   | "paused"
@@ -32,6 +34,7 @@ export const accountPoolFilters: Array<{
   { value: "healthy", label: "健康" },
   { value: "degraded", label: "降级" },
   { value: "cost_blocked", label: "成本墙拦截" },
+  { value: "concurrency_limited", label: concurrencyLimitedLabel },
   { value: "fused", label: "已熔断" },
   { value: "survivor", label: "保底强留" },
   { value: "paused", label: "已暂停" },
@@ -45,6 +48,11 @@ const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
   healthy: { value: "healthy", label: "健康", tone: "success" },
   degraded: { value: "degraded", label: "降级", tone: "warning" },
   cost_blocked: { value: "cost_blocked", label: "成本墙拦截", tone: "warning" },
+  concurrency_limited: {
+    value: "concurrency_limited",
+    label: concurrencyLimitedLabel,
+    tone: "warning",
+  },
   survivor: { value: "survivor", label: "保底强留", tone: "purple" },
   fused: { value: "fused", label: "已熔断", tone: "danger" },
   paused: { value: "paused", label: "已暂停", tone: "warning" },
@@ -74,6 +82,7 @@ export function accountPoolCounts(accounts: AccountStatus[]): Record<AccountPool
     healthy: 0,
     degraded: 0,
     cost_blocked: 0,
+    concurrency_limited: 0,
     survivor: 0,
     fused: 0,
     paused: 0,

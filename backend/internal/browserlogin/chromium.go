@@ -3,7 +3,6 @@ package browserlogin
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -16,14 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/storage"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 )
@@ -40,13 +37,11 @@ type chromiumBrowser struct {
 	ctx            context.Context
 	cleanup        func()
 	once           sync.Once
-	record         configstore.AuthRecord
 	origin         string
 	allowedOrigins []string
 	callback       *oauthCallback
 	securityAuth   bool
 	security       atomic.Pointer[securityChromium]
-	challenge      atomic.Pointer[string]
 	recovery       *oauthRecoveryState
 	seed           *oauthCheckpointDocument
 }
@@ -72,10 +67,6 @@ func publicAddress(ctx context.Context, host string) (string, error) {
 	return ips[0].IP.String(), nil
 }
 
-func (f Chromium) Open(ctx context.Context, record configstore.AuthRecord) (Browser, error) {
-	return f.openChromium(ctx, record, strings.TrimRight(record.BaseURL, "/")+"/login", []string{strings.TrimRight(record.BaseURL, "/")}, nil, "")
-}
-
 func (f Chromium) OpenOAuth(ctx context.Context, options OAuthOptions) (OAuthBrowser, error) {
 	if err := options.Validate(); err != nil {
 		return nil, err
@@ -87,11 +78,10 @@ func (f Chromium) OpenOAuth(ctx context.Context, options OAuthOptions) (OAuthBro
 		}
 		dir.close()
 	}
-	b, err := f.openChromium(ctx, configstore.AuthRecord{BaseURL: "https://auth.openai.com", Host: "auth.openai.com"}, options.AuthorizationURL, oauthAllowedOrigins(), &oauthCallback{state: options.State, redirectURI: options.RedirectURI}, options.ProxyURL, chromiumSessionState{recovery: newOAuthRecoveryState(f, options)})
+	browser, err := f.openChromium(ctx, "https://auth.openai.com", options.AuthorizationURL, oauthAllowedOrigins(), &oauthCallback{state: options.State, redirectURI: options.RedirectURI}, options.ProxyURL, chromiumSessionState{recovery: newOAuthRecoveryState(f, options)})
 	if err != nil {
 		return nil, err
 	}
-	browser := b.(*chromiumBrowser)
 	browser.startAutomaticCheckpoints()
 	return browser, nil
 }
@@ -130,8 +120,8 @@ func (c *oauthCallback) capture(raw string) {
 	c.code = code
 }
 
-func (f Chromium) openChromium(ctx context.Context, record configstore.AuthRecord, navigateURL string, allowedOrigins []string, callback *oauthCallback, proxyURL string, initial ...chromiumSessionState) (Browser, error) {
-	u, err := url.Parse(record.BaseURL)
+func (f Chromium) openChromium(ctx context.Context, origin, navigateURL string, allowedOrigins []string, callback *oauthCallback, proxyURL string, initial ...chromiumSessionState) (*chromiumBrowser, error) {
+	u, err := url.Parse(origin)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Port() != "" && u.Port() != "443" && f.Resolve == nil) {
 		return nil, errors.New("浏览器验证需要使用 HTTPS 默认端口的上游地址")
 	}
@@ -200,7 +190,7 @@ func (f Chromium) openChromium(ctx context.Context, record configstore.AuthRecor
 	if err != nil {
 		return nil, errors.New("浏览器网络隔离服务启动失败")
 	}
-	dir, err := os.MkdirTemp("", "console-browser-login-")
+	dir, err := os.MkdirTemp("", "console-workbench-browser-")
 	if err != nil {
 		proxy.Close()
 		return nil, err
@@ -255,7 +245,7 @@ func (f Chromium) openChromium(ctx context.Context, record configstore.AuthRecor
 	}
 	alloc, allocCancel := chromedp.NewExecAllocator(processCtx, opts...)
 	browserCtx, browserCancel := chromedp.NewContext(alloc)
-	b := &chromiumBrowser{ctx: browserCtx, record: record, origin: u.Scheme + "://" + u.Host, allowedOrigins: append([]string(nil), allowedOrigins...), callback: callback, cleanup: func() {
+	b := &chromiumBrowser{ctx: browserCtx, origin: u.Scheme + "://" + u.Host, allowedOrigins: append([]string(nil), allowedOrigins...), callback: callback, cleanup: func() {
 		browserCancel()
 		allocCancel()
 		cancel()
@@ -269,7 +259,6 @@ func (f Chromium) openChromium(ctx context.Context, record configstore.AuthRecor
 		b.security.Store(initial[0].security)
 	}
 	chromedp.ListenTarget(browserCtx, func(event any) {
-		b.observeChallenge(event)
 		b.observeOAuthRecovery(event)
 		if req, ok := event.(*fetch.EventRequestPaused); ok {
 			go func() {
@@ -417,12 +406,6 @@ func (b *chromiumBrowser) Input(ctx context.Context, v Input) error {
 		return err
 	}
 	switch v.Kind {
-	case "reload":
-		if b.callback != nil || b.securityAuth {
-			return errors.New("当前授权会话不支持重新加载登录页")
-		}
-		// Navigate with GET to avoid replaying a submitted login form.
-		return b.run(ctx, chromedp.Navigate(strings.TrimRight(b.record.BaseURL, "/")+"/login"))
 	case "click":
 		return b.run(ctx, chromedp.MouseClickXY(v.X, v.Y))
 	case "text":
@@ -440,52 +423,6 @@ func (b *chromiumBrowser) Input(ctx context.Context, v Input) error {
 		return b.run(ctx, chromedp.KeyEvent(key))
 	}
 	return errors.New("浏览器操作无效")
-}
-func (b *chromiumBrowser) Credentials(ctx context.Context) (configstore.AuthRecord, error) {
-	var values struct {
-		Origin  string `json:"origin"`
-		Access  string `json:"access"`
-		Refresh string `json:"refresh"`
-		UA      string `json:"ua"`
-	}
-	var cookies []*network.Cookie
-	err := b.run(ctx, chromedp.Evaluate(`({origin:location.origin,access:localStorage.getItem("auth_token")||localStorage.getItem("access_token")||sessionStorage.getItem("auth_token")||sessionStorage.getItem("access_token")||"",refresh:localStorage.getItem("refresh_token")||sessionStorage.getItem("refresh_token")||"",ua:navigator.userAgent})`, &values), chromedp.ActionFunc(func(c context.Context) error { var e error; cookies, e = storage.GetCookies().Do(c); return e }))
-	if err != nil {
-		return configstore.AuthRecord{}, errors.New("读取登录结果失败，请保持上游登录页面打开")
-	}
-	if values.Origin != b.origin {
-		return configstore.AuthRecord{}, errors.New("请返回上游网站完成登录")
-	}
-	record := b.record
-	record.Cookies = map[string]string{}
-	host, _ := url.Parse(b.origin)
-	for _, cookie := range cookies {
-		domain := strings.TrimPrefix(cookie.Domain, ".")
-		if host.Hostname() != domain && !strings.HasSuffix(host.Hostname(), "."+domain) {
-			continue
-		}
-		record.Cookies[cookie.Name] = cookie.Value
-		if cookie.Name == "sub2api_refresh_token" {
-			values.Refresh = cookie.Value
-		}
-	}
-	// Some frontends serialize strings as JSON rather than storing them directly.
-	for _, value := range []*string{&values.Access, &values.Refresh} {
-		var decoded string
-		if json.Unmarshal([]byte(*value), &decoded) == nil {
-			*value = decoded
-		}
-	}
-	if values.Access == "" || values.Refresh == "" {
-		return configstore.AuthRecord{}, errors.New("尚未取得完整登录凭据，请先在上游页面完成登录后重试")
-	}
-	record.AccessToken = &values.Access
-	record.RefreshToken = &values.Refresh
-	record.AdminKey = nil
-	record.UserID = nil
-	record.AuthMode = "sub2api_user_token"
-	record.Headers = map[string]string{"User-Agent": values.UA, "Origin": b.origin, "Referer": b.origin + "/", "Accept-Language": "zh"}
-	return record, nil
 }
 func (b *chromiumBrowser) Close() { b.once.Do(b.cleanup) }
 

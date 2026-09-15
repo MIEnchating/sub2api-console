@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Bolt, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
@@ -18,6 +19,7 @@ import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
+import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
 import { OverviewActivity } from "./overview-activity";
 import {
   buildAttentionAccounts,
@@ -237,7 +239,7 @@ export function OverviewPage(props: OverviewPageProps) {
   }, [queryClient, syncTask.data]);
 
   const accountRows = accounts.data ?? [];
-  const groupRows = groups.data ?? [];
+  const groupRows = useDictionaryOrder("group", groups.data ?? [], (group) => group.id ?? "");
   const visibleGroups = useMemo(() => visibleOverviewGroups(groupRows), [groupRows]);
   const managedAccounts = useMemo(
     () => overviewAccounts(accountRows, visibleGroups),
@@ -260,7 +262,7 @@ export function OverviewPage(props: OverviewPageProps) {
   const error = accounts.error ?? groups.error;
   const unavailable = !accounts.data || !groups.data;
 
-  const accountDetail = `${metrics.healthyAccounts} 健康 · ${metrics.degradedAccounts} 降级 · ${metrics.fusedAccounts} 熔断${metrics.costBlockedAccounts ? ` · ${metrics.costBlockedAccounts} 成本拦截` : ""}${metrics.pausedAccounts ? ` · ${metrics.pausedAccounts} 暂停` : ""}${metrics.disabledAccounts ? ` · ${metrics.disabledAccounts} 停用` : ""}${metrics.survivorAccounts ? ` · ${metrics.survivorAccounts} 保底` : ""}${metrics.unknownAccounts ? ` · ${metrics.unknownAccounts} 待观察` : ""}`;
+  const accountDetail = `${metrics.healthyAccounts} 健康 · ${metrics.degradedAccounts} 降级 · ${metrics.fusedAccounts} 熔断${metrics.costBlockedAccounts ? ` · ${metrics.costBlockedAccounts} 成本拦截` : ""}${metrics.concurrencyLimitedAccounts ? ` · ${metrics.concurrencyLimitedAccounts} ${concurrencyLimitedLabel}` : ""}${metrics.pausedAccounts ? ` · ${metrics.pausedAccounts} 暂停` : ""}${metrics.disabledAccounts ? ` · ${metrics.disabledAccounts} 停用` : ""}${metrics.survivorAccounts ? ` · ${metrics.survivorAccounts} 保底` : ""}${metrics.unknownAccounts ? ` · ${metrics.unknownAccounts} 待观察` : ""}`;
   const healthDetail =
     metrics.managedAccounts === 0
       ? "暂无渠道健康样本"

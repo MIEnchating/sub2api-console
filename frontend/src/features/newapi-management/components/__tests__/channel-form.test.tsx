@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test/dictionary";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { filterChannelModels } from "../channel-model-dialog";
@@ -51,12 +52,9 @@ describe("New API 渠道表单", () => {
     expect(markup).toContain("创建密钥");
     expect(markup).not.toContain("从上游获取");
     expect(markup).not.toContain('aria-label="New API 分组"');
-    expect(markup).toContain("w-full gap-0");
     expect(markup).not.toContain("max-w-5xl");
     expect(markup).toContain('data-channel-credentials-layout=""');
-    expect(markup).toContain(
-      "lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0",
-    );
+    expect(markup).not.toContain("max-w-2xl");
     expect(markup).toContain('data-channel-step="credentials" data-state="current"');
     expect(markup).toContain('aria-current="step"');
   });
@@ -101,11 +99,8 @@ describe("New API 渠道表单", () => {
     expect(markup).toContain('aria-label="API 地址来源"');
     expect(markup).toContain("https://api.example");
     expect(markup).toContain('data-channel-configuration-layout=""');
-    expect(markup).toContain(
-      "divide-y lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0",
-    );
-    expect(markup).toContain("min-h-24");
-    expect(markup).toContain("border-t px-4 py-3 sm:px-5");
+    expect(markup).toContain("grid-cols-1");
+    expect(markup).toContain('data-slot="channel-form-footer"');
   });
 
   it("第二步选择自定义来源时显示可编辑 API 地址", () => {

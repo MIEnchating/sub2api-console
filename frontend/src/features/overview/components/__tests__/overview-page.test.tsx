@@ -7,6 +7,30 @@ import type { AccountStatus, GroupStatus, RunEvent } from "@/api";
 import { OverviewPage } from "../overview-page";
 import { OverviewActivity } from "../overview-activity";
 
+it("运营动态收到等待并发额度账号时展示中文状态及后续操作", () => {
+  render(
+    <OverviewActivity
+      attention={[
+        {
+          account: { ...account(), health: "concurrency_limited" },
+          state: "concurrency_limited",
+          reason: "请同步并发额度后重新计算调度",
+        },
+      ]}
+      attentionLoading={false}
+      attentionError={null}
+      events={[]}
+      eventsLoading={false}
+      eventsError={null}
+      onOpenAccounts={() => undefined}
+      onOpenEvents={() => undefined}
+    />,
+  );
+
+  expect(screen.getByText("等待并发额度")).toBeVisible();
+  expect(screen.getByText("请同步并发额度后重新计算调度")).toBeVisible();
+});
+
 function account(): AccountStatus {
   return {
     id: "42",
@@ -214,4 +238,29 @@ it("超长分组名不会挤压健康状态标签的可读宽度", () => {
   expect(
     screen.getByText("仅剩保底", { exact: true }).closest('[data-slot="status-badge"]'),
   ).toHaveClass("shrink-0");
+});
+
+it("概览健康卡片使用字典顺序", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  client.setQueryData(["accounts"], []);
+  client.setQueryData(["groups"], [group(), group({ id: "8", name: "pro" })]);
+  client.setQueryData(["dictionaries", "group"], {
+    items: [
+      { value: "8", enabled: true },
+      { value: "6", enabled: true },
+    ],
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <OverviewPage
+        onOpenAccounts={() => undefined}
+        onOpenEvents={() => undefined}
+        onOpenGroups={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  const cards = screen.getAllByRole("button", { name: "打开分组管理" });
+  expect(cards[0]).toHaveTextContent("pro");
+  expect(cards[1]).toHaveTextContent("codex");
+  client.clear();
 });

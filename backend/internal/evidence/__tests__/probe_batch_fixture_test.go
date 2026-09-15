@@ -32,7 +32,7 @@ type probeBatchFixture struct {
 	probed  []string
 }
 
-func newProbeBatchFixture(t *testing.T, accountIDs []string, freshIDs []string) *probeBatchFixture {
+func newProbeBatchFixture(t *testing.T, accountIDs []string, freshIDs []string, oauthIDs ...string) *probeBatchFixture {
 	t.Helper()
 	fixture := &probeBatchFixture{now: time.Now().UTC()}
 	path := filepath.Join(t.TempDir(), "evidence.sqlite3")
@@ -72,13 +72,36 @@ func newProbeBatchFixture(t *testing.T, accountIDs []string, freshIDs []string) 
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/test") {
-			accountID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/admin/accounts/"), "/test")
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/admin/accounts/") {
+			accountID := strings.TrimPrefix(r.URL.Path, "/api/v1/admin/accounts/")
+			if !slices.Contains(accountIDs, accountID) {
+				t.Errorf("unexpected account credential request: %s", r.URL.Path)
+				http.NotFound(w, r)
+				return
+			}
+			accountType := "apikey"
+			if slices.Contains(oauthIDs, accountID) {
+				accountType = "oauth"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"id": accountID, "type": accountType, "platform": "openai",
+				"credentials": map[string]any{"base_url": "http://" + r.Host, "api_key": "probe-account-" + accountID},
+			}})
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/responses" {
+			accountID := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer probe-account-")
+			if !slices.Contains(accountIDs, accountID) || r.Header.Get("X-API-Key") != "" {
+				t.Errorf("unexpected direct probe credentials for account %q", accountID)
+				http.Error(w, "invalid test credentials", http.StatusUnauthorized)
+				return
+			}
 			fixture.mu.Lock()
 			fixture.probed = append(fixture.probed, accountID)
 			fixture.mu.Unlock()
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: {\"type\":\"test_complete\",\"success\":true}\n\n")
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n")
 			return
 		}
 		if r.URL.Path == "/api/v1/admin/ops/requests" || r.URL.Path == "/api/v1/admin/usage" {

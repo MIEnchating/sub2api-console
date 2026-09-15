@@ -549,6 +549,11 @@ func TestProbeHealthLatencyRequiresFirstContentAndRespectsThreshold(t *testing.T
 	}{
 		{"at threshold", "5000", "first_token", "account_test.first_content", "通过", EventHealthy},
 		{"above threshold", "5000.1", "first_token", "account_test.first_content", "通过", EventSlow},
+		{"direct probe at threshold", "5000", "first_token", "upstream_direct.first_content", "通过", EventHealthy},
+		{"direct probe above threshold", "5000.1", "first_token", "upstream_direct.first_content", "通过", EventSlow},
+		{"direct probe total duration", "30000", "total_duration", "upstream_direct.complete_response", "通过", EventHealthy},
+		{"direct probe invalid latency", "NaN", "first_token", "upstream_direct.first_content", "通过", EventHealthy},
+		{"direct probe failure", "6000", "first_token", "upstream_direct.first_content", "timeout", EventProbeFailed},
 		{"total duration", "30000", "total_duration", "account_test.complete_response", "通过", EventHealthy},
 		{"missing provenance", "30000", "first_token", "", "通过", EventHealthy},
 		{"invalid latency", "NaN", "first_token", "account_test.first_content", "通过", EventHealthy},

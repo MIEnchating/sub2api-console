@@ -46,7 +46,7 @@ func probeStep(ctx context.Context, stage string) func(error) {
 // EnqueueProbe exposes only stage metadata and the public result; credentials
 // stay inside the synchronous domain operations.
 func (s *Service) EnqueueProbe(ctx context.Context, action, host, groupID, model, mode string) (taskstore.Task, error) {
-	if action != "models" && action != "probe" && action != "cleanup" {
+	if action != "models" && action != "model-options" && action != "probe" && action != "cleanup" {
 		return taskstore.Task{}, errors.New("不支持的探活操作")
 	}
 	if strings.TrimSpace(host) == "" || strings.TrimSpace(groupID) == "" {
@@ -103,6 +103,8 @@ func (s *Service) executeProbeTask(parent context.Context, task taskstore.Task, 
 	switch action {
 	case "models":
 		models, err = s.ProbeModels(ctx, host, groupID)
+	case "model-options":
+		models, err = s.probeModelOptions(ctx, host, groupID)
 	case "probe":
 		result, err = s.Probe(ctx, host, groupID, model, mode)
 	case "cleanup":
@@ -112,7 +114,7 @@ func (s *Service) executeProbeTask(parent context.Context, task taskstore.Task, 
 		err = saveErr
 	}
 	task.Result = map[string]any{"host": host, "group_id": groupID, "request_id": task.ID, "steps": append([]ProbeStep{}, steps...)}
-	if action == "models" && err == nil {
+	if (action == "models" || action == "model-options") && err == nil {
 		task.Result["models"] = models
 	}
 	if result.RequestModel != "" {

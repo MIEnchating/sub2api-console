@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -28,45 +28,87 @@ const statusLabels = {
   skipped: "无需清理",
 };
 
-export function ProbeProgressSummary(props: { steps: ProbeStep[]; pendingMessage?: string }) {
+export function ProbeProgressSummary(props: {
+  steps: ProbeStep[];
+  pendingMessage?: string;
+  children?: ReactNode;
+}) {
   const [expanded, setExpanded] = useState(false);
   const id = useId();
-  const latest = props.steps.at(-1);
-  if (!latest)
-    return (
-      <div className="min-h-8 min-w-0">
-        {props.pendingMessage ? (
-          <TaskStartupState message={props.pendingMessage} className="min-h-8 py-0 text-xs" />
-        ) : null}
-      </div>
-    );
-  const stageLabel = Object.hasOwn(stageLabels, latest.stage)
-    ? stageLabels[latest.stage]
-    : latest.stage;
+  const recentSteps = [...props.steps].reverse();
+  const latest =
+    recentSteps.find((step) => step.status === "running") ??
+    recentSteps.find((step) => step.status === "failed") ??
+    recentSteps[0];
+  let stageLabel = "";
+  if (latest)
+    stageLabel = Object.hasOwn(stageLabels, latest.stage)
+      ? stageLabels[latest.stage]
+      : latest.stage;
+  const showingDetails = expanded && Boolean(latest);
+  let Icon = CheckCircle2;
+  if (props.pendingMessage || latest?.status === "running") Icon = LoaderCircle;
+  else if (latest?.status === "failed") Icon = XCircle;
+  else if (latest?.status === "skipped") Icon = MinusCircle;
   return (
-    <div className="min-w-0">
-      <Button
-        variant="ghost"
-        className="w-full min-w-0 justify-start gap-2 px-0"
-        aria-expanded={expanded}
-        aria-controls={id}
-        onClick={() => setExpanded(!expanded)}
+    <div className="grid min-w-0 gap-2">
+      {latest ? (
+        <Button
+          variant="ghost"
+          className="w-full min-w-0 justify-start gap-2 px-0"
+          aria-expanded={showingDetails}
+          aria-controls={id}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="flex size-4 shrink-0 items-center justify-center overflow-hidden">
+            <Icon
+              aria-hidden="true"
+              className={
+                Icon === LoaderCircle ? "size-4 animate-spin motion-reduce:animate-none" : "size-4"
+              }
+            />
+          </span>
+          <span className="min-w-0 flex-1 truncate text-left">
+            {props.pendingMessage || stageLabel}
+          </span>
+          <span className="text-muted-foreground shrink-0 text-xs">
+            {props.pendingMessage ? "进行中" : statusLabels[latest.status]}
+          </span>
+          <span aria-hidden="true" className="text-muted-foreground shrink-0 text-xs">
+            {showingDetails && props.children ? "返回响应" : "过程"}
+          </span>
+          <ChevronDown aria-hidden="true" className={showingDetails ? "rotate-180" : undefined} />
+        </Button>
+      ) : (
+        <div className="min-h-8 min-w-0 overflow-hidden">
+          {props.pendingMessage ? (
+            <TaskStartupState message={props.pendingMessage} className="min-h-8 py-0 text-xs" />
+          ) : null}
+        </div>
+      )}
+      <div
+        id={id}
+        hidden={!showingDetails && !props.children}
+        data-slot="probe-detail-panel"
+        className={
+          props.children
+            ? "h-48 min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950"
+            : "min-w-0"
+        }
       >
-        {props.pendingMessage || latest.status === "running" ? (
-          <LoaderCircle aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+        {showingDetails ? (
+          <div
+            className={
+              props.children
+                ? "h-full min-w-0 bg-popover overflow-y-auto overflow-x-hidden overscroll-contain p-3 [scrollbar-gutter:stable]"
+                : "min-w-0"
+            }
+          >
+            <ProbeTaskTimeline steps={props.steps} />
+          </div>
         ) : (
-          <Circle aria-hidden="true" />
+          props.children
         )}
-        <span className="min-w-0 flex-1 truncate text-left">
-          {props.pendingMessage || stageLabel}
-        </span>
-        <span className="text-muted-foreground shrink-0 text-xs">
-          {props.pendingMessage ? "进行中" : statusLabels[latest.status]}
-        </span>
-        <ChevronDown aria-hidden="true" className={expanded ? "rotate-180" : undefined} />
-      </Button>
-      <div id={id} hidden={!expanded} className="max-h-40 overflow-y-auto overscroll-contain">
-        {expanded ? <ProbeTaskTimeline steps={props.steps} /> : null}
       </div>
     </div>
   );
@@ -97,10 +139,12 @@ export function ProbeTaskTimeline(props: { steps: ProbeStep[] }) {
           : null;
         return (
           <li key={`${index}:${step.stage}`} className={`flex min-w-0 items-start gap-2 ${tone}`}>
-            <Icon
-              aria-hidden="true"
-              className={`size-4 shrink-0 ${step.status === "running" ? "animate-spin motion-reduce:animate-none" : ""}`}
-            />
+            <span className="flex size-4 shrink-0 items-center justify-center overflow-hidden">
+              <Icon
+                aria-hidden="true"
+                className={`size-4 shrink-0 ${step.status === "running" ? "animate-spin motion-reduce:animate-none" : ""}`}
+              />
+            </span>
             <span className="min-w-0 flex-1 break-words">
               {Object.hasOwn(stageLabels, step.stage) ? stageLabels[step.stage] : step.stage}
             </span>

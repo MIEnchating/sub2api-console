@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkbenchTemplate } from "@/api";
@@ -83,7 +83,7 @@ describe("首选模板", () => {
     );
   });
 
-  it("键盘切换首选使用当前模板ID和版本，刷新后可取消首选", async () => {
+  it("键盘使用模板提交当前ID和版本，当前模板不再提供重复操作", async () => {
     let preferred = "team";
     const writes: Array<{ path: string; body: unknown }> = [];
     vi.stubGlobal(
@@ -101,15 +101,21 @@ describe("首选模板", () => {
     );
     mount(<WorkbenchTemplates />);
     const user = userEvent.setup();
-    const action = await screen.findByRole("button", { name: "设为首选模板：个人模板" });
+    const action = within(
+      await screen.findByRole("article", { name: "配置模板 个人模板" }),
+    ).getByRole("button", { name: "使用" });
     action.focus();
     await user.keyboard("{Enter}");
-    const selected = await screen.findByRole("button", { name: "取消首选模板：个人模板" });
+    const selected = await within(
+      screen.getByRole("article", { name: "配置模板 个人模板" }),
+    ).findByRole("button", { name: "当前使用" });
     expect(selected).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "设为首选模板：团队模板" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(selected).toBeDisabled();
+    expect(
+      within(screen.getByRole("article", { name: "配置模板 团队模板" })).getByRole("button", {
+        name: "使用",
+      }),
+    ).toHaveAttribute("aria-pressed", "false");
     expect(writes).toEqual([
       {
         path: "/api/account-workbench/templates/personal/preference",
@@ -117,8 +123,7 @@ describe("首选模板", () => {
       },
     ]);
     await user.click(selected);
-    await screen.findByRole("button", { name: "设为首选模板：个人模板" });
-    expect(writes[1]?.body).toEqual({ revision: 2, preferred: false });
+    expect(writes).toHaveLength(1);
   });
 
   it("更新首选失败后保留原首选状态并恢复操作", async () => {
@@ -132,13 +137,23 @@ describe("首选模板", () => {
     );
     mount(<WorkbenchTemplates />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "设为首选模板：个人模板" }));
+    await user.click(
+      within(await screen.findByRole("article", { name: "配置模板 个人模板" })).getByRole(
+        "button",
+        { name: "使用" },
+      ),
+    );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "设为首选模板：个人模板" })).toBeEnabled(),
+      expect(
+        within(screen.getByRole("article", { name: "配置模板 个人模板" })).getByRole("button", {
+          name: "使用",
+        }),
+      ).toBeEnabled(),
     );
-    expect(screen.getByRole("button", { name: "取消首选模板：团队模板" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(
+      within(screen.getByRole("article", { name: "配置模板 团队模板" })).getByRole("button", {
+        name: "当前使用",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });

@@ -13,7 +13,9 @@ import { WorkbenchRegeneration } from "./workbench-regeneration";
 import { WorkbenchTask } from "./workbench-task";
 import { WorkbenchArtifactProfile } from "./workbench-artifact-profile";
 
-export function WorkbenchExportArtifacts(props: { scope?: WorkbenchScope } = {}): ReactElement {
+export function WorkbenchExportArtifacts(
+  props: { scope?: WorkbenchScope; artifactIds?: string[] } = {},
+): ReactElement {
   const client = useQueryClient();
   const local = props.scope === "local-export";
   const queryKey = local ? workbenchKeys.localExports : workbenchKeys.exports;
@@ -34,6 +36,9 @@ export function WorkbenchExportArtifacts(props: { scope?: WorkbenchScope } = {})
     },
     onError: (error) => notifyOperationError(error, "私有文件删除失败，请重试"),
   });
+  const artifacts = query.data?.filter(
+    (item) => !props.artifactIds || props.artifactIds.includes(item.id),
+  );
   return (
     <section className="grid min-w-0 gap-3 border-t pt-4" aria-label="私有导出文件">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -47,12 +52,10 @@ export function WorkbenchExportArtifacts(props: { scope?: WorkbenchScope } = {})
       {!query.isPending && !query.data && (
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
       )}
-      {query.data?.length === 0 && (
-        <p className="text-sm text-muted-foreground">暂无私有导出文件</p>
-      )}
-      {query.data && query.data.length > 0 && (
+      {artifacts?.length === 0 && <p className="text-sm text-muted-foreground">暂无私有导出文件</p>}
+      {artifacts && artifacts.length > 0 && (
         <ul className="divide-y" aria-label="私有文件列表">
-          {query.data.map((item) => (
+          {artifacts.map((item) => (
             <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-3 py-3">
               <div className="min-w-0 flex-1 text-sm">
                 <p className="wrap-anywhere">{item.id}</p>
@@ -61,7 +64,7 @@ export function WorkbenchExportArtifacts(props: { scope?: WorkbenchScope } = {})
                   {item.expires_at}
                 </p>
               </div>
-              {local && item.kind === "accounts" ? (
+              {!props.artifactIds && local && item.kind === "accounts" ? (
                 <Button
                   variant="outline"
                   disabled={query.isError || query.isFetching || remove.isPending}
@@ -72,7 +75,7 @@ export function WorkbenchExportArtifacts(props: { scope?: WorkbenchScope } = {})
                   登录资料
                 </Button>
               ) : null}
-              {local && item.kind === "accounts" ? (
+              {!props.artifactIds && local && item.kind === "accounts" ? (
                 <Button
                   variant="outline"
                   disabled={query.isError || query.isFetching || remove.isPending}

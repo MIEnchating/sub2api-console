@@ -1,0 +1,37 @@
+/* Opt in per table: the final column must contain row actions. Spanning empty,
+ * error and expanded-detail rows remain part of the ordinary table content. */
+[data-action-column="true"] > thead > tr > th:last-child:not([colspan]),
+[data-action-column="true"] > tbody > tr > td:last-child:not([colspan]) {
+  position: sticky;
+  right: 0;
+  box-shadow: -1px 0 0 var(--border);
+}
+
+[data-action-column="true"] > thead > tr > th:last-child:not([colspan]) {
+  z-index: 20;
+  background-color: var(--table-header);
+}
+
+[data-action-column="true"] > tbody > tr > td:last-child:not([colspan]) {
+  z-index: 1;
+  background-color: var(--card);
+  transition: background-color 150ms;
+}
+
+[data-action-column="true"] > tbody > tr:hover > td:last-child:not([colspan]),
+[data-action-column="true"]
+  > tbody
+  > tr:has([aria-expanded="true"])
+  > td:last-child:not([colspan]) {
+  background-color: color-mix(in oklch, var(--muted) 50%, var(--background));
+}
+
+[data-action-column="true"] > tbody > tr[data-state="selected"] > td:last-child:not([colspan]) {
+  background-color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-action-column="true"] > tbody > tr > td:last-child:not([colspan]) {
+    transition: none;
+  }
+}

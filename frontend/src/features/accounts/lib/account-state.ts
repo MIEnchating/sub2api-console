@@ -1,4 +1,5 @@
 import type { AccountStatus } from "@/api";
+import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
 
 export type CanonicalAccountState =
   | "manual_priority"
@@ -6,6 +7,7 @@ export type CanonicalAccountState =
   | "degraded"
   | "fused"
   | "cost_blocked"
+  | "concurrency_limited"
   | "survivor"
   | "paused"
   | "disabled"
@@ -36,6 +38,8 @@ const aliases: Record<string, CanonicalAccountState> = {
   熔断: "fused",
   已熔断: "fused",
   cost_blocked: "cost_blocked",
+  concurrency_limited: "concurrency_limited",
+  [concurrencyLimitedLabel]: "concurrency_limited",
   "cost-wall-blocked": "cost_blocked",
   成本墙拦截: "cost_blocked",
   已被成本墙拦截: "cost_blocked",

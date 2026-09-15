@@ -24,6 +24,10 @@ it("日志字段名为 __proto__ 时不会读取上下文字典原型", () => {
   expect(formatLogValue("constructor", "__proto__")).toBe("constructor");
 });
 
+it("探测来源为上游直连时显示对应的中文名称", () => {
+  expect(formatLogValue("upstream-direct-probe", "source")).toBe("上游直连探测");
+});
+
 it.each([
   { seconds: 59.96, expected: "1 分 0 秒" },
   { seconds: 119.96, expected: "2 分 0 秒" },

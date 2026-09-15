@@ -1,4 +1,5 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test/dictionary";
+
 import { describe, expect, it } from "vitest";
 
 import { UpstreamGroupBindingEditor } from "../upstream-group-binding-editor";

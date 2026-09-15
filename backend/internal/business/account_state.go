@@ -3,16 +3,17 @@ package business
 import "strings"
 
 const (
-	AccountStateHealthy        = "healthy"
-	AccountStateDegraded       = "degraded"
-	AccountStateFused          = "fused"
-	AccountStateCostBlocked    = "cost_blocked"
-	AccountStateSurvivor       = "survivor"
-	AccountStatePaused         = "paused"
-	AccountStateDisabled       = "disabled"
-	AccountStateExcluded       = "excluded"
-	AccountStateUnknown        = "unknown"
-	AccountStateManualPriority = "manual_priority"
+	AccountStateHealthy            = "healthy"
+	AccountStateDegraded           = "degraded"
+	AccountStateFused              = "fused"
+	AccountStateCostBlocked        = "cost_blocked"
+	AccountStateConcurrencyLimited = "concurrency_limited"
+	AccountStateSurvivor           = "survivor"
+	AccountStatePaused             = "paused"
+	AccountStateDisabled           = "disabled"
+	AccountStateExcluded           = "excluded"
+	AccountStateUnknown            = "unknown"
+	AccountStateManualPriority     = "manual_priority"
 )
 
 // NormalizeAccountState is the single backend mapping from upstream and engine
@@ -27,6 +28,8 @@ func NormalizeAccountState(value string) string {
 		return AccountStateFused
 	case "cost_blocked", "cost-wall-blocked", "成本墙拦截", "已被成本墙拦截":
 		return AccountStateCostBlocked
+	case "concurrency_limited", "等待并发额度":
+		return AccountStateConcurrencyLimited
 	case "survivor":
 		return AccountStateSurvivor
 	case "paused", "暂停", "已暂停":
@@ -52,6 +55,8 @@ func accountStatePriority(state string) int {
 		return 60
 	case AccountStateCostBlocked:
 		return 55
+	case AccountStateConcurrencyLimited:
+		return 54
 	case AccountStateSurvivor:
 		return 50
 	case AccountStateDegraded:

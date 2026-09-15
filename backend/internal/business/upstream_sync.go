@@ -42,6 +42,9 @@ type UpstreamBalanceObservation struct {
 	SiteName          *string
 	QuotaPerUnit      *string
 	BalanceUnit       *string
+	ConcurrencyLimit  *int64
+	ConcurrencyStatus string
+	ProfileUserID     string
 }
 
 type UpstreamSyncWrite struct {
@@ -67,6 +70,8 @@ type UpstreamSyncWriteResult struct {
 	DisplayBalance       *string `json:"display_balance"`
 	BalanceUnit          *string `json:"balance_unit"`
 	BalanceStatus        string  `json:"balance_status"`
+	ConcurrencyLimit     *int64  `json:"concurrency_limit"`
+	ConcurrencyStatus    string  `json:"concurrency_status"`
 	CheckedAt            string  `json:"checked_at"`
 }
 
@@ -216,6 +221,8 @@ func (s *Store) ApplyUpstreamSync(ctx context.Context, value UpstreamSyncWrite) 
 		}
 	}
 	if balance != nil {
+		applyUpstreamConcurrencyObservation(metadata, balance, now)
+		result.ConcurrencyLimit, result.ConcurrencyStatus = readUpstreamConcurrencyMetadata(metadata)
 		result.RawBalance = balance.RawBalance
 		result.Balance = divideDecimalPointers(balance.RawBalance, recharge)
 		result.DisplayBalance = balance.DisplayBalance
@@ -368,6 +375,9 @@ func (s *Store) RecordUpstreamSyncFailure(ctx context.Context, host, scope, reas
 		metadata["balance_status"], metadata["balance_error"], metadata["balance_checked_at"] = "读取失败", reason, now
 		metadata["rate_sync_status"], metadata["rate_sync_error"], metadata["rate_sync_at"] = "failed", reason, now
 	}
+	if scope != "name" && scope != "key" && scope != "catalog" {
+		markUpstreamConcurrencyStale(metadata, reason)
+	}
 	authStatus := existingAuthStatus
 	if authenticationFailure {
 		authStatus = UpstreamAuthStatusInvalid
@@ -438,6 +448,9 @@ func normalizeUpstreamBalance(value *UpstreamBalanceObservation) (*UpstreamBalan
 		return nil, nil
 	}
 	result := *value
+	if err := normalizeUpstreamConcurrencyObservation(&result); err != nil {
+		return nil, err
+	}
 	if result.Status == "" {
 		result.Status = "未返回余额"
 	}

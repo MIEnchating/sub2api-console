@@ -1,14 +1,16 @@
 import { useState, type ReactElement } from "react";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
+import { SegmentedControlItem } from "@/components/ui/segmented-control";
+import { WorkbenchModeTabs } from "./workbench-mode-tabs";
 import { WorkbenchImport } from "./workbench-import";
 import { WorkbenchOAuth } from "./workbench-oauth";
 import { WorkbenchOAuthBatch } from "./workbench-oauth-batch";
 import { WorkbenchMixed } from "./workbench-mixed";
 import { WorkbenchExportArtifacts } from "./workbench-export-artifacts";
 import { WorkbenchSMSReceipts } from "./workbench-sms-receipts";
+import { WorkbenchScopeNotice } from "./workbench-scope-notice";
 
 const modes = [
-  { id: "json", label: "JSON 转换" },
+  { id: "json", label: "JSON / RT 转换" },
   { id: "oauth", label: "单个授权" },
   { id: "batch", label: "批量授权" },
   { id: "mixed", label: "混合运行" },
@@ -21,7 +23,10 @@ export function WorkbenchLocalExport(): ReactElement {
   const [mode, setMode] = useState<(typeof modes)[number]["id"]>("json");
   return (
     <div className="min-w-0 space-y-4">
-      <SegmentedControl role="tablist" aria-label="本地导出来源">
+      <WorkbenchScopeNotice scope="local-export">
+        只生成服务器私有文件，不读取或修改线上托管账号。
+      </WorkbenchScopeNotice>
+      <WorkbenchModeTabs label="本地导出来源">
         {modes.map((item) => (
           <SegmentedControlItem
             key={item.id}
@@ -34,7 +39,7 @@ export function WorkbenchLocalExport(): ReactElement {
             {item.label}
           </SegmentedControlItem>
         ))}
-      </SegmentedControl>
+      </WorkbenchModeTabs>
       <section
         id="local-export-content"
         role="tabpanel"

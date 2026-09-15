@@ -8,6 +8,7 @@ export const policy: AlertPolicy = {
   rate_sync_enabled: true,
   multiplier_increase_enabled: true,
   multiplier_decrease_enabled: true,
+  cost_traffic_enabled: true,
   balance_enabled: true,
   probe_enabled: true,
   routing_breaker_enabled: true,

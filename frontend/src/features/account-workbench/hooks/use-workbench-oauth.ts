@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   api,
-  type BrowserLoginInput,
+  type BrowserInput,
   type WorkbenchOAuthSession,
   type WorkbenchOAuthStartInput,
   type WorkbenchOAuthCheckpoint,
@@ -26,7 +26,7 @@ type WorkbenchOAuthControl = {
   close: () => void;
   finish: () => void;
   retry: () => void;
-  send: (payload: BrowserLoginInput) => Promise<unknown>;
+  send: (payload: BrowserInput) => Promise<unknown>;
 };
 
 export function useWorkbenchOAuth(): WorkbenchOAuthControl {
@@ -87,7 +87,7 @@ export function useWorkbenchOAuth(): WorkbenchOAuthControl {
   });
   const input = useMutation({
     gcTime: 0,
-    mutationFn: (request: { id: string; input: BrowserLoginInput }) =>
+    mutationFn: (request: { id: string; input: BrowserInput }) =>
       api.workbenchOAuthInput(request.id, request.input),
     onError: (error) => notifyOperationError(error, "授权页面操作失败，请重试"),
   });

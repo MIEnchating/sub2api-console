@@ -58,9 +58,7 @@ for (const height of [480, 900]) {
     await page.setViewportSize({ width: viewport!.width, height });
     await page.goto("/newapi/differences");
     await page.getByRole("combobox", { name: "比对上游" }).click();
-    await page
-      .getByRole("option", { name: "upstream.example.test · Sub2API", exact: true })
-      .click();
+    await page.getByRole("option", { name: "比对上游 · Sub2API", exact: true }).click();
     await page.getByRole("button", { name: "比对 claude-fable-5", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "claude-fable-5 价格比对" });
     const title = dialog.getByRole("heading", { name: "claude-fable-5 价格比对" });

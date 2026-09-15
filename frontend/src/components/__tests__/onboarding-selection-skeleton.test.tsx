@@ -1,10 +1,23 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { OnboardingSelectionSkeleton } from "../onboarding-selection-skeleton";
 
 describe("OnboardingSelectionSkeleton", () => {
+  it("加载候选分组时保持与实际表一致的五列和固定操作列", () => {
+    render(<OnboardingSelectionSkeleton fillAvailableHeight groupLocked={false} />);
+    const table = screen.getByRole("table", { name: "正在加载上游分组" });
+    expect(table).toHaveAttribute("data-action-column", "true");
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((column) => column.textContent),
+    ).toEqual(["上游分组", "账号成本", "账号类型", "本地分组", "操作"]);
+    for (const row of within(table).getAllByRole("row", { name: "正在加载分组" })) {
+      expect(within(row).getAllByRole("cell")).toHaveLength(5);
+    }
+  });
   it.each([true, false])(
     "分组锁定为 %s 时，窄屏字段和汇总允许收缩且控件保持 32px",
     (groupLocked) => {
@@ -31,10 +44,9 @@ describe("OnboardingSelectionSkeleton", () => {
     expect(markup).toContain('data-onboarding-skeleton="groups"');
     expect(markup).not.toContain('data-onboarding-skeleton="action"');
     expect(markup).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
-    expect(markup).toContain("min-w-[1120px]");
-    expect(markup).toContain("平台");
+    expect(markup).toContain("min-w-[800px]");
+    expect(markup).toContain("账号类型");
     expect(markup).toContain("本地分组");
-    expect(markup).toContain("状态");
     expect(markup).not.toContain("绑定到本地分组");
     expect(markup).toContain("操作");
     expect(markup.indexOf('data-onboarding-skeleton="groups"')).toBeLessThan(

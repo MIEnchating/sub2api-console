@@ -17,6 +17,7 @@ afterEach(() => {
 function setup(accountsCached = true, capabilitiesCached = true) {
   const client = createConsoleQueryClient();
   clients.push(client);
+  client.setQueryData(["dictionaries", "group"], { items: [] });
   client.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   if (accountsCached)
     client.setQueryData(

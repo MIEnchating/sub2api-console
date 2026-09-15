@@ -67,6 +67,10 @@ it.each([true, false])("保存巡检设置期间锁定心跳输入，success=%s 
   const interval = screen.getByRole("spinbutton", { name: "调度心跳周期" });
   await waitFor(() => expect(screen.getByRole("button", { name: "保存自动巡检" })).toBeDisabled());
   expect(interval).toBeDisabled();
+  expect(screen.getByRole("switch", { name: "启用自动巡检" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   expect(interval).toHaveValue(15);
   await act(async () =>
     finish(
@@ -78,6 +82,10 @@ it.each([true, false])("保存巡检设置期间锁定心跳输入，success=%s 
   );
 
   await waitFor(() => expect(interval).toBeEnabled());
+  expect(screen.getByRole("switch", { name: "启用自动巡检" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   await user.clear(interval);
   await user.type(interval, "30");
   expect(interval).toHaveValue(30);

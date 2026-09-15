@@ -101,6 +101,32 @@ const account: AccountStatus = {
 };
 
 describe("account pool cells", () => {
+  it.each([false, true])(
+    "账号等待并发额度且 compact 为 %s 时展示等待原因和重新评估入口",
+    (compact) => {
+      render(
+        <AccountStateCell
+          compact={compact}
+          account={{
+            ...account,
+            health: "concurrency_limited",
+            routing_state: "concurrency_limited",
+            decision_state: "concurrency_limited",
+            decision_reason: "上游剩余额度不足以分配单账号并发下限",
+            schedulable: false,
+            recovery: undefined,
+          }}
+        />,
+      );
+
+      expect(screen.getByText("等待并发额度")).toBeVisible();
+      expect(screen.getByText(/等待原因：上游剩余额度不足以分配单账号并发下限/)).toBeVisible();
+      expect(screen.getByText(/请在上游管理同步并发额度后重新计算调度/)).toBeVisible();
+      expect(screen.queryByText("待探测")).not.toBeInTheDocument();
+      expect(screen.queryByText(/停止原因未记录/)).not.toBeInTheDocument();
+    },
+  );
+
   it("评分详情区分实际短长期样本数，不把配置上限当作样本数", () => {
     render(
       <AccountHealthCell

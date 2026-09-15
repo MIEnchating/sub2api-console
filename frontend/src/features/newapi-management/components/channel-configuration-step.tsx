@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import { FieldError } from "@/components/field-error";
 import { RadioTower, RefreshCw } from "lucide-react";
 
+import { ChannelFormColumns, ChannelFormFooter } from "./channel-form-layout";
+import { Badge } from "@/components/ui/badge";
 import { MultiSelect } from "@/components/multi-select";
 import type { NewAPIChannelEndpoint } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -61,23 +63,17 @@ export function NewAPIChannelConfigurationStep(props: Props) {
 
   return (
     <>
-      <div className="grid gap-px border-b bg-border sm:grid-cols-2">
-        <div className="bg-background px-4 py-3 sm:px-5">
-          <p className="text-muted-foreground text-xs">渠道名称</p>
-          <p className="mt-1 truncate text-sm font-medium">{props.channelName}</p>
+      <div className="flex min-w-0 flex-wrap items-start gap-2 border-b border-border/70 px-4 py-3">
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-xs text-muted-foreground">渠道名称</p>
+          <p className="wrap-anywhere text-sm font-semibold">{props.channelName}</p>
         </div>
-        <div className="bg-background px-4 py-3 sm:px-5">
-          <p className="text-muted-foreground text-xs">类型</p>
-          <p className="mt-1 text-sm font-medium">Sub2API</p>
-        </div>
+        <Badge variant="secondary">Sub2API</Badge>
       </div>
 
-      <div
-        data-channel-configuration-layout=""
-        className="grid min-w-0 divide-y lg:grid-cols-[minmax(0,1.35fr)_minmax(18rem,0.65fr)] lg:divide-x lg:divide-y-0"
-      >
-        <div className="grid min-w-0 content-start gap-5 p-4 sm:p-5">
-          <div className="grid gap-1.5 text-sm">
+      <ChannelFormColumns kind="configuration">
+        <div className="contents">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 text-sm">
             <label className="font-medium" htmlFor="newapi-channel-base-url-source">
               API 地址
             </label>
@@ -99,6 +95,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               }}
             >
               <SelectTrigger
+                className="min-w-0"
                 id="newapi-channel-base-url-source"
                 aria-label="API 地址来源"
                 aria-invalid={Boolean(props.baseURLError)}
@@ -124,10 +121,10 @@ export function NewAPIChannelConfigurationStep(props: Props) {
                 placeholder="https://api.example.com"
               />
             ) : null}
-            <FieldError message={props.baseURLError} />
+            {props.baseURLError && <FieldError message={props.baseURLError} />}
           </div>
 
-          <div className="grid gap-1.5 text-sm">
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 text-sm">
             <span className="font-medium">New API 分组</span>
             <MultiSelect
               options={props.newAPIGroupOptions}
@@ -137,17 +134,22 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               searchPlaceholder="搜索 New API 分组"
               clearText="清空分组"
               ariaLabel="New API 分组"
-              maxVisibleChips={6}
+              maxVisibleChips={3}
               disabled={props.pending || props.newAPIGroupOptions.length === 0}
             />
-            <FieldError message={props.groupError} />
+            {props.newAPIGroupOptions.length === 0 && (
+              <p className="text-xs leading-5 text-muted-foreground">
+                暂无可用的 New API 分组，请配置后刷新页面。
+              </p>
+            )}
+            {props.groupError && <FieldError message={props.groupError} />}
           </div>
         </div>
 
-        <div className="bg-muted/10 grid min-w-0 content-start gap-1.5 p-4 text-sm sm:p-5">
-          <span className="font-medium">模型</span>
-          <div className="bg-background flex min-h-24 flex-col items-start justify-center gap-3 rounded-lg border border-dashed px-4 py-3">
-            <span className="text-muted-foreground text-xs">
+        <div className="col-span-full grid min-w-0 content-start gap-1.5 border-t border-border/70 pt-4 text-sm">
+          <h3 className="text-sm font-medium">模型范围</h3>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+            <span role="status" className="text-sm font-medium">
               {props.selectedModelCount > 0
                 ? `已选择 ${props.selectedModelCount} 个模型`
                 : "尚未选择模型"}
@@ -159,17 +161,17 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               onClick={props.onFetchModels}
             >
               <RefreshCw
-                className={props.fetchingModels ? "animate-spin" : ""}
+                className={props.fetchingModels ? "animate-spin motion-reduce:animate-none" : ""}
                 aria-hidden="true"
               />
               {props.fetchingModels ? "正在获取" : "从上游获取"}
             </Button>
           </div>
-          <FieldError message={props.modelError} />
+          {props.modelError && <FieldError message={props.modelError} />}
         </div>
-      </div>
+      </ChannelFormColumns>
 
-      <div className="bg-muted/20 flex justify-end border-t px-4 py-3 sm:px-5">
+      <ChannelFormFooter note="确认分组和模型范围后，添加到 New API 平台。">
         <Button
           type="submit"
           disabled={
@@ -183,7 +185,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
           <RadioTower aria-hidden="true" />
           {props.pending ? "正在添加" : "添加渠道"}
         </Button>
-      </div>
+      </ChannelFormFooter>
     </>
   );
 }

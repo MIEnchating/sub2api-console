@@ -135,6 +135,7 @@ export function MonitorWorkspace(props: {
       )}
       <DataTablePanel role="region" aria-label="监控项列表" className="flex-1">
         <Table
+          actionColumn={props.management}
           aria-label="监控项"
           className="min-w-[78rem]"
           containerClassName="min-h-0 flex-1 overflow-auto"

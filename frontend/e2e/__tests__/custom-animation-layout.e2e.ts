@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import type { Task } from "../../src/api";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("多条自定义动画记录分页展示且不撑高面板，较矮窗口仍能滚动访问完整内容", async ({
+test("多条自定义动画记录分页展示且无横向溢出，较矮窗口仍能滚动访问完整内容", async ({
   page,
 }, testInfo) => {
   const tasks: Task[] = [1, 2, 3, 4].map((index) => ({
@@ -58,12 +58,9 @@ test("多条自定义动画记录分页展示且不撑高面板，较矮窗口�
   await expect(content.getByRole("article")).toHaveCount(mobile ? 1 : 3);
   await expect(previous).toBeDisabled();
   const firstModel = await content.getByRole("article").first().getAttribute("aria-label");
-  expect(
-    await content.evaluate(
-      (element) =>
-        element.scrollHeight <= element.clientHeight && element.scrollWidth <= element.clientWidth,
-    ),
-  ).toBe(true);
+  expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
   await next.click();
   await expect(content.getByRole("article").first()).not.toHaveAttribute("aria-label", firstModel!);
   await expect(previous).toBeEnabled();

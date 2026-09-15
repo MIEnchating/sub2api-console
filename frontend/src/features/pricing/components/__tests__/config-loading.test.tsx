@@ -60,7 +60,7 @@ it("价格配置首次读取时按参数侧栏和互换范围占位，不显示�
   const loading = screen.getByRole("status", { name: "正在读取价格设置" });
   expect(loading).toHaveAttribute("aria-busy", "true");
   expect(loading.querySelector('[data-slot="pricing-config-layout"]')).toHaveClass(
-    "xl:grid-cols-[18rem_minmax(0,1fr)]",
+    "xl:grid-cols-[20rem_minmax(0,1fr)]",
   );
   expect(
     screen
@@ -68,6 +68,14 @@ it("价格配置首次读取时按参数侧栏和互换范围占位，不显示�
       .querySelectorAll('[data-slot="skeleton-control"]'),
   ).toHaveLength(3);
   expect(screen.getByTestId("pricing-exchange-skeleton")).toBeInTheDocument();
+  expect(
+    screen.getByTestId("pricing-settings-skeleton").querySelector('[data-slot="card-content"]'),
+  ).not.toBeInTheDocument();
+  expect(
+    screen
+      .getByTestId("pricing-exchange-skeleton")
+      .querySelectorAll('[data-slot="skeleton-control"]'),
+  ).toHaveLength(3);
   expect(screen.getByRole("button", { name: "保存配置" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "立即调整" })).toBeDisabled();
   expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();

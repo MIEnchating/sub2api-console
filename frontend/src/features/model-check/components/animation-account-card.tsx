@@ -15,10 +15,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
+import { PrecheckAccountResult } from "./precheck-account-result";
 
 export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
   account: AccountStatus;
   result?: AnimationResult;
+  precheckResult?: AnimationResult;
+  precheckStatus?: Task["status"];
   taskStatus?: Task["status"];
   activity?: AnimationActivity;
   retryDisabled: boolean;
@@ -38,22 +41,27 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
     props.taskStatus === "running" ||
     props.taskStatus === "waiting_input";
   const groups = props.account.groups.join("、");
+  const animationActivity = props.activity?.mode === "precheck" ? undefined : props.activity;
   let scheduleLabel = props.schedule?.enabled
     ? `每 ${props.schedule.interval_minutes} 分钟自动检测`
     : "自动检测关闭";
   if (running && props.result) scheduleLabel = "正在重新检测";
+  if (props.schedule?.enabled && props.schedule.mode === "precheck")
+    scheduleLabel = `每 ${props.schedule.interval_minutes} 分钟前置检测`;
+  if (props.schedule?.enabled && props.schedule.mode === "both")
+    scheduleLabel = `每 ${props.schedule.interval_minutes} 分钟前置与动画检测`;
   if (props.schedule?.last_error)
     scheduleLabel = `最近自动检测未启动：${props.schedule.last_error}`;
   return (
     <article
       aria-label={`账号 ${props.account.name}`}
       className={cn(
-        "flex h-[360px] min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card transition-colors hover:border-border",
+        "flex h-auto min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card transition-colors hover:border-border",
         props.checked && "border-primary/60 bg-primary/[0.02] ring-1 ring-primary/10",
       )}
     >
-      <header className="shrink-0 space-y-1 px-3 py-2">
-        <label className="flex min-w-0 items-center gap-2">
+      <header className="flex h-[72px] shrink-0 flex-col justify-center gap-0.5 px-3">
+        <label className="flex h-5 min-w-0 items-center gap-2">
           <Checkbox
             checked={props.checked}
             disabled={props.disabled || unavailable}
@@ -70,7 +78,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           </Tooltip>
           <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
         </label>
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex h-4 min-w-0 items-center gap-1.5">
           <Badge variant="outline">{props.account.platform ?? "未标注平台"}</Badge>
           {props.account.manual_priority != null ? (
             <Badge variant="secondary">人工优先</Badge>
@@ -91,23 +99,42 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           <TooltipContent>{props.account.upstream_host || "未配置 Host"}</TooltipContent>
         </Tooltip>
       </header>
-      <div className="min-h-0 flex-1 px-3 pb-2">
+      <div className="h-56 min-w-0 shrink-0">
         {props.result ? (
           <AnimationAccountResult
+            layout="card"
             result={props.result}
-            activity={props.activity}
+            activity={animationActivity}
             retryDisabled={props.retryDisabled}
             onRetry={props.onRetry}
           />
         ) : (
-          <AnimationCardState
-            status={props.taskStatus}
-            activity={props.activity}
-            unavailable={unavailable}
-          />
+          <>
+            <div
+              role="group"
+              aria-label="动画预览区域"
+              className="h-[180px] w-full shrink-0 overflow-hidden border-y border-border/40 bg-muted/20"
+            >
+              <AnimationCardState
+                status={props.taskStatus}
+                activity={animationActivity}
+                unavailable={unavailable}
+              />
+            </div>
+            <div className="flex h-11 items-center px-3 text-xs text-muted-foreground">
+              动画检测：暂无结果
+            </div>
+          </>
         )}
       </div>
-      <footer className="flex h-11 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3">
+      <div className="h-auto shrink-0 border-t border-border/40 px-3">
+        <PrecheckAccountResult
+          result={props.precheckResult}
+          status={props.precheckStatus}
+          activity={props.activity}
+        />
+      </div>
+      <footer className="flex h-10 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -168,15 +195,14 @@ function AnimationCardState(props: {
   else if (props.status) label = "本次检测未返回动画";
   if (!label)
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 text-center">
-        <span className="grid size-10 place-items-center rounded-full bg-muted text-muted-foreground">
-          <ScanLine className="size-5" aria-hidden="true" />
-        </span>
-        <p className="text-sm font-medium">尚未检测</p>
-        <p className="text-xs leading-relaxed text-muted-foreground">勾选账号后，在顶部开始检测</p>
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-3 text-center text-muted-foreground">
+        <ScanLine className="size-6" aria-hidden="true" />
+        <p className="text-xs">尚未检测</p>
       </div>
     );
   return (
-    <p className="flex h-full items-center justify-center text-xs text-muted-foreground">{label}</p>
+    <p className="flex h-full items-center justify-center px-3 text-center text-xs text-muted-foreground">
+      {label}
+    </p>
   );
 }

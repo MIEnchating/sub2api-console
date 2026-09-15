@@ -136,6 +136,106 @@ it("地址含凭据或 Key 为空时展示字段错误并阻止创建任务", as
   view.client.clear();
 });
 
+it.each([false, true])(
+  "自定义前置检测单题模式为 %s 时按选择提交和展示结果并清除 Key",
+  async (single) => {
+    const completed = {
+      ...queued,
+      operation: "account-model-precheck",
+      status: "succeeded",
+      progress: 100,
+      result: {
+        ...queued.result,
+        mode: "precheck",
+        animations: [
+          {
+            account_id: "custom-target",
+            account_name: "自定义接口",
+            mode: "precheck",
+            model: "custom-model",
+            status: "succeeded",
+            request_id: "custom-precheck",
+            completed_at: "2026-09-15T00:00:00Z",
+            duration_ms: 20,
+            precheck: {
+              verdict: "passed",
+              profile_version: "astra-v1",
+              questions: [
+                { id: "candy", verdict: "passed", answer: "21", request_id: "candy" },
+                {
+                  id: "knowledge-cutoff",
+                  verdict: "passed",
+                  answer: "无法提供日期",
+                  request_id: "cutoff",
+                },
+              ].slice(0, single ? 1 : 2),
+            },
+          },
+        ],
+      },
+    };
+    const calls: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          calls.push(JSON.parse(String(init.body)));
+          return Response.json(completed);
+        }
+        return Response.json(String(input).includes("/api/tasks/") ? completed : [completed]);
+      }),
+    );
+    const view = await setup();
+    fill();
+    if (single) {
+      await userEvent.click(screen.getByRole("button", { name: "选择前置检测题目" }));
+      await userEvent.click(
+        within(screen.getByRole("dialog", { name: "前置检测题目" })).getByRole("checkbox", {
+          name: "知识截止日期",
+        }),
+      );
+      await userEvent.keyboard("{Escape}");
+    }
+    await userEvent.click(screen.getByRole("button", { name: "前置检测" }));
+    const dialog = await screen.findByRole("dialog", { name: "确认自定义接口检测" });
+    expect(dialog).toHaveTextContent(single ? "前置检测请求（糖果题）" : "糖果题和知识截止日期题");
+    await userEvent.click(within(dialog).getByRole("button", { name: "确认并开始检测" }));
+    const result = await screen.findByRole("region", { name: "前置检测结果" });
+    const questions = await within(result).findByRole("list", { name: "前置检测题目结果" });
+    expect(questions).toHaveTextContent("糖果题通过");
+    expect(within(questions).getAllByRole("listitem")).toHaveLength(single ? 1 : 2);
+    if (single) expect(result).not.toHaveTextContent("知识截止日期");
+    else expect(questions).toHaveTextContent("知识截止日期通过");
+    await userEvent.click(within(result).getByRole("button", { name: "查看前置检测详情" }));
+    const detail = await screen.findByRole("dialog", { name: "前置检测详情" });
+    expect(within(detail).getByText("21")).toBeVisible();
+    if (single) expect(within(detail).queryByText("无法提供日期")).not.toBeInTheDocument();
+    else expect(within(detail).getByText("无法提供日期")).toBeVisible();
+    expect(detail).not.toHaveTextContent(secret);
+    await userEvent.click(within(detail).getByRole("button", { name: "关闭" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "前置检测详情" })).not.toBeInTheDocument(),
+    );
+    expect(calls).toEqual([
+      {
+        mode: "precheck",
+        targets: [],
+        precheck_questions: single ? ["candy"] : ["candy", "knowledge-cutoff"],
+        timeout_seconds: 120,
+        custom: {
+          base_url: "https://custom.example.invalid/v1",
+          api_key: secret,
+          platform: "openai",
+          model: "custom-model",
+        },
+      },
+    ]);
+    await waitFor(() => expect(screen.getByLabelText("API Key")).toHaveValue(""));
+    view.unmount();
+    view.client.clear();
+  },
+);
+
 it("创建失败时解除禁用并保留输入以便重试，只通过 toast 展示错误", async () => {
   let rejectRequest: (error: Error) => void = () => {};
   vi.stubGlobal(

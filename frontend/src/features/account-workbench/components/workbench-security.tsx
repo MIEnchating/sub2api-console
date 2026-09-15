@@ -11,7 +11,7 @@ import { ContentRetry } from "@/components/content-retry";
 import { WorkbenchSecuritySkeleton } from "./workbench-page-skeletons";
 import { TaskStartupState } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
-import { BrowserSurface } from "@/features/upstreams/components/browser-login/browser-surface";
+import { BrowserSurface } from "@/components/browser-surface/browser-surface";
 import { securityActiveStatuses, useWorkbenchSecurity } from "../hooks/use-workbench-security";
 import { WorkbenchSecurityForm } from "./workbench-security-form";
 import { WorkbenchSecurityProfile } from "./workbench-security-profile";

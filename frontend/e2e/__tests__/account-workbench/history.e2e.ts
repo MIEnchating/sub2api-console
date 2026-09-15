@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { installWorkbenchFixture } from "./fixture";
 
-test("处理记录长结果筛选和批量确认在桌面手机保持可见", async ({ page, colorScheme }) => {
+test("处理记录长结果筛选和详情在桌面手机保持可见", async ({ page, colorScheme }) => {
   await page.addInitScript(
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
     colorScheme,
@@ -28,11 +28,11 @@ test("处理记录长结果筛选和批量确认在桌面手机保持可见", as
   await page.goto("/account-workbench");
   await page.getByRole("tab", { name: "处理记录", exact: true }).click();
   await page.getByRole("textbox", { name: "搜索处理记录" }).fill("owner@example.com");
-  await page.getByRole("checkbox", { name: /^选择筛选结果/ }).check();
-  await page.getByRole("button", { name: "删除选中记录（1）" }).click();
-  const dialog = page.getByRole("dialog", { name: "确认删除处理记录" });
+  await page.getByRole("button", { name: `查看任务 ${id}` }).click();
+  const dialog = page.getByRole("dialog", { name: "处理详情" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "确认执行" })).toBeInViewport();
+  await dialog.getByRole("button", { name: "关闭详情" }).scrollIntoViewIfNeeded();
+  await expect(dialog.getByRole("button", { name: "关闭详情" })).toBeInViewport();
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -41,6 +41,10 @@ test("处理记录长结果筛选和批量确认在桌面手机保持可见", as
     path: test.info().outputPath("history-selection.png"),
     animations: "disabled",
   });
-  await dialog.getByRole("button", { name: "返回" }).click();
-  await expect(page.getByRole("checkbox", { name: /^选择筛选结果/ })).toBeChecked();
+  await dialog.getByRole("button", { name: "关闭详情" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "搜索处理记录" })).toHaveValue(
+    "owner@example.com",
+  );
 });

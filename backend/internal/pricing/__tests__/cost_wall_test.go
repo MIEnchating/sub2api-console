@@ -24,7 +24,7 @@ func (target testTarget) TargetSettings(context.Context) (configstore.TargetSett
 	return target.settings, nil
 }
 
-func TestCostBlockedAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t *testing.T) {
+func TestCostFallbackAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t *testing.T) {
 	ctx := context.Background()
 	store, err := business.Open(filepath.Join(t.TempDir(), "pricing.sqlite3"))
 	if err != nil {
@@ -57,10 +57,10 @@ func TestCostBlockedAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := before.AccountTargets["104"]; target.DesiredHealth != "cost_blocked" || target.Schedulable == nil || *target.Schedulable {
+	if target := before.AccountTargets["104"]; target.DesiredHealth != "survivor" || target.Schedulable == nil || !*target.Schedulable {
 		t.Fatalf("before=%#v", target)
 	}
-	// Simulate the confirmed remote disable before pricing runs in a later round.
+	// A later confirmed pause must not prevent moving into an affordable group.
 	_, err = store.SyncManagementSnapshot(ctx, []map[string]any{{"id": json.Number("104"), "schedulable": false}}, groupRows, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestCostBlockedAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := after.AccountTargets["104"]; target.DesiredHealth == "cost_blocked" || target.Schedulable == nil || !*target.Schedulable {
+	if target := after.AccountTargets["104"]; target.DesiredHealth == "cost_blocked" || target.DesiredHealth == "survivor" || target.Schedulable == nil || !*target.Schedulable {
 		t.Fatalf("after=%#v", target)
 	}
 }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactElement } from "react";
+import { useEffect, useId, useRef, useState, type ReactElement } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, FormProvider, useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { ContentLoading } from "@/components/content-loading";
+import { FileUpload } from "@/components/file-upload";
 import {
   Select,
   SelectContent,
@@ -47,6 +47,7 @@ export function WorkbenchOAuthBatchForm(props: {
   });
   const [format, setFormat] = useState("text");
   const [reading, setReading] = useState(false);
+  const [fileName, setFileName] = useState("");
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -55,10 +56,7 @@ export function WorkbenchOAuthBatchForm(props: {
       form.reset(oauthBatchDefaults);
     };
   }, [form]);
-  async function loadFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  async function loadFile(file: File): Promise<void> {
     if (file.size > maxInputBytes) {
       toast.error("文件不能超过 2 MB，请分批授权");
       return;
@@ -68,6 +66,7 @@ export function WorkbenchOAuthBatchForm(props: {
       const content = await file.text();
       if (!mounted.current) return;
       form.setValue("content", content, { shouldValidate: true });
+      setFileName(file.name);
       setFormat(content.trimStart().startsWith("[") ? "json" : "text");
     } catch (error) {
       notifyOperationError(error, "文件读取失败，请重新选择文件");
@@ -101,6 +100,7 @@ export function WorkbenchOAuthBatchForm(props: {
                 recovery_enabled: value.recovery_enabled || undefined,
               });
               form.reset(oauthBatchDefaults);
+              setFileName("");
               props.onClose();
             })}
           >
@@ -121,12 +121,14 @@ export function WorkbenchOAuthBatchForm(props: {
                 </Select>
               </FormField>
               <FormField label="从文件读取（最大 2 MB）" htmlFor="batch-auth-file">
-                <Input
+                <FileUpload
                   id="batch-auth-file"
-                  type="file"
+                  label="从文件读取（最大 2 MB）"
+                  description="TXT / JSON，最大 2 MB"
                   accept=".txt,.json"
-                  disabled={reading}
-                  onChange={(event) => void loadFile(event)}
+                  fileName={fileName}
+                  busy={reading}
+                  onSelect={(file) => void loadFile(file)}
                 />
               </FormField>
             </div>
@@ -169,7 +171,6 @@ export function WorkbenchOAuthBatchForm(props: {
                 />
               )}
             </FormField>
-            {reading && <ContentLoading label="正在读取授权文件" compact />}
             <FormField
               label="本批登录代理"
               htmlFor="batch-auth-proxy"

@@ -213,7 +213,7 @@ describe("调度策略入口", () => {
     expect(markup).toContain("负载因子调权");
     expect(markup).not.toContain("运行控制");
     expect(markup).not.toContain("执行模式");
-    expect(markup).not.toContain("监控模式");
+    expect(markup).not.toContain('aria-label="监控模式"');
     expect(markup).not.toContain("调度模式");
     expect(renderOperationsSection("sampling")).toContain('aria-label="启用主动探测"');
     expect(schedulingStrategyOptions).toContainEqual({
@@ -288,17 +288,16 @@ describe("调度策略入口", () => {
     const markup = renderPolicyPage();
 
     expect(markup).toContain('data-testid="policy-page-layout"');
-    expect(markup).toContain('class="w-full space-y-3"');
+    expect(markup).toContain('class="w-full min-w-0 space-y-4"');
     expect(markup).toContain('data-testid="policy-category-navigation"');
     expect(markup.indexOf('data-slot="page-navigation"')).toBeLessThan(
       markup.indexOf('data-slot="page-content"'),
     );
     expect(markup).not.toContain("sticky top-0");
     expect(markup).toContain("overflow-x-auto");
-    expect(markup.match(/data-slot="card"/g)).toHaveLength(4);
-    expect(markup.match(/data-slot="card" data-card-hover="false" data-size="sm"/g)).toHaveLength(
-      4,
-    );
+    expect(markup.match(/data-slot="card"/g)).toHaveLength(6);
+    expect(markup.match(/data-policy-section="[^"]+"/g)).toHaveLength(6);
+    expect(markup).toContain('data-policy-section="成本墙"');
     expect(markup).not.toContain("探活来源");
     expect(markup).not.toContain("60s");
     expect(markup).not.toContain("xl:grid-cols-4");
@@ -308,20 +307,23 @@ describe("调度策略入口", () => {
     expect(markup).toContain("flex-wrap");
     expect(markup.match(/data-slot="select-trigger"[^>]*class="[^"]*w-full/g)).toHaveLength(2);
     expect(markup).toContain('data-testid="policy-operations-layout"');
-    expect(markup).toContain('class="flex flex-col gap-3"');
+    expect(markup).toContain('class="flex min-w-0 flex-col gap-4"');
     expect(markup).toContain('data-testid="policy-routing-overview"');
     expect(markup).toContain('data-testid="policy-routing-sections"');
     expect(markup).toContain("xl:grid-cols-2");
-    expect(policySection(markup, "全局默认策略", "自动执行范围")).toContain("lg:grid-cols-3");
-    expect(markup).toContain("min-h-14 flex-col items-stretch justify-between");
-    expect(markup).toContain("rounded-lg border px-3 py-2.5");
-    expect(markup).toMatch(/class="[^"]*xl:col-span-2[^"]*" data-policy-section="自动执行范围"/);
+    expect(policySection(markup, "全局默认策略", "自动执行范围")).toContain(
+      "@min-[56rem]/policy-card:grid-cols-3",
+    );
+    expect(markup).toContain("min-h-14 min-w-0 items-center justify-between");
+    expect(markup).toContain("rounded-lg border px-3 py-3");
+    expect(markup).toContain('data-policy-section="自动执行范围"');
     const health = renderOperationsSection("health");
-    expect(health).toContain("flex items-start justify-between gap-4");
+    expect(health).toContain("flex flex-col items-stretch gap-3");
     expect(health).not.toContain("flex-row items-start justify-between gap-4");
     expectSwitchLabelAssociation(health, "熔断");
     expectSwitchLabelAssociation(health, "健康回池");
     expectSwitchLabelAssociation(markup, "智能扩容");
+    expectSwitchLabelAssociation(markup, "上游超额自动下调");
     expect(markup).toContain('for="policy-auto-apply-schedulable"');
     expect(markup).toContain('id="policy-auto-apply-schedulable"');
   });
@@ -350,7 +352,7 @@ describe("调度策略入口", () => {
     expect(rules).toContain('data-testid="policy-rules-sections"');
     expect(scope).toContain('data-testid="policy-scope-layout"');
     for (const section of [routing, health, sampling, rules, scope]) {
-      expect(section).toContain("grid items-stretch gap-3 xl:grid-cols-2");
+      expect(section).toContain("grid min-w-0 items-stretch gap-4 xl:grid-cols-2");
     }
     expect(health).toContain('data-policy-section="保底与降级"');
     expect(health).toContain('data-policy-section="健康回池"');
@@ -448,6 +450,12 @@ describe("调度策略入口", () => {
     expect(sampling).toContain('value="4"');
     expect(scaling).toContain("扩容触发容量比例");
     expect(scaling).toContain("已配置并发占全局并发上限的比例");
+    expect(scaling).toContain("同一上游的账号按调度策略权重共享可用并发");
+    expect(scaling).toContain("低优先级账号等待并发额度");
+    expect(scaling).toContain("额度恢复后自动评估");
+    expect(scaling).toContain("完全模式下同时开启");
+    expect(scaling).toContain("并发上限自动执行");
+    expect(scaling).toContain("调度状态自动执行");
     expect(scaling).not.toContain("负载率");
     expect(scaling).toContain("扩容步长");
     expect(scaling).toContain("缩容步长");
@@ -486,9 +494,9 @@ describe("调度策略入口", () => {
     expect(sampling).not.toContain('max="3"');
     expect(sampling).toContain('max="32"');
     expect(sampling).toContain("真实样本新鲜期（秒）");
-    expect(sampling).toContain("lg:grid-cols-3");
+    expect(sampling).toContain("@min-[56rem]/policy-card:grid-cols-3");
     expect(sampling).toContain('data-testid="policy-sampling-switches"');
-    expect(sampling).toContain("lg:grid-cols-3");
+    expect(sampling).toContain("@min-[56rem]/policy-card:grid-cols-3");
     const switches = sampling.slice(sampling.indexOf('data-testid="policy-sampling-switches"'));
     expect(switches).toContain("接入真实流量样本");
     expect(switches).toContain("启用主动探测");
@@ -721,7 +729,7 @@ describe("调度策略入口", () => {
     );
 
     expect(markup).toContain('data-testid="policy-scope-layout"');
-    expect(markup).toContain('class="grid items-stretch gap-3 xl:grid-cols-2"');
+    expect(markup).toContain('class="grid min-w-0 items-stretch gap-4 xl:grid-cols-2"');
     expect(markup).toContain('data-policy-section="暂停与排除的账号"');
     expect(markup.match(/xl:col-span-2/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });

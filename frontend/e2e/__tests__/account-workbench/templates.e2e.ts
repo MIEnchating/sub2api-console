@@ -68,33 +68,32 @@ test("来源模板长名称在桌面和手机不溢出，预览确认前不保�
   const card = page.getByRole("article", { name: `配置模板 ${template.name}` });
   await expect(card).toContainText(template.source_name!);
   expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  const preference = card.getByRole("button", { name: `设为首选模板：${template.name}` });
+  const preference = card.getByRole("button", { name: "使用", exact: true });
   await preference.focus();
   await page.keyboard.press("Enter");
-  await expect(
-    card.getByRole("button", { name: `取消首选模板：${template.name}` }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(card.getByRole("button", { name: "当前使用" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   expect(writes).toEqual([{ revision: 4, preferred: true }]);
   await card.getByRole("button", { name: "刷新来源" }).click();
-  const dialog = page.getByRole("dialog", { name: "编辑账号配置模板" });
-  await expect(dialog.getByRole("region", { name: "来源配置预览" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "保存模板" })).toBeDisabled();
-  await expect(dialog.getByRole("button", { name: "保存模板" })).toBeInViewport();
+  const dialog = page.getByRole("dialog", { name: "读取线上账号配置" });
+  await expect(
+    dialog.getByRole("definition").filter({ hasText: "0.1234567890123456789" }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "保存并使用" })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "保存并使用" })).toBeInViewport();
   await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeInViewport();
-  await dialog.getByRole("textbox", { name: "来源账号配置 JSON" }).scrollIntoViewIfNeeded();
-  await expect(dialog.getByRole("textbox", { name: "来源账号配置 JSON" })).toContainText(
-    "0.1234567890123456789",
-  );
+  await expect(dialog.getByRole("spinbutton")).toHaveCount(0);
+  await expect(dialog.getByRole("checkbox")).toHaveCount(0);
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({
     path: test.info().outputPath("template-source-preview.png"),
     animations: "disabled",
   });
   expect(writes).toHaveLength(1);
-  await dialog.getByRole("button", { name: "应用来源配置" }).click();
-  await expect(dialog.getByRole("spinbutton", { name: "并发数" })).toHaveValue("25");
-  await expect(dialog.getByRole("checkbox", { name: "设为首选模板" })).toBeChecked();
-  await dialog.getByRole("button", { name: "保存模板" }).click();
+  await expect(dialog.getByRole("definition").filter({ hasText: /^25$/ })).toBeVisible();
+  await dialog.getByRole("button", { name: "保存并使用" }).click();
   await expect(dialog).toHaveCount(0);
   expect(writes[1]).toMatchObject({
     revision: 5,

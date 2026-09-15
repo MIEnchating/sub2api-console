@@ -17,6 +17,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { logStatusLabel, logTitleLabel } from "@/features/logs/lib/log-display";
 import { cn } from "@/lib/utils";
+import { concurrencyLimitedLabel } from "@/lib/domain-dictionaries";
 import type { AttentionAccount, AttentionState } from "../lib/overview-health";
 
 type OverviewActivityProps = {
@@ -34,6 +35,7 @@ const attentionLabels: Record<AttentionState, string> = {
   apply_pending: "待执行",
   fused: "已熔断",
   cost_blocked: "成本墙拦截",
+  concurrency_limited: concurrencyLimitedLabel,
   survivor: "保底中",
   degraded: "已降级",
   paused: "已暂停",
@@ -44,6 +46,7 @@ const attentionVariants: Record<AttentionState, StatusVariant> = {
   apply_pending: "warning",
   fused: "danger",
   cost_blocked: "warning",
+  concurrency_limited: "warning",
   survivor: "warning",
   degraded: "info",
   paused: "warning",

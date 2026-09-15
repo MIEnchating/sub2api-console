@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin/loginproxy"
 )
 
 const (
@@ -44,9 +46,18 @@ func (s *Service) UseOAuthTransport(transport http.RoundTripper) {
 	s.oauthTransport = transport
 }
 
-// CheckOAuth checks the current Sol profile with a caller-owned OAuth credential.
+// CheckOAuth checks a supported profile with a caller-owned OAuth credential.
 // Credentials stay in memory; the caller owns task, audit and account state updates.
 func (s *Service) CheckOAuth(ctx context.Context, accountID, accountName string, credentials map[string]any, model string, timeoutSeconds int) (map[string]any, error) {
+	return s.CheckOAuthWithProxy(ctx, accountID, accountName, credentials, model, timeoutSeconds, "")
+}
+
+// CheckOAuthWithProxy uses the explicit batch proxy only for the fixed official
+// generation endpoint; embedded credential URLs never influence routing.
+func (s *Service) CheckOAuthWithProxy(ctx context.Context, accountID, accountName string, credentials map[string]any, model string, timeoutSeconds int, proxyURL string) (map[string]any, error) {
+	if err := loginproxy.Validate(proxyURL); err != nil {
+		return nil, errors.New("检测代理无效，请检查登录 / 检测代理设置")
+	}
 	accountID, accountName, model = strings.TrimSpace(accountID), strings.TrimSpace(accountName), strings.TrimSpace(model)
 	if accountID == "" || !validOAuthHeader(accountID, 256) || !utf8.ValidString(accountName) || utf8.RuneCountInString(accountName) > 200 {
 		return nil, errors.New("OAuth 检测账号标识或名称无效，请重新选择账号")
@@ -69,13 +80,32 @@ func (s *Service) CheckOAuth(ctx context.Context, accountID, accountName string,
 	if model == "" && len(profile.Models) > 0 {
 		model = profile.Models[0]
 	}
-	if !slices.Contains(profile.Models, model) {
-		return nil, errors.New("所选模型不在当前 Sol 检测画像中，请重新选择模型")
+	if model != astraModel && !slices.Contains(profile.Models, model) {
+		return nil, errors.New("所选模型不在当前检测画像中，请重新选择模型")
 	}
 	for _, field := range []string{"access_token", "refresh_token", "id_token"} {
 		if secret := stringField(credentials, field); secret != "" && (strings.Contains(accountID, secret) || strings.Contains(accountName, secret) || strings.Contains(model, secret)) {
 			return nil, errors.New("OAuth 检测账号信息或模型名称不能包含凭据")
 		}
+	}
+	if transport == nil && strings.TrimSpace(proxyURL) != "" {
+		raw, err := loginproxy.SessionURL(proxyURL)
+		if err != nil {
+			return nil, errors.New("检测代理配置无效")
+		}
+		resolve, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		address, err := loginproxy.PublicAddress(resolve, "chatgpt.com")
+		if err != nil {
+			return nil, errors.New("检测目标解析失败，请检查网络后重试")
+		}
+		dialer, err := loginproxy.NewDialer(resolve, loginproxy.Config{UpstreamURL: raw, Destinations: map[string]string{"chatgpt.com:443": net.JoinHostPort(address, "443")}})
+		if err != nil {
+			return nil, errors.New("检测代理连接配置失败，请检查代理后重试")
+		}
+		proxied := dialer.Transport()
+		defer proxied.CloseIdleConnections()
+		transport = proxied
 	}
 	if transport == nil {
 		direct := &http.Transport{
@@ -91,21 +121,32 @@ func (s *Service) CheckOAuth(ctx context.Context, accountID, accountName string,
 	sender := oauthBundleSender{
 		client: &http.Client{Transport: transport, Timeout: time.Duration(timeoutSeconds) * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		credential: credential, models: profile.Models, slots: make(chan struct{}, 2),
+		credential: credential, models: append(append([]string(nil), profile.Models...), astraModel), slots: make(chan struct{}, 2),
 	}
-	result, err := runSolCheck(ctx, sender, profile, targetRequest{
+	input := targetRequest{
 		AccountID: accountID, AccountName: accountName, Model: model, Rounds: 1, TimeoutSeconds: timeoutSeconds,
-	})
+	}
+	var result map[string]any
+	if model == astraModel {
+		result, err = runAstraCheck(ctx, sender, input)
+	} else {
+		result, err = runSolCheck(ctx, sender, profile, input)
+	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if err != nil {
-		return nil, errors.New("Sol 检测画像不可用，请检查已发布的检测规则")
+		return nil, errors.New("检测画像不可用，请检查检测规则")
 	}
 	result["profile_version"], result["profile_fingerprint"] = version, fingerprint
 	result["transport"] = "oauth-direct"
+	if strings.TrimSpace(proxyURL) != "" {
+		result["transport"] = "oauth-proxy"
+	}
 	result["production_path_equivalent"] = false
-	result["scope"] = "closed-set behavioral similarity; not model identity or production-route proof"
+	if model != astraModel {
+		result["scope"] = "closed-set behavioral similarity; not model identity or production-route proof"
+	}
 	return result, nil
 }
 
@@ -135,6 +176,10 @@ func validOAuthHeader(value string, maxBytes int) bool {
 }
 
 func (sender oauthBundleSender) Send(ctx context.Context, _ string, model, prompt string, timeoutSeconds int) (string, string, error) {
+	return sender.SendWithReasoning(ctx, "", model, prompt, timeoutSeconds, "none")
+}
+
+func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string, model, prompt string, timeoutSeconds int, effort string) (string, string, error) {
 	select {
 	case sender.slots <- struct{}{}:
 		defer func() { <-sender.slots }()
@@ -145,7 +190,7 @@ func (sender oauthBundleSender) Send(ctx context.Context, _ string, model, promp
 	defer cancel()
 	body, err := json.Marshal(map[string]any{
 		"model": model, "input": []map[string]string{{"role": "user", "content": prompt}},
-		"instructions": oauthCheckInstructions, "reasoning": map[string]string{"effort": "none"},
+		"instructions": oauthCheckInstructions, "reasoning": map[string]string{"effort": effort},
 		"stream": true, "store": false,
 	})
 	if err != nil {

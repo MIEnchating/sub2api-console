@@ -50,7 +50,7 @@ type GroupAllocation struct {
 	PendingAccounts      int64                    `json:"pending_accounts"`
 	HighestHealthScore   *float64                 `json:"highest_health_score"`
 	AverageHealthScore   *float64                 `json:"average_health_score"`
-	AssignedConcurrency  int64                    `json:"assigned_concurrency"`
+	AssignedConcurrency  *int64                   `json:"assigned_concurrency"`
 	Channels             []GroupAllocationChannel `json:"channels"`
 }
 
@@ -74,12 +74,12 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		GroupID: groupID, GroupName: group.Name, Platform: group.Platform, RateMultiplier: group.RateMultiplier,
 		Status: group.Status, ProbeIntervalSeconds: group.ProbeInterval, WeightBudget: group.WeightBudget, Strategy: group.Strategy,
 		AccountCount: group.AccountCount, RateLimitedAccounts: group.RateLimitedAccounts,
-		AverageHealthScore: group.AverageHealthScore, Channels: []GroupAllocationChannel{},
+		AverageHealthScore: group.AverageHealthScore, AssignedConcurrency: new(int64), Channels: []GroupAllocationChannel{},
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.name,a.multiplier,rd.priority,rd.schedulable,rd.role,rd.routing_state,
 		rd.rank,rd.reason,rd.updated_at,rd.payload_json,he.health_score,he.short_score,he.long_score,
 		he.sample_count,he.ttfb_p95_ms,
-		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json,m.priority
+		a.schedulable,a.routing_state,a.health_status,a.paused,a.metadata_json,m.priority,a.concurrency
 		FROM account_groups ag
 		JOIN accounts a ON a.id=ag.account_id
 		LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
@@ -94,14 +94,14 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 	defer rows.Close()
 	for rows.Next() {
 		var channel GroupAllocationChannel
-		var priority, schedulable, rank, sampleCount, accountSchedulable, paused, manualPriority sql.NullInt64
+		var priority, schedulable, rank, sampleCount, accountSchedulable, paused, manualPriority, concurrency sql.NullInt64
 		var accountMultiplier, role, state, reason, updatedAt, payloadRaw sql.NullString
 		var accountRoutingState, accountHealthStatus sql.NullString
 		var metadataRaw string
 		var healthScore, shortScore, longScore, p95 sql.NullFloat64
 		if err := rows.Scan(&channel.AccountID, &channel.AccountName, &accountMultiplier, &priority, &schedulable, &role, &state,
 			&rank, &reason, &updatedAt, &payloadRaw, &healthScore, &shortScore, &longScore, &sampleCount, &p95,
-			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw, &manualPriority); err != nil {
+			&accountSchedulable, &accountRoutingState, &accountHealthStatus, &paused, &metadataRaw, &manualPriority, &concurrency); err != nil {
 			return GroupAllocation{}, err
 		}
 		channel.Priority, channel.Schedulable, channel.Rank = nullInt(priority), strictBool(schedulable), nullInt(rank)
@@ -142,14 +142,20 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 		if channel.UpdatedAt == nil {
 			channel.Schedulable = account.Schedulable
 		}
+		channel.AssignedConcurrency = nullInt(concurrency)
 		if payloadRaw.Valid {
 			payload, decodeErr := decodeObject(payloadRaw.String)
 			if decodeErr == nil {
 				channel.Weight = finiteFloat(payload["weight"])
-				channel.AssignedConcurrency = allocationInteger(payload["desired_concurrency"])
+				if desired := payload["desired_concurrency"]; desired != nil {
+					channel.AssignedConcurrency = allocationInteger(desired)
+				}
 				channel.Rate = allocationString(payload["rate"])
+			} else {
+				channel.AssignedConcurrency = nil
 			}
 		}
+		channel.AssignedConcurrency = allocationCapacity(channel.AssignedConcurrency, channel.Schedulable)
 		if accountMultiplier.Valid && strings.TrimSpace(accountMultiplier.String) != "" {
 			channel.Rate = stringPointer(strings.TrimSpace(accountMultiplier.String))
 		}
@@ -160,8 +166,12 @@ func (s *Store) GroupAllocation(ctx context.Context, groupID string) (GroupAlloc
 			value := *channel.HealthScore
 			result.HighestHealthScore = &value
 		}
-		if channel.AssignedConcurrency != nil && *channel.AssignedConcurrency > 0 {
-			result.AssignedConcurrency += *channel.AssignedConcurrency
+		if result.AssignedConcurrency != nil {
+			if channel.AssignedConcurrency == nil || *channel.AssignedConcurrency > math.MaxInt64-*result.AssignedConcurrency {
+				result.AssignedConcurrency = nil
+			} else {
+				*result.AssignedConcurrency += *channel.AssignedConcurrency
+			}
 		}
 		if channel.Weight != nil {
 			result.TotalWeight += *channel.Weight
@@ -194,7 +204,7 @@ func classifyAllocationChannel(allocation *GroupAllocation, channel GroupAllocat
 	switch channel.Health {
 	case AccountStateFused:
 		allocation.FusedAccounts++
-	case AccountStatePaused:
+	case AccountStatePaused, AccountStateConcurrencyLimited:
 		allocation.PausedAccounts++
 	case AccountStateDisabled, AccountStateExcluded:
 		allocation.UnavailableAccounts++
@@ -212,19 +222,35 @@ func classifyAllocationChannel(allocation *GroupAllocation, channel GroupAllocat
 		}
 	}
 	if channel.Schedulable != nil && *channel.Schedulable &&
-		channel.Health != AccountStateFused && channel.Health != AccountStatePaused &&
+		channel.Health != AccountStateFused && channel.Health != AccountStatePaused && channel.Health != AccountStateConcurrencyLimited &&
 		channel.Health != AccountStateDisabled && channel.Health != AccountStateExcluded {
 		allocation.AvailableAccounts++
 	}
 }
 
 func allocationInteger(value any) *int64 {
-	number := finiteFloat(value)
-	if number == nil || *number < 0 || math.Trunc(*number) != *number || *number > math.MaxInt64 {
+	number, ok := value.(json.Number)
+	if !ok {
 		return nil
 	}
-	result := int64(*number)
+	result, err := number.Int64()
+	if err != nil || result < 0 {
+		return nil
+	}
 	return &result
+}
+
+func allocationCapacity(concurrency *int64, schedulable *bool) *int64 {
+	if schedulable == nil {
+		return nil
+	}
+	if !*schedulable {
+		return new(int64)
+	}
+	if concurrency == nil || *concurrency <= 0 {
+		return nil
+	}
+	return concurrency
 }
 
 func allocationString(value any) *string {

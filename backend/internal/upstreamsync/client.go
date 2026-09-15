@@ -157,6 +157,10 @@ func (r *Reader) ReadBalance(ctx context.Context, record configstore.AuthRecord)
 	if err != nil {
 		return business.UpstreamBalanceObservation{}, err
 	}
+	concurrencyLimit, concurrencyStatus, profileUserID, err := profileConcurrency(record, data)
+	if err != nil {
+		return business.UpstreamBalanceObservation{}, err
+	}
 	raw, present := presentValue(data, "balance", "remain_quota", "quota", "remaining")
 	var balance *string
 	if present && raw != nil && textValue(raw) != "" {
@@ -228,6 +232,7 @@ func (r *Reader) ReadBalance(ctx context.Context, record configstore.AuthRecord)
 	return business.UpstreamBalanceObservation{
 		RawBalance: balance, DisplayBalance: displayBalance, Status: status, HardClosed: hardClosed, HardClosedPresent: hardPresent,
 		SiteName: siteName, QuotaPerUnit: quotaPerUnit, BalanceUnit: balanceUnit,
+		ConcurrencyLimit: concurrencyLimit, ConcurrencyStatus: concurrencyStatus, ProfileUserID: profileUserID,
 	}, nil
 }
 

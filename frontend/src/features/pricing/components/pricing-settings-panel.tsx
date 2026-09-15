@@ -1,9 +1,9 @@
 import type { ReactElement } from "react";
-import { CircleDollarSign } from "lucide-react";
+import { ChevronDown, CircleDollarSign } from "lucide-react";
 
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { PricingConfigDraft } from "../types";
@@ -22,7 +22,7 @@ export function PricingSettingsPanel(props: {
     >
       <CardHeader className="bg-muted/20 grid-cols-1 gap-3">
         <div className="flex min-w-0 items-center gap-3">
-          <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
+          <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-md">
             <CircleDollarSign className="size-4" aria-hidden="true" />
           </span>
           <div className="min-w-0">
@@ -32,19 +32,29 @@ export function PricingSettingsPanel(props: {
             </CardDescription>
           </div>
         </div>
-        <div className="bg-background flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
-          <Badge variant={props.value.enabled ? "default" : "secondary"}>
-            {props.value.enabled ? "已开启" : "默认关闭"}
-          </Badge>
+        <div className="bg-background flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <label htmlFor="pricing-enabled" className="cursor-pointer font-medium">
+              启用动态价格分组
+            </label>
+            <Badge
+              id="pricing-enabled-status"
+              variant={props.value.enabled ? "default" : "secondary"}
+            >
+              {props.value.enabled ? "已开启" : "默认关闭"}
+            </Badge>
+          </div>
           <Switch
+            id="pricing-enabled"
             checked={props.value.enabled}
             onCheckedChange={(enabled) => props.onChange({ ...props.value, enabled })}
             aria-label="启用动态价格分组"
+            aria-describedby="pricing-enabled-status"
           />
         </div>
       </CardHeader>
-      <CardContent
-        className="grid divide-y p-0 lg:grid-cols-3 lg:divide-x lg:divide-y-0 xl:grid-cols-1 xl:divide-x-0 xl:divide-y"
+      <div
+        className="grid min-w-0 divide-y lg:grid-cols-3 lg:divide-x lg:divide-y-0 xl:grid-cols-1 xl:divide-x-0 xl:divide-y"
         data-testid="pricing-settings-grid"
       >
         <div
@@ -132,12 +142,16 @@ export function PricingSettingsPanel(props: {
             }
           />
         </div>
-      </CardContent>
-      <div className="border-t px-3 py-3 text-xs leading-5 text-muted-foreground">
+      </div>
+      <div className="bg-muted/10 border-t px-3 py-3 text-xs leading-5 text-muted-foreground">
         <p>执行间隔与写入并发不参与售价计算。</p>
-        <details className="mt-2">
-          <summary className="focus-visible:ring-ring w-fit cursor-pointer rounded-sm font-medium outline-none focus-visible:ring-2">
+        <details className="group mt-2">
+          <summary className="focus-visible:ring-ring hover:text-foreground flex cursor-pointer list-none items-center justify-between gap-2 rounded-sm font-medium outline-none transition-colors focus-visible:ring-2 [&::-webkit-details-marker]:hidden">
             查看分组选择规则
+            <ChevronDown
+              className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+              aria-hidden="true"
+            />
           </summary>
           <p className="mt-2">
             每个互换组仅从账号成本倍率达到最低迁入倍率的分组中选择，未设置则不限。优先选择达到目标盈利比例且售价最低的分组；均未达标时选择售价最高且能覆盖成本的分组，无合适分组时保留当前分组。

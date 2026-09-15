@@ -6,6 +6,7 @@ export function useDictionaryOrder<T>(
   kind: DictionaryKind,
   items: readonly T[],
   valueOf: (item: T) => string,
+  entryKey: "value" | "name" = "value",
 ): T[] {
   const query = useQuery({
     queryKey: ["dictionaries", kind],
@@ -13,5 +14,5 @@ export function useDictionaryOrder<T>(
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
-  return orderByDictionary(items, query.data?.items, valueOf);
+  return orderByDictionary(items, query.data?.items, valueOf, entryKey);
 }

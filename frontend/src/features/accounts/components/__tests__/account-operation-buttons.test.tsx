@@ -232,18 +232,21 @@ describe("账号操作", () => {
     expect(props.onControl).toHaveBeenCalledWith("resume", "恢复调度", undefined);
   });
 
-  it("策略已停止调度时不提供暂停和恢复调度操作", () => {
-    render(
-      <AccountOperationButtons
-        {...operationProps({
-          health: "cost_blocked",
-          routing_state: "cost_blocked",
-          schedulable: false,
-        })}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: /暂停调度|恢复调度/ })).not.toBeInTheDocument();
-  });
+  it.each(["cost_blocked", "concurrency_limited"])(
+    "策略 %s 已停止调度时不提供暂停和恢复调度操作",
+    (state) => {
+      render(
+        <AccountOperationButtons
+          {...operationProps({
+            health: state,
+            routing_state: state,
+            schedulable: false,
+          })}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: /暂停调度|恢复调度/ })).not.toBeInTheDocument();
+    },
+  );
 
   it("已排除账号允许恢复管控，同步倍率仍可用且删除保留在菜单中", async () => {
     const user = userEvent.setup();

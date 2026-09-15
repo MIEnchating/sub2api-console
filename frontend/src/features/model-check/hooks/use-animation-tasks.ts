@@ -10,6 +10,8 @@ export function useAnimationTasks(active = true) {
   const [createdIDs, setCreatedIDs] = useState<string[]>([]);
   const submittingRef = useRef(new Set<string>());
   const [submitting, setSubmitting] = useState(new Set<string>());
+  const precheckSubmittingRef = useRef(new Set<string>());
+  const [precheckSubmitting, setPrecheckSubmitting] = useState(new Set<string>());
   const history = useQuery({
     queryKey: ["model-animation", "history"],
     queryFn: api.animationHistory,
@@ -31,7 +33,7 @@ export function useAnimationTasks(active = true) {
     })),
   });
   const tasks = ids.map((id, index) => queryDataByID(id, queries[index]?.data, history.data));
-  const state = collectAnimationTasks(tasks, submitting);
+  const state = collectAnimationTasks(tasks, submitting, precheckSubmitting);
   const run = useMutation({
     mutationFn: api.runAnimation,
     gcTime: 0,
@@ -41,7 +43,11 @@ export function useAnimationTasks(active = true) {
       void client.invalidateQueries({ queryKey: ["model-animation", "history"] });
       void client.invalidateQueries({ queryKey: ["tasks"] });
     },
-    onError: (error) => notifyOperationError(error, "动画检测启动失败"),
+    onError: (error, request) =>
+      notifyOperationError(
+        error,
+        request.mode === "precheck" ? "前置检测启动失败" : "动画检测启动失败",
+      ),
   });
   const cancel = useMutation({
     mutationFn: api.cancelTask,
@@ -69,6 +75,10 @@ export function useAnimationTasks(active = true) {
         return false;
       }
       for (const target of request.targets) submittingRef.current.add(target.account_id);
+      if (request.mode === "precheck") {
+        for (const target of request.targets) precheckSubmittingRef.current.add(target.account_id);
+        setPrecheckSubmitting(new Set(precheckSubmittingRef.current));
+      }
       setSubmitting(new Set(submittingRef.current));
       try {
         await mutateAsync(request);
@@ -78,6 +88,9 @@ export function useAnimationTasks(active = true) {
       } finally {
         resetMutation();
         for (const target of request.targets) submittingRef.current.delete(target.account_id);
+        for (const target of request.targets)
+          precheckSubmittingRef.current.delete(target.account_id);
+        setPrecheckSubmitting(new Set(precheckSubmittingRef.current));
         setSubmitting(new Set(submittingRef.current));
       }
     },

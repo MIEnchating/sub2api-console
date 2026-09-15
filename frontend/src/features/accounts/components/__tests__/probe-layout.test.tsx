@@ -43,3 +43,72 @@ it("清理失败时折叠摘要直接显示失败阶段", () => {
     "false",
   );
 });
+
+it("请求失败但清理成功时摘要仍显示请求失败", () => {
+  render(
+    <ProbeProgressSummary
+      steps={[
+        { stage: "request", status: "failed", started_at: "2026-09-15T00:00:00Z" },
+        { stage: "cleanup_key", status: "succeeded", started_at: "2026-09-15T00:00:01Z" },
+      ]}
+    />,
+  );
+  expect(screen.getByRole("button", { name: /发送探活请求并等待响应.*失败/ })).toBeVisible();
+});
+
+it("响应与过程切换时保持紧凑高度，收起后恢复已有结果", async () => {
+  const user = userEvent.setup();
+  render(
+    <ProbeProgressSummary
+      steps={[{ stage: "cleanup_key", status: "succeeded", started_at: "2026-09-15T00:00:00Z" }]}
+    >
+      <ProbeResultSlot
+        pending={false}
+        error={null}
+        result={{
+          status: "passed",
+          message: "完成",
+          request_model: "model",
+          actual_model: "model",
+          response_text: "本次探活响应",
+          http_status: 200,
+          latency_ms: 100,
+        }}
+      />
+    </ProbeProgressSummary>,
+  );
+  expect(screen.getByText("本次探活响应")).toBeVisible();
+  const toggle = screen.getByRole("button", { name: /清理临时上游 Key/ });
+  const detailPanel = document.getElementById(toggle.getAttribute("aria-controls")!);
+  expect(detailPanel).toHaveClass("h-48", "overflow-hidden");
+  await user.click(toggle);
+  expect(screen.getByRole("list", { name: "探活过程" })).toBeVisible();
+  expect(detailPanel).toHaveClass("h-48", "overflow-hidden");
+  expect(screen.queryByText("本次探活响应")).not.toBeInTheDocument();
+  await user.click(toggle);
+  expect(screen.getByText("本次探活响应")).toBeVisible();
+});
+
+it("长探活响应使用可键盘访问的独立滚动区并保留真实模型信息", () => {
+  render(
+    <ProbeResultSlot
+      pending={false}
+      error={null}
+      result={{
+        status: "passed",
+        message: "完成",
+        request_model: "model-".repeat(80),
+        actual_model: "actual-model",
+        response_text: "response ".repeat(500),
+        http_status: 200,
+        latency_ms: 250,
+      }}
+    />,
+  );
+  const output = screen.getByRole("region", { name: "探活响应内容" });
+  expect(output).toHaveAttribute("tabindex", "0");
+  expect(output).toHaveClass("overflow-y-auto", "overscroll-contain");
+  expect(output).toHaveClass("min-h-0", "flex-1");
+  expect(screen.getByText(/actual-model/)).toBeVisible();
+  expect(screen.queryByText(/发送测试消息："hi"/)).not.toBeInTheDocument();
+});

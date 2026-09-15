@@ -3,7 +3,6 @@ package probe
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -64,12 +63,12 @@ func TestManualBatchRejectsEmptyDuplicateInvalidAndAutomaticSelections(t *testin
 }
 
 func TestManualBatchRetainsScopeAndBackgroundVisibilityAfterCompletion(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/admin/accounts/41/test" {
+	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
 			t.Errorf("unexpected target: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"type\":\"content\",\"text\":\"pong\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{policy: map[string]any{}, candidates: []business.ProbeCandidate{

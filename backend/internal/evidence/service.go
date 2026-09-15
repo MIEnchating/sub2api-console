@@ -77,6 +77,7 @@ type Service struct {
 }
 
 type collectionPolicy struct {
+	costWallBlocked    map[string]bool
 	source             string
 	lookbackMinutes    int
 	maxSamples         int
@@ -121,6 +122,10 @@ func (s *Service) Plan(ctx context.Context, policy map[string]any, accountID, gr
 		return Plan{}, err
 	}
 	targets = filterEvidenceTargets(targets, configured)
+	configured.costWallBlocked, err = probe.AutomaticCostWallBlocks(ctx, s.repository, policy)
+	if err != nil {
+		return Plan{}, err
+	}
 	return Plan{
 		RequestedSource: configured.source,
 		ProbeAccountIDs: dueProbeAccounts(targets, configured, now.UTC(), false, map[string]struct{}{}),
@@ -144,6 +149,12 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		return Result{}, err
 	}
 	targets = filterEvidenceTargets(targets, configured)
+	if options.ProbesAllowed {
+		configured.costWallBlocked, err = probe.AutomaticCostWallBlocks(ctx, s.repository, policy)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	byAccount := groupTargets(targets)
 	result := Result{
 		RequestedSource: configured.source, EffectiveSource: configured.source,
@@ -246,6 +257,7 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 				result.SourceErrors = append(result.SourceErrors, safeError(probeErr))
 			} else {
 				result.ProbesPersisted = summary.Persisted
+				result.SourceErrors = append(result.SourceErrors, summary.SourceErrors...)
 			}
 		}
 	}
@@ -731,6 +743,11 @@ func convertTrafficRows(accountID string, memberships []business.EvidenceTarget,
 		payload := map[string]any{
 			"request_id": requestID, "status_code": safeScalar(row["status_code"]), "phase": safeScalar(row["phase"]),
 		}
+		// Keep the actual request group separate from the primary membership
+		// used to store account-level health evidence.
+		if groupID, err := strconv.ParseInt(textValue(row["group_id"]), 10, 64); err == nil && groupID > 0 {
+			payload["request_group_id"] = strconv.FormatInt(groupID, 10)
+		}
 		if counts, valid := usagequality.Normalize(row); valid {
 			payload["token_usage"] = counts
 		}
@@ -814,6 +831,9 @@ func dueProbeAccounts(targets []business.EvidenceTarget, policy collectionPolicy
 	byAccount := groupTargets(targets)
 	result := []string{}
 	for _, accountID := range sortedAccountIDs(byAccount) {
+		if policy.costWallBlocked[accountID] {
+			continue
+		}
 		memberships := byAccount[accountID]
 		_, forcedAccount := forced[accountID]
 		primary, found := primaryEvidenceMembership(memberships)

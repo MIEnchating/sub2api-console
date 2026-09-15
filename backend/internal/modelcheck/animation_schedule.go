@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -16,12 +17,14 @@ type animationRepository interface {
 }
 
 type AnimationSchedule struct {
-	AccountID       string `json:"account_id"`
-	Enabled         bool   `json:"enabled"`
-	Model           string `json:"model"`
-	IntervalMinutes int    `json:"interval_minutes"`
-	TimeoutSeconds  int    `json:"timeout_seconds"`
-	Version         int    `json:"version"`
+	PrecheckQuestions []string `json:"precheck_questions,omitempty"`
+	Mode              string   `json:"mode,omitempty"`
+	AccountID         string   `json:"account_id"`
+	Enabled           bool     `json:"enabled"`
+	Model             string   `json:"model"`
+	IntervalMinutes   int      `json:"interval_minutes"`
+	TimeoutSeconds    int      `json:"timeout_seconds"`
+	Version           int      `json:"version"`
 }
 
 type AnimationScheduleView struct {
@@ -71,6 +74,7 @@ func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 		if err := validateAnimationSchedule(schedule); err != nil {
 			return err
 		}
+		schedule.PrecheckQuestions, _ = normalizePrecheckQuestions(schedule.Mode, schedule.PrecheckQuestions)
 		s.animation.schedules[schedule.AccountID] = schedule
 		s.animation.next[schedule.AccountID] = time.Now().Add(time.Duration(schedule.IntervalMinutes) * time.Minute)
 	}
@@ -78,6 +82,12 @@ func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 }
 
 func validateAnimationSchedule(value AnimationSchedule) error {
+	if !validAnimationMode(value.Mode) {
+		return errors.New("自动检测内容必须为动画检测、前置检测或两者")
+	}
+	if _, err := normalizePrecheckQuestions(value.Mode, value.PrecheckQuestions); err != nil {
+		return err
+	}
 	if !stablePositiveID(value.AccountID) || value.Version < 0 {
 		return errors.New("自动检测账号 ID 或版本无效")
 	}
@@ -95,6 +105,7 @@ func (s *Service) AnimationSchedules() []AnimationScheduleView {
 	defer s.animation.scheduleMu.Unlock()
 	result := make([]AnimationScheduleView, 0, len(s.animation.schedules))
 	for id, schedule := range s.animation.schedules {
+		schedule.PrecheckQuestions = slices.Clone(schedule.PrecheckQuestions)
 		view := AnimationScheduleView{AnimationSchedule: schedule, LastTaskID: s.animation.lastTask[id], LastError: s.animation.lastError[id]}
 		if next := s.animation.next[id]; schedule.Enabled && !next.IsZero() {
 			view.NextAt = next.UTC().Format(time.RFC3339Nano)
@@ -112,8 +123,9 @@ func (s *Service) SaveAnimationSchedule(ctx context.Context, value AnimationSche
 	if err := validateAnimationSchedule(value); err != nil {
 		return nil, err
 	}
+	value.PrecheckQuestions, _ = normalizePrecheckQuestions(value.Mode, value.PrecheckQuestions)
 	if value.Enabled {
-		request, _, err := s.prepareAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: value.AccountID, Model: value.Model}}, TimeoutSeconds: value.TimeoutSeconds})
+		request, _, err := s.prepareAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: value.AccountID, Model: value.Model}}, TimeoutSeconds: value.TimeoutSeconds, Mode: value.Mode, PrecheckQuestions: value.PrecheckQuestions})
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +203,7 @@ func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds})
+		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
 		s.animation.scheduleMu.Lock()
 		if err != nil {
 			s.animation.lastError[schedule.AccountID] = safeCredentialError(err)

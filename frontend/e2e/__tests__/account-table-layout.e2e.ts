@@ -501,7 +501,7 @@ test("没有流量或探针时显示十格空色条且不增加键盘停靠点",
   ).toBeVisible();
 });
 
-test("移除Sub2API和Key状态列后加载和空列表均跨越剩余十列", async ({ page }) => {
+test("账号加载骨架保留十列，空列表提示跨越十列", async ({ page }) => {
   let releaseResponse = (): void => {};
   const responseGate = new Promise<void>((resolve) => {
     releaseResponse = resolve;
@@ -512,7 +512,12 @@ test("移除Sub2API和Key状态列后加载和空列表均跨越剩余十列", a
   });
   await page.goto("/accounts");
   await expect(page.getByRole("columnheader")).toHaveCount(10);
-  await expect(page.locator('tbody td[colspan="10"]')).toHaveCount(6);
+  const loadingRows = page.getByRole("row", { name: "正在加载账号", exact: true });
+  await expect(loadingRows).toHaveCount(6);
+  for (const row of await loadingRows.all()) {
+    await expect(row.getByRole("cell")).toHaveCount(10);
+    await expect(row.locator("td[colspan]")).toHaveCount(0);
+  }
   releaseResponse();
   await expect(page.locator("tbody td")).toHaveCount(1);
   await expect(page.locator("tbody td")).toHaveAttribute("colspan", "10");

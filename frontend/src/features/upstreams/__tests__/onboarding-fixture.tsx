@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { render } from "@testing-library/react";
+import { StrictMode } from "react";
 import { vi } from "vitest";
 
 import { OnboardingPage } from "@/App";
@@ -76,6 +77,7 @@ export function renderOnboarding(
   candidate?: OnboardingCandidate,
   directGroup = true,
   groupOverrides?: GroupStatus[],
+  options?: { cacheEntryConfiguration?: boolean; strictMode?: boolean },
 ): QueryClient {
   // JSDOM 26 recurses while matching top-layer selectors; these tests use ordinary popups.
   const matches = Element.prototype.matches;
@@ -161,10 +163,14 @@ export function renderOnboarding(
     history: createMemoryHistory({ initialEntries: [url] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  if (options?.cacheEntryConfiguration) {
+    client.setQueryData(["upstream-configuration", upstream.host], upstream);
+  }
+  const page = (
     <QueryClientProvider client={client}>
       <RouterProvider router={router} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  render(options?.strictMode ? <StrictMode>{page}</StrictMode> : page);
   return client;
 }

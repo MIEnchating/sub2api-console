@@ -1122,7 +1122,7 @@ func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}
 	} else if item.manualFused && item.Schedulable != nil && !*item.Schedulable {
 		current = AccountStateFused
 		reason = item.DecisionReason
-	} else if current == "fused" || current == "cost_blocked" || current == "survivor" {
+	} else if current == "fused" || current == "cost_blocked" || current == AccountStateConcurrencyLimited || current == "survivor" {
 		reason = item.DecisionReason
 	} else if item.SampleCount == 0 || item.HealthScore == nil {
 		current = "unknown"

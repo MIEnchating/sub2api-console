@@ -7,6 +7,7 @@ import { useClientPagination } from "@/hooks/use-client-pagination";
 import type { DetectionRule, RuleProbe } from "../lib/model-check-rules";
 
 const pageSizes = [5, 10, 20];
+const probeKindLabels = { choice: "选择题", numeric: "数值题", text: "回答特征" };
 
 export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactElement {
   const [search, setSearch] = useState("");
@@ -56,15 +57,21 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
           className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1"
         >
           <section aria-label="判定标准" className="space-y-4">
-            {rule.family === "Claude" ? (
+            {rule.builtinVersion ? (
+              <p className="text-xs text-muted-foreground">
+                内置规则 · {rule.builtinVersion} · 行为特征参考
+              </p>
+            ) : null}
+            {!rule.builtinVersion && rule.family === "Claude" ? (
               <p className="text-xs leading-5 text-muted-foreground">
                 覆盖率达标的轮次参与评分，平均匹配分和分差均达标则匹配；没有合格轮次则无法判定。
               </p>
-            ) : (
+            ) : null}
+            {!rule.builtinVersion && rule.family === "GPT" ? (
               <p className="text-xs leading-5 text-muted-foreground">
                 以下条件全部满足则符合该模型的回答特征。首轮无法判定时追加补充题，再用全部答案评分。
               </p>
-            )}
+            ) : null}
             <table aria-label="模型判定阈值" className="w-full table-fixed text-xs">
               <thead className="border-y bg-muted/40 text-muted-foreground">
                 <tr>
@@ -108,31 +115,35 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                 ))}
               </tbody>
             </table>
-            <details className="border-b pb-3 text-xs">
-              <summary className="cursor-pointer font-medium focus-visible:outline-2">
-                对比候选与兼容组
-              </summary>
-              <ul className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2">
-                {rule.candidates
-                  .filter((model) => model !== rule.label)
-                  .map((model) => (
-                    <li key={model} className="break-all">
-                      {model}
-                    </li>
-                  ))}
-              </ul>
-              {rule.identityGroup.length > 0 ? (
-                <p className="mt-3 text-muted-foreground break-all">
-                  目标兼容组：{rule.identityGroup.join("、")}
+            {!rule.builtinVersion ? (
+              <details className="border-b pb-3 text-xs">
+                <summary className="cursor-pointer font-medium focus-visible:outline-2">
+                  对比候选与兼容组
+                </summary>
+                <ul className="mt-2 grid gap-2 text-muted-foreground sm:grid-cols-2">
+                  {rule.candidates
+                    .filter((model) => model !== rule.label)
+                    .map((model) => (
+                      <li key={model} className="break-all">
+                        {model}
+                      </li>
+                    ))}
+                </ul>
+                {rule.identityGroup.length > 0 ? (
+                  <p className="mt-3 text-muted-foreground break-all">
+                    目标兼容组：{rule.identityGroup.join("、")}
+                  </p>
+                ) : null}
+              </details>
+            ) : null}
+            {!rule.builtinVersion ? (
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer focus-visible:outline-2">评分指标说明</summary>
+                <p className="mt-2 leading-5">
+                  可解析答案是能识别格式的回答；有效评分答案是命中已配置答案特征的回答。匹配分、分差和相似度均来自题库权重，不代表答题正确率。
                 </p>
-              ) : null}
-            </details>
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer focus-visible:outline-2">评分指标说明</summary>
-              <p className="mt-2 leading-5">
-                可解析答案是能识别格式的回答；有效评分答案是命中已配置答案特征的回答。匹配分、分差和相似度均来自题库权重，不代表答题正确率。
-              </p>
-            </details>
+              </details>
+            ) : null}
           </section>
         </Tabs.Panel>
         <Tabs.Panel value="questions" className="flex min-h-0 flex-1 flex-col">
@@ -163,7 +174,7 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                   <li key={`${stage}:${probe.id}`} className="space-y-2 py-3 first:pt-0">
                     <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>{stage}</span>
-                      <span>{probe.kind === "choice" ? "选择题" : "数值题"}</span>
+                      <span>{probeKindLabels[probe.kind]}</span>
                       <span className="break-all">{probe.id}</span>
                     </div>
                     <p className="text-sm whitespace-pre-wrap break-words">
@@ -171,6 +182,11 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                         ? probe.stem
                         : probe.question}
                     </p>
+                    {probe.expected ? (
+                      <p className="text-xs text-muted-foreground break-words">
+                        预期回答：{probe.expected}
+                      </p>
+                    ) : null}
                     {probe.kind === "choice" ? (
                       <ol className="list-inside list-[upper-alpha] space-y-1 text-sm text-muted-foreground">
                         {probe.options?.map((option, index) => (
@@ -179,7 +195,8 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                           </li>
                         ))}
                       </ol>
-                    ) : (
+                    ) : null}
+                    {probe.kind === "numeric" ? (
                       <p className="text-xs text-muted-foreground break-words">
                         答案特征值：
                         {probe.clusters?.map((cluster) => cluster.center).join("、") || "未配置"}
@@ -187,8 +204,10 @@ export function ModelCheckRuleDetail(props: { rule: DetectionRule }): ReactEleme
                           ? `；配置容差：${probe.tolerance.mode === "relative" ? `${Number((probe.tolerance.value * 100).toFixed(2))}%（相对）` : `${probe.tolerance.value}（绝对）`}`
                           : ""}
                       </p>
-                    )}
-                    <ProbeWeights probe={probe} candidates={rule.candidates} model={rule.label} />
+                    ) : null}
+                    {!rule.builtinVersion ? (
+                      <ProbeWeights probe={probe} candidates={rule.candidates} model={rule.label} />
+                    ) : null}
                   </li>
                 ))}
               </ol>

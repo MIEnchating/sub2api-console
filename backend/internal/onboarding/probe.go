@@ -48,11 +48,12 @@ type probeKeyDeleter interface {
 }
 
 type probeCredential struct {
-	auth      configstore.AuthRecord
-	candidate business.OnboardingCandidate
-	key       upstreamsync.CreatedKey
-	temporary bool
-	expiresAt time.Time
+	auth         configstore.AuthRecord
+	candidate    business.OnboardingCandidate
+	key          upstreamsync.CreatedKey
+	temporary    bool
+	modelOptions bool
+	expiresAt    time.Time
 }
 
 func (s *Service) ProbeModels(ctx context.Context, host, groupID string) ([]string, error) {
@@ -321,6 +322,10 @@ func (s *Service) clearProbeCancellation(host, groupID string) {
 }
 
 func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID string) (_ probeCredential, returnErr error) {
+	return s.acquireProbeCredentialWithMarker(ctx, host, groupID, "")
+}
+
+func (s *Service) acquireProbeCredentialWithMarker(ctx context.Context, host, groupID, marker string) (_ probeCredential, returnErr error) {
 	finishCredential := probeStep(ctx, "credential")
 	defer func() { finishCredential(returnErr) }()
 	groupID = strings.TrimSpace(groupID)
@@ -375,7 +380,9 @@ func (s *Service) acquireProbeCredential(ctx context.Context, host, groupID stri
 	if _, ok := s.keys.(probeKeyDeleter); !ok {
 		return probeCredential{}, errors.New("当前上游客户端不支持安全清理临时测试 Key")
 	}
-	marker := probeKeyMarker(auth.Host, groupID)
+	if marker == "" {
+		marker = probeKeyMarker(auth.Host, groupID)
+	}
 	finishCreate := probeStep(ctx, "create_key")
 	credential.key, err = createKey(ctx, s.keys, *auth, marker, groupID, true)
 	finishCreate(err)
@@ -412,6 +419,9 @@ func (s *Service) cleanupProbeCredentialWithContext(parent context.Context, cred
 			return
 		}
 		key := s.probeSessionKey(credential.auth.Host, *credential.candidate.GroupID)
+		if credential.modelOptions {
+			key += "\x00model-options"
+		}
 		s.probeMu.Lock()
 		defer s.probeMu.Unlock()
 		if err != nil {
@@ -443,7 +453,7 @@ func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, mar
 	reconciler, reconcileSupported := s.keys.(reconcilingKeyClient)
 	deleter, deleteSupported := s.keys.(probeKeyDeleter)
 	if !reconcileSupported || !deleteSupported {
-		return fmt.Errorf("marker %s 的只读对账或删除能力不可用；后续探活将复用该 marker", marker)
+		return fmt.Errorf("marker %s 的只读对账或删除能力不可用；请在无绑定 Key 清理中核对并清理", marker)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), probeCleanupTimeout)
 	defer cancel()
@@ -452,10 +462,10 @@ func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, mar
 		key, found, err := reconciler.ReconcileCreatedKey(ctx, auth, marker, groupID)
 		if err == nil && found {
 			if strings.TrimSpace(key.KeyID) == "" {
-				return fmt.Errorf("marker %s 对账结果缺少稳定 Key ID", marker)
+				return fmt.Errorf("marker %s 对账结果缺少稳定 Key ID；请在无绑定 Key 清理中核对并清理", marker)
 			}
 			if err := deleter.DeleteKey(ctx, auth, key.KeyID); err != nil {
-				return fmt.Errorf("marker %s 已定位但删除失败：%w", marker, err)
+				return fmt.Errorf("marker %s 已定位但删除失败：%w；请在无绑定 Key 清理中核对并清理", marker, err)
 			}
 			return nil
 		}
@@ -467,9 +477,9 @@ func (s *Service) cleanupUnknownProbeCredential(auth configstore.AuthRecord, mar
 		case <-ctx.Done():
 			timer.Stop()
 			if lastErr != nil {
-				return fmt.Errorf("marker %s 在清理时限内无法完成对账：%w；后续探活将复用该 marker", marker, lastErr)
+				return fmt.Errorf("marker %s 在清理时限内无法完成对账：%w；请在无绑定 Key 清理中核对并清理", marker, lastErr)
 			}
-			return fmt.Errorf("marker %s 在清理时限内尚未可见；后续探活将复用该 marker", marker)
+			return fmt.Errorf("marker %s 在清理时限内尚未可见；请在无绑定 Key 清理中核对并清理", marker)
 		case <-timer.C:
 		}
 	}

@@ -24,25 +24,37 @@ type AnimationTarget struct {
 }
 
 type AnimationRequest struct {
-	Targets        []AnimationTarget        `json:"targets"`
-	TimeoutSeconds int                      `json:"timeout_seconds"`
-	Custom         *AnimationCustomEndpoint `json:"custom,omitempty"`
+	PrecheckQuestions []string                 `json:"precheck_questions,omitempty"`
+	Mode              string                   `json:"mode,omitempty"`
+	Targets           []AnimationTarget        `json:"targets"`
+	TimeoutSeconds    int                      `json:"timeout_seconds"`
+	Custom            *AnimationCustomEndpoint `json:"custom,omitempty"`
 }
 
 type AnimationResult struct {
-	AccountID     string `json:"account_id"`
-	AccountName   string `json:"account_name"`
-	Model         string `json:"model"`
-	ResponseModel string `json:"response_model,omitempty"`
-	RequestID     string `json:"request_id"`
-	Status        string `json:"status"`
-	SVG           string `json:"svg,omitempty"`
-	Error         string `json:"error,omitempty"`
-	DurationMS    int64  `json:"duration_ms"`
-	CompletedAt   string `json:"completed_at"`
+	Mode          string          `json:"mode,omitempty"`
+	Precheck      *PrecheckResult `json:"precheck,omitempty"`
+	AccountID     string          `json:"account_id"`
+	AccountName   string          `json:"account_name"`
+	Model         string          `json:"model"`
+	ResponseModel string          `json:"response_model,omitempty"`
+	RequestID     string          `json:"request_id"`
+	Status        string          `json:"status"`
+	SVG           string          `json:"svg,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	DurationMS    int64           `json:"duration_ms"`
+	CompletedAt   string          `json:"completed_at"`
 }
 
 func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest) (AnimationRequest, []selectedAccount, error) {
+	if !validAnimationMode(request.Mode) {
+		return request, nil, errors.New("检测内容必须为动画检测、前置检测或两者")
+	}
+	questions, err := normalizePrecheckQuestions(request.Mode, request.PrecheckQuestions)
+	if err != nil {
+		return request, nil, err
+	}
+	request.PrecheckQuestions = questions
 	if request.TimeoutSeconds == 0 {
 		request.TimeoutSeconds = 120
 	}
@@ -50,6 +62,9 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		return request, nil, errors.New("动画检测超时必须在 5 到 120 秒之间")
 	}
 	if request.Custom != nil {
+		if request.Mode == combinedMode {
+			return request, nil, errors.New("自定义接口请分别执行前置检测与动画检测")
+		}
 		return prepareCustomAnimation(request)
 	}
 	if len(request.Targets) < 1 || len(request.Targets) > 20 {
@@ -127,6 +142,14 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 	}
 	task := taskstore.Task{ID: id, Skill: animationSkill, Operation: "account-model-animation", Status: "queued", Message: "动画生成检测已排队", CreatedAt: now, UpdatedAt: now,
 		Result: map[string]any{"account_ids": ids, "targets": request.Targets, "completed": 0, "total": len(accounts), "animations": []AnimationResult{}, "remote_write": false}}
+	if request.Mode == precheckMode {
+		task.Operation, task.Message = "account-model-precheck", "前置检测已排队"
+		task.Result["mode"] = precheckMode
+	}
+	if request.Mode == combinedMode {
+		task.Operation, task.Message = "account-model-combined", "前置与动画检测已排队"
+		task.Result["mode"], task.Result["total"] = combinedMode, 2*len(accounts)
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		release()
 		return taskstore.Task{}, err
@@ -154,59 +177,84 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	ctx, cancel := context.WithTimeout(parent, s.taskTimeout)
 	defer cancel()
 	task.Status, task.Message = "running", "正在生成鹈鹕骑自行车动画"
+	if request.Mode == precheckMode {
+		task.Message = "正在执行前置检测"
+	}
+	if request.Mode == combinedMode {
+		task.Message = "正在依次执行前置与动画检测"
+	}
 	task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
-	results := make(chan AnimationResult, len(accounts))
+	modes := []string{request.Mode}
+	unit := "个账号"
+	if request.Mode == combinedMode {
+		modes = []string{precheckMode, "animation"}
+		unit = "项检测"
+	}
+	total := len(accounts) * len(modes)
+	results := make(chan AnimationResult, total)
 	var workers sync.WaitGroup
 	for index, account := range accounts {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
-			started := time.Now()
-			err := s.runAnimationTarget(ctx, account, request.TimeoutSeconds, request.Custom, &result)
-			result.DurationMS = time.Since(started).Milliseconds()
-			result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			if err != nil {
-				if request.Custom != nil {
-					err = errors.New(strings.ReplaceAll(err.Error(), request.Custom.APIKey, "[已隐藏]"))
+			for phase, mode := range modes {
+				if phase > 0 && ctx.Err() != nil {
+					return
 				}
-				result.Error = safeCredentialError(err)
-			} else {
-				result.Status = "succeeded"
+				result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
+				result.Mode = mode
+				if request.Mode == combinedMode {
+					result.RequestID += "-" + mode
+				}
+				started := time.Now()
+				err := s.runAnimationTarget(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result)
+				result.DurationMS = time.Since(started).Milliseconds()
+				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+				if err != nil {
+					if request.Custom != nil {
+						err = errors.New(strings.ReplaceAll(err.Error(), request.Custom.APIKey, "[已隐藏]"))
+					}
+					result.Error = safeCredentialError(err)
+				} else {
+					result.Status = "succeeded"
+				}
+				results <- result
 			}
-			results <- result
 		}()
 	}
 	go func() { workers.Wait(); close(results) }()
-	completed := make([]AnimationResult, 0, len(accounts))
+	completed := make([]AnimationResult, 0, total)
 	succeeded := 0
 	for result := range results {
 		completed = append(completed, result)
 		if result.Status == "succeeded" {
 			succeeded++
 		}
-		task.Progress = len(completed) * 100 / len(accounts)
-		task.Message = fmt.Sprintf("动画检测已完成 %d/%d 个账号", len(completed), len(accounts))
+		task.Progress = len(completed) * 100 / total
+		task.Message = fmt.Sprintf("%s已完成 %d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
 		// Copy results to keep previously published task snapshots immutable.
-		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": request.Targets, "completed": len(completed), "total": len(accounts), "animations": append([]AnimationResult(nil), completed...), "remote_write": false}
+		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": request.Targets, "completed": len(completed), "total": total, "animations": append([]AnimationResult(nil), completed...), "remote_write": false}
+		if request.Mode == precheckMode || request.Mode == combinedMode {
+			task.Result["mode"] = request.Mode
+		}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		taskstore.PersistProgress(s.tasks, task)
 	}
 	task.Status = "succeeded"
 	if succeeded == 0 {
 		task.Status = "failed"
-	} else if succeeded < len(accounts) {
+	} else if succeeded < total {
 		task.Status = "partial"
 	}
-	task.Message = fmt.Sprintf("动画检测完成：成功 %d，失败 %d", succeeded, len(accounts)-succeeded)
-	taskstore.MarkCancelled(ctx, &task, "动画检测已取消")
+	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d", animationModeLabel(request.Mode), succeeded, total-succeeded)
+	taskstore.MarkCancelled(ctx, &task, animationModeLabel(request.Mode)+"已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, result *AnimationResult) error {
+func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) error {
 	select {
 	case s.animation.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -218,6 +266,10 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 		return err
 	}
 	defer release()
+	if result.Mode == precheckMode {
+		client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		return runPrecheckTarget(guarded, client, credential, timeout, questions, result)
+	}
 	requestCtx, cancel := context.WithTimeout(guarded, time.Duration(timeout)*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

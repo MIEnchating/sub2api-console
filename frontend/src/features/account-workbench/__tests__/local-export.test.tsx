@@ -147,7 +147,7 @@ it("本地JSON转换不读取线上模板，成功后清空输入并更新本地
       name: "创建私有转换任务",
     }),
   );
-  await waitFor(() => expect(editor).toHaveTextContent(/^$/));
+  await waitFor(() => expect(editor).toHaveTextContent(/^账号 JSON 或 rt_ 刷新令牌$/));
   await user.click(screen.getByRole("tab", { name: "私有文件" }));
   expect(await screen.findByText("local-file")).toBeVisible();
   expect(screen.queryByText("managed-secret-file")).not.toBeInTheDocument();

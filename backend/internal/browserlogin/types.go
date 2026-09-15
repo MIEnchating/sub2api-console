@@ -1,4 +1,4 @@
-// Package browserlogin provides short-lived, operator-controlled login browsers.
+// Package browserlogin provides isolated browsers for workbench OAuth and account security.
 // Only screenshots and bounded input commands cross the console API boundary.
 package browserlogin
 
@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 )
 
 const Width = 1100
@@ -22,19 +20,6 @@ var ErrSession = errors.New("浏览器验证会话不存在、已过期或不属
 var ErrOAuthPending = errors.New("OAuth 尚未取得授权回调，请先完成登录")
 var ErrOAuthState = errors.New("OAuth 回调 state 不匹配，请重新授权")
 var ErrOAuthRejected = errors.New("OAuth 授权回调无效或被上游拒绝，请重新授权")
-
-type View struct {
-	ID            string `json:"id"`
-	TaskID        string `json:"task_id"`
-	Host          string `json:"host"`
-	Status        string `json:"status"`
-	Message       string `json:"message"`
-	ExpiresAt     string `json:"expires_at"`
-	Image         string `json:"image,omitempty"`
-	ChallengeCode string `json:"challenge_code,omitempty"`
-	Width         int    `json:"width"`
-	Height        int    `json:"height"`
-}
 
 type Input struct {
 	Kind  string  `json:"kind"`
@@ -49,10 +34,6 @@ type Input struct {
 func (v Input) Validate() error {
 	finite := func(n float64) bool { return !math.IsNaN(n) && !math.IsInf(n, 0) }
 	switch v.Kind {
-	case "reload":
-		if v.Text == "" && v.Key == "" && v.X == 0 && v.Y == 0 && v.Delta == 0 && !v.Shift {
-			return nil
-		}
 	case "click":
 		if finite(v.X) && finite(v.Y) && v.X >= 0 && v.X < Width && v.Y >= 0 && v.Y < Height {
 			return nil
@@ -72,17 +53,6 @@ func (v Input) Validate() error {
 		}
 	}
 	return errors.New("浏览器操作参数无效")
-}
-
-type Browser interface {
-	Screenshot(context.Context) ([]byte, error)
-	Input(context.Context, Input) error
-	Credentials(context.Context) (configstore.AuthRecord, error)
-	Close()
-}
-
-type Factory interface {
-	Open(context.Context, configstore.AuthRecord) (Browser, error)
 }
 
 // OAuthOptions describes the fixed OpenAI authorization transaction. The
@@ -172,4 +142,3 @@ type OAuthBrowser interface {
 type OAuthFactory interface {
 	OpenOAuth(context.Context, OAuthOptions) (OAuthBrowser, error)
 }
-type Commit func(context.Context, configstore.AuthRecord) error

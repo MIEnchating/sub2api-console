@@ -156,32 +156,32 @@ function mount(handler?: (request: Request) => Promise<Response | undefined>): {
   return { requests, unmount: view.unmount };
 }
 async function parse(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await user.click(await screen.findByRole("textbox", { name: "混合账号内容" }));
+  await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
   await user.paste(mixedContent);
-  await user.click(screen.getByRole("button", { name: "解析混合运行范围" }));
+  await user.click(screen.getByRole("button", { name: "解析并预览" }));
 }
 async function start(user: ReturnType<typeof userEvent.setup>): Promise<void> {
   await user.click(await screen.findByRole("button", { name: "确认处理 3 项" }));
-  await user.click(screen.getByRole("button", { name: "开始混合运行" }));
-  await screen.findByRole("region", { name: "混合运行进度" });
+  await user.click(screen.getByRole("button", { name: "开始处理" }));
+  await screen.findByRole("region", { name: "账号处理进度" });
 }
 
-describe("混合运行", () => {
+describe("账号批次", () => {
   it("JSON、RT和登录行原文只提交一次，范围确认后仅用预览ID开始", async () => {
     const view = mount();
     const user = userEvent.setup();
     await parse(user);
-    expect(await screen.findByRole("region", { name: "混合运行预览" })).toHaveTextContent(
+    expect(await screen.findByRole("region", { name: "账号内容预览" })).toHaveTextContent(
       "共 3 项",
     );
-    expect(screen.queryByRole("textbox", { name: "混合账号内容" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "账号内容" })).not.toBeInTheDocument();
     expect(
       view.requests.find((request) => request.path.endsWith("/runs/preview"))?.body,
     ).toMatchObject({
       content: mixedContent,
       export_only: false,
-      check_after_import: false,
-      model: "",
+      check_after_import: true,
+      model: "gpt-5.6-sol",
     });
     expect(
       JSON.stringify(
@@ -234,12 +234,11 @@ describe("混合运行", () => {
         return Response.json(run(true));
     });
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("combobox", { name: "处理方式" }));
-    await user.click(screen.getByRole("option", { name: "生成私有 JSON" }));
+    await user.click(await screen.findByRole("button", { name: "仅导出 JSON" }));
     expect(screen.queryByRole("textbox", { name: "检测模型" })).not.toBeInTheDocument();
     await parse(user);
     await start(user);
-    await user.click(screen.getByRole("button", { name: "预览私有转换结果" }));
+    await user.click(screen.getByRole("button", { name: "预览可导出账号" }));
     await user.click(await screen.findByRole("button", { name: "生成私有 JSON 文件" }));
     expect(screen.queryByRole("button", { name: "确认导入 1 个账号" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "创建私有转换任务" }));
@@ -260,7 +259,7 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await start(user);
-    expect(screen.getByRole("list", { name: "混合运行问题" })).toHaveTextContent(
+    expect(screen.getByRole("list", { name: "账号处理问题" })).toHaveTextContent(
       "第 3 项：身份与第 1 项重复",
     );
     expect(screen.queryByRole("button", { name: "预览可导入账号" })).not.toBeInTheDocument();
@@ -282,7 +281,7 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await start(user);
-    expect(screen.getByRole("table", { name: "混合运行账号" })).toHaveTextContent("授权未完成");
+    expect(screen.getByRole("table", { name: "本批账号" })).toHaveTextContent("授权未完成");
     expect(screen.getByRole("button", { name: "预览可导入账号" })).toBeEnabled();
   });
 
@@ -308,7 +307,7 @@ describe("混合运行", () => {
         ),
       ).toBe(true),
     );
-    expect(await screen.findByRole("textbox", { name: "混合账号内容" })).toHaveValue("");
+    expect(await screen.findByRole("textbox", { name: "账号内容" })).toHaveValue("");
   });
 
   it("启动响应迟到且界面卸载时清理新运行", async () => {
@@ -322,7 +321,7 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await user.click(await screen.findByRole("button", { name: "确认处理 3 项" }));
-    await user.click(screen.getByRole("button", { name: "开始混合运行" }));
+    await user.click(screen.getByRole("button", { name: "开始处理" }));
     view.unmount();
     await act(async () => {
       resolve(Response.json(run()));
@@ -347,7 +346,7 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await user.click(await screen.findByRole("button", { name: "确认处理 3 项" }));
-    await user.click(screen.getByRole("button", { name: "开始混合运行" }));
+    await user.click(screen.getByRole("button", { name: "开始处理" }));
     view.unmount();
     await act(async () => {
       resolve(Response.json({ ...run(), recovery_enabled: true }));
@@ -370,9 +369,9 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await user.click(await screen.findByRole("button", { name: "确认处理 3 项" }));
-    await user.click(screen.getByRole("button", { name: "开始混合运行" }));
+    await user.click(screen.getByRole("button", { name: "开始处理" }));
     expect(
-      within(screen.getByRole("dialog", { name: "确认开始混合运行" })).getByRole("button", {
+      within(screen.getByRole("dialog", { name: "确认处理账号" })).getByRole("button", {
         name: "取消",
       }),
     ).toBeDisabled();
@@ -398,7 +397,7 @@ describe("混合运行", () => {
     await parse(user);
     await start(user);
     const retry = await screen.findByRole("button", { name: "重新读取" });
-    expect(screen.getByRole("button", { name: "结束混合运行" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "结束本批处理" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "预览可导入账号" })).toBeDisabled();
     fail = false;
     await user.click(retry);
@@ -412,15 +411,15 @@ describe("混合运行", () => {
     const user = userEvent.setup();
     await parse(user);
     await start(user);
-    await user.click(screen.getByRole("button", { name: "结束混合运行" }));
+    await user.click(screen.getByRole("button", { name: "结束本批处理" }));
     expect(
       view.requests.some(
         (request) => request.method === "DELETE" && request.path.endsWith("/runs/mixed-run"),
       ),
     ).toBe(false);
-    await user.click(screen.getByRole("button", { name: "结束并清除混合结果" }));
+    await user.click(screen.getByRole("button", { name: "结束并清除未用结果" }));
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "混合运行进度" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("region", { name: "账号处理进度" })).not.toBeInTheDocument(),
     );
     expect(client.getQueryData(workbenchKeys.run("mixed-run"))).toBeUndefined();
   });
@@ -437,12 +436,12 @@ describe("混合运行", () => {
     await parse(user);
     await start(user);
     await user.click(screen.getByRole("button", { name: "预览可导入账号" }));
-    await screen.findByText("正在生成混合运行结果预览");
-    expect(screen.getByRole("button", { name: "结束混合运行" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "结束混合运行" }));
-    await user.click(screen.getByRole("button", { name: "结束并清除混合结果" }));
+    await screen.findByText("正在生成账号批次结果预览");
+    expect(screen.getByRole("button", { name: "结束本批处理" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "结束本批处理" }));
+    await user.click(screen.getByRole("button", { name: "结束并清除未用结果" }));
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "混合运行进度" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("region", { name: "账号处理进度" })).not.toBeInTheDocument(),
     );
     await act(async () => {
       resolve(Response.json(resultPreview()));
@@ -469,7 +468,7 @@ describe("混合运行", () => {
       <WorkbenchMixedPreview preview={value} pending={false} onStart={onStart} onClose={onClose} />,
     );
     expect(screen.getByRole("button", { name: "确认处理 3 项" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "关闭混合运行预览" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "关闭预览" })).toBeEnabled();
     expect(screen.getByRole("list", { name: "混合输入问题" })).toHaveTextContent(
       "第 2 项：无效 RT",
     );

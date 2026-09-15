@@ -52,6 +52,52 @@ func TestExtractTemplateRejectsInvalidConfigAndOtherAccountTypes(t *testing.T) {
 	}
 }
 
+func TestExtractTemplateNormalizesOnlyNullNotes(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "null", value: nil, want: `""`},
+		{name: "empty", value: "", want: `""`},
+		{name: "existing text", value: "Source notes", want: `"Source notes"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := accountworkbench.ExtractTemplate(map[string]any{
+				"platform": "openai", "type": "oauth", "notes": tt.value,
+				"proxy_id": nil, "expires_at": nil, "load_factor": nil,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(config["notes"]) != tt.want {
+				t.Fatalf("notes = %s, want %s", config["notes"], tt.want)
+			}
+			for _, key := range []string{"proxy_id", "expires_at", "load_factor"} {
+				if string(config[key]) != "null" {
+					t.Fatalf("nullable field %s changed: %s", key, config[key])
+				}
+			}
+		})
+	}
+}
+
+func TestExtractTemplateRejectsMalformedNotes(t *testing.T) {
+	for name, value := range map[string]any{
+		"number": json.Number("42"), "object": map[string]any{},
+		"overlong": strings.Repeat("x", 16385), "null byte": "note\x00",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := accountworkbench.ExtractTemplate(map[string]any{
+				"platform": "openai", "type": "oauth", "notes": value,
+			})
+			if err == nil || !strings.Contains(err.Error(), "notes") {
+				t.Fatalf("expected notes validation error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestMatchTemplateUsesPlanAndEmailDomainThenStablePriority(t *testing.T) {
 	item := accountworkbench.InputItem{PlanType: "plus", Email: "owner@example.com"}
 	templates := []configstore.WorkbenchTemplate{

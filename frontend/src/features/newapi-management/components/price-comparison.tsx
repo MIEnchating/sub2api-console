@@ -1,11 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, GitCompareArrows, Search } from "lucide-react";
 
 import type { NewAPIModelPrice, NewAPIRemoteSnapshot } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePanel } from "@/components/data-table/table-panel";
-import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +28,7 @@ import {
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { upstreamTypeLabel } from "@/lib/domain-dictionaries";
 import { modelPriceNumbersEqual } from "../lib/pricing-number";
+import { dismissOperationError, notifyOperationError } from "@/lib/operation-feedback";
 import { modelPriceColumnValues } from "./model-prices";
 
 export type PlatformPriceComparisonStatus = "matched" | "mismatched" | "missing";
@@ -37,8 +37,33 @@ type UpstreamPriceCatalog = NonNullable<NewAPIRemoteSnapshot["upstream_prices"]>
 type PriceColumns = ReturnType<typeof modelPriceColumnValues>;
 type PriceColumn = keyof PriceColumns;
 
+const dismissedPriceWarnings = new Set<string>();
+
+function PriceWarningToast(props: { warning?: string; fetchedAt?: string }): null {
+  const key = props.warning ? `${props.fetchedAt ?? ""}:${props.warning}` : "";
+  const cleanupTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cleanupTimerKey = useRef("");
+  useEffect(() => {
+    if (cleanupTimer.current && cleanupTimerKey.current === key) {
+      clearTimeout(cleanupTimer.current);
+      cleanupTimer.current = undefined;
+      cleanupTimerKey.current = "";
+    }
+    if (!props.warning || !key || dismissedPriceWarnings.has(key)) return;
+    notifyOperationError(props.warning, "上游价格读取失败");
+    return () => {
+      cleanupTimer.current = setTimeout(() => {
+        dismissedPriceWarnings.add(key);
+        dismissOperationError(props.warning, "上游价格读取失败");
+      }, 0);
+      cleanupTimerKey.current = key;
+    };
+  }, [key, props.warning]);
+  return null;
+}
+
 function upstreamDisplayLabel(upstream: UpstreamPriceCatalog): string {
-  return `${upstream.host} · ${upstreamTypeLabel(upstream.upstream_type)}`;
+  return `${upstream.name.trim() || upstream.host} · ${upstreamTypeLabel(upstream.upstream_type)}`;
 }
 
 const comparedPriceColumns: Array<{ key: PriceColumn; label: string }> = [
@@ -158,6 +183,35 @@ function ComparisonStatus(props: {
       label={presentation.label}
       variant={presentation.variant}
     />
+  );
+}
+
+function ComparisonOverview(props: {
+  total: number;
+  selected: number;
+  compared: number;
+  matched: number;
+  mismatched: number;
+}) {
+  return (
+    <section
+      role="region"
+      aria-label="价格比对概览"
+      className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-5"
+    >
+      {[
+        ["模型总数", props.total, "text-foreground"],
+        ["已选择", props.selected, "text-primary"],
+        ["已比对", props.compared, "text-foreground"],
+        ["一致", props.matched, "text-emerald-600 dark:text-emerald-400"],
+        ["不一致", props.mismatched, "text-amber-600 dark:text-amber-400"],
+      ].map(([label, value, color]) => (
+        <div key={label} className="rounded-lg border bg-card px-3 py-2.5 shadow-xs">
+          <p className="text-muted-foreground text-xs">{label}</p>
+          <p className={`mt-1 text-lg leading-none font-semibold tabular-nums ${color}`}>{value}</p>
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -321,6 +375,15 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   const allVisibleSelected =
     visibleModelNames.length > 0 &&
     visibleModelNames.every((model) => selectedModels.includes(model));
+  const comparisonCounts = useMemo(() => {
+    let matched = 0;
+    let mismatched = 0;
+    for (const status of results.values()) {
+      if (status === "matched") matched += 1;
+      if (status === "mismatched") mismatched += 1;
+    }
+    return { matched, mismatched };
+  }, [results]);
 
   function selectUpstream(host: string) {
     setSelectedUpstreamHost(host);
@@ -371,19 +434,27 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      {props.snapshot.upstream_price_warning ? (
-        <QueryErrorToast
-          error={props.snapshot.upstream_price_warning}
-          fallback="上游价格读取失败"
-        />
-      ) : null}
-      <TableFilterToolbar aria-label="价格比对筛选与操作">
+      <PriceWarningToast
+        warning={props.snapshot.upstream_price_warning}
+        fetchedAt={props.snapshot.fetched_at}
+      />
+      <ComparisonOverview
+        total={props.snapshot.models.length}
+        selected={selectedModels.length}
+        compared={results.size}
+        matched={comparisonCounts.matched}
+        mismatched={comparisonCounts.mismatched}
+      />
+      <TableFilterToolbar
+        aria-label="价格比对筛选与操作"
+        className="rounded-lg border bg-card/60 p-2 shadow-xs sm:p-2.5"
+      >
         <UpstreamSelector
           upstreams={upstreams}
           value={selectedUpstreamHost}
           onChange={selectUpstream}
         />
-        <div className="relative min-w-48 flex-1 sm:max-w-80">
+        <div className="relative w-full min-w-0 flex-1 sm:w-auto sm:min-w-56 sm:max-w-96">
           <Search
             className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
             aria-hidden="true"
@@ -397,7 +468,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
           />
         </div>
         <Button
-          className="ml-auto"
+          className="ml-auto w-full sm:w-auto"
           disabled={!selectedUpstream || selectedModels.length === 0}
           onClick={compareSelectedModels}
         >
@@ -413,61 +484,73 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
           </div>
         ) : (
           <>
-            <Table containerClassName="min-h-0 flex-1 overflow-auto">
-              <TableHeader className="sticky top-0 z-10 bg-background">
-                <TableRow>
-                  <TableHead className="w-12">
-                    <Checkbox
-                      checked={allVisibleSelected}
-                      aria-label="选择当前页全部模型"
-                      onCheckedChange={toggleVisibleModels}
-                    />
-                  </TableHead>
-                  <TableHead>模型</TableHead>
-                  <TableHead className="w-40 text-right">输入价格</TableHead>
-                  <TableHead className="w-40 text-right">输出价格</TableHead>
-                  <TableHead className="w-32">结果</TableHead>
-                  <TableHead className="w-24 text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {pagination.visibleItems.map((model) => {
-                  const prices = modelPriceColumnValues(model);
-                  return (
-                    <TableRow key={model.model}>
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedModels.includes(model.model)}
-                          aria-label={`选择 ${model.model}`}
-                          onCheckedChange={(checked) => toggleModel(model.model, checked)}
-                        />
-                      </TableCell>
-                      <TableCell className="font-mono text-xs font-medium">{model.model}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {prices.input || "-"}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-xs">
-                        {prices.output || "-"}
-                      </TableCell>
-                      <TableCell>
-                        <ComparisonStatus model={model.model} status={results.get(model.model)} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          aria-label={`比对 ${model.model}`}
-                          disabled={!selectedUpstream}
-                          onClick={() => compareSingleModel(model)}
-                        >
-                          <GitCompareArrows aria-hidden="true" />
-                          比对
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            {filteredModels.length === 0 ? (
+              <div className="text-muted-foreground flex min-h-52 flex-1 items-center justify-center px-6 text-sm">
+                没有匹配的模型，请调整搜索条件
+              </div>
+            ) : (
+              <Table
+                actionColumn
+                containerClassName="min-h-0 flex-1 overflow-auto"
+                className="min-w-[48rem]"
+              >
+                <TableHeader className="sticky top-0 z-10 bg-background shadow-[0_1px_0_var(--border)]">
+                  <TableRow>
+                    <TableHead className="w-12">
+                      <Checkbox
+                        checked={allVisibleSelected}
+                        aria-label="选择当前页全部模型"
+                        onCheckedChange={toggleVisibleModels}
+                      />
+                    </TableHead>
+                    <TableHead>模型</TableHead>
+                    <TableHead className="w-40 text-right">输入价格</TableHead>
+                    <TableHead className="w-40 text-right">输出价格</TableHead>
+                    <TableHead className="w-32">结果</TableHead>
+                    <TableHead className="w-24 text-right">操作</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagination.visibleItems.map((model) => {
+                    const prices = modelPriceColumnValues(model);
+                    return (
+                      <TableRow key={model.model} className="transition-colors hover:bg-muted/40">
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedModels.includes(model.model)}
+                            aria-label={`选择 ${model.model}`}
+                            onCheckedChange={(checked) => toggleModel(model.model, checked)}
+                          />
+                        </TableCell>
+                        <TableCell className="font-mono text-xs font-medium">
+                          {model.model}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">
+                          {prices.input || "-"}
+                        </TableCell>
+                        <TableCell className="text-right font-mono text-xs">
+                          {prices.output || "-"}
+                        </TableCell>
+                        <TableCell>
+                          <ComparisonStatus model={model.model} status={results.get(model.model)} />
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            aria-label={`比对 ${model.model}`}
+                            disabled={!selectedUpstream}
+                            onClick={() => compareSingleModel(model)}
+                          >
+                            <GitCompareArrows aria-hidden="true" />
+                            比对
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
             <DataTablePagination
               currentPage={pagination.currentPage}
               totalPages={pagination.totalPages}

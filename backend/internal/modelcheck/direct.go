@@ -28,15 +28,23 @@ type directCredential struct {
 type directBundleSender struct {
 	client     *http.Client
 	credential directCredential
+	requestID  string
 }
 
 func (sender directBundleSender) Send(ctx context.Context, _ string, model, prompt string, timeoutSeconds int) (string, string, error) {
+	return sender.SendWithReasoning(ctx, "", model, prompt, timeoutSeconds, "")
+}
+
+func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string, model, prompt string, timeoutSeconds int, effort string) (string, string, error) {
 	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	if strings.EqualFold(strings.TrimSpace(sender.credential.Platform), "anthropic") {
+		if effort != "" {
+			return "", "", visibleRequestError{message: "Astra 检测需要支持思考等级的 OpenAI 接口，请检查账号平台配置"}
+		}
 		return sender.sendAnthropic(requestContext, model, prompt)
 	}
-	return sender.sendOpenAI(requestContext, model, prompt)
+	return sender.sendOpenAI(requestContext, model, prompt, effort)
 }
 
 func (sender directBundleSender) sendAnthropic(ctx context.Context, model, prompt string) (string, string, error) {
@@ -61,10 +69,13 @@ func (sender directBundleSender) sendAnthropic(ctx context.Context, model, promp
 	return text, stringField(payload, "model"), nil
 }
 
-func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt string) (string, string, error) {
+func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt, effort string) (string, string, error) {
 	headers := map[string]string{"Authorization": "Bearer " + sender.credential.Secret}
 	responsesBody := map[string]any{
 		"model": model, "input": prompt, "max_output_tokens": 4096, "stream": false,
+	}
+	if effort != "" {
+		responsesBody["reasoning"] = map[string]string{"effort": effort}
 	}
 	payload, status, raw, err := sender.request(ctx, "/v1/responses", responsesBody, headers)
 	if err != nil {
@@ -83,6 +94,9 @@ func (sender directBundleSender) sendOpenAI(ctx context.Context, model, prompt s
 	chatBody := map[string]any{
 		"model": model, "messages": []map[string]any{{"role": "user", "content": prompt}},
 		"max_tokens": 4096, "stream": false,
+	}
+	if effort != "" {
+		chatBody["reasoning_effort"] = effort
 	}
 	payload, status, raw, err = sender.request(ctx, "/v1/chat/completions", chatBody, headers)
 	if err != nil {
@@ -128,6 +142,9 @@ func (sender directBundleSender) sendRequest(ctx context.Context, endpoint strin
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "Sub2API-Console/1.0")
+	if sender.requestID != "" {
+		request.Header.Set("X-Request-ID", sender.requestID)
+	}
 	for key, value := range headers {
 		request.Header.Set(key, value)
 	}

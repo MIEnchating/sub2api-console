@@ -196,6 +196,7 @@ func (s *Store) UpdateUpstreamConfiguration(ctx context.Context, value UpstreamC
 	metadata["auth_verified_at"] = now
 	metadata["account_base_url"] = accountBaseURL
 	delete(metadata, "auth_error")
+	markUpstreamConcurrencyStale(metadata, "上游配置已更新，请重新同步用户并发上限")
 	metadataEncoded, err := json.Marshal(metadata)
 	if err != nil {
 		return UpstreamConfigurationWriteResult{}, err
@@ -299,6 +300,7 @@ func (s *Store) UpdateUpstreamClassification(ctx context.Context, host, upstream
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	metadata["auth_verified_at"] = now
 	delete(metadata, "auth_error")
+	markUpstreamConcurrencyStale(metadata, "上游鉴权配置已更新，请重新同步用户并发上限")
 	metadataEncoded, err := json.Marshal(metadata)
 	if err != nil {
 		return err

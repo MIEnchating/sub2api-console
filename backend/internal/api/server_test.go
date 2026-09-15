@@ -2663,6 +2663,7 @@ func TestAccountControlQueuesDedicatedTaskWithoutInspection(t *testing.T) {
 func TestGroupAndUpstreamReadContracts(t *testing.T) {
 	groupID := "1"
 	rawRate := "1"
+	assignedConcurrency := int64(32)
 	router, _ := testRouter(t, config.Config{AdminToken: "test-token"}, fakeBusiness{
 		mode: "完全模式",
 		groupRows: []business.GroupStatus{{
@@ -2670,7 +2671,7 @@ func TestGroupAndUpstreamReadContracts(t *testing.T) {
 			ParticipationStatus: "participating", Status: "healthy",
 		}},
 		groupAllocation: business.GroupAllocation{
-			GroupID: "1", GroupName: "codex", AccountCount: 1, AssignedConcurrency: 32,
+			GroupID: "1", GroupName: "codex", AccountCount: 1, AssignedConcurrency: &assignedConcurrency,
 			Channels: []business.GroupAllocationChannel{{AccountID: "41", AccountName: "alpha"}},
 		},
 		groupProbeModels: business.GroupProbeModels{
@@ -3873,7 +3874,7 @@ func TestAlertPolicyContracts(t *testing.T) {
 	}
 	payload := map[string]any{
 		"enabled": true, "configuration_enabled": true, "auth_enabled": true, "rate_sync_enabled": true,
-		"multiplier_increase_enabled": true, "multiplier_decrease_enabled": true,
+		"multiplier_increase_enabled": true, "multiplier_decrease_enabled": true, "cost_traffic_enabled": true,
 		"balance_enabled": true, "probe_enabled": true, "balance_thresholds": []any{"20", "10", "5"},
 		"routing_breaker_enabled": true, "routing_degraded_enabled": true,
 		"routing_degraded_types": []any{"health_score", "gateway_error_rate", "latency", "other"}, "routing_survivor_enabled": true,

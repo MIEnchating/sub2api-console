@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -404,7 +404,7 @@ describe("PricingPage", () => {
     expect(markup).toContain('aria-label="互换组 1 可选分组"');
     expect(markup).toContain('data-testid="exchange-set-options-1"');
     const exchangeOption = markup.match(/<label[^>]*data-slot="exchange-group-option"[^>]*>/)?.[0];
-    expect(exchangeOption).toContain("min-h-12");
+    expect(exchangeOption).toContain("min-h-[4.75rem]");
     expect(markup).toContain(">售价 1</span>");
     expect(markup).not.toContain("account-41");
     expect(markup).toContain("disabled");
@@ -728,4 +728,25 @@ it("价格变更记录首次读取显示轻量反馈，完成后展示空记录�
   expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
   await act(async () => resolve(Response.json([])));
   expect(await screen.findByText("暂无账号分组变更")).toBeVisible();
+});
+
+it("价格目录按分组字典排列且保留分组售价", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+  client.setQueryData(["pricing"], snapshot);
+  client.setQueryData(["dictionaries", "group"], {
+    items: [
+      { value: "7", enabled: true },
+      { value: "6", enabled: true },
+    ],
+  });
+  render(
+    <QueryClientProvider client={client}>
+      <PricingPage />
+    </QueryClientProvider>,
+  );
+  const rows = screen.getAllByRole("row").slice(1);
+  expect(within(rows[0]).getByText("复合")).toBeVisible();
+  expect(within(rows[0]).getByText("0.5")).toBeVisible();
+  expect(within(rows[1]).getByText("标准")).toBeVisible();
+  client.clear();
 });

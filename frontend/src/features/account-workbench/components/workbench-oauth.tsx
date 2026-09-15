@@ -14,7 +14,7 @@ import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { ContentRetry } from "@/components/content-retry";
 import { TaskStartupState } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
-import { BrowserSurface } from "@/features/upstreams/components/browser-login/browser-surface";
+import { BrowserSurface } from "@/components/browser-surface/browser-surface";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { oauthPollingStatuses, oauthStatusLabels, workbenchKeys } from "../constants";
 import { useWorkbenchOAuth } from "../hooks/use-workbench-oauth";
@@ -128,7 +128,7 @@ export function WorkbenchOAuth(props: { scope?: WorkbenchScope } = {}): ReactEle
     <div className="grid min-w-0 gap-4">
       <section className="grid min-w-0 gap-4" aria-label="账号授权登录">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-base font-medium">OpenAI 账号授权</h2>
+          <h2 className="text-sm font-semibold">OpenAI 账号授权</h2>
           <WorkbenchOAuthCheckpoints
             scope={props.scope}
             disabled={busy || !!active || !!authorized || oauth.starting}
@@ -136,17 +136,17 @@ export function WorkbenchOAuth(props: { scope?: WorkbenchScope } = {}): ReactEle
             onSecurity={setSecurityCheckpoint}
             onOAuth={oauth.accept}
           />
-          {!active && !authorized && !oauth.starting ? (
-            <WorkbenchOAuthStart
-              disabled={busy}
-              retry={oauth.startFailed || session !== null}
-              onStart={(input) => {
-                clearPreview();
-                oauth.start({ ...input, scope: props.scope });
-              }}
-            />
-          ) : null}
         </div>
+        {!active && !authorized && !oauth.starting ? (
+          <WorkbenchOAuthStart
+            disabled={busy}
+            retry={oauth.startFailed || session !== null}
+            onStart={(input) => {
+              clearPreview();
+              oauth.start({ ...input, scope: props.scope });
+            }}
+          />
+        ) : null}
         {oauth.starting || session?.status === "starting" ? (
           <ContentLoading label={oauthStatusLabels.starting} />
         ) : null}

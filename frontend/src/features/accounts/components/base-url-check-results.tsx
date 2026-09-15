@@ -112,6 +112,7 @@ export function BaseURLCheckResults(props: BaseURLCheckResultsProps) {
 
       <DataTablePanel className="flex-1">
         <Table
+          actionColumn
           overflowTooltip={false}
           containerClassName="min-h-0 flex-1 overflow-auto"
           className="min-w-[1120px] table-fixed"

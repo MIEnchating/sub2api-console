@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup } from "@/test/dictionary";
 import { describe, expect, it } from "vitest";
 
 import type { AccountStatus, Task } from "@/api";

@@ -46,6 +46,25 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
 }
 
 describe("accountPoolState", () => {
+  it("并发额度不足的账号单独展示、统计和筛选，不归入人工暂停或待探测", () => {
+    const limited = account({ health: "concurrency_limited", schedulable: false });
+
+    expect(accountPoolState(limited)).toMatchObject({
+      value: "concurrency_limited",
+      label: "等待并发额度",
+      tone: "warning",
+    });
+    expect(accountPoolCounts([limited, account()])).toMatchObject({
+      all: 2,
+      concurrency_limited: 1,
+      healthy: 1,
+      paused: 0,
+      unknown: 0,
+    });
+    expect(accountMatchesPoolFilter(limited, "concurrency_limited")).toBe(true);
+    expect(accountMatchesPoolFilter(limited, "paused")).toBe(false);
+  });
+
   it.each(["__proto__", "constructor"])("健康状态为 %s 时归入待探测", (health) => {
     expect(accountPoolState(account({ health })).value).toBe("unknown");
   });

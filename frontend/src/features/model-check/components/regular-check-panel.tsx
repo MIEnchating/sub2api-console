@@ -47,6 +47,7 @@ function searchableAccount(values: Array<string | null | undefined>, query: stri
 }
 
 function hasDetectionProfile(model: string, capabilities?: ModelCheckCapabilities): boolean {
+  if (capabilities?.astra_models?.includes(model)) return true;
   if (!capabilities) return false;
   if (capabilities.sol_models.includes(model) || capabilities.claude_standards.includes(model))
     return true;

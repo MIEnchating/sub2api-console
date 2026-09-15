@@ -110,7 +110,7 @@ func (w *worker) openSecurity(r *http.Request) (wireResponse, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.id != "" || w.oauthID != "" || w.securityID != "" {
+	if w.oauthID != "" || w.securityID != "" {
 		return wireResponse{}, errors.New("验证浏览器正在使用中")
 	}
 	ctx, cancel := context.WithTimeout(w.ctx, Lifetime)

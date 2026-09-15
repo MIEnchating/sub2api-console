@@ -35,12 +35,13 @@ test("混合恢复保留长标识布局、刷新后接回原任务并经确认�
       },
     ],
   };
-  await page.route("**/api/account-workbench/queue-recoveries", (route) =>
+  await page.route("**/api/account-workbench/queue-recoveries?scope=managed", (route) =>
     route.fulfill({
       json: [
         {
           id: "mixed-saved",
           kind: "mixed",
+          scope: "managed",
           task_id: "original-task-" + "stable-id".repeat(25),
           status: "completed",
           revision: 9,
@@ -64,8 +65,26 @@ test("混合恢复保留长标识布局、刷新后接回原任务并经确认�
       json: route.request().method() === "DELETE" ? { cancelled: true } : run,
     });
   });
+  const originalID = "original-task-" + "stable-id".repeat(25);
+  const task = {
+    id: originalID,
+    skill: "account-workbench",
+    operation: "account-workbench-mixed",
+    status: "succeeded",
+    progress: 100,
+    message: "已保存本批",
+    created_at: "",
+    updated_at: "",
+    result: { recovery_id: "mixed-saved" },
+  };
+  await page.route("**/api/account-workbench/history", (route) => route.fulfill({ json: [task] }));
+  await page.route("**/api/tasks/**", (route) => route.fulfill({ json: task }));
+  await page.route("**/api/account-workbench/queue-recoveries?scope=local-export", (route) =>
+    route.fulfill({ json: [] }),
+  );
   await page.goto("/account-workbench");
-  await page.getByRole("tab", { name: "混合运行", exact: true }).click();
+  await page.getByRole("tab", { name: "处理记录", exact: true }).click();
+  await page.getByRole("button", { name: `查看任务 ${originalID}` }).click();
   await page.getByRole("button", { name: "恢复已保存批次" }).click();
   const dialog = page.getByRole("dialog", { name: "恢复已保存批次", exact: true });
   await expect(dialog.getByRole("button", { name: "恢复本批" })).toBeInViewport();
@@ -77,26 +96,27 @@ test("混合恢复保留长标识布局、刷新后接回原任务并经确认�
   await dialog.getByRole("button", { name: "恢复本批" }).click();
   expect(resumes).toHaveLength(0);
   await page.getByRole("button", { name: "确认继续本批" }).click();
-  const progress = page.getByRole("region", { name: "混合运行进度" });
+  const progress = page.getByRole("region", { name: "账号处理进度" });
   await expect(progress).toContainText("mixed-reconnected");
-  await expect(page.getByRole("button", { name: "预览私有转换结果" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "预览可导出账号" })).toBeEnabled();
   expect((await progress.boundingBox())?.x).toBeGreaterThanOrEqual(0);
-  expect(resumes).toEqual([{ revision: 9, confirmed: true }]);
+  expect(resumes).toEqual([{ revision: 9, confirmed: true, scope: "managed" }]);
   await page.screenshot({
     path: test.info().outputPath("mixed-queue-restored.png"),
     animations: "disabled",
   });
   await page.reload();
-  await page.getByRole("tab", { name: "混合运行", exact: true }).click();
+  await page.getByRole("tab", { name: "处理记录", exact: true }).click();
+  await page.getByRole("button", { name: `查看任务 ${originalID}` }).click();
   await page.getByRole("button", { name: "恢复已保存批次" }).click();
   await page.getByRole("button", { name: "恢复本批" }).click();
   await page.getByRole("button", { name: "确认继续本批" }).click();
   await expect(progress).toContainText("mixed-reconnected");
   expect(deletes).toHaveLength(0);
   expect(resumes).toHaveLength(2);
-  await page.getByRole("button", { name: "结束混合运行" }).click();
+  await page.getByRole("button", { name: "结束本批处理" }).click();
   expect(deletes).toHaveLength(0);
-  await page.getByRole("button", { name: "结束并清除混合结果" }).click();
+  await page.getByRole("button", { name: "结束并清除未用结果" }).click();
   await expect(progress).toHaveCount(0);
   expect(deletes).toHaveLength(1);
 });

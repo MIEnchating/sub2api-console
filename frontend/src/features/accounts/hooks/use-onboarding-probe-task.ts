@@ -27,7 +27,10 @@ export const probeTaskResultSchema = z.object({
 export function useOnboardingProbeTask(host: string, groupId: string) {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [history, setHistory] = useState<ProbeStep[]>([]);
+  const [isStarting, setIsStarting] = useState(false);
   const previous = useRef<ProbeStep[]>([]);
+  const preparation = useRef<ProbeStep[]>([]);
+  const actionRef = useRef<"models" | "probe" | "cleanup">("models");
   const historyRef = useRef<ProbeStep[]>([]);
   const starting = useRef<Promise<Task> | null>(null);
   const current = useRef<Task | null>(null);
@@ -46,6 +49,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     current.current = task;
     const parsed = probeStepsSchema.safeParse(task.result.steps);
     historyRef.current = [...previous.current, ...(parsed.success ? parsed.data : [])].slice(-200);
+    if (actionRef.current === "models") preparation.current = parsed.success ? parsed.data : [];
     setHistory(historyRef.current);
     if (taskIsTerminal(task)) {
       complete.current?.(task);
@@ -67,7 +71,13 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     mode?: OnboardingProbeMode,
   ): Promise<Task> {
     if (active.current) throw new Error("探活操作仍在进行，请等待完成");
-    previous.current = historyRef.current;
+    actionRef.current = action;
+    previous.current = action === "probe" ? preparation.current : [];
+    preparation.current = [];
+    historyRef.current = previous.current;
+    setHistory(historyRef.current);
+    setTaskId(null);
+    setIsStarting(true);
     current.current = null;
     const promise = (async (): Promise<Task> => {
       starting.current = api.startOnboardingProbeTask(action, host, groupId, model, mode);
@@ -89,6 +99,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     } finally {
       active.current = null;
       starting.current = null;
+      if (mounted.current) setIsStarting(false);
     }
   }
 
@@ -112,6 +123,7 @@ export function useOnboardingProbeTask(host: string, groupId: string) {
     run,
     cancel,
     history,
+    starting: isStarting && !query.data,
     task: query.data,
     queryError: query.isError,
     refetch: query.refetch,

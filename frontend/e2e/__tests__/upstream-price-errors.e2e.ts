@@ -83,7 +83,7 @@ test("大量上游失败时详情在视口内滚动且关闭后仍能比对可�
   await page.getByRole("button", { name: "关闭通知" }).click();
   await expect(details).toHaveCount(0);
   await page.getByRole("combobox", { name: "比对上游" }).click();
-  await page.getByRole("option", { name: /available\.test · New API/ }).click();
+  await page.getByRole("option", { name: "可用上游 · New API" }).click();
   await page.getByRole("button", { name: "比对 test-model" }).click();
   await expect(page.getByRole("dialog", { name: "test-model 价格比对" })).toBeVisible();
   await expect(page.getByText("价格一致", { exact: true })).toBeVisible();

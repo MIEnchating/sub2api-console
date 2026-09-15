@@ -105,7 +105,7 @@ test("价格规则可用键盘展开，自动调整开关保留已填写参数",
   await page.keyboard.press("Space");
   await expect(toggle).toBeChecked();
   await expect(margin).toHaveValue("25");
-  const description = page.getByText(/均亏损时保留当前分组/);
+  const description = page.getByText(/无合适分组时保留当前分组/);
   await expect(description).not.toBeVisible();
   await page.getByText("查看分组选择规则", { exact: true }).focus();
   await page.keyboard.press("Enter");

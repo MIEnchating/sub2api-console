@@ -64,7 +64,7 @@ function mount(scope?: WorkbenchScope): {
   });
   const view = render(
     <QueryClientProvider client={client}>
-      <WorkbenchMixed scope={scope} />
+      <WorkbenchMixed scope={scope} recoveryTaskId={queue.task_id} />
     </QueryClientProvider>,
   );
   return { fetcher, unmount: view.unmount };
@@ -74,7 +74,7 @@ async function resume(): Promise<void> {
   await user.click(screen.getByRole("button", { name: "恢复已保存批次" }));
   await user.click(await screen.findByRole("button", { name: "恢复本批" }));
   await user.click(screen.getByRole("button", { name: "确认继续本批" }));
-  await screen.findByRole("region", { name: "混合运行进度" });
+  await screen.findByRole("region", { name: "账号处理进度" });
 }
 
 it("混合恢复筛选父批次并在确认后提交稳定ID、版本和本地范围", async () => {
@@ -85,7 +85,7 @@ it("混合恢复筛选父批次并在确认后提交稳定ID、版本和本地�
   await user.click(screen.getByRole("button", { name: "恢复本批" }));
   expect(view.fetcher.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
   await user.click(screen.getByRole("button", { name: "确认继续本批" }));
-  expect(await screen.findByRole("region", { name: "混合运行进度" })).toHaveTextContent(
+  expect(await screen.findByRole("region", { name: "账号处理进度" })).toHaveTextContent(
     "restored-task",
   );
   const request = view.fetcher.mock.calls.find(
@@ -115,11 +115,11 @@ it("主动结束已恢复批次仍需确认并清除服务器结果", async () =
   const view = mount();
   await resume();
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "结束混合运行" }));
+  await user.click(screen.getByRole("button", { name: "结束本批处理" }));
   expect(view.fetcher.mock.calls.some(([, options]) => options?.method === "DELETE")).toBe(false);
-  await user.click(screen.getByRole("button", { name: "结束并清除混合结果" }));
+  await user.click(screen.getByRole("button", { name: "结束并清除未用结果" }));
   await waitFor(() =>
-    expect(screen.queryByRole("region", { name: "混合运行进度" })).not.toBeInTheDocument(),
+    expect(screen.queryByRole("region", { name: "账号处理进度" })).not.toBeInTheDocument(),
   );
   expect(view.fetcher).toHaveBeenCalledWith(
     "/api/account-workbench/runs/restored-mixed",

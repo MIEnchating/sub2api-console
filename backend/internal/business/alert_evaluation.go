@@ -67,6 +67,11 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if balanceHost == "" {
+		if err := closeLegacyCapacityWaitAlerts(ctx, tx, now); err != nil {
+			return AlertEvidenceResult{}, err
+		}
+	}
 	current := make(map[string]struct{}, len(findings))
 	currentScopes := make(map[string]struct{}, len(findings))
 	for _, finding := range findings {
@@ -169,7 +174,7 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 }
 
 func alertIncidentScope(incidentKey, eventType, objectKind, objectID string) string {
-	if eventType == "account.probe" {
+	if eventType == "account.probe" || eventType == "account.cost_traffic" {
 		return incidentKey
 	}
 	if strings.HasPrefix(eventType, "account.routing_") || eventType == "account.binding_invalid" {
@@ -203,6 +208,8 @@ func (s *Store) suppressFiringAlertIncidents(ctx context.Context) error {
 
 func alertRuleEnabled(policy AlertPolicy, eventType, causeCode string) bool {
 	switch eventType {
+	case "account.cost_traffic":
+		return policy.CostTrafficEnabled
 	case "upstream.configuration":
 		return policy.ConfigurationEnabled
 	case "upstream.auth":
@@ -371,6 +378,16 @@ func (s *Store) alertFindings(ctx context.Context, policy AlertPolicy, balanceHo
 	}
 	findings = append(findings, routingFindings...)
 	notEvaluated := routingNotEvaluated
+	if policy.CostTrafficEnabled {
+		costFindings, costNotEvaluated, err := s.costTrafficAlertFindings(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		findings = append(findings, costFindings...)
+		for key, detail := range costNotEvaluated {
+			notEvaluated[key] = detail
+		}
+	}
 	if policy.ProbeEnabled {
 		probeFindings, probeNotEvaluated, err := s.probeFailureFindings(ctx, policy)
 		if err != nil {
@@ -529,7 +546,8 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 }
 
 func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,COALESCE(latest.error,'')
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,COALESCE(latest.error,''),latest.operation_type,
+		COALESCE(latest.remote_confirmed,0),COALESCE(latest.readback_confirmed,0)
 		FROM accounts a JOIN operation_audit latest ON latest.source_id=(
 			SELECT recent.source_id FROM operation_audit recent INDEXED BY ix_operation_audit_apply_error_recent
 			WHERE recent.operation_type IN ('routing.writeback','cleanup.delete') AND recent.object_id=a.id
@@ -545,9 +563,13 @@ func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding
 	defer rows.Close()
 	findings := []alertFinding{}
 	for rows.Next() {
-		var accountID, reason string
-		if err := rows.Scan(&accountID, &reason); err != nil {
+		var accountID, reason, operationType string
+		var remoteConfirmed, readbackConfirmed bool
+		if err := rows.Scan(&accountID, &reason, &operationType, &remoteConfirmed, &readbackConfirmed); err != nil {
 			return nil, err
+		}
+		if operationType == "routing.writeback" && !remoteConfirmed && !readbackConfirmed && legacyCapacityWaitReason(reason) {
+			continue
 		}
 		findings = append(findings, alertFinding{
 			"console:routing:apply:" + accountID, "routing.apply_failure", "account", accountID,

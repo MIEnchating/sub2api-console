@@ -1,6 +1,7 @@
 import { memo, useMemo, useRef, useState, type ReactElement } from "react";
 import { Maximize2 } from "lucide-react";
 import type { AnimationResult } from "@/api";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import {
 
 export const AnimationPreview = memo(function AnimationPreview(props: {
   result: AnimationResult;
+  className?: string;
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -29,7 +31,10 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen(true)}
-        className="group relative block h-full min-h-0 w-full cursor-zoom-in overflow-hidden rounded-lg bg-slate-100 ring-1 ring-inset ring-border/40 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        className={cn(
+          "group relative block h-full min-h-0 w-full cursor-zoom-in overflow-hidden rounded-lg bg-slate-100 ring-1 ring-inset ring-border/40 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          props.className,
+        )}
       >
         <img className="h-full min-h-0 w-full object-contain" src={source} alt={alt} />
         <span

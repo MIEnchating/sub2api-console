@@ -20,6 +20,7 @@ import { WorkbenchGroupPicker } from "./group-picker";
 import { WorkbenchTask } from "./workbench-task";
 import { WorkbenchMaintenanceAuthorization } from "./workbench-maintenance-authorization";
 import { WorkbenchMaintenanceUploads } from "./workbench-maintenance-uploads";
+import { WorkbenchMaintenanceResult } from "./workbench-maintenance-result";
 
 export function WorkbenchMaintenancePanel(): ReactElement {
   const query = useQuery({
@@ -27,7 +28,11 @@ export function WorkbenchMaintenancePanel(): ReactElement {
     queryFn: api.workbenchMaintenance,
     refetchInterval: (state) => {
       if (state.state.error) return false;
-      return state.state.data?.enabled || state.state.data?.pending_uploads?.length ? 5000 : false;
+      return state.state.data?.enabled ||
+        state.state.data?.running ||
+        state.state.data?.pending_uploads?.length
+        ? 5000
+        : false;
     },
   });
   const groups = useQuery({ queryKey: ["groups"], queryFn: api.groups });
@@ -45,11 +50,13 @@ export function WorkbenchMaintenancePanel(): ReactElement {
   return (
     <div className="grid min-w-0 gap-4">
       <MaintenanceForm config={query.data} groups={groups.data} />
-      <WorkbenchMaintenanceUploads
-        items={query.data.pending_uploads ?? []}
-        refreshing={query.isFetching}
-        onRefresh={() => void query.refetch()}
-      />
+      {!!query.data.pending_uploads?.length && (
+        <WorkbenchMaintenanceUploads
+          items={query.data.pending_uploads ?? []}
+          refreshing={query.isFetching}
+          onRefresh={() => void query.refetch()}
+        />
+      )}
     </div>
   );
 }
@@ -109,20 +116,23 @@ function MaintenanceForm(props: {
   const detection = confirmedSettings.check_after_repair
     ? `修复后使用 ${confirmedSettings.model} 检测，会产生模型调用用量。`
     : "修复后不执行模型检测。";
+  let status = props.config.enabled ? "运行中" : "已暂停";
+  if (props.config.running) status = "正在检查";
   return (
     <div className="grid gap-4">
       <form
-        className="grid gap-4 rounded-lg border bg-card p-4"
+        className="grid gap-4"
         onSubmit={form.handleSubmit((value) => {
           if (value.enabled) setConfirm(value);
           else save.mutate(value);
         })}
       >
-        <h2 className="font-medium">自动维护设置</h2>
-        <p className="text-sm text-muted-foreground">
-          定期检查账号登录状态，对需要恢复的账号执行修复。同一账号在冷却期内不会重复修复。分组留空时覆盖全部
-          OpenAI OAuth 账号。
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-medium">自动维护设置</h2>
+          <span role="status" className="text-sm text-muted-foreground">
+            {status}
+          </span>
+        </div>
         <label className="flex items-center gap-2 text-sm">
           <Controller
             control={form.control}
@@ -132,20 +142,6 @@ function MaintenanceForm(props: {
             )}
           />
           启用自动维护
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <Controller
-            control={form.control}
-            name="reauthorize_with_profiles"
-            render={({ field }) => (
-              <Checkbox
-                checked={field.value ?? false}
-                onCheckedChange={field.onChange}
-                disabled={pending}
-              />
-            )}
-          />
-          使用已保存资料自动重新授权
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <FormField
@@ -170,25 +166,13 @@ function MaintenanceForm(props: {
             <Input
               id="workbench-cooldown"
               type="number"
-              min={1}
+              min={0}
               disabled={pending}
               aria-invalid={!!form.formState.errors.cooldown_minutes}
               {...form.register("cooldown_minutes", { valueAsNumber: true })}
             />
           </FormField>
         </div>
-        <Controller
-          control={form.control}
-          name="group_ids"
-          render={({ field }) => (
-            <WorkbenchGroupPicker
-              groups={props.groups}
-              value={field.value}
-              onChange={field.onChange}
-              disabled={pending}
-            />
-          )}
-        />
         <label className="flex items-center gap-2 text-sm">
           <Controller
             control={form.control}
@@ -199,18 +183,52 @@ function MaintenanceForm(props: {
           />
           修复后检测（会产生模型调用用量）
         </label>
-        <FormField
-          label="检测模型"
-          htmlFor="workbench-maintenance-model"
-          error={form.formState.errors.model?.message}
+        <details
+          className="min-w-0 border-t pt-3"
+          open={!!form.formState.errors.model || undefined}
         >
-          <Input
-            id="workbench-maintenance-model"
-            disabled={pending || !form.watch("check_after_repair")}
-            aria-invalid={!!form.formState.errors.model}
-            {...form.register("model")}
-          />
-        </FormField>
+          <summary className="cursor-pointer text-sm text-muted-foreground">高级设置</summary>
+          <div className="mt-3 grid gap-3">
+            <Controller
+              control={form.control}
+              name="group_ids"
+              render={({ field }) => (
+                <WorkbenchGroupPicker
+                  groups={props.groups}
+                  value={field.value}
+                  onChange={field.onChange}
+                  disabled={pending}
+                />
+              )}
+            />
+            <FormField
+              label="检测模型"
+              htmlFor="workbench-maintenance-model"
+              error={form.formState.errors.model?.message}
+            >
+              <Input
+                id="workbench-maintenance-model"
+                disabled={pending || !form.watch("check_after_repair")}
+                aria-invalid={!!form.formState.errors.model}
+                {...form.register("model")}
+              />
+            </FormField>
+            <label className="flex items-center gap-2 text-sm">
+              <Controller
+                control={form.control}
+                name="reauthorize_with_profiles"
+                render={({ field }) => (
+                  <Checkbox
+                    checked={field.value ?? false}
+                    onCheckedChange={field.onChange}
+                    disabled={pending}
+                  />
+                )}
+              />
+              使用已保存资料自动重新授权
+            </label>
+          </div>
+        </details>
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={pending}>
             {save.isPending ? "正在保存…" : "保存维护设置"}
@@ -231,7 +249,7 @@ function MaintenanceForm(props: {
           <Button
             type="button"
             variant="outline"
-            disabled={pending || form.formState.isDirty}
+            disabled={pending || form.formState.isDirty || props.config.running}
             onClick={() => setConfirm("check")}
           >
             立即检查并修复
@@ -241,9 +259,12 @@ function MaintenanceForm(props: {
           <p className="text-sm text-muted-foreground">请先保存设置，再立即检查。</p>
         )}
         {check.isPending && <TaskStartupState message="正在创建账号维护任务" />}
-        {props.config.last_run_at && (
-          <p className="text-sm text-muted-foreground">最近检查：{props.config.last_run_at}</p>
-        )}
+        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+          <p>最近检查：{props.config.last_run_at || "尚未检查"}</p>
+          <p>
+            下次检查：{props.config.next_run_at || (props.config.enabled ? "等待调度" : "已暂停")}
+          </p>
+        </div>
       </form>
       <ConfirmActionDialog
         open={confirm !== null}
@@ -260,6 +281,7 @@ function MaintenanceForm(props: {
         }}
       />
       {task && <WorkbenchTask task={task} />}
+      {!task && <WorkbenchMaintenanceResult id={props.config.last_task_id} />}
       {props.config.enabled && props.config.reauthorize_with_profiles ? (
         <WorkbenchMaintenanceAuthorization config={props.config} />
       ) : null}

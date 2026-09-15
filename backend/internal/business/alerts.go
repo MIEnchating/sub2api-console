@@ -524,6 +524,8 @@ func recoveryNotificationEnabled(policy alertPolicy, eventType string) bool {
 
 func recoveryNotificationType(eventType string) string {
 	switch eventType {
+	case "account.cost_traffic":
+		return "cost_traffic"
 	case "upstream.configuration":
 		return "configuration"
 	case "upstream.auth":
@@ -666,6 +668,9 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 		if err := rows.Scan(&item.IncidentKey, &item.EventType, &item.ObjectKind, &item.ObjectID,
 			&objectName, &item.CauseCode, &item.Status, &item.FirstSeenAt, &item.LastSeenAt, &deliveryStatus, &lastError, &groupNamesJSON); err != nil {
 			return nil, err
+		}
+		if legacyCapacityWaitAlert(item.EventType, item.CauseCode) {
+			continue
 		}
 		if err := json.Unmarshal([]byte(groupNamesJSON), &item.GroupNames); err != nil {
 			return nil, fmt.Errorf("读取告警账号分组失败: %w", err)

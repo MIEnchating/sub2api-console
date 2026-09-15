@@ -148,6 +148,7 @@ func run() error {
 	pricingTasks := pricing.New(businessStore, privateStore, taskStore)
 	managementTasks.UseUpstreamCatalogReader(upstreamReader)
 	probeTasks := probe.New(businessStore, privateStore, taskStore)
+	probeTasks.UseKeyRevealer(upstreamReader)
 	accountTasks.UseModelSyncProbe(probeTasks)
 	modelChecks, err := modelcheck.New(taskStore, privateStore, businessStore, upstreamReader)
 	if err != nil {
@@ -189,7 +190,6 @@ func run() error {
 		captchaManager,
 	)
 	authRecoveryService.UsePlatformDetector(upstreamDetector)
-	authRecoveryService.UseBrowserLogin(browserlogin.New(browserlogin.NewRemote("/run/browser/worker.sock"), taskStore, liveTasks))
 	notificationTargetDiscovery.UseTaskRunner(backgroundTasks)
 	alertTasks.UseTaskRunner(backgroundTasks)
 	accountTasks.UseTaskRunner(backgroundTasks)

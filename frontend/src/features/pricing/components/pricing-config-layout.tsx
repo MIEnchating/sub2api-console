@@ -8,7 +8,7 @@ export function PricingConfigLayout(props: ComponentProps<"div">): ReactElement 
       {...props}
       data-slot="pricing-config-layout"
       className={cn(
-        "grid min-w-0 items-start gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]",
+        "grid min-w-0 items-start gap-5 xl:grid-cols-[20rem_minmax(0,1fr)]",
         props.className,
       )}
     />

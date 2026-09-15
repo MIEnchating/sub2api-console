@@ -129,7 +129,8 @@ describe("输入转换为私有JSON", () => {
   it("转换成功清空输入凭据并可开始下一次转换", async () => {
     const view = mount(<WorkbenchImport output="export" />);
     const user = userEvent.setup();
-    await user.type(await screen.findByRole("textbox", { name: "账号内容" }), "rt_private_first");
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.paste("rt_private_first");
     expect(screen.queryByRole("textbox", { name: "检测模型" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
@@ -138,9 +139,14 @@ describe("输入转换为私有JSON", () => {
     });
     expect(screen.queryByRole("button", { name: "确认导入 1 个账号" })).not.toBeInTheDocument();
     await confirmConversion(user);
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveValue(""));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveTextContent(
+        /^账号 JSON 或 rt_ 刷新令牌$/,
+      ),
+    );
     expect(view.requests.some((request) => request.path.endsWith("/import"))).toBe(false);
-    await user.type(screen.getByRole("textbox", { name: "账号内容" }), "rt_private_second");
+    await user.click(screen.getByRole("textbox", { name: "账号内容" }));
+    await user.paste("rt_private_second");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "生成私有 JSON 文件" })).toBeEnabled(),
@@ -173,7 +179,8 @@ describe("输入转换为私有JSON", () => {
         return Response.json({ detail: "任务队列暂时已满" }, { status: 503 });
     });
     const user = userEvent.setup();
-    await user.type(await screen.findByRole("textbox", { name: "账号内容" }), "rt_private_retry");
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.paste("rt_private_retry");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
     await confirmConversion(user);
@@ -182,7 +189,7 @@ describe("输入转换为私有JSON", () => {
         screen.queryByRole("table", { name: "账号预览", hidden: true }),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveValue("rt_private_retry");
+    expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveTextContent("rt_private_retry");
     fail = false;
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
@@ -199,16 +206,22 @@ describe("输入转换为私有JSON", () => {
       request.path.endsWith("/from-input") ? pending : undefined,
     );
     const user = userEvent.setup();
-    await user.type(await screen.findByRole("textbox", { name: "账号内容" }), "rt_private_waiting");
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.paste("rt_private_waiting");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
     await confirmConversion(user);
-    expect(screen.getByLabelText("账号内容")).toBeDisabled();
+    expect(screen.getByLabelText("账号内容")).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "解析并预览", hidden: true })).toBeDisabled();
     await act(async () => {
       resolve(Response.json(task));
     });
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "账号内容" })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "账号内容" })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      ),
+    );
   });
 
   it("有无效输入时禁止转换但保留关闭入口", () => {

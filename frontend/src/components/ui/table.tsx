@@ -22,16 +22,20 @@ import * as React from "react";
 
 import { cn } from "@/lib/utils";
 import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
+import "./table.css";
 
 const TableOverflowTooltipContext = React.createContext(true);
 
 type TableProps = React.ComponentProps<"table"> & {
+  /** The final column contains row actions and stays visible while scrolling. */
+  actionColumn?: boolean;
   containerClassName?: string;
   overflowTooltip?: boolean;
   uniformTextSize?: boolean;
 };
 
 function Table({
+  actionColumn = false,
   className,
   containerClassName,
   overflowTooltip = true,
@@ -49,6 +53,7 @@ function Table({
       >
         <table
           data-slot="table"
+          data-action-column={actionColumn ? "true" : undefined}
           data-overflow-tooltip={overflowTooltip ? "true" : "false"}
           className={cn(
             "w-full caption-bottom text-sm tabular-nums",

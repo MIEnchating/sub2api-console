@@ -55,12 +55,16 @@ function renderCard(
   initialScope?: string,
   configuredSettings = settings,
   configuredGroups: GroupStatus[] = [group],
+  order: string[] = [],
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { enabled: false, retry: false } },
   });
   queryClient.setQueryData(["account-creation-settings"], configuredSettings);
   queryClient.setQueryData(["groups"], configuredGroups);
+  queryClient.setQueryData(["dictionaries", "group"], {
+    items: order.map((value) => ({ value, enabled: true })),
+  });
   queryClient.setQueryData(
     ["accounts"],
     [
@@ -268,4 +272,11 @@ describe("账号创建设置卡片", () => {
     expect(await screen.findByText("请求失败（404）")).toBeVisible();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+});
+
+it("字典顺序与目录相反时开户设置使用字典顺序", () => {
+  renderCard("6", settings, [group, secondGroup], ["7", "6"]);
+  expect(
+    screen.getAllByTestId(/^account-group-settings-/).map((row) => row.getAttribute("data-testid")),
+  ).toEqual(["account-group-settings-7", "account-group-settings-6"]);
 });

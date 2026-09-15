@@ -16,6 +16,7 @@ type WorkbenchExecution struct {
 	SourceID          string                         `json:"source_id,omitempty"`
 	TargetURL         string                         `json:"target_url"`
 	TargetFingerprint string                         `json:"target_fingerprint"`
+	ProxyURL          string                         `json:"proxy_url,omitempty"`
 	Revision          int64                          `json:"revision"`
 	CreatedAt         string                         `json:"created_at"`
 	ExpiresAt         string                         `json:"expires_at"`

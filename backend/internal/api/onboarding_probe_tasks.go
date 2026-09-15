@@ -19,7 +19,7 @@ func (s *Server) onboardingProbeTask(c *gin.Context) {
 		return
 	}
 	action := c.Param("action")
-	if action != "models" && action != "probe" && action != "cleanup" {
+	if action != "models" && action != "model-options" && action != "probe" && action != "cleanup" {
 		writeError(c, http.StatusUnprocessableEntity, "不支持的探活操作")
 		return
 	}

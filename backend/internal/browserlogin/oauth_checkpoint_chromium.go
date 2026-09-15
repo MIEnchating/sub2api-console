@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -288,13 +287,12 @@ func (f Chromium) RestoreOAuth(ctx context.Context, options OAuthRestoreOptions)
 	}
 	r := newOAuthRecoveryState(f, options.Options)
 	r.paused, r.restore, r.revision = true, &document, document.Meta.Revision
-	browser, err := f.openChromium(ctx, configstore.AuthRecord{BaseURL: "https://auth.openai.com", Host: "auth.openai.com"}, document.URL, oauthAllowedOrigins(), &oauthCallback{state: options.Options.State, redirectURI: options.Options.RedirectURI}, options.Options.ProxyURL, chromiumSessionState{recovery: r})
+	browser, err := f.openChromium(ctx, "https://auth.openai.com", document.URL, oauthAllowedOrigins(), &oauthCallback{state: options.Options.State, redirectURI: options.Options.RedirectURI}, options.Options.ProxyURL, chromiumSessionState{recovery: r})
 	if err != nil {
 		return nil, err
 	}
-	b := browser.(*chromiumBrowser)
-	b.startAutomaticCheckpoints()
-	return b, nil
+	browser.startAutomaticCheckpoints()
+	return browser, nil
 }
 
 func oauthAllowedOrigins() []string {

@@ -20,6 +20,22 @@ function renderForm(upstreamType: string) {
 }
 
 describe("manual upstream authentication form", () => {
+  it("Sub2API 恢复鉴权保留凭据表单且不提供浏览器手动验证入口", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <ManualAuthForm host="api.example.test" upstreamType="sub2api" />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByLabelText("Token", { exact: true })).toBeVisible();
+    expect(screen.getByLabelText("刷新 Token", { exact: true })).toBeVisible();
+    expect(screen.getByRole("button", { name: "验证并保存" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /打开浏览器/ })).not.toBeInTheDocument();
+    view.unmount();
+    client.clear();
+  });
+
   it("shows Token fields for Sub2API and disables empty submission", () => {
     const markup = renderForm("sub2api");
 

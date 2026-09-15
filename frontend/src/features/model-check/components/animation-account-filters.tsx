@@ -1,8 +1,10 @@
 import { useMemo, type ReactElement } from "react";
+import { RotateCcw } from "lucide-react";
 import type { AccountStatus } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import {
   defaultAnimationFilters,
@@ -19,7 +21,7 @@ export function AnimationAccountFilters(props: {
   onChange: (value: AnimationFilters) => void;
 }): ReactElement {
   const groups = useMemo(
-    () => [...new Set(props.accounts.flatMap((account) => account.groups))].sort(),
+    () => [...new Set(props.accounts.flatMap((account) => account.groups))],
     [props.accounts],
   );
   const platforms = useMemo(
@@ -29,14 +31,15 @@ export function AnimationAccountFilters(props: {
     [props.accounts],
   );
   const orderedPlatforms = useDictionaryOrder("platform", platforms, (platform) => platform);
+  const orderedGroups = useDictionaryOrder("group", groups, (group) => group, "name");
   return (
     <div
       role="group"
       aria-label="动画账号筛选"
-      className="flex w-full min-w-0 items-center gap-2 overflow-x-auto"
+      className="flex w-full min-w-0 flex-wrap items-center gap-2"
     >
       <Input
-        className="w-64 min-w-48 shrink-0"
+        className="w-full min-w-0 sm:w-52"
         value={props.value.query}
         onChange={(event) => props.onChange({ ...props.value, query: event.target.value })}
         aria-label="搜索动画检测账号"
@@ -44,7 +47,7 @@ export function AnimationAccountFilters(props: {
       />
       <FilterMenu
         label="分组"
-        options={groups}
+        options={orderedGroups}
         value={props.value.group}
         onValueChange={(group) => props.onChange({ ...props.value, group })}
       />
@@ -61,16 +64,28 @@ export function AnimationAccountFilters(props: {
         value={props.value.priority}
         onValueChange={(priority) => props.onChange({ ...props.value, priority })}
       />
-      <Button
-        type="button"
-        variant="ghost"
-        disabled={
-          !props.value.query && !props.value.group && !props.value.platform && !props.value.priority
-        }
-        onClick={() => props.onChange(defaultAnimationFilters)}
-      >
-        重置筛选
-      </Button>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="重置筛选"
+              disabled={
+                !props.value.query &&
+                !props.value.group &&
+                !props.value.platform &&
+                !props.value.priority
+              }
+              onClick={() => props.onChange(defaultAnimationFilters)}
+            />
+          }
+        >
+          <RotateCcw aria-hidden="true" />
+        </TooltipTrigger>
+        <TooltipContent>重置筛选</TooltipContent>
+      </Tooltip>
     </div>
   );
 }

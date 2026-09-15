@@ -21,6 +21,7 @@ import { queueItemStatusLabels, workbenchKeys } from "../constants";
 export function WorkbenchQueueRecovery(props: {
   scope?: WorkbenchScope;
   kind: WorkbenchQueueRecovery["kind"];
+  taskId?: string;
   disabled: boolean;
   onResume: (value: WorkbenchQueueRecovery) => void;
 }): ReactElement {
@@ -35,6 +36,7 @@ export function WorkbenchQueueRecovery(props: {
         <QueueDialog
           scope={props.scope}
           kind={props.kind}
+          taskId={props.taskId}
           onClose={() => setOpen(false)}
           onResume={(value) => {
             setOpen(false);
@@ -49,6 +51,7 @@ export function WorkbenchQueueRecovery(props: {
 function QueueDialog(props: {
   scope?: WorkbenchScope;
   kind: WorkbenchQueueRecovery["kind"];
+  taskId?: string;
   onClose: () => void;
   onResume: (value: WorkbenchQueueRecovery) => void;
 }): ReactElement {
@@ -64,7 +67,9 @@ function QueueDialog(props: {
     gcTime: 0,
     retry: false,
   });
-  const queues = query.data?.filter((queue) => queue.kind === props.kind);
+  const queues = query.data?.filter(
+    (queue) => queue.kind === props.kind && (!props.taskId || queue.task_id === props.taskId),
+  );
   useEffect(() => {
     const expiries =
       query.data?.map((item) => Date.parse(item.expires_at)).filter((value) => value > now) ?? [];

@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronLeft, ChevronRight, Play, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Play, RefreshCw, ShieldCheck } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
@@ -14,12 +14,18 @@ import type { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { customAnimationSchema, type CustomAnimationForm } from "../lib/animation-schema";
 import { AnimationAccountResult } from "./animation-account-result";
 import { CustomAnimationFields } from "./custom-animation-fields";
+import { PrecheckAccountResult } from "./precheck-account-result";
+import type { PrecheckQuestionID } from "@/api";
+import { allPrecheckQuestions, precheckQuestionSummary } from "../constants";
+import { PrecheckQuestionSelector } from "./precheck-question-selector";
 
 export function CustomAnimationPanel(props: {
   tasks: ReturnType<typeof useAnimationTasks>;
   active?: boolean;
 }): ReactElement {
   const [confirmation, setConfirmation] = useState(false);
+  const [mode, setMode] = useState<"animation" | "precheck">("animation");
+  const [questions, setQuestions] = useState<PrecheckQuestionID[]>(allPrecheckQuestions);
   const [pending, setPending] = useState(false);
   const form = useForm<CustomAnimationForm>({
     resolver: zodResolver(customAnimationSchema),
@@ -42,6 +48,7 @@ export function CustomAnimationPanel(props: {
     setPending(true);
     try {
       const started = await props.tasks.start({
+        ...(mode === "precheck" ? { mode, precheck_questions: questions } : {}),
         targets: [],
         timeout_seconds: value.timeout_seconds,
         custom: {
@@ -57,7 +64,14 @@ export function CustomAnimationPanel(props: {
       setConfirmation(false);
     }
   });
-  const ids = [...new Set([...props.tasks.results.keys(), ...props.tasks.statuses.keys()])]
+  const ids = [
+    ...new Set([
+      ...props.tasks.results.keys(),
+      ...props.tasks.statuses.keys(),
+      ...props.tasks.precheckResults.keys(),
+      ...props.tasks.precheckStatuses.keys(),
+    ]),
+  ]
     .filter((id) => id.startsWith("custom-"))
     .reverse();
   const mobile = useIsMobile();
@@ -77,10 +91,32 @@ export function CustomAnimationPanel(props: {
         className="shrink-0 space-y-2 border-b p-3"
         noValidate
         autoComplete="off"
-        onSubmit={form.handleSubmit(() => setConfirmation(true))}
+        onSubmit={form.handleSubmit(() => {
+          setMode("animation");
+          setConfirmation(true);
+        })}
       >
         <CustomAnimationFields form={form} disabled={pending || confirmation} />
         <div className="flex flex-wrap items-center gap-2">
+          <PrecheckQuestionSelector
+            value={questions}
+            onChange={setQuestions}
+            disabled={pending || confirmation}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending || questions.length === 0}
+            onClick={() =>
+              void form.handleSubmit(() => {
+                setMode("precheck");
+                setConfirmation(true);
+              })()
+            }
+          >
+            <ShieldCheck aria-hidden="true" />
+            前置检测
+          </Button>
           <Button type="submit" disabled={pending} aria-busy={pending}>
             <Play aria-hidden="true" />
             开始检测
@@ -148,17 +184,29 @@ export function CustomAnimationPanel(props: {
           {pagination.visibleItems.map((id) => {
             const activity = props.tasks.activities.get(id);
             const result = props.tasks.results.get(id);
+            const precheckResult = props.tasks.precheckResults.get(id);
+            const isPrecheck = props.tasks.precheckStatuses.has(id);
             return (
               <article
                 key={id}
-                aria-label={`自定义检测 ${result?.model ?? id}`}
+                aria-label={`自定义检测 ${result?.model ?? precheckResult?.model ?? id}`}
                 className="flex min-h-0 min-w-0 flex-col gap-2 rounded-lg border p-2"
               >
                 {activity ? (
                   <>
-                    <TaskStartupState message="生成中，等待动画结果" />
+                    <TaskStartupState
+                      message={
+                        activity.mode === "precheck" ? "正在执行前置检测" : "生成中，等待动画结果"
+                      }
+                    />
                     {activity.taskID ? <TaskCancelButton taskId={activity.taskID} /> : null}
                   </>
+                ) : null}
+                {!activity && isPrecheck ? (
+                  <PrecheckAccountResult
+                    result={precheckResult}
+                    status={props.tasks.precheckStatuses.get(id)}
+                  />
                 ) : null}
                 {!activity && result ? (
                   <AnimationAccountResult
@@ -166,12 +214,13 @@ export function CustomAnimationPanel(props: {
                     retryDisabled={pending}
                     onRetry={(target) => {
                       form.setValue("model", target.model);
+                      setMode("animation");
                       form.setFocus("api_key");
                       void form.handleSubmit(() => setConfirmation(true))();
                     }}
                   />
                 ) : null}
-                {!activity && !result ? (
+                {!activity && !result && !isPrecheck ? (
                   <p className="text-sm text-muted-foreground">检测已结束，未返回动画</p>
                 ) : null}
               </article>
@@ -182,7 +231,7 @@ export function CustomAnimationPanel(props: {
       <ConfirmActionDialog
         open={confirmation}
         title="确认自定义接口检测"
-        description={`将向 ${form.getValues("base_url")} 发送 ${form.getValues("platform")} 动画生成请求，模型为 ${form.getValues("model")}，并产生 API 用量。`}
+        description={`将向 ${form.getValues("base_url")} 发送 ${form.getValues("platform")} ${mode === "precheck" ? `前置检测请求（${precheckQuestionSummary(questions)}）` : "动画生成请求"}，模型为 ${form.getValues("model")}，并产生 API 用量。`}
         confirmLabel="确认并开始检测"
         pending={pending}
         onOpenChange={setConfirmation}

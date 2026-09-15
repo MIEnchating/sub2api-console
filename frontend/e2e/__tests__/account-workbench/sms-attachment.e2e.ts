@@ -29,9 +29,44 @@ test("手机号步骤临时配置接码，确认费用后提交且重新打开�
       },
     });
   });
+  const run = {
+    id: "sms-run",
+    task_id: "sms-task",
+    status: "waiting_input",
+    message: "等待登录",
+    current_oauth_id: "oauth-fixture",
+    available: 0,
+    export_only: false,
+    expires_at: new Date(Date.now() + 600000).toISOString(),
+    errors: [],
+    items: [
+      {
+        index: 0,
+        kind: "oauth_login",
+        name: "短信账号",
+        email: "sms@example.test",
+        status: "running",
+        message: "等待登录",
+        has_password: true,
+        has_totp: false,
+        has_proxy: false,
+      },
+    ],
+  };
+  await page.route("**/api/account-workbench/runs/preview", (route) =>
+    route.fulfill({ json: { ...run, id: "sms-preview", target: "https://sub2api.example.test" } }),
+  );
+  await page.route("**/api/account-workbench/runs", (route) => route.fulfill({ json: run }));
+  await page.route("**/api/account-workbench/runs/sms-run", (route) =>
+    route.fulfill({ json: run }),
+  );
   await page.goto("/account-workbench");
-  await page.getByRole("tab", { name: "授权登录", exact: true }).click();
-  await page.getByRole("button", { name: "开始授权登录" }).click();
+  await page
+    .getByRole("textbox", { name: "账号内容" })
+    .fill("sms@example.test----fixture-password");
+  await page.getByRole("button", { name: "解析并预览" }).click();
+  await page.getByRole("button", { name: "确认处理 1 项" }).click();
+  await page.getByRole("button", { name: "开始处理" }).click();
   await page.getByRole("button", { name: "配置短信接码" }).click();
   const dialog = page.getByRole("dialog", { name: "配置当前授权的短信接码" });
   await dialog.getByRole("combobox", { name: "短信验证码" }).click();

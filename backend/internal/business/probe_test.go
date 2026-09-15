@@ -61,7 +61,7 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 	if err := store.db.QueryRow(`SELECT result,sample_count,payload_json FROM health_samples WHERE account_id='41' AND group_name='codex'`).Scan(&result, &sampleCount, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if result != "通过" || sampleCount != 1 || payload != `{"actual_model":"","latency_metric":"first_token","latency_source":"account_test.first_content","latency_unit":"ms","request_model":"","status_code":200}` {
+	if result != "通过" || sampleCount != 1 || payload != `{"actual_model":"","latency_metric":"first_token","latency_source":"upstream_direct.first_content","latency_unit":"ms","request_model":"","status_code":200}` {
 		t.Fatalf("result=%q sampleCount=%d payload=%s", result, sampleCount, payload)
 	}
 	before := 0
@@ -163,7 +163,7 @@ func TestProbeRepositoryPersistsModelRewriteEvidence(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT event_type,status,summary,payload_json FROM runtime_events WHERE event_type='probe_model_rewritten'`).Scan(&eventType, &status, &summary, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if status != "warning" || !strings.Contains(summary, "requested-model") || !strings.Contains(summary, "mapped-model") ||
+	if status != "warning" || summary != `账号 41 指定探测模型 "requested-model"，上游实际返回模型 "mapped-model"` ||
 		!strings.Contains(payload, `"account_id":"41"`) {
 		t.Fatalf("event=%q status=%q summary=%q payload=%s", eventType, status, summary, payload)
 	}

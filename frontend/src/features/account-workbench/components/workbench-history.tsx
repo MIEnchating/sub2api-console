@@ -1,12 +1,21 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type Task, type WorkbenchRegenerationInput } from "@/api";
+import { RefreshCw, Play } from "lucide-react";
+import { api, type Task } from "@/api";
 import { ContentRetry } from "@/components/content-retry";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -14,46 +23,50 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { taskIsTerminal } from "@/lib/task-state";
 import { taskStatusLabels, workbenchKeys, workbenchOperationLabels } from "../constants";
 import { filterHistory } from "../lib/history-filter";
-import { WorkbenchHistoryActions } from "./workbench-history-actions";
-import { WorkbenchHistoryQuery } from "./workbench-history-query";
-import { WorkbenchRegeneration } from "./workbench-regeneration";
 import { WorkbenchTask } from "./workbench-task";
 import { WorkbenchRetry } from "./workbench-retry";
-import { WorkbenchOAuthBatch } from "./workbench-oauth-batch";
+import { WorkbenchTaskRecovery } from "./workbench-task-recovery";
+import { WorkbenchTaskOrders } from "./workbench-task-orders";
+import { WorkbenchOAuthBatchBrowser } from "./workbench-oauth-batch-browser";
+import { WorkbenchExports } from "./workbench-exports";
+import { workbenchResultItems } from "../lib/task-results";
+import { taskIsTerminal } from "@/lib/task-state";
 
-export function WorkbenchHistory(): ReactElement {
-  const [selectedSnapshot, setSelected] = useState<Task | null>(null);
+export function WorkbenchHistory(
+  props: {
+    activeTaskId?: string | null;
+    onContinue?: () => void;
+  } = {},
+): ReactElement {
+  const statuses = useDictionaryOrder(
+    "task_status",
+    Object.entries(taskStatusLabels),
+    (item) => item[0],
+  );
+  const [selection, setSelected] = useState<Task | null>(null);
   const [retry, setRetry] = useState<{ task: Task; indexes: number[] } | null>(null);
-  const [reauthorizing, setReauthorizing] = useState<string | null>(null);
-  const [regenerating, setRegenerating] = useState<WorkbenchRegenerationInput | null>(null);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("");
-  const [operation, setOperation] = useState("");
+  const [authorization, setAuthorization] = useState<string | null>(null);
+  const [orders, setOrders] = useState<string | null>(null);
   const query = useQuery({
     queryKey: workbenchKeys.history,
     queryFn: api.workbenchHistory,
-    refetchInterval: (state) =>
-      state.state.data?.some((task) => !taskIsTerminal(task)) ? 2000 : false,
+    refetchInterval: 3000,
   });
-  const selectedQuery = useQuery({
-    queryKey: workbenchKeys.task(selectedSnapshot?.id ?? ""),
-    queryFn: () => api.task(selectedSnapshot!.id),
-    enabled: selectedSnapshot !== null,
-    initialData: selectedSnapshot ?? undefined,
-  });
-  const selected = selectedQuery.data ?? selectedSnapshot;
+  const selected = query.data?.find((task) => task.id === selection?.id) ?? selection;
   const tasks = useMemo(
-    () => filterHistory(query.data ?? [], search, status, operation),
-    [query.data, search, status, operation],
+    () => filterHistory(query.data ?? [], search, status, ""),
+    [query.data, search, status],
   );
-  const operations = useMemo(
-    () => [...new Set(query.data?.map((task) => task.operation) ?? [])],
-    [query.data],
-  );
+  function closeDetails(): void {
+    setRetry(null);
+    setSelected(null);
+    setAuthorization(null);
+    setOrders(null);
+  }
   if (query.isPending) return <PageLoadingSkeleton label="正在读取账号处理记录" variant="list" />;
   if (!query.data)
     return <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />;
@@ -62,7 +75,7 @@ export function WorkbenchHistory(): ReactElement {
       <div className="flex flex-wrap items-center gap-2">
         <Input
           aria-label="搜索处理记录"
-          placeholder="搜索任务 ID、邮箱或结果"
+          placeholder="搜索账号或处理结果"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="min-w-0 flex-1 basis-48"
@@ -73,91 +86,39 @@ export function WorkbenchHistory(): ReactElement {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="">全部状态</SelectItem>
-            {Object.entries(taskStatusLabels).map(([id, label]) => (
+            {statuses.map(([id, label]) => (
               <SelectItem key={id} value={id}>
                 {label}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <Select value={operation} onValueChange={(value) => setOperation(value ?? "")}>
-          <SelectTrigger aria-label="筛选处理类型">
-            <SelectValue>{workbenchOperationLabels[operation] ?? "全部类型"}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">全部类型</SelectItem>
-            {operations.map((id) => (
-              <SelectItem key={id} value={id}>
-                {workbenchOperationLabels[id] ?? id}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
         <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
+          <RefreshCw aria-hidden="true" />
           刷新记录
         </Button>
-        <WorkbenchHistoryQuery
-          onSelect={(task) => {
-            setRetry(null);
-            setReauthorizing(null);
-            setSelected(task);
-          }}
-        />
       </div>
-      <WorkbenchHistoryActions
-        tasks={query.data}
-        checked={checked}
-        onDeleted={(ids) => {
-          setChecked((previous) => new Set([...previous].filter((id) => !ids.includes(id))));
-          if (selected && ids.includes(selected.id)) setSelected(null);
-          if (retry && ids.includes(retry.task.id)) setRetry(null);
-          if (reauthorizing && ids.includes(reauthorizing)) setReauthorizing(null);
-        }}
-      />
-      {tasks.length > 0 && (
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox
-            checked={tasks.every((task) => checked.has(task.id))}
-            indeterminate={
-              tasks.some((task) => checked.has(task.id)) &&
-              !tasks.every((task) => checked.has(task.id))
-            }
-            onCheckedChange={(value) =>
-              setChecked((previous) => {
-                const next = new Set(previous);
-                for (const task of tasks) {
-                  if (value) next.add(task.id);
-                  else next.delete(task.id);
-                }
-                return next;
-              })
-            }
-          />
-          选择筛选结果（{tasks.length} 条）
-        </label>
+      {props.activeTaskId && (
+        <div>
+          <Button variant="outline" onClick={props.onContinue}>
+            <Play aria-hidden="true" />
+            继续当前批次
+          </Button>
+        </div>
       )}
       {!tasks.length && (
-        <p className="rounded-lg border p-8 text-center text-sm text-muted-foreground">
-          {query.data.length ? "没有匹配的处理记录，请调整筛选条件" : "暂无账号处理记录"}
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          {query.data.length ? "没有匹配的处理记录" : "暂无处理记录"}
         </p>
       )}
-      <ul className="divide-y rounded-lg border bg-card" aria-label="账号处理记录">
+      <ul className="min-w-0 divide-y" aria-label="账号处理记录">
         {tasks.map((task) => (
-          <li key={task.id} className="flex min-w-0 flex-col gap-2 p-3 sm:flex-row sm:items-center">
-            <Checkbox
-              aria-label={`选择处理记录 ${task.id}`}
-              checked={checked.has(task.id)}
-              onCheckedChange={(value) =>
-                setChecked((previous) => {
-                  const next = new Set(previous);
-                  if (value) next.add(task.id);
-                  else next.delete(task.id);
-                  return next;
-                })
-              }
-            />
+          <li
+            key={task.id}
+            className="flex min-w-0 flex-col gap-2 py-3 sm:flex-row sm:items-center"
+          >
             <div className="min-w-0 flex-1 text-sm">
-              <p className="text-xs text-muted-foreground">
+              <p className="font-medium">
                 {workbenchOperationLabels[task.operation] ?? task.operation}
               </p>
               <p className="wrap-anywhere">{task.message || task.id}</p>
@@ -166,12 +127,11 @@ export function WorkbenchHistory(): ReactElement {
             <Badge variant="secondary">{taskStatusLabels[task.status]}</Badge>
             <Button
               variant="outline"
+              aria-label={`查看任务 ${task.id}`}
               onClick={() => {
                 setRetry(null);
-                setReauthorizing(null);
                 setSelected(task);
               }}
-              aria-label={`查看任务 ${task.id}`}
             >
               查看结果
             </Button>
@@ -179,84 +139,86 @@ export function WorkbenchHistory(): ReactElement {
         ))}
       </ul>
       {selected && (
-        <WorkbenchTask
-          key={selected.id}
-          task={selected}
-          onRetry={(task, indexes) => setRetry({ task, indexes })}
-        />
-      )}
-      {selected &&
-        taskIsTerminal(selected) &&
-        [
-          "account-workbench-export",
-          "account-workbench-convert",
-          "account-workbench-regenerate",
-          "account-workbench-import",
-          "account-workbench-retry",
-        ].includes(selected.operation) && (
-          <Button
-            variant="outline"
-            onClick={() => {
-              const items: unknown = selected.result.items;
-              const local =
-                Array.isArray(items) &&
-                items.some(
-                  (item: unknown) =>
-                    typeof item === "object" &&
-                    item !== null &&
-                    "report" in item &&
-                    typeof item.report === "object" &&
-                    item.report !== null &&
-                    "scope" in item.report &&
-                    item.report.scope === "local-export",
-                );
-              setRegenerating({
-                source_task_id: selected.id,
-                scope: local ? "local-export" : undefined,
-              });
-            }}
-          >
-            从此记录重新生成授权文件
-          </Button>
-        )}
-      {regenerating && (
-        <WorkbenchRegeneration
-          source={regenerating}
-          onClose={() => setRegenerating(null)}
-          onCreated={setSelected}
-        />
-      )}
-      {selected &&
-      taskIsTerminal(selected) &&
-      selected.operation === "account-workbench-oauth-batch" &&
-      Array.isArray(selected.result.items) &&
-      selected.result.items.some(
-        (row: unknown) =>
-          typeof row === "object" && row !== null && "profile_id" in row && !!row.profile_id,
-      ) ? (
-        <Button variant="outline" onClick={() => setReauthorizing(selected.id)}>
-          从此记录重新授权
-        </Button>
-      ) : null}
-      {reauthorizing ? (
-        <section aria-label="历史账号重新授权" className="min-w-0 space-y-3">
-          <Button variant="outline" onClick={() => setReauthorizing(null)}>
-            关闭历史重新授权
-          </Button>
-          <WorkbenchOAuthBatch key={reauthorizing} sourceTaskId={reauthorizing} />
-        </section>
-      ) : null}
-      {retry && (
-        <WorkbenchRetry
-          key={`${retry.task.id}:${retry.indexes.join(",")}`}
-          task={retry.task}
-          indexes={retry.indexes}
-          onClose={() => setRetry(null)}
-          onCreated={(task) => {
-            setRetry(null);
-            setSelected(task);
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open) closeDetails();
           }}
-        />
+        >
+          <DialogContent width="wide">
+            <DialogHeader>
+              <DialogTitle>处理详情</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <section aria-label="本批处理详情" className="grid min-w-0 gap-3">
+                <WorkbenchTask
+                  key={selected.id}
+                  task={selected}
+                  onRetry={(task, indexes) => setRetry({ task, indexes })}
+                />
+                {taskIsTerminal(selected) &&
+                  ["account-workbench-import", "account-workbench-retry"].includes(
+                    selected.operation,
+                  ) &&
+                  workbenchResultItems(selected.result).some((item) => !!item.accountId) && (
+                    <WorkbenchExports key={`export-${selected.id}`} sourceTaskId={selected.id} />
+                  )}
+                {selected.operation === "account-workbench-oauth" &&
+                  !props.activeTaskId &&
+                  (selected.status === "waiting_input" || selected.status === "running") && (
+                    <div>
+                      <Button variant="outline" onClick={() => setAuthorization(selected.id)}>
+                        <Play aria-hidden="true" />
+                        继续授权
+                      </Button>
+                    </div>
+                  )}
+                {authorization === selected.id && (
+                  <WorkbenchOAuthBatchBrowser
+                    key={`oauth-${selected.id}`}
+                    id={selected.id}
+                    disabled={false}
+                  />
+                )}
+                {selected.operation === "account-workbench-oauth" && (
+                  <div>
+                    <Button
+                      variant="outline"
+                      onClick={() => setOrders(orders === selected.id ? null : selected.id)}
+                      aria-expanded={orders === selected.id}
+                    >
+                      本次授权短信订单
+                    </Button>
+                  </div>
+                )}
+                {orders === selected.id && <WorkbenchTaskOrders taskId={selected.id} />}
+                {selected.operation === "account-workbench-mixed" &&
+                  selected.id !== props.activeTaskId &&
+                  typeof selected.result.recovery_id === "string" &&
+                  !!selected.result.recovery_id && (
+                    <WorkbenchTaskRecovery key={`recovery-${selected.id}`} task={selected} />
+                  )}
+              </section>
+            </DialogBody>
+            <DialogFooter>
+              <Button variant="outline" onClick={closeDetails}>
+                关闭详情
+              </Button>
+            </DialogFooter>
+            {retry && (
+              <WorkbenchRetry
+                key={`${retry.task.id}:${retry.indexes.join(",")}`}
+                task={retry.task}
+                indexes={retry.indexes}
+                onClose={() => setRetry(null)}
+                onCreated={(task) => {
+                  setRetry(null);
+                  setSelected(task);
+                }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
       )}
     </div>
   );

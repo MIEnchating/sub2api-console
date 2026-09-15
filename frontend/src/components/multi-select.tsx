@@ -50,6 +50,9 @@ type MultiSelectProps = {
   unknownValueLabel?: string;
   className?: string;
   ariaLabel?: string;
+  id?: string;
+  ariaInvalid?: boolean;
+  ariaDescribedBy?: string;
   disabled?: boolean;
   singleSelect?: boolean;
   showTitle?: boolean;
@@ -161,9 +164,12 @@ export function MultiSelect(props: MultiSelectProps) {
     >
       <ComboboxTrigger
         ref={triggerAnchorRef}
+        id={props.id}
         open={open}
         className={cn(props.disabled && "pointer-events-none opacity-50", props.className)}
         aria-label={props.ariaLabel ?? title}
+        aria-invalid={props.ariaInvalid}
+        aria-describedby={props.ariaDescribedBy}
         aria-expanded={open}
         aria-disabled={props.disabled || undefined}
         aria-haspopup="dialog"
@@ -193,6 +199,12 @@ export function MultiSelect(props: MultiSelectProps) {
           setOpen(true);
         }}
         onKeyDown={(event) => {
+          if (open && event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+            return;
+          }
           if (props.disabled || event.target !== event.currentTarget) return;
           if (!["Enter", " ", "ArrowDown"].includes(event.key)) return;
           event.preventDefault();

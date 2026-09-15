@@ -90,7 +90,8 @@ describe("巡检鉴权恢复失败明细", () => {
     );
     const failures = screen.getByRole("alert");
     expect(within(failures).getByText("登录触发浏览器人机验证")).toBeVisible();
-    expect(within(failures).getByText(/恢复鉴权.*打开浏览器手动验证/)).toBeVisible();
+    expect(within(failures).getByText(/恢复鉴权.*Token.*刷新 Token/)).toBeVisible();
+    expect(within(failures).queryByText(/打开浏览器手动验证/)).not.toBeInTheDocument();
     expect(within(failures).queryByText("refresh token 已失效")).not.toBeInTheDocument();
   });
 

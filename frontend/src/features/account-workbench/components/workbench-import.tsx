@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Controller, useForm } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
 import { api, type Task, type WorkbenchPreview, type WorkbenchScope } from "@/api";
@@ -11,22 +11,15 @@ import { WorkbenchImportSkeleton } from "./workbench-page-skeletons";
 import { JsonEditorField } from "@/components/json-editor/form-field";
 import { TaskStartupState } from "@/components/task-startup-state";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { FileUpload } from "@/components/file-upload";
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { cn } from "@/lib/utils";
 import { maxInputBytes, workbenchKeys } from "../constants";
 import { importSchema, type ImportValues } from "../lib/schemas";
 import { usePreferredTemplate } from "../hooks/use-preferred-template";
 import { WorkbenchPreviewPanel } from "./workbench-preview";
 import { WorkbenchTask } from "./workbench-task";
+import { WorkbenchImportOptions } from "./workbench-import-options";
 
 const defaults: ImportValues = {
   content: "",
@@ -45,14 +38,13 @@ export function WorkbenchImport(
     queryFn: api.workbenchTemplates,
     enabled: !local,
   });
-  const [format, setFormat] = useState(local ? "json" : "tokens");
   const [preview, setPreview] = useState<WorkbenchPreview | null>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [reading, setReading] = useState(false);
+  const [fileName, setFileName] = useState("");
   const [converting, setConverting] = useState(false);
   const activePreview = useRef<string | null>(null);
   const mounted = useRef(true);
-  const fileInput = useRef<HTMLInputElement>(null);
   const form = useForm<ImportValues>({
     resolver: zodResolver(importSchema),
     defaultValues: defaults,
@@ -99,7 +91,7 @@ export function WorkbenchImport(
     setPreview(null);
     form.reset({ ...defaults, template_id: form.getValues("template_id") });
     parse.reset();
-    if (fileInput.current) fileInput.current.value = "";
+    setFileName("");
     setTask(value);
   }
   useEffect(() => {
@@ -113,10 +105,7 @@ export function WorkbenchImport(
     };
   }, [form]);
   const busy = parse.isPending || create.isPending || reading || converting;
-  async function loadFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
+  async function loadFile(file: File): Promise<void> {
     if (file.size > maxInputBytes) {
       toast.error("文件不能超过 2 MB，请分批导入");
       return;
@@ -127,11 +116,7 @@ export function WorkbenchImport(
       const content = await file.text();
       if (!mounted.current) return;
       form.setValue("content", content, { shouldValidate: true });
-      setFormat(
-        content.trimStart().startsWith("{") || content.trimStart().startsWith("[")
-          ? "json"
-          : "tokens",
-      );
+      setFileName(file.name);
     } catch (error) {
       notifyOperationError(error, "文件读取失败，请重新选择文件");
     } finally {
@@ -144,7 +129,8 @@ export function WorkbenchImport(
   return (
     <div className="grid min-w-0 gap-4">
       <form
-        className="grid min-w-0 gap-4 rounded-lg border bg-card p-4"
+        aria-label="账号导入输入"
+        className="@container/import grid min-w-0 gap-3"
         onChange={clearPreview}
         onSubmit={form.handleSubmit(() => {
           clearPreview();
@@ -152,146 +138,61 @@ export function WorkbenchImport(
         })}
       >
         <div
-          className="flex flex-col gap-3 sm:flex-row sm:items-end"
           role="group"
-          aria-label="账号输入方式"
-        >
-          <FormField label="输入格式">
-            <Select
-              value={format}
-              onValueChange={(value) => setFormat(value ?? "tokens")}
-              disabled={busy}
-            >
-              <SelectTrigger aria-label="输入格式">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {!local && <SelectItem value="tokens">Refresh Token 文本</SelectItem>}
-                <SelectItem value="json">账号 JSON</SelectItem>
-              </SelectContent>
-            </Select>
-          </FormField>
-          <div className="min-w-0 flex-1">
-            <label htmlFor="workbench-file" className="mb-1.5 block text-sm font-medium">
-              从文件读取（最大 2 MB）
-            </label>
-            <Input
-              ref={fileInput}
-              id="workbench-file"
-              type="file"
-              accept=".json,.txt,.jsonl"
-              disabled={busy}
-              onChange={(event) => void loadFile(event)}
-            />
-          </div>
-        </div>
-        <FormField
-          label="账号内容"
-          htmlFor="workbench-content"
-          error={form.formState.errors.content?.message}
-        >
-          {format === "json" ? (
-            <JsonEditorField
-              control={form.control}
-              name="content"
-              aria-label="账号内容"
-              disabled={busy}
-              onValueChange={clearPreview}
-              className="h-64"
-            />
-          ) : (
-            <Textarea
-              id="workbench-content"
-              aria-label="账号内容"
-              aria-invalid={!!form.formState.errors.content}
-              className="h-64 resize-y font-mono"
-              placeholder="每行填写一个 rt_ 开头的 Refresh Token，也支持邮箱与 Token 组合。"
-              autoComplete="off"
-              spellCheck={false}
-              disabled={busy}
-              {...form.register("content")}
-            />
+          aria-label="导入内容与选项"
+          className={cn(
+            "grid min-w-0 items-start gap-5",
+            !local && "@3xl/import:grid-cols-[minmax(0,1fr)_20rem]",
           )}
-        </FormField>
-        {!local && (
-          <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-            <FormField label="配置模板">
-              <Controller
+        >
+          <section aria-label="账号内容与文件" className="grid min-w-0 gap-3">
+            <div className="grid min-w-0 gap-3" role="group" aria-label="账号输入方式">
+              <div className="min-w-0 flex-1">
+                <label htmlFor="workbench-file" className="mb-1.5 block text-sm font-medium">
+                  从文件读取（最大 2 MB）
+                </label>
+                <FileUpload
+                  id="workbench-file"
+                  label="从文件读取（最大 2 MB）"
+                  description="TXT / JSON / JSONL，最大 2 MB"
+                  accept=".json,.txt,.jsonl"
+                  fileName={fileName}
+                  busy={reading}
+                  disabled={busy}
+                  onSelect={(file) => void loadFile(file)}
+                />
+              </div>
+            </div>
+            <FormField
+              label="账号内容"
+              htmlFor="workbench-content"
+              error={form.formState.errors.content?.message}
+              reserveErrorSpace={false}
+            >
+              <JsonEditorField
                 control={form.control}
-                name="template_id"
-                render={({ field }) => (
-                  <Select
-                    value={field.value || "auto"}
-                    disabled={busy}
-                    onValueChange={(value) => {
-                      clearPreview();
-                      field.onChange(value === "auto" ? "" : value);
-                    }}
-                  >
-                    <SelectTrigger aria-label="配置模板" className="min-w-0">
-                      <SelectValue>
-                        <span className="min-w-0 truncate">
-                          {templates.data?.find((item) => item.id === field.value)?.name ||
-                            "自动匹配模板"}
-                        </span>
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">自动匹配模板</SelectItem>
-                      {templates.data?.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                name="content"
+                id="workbench-content"
+                aria-label="账号内容"
+                language="auto"
+                placeholder="账号 JSON 或 rt_ 刷新令牌"
+                disabled={busy}
+                onValueChange={clearPreview}
+                className="h-64"
               />
             </FormField>
-            {props.output !== "export" ? (
-              <FormField
-                label="检测模型"
-                htmlFor="workbench-import-model"
-                error={form.formState.errors.model?.message}
-              >
-                <Input
-                  id="workbench-import-model"
-                  disabled={busy || !form.watch("check_after_import")}
-                  aria-invalid={!!form.formState.errors.model}
-                  placeholder="填写已支持的模型名称"
-                  {...form.register("model")}
-                />
-              </FormField>
-            ) : null}
-          </div>
-        )}
-        {props.output !== "export" ? (
-          <label className="flex items-center gap-2 text-sm">
-            <Controller
-              control={form.control}
-              name="check_after_import"
-              render={({ field }) => (
-                <Checkbox
-                  checked={field.value}
-                  disabled={busy}
-                  onCheckedChange={(value) => {
-                    clearPreview();
-                    field.onChange(value);
-                  }}
-                />
-              )}
+          </section>
+          {!local && (
+            <WorkbenchImportOptions
+              form={form}
+              templates={templates.data ?? []}
+              exportOnly={props.output === "export"}
+              disabled={busy}
+              onChange={clearPreview}
             />
-            导入后检测（会产生模型调用用量）
-          </label>
-        ) : null}
-        {!local && (
-          <p className="text-sm text-muted-foreground">
-            {props.output === "export"
-              ? "输入账号凭据并套用模板，确认后生成服务器私有 JSON 文件。输入凭据仅用于本次转换。"
-              : "先预览识别结果和配置，再确认导入至系统设置中的 Sub2API。输入凭据仅用于本次处理。"}
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
+          )}
+        </div>
+        <div role="group" aria-label="账号输入操作" className="flex flex-wrap items-center gap-2">
           <Button type="submit" disabled={busy}>
             解析并预览
           </Button>
@@ -302,12 +203,12 @@ export function WorkbenchImport(
             onClick={() => {
               clearPreview();
               form.reset(defaults);
+              setFileName("");
             }}
           >
             清空输入
           </Button>
         </div>
-        {reading && <ContentLoading label="正在读取账号文件" compact />}
         {parse.isPending && <ContentLoading label="正在解析账号并读取影响范围" compact />}
         {create.isPending && <TaskStartupState message="正在创建账号导入任务" />}
       </form>

@@ -93,7 +93,12 @@ export function AccountBatchProbeDialog(props: {
         if (!run.isPending) props.onOpenChange(open);
       }}
     >
-      <DialogContent width="medium" showCloseButton={!run.isPending}>
+      <DialogContent
+        width="progress"
+        height="adaptive"
+        className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+        showCloseButton={!run.isPending}
+      >
         <DialogHeader>
           <DialogTitle>批量探活</DialogTitle>
           <DialogDescription>
@@ -102,14 +107,24 @@ export function AccountBatchProbeDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid min-w-0 gap-3">
-          <ul aria-label="本次探活账号" className="max-h-64 min-w-0 divide-y overflow-y-auto">
+          <ul
+            aria-label="本次探活账号"
+            className="max-h-[min(22rem,45svh)] min-w-0 divide-y overflow-y-auto overscroll-contain rounded-lg border px-3"
+          >
             {eligible.map((account) => (
-              <li key={account.id} className="py-2 text-sm break-words">
-                <span className="font-medium">{account.name}</span>
-                <span className="text-muted-foreground ml-2">ID {account.id}</span>
+              <li key={account.id} className="flex min-w-0 items-start gap-3 py-2.5 text-sm">
+                <span className="min-w-0 flex-1 font-medium break-words [overflow-wrap:anywhere]">
+                  {account.name}
+                </span>
+                <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                  ID {account.id}
+                </span>
               </li>
             ))}
           </ul>
+          <p className="text-muted-foreground text-xs">
+            任务在后台执行，可在系统信息中查看每个账号的结果。
+          </p>
           {eligible.length === 0 ? (
             <p role="alert" className="text-muted-foreground text-sm">
               没有可探活账号，请选择非人工优先位账号。

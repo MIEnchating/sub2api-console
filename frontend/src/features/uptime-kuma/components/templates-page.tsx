@@ -108,6 +108,7 @@ export function KumaTemplatesPage() {
             </TableFilterToolbar>
             <DataTablePanel className="flex-1">
               <Table
+                actionColumn
                 aria-label="功能模板"
                 className="min-w-[72rem]"
                 containerClassName="min-h-0 flex-1 overflow-auto"

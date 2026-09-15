@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { MultiSelect } from "@/components/multi-select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { compatibleOnboardingLocalGroups } from "@/lib/onboarding-entry";
@@ -30,9 +31,10 @@ export function OnboardingGroupBindingSelect(props: {
   disabledReason: string | null;
   onValueChange: (value: string[]) => void;
 }) {
-  const compatibleGroups = compatibleOnboardingLocalGroups(
-    { platform: props.upstreamPlatform },
-    props.groups,
+  const compatibleGroups = useDictionaryOrder(
+    "group",
+    compatibleOnboardingLocalGroups({ platform: props.upstreamPlatform }, props.groups),
+    (group) => group.id ?? "",
   );
   const groupsByID = new Map(
     compatibleGroups.flatMap((group) => (group.id ? [[group.id, group]] : [])),

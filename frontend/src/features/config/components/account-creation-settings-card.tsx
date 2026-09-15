@@ -1,3 +1,4 @@
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, RefreshCw, Save } from "lucide-react";
@@ -99,9 +100,10 @@ export function AccountCreationSettingsCard(props: {
   const [poolModeDialogOpen, setPoolModeDialogOpen] = useState(false);
   const [poolModeTaskID, setPoolModeTaskID] = useState<string | null>(null);
   const currentSettings = settings.data ?? placeholder;
-  const availableGroups = useMemo(
-    () => groupOptions(groups.data, currentSettings),
-    [currentSettings, groups.data],
+  const availableGroups = useDictionaryOrder(
+    "group",
+    groupOptions(groups.data, currentSettings),
+    (group) => group.id,
   );
   const poolModeTask = useQuery({
     queryKey: ["account-pool-mode-sync", poolModeTaskID],

@@ -24,3 +24,22 @@ describe("消费字典排序", () => {
     expect(orderByDictionary(["C", "A"], undefined, (value) => value)).toEqual(["C", "A"]);
   });
 });
+
+it("仅有名称的展示项遇到同名字典条目时使用首次出现顺序，不做模糊匹配", () => {
+  const entries = [
+    { value: "2", name: "B", enabled: true },
+    { value: "1", name: "A", enabled: true },
+    { value: "3", name: "B", enabled: true },
+  ] as DictionaryEntry[];
+  expect(orderByDictionary(["A", "B", "b"], entries, (value) => value, "name")).toEqual([
+    "B",
+    "A",
+    "b",
+  ]);
+});
+
+it("字典没有可用条目时保留空列表和原始选项", () => {
+  const entries = [{ value: "B", enabled: false }] as DictionaryEntry[];
+  expect(orderByDictionary([], entries, String)).toEqual([]);
+  expect(orderByDictionary(["A", "B"], entries, String)).toEqual(["A", "B"]);
+});
