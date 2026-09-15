@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { UnifiedLogPage } from "@/api";
@@ -166,6 +167,8 @@ describe("LogsCenterPage layout", () => {
     expect(markup).toContain("共 3 个账号：成功 2，失败 1");
     expect(markup).toContain("关联 3 条");
     expect(markup).toContain("执行人：自动巡检");
-    expect(markup.match(/>3 个账号<\/span>/g)).toHaveLength(1);
+    const container = document.createElement("div");
+    container.innerHTML = markup;
+    expect(within(container).getAllByText("3 个账号", { exact: true })).toHaveLength(1);
   });
 });

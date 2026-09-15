@@ -108,7 +108,15 @@ export function FileUpload(props: FileUploadProps): ReactElement {
           <ContentLoading label="正在读取文件" compact className="min-h-5 py-0" />
         ) : (
           <Tooltip>
-            <TooltipTrigger render={<p role="status" className="truncate text-sm" />}>
+            <TooltipTrigger
+              render={
+                <p
+                  role="status"
+                  aria-label={props.fileName || "未选择文件"}
+                  className="truncate text-sm"
+                />
+              }
+            >
               {props.fileName || "未选择文件"}
             </TooltipTrigger>
             <TooltipContent>{props.fileName || "未选择文件"}</TooltipContent>
