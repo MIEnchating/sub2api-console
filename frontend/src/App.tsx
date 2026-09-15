@@ -799,11 +799,12 @@ function App() {
     <>
       <SidebarProvider className="h-svh max-h-svh flex-col overflow-clip" defaultOpen>
         <header className="sticky top-0 z-40 h-[var(--app-header-height)] w-full shrink-0 bg-transparent">
-          <div className="flex h-full items-center gap-1.5 px-2 sm:gap-2 sm:px-3">
+          <div className="flex h-full items-center gap-1 px-2 sm:gap-2 sm:px-3">
             <SidebarTrigger variant="ghost" className="size-8" />
             <Link
               to="/"
-              className="text-foreground inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-sm font-medium transition-colors hover:bg-accent"
+              aria-label="Sub2API"
+              className="text-foreground inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-1.5 text-sm font-medium transition-colors hover:bg-accent"
             >
               <img
                 src="/console-mark.svg"
@@ -812,18 +813,22 @@ function App() {
                 alt=""
                 className="size-5 shrink-0"
               />
-              <span>Sub2API</span>
+              <span className="hidden sm:inline">Sub2API</span>
             </Link>
-            <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+            <div className="ml-auto flex min-w-0 items-center overflow-x-auto sm:gap-2">
               <SchedulerHeaderControls />
               <Button
                 variant="ghost"
-                className="gap-1.5"
+                size="icon"
+                className="gap-1.5 sm:w-auto sm:px-2.5"
+                aria-label={`告警：${openAlertsLabel ?? 0}`}
                 onClick={() => void navigate({ to: "/alerts" })}
               >
                 <BellRing size={15} />
                 <span className="hidden sm:inline">告警</span>
-                <Badge variant="destructive">{openAlertsLabel}</Badge>
+                <Badge variant="destructive" className="hidden sm:inline-flex">
+                  {openAlertsLabel}
+                </Badge>
               </Button>
               <Tooltip>
                 <TooltipTrigger
@@ -844,7 +849,9 @@ function App() {
               </Tooltip>
               <Button
                 variant="ghost"
-                className="max-w-44 gap-1.5"
+                size="icon"
+                className="gap-1.5 sm:w-auto sm:max-w-44 sm:px-2.5"
+                aria-label="个人资料"
                 onClick={() => void navigate({ to: "/profile" })}
               >
                 <UserRound size={15} />
@@ -1082,7 +1089,8 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant="ghost"
-            className="gap-1.5"
+            size="icon"
+            className="gap-1.5 xl:w-auto xl:px-2.5"
             disabled={syncing}
             aria-label={syncing ? "正在同步账号与分组" : "同步账号与分组"}
             onClick={() => sync.mutate()}
@@ -1097,7 +1105,8 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant="ghost"
-            className="gap-1.5"
+            size="icon"
+            className="gap-1.5 xl:w-auto xl:px-2.5"
             disabled={executing}
             aria-label={executing ? "巡检执行中" : "立即检查一轮到期任务"}
             onClick={() => run.mutate()}
@@ -1112,7 +1121,8 @@ export function SchedulerHeaderControls() {
         <TooltipTrigger render={<span className="inline-flex" />}>
           <Button
             variant={schedulingEnabled ? "destructive" : "default"}
-            className="gap-1.5"
+            size="icon"
+            className="gap-1.5 2xl:w-auto 2xl:px-2.5"
             disabled={!status.data || toggle.isPending}
             aria-label={schedulingEnabled ? "取消自动调度" : "启动自动调度"}
             onClick={() => toggle.mutate()}

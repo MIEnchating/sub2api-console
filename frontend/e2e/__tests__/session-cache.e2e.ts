@@ -54,6 +54,7 @@ test("退出后重新登录时读取新日志，不复用上次会话的业务�
 
   await page.goto("/logs?kind=event");
   await expect(page.getByText("退出前的运行记录", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeInViewport({ ratio: 1 });
   await page.getByRole("button", { name: "退出登录" }).click();
   await expect(page.getByRole("heading", { name: "登录", exact: true })).toBeVisible();
   await page.getByLabel("账号", { exact: true }).fill("operator");
@@ -90,9 +91,39 @@ test("退出请求失败时保留当前会话并显示可重试的失败提示",
   });
   await page.goto("/logs?kind=event");
   await expect(page.getByText("暂无日志记录", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeInViewport({ ratio: 1 });
   await page.getByRole("button", { name: "退出登录" }).click();
 
   await expect(page.getByText("退出失败，请重试", { exact: true })).toBeVisible();
   await expect(page.getByText("暂无日志记录", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "登录", exact: true })).toHaveCount(0);
+});
+
+test("320px 顶栏在告警数和用户名很长时仍完整显示退出入口", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 664 });
+  await page.route("**/api/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const responses: Record<string, unknown> = {
+      "/api/setup/status": { initialized: true, configuration_errors: [] },
+      "/api/auth/session": { authenticated: true, username: "operator".repeat(20) },
+      "/api/overview": { mode: "监控模式", account_count: 0, group_count: 0, open_alerts: 123456 },
+      "/api/logs": { items: [], total: 0, page: 1, page_size: 20, counts: {}, truncated: false },
+    };
+    if (path.endsWith("/events")) {
+      await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
+    } else if (path in responses) {
+      await route.fulfill({ json: responses[path] });
+    } else {
+      await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
+    }
+  });
+  await page.goto("/logs");
+  await expect(page.getByText("暂无日志记录", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "退出登录" })).toBeInViewport({ ratio: 1 });
+  expect(
+    await page
+      .getByRole("banner")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("header-320px.png") });
 });
