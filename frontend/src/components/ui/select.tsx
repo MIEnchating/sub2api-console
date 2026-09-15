@@ -54,7 +54,8 @@ function selectValueLabel(value: unknown): string {
   if (vaultSeparator >= 0) {
     return `${raw.slice(0, vaultSeparator)} / ${raw.slice(vaultSeparator + 1)}`;
   }
-  return selectLabels[raw] ?? knownUpstreamTypeLabel(raw) ?? raw;
+  if (Object.hasOwn(selectLabels, raw)) return selectLabels[raw];
+  return knownUpstreamTypeLabel(raw) ?? raw;
 }
 
 function Select<Value>(props: SelectPrimitive.Root.Props<Value, false>) {

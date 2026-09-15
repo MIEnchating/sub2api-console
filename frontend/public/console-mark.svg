@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#173C46"/>
+      <stop offset="1" stop-color="#0B202A"/>
+    </linearGradient>
+    <linearGradient id="route" x1="22" y1="28" x2="46" y2="49" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9DECD9"/>
+      <stop offset="1" stop-color="#54CBB9"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#surface)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="15.5" stroke="#FFFFFF" stroke-opacity="0.1"/>
+  <path d="M46 17H27C21.477 17 17 21.477 17 27C17 32.523 21.477 37 27 37H38" stroke="#F0FAF9" stroke-width="8"/>
+  <path d="M18 47H37C42.523 47 47 42.523 47 37C47 31.477 42.523 27 37 27H26" stroke="url(#route)" stroke-width="8"/>
+</svg>

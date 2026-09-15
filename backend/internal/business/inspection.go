@@ -309,9 +309,12 @@ func (s *Store) AcquireInspectionLease(
 }
 
 func (s *Store) RenewInspectionLease(ctx context.Context, ownerID string, now time.Time, ttl time.Duration) (bool, error) {
+	if strings.TrimSpace(ownerID) == "" || ttl < time.Second {
+		return false, errors.New("巡检租约参数无效")
+	}
 	result, err := s.db.ExecContext(ctx, `UPDATE scheduler_leases SET renewed_at=?,expires_at=?
-		WHERE lease_name=? AND owner_id=?`, now.UTC().Format(time.RFC3339Nano),
-		now.UTC().Add(ttl).Format(time.RFC3339Nano), inspectionLeaseName, ownerID)
+		WHERE lease_name=? AND owner_id=? AND julianday(expires_at)>julianday(?)`, now.UTC().Format(time.RFC3339Nano),
+		now.UTC().Add(ttl).Format(time.RFC3339Nano), inspectionLeaseName, ownerID, now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return false, err
 	}
@@ -526,8 +529,8 @@ func (s *Store) inspectionTaskState(ctx context.Context) (map[string]string, err
 		return nil, err
 	}
 	result := map[string]string{}
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return map[string]string{}, nil
+	if err := json.Unmarshal([]byte(raw), &result); err != nil || result == nil {
+		return nil, errors.New("巡检调度时间记录损坏，无法安全执行任务")
 	}
 	return result, nil
 }

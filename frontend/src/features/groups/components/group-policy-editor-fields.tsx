@@ -1,6 +1,7 @@
 import type { GroupPolicyOverrideUpdate, GroupProbeModels } from "../../../api";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { Button } from "../../../components/ui/button";
 import { FieldLabel } from "../../../components/field-help-tooltip";
 import { Input } from "../../../components/ui/input";
@@ -19,8 +20,6 @@ import {
   schedulingStrategyOptions,
   schedulingWeightFormula,
 } from "../../../lib/scheduling-strategy";
-
-const groupStrategyOptions = [{ value: null, label: "全局默认" }, ...schedulingStrategyOptions];
 
 export type GroupPolicyOverrideDraft = Omit<
   GroupPolicyOverrideUpdate,
@@ -157,6 +156,7 @@ function ProbeModelControl(props: {
 
 export function GroupPolicyEditorFields(props: {
   value: GroupPolicyOverrideDraft;
+  disabled?: boolean;
   onChange: (value: GroupPolicyOverrideDraft) => void;
   globalStrategy?: string | null;
   globalProbeModel?: string | null;
@@ -165,6 +165,12 @@ export function GroupPolicyEditorFields(props: {
   probeModelsError?: boolean;
   onReloadProbeModels?: () => void;
 }) {
+  const strategies = useDictionaryOrder(
+    "scheduling_strategy",
+    schedulingStrategyOptions,
+    (item) => item.value,
+  );
+  const groupStrategyOptions = [{ value: null, label: "全局默认" }, ...strategies];
   const update = (
     field: keyof GroupPolicyOverrideDraft,
     value: GroupPolicyOverrideDraft[keyof GroupPolicyOverrideDraft],
@@ -197,6 +203,7 @@ export function GroupPolicyEditorFields(props: {
         />
         <Switch
           id="group-policy-enabled"
+          disabled={props.disabled}
           checked={props.value.enabled}
           onCheckedChange={(enabled) => update("enabled", enabled)}
         />
@@ -223,6 +230,7 @@ export function GroupPolicyEditorFields(props: {
                     "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground dark:bg-primary dark:hover:bg-primary/90",
                 )}
                 role="radio"
+                disabled={props.disabled}
                 aria-checked={selected}
                 onClick={() => update("strategy", strategy.value)}
               >
@@ -254,6 +262,7 @@ export function GroupPolicyEditorFields(props: {
           />
           <Input
             id="group-policy-min-pool-size"
+            disabled={props.disabled}
             className="min-w-0"
             type="number"
             min={0}
@@ -271,6 +280,7 @@ export function GroupPolicyEditorFields(props: {
           />
           <Input
             id="group-policy-weight-budget"
+            disabled={props.disabled}
             className="min-w-0"
             type="number"
             min={1}
@@ -289,6 +299,7 @@ export function GroupPolicyEditorFields(props: {
             max={1}
             step={0.05}
             value={props.value.balanced_price_ratio ?? ""}
+            disabled={props.disabled}
             onChange={(event) =>
               update(
                 "balanced_price_ratio",
@@ -318,6 +329,7 @@ export function GroupPolicyEditorFields(props: {
               />
               <Switch
                 id={`group-policy-${option.field}`}
+                disabled={props.disabled}
                 checked={props.value[option.field]}
                 onCheckedChange={(checked) => update(option.field, checked)}
               />
@@ -336,6 +348,7 @@ export function GroupPolicyEditorFields(props: {
           />
           <Switch
             id="group-policy-probe-enabled"
+            disabled={props.disabled}
             checked={props.value.probe_enabled}
             onCheckedChange={(checked) => update("probe_enabled", checked)}
           />
@@ -348,7 +361,7 @@ export function GroupPolicyEditorFields(props: {
               type="number"
               min={30}
               value={props.value.probe_interval_seconds ?? ""}
-              disabled={!props.value.probe_enabled}
+              disabled={props.disabled || !props.value.probe_enabled}
               onChange={(event) =>
                 update(
                   "probe_interval_seconds",
@@ -362,7 +375,7 @@ export function GroupPolicyEditorFields(props: {
               <ProbeModelControl
                 options={probeModelOptions}
                 value={props.value.probe_model}
-                disabled={!props.value.probe_enabled}
+                disabled={props.disabled || !props.value.probe_enabled}
                 onChange={(model) => update("probe_model", model)}
               />
               <Button
@@ -370,6 +383,7 @@ export function GroupPolicyEditorFields(props: {
                 variant="outline"
                 className="whitespace-nowrap"
                 disabled={
+                  props.disabled ||
                   !props.value.probe_enabled ||
                   props.probeModelsLoading ||
                   !props.onReloadProbeModels

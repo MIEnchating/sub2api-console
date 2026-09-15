@@ -2,6 +2,7 @@ import { Check, Trash2, XCircle } from "lucide-react";
 
 import type { KeyCleanupPreview, Task } from "@/api";
 import { DataTablePanel } from "@/components/data-table/table-panel";
+import { ContentLoading } from "@/components/content-loading";
 import { RefreshButton } from "@/components/refresh-button";
 import { TaskProgressState, TaskStartupState } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
@@ -126,7 +127,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
       </DialogHeader>
       <DialogBody className="min-h-0 overflow-auto pr-0">
         {props.previewPending && !props.preview ? (
-          <TaskStartupState message="正在扫描上游 Key 与绑定关系" />
+          <ContentLoading label="正在扫描上游 Key 与绑定关系" />
         ) : null}
         {props.previewError ? (
           <QueryErrorToast error={props.previewError} fallback="无绑定 Key 扫描失败" />
@@ -253,7 +254,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
           <>
             <Button
               variant="outline"
-              disabled={controlsDisabled}
+              disabled={props.taskPending || taskRunning}
               onClick={() => props.onOpenChange(false)}
             >
               {closeButtonLabel}
@@ -297,8 +298,7 @@ export function OnboardingKeyCleanupDialogContent(props: OnboardingKeyCleanupDia
 }
 
 export function OnboardingKeyCleanupDialog(props: OnboardingKeyCleanupDialogProps) {
-  const controlsDisabled =
-    props.previewPending || props.taskPending || keyCleanupTaskRunning(props.task);
+  const controlsDisabled = props.taskPending || keyCleanupTaskRunning(props.task);
   return (
     <Dialog
       open={props.open}

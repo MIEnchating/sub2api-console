@@ -8,6 +8,13 @@ import { api } from "@/api";
 import { TaskProgressState, TaskStartupState, taskStartupStateLayout } from "../task-startup-state";
 
 describe("task startup state", () => {
+  it("任务阶段文案过长时换行保留完整内容，减少动效时不强制旋转", () => {
+    const message = "正在同步" + "很长的分组名称".repeat(20);
+    render(<TaskProgressState message={message} progress={15} />);
+    expect(screen.getByText(message)).toHaveClass("min-w-0", "wrap-anywhere");
+    expect(screen.getByText(message)).not.toHaveClass("truncate");
+    expect(screen.getByRole("status").querySelector("svg")).toHaveClass("motion-safe:animate-spin");
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

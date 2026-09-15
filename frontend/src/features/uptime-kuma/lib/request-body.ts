@@ -1,3 +1,5 @@
+import { applyEdits, modify, parseTree, type JSONPath, type Node } from "jsonc-parser";
+
 import { requestProfileDetails, type RequestProfile } from "./request-profiles";
 
 type JSONObject = Record<string, unknown>;
@@ -25,6 +27,21 @@ function textBlock(content: unknown): JSONObject | undefined {
       typeof item.text === "string",
   );
 }
+function fieldNode(body: string, path: JSONPath): Node | undefined {
+  let node = parseTree(body);
+  for (const segment of path) {
+    if (typeof segment === "number") node = node?.children?.[segment];
+    else {
+      // JSON.parse uses the last property when names are repeated.
+      let child: Node | undefined;
+      for (const property of node?.children ?? []) {
+        if (property.children?.[0].value === segment) child = property.children?.[1];
+      }
+      node = child;
+    }
+  }
+  return node;
+}
 export function requestBodyFields(body: string): {
   model: string;
   message: string;
@@ -48,19 +65,26 @@ export function requestBodyFields(body: string): {
 export function updateRequestBody(body: string, field: "model" | "message", text: string): string {
   const value = parseRequestBody(body);
   if (!value) return body;
-  if (field === "model") value.model = text;
-  else if (typeof value.input === "string") value.input = text;
+  let path: JSONPath;
+  if (field === "model") path = ["model"];
+  else if (typeof value.input === "string") path = ["input"];
   else {
-    const message = userMessage(value.messages ?? value.input);
-    if (!message) return body;
-    if (typeof message.content === "string") message.content = text;
-    else {
+    const key = value.messages == null ? "input" : "messages";
+    const messages = value[key];
+    const message = userMessage(messages);
+    if (!message || !Array.isArray(messages)) return body;
+    path = [key, messages.indexOf(message), "content"];
+    if (typeof message.content !== "string") {
       const block = textBlock(message.content);
-      if (!block) return body;
-      block.text = text;
+      if (!block || !Array.isArray(message.content)) return body;
+      path.push(message.content.indexOf(block), "text");
     }
   }
-  return JSON.stringify(value, null, 2);
+  const node = fieldNode(body, path);
+  if (!node) return applyEdits(body, modify(body, path, text, {}));
+  return applyEdits(body, [
+    { offset: node.offset, length: node.length, content: JSON.stringify(text) },
+  ]);
 }
 export function requestEndpointURL(value: string, profile: RequestProfile): string {
   if (!value || !profile) return value;

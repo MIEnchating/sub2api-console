@@ -250,7 +250,7 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 	if targetHost != host {
 		resources = append(resources, mutationguard.Upstream(targetHost))
 	}
-	if vault := vaultMutationResource(host, input, false); vault != "" {
+	if vault := vaultMutationResource(targetHost, input, false); vault != "" {
 		resources = append(resources, vault)
 	}
 	guarded, release, err := s.acquireHostMutation(ctx, host, resources...)

@@ -23,7 +23,7 @@ test("模板保存完整检测参数并可选择 Claude CLI 请求功能", async
   await dialog.getByRole("checkbox", { name: "反转正常 / 故障判断" }).check();
   await dialog.getByRole("combobox", { name: "接口模式" }).click();
   await page.getByRole("option", { name: "Claude CLI 请求", exact: true }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/claude-sonnet-4-6/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/claude-sonnet-4-6/);
   await dialog.getByRole("button", { name: "保存模板" }).click();
   await expect(dialog).toBeHidden();
   expect(fixture.writes[0]?.value).toMatchObject({

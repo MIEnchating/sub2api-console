@@ -123,13 +123,22 @@ func ratesExpr(r Rates) string {
 }
 
 // Providers use decimal K/M units on these pages, not Ki/Mi units.
-func tokenCount(value, unit string) string {
-	r, _ := new(big.Rat).SetString(value)
+func tokenCount(value, unit string) (string, error) {
+	if len(value) > 32 || !decimal.MatchString(value) {
+		return "", errors.New("官方 Token 阶梯数值无效")
+	}
+	r, ok := new(big.Rat).SetString(value)
+	if !ok {
+		return "", errors.New("官方 Token 阶梯数值无效")
+	}
 	if strings.EqualFold(unit, "k") {
 		r.Mul(r, big.NewRat(1000, 1))
 	}
 	if strings.EqualFold(unit, "m") {
 		r.Mul(r, big.NewRat(1_000_000, 1))
 	}
-	return r.FloatString(0)
+	if !r.IsInt() {
+		return "", errors.New("官方 Token 阶梯必须是整数")
+	}
+	return r.Num().String(), nil
 }

@@ -82,6 +82,15 @@ const task: Task = {
   },
 };
 
+it("展示动画账号时卡片和检测面板沿用统一圆角", () => {
+  const { dispose } = setup(task);
+  for (const card of screen.getAllByRole("article")) expect(card).toHaveClass("rounded-lg");
+  expect(screen.getByRole("tablist", { name: "动画检测来源" }).closest(".bg-card")).toHaveClass(
+    "rounded-lg",
+  );
+  dispose();
+});
+
 it("检测结果顺序与账号不同，仍在对应账号卡片中展示动画或失败原因", () => {
   const { dispose } = setup(task);
   const cards = screen.getAllByRole("article");

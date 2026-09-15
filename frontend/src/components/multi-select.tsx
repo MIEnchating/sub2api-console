@@ -193,7 +193,7 @@ export function MultiSelect(props: MultiSelectProps) {
           setOpen(true);
         }}
         onKeyDown={(event) => {
-          if (props.disabled) return;
+          if (props.disabled || event.target !== event.currentTarget) return;
           if (!["Enter", " ", "ArrowDown"].includes(event.key)) return;
           event.preventDefault();
           setOpen((current) => (event.key === "ArrowDown" ? true : !current));

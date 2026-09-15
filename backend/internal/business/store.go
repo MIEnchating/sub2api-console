@@ -21,7 +21,7 @@ import (
 
 type Store struct {
 	path string
-	db   *sql.DB
+	db   *database
 }
 
 func preferContextError(ctx context.Context, err error) error {
@@ -65,16 +65,11 @@ func Open(path string) (*Store, error) {
 	if err := sqliteutil.Prepare(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", sqliteutil.DSN(path, "_txlock=immediate&_pragma=busy_timeout%2810000%29&_pragma=journal_mode%28WAL%29&_pragma=foreign_keys%28ON%29"))
+	db, err := openDatabase(path)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(8)
 	store := &Store{path: path, db: db}
-	if err := db.PingContext(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
 	if err := store.ensureSchema(context.Background()); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}

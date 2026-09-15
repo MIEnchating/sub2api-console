@@ -25,7 +25,12 @@ describe("模型价格悬浮批量操作栏", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择模型 model-a" }));
     const toolbar = screen.getByRole("toolbar", { name: "已选择 1 个模型的批量操作" });
-    expect(toolbar).toHaveClass("fixed", "bottom-6", "left-1/2", "-translate-x-1/2");
+    expect(toolbar).toHaveClass(
+      "fixed",
+      "bottom-[max(7rem,env(safe-area-inset-bottom))]",
+      "left-1/2",
+      "-translate-x-1/2",
+    );
     expect(toolbar).toHaveClass("max-w-[calc(100%-2rem)]");
     expect(within(toolbar).getByLabelText("1 个已选择模型")).toBeVisible();
     expect(within(toolbar).getByRole("button", { name: "批量同步（1）" })).toBeEnabled();

@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,127 @@ func TestOpenReservesWriteLockWhenTransactionBegins(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("waiting writer did not begin after the active transaction released its lock")
+	}
+}
+
+func TestUpstreamSyncWaitsForActiveWriterWithoutSQLiteBusy(t *testing.T) {
+	for _, cancelWaiting := range []bool{false, true} {
+		name := "commits after active writer releases"
+		if cancelWaiting {
+			name = "cancellation leaves catalog unchanged and writer reusable"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, err := Open(filepath.Join(t.TempDir(), "writer-queue.sqlite3"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if _, err := store.CreateUpstreamConfiguration(ctx, UpstreamConfigurationWrite{
+				Host: "sync.example.test", BaseURL: "https://sync.example.test", UpstreamType: "sub2api", AuthMode: "access_token", RechargeRate: "1",
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			// Disable SQLite's lock wait on every pooled connection: local writers
+			// must queue before entering SQLite, independently of busy_timeout.
+			connections := make([]*sql.Conn, store.db.Stats().MaxOpenConnections)
+			for index := range connections {
+				connection, err := store.db.Conn(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = connection.Close() })
+				connections[index] = connection
+				if _, err := connection.ExecContext(ctx, "PRAGMA busy_timeout=0"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, connection := range connections {
+				if err := connection.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			active, err := store.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer active.Rollback()
+			waitingCtx, cancelWaitingSync := context.WithCancel(ctx)
+			defer cancelWaitingSync()
+			rate := "0.2"
+			write := UpstreamSyncWrite{Host: "sync.example.test", Catalog: &UpstreamCatalogSnapshot{
+				Groups: []UpstreamCatalogGroup{{GroupID: "7", Name: "standard", RawRate: &rate}},
+			}}
+			completed := make(chan error, 1)
+			previousWaitCount := store.db.Stats().WaitCount
+			go func() {
+				_, err := store.ApplyUpstreamSync(waitingCtx, write)
+				completed <- err
+			}()
+			for store.db.Stats().WaitCount == previousWaitCount {
+				select {
+				case err := <-completed:
+					t.Fatalf("sync did not wait for the active writer: %v", err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				default:
+					runtime.Gosched()
+				}
+			}
+			if cancelWaiting {
+				cancelWaitingSync()
+				if err := <-completed; !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled sync returned %v", err)
+				}
+			}
+			// Reads must remain available while the active writer and queued sync
+			// occupy the write path.
+			var groups int
+			if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM upstream_groups").Scan(&groups); err != nil || groups != 0 {
+				t.Fatalf("catalog read during write contention: groups=%d err=%v", groups, err)
+			}
+			if err := active.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			if cancelWaiting {
+				if _, err := store.ApplyUpstreamSync(ctx, write); err != nil {
+					t.Fatalf("writer not reusable after cancellation: %v", err)
+				}
+			} else if err := <-completed; err != nil {
+				t.Fatalf("queued sync failed: %v", err)
+			}
+			var persisted string
+			if err := store.db.QueryRowContext(ctx, "SELECT raw_rate FROM upstream_groups WHERE host=? AND group_id='7'", write.Host).Scan(&persisted); err != nil || persisted != rate {
+				t.Fatalf("synced rate=%q err=%v", persisted, err)
+			}
+		})
+	}
+}
+
+func TestAccountProtectionReadTransactionDoesNotWaitForActiveWriter(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "read-transaction.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := store.Bootstrap(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	protections, err := store.AccountMutationProtections(ctx, []string{"41"})
+	if err != nil {
+		t.Fatalf("protection snapshot blocked by active writer: %v", err)
+	}
+	if protection, found := protections["41"]; !found || protection.Protected() {
+		t.Fatalf("unexpected default account protection: %#v", protections)
 	}
 }
 

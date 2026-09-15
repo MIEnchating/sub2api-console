@@ -367,6 +367,10 @@ func (f fakeBusiness) SetProbeEnabled(_ context.Context, enabled bool) error {
 func (f fakeBusiness) Accounts(context.Context) ([]business.AccountStatus, error) {
 	return f.accountRows, nil
 }
+
+func (f fakeBusiness) DictionaryValues(context.Context, string) ([]configstore.DictionaryEntry, error) {
+	return []configstore.DictionaryEntry{}, nil
+}
 func (f fakeBusiness) Account(context.Context, string) (*business.AccountDetail, error) {
 	if f.accountDetail == nil {
 		return nil, sql.ErrNoRows

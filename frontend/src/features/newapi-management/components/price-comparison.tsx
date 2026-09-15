@@ -5,6 +5,7 @@ import type { NewAPIModelPrice, NewAPIRemoteSnapshot } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { DataTablePanel } from "@/components/data-table/table-panel";
+import { QueryErrorToast } from "@/components/query-error-toast";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,6 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useClientPagination } from "@/hooks/use-client-pagination";
+import { upstreamTypeLabel } from "@/lib/domain-dictionaries";
 import { modelPriceNumbersEqual } from "../lib/pricing-number";
 import { modelPriceColumnValues } from "./model-prices";
 
@@ -34,6 +36,10 @@ export type PlatformPriceComparisonStatus = "matched" | "mismatched" | "missing"
 type UpstreamPriceCatalog = NonNullable<NewAPIRemoteSnapshot["upstream_prices"]>[number];
 type PriceColumns = ReturnType<typeof modelPriceColumnValues>;
 type PriceColumn = keyof PriceColumns;
+
+function upstreamDisplayLabel(upstream: UpstreamPriceCatalog): string {
+  return `${upstream.host} · ${upstreamTypeLabel(upstream.upstream_type)}`;
+}
 
 const comparedPriceColumns: Array<{ key: PriceColumn; label: string }> = [
   { key: "input", label: "输入价格" },
@@ -189,7 +195,7 @@ function UpstreamSelector(props: {
         }}
       >
         <span className={selected ? "truncate" : "text-muted-foreground truncate"}>
-          {selected ? `${selected.name} · ${selected.host}` : "选择比对上游"}
+          {selected ? upstreamDisplayLabel(selected) : "选择比对上游"}
         </span>
         <ChevronDown className="text-muted-foreground" aria-hidden="true" />
       </Button>
@@ -223,9 +229,7 @@ function UpstreamSelector(props: {
                   setOpen(false);
                 }}
               >
-                <span className="min-w-0 flex-1 truncate">
-                  {upstream.name} · {upstream.host}
-                </span>
+                <span className="min-w-0 flex-1 truncate">{upstreamDisplayLabel(upstream)}</span>
                 {selectedOption ? <Check className="size-4 shrink-0" aria-hidden="true" /> : null}
               </button>
             );
@@ -262,7 +266,7 @@ function PriceComparisonDialog(props: {
             当前平台价格与 {props.upstream?.name ?? "所选上游"} 价卡的逐项结果。
           </DialogDescription>
         </DialogHeader>
-        <DialogBody className="grid gap-3">
+        <DialogBody className="space-y-3">
           <StatusBadge label={comparisonSummary(status)} variant={summary.variant} />
           {rows.length > 0 ? (
             <Table overflowTooltip={false}>
@@ -301,7 +305,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   const upstreams = props.snapshot.upstream_prices ?? [];
   const [selectedUpstreamHost, setSelectedUpstreamHost] = useState("");
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
-  const [results, setResults] = useState<Record<string, PlatformPriceComparisonStatus>>({});
+  const [results, setResults] = useState<Map<string, PlatformPriceComparisonStatus>>(new Map());
   const [search, setSearch] = useState("");
   const [dialogModel, setDialogModel] = useState<NewAPIModelPrice | null>(null);
   const selectedUpstream =
@@ -320,7 +324,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
 
   function selectUpstream(host: string) {
     setSelectedUpstreamHost(host);
-    setResults({});
+    setResults(new Map());
     setDialogModel(null);
   }
 
@@ -342,10 +346,17 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   function compareSelectedModels() {
     if (!selectedUpstream) return;
     setResults((current) => {
-      const next = { ...current };
+      const next = new Map(current);
+      const platformModels = new Map(props.snapshot.models.map((model) => [model.model, model]));
+      const upstreamModels = new Map(selectedUpstream.models.map((model) => [model.model, model]));
       for (const modelName of selectedModels) {
-        const model = props.snapshot.models.find((candidate) => candidate.model === modelName);
-        if (model) next[modelName] = comparePlatformModelPrice(model, selectedUpstream.models);
+        const model = platformModels.get(modelName);
+        const upstreamModel = upstreamModels.get(modelName);
+        if (model)
+          next.set(
+            modelName,
+            comparePlatformModelPrice(model, upstreamModel ? [upstreamModel] : []),
+          );
       }
       return next;
     });
@@ -354,12 +365,18 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   function compareSingleModel(model: NewAPIModelPrice) {
     if (!selectedUpstream) return;
     const status = comparePlatformModelPrice(model, selectedUpstream.models);
-    setResults((current) => ({ ...current, [model.model]: status }));
+    setResults((current) => new Map(current).set(model.model, status));
     setDialogModel(model);
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {props.snapshot.upstream_price_warning ? (
+        <QueryErrorToast
+          error={props.snapshot.upstream_price_warning}
+          fallback="上游价格读取失败"
+        />
+      ) : null}
       <TableFilterToolbar aria-label="价格比对筛选与操作">
         <UpstreamSelector
           upstreams={upstreams}
@@ -433,7 +450,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
                         {prices.output || "-"}
                       </TableCell>
                       <TableCell>
-                        <ComparisonStatus model={model.model} status={results[model.model]} />
+                        <ComparisonStatus model={model.model} status={results.get(model.model)} />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

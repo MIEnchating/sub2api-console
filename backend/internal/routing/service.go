@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 )
 
 type Repository interface {
@@ -307,7 +308,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		if err != nil {
 			return Result{}, err
 		}
-		if !enabled || groupConfig.groupExcluded(groupName, members[0].GroupID) || !groupConfig.groupManaged(groupName, members[0].GroupID) {
+		if !enabled || groupConfig.groupExcluded(members[0].GroupID) || !groupConfig.groupManaged(members[0].GroupID) {
 			continue
 		}
 		processedGroups++
@@ -1069,7 +1070,7 @@ func accountExternallyModified(account business.RoutingAccount) bool {
 	if account.ManagedPriority != nil && !sameOptionalInt64(account.Priority, account.ManagedPriority) {
 		return true
 	}
-	if account.ManagedLoadFactor != nil && !sameOptionalText(account.LoadFactor, account.ManagedLoadFactor) {
+	if account.ManagedLoadFactor != nil && !sameOptionalDecimal(account.LoadFactor, account.ManagedLoadFactor) {
 		return true
 	}
 	return account.ManagedConcurrency != nil && !sameOptionalInt64(account.Concurrency, account.ManagedConcurrency)
@@ -1083,8 +1084,13 @@ func sameOptionalInt64(left, right *int64) bool {
 	return left != nil && right != nil && *left == *right
 }
 
-func sameOptionalText(left, right *string) bool {
-	return left != nil && right != nil && strings.TrimSpace(*left) == strings.TrimSpace(*right)
+func sameOptionalDecimal(left, right *string) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftValue, leftOK := decimalutil.Parse(*left)
+	rightValue, rightOK := decimalutil.Parse(*right)
+	return leftOK && rightOK && leftValue.Cmp(rightValue) == 0
 }
 
 func catalogBindingInvalid(value string) bool {
@@ -2153,24 +2159,24 @@ func eligibleScope(account business.RoutingAccount, config engineConfig) (bool, 
 	if _, found := config.excludedAccounts[account.ID]; found {
 		return false, "账号被排除"
 	}
-	if config.groupExcluded(account.GroupName, account.GroupID) {
+	if config.groupExcluded(account.GroupID) {
 		return false, "分组被排除"
 	}
-	if !config.groupManaged(account.GroupName, account.GroupID) {
+	if !config.groupManaged(account.GroupID) {
 		return false, "分组未纳入托管范围"
 	}
 	return true, ""
 }
 
-func (c engineConfig) groupExcluded(name string, id *string) bool {
-	return setsOverlap(groupKeys(name, id), c.excludedGroups)
+func (c engineConfig) groupExcluded(id *string) bool {
+	return containsGroupID(c.excludedGroups, id)
 }
 
-func (c engineConfig) groupManaged(name string, id *string) bool {
+func (c engineConfig) groupManaged(id *string) bool {
 	if c.managedMode != "selected" {
 		return true
 	}
-	return setsOverlap(groupKeys(name, id), c.managedGroups)
+	return containsGroupID(c.managedGroups, id)
 }
 
 func filterSource(samples []business.RoutingSample, source string) []business.RoutingSample {
@@ -2779,21 +2785,12 @@ func stableIDLess(left, right string) bool {
 	return left < right
 }
 
-func groupKeys(name string, id *string) map[string]struct{} {
-	result := map[string]struct{}{strings.ToLower(strings.TrimSpace(name)): {}}
-	if id != nil {
-		result[strings.ToLower(strings.TrimSpace(*id))] = struct{}{}
+func containsGroupID(ids map[string]struct{}, id *string) bool {
+	if id == nil {
+		return false
 	}
-	return result
-}
-
-func setsOverlap(left, right map[string]struct{}) bool {
-	for value := range left {
-		if _, found := right[value]; found {
-			return true
-		}
-	}
-	return false
+	_, found := ids[strings.ToLower(strings.TrimSpace(*id))]
+	return found
 }
 
 func textMetadata(value map[string]any, keys ...string) string {

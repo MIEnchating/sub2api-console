@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, type AccountDeletePreview, type Task, type UpstreamGroup } from "@/api";
 import { UpstreamAccounts } from "../upstream-edit-dialog";
@@ -78,9 +78,8 @@ function renderAccounts(onChanged = vi.fn(), groups: UpstreamGroup[] = [group]) 
   return onChanged;
 }
 
-beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => vi.restoreAllMocks());
-afterAll(() => vi.unstubAllGlobals());
 
 describe("编辑上游账号操作", () => {
   it("探活使用与账号管理相同的稳定账号 ID 接口", async () => {

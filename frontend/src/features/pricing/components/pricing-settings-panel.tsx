@@ -17,7 +17,7 @@ export function PricingSettingsPanel(props: {
       size="sm"
       role="region"
       aria-labelledby="pricing-settings-title"
-      className="rounded-xl xl:sticky xl:top-1"
+      className="xl:sticky xl:top-1"
       data-testid="pricing-settings-panel"
     >
       <CardHeader className="bg-muted/20 grid-cols-1 gap-3">
@@ -140,7 +140,7 @@ export function PricingSettingsPanel(props: {
             查看分组选择规则
           </summary>
           <p className="mt-2">
-            每个互换组优先选择达到目标盈利比例且售价最低的分组；均未达标时选择售价最高且能覆盖成本的分组，均亏损时保留当前分组。
+            每个互换组仅从账号成本倍率达到最低迁入倍率的分组中选择，未设置则不限。优先选择达到目标盈利比例且售价最低的分组；均未达标时选择售价最高且能覆盖成本的分组，无合适分组时保留当前分组。
           </p>
         </details>
       </div>

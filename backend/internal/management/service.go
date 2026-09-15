@@ -1510,24 +1510,17 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 		if captureErr != nil {
 			return nil, captureErr
 		}
-		readCtx, releaseRead, acquireErr := targetguard.Acquire(targetCtx, s.repository)
-		if acquireErr != nil {
-			return nil, acquireErr
-		}
-		readCtx, err = targetguard.Bind(readCtx, s.targets)
+		// Collection can span many upstream batches. Pin its target without
+		// holding the mutation lease; observation commits revalidate it below.
+		readCtx, err := targetguard.Pin(targetCtx, s.targets)
 		if err != nil {
-			_ = releaseRead()
 			return nil, err
 		}
 		readClient, clientErr := s.maintenanceClient(readCtx)
 		if clientErr != nil {
-			_ = releaseRead()
 			return nil, clientErr
 		}
 		batch, batchErr := readClient.AccountUpstreamMultipliers(readCtx, sub2APIIDs)
-		if releaseErr := releaseRead(); releaseErr != nil {
-			return nil, fmt.Errorf("管理倍率探测目标租约释放失败：%w", releaseErr)
-		}
 		ctx = targetCtx
 		for index, accountID := range accountIDs {
 			if upstreamRates[index].err != nil || upstreamRates[index].skippedReason != "" || isNewAPIType(upstreamRates[index].account.UpstreamType) {
@@ -2537,10 +2530,11 @@ func (s *Service) repairAccountDefaults(ctx context.Context, accountIDs []string
 					}
 					confirmedConcurrency, confirmedConcurrencyErr := managementInteger(readback, "concurrency")
 					confirmedPriority, confirmedPriorityErr := managementInteger(readback, "priority")
-					confirmedLoadFactor, confirmedLoadFactorErr := managementOptionalInteger(readback, "load_factor")
+					_, confirmedLoadFactorErr := managementOptionalInteger(readback, "load_factor")
+					confirmedLoadFactor, confirmedLoadFactorPresent := readback["load_factor"]
 					confirmed := confirmedConcurrencyErr == nil && confirmedPriorityErr == nil && confirmedLoadFactorErr == nil &&
 						confirmedConcurrency == afterConcurrency && confirmedPriority == afterPriority &&
-						(body["load_factor"] == nil || confirmedLoadFactor == nil)
+						(body["load_factor"] == nil || confirmedLoadFactorPresent && confirmedLoadFactor == nil)
 					if !confirmed {
 						item["status"], item["error"] = "修复失败", "管理平台账号参数读回与预期不一致"
 						results[index] = repairResult{item: item, written: true, kind: "failed"}

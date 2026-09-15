@@ -170,6 +170,10 @@ func (s *Service) deliver(ctx context.Context, dryRun bool, balanceHost string) 
 		return result, nil
 	}
 	batches := NotificationBatches(plan.Pending, plan.MergeThreshold)
+	if dryRun {
+		result.Sent, result.Attempted, result.Batches = len(plan.Pending), len(plan.Pending), len(batches)
+		return result, nil
+	}
 	if err := s.repository.BeginAlertDelivery(ctx, channelKey, plan.Pending); err != nil {
 		return business.AlertDeliveryResult{}, err
 	}
@@ -177,14 +181,7 @@ func (s *Service) deliver(ctx context.Context, dryRun bool, balanceHost string) 
 	for index := range batches {
 		messages[index] = batches[index].Message
 	}
-	batchOutcomes := make([]SendOutcome, len(batches))
-	if dryRun {
-		for index := range batchOutcomes {
-			batchOutcomes[index] = SendOutcome{Success: true, Detail: "模拟发送成功"}
-		}
-	} else {
-		batchOutcomes = s.sender.Send(ctx, settings, messages)
-	}
+	batchOutcomes := s.sender.Send(ctx, settings, messages)
 	if len(batchOutcomes) != len(batches) {
 		batchOutcomes = make([]SendOutcome, len(batches))
 		for index := range batchOutcomes {
@@ -234,7 +231,7 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 	if mergeThreshold < 2 {
 		mergeThreshold = 10
 	}
-	groups := notificationGroups(incidents)
+	groups := splitUpstreamNotificationGroups(notificationGroups(incidents))
 	if len(incidents) < mergeThreshold {
 		degraded := make([]business.AlertIncident, 0)
 		for _, group := range groups {
@@ -260,7 +257,7 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 	current := make([]business.AlertIncident, 0)
 	for _, group := range groups {
 		candidate := append(append([]business.AlertIncident{}, current...), group.incidents...)
-		message := BatchMessage(candidate)
+		message := batchMessage(candidate)
 		if len(current) > 0 && utf8.RuneCountInString(message) >= batchLimit {
 			result = append(result, NotificationBatch{Incidents: current, Message: BatchMessage(current)})
 			current = append([]business.AlertIncident{}, group.incidents...)
@@ -277,6 +274,7 @@ func NotificationBatches(incidents []business.AlertIncident, mergeThreshold int)
 type notificationGroup struct {
 	incidents []business.AlertIncident
 	parent    *business.AlertIncident
+	upstream  bool
 }
 
 func notificationGroups(incidents []business.AlertIncident) []notificationGroup {
@@ -321,12 +319,22 @@ func notificationGroups(incidents []business.AlertIncident) []notificationGroup 
 	}
 
 	result := make([]notificationGroup, 0, len(incidents))
+	upstreamGroups := map[string]int{}
 	for index, incident := range incidents {
 		if group, found := groupByRoot[index]; found {
 			result = append(result, group)
 			continue
 		}
 		if _, found := consumed[index]; found {
+			continue
+		}
+		if incident.ObjectKind == "host" && strings.TrimSpace(incident.ObjectID) != "" {
+			if groupIndex, found := upstreamGroups[incident.ObjectID]; found {
+				result[groupIndex].incidents = append(result[groupIndex].incidents, incident)
+				continue
+			}
+			upstreamGroups[incident.ObjectID] = len(result)
+			result = append(result, notificationGroup{incidents: []business.AlertIncident{incident}, upstream: true})
 			continue
 		}
 		result = append(result, notificationGroup{incidents: []business.AlertIncident{incident}})
@@ -405,6 +413,10 @@ var causeLabels = map[string]string{
 var objectLabels = map[string]string{"host": "上游", "account": "账号", "group": "分组"}
 
 func BatchMessage(incidents []business.AlertIncident) string {
+	return truncateRunes(batchMessage(incidents), messageLimit)
+}
+
+func batchMessage(incidents []business.AlertIncident) string {
 	groups := notificationGroups(incidents)
 	degradedDigests := routingDegradedDigests(groups)
 	statuses := map[string]struct{}{}
@@ -412,7 +424,7 @@ func BatchMessage(incidents []business.AlertIncident) string {
 		statuses[incident.Status] = struct{}{}
 	}
 	title := "告警与恢复汇总"
-	if len(groups) == 1 {
+	if len(groups) == 1 && len(statuses) == 1 {
 		title = "状态通知"
 		if incidents[0].Status == "recovered" {
 			title = "恢复通知"
@@ -430,6 +442,9 @@ func BatchMessage(incidents []business.AlertIncident) string {
 	if len(groups) == 1 && groups[0].parent != nil {
 		return relatedRoutingMessage(title, groups[0])
 	}
+	if len(groups) == 1 && groups[0].upstream && len(groups[0].incidents) > 1 {
+		return upstreamNotificationMessage(title, groups[0].incidents)
+	}
 	if len(groups) == 1 {
 		fields := notificationIncidentFields(incidents[0])
 		lines := []string{
@@ -443,7 +458,7 @@ func BatchMessage(incidents []business.AlertIncident) string {
 			fmt.Sprintf("| 状态 | %s |", fields.status),
 			fmt.Sprintf("| 时间（北京时间） | %s |", markdownTableValue(fields.observedAt)),
 		}
-		return truncateRunes(strings.Join(lines, "\n"), messageLimit)
+		return strings.Join(lines, "\n")
 	}
 	displayCount := len(groups)
 	for _, digest := range degradedDigests {
@@ -471,9 +486,13 @@ func BatchMessage(incidents []business.AlertIncident) string {
 			lines = append(lines, relatedRoutingTableRow(group))
 			continue
 		}
+		if group.upstream && len(group.incidents) > 1 {
+			lines = append(lines, upstreamNotificationRows(group.incidents)...)
+			continue
+		}
 		lines = append(lines, incidentTableRow(group.incidents[0]))
 	}
-	return truncateRunes(strings.Join(lines, "\n"), messageLimit)
+	return strings.Join(lines, "\n")
 }
 
 func routingDegradedDigests(groups []notificationGroup) map[string][]business.AlertIncident {

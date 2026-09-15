@@ -70,12 +70,13 @@ type TaskStore interface {
 }
 
 type Config struct {
-	Enabled               bool       `json:"enabled"`
-	ProfitMargin          float64    `json:"profit_margin"`
-	ExchangeGroupSets     [][]string `json:"exchange_group_sets"`
-	ExchangeGroupSetNames []string   `json:"exchange_group_set_names"`
-	IntervalSeconds       int        `json:"interval_seconds"`
-	WriteConcurrency      int        `json:"write_concurrency"`
+	Enabled                 bool              `json:"enabled"`
+	ProfitMargin            float64           `json:"profit_margin"`
+	ExchangeGroupSets       [][]string        `json:"exchange_group_sets"`
+	ExchangeGroupSetNames   []string          `json:"exchange_group_set_names"`
+	GroupMinCostMultipliers map[string]string `json:"group_min_cost_multipliers"`
+	IntervalSeconds         int               `json:"interval_seconds"`
+	WriteConcurrency        int               `json:"write_concurrency"`
 }
 
 type Group struct {
@@ -321,11 +322,16 @@ func (s *Service) UpdateConfig(ctx context.Context, config Config, actor string)
 			return Snapshot{}, err
 		}
 	}
+	minimums := make(map[string]any, len(config.GroupMinCostMultipliers))
+	for groupID, minimum := range config.GroupMinCostMultipliers {
+		minimums[groupID] = minimum
+	}
 	_, err = s.repository.UpdatePolicy(ctx, map[string]any{"advanced_policy": map[string]any{
 		"price_management": map[string]any{
 			"enabled": config.Enabled, "profit_margin": config.ProfitMargin,
-			"exchange_group_sets":      stringGroupsToAny(config.ExchangeGroupSets),
-			"exchange_group_set_names": stringsToAny(config.ExchangeGroupSetNames), "interval_seconds": config.IntervalSeconds,
+			"exchange_group_sets":        stringGroupsToAny(config.ExchangeGroupSets),
+			"group_min_cost_multipliers": minimums,
+			"exchange_group_set_names":   stringsToAny(config.ExchangeGroupSetNames), "interval_seconds": config.IntervalSeconds,
 			"write_concurrency": config.WriteConcurrency,
 		},
 	}}, actor)
@@ -423,7 +429,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, actor str
 }
 
 func ConfigFromPolicy(policy map[string]any) (Config, error) {
-	config := Config{ProfitMargin: 0.2, IntervalSeconds: 120, WriteConcurrency: 4, ExchangeGroupSets: [][]string{}}
+	config := Config{ProfitMargin: 0.2, IntervalSeconds: 120, WriteConcurrency: 4, ExchangeGroupSets: [][]string{}, GroupMinCostMultipliers: map[string]string{}}
 	raw, present := policy["price_management"]
 	if !present {
 		return config, nil
@@ -494,6 +500,19 @@ func ConfigFromPolicy(policy map[string]any) (Config, error) {
 			config.ExchangeGroupSetNames = append(config.ExchangeGroupSetNames, name)
 		}
 	}
+	if value, found := section["group_min_cost_multipliers"]; found {
+		items, valid := value.(map[string]any)
+		if !valid {
+			return Config{}, errors.New("价格管理配置无效：price_management.group_min_cost_multipliers")
+		}
+		for groupID, item := range items {
+			minimum, valid := item.(string)
+			if !valid {
+				return Config{}, fmt.Errorf("分组 %s 的最低迁入倍率必须使用十进制字符串", groupID)
+			}
+			config.GroupMinCostMultipliers[groupID] = minimum
+		}
+	}
 	return normalizeConfig(config)
 }
 
@@ -561,6 +580,22 @@ func normalizeConfig(config Config) (Config, error) {
 	if config.Enabled && len(sets) == 0 {
 		return Config{}, errors.New("开启价格管理前至少配置一个账号互换组")
 	}
+	minimums := make(map[string]string, len(config.GroupMinCostMultipliers))
+	for groupID, raw := range config.GroupMinCostMultipliers {
+		minimum := strings.TrimSpace(raw)
+		if minimum == "" {
+			continue
+		}
+		if _, managed := seen[groupID]; !managed {
+			return Config{}, fmt.Errorf("最低迁入倍率的分组 %s 必须使用互换组内的稳定分组 ID", groupID)
+		}
+		parsed, valid := decimalutil.Parse(minimum)
+		if !valid || parsed.Sign() < 0 {
+			return Config{}, fmt.Errorf("分组 %s 的最低迁入倍率必须是大于或等于 0 的有效十进制数", groupID)
+		}
+		minimums[groupID] = minimum
+	}
+	config.GroupMinCostMultipliers = minimums
 	return config, nil
 }
 
@@ -587,6 +622,14 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 	}
 	groupByID := map[string]Group{}
 	groupPrice := map[string]*big.Rat{}
+	groupMinimumCost := make(map[string]*big.Rat, len(config.GroupMinCostMultipliers))
+	for groupID, minimum := range config.GroupMinCostMultipliers {
+		parsed, valid := decimalutil.Parse(minimum)
+		if !valid || parsed.Sign() < 0 {
+			return Snapshot{}, fmt.Errorf("分组 %s 的最低迁入倍率无效，请检查价格设置", groupID)
+		}
+		groupMinimumCost[groupID] = parsed
+	}
 	resultGroups := make([]Group, 0, len(catalog.Groups))
 	for _, raw := range catalog.Groups {
 		id := strings.TrimSpace(raw.ID)
@@ -697,12 +740,17 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 			fallbackID := ""
 			var fallbackRate *big.Rat
 			compatible := 0
+			belowMinimum := 0
 			for _, groupID := range config.ExchangeGroupSets[setIndex] {
 				group := groupByID[groupID]
 				if !group.Available || group.Platform != decision.Platform {
 					continue
 				}
 				compatible++
+				if minimum := groupMinimumCost[groupID]; minimum != nil && cost.Cmp(minimum) < 0 {
+					belowMinimum++
+					continue
+				}
 				rate := groupPrice[groupID]
 				if cost.Cmp(rate) <= 0 && (fallbackRate == nil || rate.Cmp(fallbackRate) > 0 || (rate.Cmp(fallbackRate) == 0 && numericLess(groupID, fallbackID))) {
 					fallbackID, fallbackRate = groupID, rate
@@ -724,7 +772,9 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 				preserved := append([]string{}, currentBySet[setIndex]...)
 				sort.Slice(preserved, func(left, right int) bool { return numericLess(preserved[left], preserved[right]) })
 				chosenID = preserved[0]
-				if compatible > 0 {
+				if belowMinimum > 0 {
+					reasons = append(reasons, fmt.Sprintf("互换组 %d 没有同时满足最低迁入倍率且能覆盖账号成本的可用分组，保留当前分组；请调整最低迁入倍率或分组售价", setIndex+1))
+				} else if compatible > 0 {
 					reasons = append(reasons, fmt.Sprintf("互换组 %d 没有满足盈利比例的可用分组，且所有候选分组售价均低于账号成本，保留当前分组", setIndex+1))
 				}
 			}
@@ -787,22 +837,35 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	if err := validatePriceGroupUniqueness(value.snapshot.Decisions, config); err != nil {
 		return Result{}, err
 	}
+	result := Result{Requested: value.snapshot.Accounts, Skipped: value.snapshot.Skipped, Items: []ItemResult{}}
+	writeDecisions := make([]Decision, 0, value.snapshot.Changes)
+	for _, decision := range value.snapshot.Decisions {
+		if decision.Changed && !decision.Skipped {
+			writeDecisions = append(writeDecisions, decision)
+		}
+	}
+	if len(writeDecisions) == 0 {
+		// A read-only plan must not queue behind a long-running probe batch.
+		if err := s.validateApplyMode(ctx); err != nil {
+			return Result{}, err
+		}
+		if _, err := targetguard.Pin(ctx, s.targets); err != nil {
+			return Result{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		result.Unchanged = max(0, result.Requested-result.Skipped)
+		return result, nil
+	}
 	guarded, release, err := s.acquirePlanMutation(ctx, value.snapshot.Decisions)
 	if err != nil {
 		return Result{}, err
 	}
 	defer release()
 	ctx = guarded
-	if reader, ok := s.repository.(interface {
-		Mode(context.Context) (string, error)
-	}); ok {
-		mode, modeErr := reader.Mode(ctx)
-		if modeErr != nil {
-			return Result{}, fmt.Errorf("价格管理运行模式读取失败：%w", modeErr)
-		}
-		if mode != runtimepolicy.Full {
-			return Result{}, errors.New("当前运行模式不允许调整账号分组，请切换为完全模式后重试")
-		}
+	if err := s.validateApplyMode(ctx); err != nil {
+		return Result{}, err
 	}
 	ctx, err = targetguard.Bind(ctx, s.targets)
 	if err != nil {
@@ -815,13 +878,6 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 	client, err := adminclient.New(adminclient.Config{BaseURL: settings.BaseURL, AdminKey: settings.AdminKey, Timeout: time.Duration(settings.TimeoutSeconds) * time.Second, Attempts: 1}, nil)
 	if err != nil {
 		return Result{}, err
-	}
-	result := Result{Requested: value.snapshot.Accounts, Skipped: value.snapshot.Skipped, Items: []ItemResult{}}
-	writeDecisions := make([]Decision, 0, value.snapshot.Changes)
-	for _, decision := range value.snapshot.Decisions {
-		if decision.Changed && !decision.Skipped {
-			writeDecisions = append(writeDecisions, decision)
-		}
 	}
 	jobs := make(chan Decision)
 	items := make(chan ItemResult, value.snapshot.Changes)
@@ -935,6 +991,23 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 		return result, fmt.Errorf("%d 个账号分组调整失败", result.Failed)
 	}
 	return result, nil
+}
+
+func (s *Service) validateApplyMode(ctx context.Context) error {
+	reader, ok := s.repository.(interface {
+		Mode(context.Context) (string, error)
+	})
+	if !ok {
+		return nil
+	}
+	mode, err := reader.Mode(ctx)
+	if err != nil {
+		return fmt.Errorf("价格管理运行模式读取失败：%w", err)
+	}
+	if mode != runtimepolicy.Full {
+		return errors.New("当前运行模式不允许调整账号分组，请切换为完全模式后重试")
+	}
+	return nil
 }
 
 func rollbackPricingRemoteGroups(ctx context.Context, client *adminclient.Client, items []ItemResult) error {

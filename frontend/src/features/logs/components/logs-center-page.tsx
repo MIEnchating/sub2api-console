@@ -13,6 +13,7 @@ import {
 } from "@/api";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { TableEmptyState } from "@/components/data-table/empty-state";
+import { ContentRetry } from "@/components/content-retry";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { SearchField } from "@/components/data-table/search-field";
@@ -304,66 +305,66 @@ export function LogsCenterPage() {
                       ))}
                     </TableRow>
                   ))}
-                {!logs.isLoading && !logs.error && !logs.data?.items.length && (
+                {!logs.data && logs.isError && (
+                  <TableEmptyState columns={6}>
+                    <ContentRetry pending={logs.isFetching} onRetry={() => void logs.refetch()} />
+                  </TableEmptyState>
+                )}
+                {logs.data && !logs.data.items.length && (
                   <TableEmptyState columns={6}>
                     {search || state !== "all" || eventLevel !== "all" || eventGroup !== "all"
                       ? "没有匹配的记录"
                       : "暂无日志记录"}
                   </TableEmptyState>
                 )}
-                {!logs.error &&
-                  logs.data?.items.map((entry) => (
-                    <TableRow key={entry.id}>
-                      <TableCell className="text-xs">{formatLogDate(entry.occurred_at)}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{logKindLabel(entry.kind)}</Badge>
-                      </TableCell>
-                      <TableCell tooltipContent={`${logTitleLabel(entry.title)}：${entry.summary}`}>
-                        <div className="grid min-w-0 gap-0.5">
-                          <span className="truncate font-medium">{logTitleLabel(entry.title)}</span>
-                          <span className="text-muted-foreground truncate text-xs">
-                            {entry.summary}
-                            {entry.related_count > 0 ? ` · 关联 ${entry.related_count} 条` : ""}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        tooltipContent={[entry.object_label, entry.actor]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      >
-                        <div className="grid min-w-0 gap-0.5">
-                          <span
-                            className={entry.object_label ? "truncate" : "text-muted-foreground"}
-                          >
-                            {entry.object_label ?? "未记录对象"}
-                          </span>
-                          <span className="text-muted-foreground truncate text-xs">
-                            {entry.actor ? `执行人：${entry.actor}` : logSourceLabel(entry.source)}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell overflowTooltip={false}>
-                        <StatusBadge
-                          label={
-                            entry.kind === "event"
-                              ? logEventLevelLabel(logEventLevel(entry.status))
-                              : logStatusLabel(entry.status)
-                          }
-                          variant={logStatusVariant(entry.status)}
-                        />
-                      </TableCell>
-                      <TableCell className="text-right" overflowTooltip={false}>
-                        <TableActionButton label="查看日志详情" onClick={() => setSelected(entry)}>
-                          <Eye />
-                        </TableActionButton>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                {logs.data?.items.map((entry) => (
+                  <TableRow key={entry.id}>
+                    <TableCell className="text-xs">{formatLogDate(entry.occurred_at)}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{logKindLabel(entry.kind)}</Badge>
+                    </TableCell>
+                    <TableCell tooltipContent={`${logTitleLabel(entry.title)}：${entry.summary}`}>
+                      <div className="grid min-w-0 gap-0.5">
+                        <span className="truncate font-medium">{logTitleLabel(entry.title)}</span>
+                        <span className="text-muted-foreground truncate text-xs">
+                          {entry.summary}
+                          {entry.related_count > 0 ? ` · 关联 ${entry.related_count} 条` : ""}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell
+                      tooltipContent={[entry.object_label, entry.actor].filter(Boolean).join(" · ")}
+                    >
+                      <div className="grid min-w-0 gap-0.5">
+                        <span className={entry.object_label ? "truncate" : "text-muted-foreground"}>
+                          {entry.object_label ?? "未记录对象"}
+                        </span>
+                        <span className="text-muted-foreground truncate text-xs">
+                          {entry.actor ? `执行人：${entry.actor}` : logSourceLabel(entry.source)}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell overflowTooltip={false}>
+                      <StatusBadge
+                        label={
+                          entry.kind === "event"
+                            ? logEventLevelLabel(logEventLevel(entry.status))
+                            : logStatusLabel(entry.status)
+                        }
+                        variant={logStatusVariant(entry.status)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right" overflowTooltip={false}>
+                      <TableActionButton label="查看日志详情" onClick={() => setSelected(entry)}>
+                        <Eye />
+                      </TableActionButton>
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           </div>
-          {!logs.error && (logs.data?.total ?? 0) > 0 && (
+          {(logs.data?.total ?? 0) > 0 && (
             <div className="shrink-0" data-testid="logs-pagination-region">
               <DataTablePagination
                 currentPage={page}

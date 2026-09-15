@@ -1,12 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, GripVertical, RefreshCw } from "lucide-react";
+import { ArrowDown, ArrowUp } from "lucide-react";
+import { SortableList, SortableItem } from "@/components/sortable-list";
 import { useMemo, useState } from "react";
 import { api, type DictionaryEntry, type DictionaryKind } from "@/api";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { SearchField } from "@/components/data-table/search-field";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ContentRetry } from "@/components/content-retry";
+import { RefreshButton } from "@/components/refresh-button";
+import { StatusBadge } from "@/components/status-badge";
 import {
   Table,
   TableBody,
@@ -30,195 +36,233 @@ const labels: Record<DictionaryKind, string> = {
   kuma_monitor_type: "监控类型",
 };
 const dictionaryKinds = Object.keys(labels) as DictionaryKind[];
+type DictionaryOrder = { kind: DictionaryKind; items: DictionaryEntry[] };
 
 export function DictionaryManagement() {
   const client = useQueryClient();
   const [kind, setKind] = useState<DictionaryKind>("platform");
   const [search, setSearch] = useState("");
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [pendingOrder, setPendingOrder] = useState<DictionaryOrder | null>(null);
   const query = useQuery({
     queryKey: ["dictionaries", kind],
     queryFn: () => api.dictionaries(kind),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
   const reorder = useMutation({
-    mutationFn: (ids: string[]) => api.reorderDictionaries(kind, ids),
-    onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: ["dictionaries", kind] });
-      if (kind === "group") await client.invalidateQueries({ queryKey: ["groups"] });
-      if (kind === "platform") await client.invalidateQueries({ queryKey: ["accounts"] });
+    mutationFn: (input: DictionaryOrder) =>
+      api.reorderDictionaries(
+        input.kind,
+        input.items.map((item) => item.id),
+      ),
+    onMutate: async (input) => {
+      const key = ["dictionaries", input.kind];
+      await client.cancelQueries({ queryKey: key });
+      const previous = client.getQueryData<{ items: DictionaryEntry[] }>(key);
+      client.setQueryData(key, {
+        items: input.items.map((item, index) => ({ ...item, sort_order: index })),
+      });
+      return { previous };
     },
-    onError: (error) => notifyOperationError(error, "字典排序失败"),
+    onSuccess: (_result, input) => {
+      // Dependent pages refresh in the background; sorting only waits for its write.
+      if (input.kind === "group") void client.invalidateQueries({ queryKey: ["groups"] });
+    },
+    onError: (error, input, context) => {
+      if (context?.previous) client.setQueryData(["dictionaries", input.kind], context.previous);
+      notifyOperationError(error, "字典排序失败");
+    },
+    onSettled: () => setPendingOrder(null),
   });
+  const saving = pendingOrder !== null || reorder.isPending;
+  const visibleItems = pendingOrder?.kind === kind ? pendingOrder.items : query.data?.items;
   const entries = useMemo(() => {
     const q = search.trim().toLocaleLowerCase();
-    return (query.data?.items ?? []).filter(
+    return (visibleItems ?? []).filter(
       (item) =>
         !q || `${item.name} ${item.value} ${item.description}`.toLocaleLowerCase().includes(q),
     );
-  }, [query.data?.items, search]);
+  }, [visibleItems, search]);
+  function saveOrder(items: DictionaryEntry[]): void {
+    const input = { kind, items };
+    // Commit the visible order with drag end, before the mutation's async cache update.
+    setPendingOrder(input);
+    reorder.mutate(input);
+  }
   function move(entry: DictionaryEntry, direction: -1 | 1) {
+    if (search.trim() || saving) return;
     const all = [...(query.data?.items ?? [])];
     const index = all.findIndex((item) => item.id === entry.id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= all.length) return;
     [all[index], all[target]] = [all[target], all[index]];
-    reorder.mutate(all.map((item) => item.id));
+    saveOrder(all);
   }
   function moveTo(entryId: string, targetId: string): void {
-    if (entryId === targetId || Boolean(search.trim()) || reorder.isPending) return;
+    if (entryId === targetId || Boolean(search.trim()) || saving) return;
     const all = [...(query.data?.items ?? [])];
     const from = all.findIndex((item) => item.id === entryId);
     const target = all.findIndex((item) => item.id === targetId);
     if (from < 0 || target < 0) return;
     const [item] = all.splice(from, 1);
     all.splice(target, 0, item);
-    reorder.mutate(all.map((value) => value.id));
+    saveOrder(all);
   }
   return (
     <Card size="sm" className="h-full min-h-0 min-w-0">
       <CardHeader className="shrink-0 gap-3">
         <div>
           <CardTitle>字典管理</CardTitle>
-          <p className="mt-1 text-sm text-muted-foreground">
-            字典值来自管理平台同步，本页仅调整展示顺序。
-          </p>
+          <CardDescription className="mt-1">
+            平台、分组来自管理平台，其余为系统内置字典。
+          </CardDescription>
         </div>
-        <div
-          className="inline-flex w-fit rounded-lg border border-border/70 bg-muted/40 p-1"
-          role="tablist"
-          aria-label="字典类型"
-        >
+        <SegmentedControl className="w-full" role="tablist" aria-label="字典类型">
           {dictionaryKinds.map((value) => (
-            <Button
+            <SegmentedControlItem
               key={value}
-              variant={kind === value ? "secondary" : "ghost"}
-              className="min-w-28 rounded-md px-4"
+              id={`dictionary-tab-${value}`}
               role="tab"
-              aria-selected={kind === value}
+              selected={kind === value}
+              aria-controls={`dictionary-panel-${value}`}
               onClick={() => {
                 setKind(value);
                 setSearch("");
               }}
             >
               {labels[value]}
-            </Button>
+            </SegmentedControlItem>
           ))}
-        </div>
+        </SegmentedControl>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <CardContent
+        role="tabpanel"
+        id={`dictionary-panel-${kind}`}
+        aria-labelledby={`dictionary-tab-${kind}`}
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+      >
         {query.error ? <QueryErrorToast error={query.error} fallback="字典数据读取失败" /> : null}
         <TableFilterToolbar aria-label="字典筛选">
           <SearchField value={search} onChange={setSearch} placeholder="搜索名称、字典值或说明" />
           <span className="ml-auto text-sm text-muted-foreground">共 {entries.length} 项</span>
-          <Button
-            size="icon"
-            variant="ghost"
-            aria-label="刷新字典"
+          <RefreshButton
+            ariaLabel="刷新字典"
+            pending={query.isFetching}
+            disabled={saving}
             onClick={() => void query.refetch()}
-          >
-            <RefreshCw aria-hidden="true" />
-          </Button>
+          />
         </TableFilterToolbar>
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border">
-          <Table className="min-w-[760px]">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="w-16">序号</TableHead>
-                <TableHead>显示名称</TableHead>
-                <TableHead>字典值</TableHead>
-                <TableHead>说明</TableHead>
-                <TableHead className="w-24">状态</TableHead>
-                <TableHead className="w-28 text-right">排序</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {query.isLoading ? (
+        <SortableList
+          key={kind}
+          items={entries.map((entry) => ({ id: entry.id, label: entry.name }))}
+          disabled={Boolean(search.trim()) || saving}
+          onMove={(from, to) => moveTo(entries[from].id, entries[to].id)}
+        >
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <Table className="min-w-[760px]" containerClassName="min-h-0 flex-1 overflow-auto">
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={6}>
-                    <div className="py-12 text-center text-muted-foreground" role="status">
-                      正在读取字典
-                    </div>
-                  </TableCell>
+                  <TableHead className="w-16">序号</TableHead>
+                  <TableHead>显示名称</TableHead>
+                  <TableHead>字典值</TableHead>
+                  <TableHead>说明</TableHead>
+                  <TableHead className="w-24">状态</TableHead>
+                  <TableHead className="w-28 text-right">排序</TableHead>
                 </TableRow>
-              ) : null}
-              {!query.isLoading && entries.length === 0 ? (
-                <TableEmptyState columns={6}>暂无管理平台字典数据</TableEmptyState>
-              ) : null}
-              {!query.isLoading
-                ? entries.map((entry, index) => (
-                    <TableRow
-                      key={entry.id}
-                      draggable={!search.trim() && !reorder.isPending}
-                      aria-grabbed={draggingId === entry.id}
-                      onDragStart={(event) => {
-                        if (search.trim() || reorder.isPending) return;
-                        setDraggingId(entry.id);
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("text/plain", entry.id);
-                      }}
-                      onDragEnd={() => setDraggingId(null)}
-                      onDragOver={(event) => {
-                        if (draggingId && draggingId !== entry.id) event.preventDefault();
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const sourceId = event.dataTransfer.getData("text/plain") || draggingId;
-                        if (sourceId) moveTo(sourceId, entry.id);
-                        setDraggingId(null);
-                      }}
-                    >
-                      <TableCell className="text-muted-foreground">{index + 1}</TableCell>
-                      <TableCell className="font-medium">
-                        <span className="inline-flex items-center gap-2">
-                          <GripVertical aria-hidden="true" className="text-muted-foreground" />
-                          {entry.name}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <code className="text-xs">{entry.value}</code>
-                      </TableCell>
-                      <TableCell className="max-w-[240px] truncate text-muted-foreground">
-                        {entry.description || "-"}
-                      </TableCell>
-                      <TableCell>
-                        <span
-                          className={entry.enabled ? "text-emerald-600" : "text-muted-foreground"}
-                        >
-                          {entry.enabled ? "启用" : "停用"}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label={`上移${entry.name}`}
-                            disabled={Boolean(search.trim()) || index === 0 || reorder.isPending}
-                            onClick={() => move(entry, -1)}
-                          >
-                            <ArrowUp aria-hidden="true" />
-                          </Button>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label={`下移${entry.name}`}
-                            disabled={
-                              Boolean(search.trim()) ||
-                              index === entries.length - 1 ||
-                              reorder.isPending
+              </TableHeader>
+              <TableBody>
+                {query.isLoading
+                  ? Array.from({ length: 4 }, (_, index) => (
+                      <TableRow key={index} aria-label="正在读取字典">
+                        {Array.from({ length: 6 }, (_, column) => (
+                          <TableCell key={column}>
+                            <Skeleton className="h-4 w-3/4" />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))
+                  : null}
+                {!query.isLoading && entries.length === 0 ? (
+                  <TableEmptyState columns={6}>
+                    {query.error ? (
+                      <ContentRetry
+                        onRetry={() => void query.refetch()}
+                        pending={query.isFetching}
+                      />
+                    ) : (
+                      "暂无字典数据"
+                    )}
+                  </TableEmptyState>
+                ) : null}
+                {!query.isLoading
+                  ? entries.map((entry, index) => (
+                      <SortableItem
+                        key={entry.id}
+                        id={entry.id}
+                        label={entry.name}
+                        disabled={Boolean(search.trim()) || saving}
+                      >
+                        {(sortable) => (
+                          <TableRow
+                            ref={sortable.ref}
+                            style={sortable.style}
+                            data-dragging={sortable.dragging || undefined}
+                            className={
+                              sortable.over ? "ring-1 ring-inset ring-primary/50" : undefined
                             }
-                            onClick={() => move(entry, 1)}
                           >
-                            <ArrowDown aria-hidden="true" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                : null}
-            </TableBody>
-          </Table>
-        </div>
+                            <TableCell className="text-muted-foreground">{index + 1}</TableCell>
+                            <TableCell className="font-medium">
+                              <span className="inline-flex items-center gap-2">
+                                {sortable.handle}
+                                {entry.name}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <code className="text-xs">{entry.value}</code>
+                            </TableCell>
+                            <TableCell className="max-w-[240px] truncate text-muted-foreground">
+                              {entry.description || "-"}
+                            </TableCell>
+                            <TableCell>
+                              <StatusBadge
+                                label={entry.enabled ? "启用" : "停用"}
+                                variant={entry.enabled ? "success" : "neutral"}
+                              />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label={`上移${entry.name}`}
+                                  disabled={Boolean(search.trim()) || index === 0 || saving}
+                                  onClick={() => move(entry, -1)}
+                                >
+                                  <ArrowUp aria-hidden="true" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  aria-label={`下移${entry.name}`}
+                                  disabled={
+                                    Boolean(search.trim()) || index === entries.length - 1 || saving
+                                  }
+                                  onClick={() => move(entry, 1)}
+                                >
+                                  <ArrowDown aria-hidden="true" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </SortableItem>
+                    ))
+                  : null}
+              </TableBody>
+            </Table>
+          </div>
+        </SortableList>
       </CardContent>
     </Card>
   );

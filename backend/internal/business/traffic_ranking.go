@@ -69,7 +69,7 @@ type trafficRankingAccumulator struct {
 	latencies          latencySampleMaxHeap
 	latencySum         float64
 	latencyCount       int
-	activeBuckets      map[string]struct{}
+	activeBuckets      map[int]struct{}
 	latest             time.Time
 	inputTokens        int64
 	outputTokens       int64
@@ -143,7 +143,7 @@ func (s *Store) TrafficRanking(ctx context.Context, query TrafficRankingQuery) (
 		order = filtered
 	}
 	bucket, bucketDuration := trafficRankingBucket(query.EndAt.Sub(query.StartAt))
-	totalBuckets := int(math.Ceil(query.EndAt.Sub(query.StartAt).Hours() / bucketDuration.Hours()))
+	totalBuckets := int((query.EndAt.Sub(query.StartAt) + bucketDuration - 1) / bucketDuration)
 	for _, account := range accounts {
 		account.row.TotalBuckets = totalBuckets
 	}
@@ -205,7 +205,7 @@ func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*traffic
 			}
 			account = &trafficRankingAccumulator{
 				row:           TrafficRankingRow{AccountID: accountID, AccountName: name, UpstreamHost: host, Platform: platform, Groups: []string{}},
-				activeBuckets: map[string]struct{}{},
+				activeBuckets: map[int]struct{}{},
 			}
 			accounts[accountID] = account
 			order = append(order, accountID)
@@ -219,13 +219,17 @@ func (s *Store) trafficRankingAccounts(ctx context.Context) (map[string]*traffic
 
 // Traffic evidence is persisted in fixed-precision UTC, so indexed text ranges
 // preserve nanosecond boundaries before request deduplication.
-const trafficRankingWindowQuery = `WITH ranked AS (
+const trafficRankingWindowCandidates = `WITH ranked AS (
  SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json,
   ROW_NUMBER() OVER(PARTITION BY account_id,request_id ORDER BY observed_at,id) AS request_rank
  FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=?
-)
+`
+
+const trafficRankingWindowResults = `)
 SELECT request_id,account_id,is_error,first_token_ms,observed_at,payload_json
 FROM ranked WHERE request_rank=1 ORDER BY observed_at`
+
+const trafficRankingWindowQuery = trafficRankingWindowCandidates + trafficRankingWindowResults
 
 func (s *Store) accumulateTrafficRanking(
 	ctx context.Context,
@@ -233,8 +237,18 @@ func (s *Store) accumulateTrafficRanking(
 	bucketDuration time.Duration,
 	accounts map[string]*trafficRankingAccumulator,
 ) error {
-	rows, err := s.db.QueryContext(ctx, trafficRankingWindowQuery,
-		query.StartAt.Format(healthSampleTimeLayout), query.EndAt.Format(healthSampleTimeLayout))
+	if len(accounts) == 0 {
+		return nil
+	}
+	statement := trafficRankingWindowCandidates
+	arguments := []any{query.StartAt.Format(healthSampleTimeLayout), query.EndAt.Format(healthSampleTimeLayout)}
+	if query.GroupName != "" {
+		// Restrict membership before deduplication and sorting; unrelated groups
+		// can contain most of the traffic in the requested window.
+		statement += ` AND account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)`
+		arguments = append(arguments, query.GroupName)
+	}
+	rows, err := s.db.QueryContext(ctx, statement+trafficRankingWindowResults, arguments...)
 	if err != nil {
 		return err
 	}
@@ -299,8 +313,10 @@ func (s *Store) accumulateTrafficRanking(
 				addTrafficLatencySample(account, accountID, requestID, value)
 			}
 		}
-		bucketAt := observedAt.UTC().Truncate(bucketDuration)
-		account.activeBuckets[bucketAt.Format(time.RFC3339)] = struct{}{}
+		// Buckets share the requested start, including partial final periods.
+		// The inclusive end is counted in the last bucket, not a new period.
+		bucketIndex := min(int(observedAt.Sub(query.StartAt)/bucketDuration), account.row.TotalBuckets-1)
+		account.activeBuckets[bucketIndex] = struct{}{}
 		if account.latest.IsZero() || observedAt.After(account.latest) {
 			account.latest = observedAt.UTC()
 		}

@@ -65,7 +65,11 @@ it("勾选分组后显示底部批量操作条，按 Esc 清空选择", () => {
   expect(screen.queryByRole("toolbar", { name: /批量操作/ })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("checkbox", { name: "选择分组 分组 1" }));
   const toolbar = screen.getByRole("toolbar", { name: "已选择 1 个分组的批量操作" });
-  expect(toolbar).toHaveClass("fixed", "bottom-6", "left-1/2");
+  expect(toolbar).toHaveClass(
+    "fixed",
+    "bottom-[max(7rem,env(safe-area-inset-bottom))]",
+    "left-1/2",
+  );
   for (const name of ["回落到全局策略", "排除分组", "恢复管控"]) {
     expect(within(toolbar).getByRole("button", { name })).toBeEnabled();
   }
@@ -231,7 +235,7 @@ it("键盘勾选分组后可取消确认，长名称在有滚动上限的范围�
   screen.getByRole("checkbox", { name: `选择分组 ${name}` }).focus();
   await user.keyboard(" ");
   const toolbar = screen.getByRole("toolbar", { name: /批量操作/ });
-  expect(toolbar).toHaveClass("max-w-[calc(100vw-2rem)]");
+  expect(toolbar).toHaveClass("max-w-[calc(100%-2rem)]");
   await user.click(within(toolbar).getByRole("button", { name: "回落到全局策略" }));
   const list = screen.getByRole("list", { name: "本次处理的分组" });
   expect(list).toHaveClass("max-h-60", "overflow-y-auto");

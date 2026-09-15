@@ -25,6 +25,7 @@ import { DataTablePanel } from "@/components/data-table/table-panel";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { SearchField } from "@/components/data-table/search-field";
 import { TableEmptyState } from "@/components/data-table/empty-state";
+import { ContentRetry } from "@/components/content-retry";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { notifyOperationError } from "@/lib/operation-feedback";
@@ -148,7 +149,10 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         <QueryErrorToast error={config.error ?? query.error} fallback="管理数据读取失败" />
       )}
       <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
-        {config.isPending && <PageLoadingSkeleton label="正在读取接入配置…" variant="table" />}
+        {config.isPending && <PageLoadingSkeleton label="正在读取接入配置…" variant="table" fill />}
+        {!config.data && config.isError && (
+          <ContentRetry pending={config.isFetching} onRetry={() => void config.refetch()} />
+        )}
         {config.data && !config.data.management_configured && (
           <p className="text-muted-foreground text-sm">
             请在侧栏「接入配置」中验证管理账号后使用此功能。
@@ -156,7 +160,9 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         )}
         {config.data?.management_configured && (
           <>
-            {query.isPending && <PageLoadingSkeleton label="正在读取管理数据…" variant="table" />}
+            {query.isPending && (
+              <PageLoadingSkeleton label="正在读取管理数据…" variant="table" fill />
+            )}
             {!query.isPending && (
               <>
                 <TableFilterToolbar>
@@ -184,6 +190,14 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
+                      {!query.data && query.isError && (
+                        <TableEmptyState columns={4}>
+                          <ContentRetry
+                            pending={query.isFetching}
+                            onRetry={() => void query.refetch()}
+                          />
+                        </TableEmptyState>
+                      )}
                       {pagination.visibleItems.map((item) => (
                         <TableRow key={item.id}>
                           <TableCell>{item.name}</TableCell>
@@ -273,7 +287,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
                           </TableCell>
                         </TableRow>
                       ))}
-                      {!pagination.visibleItems.length && (
+                      {query.data && !pagination.visibleItems.length && (
                         <TableEmptyState columns={4}>
                           {search ? "没有匹配的记录" : "暂无记录"}
                         </TableEmptyState>

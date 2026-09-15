@@ -289,20 +289,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 const businessSchemaVersion = 9
 
 func (s *Store) ensureSchema(ctx context.Context) error {
-	fresh, err := databaseHasNoApplicationTables(ctx, s.db)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	fresh, err := databaseHasNoApplicationTables(ctx, tx)
 	if err != nil {
 		return err
 	}
 	if !fresh {
-		if err := validateBusinessSchema(ctx, s.db); err != nil {
+		if err := validateBusinessSchema(ctx, tx); err != nil {
 			return fmt.Errorf("业务数据库结构不是当前版本；本系统仅支持使用当前版本创建的全新数据库: %w", err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, businessSchema); err != nil {
+	// Commit the complete schema and its version together. A failed statement
+	// must not leave a partial database, and each DDL needs no separate fsync.
+	if _, err := tx.ExecContext(ctx, businessSchema); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", businessSchemaVersion)); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", businessSchemaVersion)); err != nil {
 		return fmt.Errorf("记录业务数据库版本失败: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	if err := s.normalizeAccountCosts(ctx); err != nil {
 		return err
@@ -313,7 +323,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	return s.ensureStableUpstreamRelations(ctx)
 }
 
-func databaseHasNoApplicationTables(ctx context.Context, db *sql.DB) (bool, error) {
+func databaseHasNoApplicationTables(ctx context.Context, db policyQueryer) (bool, error) {
 	var count int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema
 		WHERE type='table' AND name NOT LIKE 'sqlite_%'`).Scan(&count); err != nil {
@@ -322,7 +332,7 @@ func databaseHasNoApplicationTables(ctx context.Context, db *sql.DB) (bool, erro
 	return count == 0, nil
 }
 
-func validateBusinessSchema(ctx context.Context, current *sql.DB) error {
+func validateBusinessSchema(ctx context.Context, current policyQueryer) error {
 	var version int
 	if err := current.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
@@ -364,7 +374,7 @@ func validateBusinessSchema(ctx context.Context, current *sql.DB) error {
 	return nil
 }
 
-func schemaTableColumns(ctx context.Context, db *sql.DB) (map[string][]string, error) {
+func schemaTableColumns(ctx context.Context, db policyQueryer) (map[string][]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT name FROM sqlite_schema
 		WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
 	if err != nil {
@@ -516,7 +526,7 @@ func initialControlPolicy() map[string]any {
 		"traffic":             map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier": map[string]any{"interval_seconds": int64(120)},
 		"account_rate_sync":   map[string]any{"interval_seconds": int64(120), "batch_size": int64(0), "batch_percent": int64(0)},
-		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
+		"price_management":    map[string]any{"enabled": false, "profit_margin": 0.2, "exchange_group_sets": []any{}, "exchange_group_set_names": []any{}, "group_min_cost_multipliers": map[string]any{}, "interval_seconds": int64(120), "write_concurrency": int64(4)},
 		"writeback":           map[string]any{"concurrency": int64(4), "verification": false},
 		"scoring": map[string]any{
 			"event_scores":           map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "empty_response": int64(40), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},

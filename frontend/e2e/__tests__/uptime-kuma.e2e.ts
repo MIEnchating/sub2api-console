@@ -95,10 +95,7 @@ test("分页后搜索回到第一页，行操作支持键盘确认", async ({ pa
   await page.getByRole("button", { name: "转到下一页" }).click();
   await expect(page.getByRole("button", { name: "查看 备用 20 详情" })).toBeVisible();
   await page.getByRole("textbox", { name: "搜索监控项或地址" }).fill("备用 0");
-  await expect(page.getByRole("button", { name: "转到第 1 页" })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
+  await expect(page.getByRole("button", { name: "转到上一页" })).toBeDisabled();
   const action = page
     .getByRole("group", { name: "备用 0 的操作" })
     .getByRole("button", { name: "恢复" });

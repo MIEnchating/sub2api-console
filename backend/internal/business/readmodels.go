@@ -324,13 +324,14 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		item.UpstreamHostRepairable = bindingHostCount.Valid && bindingHostCount.Int64 == 1 && bindingHost != nil &&
 			(item.RecordedUpstreamHost == nil || !strings.EqualFold(*item.RecordedUpstreamHost, *bindingHost))
 		item.UpstreamType = nullString(upstreamType)
-		item.Platform = accountMetadataText(item.metadataRaw, "platform")
-		item.AccountType = accountMetadataText(item.metadataRaw, "account_type", "type")
-		item.BaseURL = accountMetadataText(item.metadataRaw, "base_url")
-		item.BaseURLCheckedAt = accountMetadataText(item.metadataRaw, "base_url_checked_at")
-		item.BaseURLSource = accountMetadataText(item.metadataRaw, "base_url_source")
-		item.Sub2APIStatus = accountMetadataText(item.metadataRaw, "status")
-		item.Sub2APIError = accountMetadataText(item.metadataRaw, "error_message")
+		metadata, metadataErr := decodeObject(item.metadataRaw)
+		item.Platform = accountMetadataValueText(metadata, "platform")
+		item.AccountType = accountMetadataValueText(metadata, "account_type", "type")
+		item.BaseURL = accountMetadataValueText(metadata, "base_url")
+		item.BaseURLCheckedAt = accountMetadataValueText(metadata, "base_url_checked_at")
+		item.BaseURLSource = accountMetadataValueText(metadata, "base_url_source")
+		item.Sub2APIStatus = accountMetadataValueText(metadata, "status")
+		item.Sub2APIError = accountMetadataValueText(metadata, "error_message")
 		item.UpstreamBaseURL = nullString(upstreamBaseURL)
 		item.BaseURLCheck, item.BaseURLCheckReason = accountBaseURLCheck(
 			item.BaseURL, item.UpstreamBaseURL, item.UpstreamHost, item.BaseURLCheckedAt, item.BaseURLSource,
@@ -339,8 +340,8 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 			item.AccountType = item.UpstreamType
 		}
 		item.Schedulable = strictBool(schedulable)
-		item.LastError = accountMetadataText(item.metadataRaw, "error_message", "last_error")
-		if metadata, decodeErr := decodeObject(item.metadataRaw); decodeErr == nil {
+		item.LastError = accountMetadataValueText(metadata, "error_message", "last_error")
+		if metadataErr == nil {
 			block, reason := AccountUpstreamBlockDetails(metadata, item.Schedulable, time.Now())
 			if block != "" {
 				item.UpstreamBlock = stringPointer(block)
@@ -920,7 +921,7 @@ func (s *Store) monitorPolicy(ctx context.Context, mode string) (map[string]stru
 		}
 	}
 	if degrade, ok := control["degrade"].(map[string]any); ok {
-		if value := finiteFloat(degrade["score_threshold"]); value != nil && *value != 0 {
+		if value := finiteFloat(degrade["score_threshold"]); value != nil && *value >= 0 && *value <= 100 {
 			threshold = *value
 		}
 	}
@@ -1052,6 +1053,10 @@ func accountMetadataText(raw string, keys ...string) *string {
 	if err != nil {
 		return nil
 	}
+	return accountMetadataValueText(metadata, keys...)
+}
+
+func accountMetadataValueText(metadata map[string]any, keys ...string) *string {
 	for _, key := range keys {
 		value, ok := metadata[key].(string)
 		value = strings.TrimSpace(value)
@@ -1101,6 +1106,9 @@ func applyMonitoringHealth(item *accountProjection, excluded map[string]struct{}
 	}
 	if current == AccountStateUnknown && item.HealthStatus != nil {
 		current = NormalizeAccountState(*item.HealthStatus)
+	}
+	if accountMetadataState(item.metadataRaw) == AccountStateDisabled {
+		current = AccountStateDisabled
 	}
 	reason := (*string)(nil)
 	if item.Paused != nil && *item.Paused {

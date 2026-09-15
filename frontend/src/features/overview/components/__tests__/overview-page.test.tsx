@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AccountStatus, GroupStatus, RunEvent } from "@/api";
 import { OverviewPage } from "../overview-page";
+import { OverviewActivity } from "../overview-activity";
 
 function account(): AccountStatus {
   return {
@@ -77,6 +78,33 @@ function group(overrides: Partial<GroupStatus> = {}): GroupStatus {
 }
 
 describe("OverviewPage", () => {
+  it.each(["attention", "events"] as const)("%s 刷新失败时保留已读取的运营动态", (kind) => {
+    const props = {
+      attention: [{ account: account(), state: "fused" as const, reason: "连续失败" }],
+      events: [
+        {
+          id: 7,
+          event_type: "routing.writeback",
+          created_at: "2026-08-26T08:01:00Z",
+          status: "failed",
+          summary: "渠道写回失败",
+          payload: {},
+        },
+      ],
+      attentionLoading: false,
+      eventsLoading: false,
+      attentionError: null,
+      eventsError: null,
+      onOpenAccounts: () => {},
+      onOpenEvents: () => {},
+    };
+    const view = render(<OverviewActivity {...props} />);
+    const label = kind === "attention" ? "需要处理的渠道" : "渠道写回失败";
+    expect(screen.getByText(label)).toBeVisible();
+    view.rerender(<OverviewActivity {...props} {...{ [`${kind}Error`]: new Error("刷新失败") }} />);
+    expect(screen.getByText(label)).toBeVisible();
+  });
+
   it("uses the global page, card, and responsive health matrix layout contract", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { enabled: false, retry: false } },

@@ -35,11 +35,12 @@ export function DataTablePagination(props: DataTablePaginationProps) {
   }));
 
   return (
-    <div className="shrink-0 border-t px-3 py-2.5 sm:px-4 sm:py-3">
-      <div
-        className={cn("@container/pagination flex min-w-0 items-center justify-end overflow-clip")}
-      >
-        <div className="flex min-w-0 shrink-0 items-center gap-2 @xl/pagination:gap-3">
+    <nav
+      aria-label="表格分页"
+      className="@container/pagination shrink-0 border-t px-3 py-2.5 sm:px-4 sm:py-3"
+    >
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 @xl/pagination:gap-3">
           <div className="flex shrink-0 items-baseline gap-1.5 text-xs font-medium whitespace-nowrap sm:text-sm">
             <span className="text-muted-foreground/80">共</span>
             <span className="text-foreground tabular-nums">
@@ -57,6 +58,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
               onValueChange={(value) => props.onPageSizeChange(Number(value))}
             >
               <SelectTrigger
+                aria-label="每页行数"
                 appearance="classic"
                 className="text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]"
               >
@@ -79,7 +81,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
             </Select>
           </div>
 
-          <div className="flex min-w-0 shrink-0 items-center gap-1 @lg/pagination:gap-1.5 @xl/pagination:gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 @lg/pagination:gap-1.5 @xl/pagination:gap-2">
             <PaginationButton
               label="转到第一页"
               hiddenOnCompact
@@ -96,11 +98,17 @@ export function DataTablePagination(props: DataTablePaginationProps) {
               <ChevronLeft />
             </PaginationButton>
 
+            <span
+              className="text-muted-foreground text-sm tabular-nums @lg/pagination:hidden"
+              aria-label={`当前第 ${props.currentPage} 页，共 ${props.totalPages} 页`}
+            >
+              {props.currentPage} / {props.totalPages}
+            </span>
             {pageNumbers.map((pageNumber, index) =>
               typeof pageNumber === "string" ? (
                 <span
                   key={`ellipsis:${index}`}
-                  className="text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1"
+                  className="text-muted-foreground hidden px-0.5 text-sm @lg/pagination:inline @lg/pagination:px-1"
                 >
                   ...
                 </span>
@@ -109,7 +117,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
                   key={pageNumber}
                   variant={props.currentPage === pageNumber ? "default" : "outline"}
                   className={cn(
-                    "h-8 min-w-8 px-2 tabular-nums",
+                    "hidden min-w-8 px-2 tabular-nums @lg/pagination:inline-flex",
                     props.currentPage === pageNumber
                       ? "font-semibold"
                       : "text-muted-foreground hover:text-foreground",
@@ -141,7 +149,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
           </div>
         </div>
       </div>
-    </div>
+    </nav>
   );
 }
 
@@ -163,7 +171,8 @@ function PaginationButton(props: {
       >
         <Button
           variant="outline"
-          className="text-muted-foreground hover:text-foreground disabled:text-muted-foreground/50 size-8 p-0"
+          size="icon"
+          className="text-muted-foreground hover:text-foreground"
           aria-label={props.label}
           disabled={props.disabled}
           onClick={props.onClick}

@@ -7,6 +7,13 @@ import { LogDetailsContent, LogStructuredValue } from "../components/log-details
 import { formatLogValue, logDetailLabel } from "../lib/log-display";
 
 describe("automatic inspection log details", () => {
+  it("labels accounts deferred by the inspection batch limit in Chinese", () => {
+    render(createElement(LogStructuredValue, { value: { probes_deferred: 22 } }));
+
+    expect(screen.getByText("待后续巡检账号数")).toBeInTheDocument();
+    expect(screen.getByText("22")).toBeInTheDocument();
+  });
+
   it("keeps delegated rate-sync and alert results out of the inspection overview", () => {
     const markup = renderToStaticMarkup(
       createElement(LogDetailsContent, {

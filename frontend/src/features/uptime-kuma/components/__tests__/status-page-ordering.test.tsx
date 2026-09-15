@@ -67,8 +67,9 @@ it("键盘可调整展示顺序，首项不能上移、末项不能下移", asyn
   expect(screen.getByRole("button", { name: "上移监控项 备用接口" })).toBeDisabled();
 });
 
-it("拖拽监控项和展示分组后按目标位置重排", async () => {
+it("键盘开始拖动后取消，保存时保留监控项和分组原顺序", async () => {
   const submit = vi.fn();
+  const user = userEvent.setup();
   render(
     <ResourceDialog
       kind="status-pages"
@@ -80,38 +81,19 @@ it("拖拽监控项和展示分组后按目标位置重排", async () => {
       onSubmit={submit}
     />,
   );
-  const transfer = {
-    effectAllowed: "none",
-    setData: vi.fn(),
-    getData: vi.fn(() => "19"),
-  } as unknown as DataTransfer;
-  const sourceMonitor = screen.getAllByText("智谱").at(-1)?.closest("li");
-  const targetMonitor = screen.getAllByText("备用接口").at(-1)?.closest("li");
-  expect(sourceMonitor).not.toBeNull();
-  expect(targetMonitor).not.toBeNull();
-  fireEvent.dragStart(sourceMonitor!, { dataTransfer: transfer });
-  fireEvent.dragOver(targetMonitor!, { dataTransfer: transfer });
-  fireEvent.drop(targetMonitor!, { dataTransfer: transfer });
-  const groupTransfer = {
-    effectAllowed: "none",
-    setData: vi.fn(),
-    getData: vi.fn(() => "1"),
-  } as unknown as DataTransfer;
-  const groups = screen
-    .getAllByText(/展示分组 [12]/)
-    .map((title) => title.closest("[data-slot=card]"));
-  expect(groups[0]).not.toBeNull();
-  expect(groups[1]).not.toBeNull();
-  fireEvent.dragStart(groups[1]!, { dataTransfer: groupTransfer });
-  fireEvent.dragOver(groups[0]!, { dataTransfer: groupTransfer });
-  fireEvent.drop(groups[0]!, { dataTransfer: groupTransfer });
+  await waitFor(() => expect(screen.getByLabelText("状态页标题")).toHaveFocus());
+  screen.getByRole("button", { name: "拖动智谱" }).focus();
+  await user.keyboard(" ");
+  expect(screen.getByRole("button", { name: "拖动智谱" })).toHaveAttribute("aria-pressed", "true");
+  await user.keyboard("{Escape}");
+  expect(screen.getByRole("button", { name: "拖动智谱" })).toHaveAttribute("aria-pressed", "false");
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(submit).toHaveBeenCalled());
   const value = submit.mock.calls[0][0] as {
     status_page: { groups: Array<{ id?: number; monitorList: Array<{ id: number }> }> };
   };
-  expect(value.status_page.groups[0]?.id).toBe(12);
-  expect(value.status_page.groups[1]?.monitorList.map((item) => item.id)).toEqual([20, 19]);
+  expect(value.status_page.groups.map((group) => group.id)).toEqual([11, 12]);
+  expect(value.status_page.groups[0]?.monitorList.map((item) => item.id)).toEqual([19, 20]);
 });
 
 it("保存中禁止排序、移除和修改公开地址", () => {

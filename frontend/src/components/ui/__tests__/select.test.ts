@@ -14,6 +14,9 @@ import {
 } from "../select";
 
 describe("select value labels", () => {
+  it.each(["__proto__", "constructor", "toString"])("选项值为 %s 时返回原始字符串标签", (value) => {
+    expect(selectValueLabel(value)).toBe(value);
+  });
   it.each([
     ["sub2api_user_token", "Token + 刷新 Token"],
     ["newapi_admin_key", "Admin Key + 用户 ID"],

@@ -13,7 +13,7 @@ import (
 
 func TestCatalogUsesAllOfficialProvidersAndRetainsFailedProviderCache(t *testing.T) {
 	fixtures := map[string]string{}
-	for _, name := range []string{"kimi.md", "minimax.md", "glm.md", "qwen.html"} {
+	for _, name := range []string{"kimi-chat.md", "minimax.md", "glm.md", "qwen.html"} {
 		b, e := os.ReadFile("../../officialpricing/__tests__/testdata/" + name)
 		if e != nil {
 			t.Fatal(e)
@@ -30,11 +30,8 @@ func TestCatalogUsesAllOfficialProvidersAndRetainsFailedProviderCache(t *testing
 		case "raw.githubusercontent.com":
 			body = `{"kimi-k3":{"input_cost_per_token":1,"output_cost_per_token":2},"minimax-m3":{"input_cost_per_token":1,"output_cost_per_token":2},"glm-4.7":{"input_cost_per_token":1,"output_cost_per_token":2},"qwen-turbo":{"input_cost_per_token":1,"output_cost_per_token":2}}`
 		case "platform.kimi.com":
-			body = fixtures["kimi.md"]
-			if strings.HasSuffix(r.URL.Path, "llms.txt") {
-				body = "https://platform.kimi.com/docs/pricing/chat-k3.md"
-			}
-		case "platform.minimaxi.com":
+			body = fixtures["kimi-chat.md"]
+		case "platform.minimax.cn":
 			body = fixtures["minimax.md"]
 		case "docs.bigmodel.cn":
 			body = fixtures["glm.md"]

@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { screen } from "@testing-library/react";
+import { render, renderToStaticMarkup } from "./dictionary-render";
 import { describe, expect, it } from "vitest";
 
 import type { GroupPolicyOverrideUpdate } from "../../../../api";

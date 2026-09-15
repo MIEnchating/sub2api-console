@@ -664,14 +664,81 @@ func (authFailureUpstreams) SyncAllNow(context.Context, upstreamsync.Scope, stri
 }
 
 type inspectionAuthRecoverer struct {
-	hosts []string
-	actor string
+	hosts     []string
+	actor     string
+	onRecover func()
 }
 
 func (s *inspectionAuthRecoverer) RecoverInvalid(_ context.Context, hosts []string, actor string) (business.AuthRecoverySummary, error) {
+	if s.onRecover != nil {
+		s.onRecover()
+	}
 	s.hosts = append([]string{}, hosts...)
 	s.actor = actor
 	return business.AuthRecoverySummary{Hosts: len(hosts), Recovered: len(hosts)}, nil
+}
+
+func TestAuthenticationRecoveryPublishesItsStageBeforeWaiting(t *testing.T) {
+	tasks := &countingTaskStore{}
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, upstreamDue: true}
+	recoverer := &inspectionAuthRecoverer{onRecover: func() {
+		if tasks.last.Message != "正在恢复失效上游鉴权" {
+			t.Errorf("recovery stage message = %q", tasks.last.Message)
+		}
+		active, _ := tasks.last.Result["active_operations"].([]string)
+		if !slices.Contains(active, operationAuthRecovery) {
+			t.Errorf("active operations during recovery = %v", active)
+		}
+		timings, _ := tasks.last.Result["operation_timings"].([]business.OperationTiming)
+		if len(timings) != 1 || timings[0].Operation != operationUpstreamSync {
+			t.Errorf("completed timings during recovery = %v", timings)
+		}
+	}}
+	runner := NewRunner(repository, nil, &evidencePlannerStub{}, &routerStub{}, &writerStub{}, nil,
+		authFailureUpstreams{}, tasks, recoverer)
+	result, err := runner.Run(context.Background(), RunRequest{Automatic: true})
+	if err != nil || result.Status != "succeeded" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestAutomaticInspectionPreviewLimitsProbeCountToConfiguredConcurrencyBatch(t *testing.T) {
+	repository := &runnerRepositoryStub{mode: runtimepolicy.Full, policy: map[string]any{
+		"probe": map[string]any{"concurrency": int64(1)},
+	}}
+	planner := &evidencePlannerStub{plan: evidence.Plan{ProbeAccountIDs: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}}}
+	runner := NewRunner(repository, nil, planner, nil, nil, nil, nil, &countingTaskStore{})
+	preview, err := runner.Preview(context.Background(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.TargetCount == nil || *preview.TargetCount != 8 {
+		t.Fatalf("concurrency 1 should advertise at most 8 probes, got %#v", preview)
+	}
+}
+
+func TestInspectionOnlyLimitsAutomaticProbeBatches(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		automatic bool
+		wantLimit int
+	}{
+		{name: "automatic round", automatic: true, wantLimit: 32},
+		{name: "manual round", wantLimit: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			planner := &evidencePlannerStub{plan: evidence.Plan{ProbeAccountIDs: []string{"41"}}}
+			runner := NewRunner(&runnerRepositoryStub{mode: runtimepolicy.Full}, nil, planner,
+				&routerStub{}, &writerStub{}, nil, nil, &countingTaskStore{})
+			result, err := runner.Run(context.Background(), RunRequest{Automatic: test.automatic})
+			if err != nil || result.Status != "succeeded" {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			if len(planner.options) != 1 || planner.options[0].ProbeBatchSize != test.wantLimit {
+				t.Fatalf("collected options=%#v, expected batch size %d", planner.options, test.wantLimit)
+			}
+		})
+	}
 }
 
 func TestAutomaticInspectionRecoversHostsWhoseUpstreamSyncAuthenticationFailed(t *testing.T) {
@@ -1063,7 +1130,7 @@ func TestPreviewCollapsesSeveralDueOperationsIntoOneQueueItem(t *testing.T) {
 		}
 	}
 	if item.Operations[0].Cycle != "每2分钟" || item.Operations[1].Cycle != "每1分钟" ||
-		item.Operations[2].Cycle != "按账号策略（常规每5分钟；回池每3分钟）" {
+		item.Operations[2].Cycle != "按账号策略（常规每5分钟；回池每3分钟），每轮最多 32 个账号，按等待时间轮转" {
 		t.Fatalf("queue operation cycles were not exposed: %#v", item.Operations)
 	}
 }
@@ -1103,7 +1170,7 @@ func TestPreviewRejectsIntervalsBelowGuardianMinimums(t *testing.T) {
 				"probe":    map[string]any{"enabled": true, "interval_seconds": int64(29)},
 				"recovery": map[string]any{"enabled": false},
 			},
-			want: "策略字段 interval_seconds 必须是 30 到 86400 之间的整数",
+			want: "probe.interval_seconds 配置无效",
 		},
 		{
 			name: "upstream multiplier",

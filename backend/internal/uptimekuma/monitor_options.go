@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -118,7 +119,7 @@ func validateOptions(kind string, o *MonitorOptions) error {
 		return bad("请填写要匹配的关键字（最多 4096 字符）")
 	}
 	if kind == "dns" {
-		if !strings.Contains("|A|AAAA|CNAME|MX|NS|TXT|SRV|PTR|SOA|CAA|", "|"+o.DNSRecordType+"|") {
+		if !slices.Contains([]string{"A", "AAAA", "CNAME", "MX", "NS", "TXT", "SRV", "PTR", "SOA", "CAA"}, o.DNSRecordType) {
 			return bad("DNS 记录类型无效")
 		}
 		if net.ParseIP(o.DNSResolver) == nil && !validHost(o.DNSResolver) {
@@ -129,7 +130,7 @@ func validateOptions(kind string, o *MonitorOptions) error {
 		return bad("超时、重试或重定向参数超出允许范围")
 	}
 	if isHTTP(kind) {
-		if !strings.Contains("|GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|", "|"+o.Method+"|") {
+		if !slices.Contains([]string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}, o.Method) {
 			return bad("HTTP 请求方法无效")
 		}
 		if len(o.AcceptedStatusCodes) == 0 || len(o.AcceptedStatusCodes) > 32 {

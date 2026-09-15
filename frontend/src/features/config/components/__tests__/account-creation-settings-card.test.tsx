@@ -2,7 +2,7 @@ import { Toaster, toast } from "sonner";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError, type AccountCreationSettings, type GroupStatus } from "@/api";
 import { AccountCreationSettingsCard } from "../account-creation-settings-card";
@@ -44,7 +44,7 @@ const secondGroup: GroupStatus = {
   name: "OpenAI 高并发组",
 };
 
-beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => {
   toast.dismiss();
   vi.restoreAllMocks();
@@ -81,6 +81,14 @@ function renderCard(
 }
 
 describe("账号创建设置卡片", () => {
+  it("分组接口按字典排序返回时保留该顺序，不再按名称重排", () => {
+    renderCard("6", settings, [secondGroup, group]);
+    const rows = screen.getAllByTestId(/^account-group-settings-/);
+    expect(rows.map((row) => row.getAttribute("data-testid"))).toEqual([
+      "account-group-settings-7",
+      "account-group-settings-6",
+    ]);
+  });
   it("确认影响范围后启动已有账号池模式同步任务", async () => {
     const user = userEvent.setup();
     const task = {

@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-const probeModel = z.string().trim().max(256, "模型名称不能超过 256 个字符");
+const probeModel = z
+  .string()
+  .trim()
+  .refine((value) => Array.from(value).length <= 256, "模型名称不能超过 256 个字符");
 
 export const platformProbeModelsSchema = z.object({
   openai: probeModel,

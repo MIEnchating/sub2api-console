@@ -24,8 +24,9 @@ type AnimationTarget struct {
 }
 
 type AnimationRequest struct {
-	Targets        []AnimationTarget `json:"targets"`
-	TimeoutSeconds int               `json:"timeout_seconds"`
+	Targets        []AnimationTarget        `json:"targets"`
+	TimeoutSeconds int                      `json:"timeout_seconds"`
+	Custom         *AnimationCustomEndpoint `json:"custom,omitempty"`
 }
 
 type AnimationResult struct {
@@ -42,14 +43,17 @@ type AnimationResult struct {
 }
 
 func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest) (AnimationRequest, []selectedAccount, error) {
-	if len(request.Targets) < 1 || len(request.Targets) > 20 {
-		return request, nil, errors.New("动画检测请选择 1 到 20 个账号")
-	}
 	if request.TimeoutSeconds == 0 {
 		request.TimeoutSeconds = 120
 	}
 	if request.TimeoutSeconds < 5 || request.TimeoutSeconds > 120 {
 		return request, nil, errors.New("动画检测超时必须在 5 到 120 秒之间")
+	}
+	if request.Custom != nil {
+		return prepareCustomAnimation(request)
+	}
+	if len(request.Targets) < 1 || len(request.Targets) > 20 {
+		return request, nil, errors.New("动画检测请选择 1 到 20 个账号")
 	}
 	request.Targets = append([]AnimationTarget(nil), request.Targets...)
 	ids := make([]string, len(request.Targets))
@@ -162,10 +166,13 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 			defer workers.Done()
 			result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
 			started := time.Now()
-			err := s.runAnimationTarget(ctx, account, request.TimeoutSeconds, &result)
+			err := s.runAnimationTarget(ctx, account, request.TimeoutSeconds, request.Custom, &result)
 			result.DurationMS = time.Since(started).Milliseconds()
 			result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			if err != nil {
+				if request.Custom != nil {
+					err = errors.New(strings.ReplaceAll(err.Error(), request.Custom.APIKey, "[已隐藏]"))
+				}
 				result.Error = safeCredentialError(err)
 			} else {
 				result.Status = "succeeded"
@@ -199,22 +206,18 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, result *AnimationResult) error {
+func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, result *AnimationResult) error {
 	select {
 	case s.animation.slots <- struct{}{}:
 	case <-ctx.Done():
 		return errors.New("动画检测已取消或任务超时")
 	}
 	defer func() { <-s.animation.slots }()
-	guarded, release, err := s.acquirePreparedAccounts(ctx, []selectedAccount{account})
+	guarded, release, credential, err := s.animationCredential(ctx, account, custom)
 	if err != nil {
 		return err
 	}
 	defer release()
-	credential, err := s.resolveCredential(guarded, account)
-	if err != nil {
-		return err
-	}
 	requestCtx, cancel := context.WithTimeout(guarded, time.Duration(timeout)*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

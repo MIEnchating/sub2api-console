@@ -1,6 +1,6 @@
 import { Controller, useFieldArray, type UseFormReturn } from "react-hook-form";
-import { ArrowUp, ArrowDown, CirclePlus, GripVertical, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowUp, ArrowDown, CirclePlus, Trash2 } from "lucide-react";
+import { SortableList, SortableItem } from "@/components/sortable-list";
 import { FormField } from "@/App";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardAction, CardContent } from "@/components/ui/card";
@@ -21,7 +21,6 @@ export function StatusPageForm(props: {
     name: "status_page.groups",
     keyName: "formKey",
   });
-  const [draggingGroup, setDraggingGroup] = useState<number | null>(null);
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -84,95 +83,92 @@ export function StatusPageForm(props: {
           disabled={props.pending}
         />
       </div>
-      {groups.fields.map((group, index) => (
-        <Card
-          size="sm"
-          key={group.formKey}
-          draggable={!props.pending}
-          aria-grabbed={draggingGroup === index}
-          onDragStart={(event) => {
-            if (props.pending) return;
-            setDraggingGroup(index);
-            event.dataTransfer.effectAllowed = "move";
-            event.dataTransfer.setData("text/plain", String(index));
-          }}
-          onDragEnd={() => setDraggingGroup(null)}
-          onDragOver={(event) => {
-            if (draggingGroup !== null && draggingGroup !== index) event.preventDefault();
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            const source = Number(event.dataTransfer.getData("text/plain"));
-            if (
-              Number.isInteger(source) &&
-              source >= 0 &&
-              source < groups.fields.length &&
-              source !== index
-            )
-              groups.move(source, index);
-            setDraggingGroup(null);
-          }}
-        >
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <GripVertical aria-hidden="true" className="text-muted-foreground" />
-              展示分组 {index + 1}
-            </CardTitle>
-            <CardAction>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`上移展示分组 ${index + 1}`}
-                disabled={props.pending || index === 0}
-                onClick={() => groups.move(index, index - 1)}
+      <SortableList
+        items={groups.fields.map((group, index) => ({
+          id: group.formKey,
+          label: `展示分组 ${index + 1}`,
+        }))}
+        disabled={props.pending}
+        onMove={groups.move}
+      >
+        {groups.fields.map((group, index) => (
+          <SortableItem
+            key={group.formKey}
+            id={group.formKey}
+            label={`展示分组 ${index + 1}`}
+            disabled={props.pending}
+          >
+            {(sortable) => (
+              <Card
+                size="sm"
+                ref={sortable.ref}
+                style={sortable.style}
+                data-dragging={sortable.dragging || undefined}
+                className={sortable.over ? "ring-1 ring-primary/50" : undefined}
               >
-                <ArrowUp aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`下移展示分组 ${index + 1}`}
-                disabled={props.pending || index === groups.fields.length - 1}
-                onClick={() => groups.move(index, index + 1)}
-              >
-                <ArrowDown aria-hidden="true" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label={`移除展示分组 ${index + 1}`}
-                disabled={props.pending}
-                onClick={() => groups.remove(index)}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <ResourceTextField
-              {...common}
-              name={`status_page.groups.${index}.name`}
-              label={`分组 ${index + 1} 名称`}
-            />
-            <Controller
-              control={props.form.control}
-              name={`status_page.groups.${index}.monitorList`}
-              render={({ field }) => (
-                <StatusPageMonitors
-                  groupIndex={index}
-                  monitors={props.options.monitors}
-                  value={field.value}
-                  onChange={field.onChange}
-                  pending={props.pending}
-                />
-              )}
-            />
-          </CardContent>
-        </Card>
-      ))}
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    {sortable.handle}
+                    展示分组 {index + 1}
+                  </CardTitle>
+                  <CardAction>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`上移展示分组 ${index + 1}`}
+                      disabled={props.pending || index === 0}
+                      onClick={() => groups.move(index, index - 1)}
+                    >
+                      <ArrowUp aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`下移展示分组 ${index + 1}`}
+                      disabled={props.pending || index === groups.fields.length - 1}
+                      onClick={() => groups.move(index, index + 1)}
+                    >
+                      <ArrowDown aria-hidden="true" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`移除展示分组 ${index + 1}`}
+                      disabled={props.pending}
+                      onClick={() => groups.remove(index)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </Button>
+                  </CardAction>
+                </CardHeader>
+                <CardContent className="grid gap-3">
+                  <ResourceTextField
+                    {...common}
+                    name={`status_page.groups.${index}.name`}
+                    label={`分组 ${index + 1} 名称`}
+                  />
+                  <Controller
+                    control={props.form.control}
+                    name={`status_page.groups.${index}.monitorList`}
+                    render={({ field }) => (
+                      <StatusPageMonitors
+                        groupIndex={index}
+                        monitors={props.options.monitors}
+                        value={field.value}
+                        onChange={field.onChange}
+                        pending={props.pending}
+                      />
+                    )}
+                  />
+                </CardContent>
+              </Card>
+            )}
+          </SortableItem>
+        ))}
+      </SortableList>
       <Button
         type="button"
         variant="outline"

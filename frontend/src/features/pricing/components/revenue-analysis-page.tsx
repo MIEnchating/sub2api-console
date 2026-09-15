@@ -1,4 +1,3 @@
-import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fromDate } from "@internationalized/date";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -7,6 +6,7 @@ import { toast } from "sonner";
 import { notifyOperationError } from "@/lib/operation-feedback";
 
 import { api, type RevenueReport, type RevenueRow, type Task } from "@/api";
+import { ContentRetry } from "@/components/content-retry";
 import { TableEmptyState } from "@/components/data-table/empty-state";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTablePanel } from "@/components/data-table/table-panel";
@@ -15,10 +15,13 @@ import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
-import { TaskCancelButton } from "@/components/task-startup-state";
+import {
+  TaskCancelButton,
+  TaskProgressState,
+  TaskStartupState,
+} from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableBody,
@@ -31,6 +34,7 @@ import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { useClientPagination } from "@/hooks/use-client-pagination";
 
 import { RevenueViewNavigation, type RevenueAnalysisView } from "./revenue-view-navigation";
+import { RevenueNavigationSkeleton, RevenueReportSkeleton } from "./pricing-table-skeleton";
 
 const revenueTimezone = "Asia/Shanghai";
 
@@ -289,19 +293,9 @@ function RevenueSummaryTable(props: { report: RevenueReport }) {
 export function RevenueCalculationProgress(props: { progress: number }) {
   const progress = Math.min(100, Math.max(0, Math.round(props.progress)));
   return (
-    <div
-      className="flex min-h-0 flex-1 items-center justify-center"
-      aria-label="收益分析进度"
-      aria-live="polite"
-    >
+    <div className="flex min-h-0 flex-1 items-center justify-center" aria-label="收益分析进度">
       <div className="w-full max-w-md space-y-3 px-4">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-muted-foreground text-sm">正在分析</span>
-          <strong className="text-foreground text-sm font-semibold tabular-nums">
-            {progress}%
-          </strong>
-        </div>
-        <Progress value={progress} />
+        <TaskProgressState message="正在分析" progress={progress} />
       </div>
     </div>
   );
@@ -344,6 +338,13 @@ export function RevenueAnalysisPage() {
   );
   const report = currentReport ?? latestReport;
   const running = calculate.isPending || (Boolean(taskID) && !taskStopsPolling(task.data));
+  const loadingReport = !running && task.data?.status !== "failed" && !report && latest.isLoading;
+  let navigation;
+  if (!running && task.data?.status !== "failed" && report) {
+    navigation = <RevenueViewNavigation value={view} onChange={changeView} />;
+  } else if (loadingReport) {
+    navigation = <RevenueNavigationSkeleton />;
+  }
 
   useEffect(() => {
     if (!currentReport || !task.data) return;
@@ -359,14 +360,7 @@ export function RevenueAnalysisPage() {
   }, [report]);
 
   return (
-    <PageLayout
-      fixedContent
-      navigation={
-        !running && task.data?.status !== "failed" && report ? (
-          <RevenueViewNavigation value={view} onChange={changeView} />
-        ) : undefined
-      }
-    >
+    <PageLayout fixedContent navigation={navigation}>
       <PageHeading
         eyebrow="OPERATIONS / REVENUE"
         title="收益分析"
@@ -406,7 +400,16 @@ export function RevenueAnalysisPage() {
         data-testid="revenue-analysis-page"
         ref={pageRef}
       >
-        {running && <RevenueCalculationProgress progress={task.data?.progress ?? 0} />}
+        {running && (calculate.isPending || !Number.isFinite(task.data?.progress)) && (
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <TaskStartupState
+              message={calculate.isPending ? "正在创建收益核算任务" : "正在读取收益核算任务状态"}
+            />
+          </div>
+        )}
+        {running && !calculate.isPending && task.data && Number.isFinite(task.data.progress) && (
+          <RevenueCalculationProgress progress={task.data.progress} />
+        )}
         {!running && task.data?.status === "failed" && (
           <div
             role="alert"
@@ -428,14 +431,23 @@ export function RevenueAnalysisPage() {
             {view === "issues" ? <RevenueIssuesTable issues={report.issues} /> : null}
           </div>
         )}
-        {!running && task.data?.status !== "failed" && !report && latest.isLoading && (
-          <PageLoadingSkeleton label="正在读取最近一次分析" />
-        )}
-        {!running && task.data?.status !== "failed" && !report && !latest.isLoading && (
-          <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm">
-            尚未生成核算结果
-          </div>
-        )}
+        {loadingReport && <RevenueReportSkeleton />}
+        {!running &&
+          task.data?.status !== "failed" &&
+          !report &&
+          !latest.isLoading &&
+          latest.isError && (
+            <ContentRetry pending={latest.isFetching} onRetry={() => void latest.refetch()} />
+          )}
+        {!running &&
+          task.data?.status !== "failed" &&
+          !report &&
+          !latest.isLoading &&
+          !latest.isError && (
+            <div className="text-muted-foreground flex min-h-0 flex-1 items-center justify-center px-4 text-center text-sm">
+              尚未生成核算结果
+            </div>
+          )}
       </div>
     </PageLayout>
   );

@@ -18,6 +18,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 )
 
@@ -756,7 +757,7 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if authenticated {
-		applyAuthentication(request, record)
+		ApplyAuthentication(request, record)
 	}
 	response, err := r.http.Do(request)
 	if err != nil {
@@ -851,7 +852,8 @@ func upstreamErrorDetail(body []byte) string {
 	return detail
 }
 
-func applyAuthentication(request *http.Request, record configstore.AuthRecord) {
+// ApplyAuthentication preserves the configured authentication mode for upstream requests.
+func ApplyAuthentication(request *http.Request, record configstore.AuthRecord) {
 	for key, value := range record.Headers {
 		if !strings.EqualFold(key, "cookie") && !strings.ContainsAny(value, "\r\n") {
 			request.Header.Set(key, value)
@@ -1058,7 +1060,7 @@ func optionalDecimal(row map[string]any, names ...string) (*string, error) {
 
 func decimalText(value any) (string, error) {
 	text := textValue(value)
-	rational, ok := new(big.Rat).SetString(text)
+	rational, ok := decimalutil.Parse(text)
 	if !ok {
 		return "", errors.New("不是有限十进制数")
 	}

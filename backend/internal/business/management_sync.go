@@ -593,6 +593,24 @@ func removeDeletedGroupPolicyReferences(control map[string]any, deletedIDs map[s
 				changed = true
 			}
 		}
+		if minimums, ok := pricing["group_min_cost_multipliers"].(map[string]any); ok {
+			managedIDs := map[string]struct{}{}
+			sets, _ := pricing["exchange_group_sets"].([]any)
+			for _, rawSet := range sets {
+				groupIDs, _ := rawSet.([]any)
+				for _, rawID := range groupIDs {
+					if groupID, ok := rawID.(string); ok {
+						managedIDs[groupID] = struct{}{}
+					}
+				}
+			}
+			for groupID := range minimums {
+				if _, managed := managedIDs[groupID]; !managed {
+					delete(minimums, groupID)
+					changed = true
+				}
+			}
+		}
 	}
 	return changed
 }

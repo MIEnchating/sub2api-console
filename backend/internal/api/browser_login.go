@@ -84,7 +84,7 @@ func (s *Server) inputBrowserLogin(c *gin.Context) {
 		return
 	}
 	var payload browserlogin.Input
-	if err := c.ShouldBindJSON(&payload); err != nil {
+	if err := bindRequestJSON(c, &payload); err != nil {
 		writeError(c, 422, "浏览器操作参数无效")
 		return
 	}

@@ -7,14 +7,15 @@ import { toast } from "sonner";
 import { notifyOperationError } from "@/lib/operation-feedback";
 
 import { api, type AlertPolicy } from "@/api";
+import { ContentRetry } from "@/components/content-retry";
 import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { AlertPolicyLayout } from "./alert-policy-layout";
+import { AlertPolicySkeleton } from "./alert-policy-skeleton";
 import { DetectionSettings } from "./detection-settings";
 import { NotificationSettings } from "./notification-settings";
 import { ThresholdSettings } from "./threshold-settings";
@@ -37,38 +38,6 @@ function policyToForm(policy: AlertPolicy): AlertPolicyFormValues {
       policy.recovery_notification_types ?? defaultAlertPolicyForm.recovery_notification_types,
     balance_thresholds: policy.balance_thresholds.map((value) => ({ value })),
   };
-}
-
-function LoadingPolicy(): ReactElement {
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      {[0, 1, 2, 3].map((item) => (
-        <Card key={item} className="min-h-52 p-4">
-          <Skeleton className="h-6 w-28" />
-          <Skeleton className="mt-5 h-10 w-full" />
-          <Skeleton className="mt-3 h-10 w-full" />
-          <Skeleton className="mt-3 h-10 w-3/4" />
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-function PolicyUnavailable(props: { isFetching: boolean; onRetry: () => void }): ReactElement {
-  return (
-    <Card>
-      <CardContent className="grid min-h-52 place-items-center p-6 text-center">
-        <div>
-          <RefreshButton
-            pending={props.isFetching}
-            ariaLabel="刷新告警策略"
-            onClick={props.onRetry}
-            className="mt-4"
-          />
-        </div>
-      </CardContent>
-    </Card>
-  );
 }
 
 export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
@@ -97,12 +66,13 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
     onError: (error) => notifyOperationError(error, "告警策略保存失败"),
   });
 
+  const isDirty = form.formState.isDirty;
   useEffect(() => {
-    if (policy.data) form.reset(policyToForm(policy.data));
-  }, [form, policy.data]);
+    if (policy.data && !isDirty) form.reset(policyToForm(policy.data));
+  }, [form, isDirty, policy.data]);
 
   const enabled = form.watch("enabled");
-  const policyReady = policy.data !== undefined && !policy.error;
+  const policyReady = policy.data !== undefined && !policy.error && !policy.isFetching;
 
   const submit = form.handleSubmit((values) => {
     if (!policyReady) {
@@ -123,10 +93,16 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
         description="配置告警检测范围、触发阈值和通知发送行为；渠道凭据统一在系统设置中管理。"
         action={
           <PageActions>
+            <RefreshButton
+              pending={policy.isFetching}
+              disabled={update.isPending}
+              ariaLabel="刷新告警策略"
+              onClick={() => void policy.refetch()}
+            />
             <Button
               data-testid="alert-policy-reset"
               variant="outline"
-              onClick={() => form.reset(defaultAlertPolicyForm)}
+              onClick={() => form.reset(defaultAlertPolicyForm, { keepDefaultValues: true })}
               disabled={update.isPending || !policyReady}
             >
               <RotateCcw aria-hidden="true" /> 恢复默认
@@ -143,18 +119,13 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
       />
 
       {policy.error && <QueryErrorToast error={policy.error} fallback="告警策略读取失败" />}
-      {policy.isLoading && <LoadingPolicy />}
-      {!policy.isLoading && !policyReady && (
-        <PolicyUnavailable isFetching={policy.isFetching} onRetry={() => void policy.refetch()} />
+      {!policy.data && policy.isLoading && <AlertPolicySkeleton />}
+      {!policy.data && !policy.isLoading && (
+        <ContentRetry pending={policy.isFetching} onRetry={() => void policy.refetch()} />
       )}
-      {!policy.isLoading && policyReady && (
-        <form
-          onSubmit={submit}
-          data-slot="alert-policy-columns"
-          className="grid items-start gap-4 lg:grid-cols-2"
-        >
-          <DetectionSettings form={form} enabled={enabled} />
-          <div className="grid min-w-0 gap-4" data-slot="alert-policy-notification-column">
+      {policy.data && (
+        <form onSubmit={submit}>
+          <AlertPolicyLayout detection={<DetectionSettings form={form} enabled={enabled} />}>
             <ThresholdSettings
               form={form}
               enabled={enabled}
@@ -168,7 +139,7 @@ export function AlertPolicyPage(props: AlertPolicyPageProps): ReactElement {
               notification={notification.data}
               onOpenSettings={props.onOpenSettings}
             />
-          </div>
+          </AlertPolicyLayout>
         </form>
       )}
     </PageLayout>

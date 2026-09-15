@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { FieldError } from "@/components/field-error";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { api, type SessionStatus } from "@/api";
+import { ContentRetry } from "@/components/content-retry";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
@@ -69,6 +70,7 @@ function emptyProfileForm(username: string): ProfileForm {
 }
 
 export function ProfilePage() {
+  const pendingPayload = useRef<Parameters<typeof api.updateProfile>[0] | null>(null);
   const queryClient = useQueryClient();
   const session = useQuery({ queryKey: ["session"], queryFn: api.session });
   const username = session.data?.username ?? "";
@@ -88,7 +90,12 @@ export function ProfilePage() {
   }
 
   const updateProfile = useMutation({
-    mutationFn: api.updateProfile,
+    mutationFn: () => {
+      const payload = pendingPayload.current;
+      pendingPayload.current = null;
+      if (!payload) throw new Error("提交内容已失效，请重新填写后保存");
+      return api.updateProfile(payload);
+    },
     onSuccess: (saved) => {
       saveSession(saved);
       form.reset(emptyProfileForm(saved.username ?? ""));
@@ -96,13 +103,16 @@ export function ProfilePage() {
     },
     onError: (error) => notifyOperationError(error, "账号信息保存失败"),
   });
-  const submit = form.handleSubmit((values) =>
-    updateProfile.mutate({
+  const unavailable = updateProfile.isPending || session.isError || !session.data?.authenticated;
+  const submit = form.handleSubmit((values) => {
+    if (unavailable || pendingPayload.current) return;
+    pendingPayload.current = {
       username: values.username,
       current_password: values.current_password,
       ...(values.new_password ? { new_password: values.new_password } : {}),
-    }),
-  );
+    };
+    updateProfile.mutate();
+  });
   const changingPassword = Boolean(form.watch("new_password"));
 
   return (
@@ -113,6 +123,9 @@ export function ProfilePage() {
         description="管理控制台登录账号和密码。"
       />
       {session.error ? <QueryErrorToast error={session.error} fallback="个人信息读取失败" /> : null}
+      {session.isError ? (
+        <ContentRetry onRetry={() => void session.refetch()} pending={session.isFetching} />
+      ) : null}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
         <Card className="lg:sticky lg:top-4">
           <CardHeader className="border-b">
@@ -166,6 +179,7 @@ export function ProfilePage() {
               >
                 <Input
                   id="profile-username"
+                  disabled={unavailable}
                   autoComplete="username"
                   aria-invalid={Boolean(form.formState.errors.username)}
                   aria-describedby={
@@ -181,6 +195,7 @@ export function ProfilePage() {
               >
                 <Input
                   id="profile-current-password"
+                  disabled={unavailable}
                   type="password"
                   autoComplete="current-password"
                   aria-invalid={Boolean(form.formState.errors.current_password)}
@@ -200,6 +215,7 @@ export function ProfilePage() {
                 >
                   <Input
                     id="profile-new-password"
+                    disabled={unavailable}
                     type="password"
                     autoComplete="new-password"
                     placeholder="不修改请留空"
@@ -219,7 +235,7 @@ export function ProfilePage() {
                     id="profile-confirm-password"
                     type="password"
                     autoComplete="new-password"
-                    disabled={!changingPassword}
+                    disabled={unavailable || !changingPassword}
                     aria-invalid={Boolean(form.formState.errors.confirm_password)}
                     aria-describedby={
                       form.formState.errors.confirm_password
@@ -230,11 +246,7 @@ export function ProfilePage() {
                   />
                 </Field>
               </div>
-              <Button
-                className="justify-self-start"
-                type="submit"
-                disabled={updateProfile.isPending || session.isLoading}
-              >
+              <Button className="justify-self-start" type="submit" disabled={unavailable}>
                 <Save /> {updateProfile.isPending ? "保存中" : "保存修改"}
               </Button>
             </form>

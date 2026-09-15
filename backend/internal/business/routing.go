@@ -149,6 +149,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	result := []RoutingAccount{}
 	for rows.Next() {
 		var item RoutingAccount

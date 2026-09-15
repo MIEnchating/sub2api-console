@@ -1,25 +1,35 @@
 import type { AnimationResult, Task } from "@/api";
+import { z } from "zod";
+
+const animationResultSchema = z.object({
+  account_id: z.string(),
+  account_name: z.string(),
+  model: z.string(),
+  response_model: z.string().optional(),
+  request_id: z.string(),
+  status: z.enum(["succeeded", "failed"]),
+  svg: z.string().optional(),
+  error: z.string().optional(),
+  duration_ms: z.number().nonnegative(),
+  completed_at: z.string().refine((value) => Number.isFinite(Date.parse(value))),
+});
 
 function animationTaskResults(task?: Task): Map<string, AnimationResult> {
   const results = new Map<string, AnimationResult>();
   if (!Array.isArray(task?.result.animations)) return results;
   for (const item of task.result.animations) {
-    if (
-      typeof item !== "object" ||
-      item === null ||
-      typeof item.account_id !== "string" ||
-      typeof item.model !== "string" ||
-      typeof item.request_id !== "string" ||
-      !["succeeded", "failed"].includes(item.status)
-    )
-      continue;
-    results.set(item.account_id, item as AnimationResult);
+    const parsed = animationResultSchema.safeParse(item);
+    if (!parsed.success) continue;
+    const result = parsed.data;
+    const existing = results.get(result.account_id);
+    if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))
+      results.set(result.account_id, result);
   }
   return results;
 }
 
-function animationTaskAccountIDs(task?: Task): Set<string> {
-  const ids = new Set(animationTaskResults(task).keys());
+function animationTaskAccountIDs(task: Task, results: Map<string, AnimationResult>): Set<string> {
+  const ids = new Set(results.keys());
   if (Array.isArray(task?.result.account_ids)) {
     for (const id of task.result.account_ids) if (typeof id === "string") ids.add(id);
   }
@@ -49,7 +59,7 @@ export function collectAnimationTasks(tasks: (Task | undefined)[], submitting: S
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   for (const task of sorted) {
     const taskResults = animationTaskResults(task);
-    const ids = animationTaskAccountIDs(task);
+    const ids = animationTaskAccountIDs(task, taskResults);
     for (const [id, result] of taskResults) {
       const existing = results.get(id);
       if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))

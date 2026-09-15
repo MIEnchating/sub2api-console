@@ -133,7 +133,7 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 		disabledTypes = append(disabledTypes, "account.probe")
 	}
 	if !policy.RoutingBreakerEnabled {
-		disabledTypes = append(disabledTypes, "account.routing_breaker")
+		disabledTypes = append(disabledTypes, "account.routing_breaker", "account.binding_invalid")
 	}
 	if !policy.RoutingDegradedEnabled {
 		disabledTypes = append(disabledTypes, "account.routing_degraded")
@@ -165,14 +165,16 @@ func suppressDisabledAlertRules(ctx context.Context, tx *sql.Tx, policy AlertPol
 				continue
 			}
 			causeCode := routingDegradedCauseCode(degradedType)
-			if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='suppressed',last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
-				WHERE status='firing' AND event_type='account.routing_degraded' AND (cause_code=? OR cause_code LIKE ?)`,
+			if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status=CASE WHEN status='recovered' THEN 'closed' ELSE 'suppressed' END,
+				last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
+				WHERE status IN ('firing','recovered') AND event_type='account.routing_degraded' AND (cause_code=? OR cause_code LIKE ?)`,
 				now, causeCode, causeCode+":%"); err != nil {
 				return err
 			}
 			if degradedType == "other" {
-				if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='suppressed',last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
-					WHERE status='firing' AND event_type='account.routing_degraded' AND (cause_code='ROUTING_DEGRADED' OR cause_code LIKE 'ROUTING_DEGRADED:%')`, now); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status=CASE WHEN status='recovered' THEN 'closed' ELSE 'suppressed' END,
+					last_seen_at=?,delivery_status='降级子类型已停用',last_error=NULL
+					WHERE status IN ('firing','recovered') AND event_type='account.routing_degraded' AND (cause_code='ROUTING_DEGRADED' OR cause_code LIKE 'ROUTING_DEGRADED:%')`, now); err != nil {
 					return err
 				}
 			}

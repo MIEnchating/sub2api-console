@@ -8,7 +8,7 @@ test("新模板请求头为空，可填写完整地址并保存表单编码和�
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "查看请求体" }).click();
   await dialog.getByLabel("模板名称").fill("表单检测");
-  await expect(dialog.getByLabel("请求头（JSON）")).toHaveValue("");
+  await expect(dialog.getByLabel("请求头（JSON）")).toHaveText("可选，填写需要发送的请求头");
   await expect(dialog.getByRole("combobox", { name: "鉴权方式", exact: true })).toHaveCount(0);
   await dialog.getByLabel("监控地址", { exact: true }).fill("http://monitor.example/probe");
   await dialog.getByRole("combobox", { name: "请求体编码" }).click();
@@ -35,8 +35,8 @@ test("内置请求体允许编辑，JSON 无效时阻止保存，切换 XML 后�
   await dialog.getByLabel("模板名称").fill("自定义预设");
   await dialog.getByRole("combobox", { name: "接口模式" }).click();
   await page.getByRole("option", { name: "OpenAI Responses", exact: true }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/max_output_tokens/);
-  await expect(dialog.getByLabel("请求头（JSON）")).toHaveValue("");
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/max_output_tokens/);
+  await expect(dialog.getByLabel("请求头（JSON）")).toHaveText("可选，填写需要发送的请求头");
   await dialog.getByLabel("请求体", { exact: true }).fill("<probe>ping</probe>");
   await dialog.getByRole("button", { name: "保存模板" }).click();
   await expect(dialog.getByLabel("请求体", { exact: true })).toHaveAttribute(
@@ -75,7 +75,7 @@ test("预设加载中禁止保存，读取失败后保留原请求体并允许�
   await expect(dialog.getByRole("button", { name: "保存模板" })).toBeDisabled();
   release();
   await expect(page.locator("[data-sonner-toast]")).toContainText("预设暂时不可用");
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue('{"input":"keep"}');
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText('{"input":"keep"}');
   await expect(dialog.getByRole("combobox", { name: "接口模式" })).toContainText("自定义请求");
   await expect(dialog.getByRole("button", { name: "保存模板" })).toBeEnabled();
 });

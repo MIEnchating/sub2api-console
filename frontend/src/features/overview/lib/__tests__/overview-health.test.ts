@@ -6,6 +6,7 @@ import {
   buildGroupHealth,
   buildOverviewMetrics,
   visibleOverviewGroups,
+  strategyLabel,
 } from "../overview-health";
 
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
@@ -68,6 +69,11 @@ function group(overrides: Partial<GroupStatus> = {}): GroupStatus {
 }
 
 describe("overview health calculations", () => {
+  it("策略值与对象原型属性同名时按原始文本显示", () => {
+    expect(strategyLabel("__proto__")).toBe("__proto__");
+    expect(strategyLabel("constructor")).toBe("constructor");
+  });
+
   it("derives live ratio, group risk and real account health", () => {
     const health = buildGroupHealth(
       group({

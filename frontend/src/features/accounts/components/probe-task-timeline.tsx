@@ -40,6 +40,9 @@ export function ProbeProgressSummary(props: { steps: ProbeStep[]; pendingMessage
         ) : null}
       </div>
     );
+  const stageLabel = Object.hasOwn(stageLabels, latest.stage)
+    ? stageLabels[latest.stage]
+    : latest.stage;
   return (
     <div className="min-w-0">
       <Button
@@ -55,7 +58,7 @@ export function ProbeProgressSummary(props: { steps: ProbeStep[]; pendingMessage
           <Circle aria-hidden="true" />
         )}
         <span className="min-w-0 flex-1 truncate text-left">
-          {props.pendingMessage || stageLabels[latest.stage] || latest.stage}
+          {props.pendingMessage || stageLabel}
         </span>
         <span className="text-muted-foreground shrink-0 text-xs">
           {props.pendingMessage ? "进行中" : statusLabels[latest.status]}
@@ -99,7 +102,7 @@ export function ProbeTaskTimeline(props: { steps: ProbeStep[] }) {
               className={`size-4 shrink-0 ${step.status === "running" ? "animate-spin motion-reduce:animate-none" : ""}`}
             />
             <span className="min-w-0 flex-1 break-words">
-              {stageLabels[step.stage] ?? step.stage}
+              {Object.hasOwn(stageLabels, step.stage) ? stageLabels[step.stage] : step.stage}
             </span>
             <span className="shrink-0">
               {statusLabels[step.status]}

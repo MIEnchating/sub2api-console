@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -31,13 +29,13 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 	switch provider.ID {
 	case "deepseek":
 		ps, err = FetchDeepSeek(ctx, client)
-	case "kimi":
-		ps, err = fetchKimi(ctx, client)
 	default:
 		var raw []byte
 		raw, err = fetchRetry(ctx, client, provider.URL+markdownSuffix(provider.ID))
 		if err == nil {
 			switch provider.ID {
+			case "kimi":
+				ps, err = ParseKimi(raw)
 			case "minimax":
 				ps, err = ParseMiniMax(raw)
 			case "glm":
@@ -59,7 +57,7 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 	return ps, err
 }
 func markdownSuffix(id string) string {
-	if id == "minimax" || id == "glm" {
+	if id == "kimi" || id == "minimax" || id == "glm" {
 		return ".md"
 	}
 	return ""
@@ -77,54 +75,4 @@ func fetchRetry(ctx context.Context, client *http.Client, address string) ([]byt
 	case <-timer.C:
 	}
 	return fetchURL(ctx, client, address)
-}
-
-var kimiLink = regexp.MustCompile(`https://platform\.kimi\.com/docs/pricing/chat-[a-z0-9-]+\.md`)
-
-func fetchKimi(ctx context.Context, client *http.Client) ([]Price, error) {
-	index, err := fetchRetry(ctx, client, "https://platform.kimi.com/docs/llms.txt")
-	if err != nil {
-		return nil, err
-	}
-	urls := []string{}
-	seen := map[string]bool{}
-	for _, url := range kimiLink.FindAllString(string(index), -1) {
-		if !seen[url] {
-			urls = append(urls, url)
-			seen[url] = true
-		}
-	}
-	if len(urls) == 0 || len(urls) > 16 {
-		return nil, errors.New("Kimi 官方模型定价目录已变更")
-	}
-	type result struct {
-		ps  []Price
-		err error
-	}
-	results := make([]result, len(urls))
-	var wg sync.WaitGroup
-	// The index is bounded, and no discovered URL can escape the official prefix.
-	for i, url := range urls {
-		wg.Go(func() {
-			raw, e := fetchRetry(ctx, client, url)
-			if e != nil {
-				results[i].err = e
-				return
-			}
-			ps, e := ParseKimi(raw)
-			for j := range ps {
-				ps[j].SourceURL = strings.TrimSuffix(url, ".md")
-			}
-			results[i] = result{ps, e}
-		})
-	}
-	wg.Wait()
-	var ps []Price
-	for _, r := range results {
-		if r.err != nil {
-			return nil, r.err
-		}
-		ps = append(ps, r.ps...)
-	}
-	return ps, nil
 }

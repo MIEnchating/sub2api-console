@@ -235,7 +235,8 @@ export function dictionaryLabel(
   fallback = "配置错误",
 ): string {
   const normalized = value?.trim();
-  return (normalized && dictionary[normalized]) || fallback;
+  if (!normalized || !Object.hasOwn(dictionary, normalized)) return fallback;
+  return dictionary[normalized] || fallback;
 }
 
 export const upstreamTypeOptions = [
@@ -363,7 +364,9 @@ export function upstreamAuthStatusIsReady(value: string | null | undefined): boo
 export function accountTypeValue(value: string | null | undefined): string | null {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return null;
-  return accountTypeAliases[normalized] ?? normalized;
+  return Object.hasOwn(accountTypeAliases, normalized)
+    ? accountTypeAliases[normalized]
+    : normalized;
 }
 
 export function accountTypeLabel(value: string | null | undefined): string | null {

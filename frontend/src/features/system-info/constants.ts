@@ -46,5 +46,5 @@ export function taskStatusVariant(status: TaskSummary["status"]): StatusVariant 
 }
 
 export function taskOperationLabel(operation: string): string {
-  return taskOperationLabels[operation] ?? operation;
+  return Object.hasOwn(taskOperationLabels, operation) ? taskOperationLabels[operation] : operation;
 }

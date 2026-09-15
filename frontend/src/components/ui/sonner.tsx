@@ -45,6 +45,7 @@ function Toaster(props: ToasterProps) {
         } as CSSProperties
       }
       {...props}
+      toastOptions={{ closeButtonAriaLabel: "关闭通知", ...props.toastOptions }}
     />
   );
 }

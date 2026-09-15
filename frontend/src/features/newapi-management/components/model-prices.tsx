@@ -238,23 +238,23 @@ export function NewAPIModelPrices(props: PriceProps) {
       const result = await props.onWriteModelPrices(prices);
       const actual = new Map(result.models.map((price) => [price.model, price]));
       const successful: string[] = [];
-      const results: Record<string, string> = {};
+      const results = new Map<string, string>();
       for (const row of batchPreview) {
         if (!row.reference || !row.price) {
-          results[row.model] = row.reason ?? "已跳过";
+          results.set(row.model, row.reason ?? "已跳过");
           continue;
         }
         const readback = actual.get(row.model);
         if (readback && newAPIPriceComparisonStatus(readback, [row.reference]) === "matched") {
-          results[row.model] = "同步成功并已读回";
+          results.set(row.model, "同步成功并已读回");
           successful.push(row.model);
           const before = props.models.find((price) => price.model === row.model);
           if (before) rememberRestorePrice(before);
         } else {
-          results[row.model] = "已提交，读回价格未匹配，请核对";
+          results.set(row.model, "已提交，读回价格未匹配，请核对");
         }
       }
-      setBatchResults(results);
+      setBatchResults(Object.fromEntries(results));
       selectModels(successful, false);
     } catch (error) {
       setBatchFailed(true);
@@ -272,7 +272,7 @@ export function NewAPIModelPrices(props: PriceProps) {
 
   function rememberRestorePrice(price: NewAPIModelPrice) {
     setRestorePrices((current) => {
-      if (current[price.model]) return current;
+      if (Object.hasOwn(current, price.model)) return current;
       return { ...current, [price.model]: { ...price } };
     });
   }
@@ -301,7 +301,7 @@ export function NewAPIModelPrices(props: PriceProps) {
   }
 
   async function restoreModelPrice(model: string): Promise<void> {
-    const restorePrice = restorePrices[model];
+    const restorePrice = Object.hasOwn(restorePrices, model) ? restorePrices[model] : undefined;
     if (!restorePrice || !(await writeModelPrice(restorePrice, "还原"))) return;
     setRestorePrices((current) => {
       const next = { ...current };
@@ -381,19 +381,11 @@ export function NewAPIModelPrices(props: PriceProps) {
           ) : null}
         </div>
       </TableFilterToolbar>
-      {props.managementPricesFetchedAt ||
-      props.managementPricesStale ||
-      props.managementPricesWarning ||
-      props.managementPricesError ? (
+      {props.managementPricesStale || props.managementPricesWarning ? (
         <div
           className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
           role="status"
         >
-          {props.managementPricesFetchedAt ? (
-            <span>
-              价格缓存更新：{new Date(props.managementPricesFetchedAt).toLocaleString("zh-CN")}
-            </span>
-          ) : null}
           {props.managementPricesStale ? (
             <StatusBadge label="缓存过期或刷新不完整" variant="warning" />
           ) : null}
@@ -443,6 +435,9 @@ export function NewAPIModelPrices(props: PriceProps) {
             error={props.managementPricesError ?? ""}
             filtered={remoteSearch !== ""}
             writingModel={props.writingManagementPrice}
+            writeDisabled={
+              selectionBusy || props.managementPricesStale || !!props.managementPricesError
+            }
             onWritePrice={props.onWriteManagementPrice}
             selectedModels={batchEnabled ? selectedModels : undefined}
             onSelectModels={selectModels}
@@ -656,7 +651,9 @@ export function NewAPIModelPrices(props: PriceProps) {
                                 <TableActionButton
                                   label="还原价格"
                                   ariaLabel={`还原 ${row.model} 价格`}
-                                  disabled={!restorePrices[row.model] || actionPending}
+                                  disabled={
+                                    !Object.hasOwn(restorePrices, row.model) || actionPending
+                                  }
                                   onClick={() => void restoreModelPrice(row.model)}
                                 >
                                   <RotateCcw aria-hidden="true" />
@@ -694,6 +691,18 @@ export function NewAPIModelPrices(props: PriceProps) {
           </DataTablePanel>
         ) : null}
       </div>
+      {props.managementPricesFetchedAt ? (
+        <p
+          role="status"
+          aria-label="价格缓存更新时间"
+          className="text-muted-foreground min-w-0 shrink-0 text-right text-xs [overflow-wrap:anywhere]"
+        >
+          价格缓存更新：
+          <time dateTime={props.managementPricesFetchedAt}>
+            {new Date(props.managementPricesFetchedAt).toLocaleString("zh-CN")}
+          </time>
+        </p>
+      ) : null}
       {batchEnabled ? (
         <ModelPriceSelectionToolbar
           selectedCount={selectedModels.size}
@@ -825,6 +834,7 @@ export function RemoteModelPricesTable(props: {
   error: string;
   filtered?: boolean;
   writingModel?: string;
+  writeDisabled?: boolean;
   onWritePrice?: (price: Sub2APIModelPrice) => void;
   selectedModels?: ReadonlySet<string>;
   onSelectModels?: (models: string[], checked: boolean) => void;
@@ -835,7 +845,7 @@ export function RemoteModelPricesTable(props: {
   return (
     <DataTablePanel className="flex min-h-0 flex-1 flex-col">
       {props.pending && props.prices.length === 0 && (
-        <PageLoadingSkeleton label="正在获取远程模型价格" />
+        <PageLoadingSkeleton label="正在获取远程模型价格" fill framed={false} />
       )}
       {!props.pending && !props.error && props.prices.length === 0 && (
         <div className="text-muted-foreground grid min-h-52 place-items-center px-6 text-center text-sm">
@@ -971,6 +981,7 @@ export function RemoteModelPricesTable(props: {
                         price={price}
                         writeSupported={writeSupported}
                         writingModel={props.writingModel}
+                        disabled={props.writeDisabled || props.pending || !!props.error}
                         onWritePrice={props.onWritePrice}
                       />
                     </TableCell>
@@ -1053,6 +1064,7 @@ function RemotePriceWriteAction(props: {
   price: Sub2APIModelPrice;
   writeSupported: boolean;
   writingModel?: string;
+  disabled?: boolean;
   onWritePrice: (price: Sub2APIModelPrice) => void;
 }) {
   if (!props.writeSupported) {
@@ -1078,7 +1090,7 @@ function RemotePriceWriteAction(props: {
       label="写入平台"
       ariaLabel={`写入平台 ${props.price.model}`}
       tone="primary"
-      disabled={props.writingModel !== undefined}
+      disabled={props.disabled || props.writingModel !== undefined}
       onClick={() => props.onWritePrice(props.price)}
     >
       <Upload aria-hidden="true" />
@@ -1335,10 +1347,12 @@ function tierConditionSignature(expression: string): string {
 }
 
 function tieredExpressionStructureMatches(configured: string, expected: string): boolean {
-  const configuredTiers = expressionPriceTiers(configured);
-  const expectedTiers = expressionPriceTiers(expected);
-  if (configuredTiers.length !== expectedTiers.length) return false;
-  return tierConditionSignature(configured) === tierConditionSignature(expected);
+  // Only price coefficients may vary; preserve all conditions, operators and extra terms.
+  const coefficients =
+    /\b(p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/g;
+  const structure = (expression: string): string =>
+    expression.replace(coefficients, "$1 * #").replace(/\s+/g, "");
+  return structure(configured) === structure(expected);
 }
 
 function ModelPriceDifferenceDialog(props: {

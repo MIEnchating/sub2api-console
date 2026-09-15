@@ -39,7 +39,7 @@ describe("价格设置卡", () => {
   it("详细规则默认折叠，点击展开后可读取亏损回退说明", async () => {
     const user = userEvent.setup();
     render(<SettingsFixture />);
-    const description = screen.getByText(/均亏损时保留当前分组/);
+    const description = screen.getByText(/无合适分组时保留当前分组/);
     expect(description).not.toBeVisible();
     await user.click(screen.getByText("查看分组选择规则"));
     expect(description).toBeVisible();

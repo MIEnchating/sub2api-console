@@ -31,7 +31,7 @@ function Card({
       data-card-hover="false"
       data-size={size}
       className={cn(
-        "group/card bg-card text-card-foreground ring-border flex min-w-0 flex-col overflow-hidden rounded-[8px] text-sm ring-1 *:[img:first-child]:rounded-t-[8px] *:[img:last-child]:rounded-b-[8px]",
+        "group/card bg-card text-card-foreground ring-border flex min-w-0 flex-col overflow-hidden rounded-lg text-sm ring-1 *:[img:first-child]:rounded-t-lg *:[img:last-child]:rounded-b-lg",
         className,
       )}
       {...props}
@@ -44,7 +44,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header border-border/70 grid min-w-0 auto-rows-min items-start gap-1 border-b px-4 py-3 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-2.5 has-data-[slot=card-action]:grid-cols-[minmax(0,1fr)_auto] has-data-[slot=card-description]:grid-rows-[auto_auto]",
+        "group/card-header @container/card-header border-border/70 grid min-w-0 shrink-0 auto-rows-min grid-cols-[minmax(0,1fr)] items-start gap-1 border-b px-4 py-3 group-data-[size=sm]/card:px-3 group-data-[size=sm]/card:py-2.5 has-data-[slot=card-description]:grid-rows-[auto_auto]",
         className,
       )}
       {...props}
@@ -56,10 +56,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn(
-        "min-w-0 text-base leading-snug font-medium [overflow-wrap:anywhere] group-data-[size=sm]/card:text-sm",
-        className,
-      )}
+      className={cn("min-w-0 text-sm leading-5 font-semibold [overflow-wrap:anywhere]", className)}
       {...props}
     />
   );
@@ -79,7 +76,10 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-action"
-      className={cn("col-start-2 row-span-2 row-start-1 self-start justify-self-end", className)}
+      className={cn(
+        "col-start-1 flex min-w-0 max-w-full flex-wrap items-center gap-2 self-start justify-self-start @sm/card-header:col-start-2 @sm/card-header:row-span-2 @sm/card-header:row-start-1 @sm/card-header:justify-self-end",
+        className,
+      )}
       {...props}
     />
   );

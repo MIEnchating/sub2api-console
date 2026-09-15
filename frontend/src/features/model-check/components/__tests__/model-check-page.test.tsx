@@ -77,7 +77,7 @@ describe("模型检测页面", () => {
 
     expect(markup).toContain("模型检测");
     expect(markup).not.toContain("平台批量检测");
-    expect(markup).toContain("检测画像");
+    expect(markup).toContain("检测规则与题库");
     expect(markup).toContain("全选账号");
     expect(markup).toContain("刷新模型");
     expect(markup).toContain("主账号");

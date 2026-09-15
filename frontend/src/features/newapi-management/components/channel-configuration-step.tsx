@@ -138,7 +138,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
               clearText="清空分组"
               ariaLabel="New API 分组"
               maxVisibleChips={6}
-              disabled={props.newAPIGroupOptions.length === 0}
+              disabled={props.pending || props.newAPIGroupOptions.length === 0}
             />
             <FieldError message={props.groupError} />
           </div>
@@ -155,7 +155,7 @@ export function NewAPIChannelConfigurationStep(props: Props) {
             <Button
               type="button"
               variant="outline"
-              disabled={props.fetchingModels}
+              disabled={props.pending || props.fetchingModels}
               onClick={props.onFetchModels}
             >
               <RefreshCw

@@ -11,14 +11,15 @@ export function OnboardingSelectionSkeleton(props: {
     <div
       aria-label="正在获取上游信息"
       role="status"
+      aria-busy="true"
       className={
         props.fillAvailableHeight
           ? "grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden"
-          : "grid gap-4"
+          : "grid min-w-0 gap-4"
       }
     >
       <div
-        className="grid grid-cols-2 divide-x rounded-lg border lg:grid-cols-6"
+        className="grid min-w-0 grid-cols-1 divide-x rounded-lg border sm:grid-cols-2 lg:grid-cols-6"
         data-onboarding-skeleton="summary"
       >
         {Array.from({ length: 6 }, (_, index) => (
@@ -31,7 +32,7 @@ export function OnboardingSelectionSkeleton(props: {
 
       {props.groupLocked ? (
         <div
-          className="grid grid-cols-2 divide-x rounded-lg border"
+          className="grid min-w-0 grid-cols-1 divide-x rounded-lg border sm:grid-cols-2"
           data-onboarding-skeleton="locked-group"
         >
           {Array.from({ length: 2 }, (_, index) => (
@@ -77,20 +78,24 @@ export function OnboardingSelectionSkeleton(props: {
       )}
 
       <div
-        className={props.groupLocked ? "grid gap-4 sm:grid-cols-3" : "flex items-end gap-3"}
+        className={
+          props.groupLocked
+            ? "grid min-w-0 gap-4 sm:grid-cols-3"
+            : "flex min-w-0 flex-wrap items-end gap-3"
+        }
         data-onboarding-skeleton="form"
       >
         {Array.from({ length: props.groupLocked ? 3 : 1 }, (_, index) => (
-          <div className="grid gap-2" key={index}>
+          <div className="grid min-w-0 flex-1 basis-48 gap-1.5" key={index}>
             <Skeleton className="h-4 w-28" />
-            <Skeleton className="h-9 w-64" />
+            <Skeleton data-slot="skeleton-control" className="h-8 w-full" />
           </div>
         ))}
-        {!props.groupLocked ? <Skeleton className="ml-auto h-9 w-36" /> : null}
+        {!props.groupLocked ? <Skeleton className="ml-auto h-8 w-36" /> : null}
       </div>
       {props.groupLocked ? (
         <div className="flex justify-end" data-onboarding-skeleton="action">
-          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-8 w-24" />
         </div>
       ) : null}
     </div>

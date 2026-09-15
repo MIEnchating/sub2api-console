@@ -1,4 +1,7 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { orderByDictionary } from "@/lib/dictionary-order";
+import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCheck, CheckCircle2, CircleAlert, CircleSlash2, Search, XCircle } from "lucide-react";
@@ -183,6 +186,14 @@ export function AccountModelSyncDialog(props: {
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
     queryFn: () => api.dictionaries("platform"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const groupDictionary = useQuery({
+    queryKey: ["dictionaries", "group"],
+    queryFn: () => api.dictionaries("group"),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
   const [discoveryTaskId, setDiscoveryTaskId] = useState<string | null>(null);
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
@@ -243,9 +254,9 @@ export function AccountModelSyncDialog(props: {
   });
   const pending =
     discovery.isPending ||
-    (discoveryTaskId !== null && !discoveryStopped) ||
+    (discoveryTaskId !== null && !discoveryStopped && !discoveryTask.isError) ||
     apply.isPending ||
-    (applyTaskId !== null && !taskStopsPolling(applyTask.data));
+    (applyTaskId !== null && !taskStopsPolling(applyTask.data) && !applyTask.isError);
   let cancellableTaskId: string | null = null;
   if (applyTaskId !== null && !taskStopsPolling(applyTask.data)) {
     cancellableTaskId = applyTaskId;
@@ -381,7 +392,13 @@ export function AccountModelSyncDialog(props: {
             queryError={discoveryTask.error}
             task={discoveryTask.data}
           />
-          {preview.isLoading ? <TaskStartupState message="正在生成模型同步预览" /> : null}
+          {discoveryTask.isError ? (
+            <ContentRetry
+              onRetry={() => void discoveryTask.refetch()}
+              pending={discoveryTask.isFetching}
+            />
+          ) : null}
+          {preview.isLoading ? <ContentLoading label="正在生成模型同步预览" /> : null}
           {preview.error ? (
             <ModelSyncError error={preview.error} fallback="模型预览读取失败" />
           ) : null}
@@ -391,6 +408,7 @@ export function AccountModelSyncDialog(props: {
               accountPlatforms={props.accountPlatforms}
               accountGroups={props.accountGroups}
               dictionaryEntries={platformDictionary.data?.items}
+              groupDictionaryEntries={groupDictionary.data?.items}
               scopeExclusions={scopeExclusions}
               probeModels={probeModels}
               probeModelOptions={probeModelOptions}
@@ -412,7 +430,13 @@ export function AccountModelSyncDialog(props: {
             <ModelSyncError error={apply.error} fallback="模型应用任务启动失败" />
           ) : null}
           {applyTask.error ? (
-            <ModelSyncError error={applyTask.error} fallback="模型应用状态读取失败" />
+            <>
+              <ModelSyncError error={applyTask.error} fallback="模型应用状态读取失败" />
+              <ContentRetry
+                onRetry={() => void applyTask.refetch()}
+                pending={applyTask.isFetching}
+              />
+            </>
           ) : null}
           {applyTask.data ? <ModelSyncApplyState task={applyTask.data} /> : null}
         </DialogBody>
@@ -488,6 +512,7 @@ function SyncModelEditor(props: {
   accountPlatforms: ReadonlyMap<string, string | null>;
   accountGroups: ReadonlyMap<string, string[]>;
   dictionaryEntries?: readonly DictionaryEntry[];
+  groupDictionaryEntries?: readonly DictionaryEntry[];
   scopeExclusions: ScopeModelExclusions;
   probeModels: string[];
   probeModelOptions: string[];
@@ -502,8 +527,15 @@ function SyncModelEditor(props: {
         props.accountPlatforms,
         props.accountGroups,
         props.dictionaryEntries,
+        props.groupDictionaryEntries,
       ),
-    [props.preview, props.accountPlatforms, props.accountGroups, props.dictionaryEntries],
+    [
+      props.preview,
+      props.accountPlatforms,
+      props.accountGroups,
+      props.dictionaryEntries,
+      props.groupDictionaryEntries,
+    ],
   );
   const [activePlatform, setActivePlatform] = useState(platforms[0]?.key ?? "");
   const [activeGroup, setActiveGroup] = useState(platforms[0]?.groups[0]?.key ?? "");
@@ -772,6 +804,7 @@ export function modelSyncPlatformGroups(
   accountPlatforms: ReadonlyMap<string, string | null>,
   accountGroups: ReadonlyMap<string, string[]>,
   dictionaryEntries?: readonly DictionaryEntry[],
+  groupDictionaryEntries?: readonly DictionaryEntry[],
 ): ModelSyncPlatformGroup[] {
   const groups = new Map<
     string,
@@ -850,6 +883,14 @@ export function modelSyncPlatformGroups(
     dictionaryEntries,
     result.map((item) => ({ value: item.key, label: item.label })),
   );
+  const groupIDs = new Map(groupDictionaryEntries?.map((entry) => [entry.name, entry.value]));
+  for (const platform of result) {
+    platform.groups = orderByDictionary(
+      platform.groups,
+      groupDictionaryEntries,
+      (group) => groupIDs.get(group.label) ?? "",
+    );
+  }
   const rank = new Map(ordered.map((item, index) => [item.value, index]));
   return result.sort((left, right) => {
     const leftRank = rank.get(left.key);

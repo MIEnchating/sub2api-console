@@ -1,7 +1,30 @@
 import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { PricingCatalogActions } from "./pricing-catalog-actions";
 import { PricingSettingsPanel } from "./pricing-settings-panel";
+import { PricingConfigLayout } from "./pricing-config-layout";
+import { PricingConfigSkeleton } from "./pricing-config-skeleton";
+import { PricingCatalogSkeleton } from "./pricing-table-skeleton";
+import { GroupMinimumField } from "./group-minimum-field";
+import {
+  cleanGroupMinimums,
+  groupMeetsMinimumCost,
+  groupMinimumSchema,
+  groupMinimumsEqual,
+} from "../lib/group-minimum";
 import type { PricingConfigDraft } from "../types";
+import {
+  accountCostValue,
+  emptyGroupAccountCosts,
+  groupAccountCostsByID,
+  type GroupAccountCosts,
+} from "../lib/account-costs";
+import {
+  comparePricingDecimals,
+  parsePricingDecimal,
+  pricingCostMeetsMargin,
+  type PricingDecimal,
+} from "../lib/pricing-decimal";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -56,7 +79,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -88,22 +110,6 @@ function decimal(value: number) {
   return value.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-function groupAccountCosts(groupID: string, decisions: PricingDecision[]) {
-  const accounts = decisions.filter((decision) => decision.current_group_ids.includes(groupID));
-  const values = [
-    ...new Map(
-      accounts.flatMap((decision) => {
-        const value = Number(decision.cost_multiplier);
-        if (!Number.isFinite(value) || value <= 0 || !decision.cost_multiplier) return [];
-        return [[value, decision.cost_multiplier] as const];
-      }),
-    ).entries(),
-  ]
-    .sort(([left], [right]) => left - right)
-    .map(([, label]) => label);
-  return { accounts: accounts.length, values };
-}
-
 function pricingConfigWithRuleNames(config: PricingConfig): PricingConfig {
   const currentNames = config.exchange_group_set_names ?? [];
   if (
@@ -123,12 +129,13 @@ export function pricingRuleNameForInput(names: string[], setIndex: number) {
   return names[setIndex] ?? `互换组 ${setIndex + 1}`;
 }
 
-function pricingConfigsEqual(left: PricingConfig, right: PricingConfig): boolean {
+function pricingConfigsEqual(left: PricingConfigDraft, right: PricingConfigDraft): boolean {
   return (
     left.enabled === right.enabled &&
     left.profit_margin === right.profit_margin &&
     left.interval_seconds === right.interval_seconds &&
     left.write_concurrency === right.write_concurrency &&
+    groupMinimumsEqual(left.group_min_cost_multipliers, right.group_min_cost_multipliers) &&
     left.exchange_group_sets.length === right.exchange_group_sets.length &&
     left.exchange_group_set_names.length === right.exchange_group_set_names.length &&
     left.exchange_group_set_names.every(
@@ -150,16 +157,23 @@ export async function applyPricingWithDraft<Result>(
   save: (config: PricingConfig) => Promise<unknown>,
   apply: () => Promise<Result>,
 ): Promise<Result> {
-  if (!pricingConfigsEqual(draft, persisted)) await save(draft);
+  const next = {
+    ...draft,
+    group_min_cost_multipliers: cleanGroupMinimums(
+      draft.group_min_cost_multipliers,
+      draft.exchange_group_sets,
+    ),
+  };
+  if (!pricingConfigsEqual(next, persisted)) await save(next);
   return apply();
 }
 
 function GroupAccountCostCell(props: {
   groupID: string;
-  decisions: PricingDecision[];
+  summary: GroupAccountCosts;
   onOpen: () => void;
 }) {
-  const summary = groupAccountCosts(props.groupID, props.decisions);
+  const summary = props.summary;
   if (summary.accounts === 0) return <span className="text-muted-foreground">无账号</span>;
   if (summary.values.length === 0) {
     return (
@@ -230,11 +244,6 @@ function AccountCostHeader(props: { range?: boolean } = {}) {
   );
 }
 
-function accountCostValue(decision: PricingDecision) {
-  const value = Number(decision.cost_multiplier);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
 export function GroupAccountCostDetails(props: { groupID: string; decisions: PricingDecision[] }) {
   const [search, setSearch] = useState("");
   const accounts = useMemo(
@@ -246,8 +255,9 @@ export function GroupAccountCostDetails(props: { groupID: string; decisions: Pri
           const rightCost = accountCostValue(right);
           if (leftCost === null && rightCost !== null) return 1;
           if (leftCost !== null && rightCost === null) return -1;
-          if (leftCost !== null && rightCost !== null && leftCost !== rightCost) {
-            return leftCost - rightCost;
+          if (leftCost !== null && rightCost !== null) {
+            const order = comparePricingDecimals(leftCost, rightCost);
+            if (order !== 0) return order;
           }
           return (left.account_name || left.account_id).localeCompare(
             right.account_name || right.account_id,
@@ -394,8 +404,8 @@ function pricingDecisionBasis(
   config: PricingConfig,
 ) {
   if (decision.skipped) return [plainPricingIssue(decision.reason)];
-  const cost = Number(decision.cost_multiplier);
-  if (!Number.isFinite(cost) || cost <= 0) return ["账号成本必须大于 0，本次不会修改分组。"];
+  const cost = parsePricingDecimal(decision.cost_multiplier);
+  if (!cost || cost.coefficient <= 0n) return ["账号成本必须大于 0，本次不会修改分组。"];
   const groupByID = new Map(groups.map((group) => [group.id, group]));
   const setByGroup = new Map<string, number>();
   config.exchange_group_sets.forEach((groupSet, setIndex) => {
@@ -422,14 +432,21 @@ function pricingDecisionBasis(
         );
         continue;
       }
-      const sale = Number(group.rate_multiplier);
-      if (!Number.isFinite(sale) || sale <= 0) {
+      const sale = parsePricingDecimal(group.rate_multiplier);
+      if (!sale || sale.coefficient <= 0n) {
         rows.push(`${name}：售价倍率无效`);
         continue;
       }
-      const limit = acceptableAccountCost(sale, config.profit_margin);
+      const minimum = config.group_min_cost_multipliers?.[groupID];
+      if (!groupMeetsMinimumCost(decision.cost_multiplier, minimum)) {
+        rows.push(
+          `${name}：账号成本倍率 ${decision.cost_multiplier} 低于最低迁入倍率 ${minimum}，不参与分组选择`,
+        );
+        continue;
+      }
+      const limit = acceptableAccountCost(Number(group.rate_multiplier), config.profit_margin);
       rows.push(
-        `${name}：账号成本 ${decision.cost_multiplier} ${cost <= limit ? "≤" : ">"} 可接受成本 ${decimal(limit)}（售价 ${group.rate_multiplier} ÷（1 + ${percent(config.profit_margin)}），目标盈利比例按利润 ÷ 账号成本计算）`,
+        `${name}：账号成本 ${decision.cost_multiplier} ${pricingCostMeetsMargin(cost, sale, config.profit_margin) ? "≤" : ">"} 可接受成本 ${decimal(limit)}（售价 ${group.rate_multiplier} ÷（1 + ${percent(config.profit_margin)}），目标盈利比例按利润 ÷ 账号成本计算）`,
       );
     }
   }
@@ -442,6 +459,7 @@ function pricingDecisionReason(
   config: PricingConfig,
 ) {
   if (decision.skipped) return plainPricingIssue(decision.reason);
+  if (decision.reason?.includes("最低迁入倍率")) return decision.reason;
   if (decision.reason?.includes("未达到目标盈利比例")) return decision.reason;
   if (decision.reason?.includes("没有满足盈利比例")) {
     return `${decision.reason}。请提高候选分组售价或降低账号成本。`;
@@ -470,6 +488,12 @@ function pricingDecisionReason(
 }
 
 function pricingConfigIsValid(config: PricingConfigDraft, groups: PricingGroup[]) {
+  if (
+    Object.values(config.group_min_cost_multipliers ?? {}).some(
+      (minimum) => !groupMinimumSchema.safeParse({ minimum }).success,
+    )
+  )
+    return false;
   if (
     config.profit_margin === null ||
     config.interval_seconds === null ||
@@ -517,8 +541,8 @@ export function pricingPreviewDecisions(
   });
   const byID = new Map(groups.map((group) => [group.id, group]));
   return decisions.map((decision) => {
-    const cost = Number(decision.cost_multiplier);
-    if (decision.skipped || !Number.isFinite(cost) || cost <= 0) {
+    const cost = parsePricingDecimal(decision.cost_multiplier);
+    if (decision.skipped || !cost || cost.coefficient <= 0n) {
       return {
         ...decision,
         desired_group_ids: [...decision.current_group_ids],
@@ -539,30 +563,43 @@ export function pricingPreviewDecisions(
     const eligible: string[] = [];
     const reasons: string[] = [];
     for (const setIndex of [...activeSets].sort((left, right) => left - right)) {
-      const compatible: Array<{ group: PricingGroup; rate: number }> = [];
+      const compatible: Array<{ group: PricingGroup; rate: PricingDecimal }> = [];
+      let belowMinimum = false;
       for (const groupID of config.exchange_group_sets[setIndex] ?? []) {
         const group = byID.get(groupID);
-        const rate = Number(group?.rate_multiplier);
+        const rate = parsePricingDecimal(group?.rate_multiplier ?? null);
         if (
           !group?.available ||
           group.platform !== decision.platform ||
-          !Number.isFinite(rate) ||
-          rate <= 0
+          !rate ||
+          rate.coefficient <= 0n
         )
           continue;
+        if (
+          !groupMeetsMinimumCost(
+            decision.cost_multiplier,
+            config.group_min_cost_multipliers?.[groupID],
+          )
+        ) {
+          belowMinimum = true;
+          continue;
+        }
         compatible.push({ group, rate });
       }
       let chosen = compatible
-        .filter(({ rate }) => cost <= acceptableAccountCost(rate, config.profit_margin))
+        .filter(({ rate }) => pricingCostMeetsMargin(cost, rate, config.profit_margin))
         .sort(
-          (left, right) => left.rate - right.rate || Number(left.group.id) - Number(right.group.id),
+          (left, right) =>
+            comparePricingDecimals(left.rate, right.rate) ||
+            Number(left.group.id) - Number(right.group.id),
         )[0];
       if (!chosen) {
         chosen = compatible
-          .filter(({ rate }) => cost <= rate)
+          .filter(({ rate }) => comparePricingDecimals(cost, rate) <= 0)
           .sort(
             (left, right) =>
-              right.rate - left.rate || Number(left.group.id) - Number(right.group.id),
+              comparePricingDecimals(right.rate, left.rate) ||
+              Number(left.group.id) - Number(right.group.id),
           )[0];
         if (chosen) {
           reasons.push(
@@ -576,7 +613,11 @@ export function pricingPreviewDecisions(
           .map((groupID) => byID.get(groupID))
           .filter((group): group is PricingGroup => Boolean(group))
           .sort((left, right) => Number(left.id) - Number(right.id))[0];
-        if (compatible.length > 0) {
+        if (belowMinimum) {
+          reasons.push(
+            `互换组 ${setIndex + 1} 没有同时满足最低迁入倍率且能覆盖成本的可用分组，保留当前分组`,
+          );
+        } else if (compatible.length > 0) {
           reasons.push(
             `互换组 ${setIndex + 1} 没有满足盈利比例的可用分组，且所有候选分组售价均低于账号成本，保留当前分组`,
           );
@@ -801,25 +842,9 @@ export function PricingChangeList(props: { records: PricingChangeRecord[] }) {
 
 function PricingLoading(props: { catalog?: boolean } = {}) {
   if (props.catalog) {
-    return (
-      <div
-        role="status"
-        aria-label="正在读取价格数据"
-        className="flex h-full min-h-0 flex-col gap-3"
-        data-testid="pricing-loading"
-      >
-        <Skeleton className="h-8 w-full shrink-0 sm:w-56" />
-        <Skeleton className="min-h-0 w-full flex-1" />
-      </div>
-    );
+    return <PricingCatalogSkeleton />;
   }
-  return (
-    <div className="space-y-4" data-testid="pricing-loading">
-      <Skeleton className="h-48 w-full" />
-      <Skeleton className="h-16 w-full" />
-      <Skeleton className="h-72 w-full" />
-    </div>
-  );
+  return <PricingConfigSkeleton />;
 }
 
 function PricingCatalogTable(props: {
@@ -828,6 +853,7 @@ function PricingCatalogTable(props: {
   search: string;
 }) {
   const tableRef = useRef<HTMLDivElement>(null);
+  const costsByGroup = useMemo(() => groupAccountCostsByID(props.decisions), [props.decisions]);
   const [selectedGroup, setSelectedGroup] = useState<PricingGroup | null>(null);
   const filteredGroups = useMemo(() => {
     const query = props.search.trim().toLocaleLowerCase();
@@ -881,7 +907,7 @@ function PricingCatalogTable(props: {
                   <TableCell>
                     <GroupAccountCostCell
                       groupID={group.id}
-                      decisions={props.decisions}
+                      summary={costsByGroup.get(group.id) ?? emptyGroupAccountCosts}
                       onOpen={() => setSelectedGroup(group)}
                     />
                   </TableCell>
@@ -1129,6 +1155,8 @@ type ExchangeGroupSetEditorProps = {
   groups: PricingGroup[];
   exchangeSetByGroup: Map<string, number>;
   exchangeSetNames: string[];
+  groupMinimums?: Record<string, string>;
+  onMinimumChange: (groupID: string, value: string) => void;
   onToggle: (setIndex: number, groupID: string, checked: boolean) => void;
   onNameChange: (setIndex: number, name: string) => void;
   onRemove: (setIndex: number) => void;
@@ -1272,40 +1300,56 @@ function ExchangeGroupSetEditor(props: ExchangeGroupSetEditorProps) {
                   detail = props.exchangeSetNames[assignedSet] || `互换组 ${assignedSet + 1}`;
                 if (wrongPlatform) detail = "其他平台";
                 return (
-                  <label
+                  <div
                     key={`${props.setIndex}:${group.id}`}
-                    data-slot="exchange-group-option"
                     data-selected={selected ? "true" : "false"}
                     className={cn(
-                      "flex min-h-12 min-w-0 items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors focus-within:ring-2 focus-within:ring-ring",
+                      "min-w-0 overflow-hidden rounded-lg border text-sm transition-colors focus-within:ring-2 focus-within:ring-ring",
                       selected ? "border-primary/50 bg-primary/5" : "hover:bg-muted/40",
                       disabled
                         ? "bg-muted/20 text-muted-foreground cursor-not-allowed"
                         : "cursor-pointer",
                     )}
                   >
-                    <Checkbox
-                      checked={selected}
-                      disabled={disabled}
-                      onCheckedChange={(checked) =>
-                        props.onToggle(props.setIndex, group.id, checked)
-                      }
-                      aria-label={`互换组 ${props.setIndex + 1} 分组 ${group.name}`}
-                    />
-                    <span className="min-w-0 flex-1 break-words font-medium [overflow-wrap:anywhere]">
-                      {group.name}
-                    </span>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="text-muted-foreground max-w-28 shrink-0 truncate text-xs tabular-nums" />
+                    <label
+                      data-slot="exchange-group-option"
+                      data-selected={selected ? "true" : "false"}
+                      className={cn(
+                        "flex min-h-12 min-w-0 items-center gap-2.5 px-3 py-2.5",
+                        disabled ? "cursor-not-allowed" : "cursor-pointer",
+                      )}
+                    >
+                      <Checkbox
+                        checked={selected}
+                        disabled={disabled}
+                        onCheckedChange={(checked) =>
+                          props.onToggle(props.setIndex, group.id, checked)
                         }
-                      >
-                        {detail}
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-sm">{detail}</TooltipContent>
-                    </Tooltip>
-                  </label>
+                        aria-label={`互换组 ${props.setIndex + 1} 分组 ${group.name}`}
+                      />
+                      <span className="min-w-0 flex-1 break-words font-medium [overflow-wrap:anywhere]">
+                        {group.name}
+                      </span>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span className="text-muted-foreground max-w-28 shrink-0 truncate text-xs tabular-nums" />
+                          }
+                        >
+                          {detail}
+                        </TooltipTrigger>
+                        <TooltipContent className="max-w-sm">{detail}</TooltipContent>
+                      </Tooltip>
+                    </label>
+                    {selected ? (
+                      <GroupMinimumField
+                        groupID={group.id}
+                        groupName={group.name}
+                        value={props.groupMinimums?.[group.id]}
+                        onChange={props.onMinimumChange}
+                      />
+                    ) : null}
+                  </div>
                 );
               })}
             </div>
@@ -1347,10 +1391,6 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   });
 
   useEffect(() => {
-    if (snapshot.data) setDraft(pricingConfigWithRuleNames(snapshot.data.config));
-  }, [snapshot.data]);
-
-  useEffect(() => {
     if (!taskID || !taskStopsPolling(task.data)) return;
     for (const queryKey of terminalRefreshKeys("pricing", task.data)) {
       void queryClient.invalidateQueries({ queryKey });
@@ -1360,10 +1400,17 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
   }, [queryClient, task.data, taskID]);
 
   const save = useMutation({
-    mutationFn: api.updatePricingConfig,
-    onSuccess: (saved) => {
+    mutationFn: (config: PricingConfig) =>
+      api.updatePricingConfig({
+        ...config,
+        group_min_cost_multipliers: cleanGroupMinimums(
+          config.group_min_cost_multipliers,
+          config.exchange_group_sets,
+        ),
+      }),
+    onSuccess: (saved, submitted) => {
       queryClient.setQueryData(["pricing"], saved);
-      setDraft(pricingConfigWithRuleNames(saved.config));
+      setDraft((latest) => (latest && !pricingConfigsEqual(latest, submitted) ? latest : null));
       toast.success(
         saved.config.enabled ? "价格配置已保存并开启" : "价格配置已保存，自动调整保持关闭",
       );
@@ -1380,7 +1427,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         async (config) => {
           const saved = await api.updatePricingConfig(config);
           queryClient.setQueryData(["pricing"], saved);
-          setDraft(pricingConfigWithRuleNames(saved.config));
+          setDraft((latest) => (latest && !pricingConfigsEqual(latest, config) ? latest : null));
         },
         api.applyPricing,
       );
@@ -1465,7 +1512,19 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
           (left, right) => Number(left) - Number(right),
         )
       : sets[setIndex].filter((id) => id !== groupID);
-    setDraft({ ...current, exchange_group_sets: sets });
+    setDraft({
+      ...current,
+      exchange_group_sets: sets,
+      group_min_cost_multipliers: cleanGroupMinimums(current.group_min_cost_multipliers, sets),
+    });
+  }
+
+  function updateGroupMinimum(groupID: string, value: string) {
+    if (!current) return;
+    const minimums = { ...current.group_min_cost_multipliers };
+    if (value === "") delete minimums[groupID];
+    else minimums[groupID] = value;
+    setDraft({ ...current, group_min_cost_multipliers: minimums });
   }
 
   function addExchangeGroupSet() {
@@ -1487,9 +1546,11 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
 
   function removeExchangeGroupSet(setIndex: number) {
     if (!current) return;
+    const sets = current.exchange_group_sets.filter((_, index) => index !== setIndex);
     setDraft({
       ...current,
-      exchange_group_sets: current.exchange_group_sets.filter((_, index) => index !== setIndex),
+      exchange_group_sets: sets,
+      group_min_cost_multipliers: cleanGroupMinimums(current.group_min_cost_multipliers, sets),
       exchange_group_set_names: current.exchange_group_set_names.filter(
         (_, index) => index !== setIndex,
       ),
@@ -1500,7 +1561,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
     <PageLayout
       fixedContent={props.page === "catalog"}
       navigation={
-        props.page === "catalog" && snapshot.data ? (
+        props.page === "catalog" ? (
           <TableFilterToolbar aria-label="价格分组筛选">
             <SearchField
               value={catalogSearch}
@@ -1556,7 +1617,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                     }
                     save.mutate(current as PricingConfig);
                   }}
-                  disabled={!current || save.isPending}
+                  disabled={!current || !valid || save.isPending}
                 >
                   <Save aria-hidden="true" />{" "}
                   <span className="hidden sm:inline">{save.isPending ? "保存中" : "保存配置"}</span>
@@ -1582,6 +1643,9 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         <QueryErrorToast error={snapshot.error} fallback="价格数据读取失败" />
       ) : null}
       {!snapshot.data && !snapshot.error && <PricingLoading catalog={props.page === "catalog"} />}
+      {!snapshot.data && snapshot.error && (
+        <ContentRetry pending={snapshot.isFetching} onRetry={() => void snapshot.refetch()} />
+      )}
       {!snapshot.isLoading && snapshot.data && props.page === "catalog" && (
         <div className="flex h-full min-h-0 flex-col" data-testid="pricing-page">
           <PricingCatalogTable
@@ -1592,18 +1656,10 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
         </div>
       )}
       {!snapshot.isLoading && snapshot.data && props.page !== "catalog" && current && (
-        <div
-          className="grid min-w-0 items-start gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]"
-          data-testid="pricing-config-page"
-        >
+        <PricingConfigLayout data-testid="pricing-config-page">
           <PricingSettingsPanel value={current} onChange={setDraft} />
 
-          <Card
-            size="sm"
-            role="region"
-            aria-labelledby="pricing-exchange-title"
-            className="rounded-xl"
-          >
+          <Card size="sm" role="region" aria-labelledby="pricing-exchange-title">
             <CardHeader className="bg-muted/20 flex flex-wrap items-start justify-between gap-3 sm:flex-row sm:items-center">
               <div className="flex min-w-0 items-center gap-3">
                 <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
@@ -1655,6 +1711,8 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
                     groups={snapshot.data.groups}
                     exchangeSetByGroup={exchangeSetByGroup}
                     exchangeSetNames={current.exchange_group_set_names}
+                    groupMinimums={current.group_min_cost_multipliers}
+                    onMinimumChange={updateGroupMinimum}
                     onToggle={toggleExchangeGroup}
                     onNameChange={renameExchangeGroupSet}
                     onRemove={removeExchangeGroupSet}
@@ -1663,7 +1721,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
               )}
             </CardContent>
           </Card>
-        </div>
+        </PricingConfigLayout>
       )}
       {!snapshot.isLoading && snapshot.data && props.page !== "catalog" && !current && (
         <PricingLoading />

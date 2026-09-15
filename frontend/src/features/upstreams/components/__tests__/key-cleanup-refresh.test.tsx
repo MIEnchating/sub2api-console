@@ -1,7 +1,34 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 
 import { OnboardingKeyCleanupDialog } from "../onboarding-key-cleanup-dialog";
+
+it("首次扫描 Key 尚未完成时显示读取状态并允许键盘关闭", async () => {
+  const onOpenChange = vi.fn();
+  render(
+    <OnboardingKeyCleanupDialog
+      open
+      preview={null}
+      previewPending
+      previewError={null}
+      task={null}
+      taskPending={false}
+      taskError={null}
+      onOpenChange={onOpenChange}
+      onRefresh={vi.fn()}
+      onConfirm={vi.fn()}
+      onComplete={vi.fn()}
+    />,
+  );
+  expect(screen.getByRole("status", { name: "正在扫描上游 Key 与绑定关系" })).toBeVisible();
+  expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  const close = screen.getAllByRole("button", { name: /^关闭$/ })[0];
+  expect(close).toBeEnabled();
+  close.focus();
+  await userEvent.setup().keyboard("{Enter}");
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+});
 
 it("重新扫描 Key 时保留预览尺寸及表格，扫描失败后禁用删除但可以重试", () => {
   const props = {

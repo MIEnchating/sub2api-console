@@ -289,6 +289,9 @@ func (s *Store) SetAccountTestModels(ctx context.Context, accountID string, requ
 	if err != nil {
 		return err
 	}
+	if document == nil {
+		return errors.New("控制面策略记录不存在")
+	}
 	models := map[string]any{}
 	if raw, present := document["account_test_models"]; present {
 		var ok bool

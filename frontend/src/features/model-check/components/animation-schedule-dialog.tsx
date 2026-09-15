@@ -66,10 +66,10 @@ export function AnimationScheduleDialog(props: {
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open) props.onClose();
+          if (!open && !save.isPending) props.onClose();
         }}
       >
-        <DialogContent>
+        <DialogContent showCloseButton={!save.isPending}>
           <DialogHeader>
             <DialogTitle>自动检测设置 · {props.accountName}</DialogTitle>
             <DialogDescription>
@@ -116,7 +116,12 @@ export function AnimationScheduleDialog(props: {
               </p>
             </DialogBody>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={props.onClose}>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={save.isPending}
+                onClick={props.onClose}
+              >
                 取消
               </Button>
               <Button

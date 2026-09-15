@@ -83,7 +83,9 @@ export function KumaConfigPage() {
       />
       <div className="grid min-w-0 gap-3">
         {query.error && <QueryErrorToast error={query.error} fallback="接入配置读取失败" />}
-        {query.isPending && <PageLoadingSkeleton label="正在读取接入配置…" variant="form" />}
+        {query.isPending && (
+          <PageLoadingSkeleton label="正在读取接入配置…" variant="form" panels={2} />
+        )}
         {save.isPending && task.task && (
           <TaskProgressState message={task.task.message} progress={task.task.progress} />
         )}

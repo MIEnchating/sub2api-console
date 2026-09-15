@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
 export const dialogContentLayout =
-  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100svh-2rem)] w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0";
+  "bg-popover text-popover-foreground ring-foreground/10 fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100svh-2rem)] w-fit min-w-[min(20rem,calc(100%-2rem))] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl p-4 text-sm ring-1 transition-[opacity,scale] duration-150 ease-out outline-none data-ending-style:scale-95 data-ending-style:opacity-0 data-starting-style:scale-95 data-starting-style:opacity-0 has-[>[data-slot=dialog-body]]:grid-rows-[auto_minmax(0,1fr)] has-[>[data-slot=dialog-body]]:overflow-hidden has-[>[data-slot=dialog-body]+[data-slot=dialog-footer]]:grid-rows-[auto_minmax(0,1fr)_auto]";
 
 export const dialogBodyLayout =
   "min-h-0 min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain pr-1";
@@ -57,7 +57,26 @@ export function dialogContentClass(
 }
 
 function Dialog(props: DialogPrimitive.Root.Props) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  return (
+    <DialogPrimitive.Root
+      data-slot="dialog"
+      {...props}
+      onOpenChange={(open, details) => {
+        const target = details.event.target;
+        // Let the drag sensor consume Escape before dismissing its containing dialog.
+        if (
+          details.reason === "escape-key" &&
+          target instanceof Element &&
+          target.closest('[data-slot="dialog-content"]')?.querySelector('[data-dragging="true"]')
+        ) {
+          details.cancel();
+          details.allowPropagation();
+          return;
+        }
+        props.onOpenChange?.(open, details);
+      }}
+    />
+  );
 }
 
 function DialogPortal(props: DialogPrimitive.Portal.Props) {
@@ -98,6 +117,15 @@ function DialogContent(
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         {...popupProps}
+        onKeyDown={(event) => {
+          props.onKeyDown?.(event);
+          if (
+            event.key.startsWith("Arrow") &&
+            event.currentTarget.querySelector('[data-dragging="true"]')
+          ) {
+            event.preventBaseUIHandler();
+          }
+        }}
         data-close-button={showCloseButton}
         className={
           typeof className === "function"
@@ -145,7 +173,7 @@ function DialogFooter(props: React.ComponentProps<"div">) {
       data-slot="dialog-footer"
       {...props}
       className={cn(
-        "bg-muted/50 -mx-4 -mb-4 flex flex-col-reverse gap-2 rounded-b-xl border-t p-4 sm:flex-row sm:justify-end",
+        "bg-muted/50 -mx-4 -mb-4 flex min-w-0 flex-col-reverse gap-2 rounded-b-xl border-t p-4 sm:flex-row sm:flex-wrap sm:justify-end [&_[data-slot=button]]:h-auto [&_[data-slot=button]]:min-h-8 [&_[data-slot=button]]:max-w-full [&_[data-slot=button]]:py-1 [&_[data-slot=button]]:whitespace-normal [&_[data-slot=button]]:[overflow-wrap:anywhere]",
         props.className,
       )}
     />

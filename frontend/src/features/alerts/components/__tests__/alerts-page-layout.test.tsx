@@ -1,5 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { AlertEvaluationTaskStatus, AlertsPage } from "@/App";
@@ -55,6 +57,40 @@ function renderPage(): string {
 }
 
 describe("AlertsPage layout", () => {
+  it("告警状态按字典排列，筛选仅展示匹配记录且保留其他记录", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    client.setQueryData(
+      ["alerts"],
+      [alertIncident(1), { ...alertIncident(2), status: "recovered" }],
+    );
+    client.setQueryData(["notification-status"], notificationStatus);
+    client.setQueryData(["dictionaries", "alert_status"], {
+      items: [
+        { value: "recovered", enabled: true },
+        { value: "firing", enabled: true },
+      ],
+    });
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AlertsPage />
+      </QueryClientProvider>,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "告警状态筛选" }));
+    expect(
+      screen
+        .getAllByRole("option")
+        .slice(0, 2)
+        .map((node) => node.textContent),
+    ).toEqual(["已恢复", "告警中"]);
+    await user.click(screen.getByRole("option", { name: "已恢复" }));
+    expect(screen.getByText(/告警测试-2/)).toBeVisible();
+    expect(screen.queryByText(/告警测试-1/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByText(/告警测试-1/)).toBeVisible();
+    view.unmount();
+    client.clear();
+  });
   it("keeps the combined queue entry visible while the paged alert list owns the remaining scroll area", () => {
     const markup = renderPage();
     const alertPanel = markup.slice(

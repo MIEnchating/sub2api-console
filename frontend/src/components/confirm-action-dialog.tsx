@@ -15,6 +15,7 @@ export type ConfirmActionDialogProps = {
   confirmLabel: string;
   pendingLabel?: string;
   pending?: boolean;
+  confirmDisabled?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 };
@@ -34,7 +35,11 @@ export function ConfirmActionDialogContent(props: ConfirmActionDialogProps) {
         >
           取消
         </Button>
-        <Button variant="destructive" disabled={props.pending} onClick={props.onConfirm}>
+        <Button
+          variant="destructive"
+          disabled={props.pending || props.confirmDisabled}
+          onClick={props.onConfirm}
+        >
           {props.pending ? (props.pendingLabel ?? "处理中…") : props.confirmLabel}
         </Button>
       </DialogFooter>

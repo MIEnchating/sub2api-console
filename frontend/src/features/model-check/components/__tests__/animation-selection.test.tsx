@@ -106,6 +106,7 @@ it("选择多个账号和统一模型后先展示影响范围，再按稳定 ID 
 });
 
 it("模型列表刷新失败时保留手动输入，且反馈不占用主体布局", async () => {
+  const errorToast = vi.spyOn(toast, "error");
   let reject: (error: Error) => void = () => {};
   vi.stubGlobal(
     "fetch",
@@ -123,7 +124,8 @@ it("模型列表刷新失败时保留手动输入，且反馈不占用主体布�
   fireEvent.click(screen.getByRole("button", { name: "获取模型" }));
   expect(screen.getByRole("button", { name: "获取模型" })).toBeDisabled();
   await act(async () => reject(new Error("模型列表请求失败")));
-  expect(await screen.findByText(/模型列表读取失败/)).toBeVisible();
+  expect(await screen.findByText("模型列表请求失败")).toBeVisible();
+  expect(errorToast).toHaveBeenCalledTimes(1);
   expect(model).toHaveValue("manual-model");
   expect(screen.getByRole("button", { name: "获取模型" })).toBeEnabled();
   view.client.clear();

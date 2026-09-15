@@ -172,6 +172,9 @@ func (s *Store) DeleteUpstreamProjection(ctx context.Context, host string, expec
 		return UpstreamDeleteProjection{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.removeDeletedAccountPolicyReferences(ctx, tx, preview.AccountIDs, now); err != nil {
+		return UpstreamDeleteProjection{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
 		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
 	),updated_at=?`, now); err != nil {

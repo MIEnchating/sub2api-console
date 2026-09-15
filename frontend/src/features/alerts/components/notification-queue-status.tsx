@@ -1,6 +1,6 @@
 import { ContentLoading } from "@/components/content-loading";
 import { notifyOperationError } from "@/lib/operation-feedback";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CircleAlert, Eye } from "lucide-react";
 
 import type { NotificationQueueDetails, NotificationQueueItem, NotificationStatus } from "@/api";
@@ -336,19 +336,30 @@ export function NotificationQueueStatus(props: {
   const [details, setDetails] = useState<NotificationQueueDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  const loadVersion = useRef(0);
+
+  useEffect(
+    () => () => {
+      loadVersion.current += 1;
+    },
+    [],
+  );
 
   const loadQueue = async () => {
+    const version = ++loadVersion.current;
     setDialogOpen(true);
     setDetails(null);
     setLoadFailed(false);
     setLoading(true);
     try {
-      setDetails(await props.loadDetails());
+      const result = await props.loadDetails();
+      if (version === loadVersion.current) setDetails(result);
     } catch (loadError) {
+      if (version !== loadVersion.current) return;
       notifyOperationError(loadError, "队列内容读取失败");
       setLoadFailed(true);
     } finally {
-      setLoading(false);
+      if (version === loadVersion.current) setLoading(false);
     }
   };
 
@@ -393,7 +404,10 @@ export function NotificationQueueStatus(props: {
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
-          if (!open) setDialogOpen(false);
+          if (!open) {
+            loadVersion.current += 1;
+            setDialogOpen(false);
+          }
         }}
       >
         <DialogContent

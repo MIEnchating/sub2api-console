@@ -2,7 +2,7 @@ import { Tabs } from "@base-ui/react/tabs";
 import { lazy, Suspense, useState, type ReactElement } from "react";
 import { PageLayout } from "@/components/page-layout";
 import { PageHeading } from "@/components/page-heading";
-import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { AnimationPanelSkeleton } from "./animation-panel-skeleton";
 import { RegularCheckPanel } from "./regular-check-panel";
 
 export { modelCheckDialogLayout } from "./regular-check-panel";
@@ -44,7 +44,7 @@ export function ModelCheckPage(): ReactElement {
         </Tabs.Panel>
         <Tabs.Panel value="animation" keepMounted className="min-h-0 flex-1 data-[hidden]:hidden">
           {animationVisited ? (
-            <Suspense fallback={<PageLoadingSkeleton label="正在读取动画检测" variant="form" />}>
+            <Suspense fallback={<AnimationPanelSkeleton />}>
               <AnimationCheckPanel active={tab === "animation"} />
             </Suspense>
           ) : null}

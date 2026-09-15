@@ -49,7 +49,7 @@ it("批量开户的参数提供可访问名称", async () => {
 it("启用自定义请求头后编辑框提供明确名称", async () => {
   client = renderOnboarding();
   fireEvent.click(await screen.findByRole("switch", { name: /自定义请求头/ }));
-  expect(screen.getByRole("textbox", { name: "自定义请求头 JSON" })).toBeVisible();
+  expect(await screen.findByRole("textbox", { name: "自定义请求头 JSON" })).toBeVisible();
 });
 
 it.each([

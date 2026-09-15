@@ -107,26 +107,30 @@ describe("手动鉴权表单可访问性", () => {
     }
   });
 
-  it("Headers 编辑器提供可访问名称", () => {
+  it("Headers 编辑器提供可访问名称", async () => {
     render(<ManualAuthHeadersEditor value="" onChange={() => undefined} />);
 
-    expect(screen.getByRole("textbox", { name: "Headers JSON" })).toBeVisible();
+    expect(await screen.findByRole("textbox", { name: "Headers JSON" })).toBeVisible();
   });
 
-  it("提交无效 Headers 时文本框标记无效并关联错误说明，重新输入时清除", () => {
+  it("提交无效 Headers 时文本框标记无效并关联错误说明，重新输入时清除", async () => {
+    const user = userEvent.setup();
     renderForm();
     fireEvent.click(screen.getByRole("switch", { name: /自定义 Headers/ }));
-    const headers = screen.getByRole("textbox");
-    fireEvent.change(headers, { target: { value: "{" } });
-    fireEvent.click(screen.getByRole("button", { name: "验证并保存" }));
+    const headers = await screen.findByRole("textbox", { name: "Headers JSON" });
+    await user.click(headers);
+    await user.paste("{");
+    await user.click(screen.getByRole("button", { name: "验证并保存" }));
 
     const error = screen.getByRole("alert");
     expect(headers).toHaveAttribute("aria-invalid", "true");
     expect(headers).toHaveAccessibleDescription(error.textContent ?? "");
 
-    fireEvent.change(headers, { target: { value: '{"X-Test":"valid"}' } });
+    await user.click(headers);
+    await user.keyboard("{Control>}a{/Control}");
+    await user.paste('{"X-Test":"valid"}');
 
-    expect(headers).toHaveAttribute("aria-invalid", "false");
+    await waitFor(() => expect(headers).toHaveAttribute("aria-invalid", "false"));
     expect(headers).not.toHaveAccessibleDescription();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

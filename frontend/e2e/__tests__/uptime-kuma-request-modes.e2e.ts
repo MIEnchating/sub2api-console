@@ -30,7 +30,7 @@ for (const mode of [
     await dialog.getByLabel("模板名称").fill(mode.label);
     await dialog.getByRole("combobox", { name: "接口模式" }).click();
     await page.getByRole("option", { name: mode.label, exact: true }).click();
-    await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(new RegExp(mode.model));
+    await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(new RegExp(mode.model));
     await dialog
       .getByLabel("监控地址", { exact: true })
       .fill(`https://monitor.example${mode.endpoint}`);
@@ -57,12 +57,12 @@ test("切换请求模式填入对应请求体，切回自定义保留可编辑�
   await dialog.getByRole("button", { name: "查看请求体" }).click();
   await dialog.getByRole("combobox", { name: "接口模式" }).click();
   await page.getByRole("option", { name: "OpenAI Chat Completions", exact: true }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/max_completion_tokens/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/max_completion_tokens/);
   await dialog.getByRole("combobox", { name: "接口模式" }).click();
   await page.getByRole("option", { name: "OpenAI Responses", exact: true }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/max_output_tokens/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/max_output_tokens/);
   await dialog.getByRole("combobox", { name: "接口模式" }).click();
   await page.getByRole("option", { name: "自定义请求", exact: true }).click();
   await expect(dialog.getByLabel("请求体", { exact: true })).toBeEditable();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/max_output_tokens/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/max_output_tokens/);
 });

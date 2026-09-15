@@ -416,6 +416,10 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 	if err != nil {
 		return RunSummary{}, err
 	}
+	prepared.targets, err = s.applyCurrentProtections(ctx, prepared.targets)
+	if err != nil {
+		return RunSummary{}, err
+	}
 	results, err := run(ctx, prepared)
 	if err != nil {
 		return RunSummary{}, err

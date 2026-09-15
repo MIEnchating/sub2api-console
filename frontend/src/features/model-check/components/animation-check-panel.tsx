@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Tabs } from "@base-ui/react/tabs";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useCallback, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
@@ -11,6 +12,7 @@ import { RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AnimationScheduleDialog } from "./animation-schedule-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { CustomAnimationPanel } from "./custom-animation-panel";
 
 export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
   const tasks = useAnimationTasks(props.active);
@@ -58,55 +60,76 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
   );
   return (
     <>
-      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border bg-card">
-        <AnimationSelection
-          results={tasks.results}
-          statuses={tasks.statuses}
-          activities={tasks.activities}
-          busyIDs={tasks.busyIDs}
-          onRetry={retry}
-          taskRetry={
-            <>
-              {tasks.historyError ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        aria-label="重新读取检测记录"
-                        disabled={tasks.retryingHistory}
-                        onClick={tasks.retryHistory}
-                      />
-                    }
-                  >
-                    <RefreshCw aria-hidden="true" />
-                  </TooltipTrigger>
-                  <TooltipContent>重新读取检测记录</TooltipContent>
-                </Tooltip>
-              ) : null}
-              {tasks.activeTaskIDs.size > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  aria-label="取消任务"
-                  disabled={tasks.cancelling}
-                  onClick={() => void tasks.cancelActive()}
-                >
-                  <X aria-hidden="true" />
-                  取消任务
-                </Button>
-              ) : null}
-            </>
-          }
-          form={form}
-          accounts={accounts}
-          schedules={schedules}
-          pending={run.isPending}
-          onSubmit={submit}
-          onSchedule={setScheduleAccount}
-        />
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
+        <Tabs.Root defaultValue="accounts" className="flex min-h-0 flex-1 flex-col">
+          <Tabs.List aria-label="动画检测来源" className="flex shrink-0 gap-1 border-b px-3">
+            <Tabs.Tab
+              value="accounts"
+              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              账号检测
+            </Tabs.Tab>
+            <Tabs.Tab
+              value="custom"
+              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              自定义接口
+            </Tabs.Tab>
+          </Tabs.List>
+          <Tabs.Panel value="accounts" keepMounted className="min-h-0 flex-1 data-[hidden]:hidden">
+            <AnimationSelection
+              results={tasks.results}
+              statuses={tasks.statuses}
+              activities={tasks.activities}
+              busyIDs={tasks.busyIDs}
+              onRetry={retry}
+              taskRetry={
+                <>
+                  {tasks.historyError ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            aria-label="重新读取检测记录"
+                            disabled={tasks.retryingHistory}
+                            onClick={tasks.retryHistory}
+                          />
+                        }
+                      >
+                        <RefreshCw aria-hidden="true" />
+                      </TooltipTrigger>
+                      <TooltipContent>重新读取检测记录</TooltipContent>
+                    </Tooltip>
+                  ) : null}
+                  {tasks.activeTaskIDs.size > 0 ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      aria-label="取消任务"
+                      disabled={tasks.cancelling}
+                      onClick={() => void tasks.cancelActive()}
+                    >
+                      <X aria-hidden="true" />
+                      取消任务
+                    </Button>
+                  ) : null}
+                </>
+              }
+              form={form}
+              accounts={accounts}
+              schedules={schedules}
+              pending={run.isPending}
+              onSubmit={submit}
+              onSchedule={setScheduleAccount}
+            />
+          </Tabs.Panel>
+          <Tabs.Panel value="custom" className="min-h-0 flex-1">
+            <CustomAnimationPanel tasks={tasks} active={props.active} />
+          </Tabs.Panel>
+        </Tabs.Root>
       </div>
       <ConfirmActionDialog
         open={confirmation !== null}
@@ -123,7 +146,7 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
       />
       {scheduleAccount ? (
         <AnimationScheduleDialog
-          key={`${scheduleAccount.id}-${schedules.data?.find((item) => item.account_id === scheduleAccount.id)?.version ?? 0}`}
+          key={scheduleAccount.id}
           accountID={scheduleAccount.id}
           accountName={scheduleAccount.name}
           model={form.getValues("unified_model").trim()}

@@ -132,7 +132,7 @@ export function OverviewActivity(props: OverviewActivityProps) {
               detail="当前没有需要人工关注的渠道。"
             />
           )}
-          {!props.attentionLoading && !props.attentionError && props.attention.length > 0 && (
+          {!props.attentionLoading && props.attention.length > 0 && (
             <ul className="divide-border divide-y px-4">
               {props.attention.slice(0, 8).map((item) => (
                 <li
@@ -190,7 +190,7 @@ export function OverviewActivity(props: OverviewActivityProps) {
           {!props.eventsLoading && !props.eventsError && props.events.length === 0 && (
             <EmptyActivity icon={<Clock3 size={18} />} title="暂无最近事件" />
           )}
-          {!props.eventsLoading && !props.eventsError && props.events.length > 0 && (
+          {!props.eventsLoading && props.events.length > 0 && (
             <ul className="divide-border divide-y px-4">
               {props.events.slice(0, 8).map((event) => (
                 <li className="flex min-h-16 min-w-0 items-start gap-3 py-3" key={event.id}>

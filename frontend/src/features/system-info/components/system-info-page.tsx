@@ -1,4 +1,8 @@
 import { ContentRetry } from "@/components/content-retry";
+import { FilterMenu } from "@/components/data-table/filter-menu";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { taskStatusDictionary } from "@/lib/domain-dictionaries";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { ContentLoading } from "@/components/content-loading";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, Eye, HardDrive, MemoryStick, type LucideIcon } from "lucide-react";
@@ -185,6 +189,12 @@ function TaskDetailsDialog(props: {
 }
 
 export function SystemInfoPage() {
+  const [statusFilter, setStatusFilter] = useState<TaskSummary["status"] | null>(null);
+  const statusOptions = useDictionaryOrder(
+    "task_status",
+    Object.keys(taskStatusDictionary) as TaskSummary["status"][],
+    (value) => value,
+  );
   const [group, setGroup] = useState<TaskListGroup>("active");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const tasks = useQuery({
@@ -214,7 +224,9 @@ export function SystemInfoPage() {
     }
     return { active, history };
   }, [tasks.data]);
-  const visibleTasks = groupedTasks[group];
+  const visibleTasks = groupedTasks[group].filter(
+    (task) => statusFilter === null || task.status === statusFilter,
+  );
 
   return (
     <PageLayout fixedContent>
@@ -259,30 +271,68 @@ export function SystemInfoPage() {
                 detail={`${formatBytes(metrics.data.disk.used_bytes)} / ${formatBytes(metrics.data.disk.total_bytes)}`}
               />
             </>
-          ) : (
-            Array.from({ length: 3 }, (_, index) => (
-              <Skeleton key={index} className="h-24 w-full rounded-lg" />
-            ))
-          )}
+          ) : null}
+          {!metrics.data && metrics.isLoading
+            ? Array.from({ length: 3 }, (_, index) => (
+                <Card
+                  key={index}
+                  size="sm"
+                  role="status"
+                  aria-label="正在读取资源占用"
+                  aria-busy="true"
+                >
+                  <CardContent className="grid gap-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <Skeleton className="h-6 w-24" />
+                      <Skeleton className="h-6 w-12" />
+                    </div>
+                    <Skeleton className="h-2 w-full" />
+                    <Skeleton className="h-4 w-1/2" />
+                  </CardContent>
+                </Card>
+              ))
+            : null}
+          {!metrics.data && metrics.isError ? (
+            <div className="col-span-full">
+              <ContentRetry pending={metrics.isFetching} onRetry={() => void metrics.refetch()} />
+            </div>
+          ) : null}
         </div>
-        <SegmentedControl role="tablist" aria-label="任务分类">
-          <SegmentedControlItem
-            type="button"
-            role="tab"
-            selected={group === "active"}
-            onClick={() => setGroup("active")}
-          >
-            进行中任务 {groupedTasks.active.length}
-          </SegmentedControlItem>
-          <SegmentedControlItem
-            type="button"
-            role="tab"
-            selected={group === "history"}
-            onClick={() => setGroup("history")}
-          >
-            历史任务 {groupedTasks.history.length}
-          </SegmentedControlItem>
-        </SegmentedControl>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <SegmentedControl role="tablist" aria-label="任务分类">
+            <SegmentedControlItem
+              type="button"
+              role="tab"
+              selected={group === "active"}
+              onClick={() => {
+                setGroup("active");
+                setStatusFilter(null);
+              }}
+            >
+              进行中任务 {groupedTasks.active.length}
+            </SegmentedControlItem>
+            <SegmentedControlItem
+              type="button"
+              role="tab"
+              selected={group === "history"}
+              onClick={() => {
+                setGroup("history");
+                setStatusFilter(null);
+              }}
+            >
+              历史任务 {groupedTasks.history.length}
+            </SegmentedControlItem>
+          </SegmentedControl>
+          <FilterMenu
+            label="任务状态"
+            options={statusOptions.filter(
+              (status) => activeTaskStatuses.has(status) === (group === "active"),
+            )}
+            value={statusFilter}
+            onValueChange={setStatusFilter}
+            optionLabel={taskStatusLabel}
+          />
+        </div>
         <DataTablePanel className="flex-1">
           <Table containerClassName="h-full min-h-0 overflow-auto" className="min-w-[760px]">
             <TableHeader>
@@ -306,12 +356,15 @@ export function SystemInfoPage() {
                     </TableRow>
                   ))
                 : null}
-              {!tasks.isLoading && visibleTasks.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="h-28 text-center text-muted-foreground">
-                    {group === "active" ? "当前没有进行中的任务" : "当前没有历史任务"}
-                  </TableCell>
-                </TableRow>
+              {!tasks.data && tasks.isError && (
+                <TableEmptyState columns={5}>
+                  <ContentRetry pending={tasks.isFetching} onRetry={() => void tasks.refetch()} />
+                </TableEmptyState>
+              )}
+              {tasks.data && visibleTasks.length === 0 ? (
+                <TableEmptyState columns={5}>
+                  {group === "active" ? "当前没有进行中的任务" : "当前没有历史任务"}
+                </TableEmptyState>
               ) : null}
               {visibleTasks.map((task) => (
                 <TableRow key={task.id}>

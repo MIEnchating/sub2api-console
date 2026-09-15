@@ -211,7 +211,7 @@ func TestRoutingDegradedStateChangeCooldownDelaysFlappingNotification(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "账号降级变化冷却中" {
+	if len(details.ConsumerItems) != 2 || details.ConsumerItems[0].QueueStatus != "状态变化冷却中" {
 		t.Fatalf("cooldown queue state is missing: %#v", details.ConsumerItems)
 	}
 
@@ -246,6 +246,125 @@ func TestRoutingDegradedStateChangeCooldownDelaysFlappingNotification(t *testing
 	}
 	if ready.Sent != 1 || len(sender.messages) != 2 {
 		t.Fatalf("changed incident was not sent after cooldown: result=%#v messages=%#v", ready, sender.messages)
+	}
+}
+
+func TestRoutingBreakerFlappingWaitsForLatestStateChangeCooldown(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		cooldown       int
+		notifyRecovery bool
+	}{
+		{name: "recovery notifications disabled", cooldown: 30},
+		{name: "recovery notifications enabled", cooldown: 30, notifyRecovery: true},
+		{name: "zero cooldown sends refiring immediately", cooldown: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := createAlertDatabase(t)
+			repository, err := business.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = repository.Close() })
+			database, err := sql.Open("sqlite", "file:"+path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			ctx := context.Background()
+			policy := defaultAlertPolicyPayload(t)
+			policy["group_unavailable_enabled"] = false
+			policy["state_change_cooldown_minutes"] = test.cooldown
+			if test.notifyRecovery {
+				policy["recovery_notification_types"] = []any{"routing_breaker"}
+			}
+			if _, err := repository.UpdateAlertPolicy(ctx, policy); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.ExecContext(ctx, `DELETE FROM alert_incidents;
+				INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','primary','{}','now');
+				INSERT INTO routing_decisions(account_id,group_name,schedulable,role,routing_state,reason,updated_at,payload_json)
+				VALUES('41','codex',0,'fused','fused','致命错误：凭据失效','2026-09-14T01:00:00Z','{}')`); err != nil {
+				t.Fatal(err)
+			}
+			settings := &staticSettings{value: configstore.NotificationSettings{
+				AppID: "app", ClientSecret: "secret", HomeChannel: "target", HomeChannelType: "c2c",
+			}}
+			sender := &concurrentWriteSender{path: path}
+			service := New(repository, settings, sender)
+			channelKey := business.NotificationChannelKey("qqbot", "target")
+			const incidentKey = "console:routing:breaker:41:codex"
+
+			if _, err := repository.EvaluateAlertIncidents(ctx); err != nil {
+				t.Fatal(err)
+			}
+			first, err := service.Deliver(ctx, false)
+			if err != nil || first.Sent != 1 || len(sender.messages) != 1 {
+				t.Fatalf("first breaker failure must notify immediately: result=%#v messages=%#v err=%v", first, sender.messages, err)
+			}
+			if !strings.Contains(sender.messages[0], "账号已停止调度") {
+				t.Fatalf("unexpected initial notification: %s", sender.messages[0])
+			}
+			old := time.Now().UTC().Add(-31 * time.Minute).Format(time.RFC3339Nano)
+			if _, err := database.ExecContext(ctx, `UPDATE alert_deliveries SET delivered_at=?,updated_at=? WHERE incident_key=?`, old, old, incidentKey); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE routing_decisions SET schedulable=1,role='healthy',routing_state='healthy' WHERE account_id='41'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.EvaluateAlertIncidents(ctx); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := service.Deliver(ctx, false)
+			if err != nil || recovered.Sent != 0 || len(sender.messages) != 1 {
+				t.Fatalf("brief recovery must not notify: result=%#v messages=%#v err=%v", recovered, sender.messages, err)
+			}
+
+			// Even after an old recovery, refiring starts a new observation window.
+			if _, err := database.ExecContext(ctx, `UPDATE alert_deliveries SET updated_at=? WHERE incident_key=?`, old, incidentKey); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE routing_decisions SET schedulable=0,role='fused',routing_state='fused' WHERE account_id='41'`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.EvaluateAlertIncidents(ctx); err != nil {
+				t.Fatal(err)
+			}
+			refired, err := service.Deliver(ctx, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.cooldown == 0 {
+				if refired.Sent != 1 || len(sender.messages) != 2 {
+					t.Fatalf("disabled cooldown delayed refiring: result=%#v messages=%#v", refired, sender.messages)
+				}
+				return
+			}
+			if refired.Sent != 0 || refired.Skipped != 1 || len(sender.messages) != 1 {
+				t.Fatalf("refiring bypassed the latest transition cooldown: result=%#v messages=%#v", refired, sender.messages)
+			}
+			details, err := repository.NotificationQueueDetails(ctx, channelKey, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(details.ConsumerItems) != 1 || len(details.ConsumerPending) != 0 ||
+				details.ConsumerItems[0].QueueStatus != "状态变化冷却中" ||
+				!strings.Contains(details.ConsumerItems[0].QueueReason, "30 分钟") ||
+				strings.Contains(details.ConsumerItems[0].QueueReason, "降级") {
+				t.Fatalf("breaker cooldown queue explanation is missing or misleading: %#v", details)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE alert_deliveries SET updated_at=? WHERE incident_key=?`, old, incidentKey); err != nil {
+				t.Fatal(err)
+			}
+			ready, err := service.Deliver(ctx, false)
+			if err != nil || ready.Sent != 1 || len(sender.messages) != 2 {
+				t.Fatalf("stable breaker failure did not notify after cooldown: result=%#v messages=%#v err=%v", ready, sender.messages, err)
+			}
+			unchanged, err := service.Deliver(ctx, false)
+			if err != nil || unchanged.Sent != 0 || len(sender.messages) != 2 {
+				t.Fatalf("unchanged breaker failure notified again with repeat disabled: result=%#v messages=%#v err=%v", unchanged, sender.messages, err)
+			}
+		})
 	}
 }
 

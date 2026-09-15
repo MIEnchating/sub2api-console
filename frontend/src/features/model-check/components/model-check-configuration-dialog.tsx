@@ -1,11 +1,11 @@
 import { ContentRetry } from "@/components/content-retry";
-import { FieldError } from "@/components/field-error";
+import { Tabs } from "@base-ui/react/tabs";
 import { ContentLoading } from "@/components/content-loading";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArchiveRestore, RefreshCw, Save, Send, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Save, Send, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { notifyOperationError } from "@/lib/operation-feedback";
@@ -18,7 +18,6 @@ import {
 } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogBody,
@@ -28,8 +27,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ModelCheckRuleBrowser } from "./model-check-rule-browser";
+import { ModelCheckConfigurationEditor } from "./model-check-configuration-editor";
 
 import {
   modelCheckConfigurationSchema,
@@ -53,28 +53,15 @@ function payloadText(version: ModelCheckConfigurationVersion): string {
   return JSON.stringify(version.payload, null, 2);
 }
 
-function profileCounts(payload: ModelCheckProfilePayload): { claude: number; probes: number } {
-  let probes = payload.sol_profile.quick.length + payload.sol_profile.reserve.length;
-  const claudeProfiles = Object.values(payload.claude_profiles);
-  for (const profile of claudeProfiles) probes += profile.probes.length;
-  return { claude: claudeProfiles.length, probes };
-}
-
-function shortFingerprint(value: string): string {
-  return value.length <= 16 ? value : `${value.slice(0, 8)}...${value.slice(-8)}`;
-}
-
-function displayTime(value: string | null): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
-}
-
 export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDialogProps) {
   const queryClient = useQueryClient();
-  const [publishConfirmOpen, setPublishConfirmOpen] = useState(false);
-  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
-  const [restoreVersionID, setRestoreVersionID] = useState<string | null>(null);
+  const [view, setView] = useState("rules");
+  const [publishFingerprint, setPublishFingerprint] = useState<string | null>(null);
+  const [discardFingerprint, setDiscardFingerprint] = useState<string | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<{ id: string; fingerprint: string } | null>(
+    null,
+  );
+  const editingFingerprint = useRef<string | null>(null);
   const form = useForm<ModelCheckConfigurationForm>({
     resolver: zodResolver(modelCheckConfigurationSchema),
     defaultValues: { note: "", payload_json: "" },
@@ -84,74 +71,68 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
     queryFn: api.modelCheckConfiguration,
     enabled: props.open,
   });
+  const isDirty = form.formState.isDirty;
 
   useEffect(() => {
-    if (!configuration.data) return;
+    if (!props.open) setView("rules");
+  }, [props.open]);
+
+  useEffect(() => {
+    if (!configuration.data || isDirty) return;
     const version = editableVersion(configuration.data);
+    editingFingerprint.current = version.fingerprint;
     form.reset({ note: version.note, payload_json: payloadText(version) });
-  }, [configuration.data, form]);
+  }, [configuration.data, form, isDirty]);
 
   function applyConfiguration(value: ModelCheckConfiguration, message: string) {
     queryClient.setQueryData(["model-check-configuration"], value);
     const version = editableVersion(value);
+    editingFingerprint.current = version.fingerprint;
     form.reset({ note: version.note, payload_json: payloadText(version) });
     toast.success(message);
   }
 
   const save = useMutation({
     mutationFn: (values: ModelCheckConfigurationForm) => {
-      if (!configuration.data) throw new Error("画像配置尚未读取完成");
+      if (!editingFingerprint.current) throw new Error("检测规则尚未读取完成");
       const payload = JSON.parse(values.payload_json) as ModelCheckProfilePayload;
       return api.saveModelCheckDraft({
-        expected_fingerprint: expectedFingerprint(configuration.data),
+        expected_fingerprint: editingFingerprint.current,
         note: values.note.trim(),
         payload,
       });
     },
-    onSuccess: (value) => applyConfiguration(value, "画像草稿已保存"),
-    onError: (error) => notifyOperationError(error, "画像草稿保存失败"),
+    onSuccess: (value) => applyConfiguration(value, "检测规则草稿已保存"),
+    onError: (error) => notifyOperationError(error, "检测规则草稿保存失败"),
   });
   const publish = useMutation({
-    mutationFn: () => {
-      if (!configuration.data?.draft) throw new Error("没有可发布的画像草稿");
-      return api.publishModelCheckDraft(configuration.data.draft.fingerprint);
-    },
+    mutationFn: (fingerprint: string) => api.publishModelCheckDraft(fingerprint),
     onSuccess: (value) => {
-      setPublishConfirmOpen(false);
-      applyConfiguration(value, "画像版本已发布");
+      setPublishFingerprint(null);
+      applyConfiguration(value, "检测规则已发布");
       void queryClient.invalidateQueries({ queryKey: ["model-check-capabilities"] });
     },
-    onError: (error) => notifyOperationError(error, "画像发布失败"),
+    onError: (error) => notifyOperationError(error, "检测规则发布失败"),
   });
   const discard = useMutation({
-    mutationFn: () => {
-      if (!configuration.data?.draft) throw new Error("没有可删除的画像草稿");
-      return api.discardModelCheckDraft(configuration.data.draft.fingerprint);
-    },
+    mutationFn: (fingerprint: string) => api.discardModelCheckDraft(fingerprint),
     onSuccess: (value) => {
-      setDiscardConfirmOpen(false);
-      applyConfiguration(value, "画像草稿已删除");
+      setDiscardFingerprint(null);
+      applyConfiguration(value, "检测规则草稿已删除");
     },
-    onError: (error) => notifyOperationError(error, "画像草稿删除失败"),
+    onError: (error) => notifyOperationError(error, "检测规则草稿删除失败"),
   });
   const restore = useMutation({
-    mutationFn: (versionID: string) => {
-      if (!configuration.data) throw new Error("画像配置尚未读取完成");
-      return api.restoreModelCheckVersion(
-        versionID,
-        expectedFingerprint(configuration.data),
-        `恢复自版本 ${versionID}`,
-      );
+    mutationFn: (target: { id: string; fingerprint: string }) => {
+      return api.restoreModelCheckVersion(target.id, target.fingerprint, `恢复自版本 ${target.id}`);
     },
     onSuccess: (value) => {
-      setRestoreVersionID(null);
+      setRestoreTarget(null);
       applyConfiguration(value, "历史版本已恢复为草稿");
     },
     onError: (error) => notifyOperationError(error, "历史版本恢复失败"),
   });
 
-  const current = configuration.data ? editableVersion(configuration.data) : null;
-  const counts = current ? profileCounts(current.payload) : null;
   const pending = save.isPending || publish.isPending || discard.isPending || restore.isPending;
   const submit = form.handleSubmit((values) => save.mutate(values));
 
@@ -161,216 +142,173 @@ export function ModelCheckConfigurationDialog(props: ModelCheckConfigurationDial
         <DialogContent
           width="wide"
           height="tall"
-          className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
+          className="flex h-[min(44rem,calc(100svh-2rem))] flex-col overflow-hidden"
         >
           <DialogHeader>
-            <DialogTitle>检测题库与行为画像</DialogTitle>
+            <DialogTitle>检测规则与题库</DialogTitle>
             <DialogDescription>
-              当前生效版本 {configuration.data?.active.id ?? "读取中"}
+              根据固定题目的回答特征判断更接近哪个模型，仅供行为对比，不能证明模型身份。
             </DialogDescription>
           </DialogHeader>
-          <DialogBody className="overflow-y-auto">
-            {configuration.isLoading ? <ContentLoading label="正在读取画像配置" /> : null}
-            {configuration.error ? (
-              <>
-                <QueryErrorToast error={configuration.error} fallback="画像配置读取失败" />
-                {!configuration.data && (
-                  <ContentRetry
-                    onRetry={() => void configuration.refetch()}
-                    pending={configuration.isFetching}
-                  />
-                )}
-              </>
-            ) : null}
-            {configuration.data && current && counts ? (
-              <form id="model-check-configuration-form" className="grid gap-4" onSubmit={submit}>
-                <section className="grid gap-3 border-b pb-4" aria-label="画像版本信息">
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <VersionMetric label="编辑版本" value={current.id} />
-                    <VersionMetric
-                      label="状态"
-                      value={configuration.data.draft ? "草稿" : "已发布"}
+          <Tabs.Root
+            value={view}
+            onValueChange={(value) => setView(String(value))}
+            className="flex min-h-0 flex-1 flex-col gap-3"
+          >
+            <Tabs.List aria-label="检测规则视图" className="flex shrink-0 gap-4 border-b">
+              <Tabs.Tab
+                value="rules"
+                className="border-b-2 border-transparent py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                规则与题目
+              </Tabs.Tab>
+              <Tabs.Tab
+                value="advanced"
+                className="border-b-2 border-transparent py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                高级设置
+              </Tabs.Tab>
+            </Tabs.List>
+            <DialogBody className="relative min-w-0 flex-1 overflow-hidden">
+              {configuration.isLoading ? <ContentLoading label="正在读取检测规则" /> : null}
+              {configuration.error ? (
+                <>
+                  <QueryErrorToast error={configuration.error} fallback="检测规则读取失败" />
+                  {!configuration.data && (
+                    <ContentRetry
+                      onRetry={() => void configuration.refetch()}
+                      pending={configuration.isFetching}
                     />
-                    <VersionMetric label="Claude 画像" value={`${counts.claude} 个`} />
-                    <VersionMetric label="检测题目" value={`${counts.probes} 道`} />
-                  </div>
-                  <p className="text-muted-foreground text-xs">
-                    内容指纹{" "}
-                    <Tooltip>
-                      <TooltipTrigger render={<code />}>
-                        {shortFingerprint(current.fingerprint)}
-                      </TooltipTrigger>
-                      <TooltipContent className="max-w-md break-all">
-                        {current.fingerprint}
-                      </TooltipContent>
-                    </Tooltip>
-                  </p>
-                </section>
-
-                <div className="grid gap-2">
-                  <label htmlFor="model-check-version-note" className="text-sm font-medium">
-                    版本说明
-                  </label>
-                  <Input
-                    id="model-check-version-note"
-                    maxLength={200}
-                    disabled={pending}
-                    aria-invalid={Boolean(form.formState.errors.note)}
-                    {...form.register("note")}
-                  />
-                  <FieldError message={form.formState.errors.note?.message} />
-                </div>
-
-                <div className="grid min-h-96 gap-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <label htmlFor="model-check-profile-json" className="text-sm font-medium">
-                      题库与画像 JSON
-                    </label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      disabled={pending}
-                      onClick={() => {
+                  )}
+                </>
+              ) : null}
+              {configuration.data ? (
+                <>
+                  {/* 保留面板布局，避免大段 JSON 在切换时重新排版；Base UI 的 inert 阻止非当前面板交互。 */}
+                  <Tabs.Panel
+                    value="rules"
+                    keepMounted
+                    hidden={false}
+                    aria-hidden={view !== "rules"}
+                    className="absolute inset-0 min-h-0 min-w-0 data-[hidden]:invisible"
+                  >
+                    {configuration.data ? (
+                      <ModelCheckRuleBrowser configuration={configuration.data} />
+                    ) : null}
+                  </Tabs.Panel>
+                  <Tabs.Panel
+                    value="advanced"
+                    keepMounted
+                    hidden={false}
+                    aria-hidden={view !== "advanced"}
+                    className="absolute inset-0 flex min-h-0 min-w-0 flex-col gap-3 data-[hidden]:invisible"
+                  >
+                    <ModelCheckConfigurationEditor
+                      configuration={configuration.data}
+                      form={form}
+                      pending={pending}
+                      onSubmit={submit}
+                      onRestore={(id) =>
+                        setRestoreTarget({
+                          id,
+                          fingerprint: expectedFingerprint(configuration.data),
+                        })
+                      }
+                      onReset={() => {
                         const version = editableVersion(configuration.data);
+                        editingFingerprint.current = version.fingerprint;
                         form.reset({ note: version.note, payload_json: payloadText(version) });
                       }}
-                    >
-                      <RefreshCw aria-hidden="true" />
-                      恢复已保存内容
-                    </Button>
-                  </div>
-                  <Textarea
-                    id="model-check-profile-json"
-                    className="min-h-96 resize-y font-mono text-xs leading-5"
-                    spellCheck={false}
-                    disabled={pending}
-                    aria-invalid={Boolean(form.formState.errors.payload_json)}
-                    {...form.register("payload_json")}
-                  />
-                  <FieldError message={form.formState.errors.payload_json?.message} />
-                </div>
-
-                <section
-                  className="grid gap-2 border-t pt-4"
-                  aria-labelledby="profile-history-title"
-                >
-                  <h3 id="profile-history-title" className="text-sm font-medium">
-                    已发布版本历史
-                  </h3>
-                  {configuration.data.history.length === 0 ? (
-                    <p className="text-muted-foreground text-sm">暂无历史版本</p>
-                  ) : (
-                    <div className="divide-y rounded-md border">
-                      {configuration.data.history.map((version) => (
-                        <div
-                          key={version.id}
-                          className="grid gap-2 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-medium">
-                              {version.note || version.id}
-                            </p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">
-                              {displayTime(version.published_at)} · {version.probe_count} 道题 ·{" "}
-                              {shortFingerprint(version.fingerprint)}
-                            </p>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            disabled={pending}
-                            onClick={() => setRestoreVersionID(version.id)}
+                    />
+                    <DialogFooter className="m-0 shrink-0 flex-row flex-nowrap items-center justify-end rounded-none bg-transparent p-0 pt-3">
+                      {configuration.data.draft ? (
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="text-destructive mr-auto"
+                                aria-label="删除草稿"
+                                disabled={pending}
+                                onClick={() =>
+                                  setDiscardFingerprint(configuration.data.draft!.fingerprint)
+                                }
+                              />
+                            }
                           >
-                            <ArchiveRestore aria-hidden="true" />
-                            恢复为草稿
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              </form>
-            ) : null}
-          </DialogBody>
-          <DialogFooter>
-            {configuration.data?.draft ? (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={pending}
-                onClick={() => setDiscardConfirmOpen(true)}
-              >
-                <Trash2 aria-hidden="true" />
-                删除草稿
-              </Button>
-            ) : null}
-            <Button
-              type="submit"
-              form="model-check-configuration-form"
-              variant="outline"
-              disabled={!configuration.data || pending}
-            >
-              <Save aria-hidden="true" />
-              {save.isPending ? "保存中..." : "保存草稿"}
-            </Button>
-            <Button
-              type="button"
-              disabled={!configuration.data?.draft || pending}
-              onClick={() => setPublishConfirmOpen(true)}
-            >
-              <Send aria-hidden="true" />
-              发布生效
-            </Button>
-          </DialogFooter>
+                            <Trash2 aria-hidden="true" />
+                          </TooltipTrigger>
+                          <TooltipContent>删除草稿</TooltipContent>
+                        </Tooltip>
+                      ) : null}
+                      <Button
+                        type="submit"
+                        form="model-check-configuration-form"
+                        variant="outline"
+                        disabled={pending}
+                      >
+                        <Save aria-hidden="true" />
+                        {save.isPending ? "保存中..." : "保存草稿"}
+                      </Button>
+                      <Button
+                        type="button"
+                        disabled={!configuration.data.draft || pending || form.formState.isDirty}
+                        onClick={() => setPublishFingerprint(configuration.data.draft!.fingerprint)}
+                      >
+                        <Send aria-hidden="true" />
+                        发布生效
+                      </Button>
+                    </DialogFooter>
+                  </Tabs.Panel>
+                </>
+              ) : null}
+            </DialogBody>
+          </Tabs.Root>
         </DialogContent>
       </Dialog>
 
       <ConfirmActionDialog
-        open={publishConfirmOpen}
-        title="发布检测画像"
-        description="发布后，新创建的模型检测任务将使用该草稿；已经排队或运行中的任务继续使用原画像。"
+        open={publishFingerprint !== null}
+        title="发布检测规则"
+        description="发布后，新创建的模型检测任务将使用该草稿；已经排队或运行中的任务继续使用原规则。"
         confirmLabel="确认发布"
         pendingLabel="发布中..."
         pending={publish.isPending}
-        onOpenChange={setPublishConfirmOpen}
-        onConfirm={() => publish.mutate()}
+        onOpenChange={(open) => {
+          if (!open) setPublishFingerprint(null);
+        }}
+        onConfirm={() => {
+          if (publishFingerprint) publish.mutate(publishFingerprint);
+        }}
       />
       <ConfirmActionDialog
-        open={discardConfirmOpen}
-        title="删除画像草稿"
-        description="未发布的题库和画像修改将被删除，当前已发布版本不会受到影响。"
+        open={discardFingerprint !== null}
+        title="删除规则草稿"
+        description="未发布的题库和规则修改将被删除，当前已发布版本不会受到影响。"
         confirmLabel="确认删除"
         pendingLabel="删除中..."
         pending={discard.isPending}
-        onOpenChange={setDiscardConfirmOpen}
-        onConfirm={() => discard.mutate()}
+        onOpenChange={(open) => {
+          if (!open) setDiscardFingerprint(null);
+        }}
+        onConfirm={() => {
+          if (discardFingerprint) discard.mutate(discardFingerprint);
+        }}
       />
       <ConfirmActionDialog
-        open={restoreVersionID !== null}
-        title="恢复历史画像"
+        open={restoreTarget !== null}
+        title="恢复历史规则"
         description="所选历史版本将复制为新草稿，不会立即影响模型检测。"
         confirmLabel="恢复为草稿"
         pendingLabel="恢复中..."
         pending={restore.isPending}
-        onOpenChange={(open) => !open && setRestoreVersionID(null)}
+        onOpenChange={(open) => !open && setRestoreTarget(null)}
         onConfirm={() => {
-          if (restoreVersionID) restore.mutate(restoreVersionID);
+          if (restoreTarget) restore.mutate(restoreTarget);
         }}
       />
     </>
-  );
-}
-
-function VersionMetric(props: { label: string; value: string }) {
-  return (
-    <div className="bg-muted/30 min-w-0 rounded-md border px-3 py-2">
-      <p className="text-muted-foreground text-xs">{props.label}</p>
-      <Tooltip>
-        <TooltipTrigger render={<p className="mt-1 truncate text-sm font-medium" />}>
-          {props.value}
-        </TooltipTrigger>
-        <TooltipContent className="max-w-sm break-words">{props.value}</TooltipContent>
-      </Tooltip>
-    </div>
   );
 }

@@ -71,6 +71,23 @@ describe("账号探活弹窗", () => {
     expect(defaultProbeModelForPlatform(["gpt-5.1"], configured, "openai")).toBe("gpt-5.1");
   });
 
+  it("平台名称与对象原型属性重名时使用首个真实模型", () => {
+    const configured = {
+      default: {
+        models: [],
+        concurrency: 10,
+        load_factor: null,
+        priority: 1,
+        pool_mode: false,
+        pool_mode_retry_count: 3,
+        pool_mode_retry_status_codes: [],
+      },
+      groups: [],
+      platform_probe_models: { openai: "gpt-5.2" },
+    };
+    expect(defaultProbeModelForPlatform(["gpt-5.1"], configured, "constructor")).toBe("gpt-5.1");
+  });
+
   it("打开添加账号探活时在模型选择框显示对应平台的默认模型", async () => {
     vi.spyOn(api, "accountCreationSettings").mockResolvedValue({
       default: {

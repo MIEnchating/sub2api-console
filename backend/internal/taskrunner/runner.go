@@ -28,6 +28,23 @@ type TaskRunner interface {
 	CancelTask(string) bool
 }
 
+// CompositeCanceller forwards cancellation to every task group that may own a
+// task. The console uses separate bounded groups for user operations and live
+// workbench tasks, while the API exposes one cancellation endpoint.
+type CompositeCanceller struct {
+	Groups []TaskRunner
+}
+
+func (c CompositeCanceller) CancelTask(taskID string) bool {
+	found := false
+	for _, group := range c.Groups {
+		if group != nil && group.CancelTask(taskID) {
+			found = true
+		}
+	}
+	return found
+}
+
 type Group struct {
 	ctx    context.Context
 	cancel context.CancelFunc

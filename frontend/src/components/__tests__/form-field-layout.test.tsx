@@ -52,7 +52,8 @@ describe("form field layout", () => {
       </FormField>,
     );
 
-    expect(markup).not.toContain("<label");
+    expect(markup).toMatch(/<label[^>]*>平台<\/label>/);
+    expect(markup).not.toMatch(/<label[^>]*>.*data-slot="select-trigger".*<\/label>/);
     expect(markup).toContain('data-slot="select-trigger"');
   });
 

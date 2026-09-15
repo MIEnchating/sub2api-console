@@ -195,6 +195,7 @@ export function NewAPIChannelForm(props: Props) {
   }
 
   async function createKey() {
+    if (props.creatingKey) return;
     const valid = await keyForm.trigger();
     if (!valid) return;
     const values = keyForm.getValues();
@@ -232,6 +233,7 @@ export function NewAPIChannelForm(props: Props) {
   }
 
   async function fetchModels() {
+    if (props.pending || props.fetchingModels) return;
     const valid = await channelForm.trigger(["sub2api_group_id", "key_id", "base_url"]);
     if (!valid || !createdKey) return;
     setModelError("");
@@ -258,7 +260,7 @@ export function NewAPIChannelForm(props: Props) {
   }
 
   async function submit(values: NewAPIChannelValues) {
-    if (props.fetchingModels || modelError) return;
+    if (props.pending || props.fetchingModels || modelError) return;
     try {
       await props.onSubmit({
         sub2api_group_id: values.sub2api_group_id,
@@ -345,6 +347,7 @@ export function NewAPIChannelForm(props: Props) {
                 >
                   <SegmentedControlItem
                     type="button"
+                    disabled={props.creatingKey}
                     selected={credentialSource === "vault"}
                     onClick={() => {
                       keyForm.setValue("credential_source", "vault");
@@ -355,6 +358,7 @@ export function NewAPIChannelForm(props: Props) {
                   </SegmentedControlItem>
                   <SegmentedControlItem
                     type="button"
+                    disabled={props.creatingKey}
                     selected={credentialSource === "custom"}
                     onClick={() => {
                       keyForm.setValue("credential_source", "custom");
@@ -376,6 +380,7 @@ export function NewAPIChannelForm(props: Props) {
                     name="vault_entry"
                     render={({ field }) => (
                       <Select
+                        disabled={props.creatingKey}
                         value={field.value || null}
                         itemToStringLabel={(value) => value}
                         onValueChange={(value) => field.onChange(value ?? "")}
@@ -411,6 +416,7 @@ export function NewAPIChannelForm(props: Props) {
                     <Input
                       id="newapi-channel-username"
                       type="email"
+                      disabled={props.creatingKey}
                       autoComplete="username"
                       aria-invalid={Boolean(keyForm.formState.errors.username)}
                       {...keyForm.register("username")}
@@ -424,6 +430,7 @@ export function NewAPIChannelForm(props: Props) {
                     <Input
                       id="newapi-channel-password"
                       type="password"
+                      disabled={props.creatingKey}
                       autoComplete="current-password"
                       aria-invalid={Boolean(keyForm.formState.errors.password)}
                       {...keyForm.register("password")}
@@ -445,6 +452,7 @@ export function NewAPIChannelForm(props: Props) {
                   name="sub2api_group_id"
                   render={({ field }) => (
                     <Select
+                      disabled={props.creatingKey}
                       value={field.value || null}
                       itemToStringLabel={(value) => groupNames.get(value) ?? value}
                       onValueChange={(value) => field.onChange(value ?? "")}

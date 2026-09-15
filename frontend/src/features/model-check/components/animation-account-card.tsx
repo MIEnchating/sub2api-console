@@ -48,7 +48,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
     <article
       aria-label={`账号 ${props.account.name}`}
       className={cn(
-        "flex h-[360px] min-w-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-card transition-colors hover:border-border",
+        "flex h-[360px] min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card transition-colors hover:border-border",
         props.checked && "border-primary/60 bg-primary/[0.02] ring-1 ring-primary/10",
       )}
     >

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const MiniMaxURL = "https://platform.minimaxi.com/docs/guides/pricing-paygo"
+const MiniMaxURL = "https://platform.minimax.cn/docs/guides/pricing-paygo"
 
 var priorityTab = regexp.MustCompile(`(?s)<Tab title="优先[^"\n]*">.*?</Tab>`)
 var minimaxModel = regexp.MustCompile(`\*\*(MiniMax-[A-Za-z0-9.-]+)\*\*`)
@@ -54,7 +54,11 @@ func ParseMiniMax(raw []byte) ([]Price, error) {
 			if op == "≤" {
 				op = "<="
 			}
-			condition = "len " + op + " " + tokenCount(r[2], r[3])
+			boundary, err := tokenCount(r[2], r[3])
+			if err != nil {
+				return nil, err
+			}
+			condition = "len " + op + " " + boundary
 			label = "输入 " + r[1] + r[2] + strings.ToUpper(r[3])
 		}
 		if err := addTier(prices, match[1], "标准服务（不含 priority 优先调用）", label, condition, rates); err != nil {

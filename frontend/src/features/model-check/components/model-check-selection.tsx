@@ -1,5 +1,6 @@
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { FieldError } from "@/components/field-error";
+import { ContentRetry } from "@/components/content-retry";
 import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -30,6 +31,8 @@ export type ModelCheckSelectionProps = {
   accounts: AccountStatus[];
   accountsLoading: boolean;
   accountsError: string | null;
+  accountsRefreshing?: boolean;
+  onRetryAccounts?: () => void;
   accountQuery: string;
   accountGroups?: string[];
   accountGroup?: string | null;
@@ -170,9 +173,13 @@ function AccountMobileList(props: ModelCheckSelectionProps) {
 
 function accountEmptyState(props: ModelCheckSelectionProps) {
   if (props.accountsLoading) {
-    return <PageLoadingSkeleton label="正在读取账号" variant="list" />;
+    return <PageLoadingSkeleton label="正在读取账号" variant="list" fill framed={false} />;
   }
-  if (props.accountsError) return null;
+  if (props.accountsError && props.accounts.length === 0) {
+    return props.onRetryAccounts ? (
+      <ContentRetry onRetry={props.onRetryAccounts} pending={props.accountsRefreshing} />
+    ) : null;
+  }
   if (props.accounts.length === 0) {
     return (
       <div className="text-muted-foreground grid min-h-40 place-items-center text-sm">
@@ -187,7 +194,7 @@ function AccountPanel(props: ModelCheckSelectionProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const pagination = useClientPagination(props.accounts);
   const emptyState = accountEmptyState(props);
-  const showAccounts = !emptyState && !props.accountsError;
+  const showAccounts = !emptyState && props.accounts.length > 0;
   const selectableAccountCount = props.accounts.length;
 
   useEffect(() => {
@@ -359,7 +366,7 @@ function ModelList(props: ModelCheckSelectionProps) {
     );
   }
   if (props.modelsLoading) {
-    return <PageLoadingSkeleton label="正在读取共同模型" variant="list" />;
+    return <PageLoadingSkeleton label="正在读取共同模型" variant="list" fill framed={false} />;
   }
   if (props.modelsError && props.models.length === 0) return null;
   if (props.models.length === 0) {

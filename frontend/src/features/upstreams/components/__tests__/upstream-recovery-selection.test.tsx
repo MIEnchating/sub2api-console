@@ -22,10 +22,10 @@ describe("UpstreamRecoverySelectionToolbar", () => {
     expect(markup).toContain('aria-label="清空选择"');
     expect(markup).toContain('aria-label="恢复已选择的 3 个上游鉴权"');
     expect(markup).toContain('aria-label="3 个已选择上游"');
-    expect(markup).toContain("bottom-6");
+    expect(markup).toContain("bottom-[max(7rem,env(safe-area-inset-bottom))]");
     expect(markup).toContain("left-1/2");
-    expect(markup).toContain("bg-background/95");
-    expect(markup).toContain("backdrop-blur-lg");
+    expect(markup).toContain("bg-popover");
+    expect(markup).toContain("text-popover-foreground");
   });
 
   it("does not render without a selected host", () => {

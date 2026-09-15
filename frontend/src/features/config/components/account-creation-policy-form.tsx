@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { SettingsFooter } from "./settings-footer";
+import { settingsLayout } from "./settings-layout";
 import {
   accountCreationSettingsSchema,
   parseAccountModels,
@@ -54,17 +55,19 @@ export function AccountCreationPolicyForm(props: {
   forceDirty?: boolean;
   fillHeight?: boolean;
   submitLabel: string;
-  onSubmit: (policy: AccountCreationPolicy) => void;
+  onSubmit: (policy: AccountCreationPolicy) => void | Promise<void>;
 }) {
   const form = useForm<AccountCreationSettingsValues>({
     resolver: zodResolver(accountCreationSettingsSchema),
     defaultValues: accountCreationPolicyFormValues(props.policy),
   });
   const poolMode = form.watch("poolMode");
+  const isDirty = form.formState.isDirty;
 
   useEffect(() => {
+    if (isDirty) return;
     form.reset(accountCreationPolicyFormValues(props.policy));
-  }, [form, props.policy]);
+  }, [form, isDirty, props.policy]);
 
   function accessibleName(field: string): string {
     return `${props.scopeLabel} ${field}`;
@@ -74,12 +77,19 @@ export function AccountCreationPolicyForm(props: {
     <form
       className={cn("flex min-w-0 flex-col", props.fillHeight && "h-full min-h-0 overflow-hidden")}
       data-testid="account-creation-policy-layout"
-      onSubmit={form.handleSubmit((values) => props.onSubmit(policyFromForm(values)))}
+      onSubmit={form.handleSubmit(async (values) => {
+        try {
+          await props.onSubmit(policyFromForm(values));
+          form.reset(values);
+        } catch {
+          // 父级 mutation 展示写入错误，表单保留草稿供重试。
+        }
+      })}
     >
       <div
         data-slot={props.fillHeight ? "settings-scroll" : undefined}
         className={cn(
-          "grid content-start items-start gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]",
+          settingsLayout.accountPolicyFields,
           props.fillHeight && "min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3",
         )}
       >
@@ -94,7 +104,7 @@ export function AccountCreationPolicyForm(props: {
               aria-invalid={Boolean(form.formState.errors.models)}
               className="field-sizing-fixed h-44 max-h-44 resize-none"
               rows={5}
-              disabled={props.disabled}
+              disabled={props.disabled || props.pending}
               placeholder="每行一个模型"
               {...form.register("models")}
             />
@@ -110,7 +120,7 @@ export function AccountCreationPolicyForm(props: {
                 aria-invalid={Boolean(form.formState.errors.concurrency)}
                 min={1}
                 max={10_000_000}
-                disabled={props.disabled}
+                disabled={props.disabled || props.pending}
                 {...form.register("concurrency")}
               />
             </SettingsField>
@@ -125,7 +135,7 @@ export function AccountCreationPolicyForm(props: {
                 aria-invalid={Boolean(form.formState.errors.loadFactor)}
                 min={1}
                 step="any"
-                disabled={props.disabled}
+                disabled={props.disabled || props.pending}
                 {...form.register("loadFactor")}
               />
             </SettingsField>
@@ -140,7 +150,7 @@ export function AccountCreationPolicyForm(props: {
                 aria-invalid={Boolean(form.formState.errors.priority)}
                 min={1}
                 max={10_000_000}
-                disabled={props.disabled}
+                disabled={props.disabled || props.pending}
                 {...form.register("priority")}
               />
             </SettingsField>
@@ -156,7 +166,7 @@ export function AccountCreationPolicyForm(props: {
               <Switch
                 id={`${props.formId}-pool-mode`}
                 checked={poolMode}
-                disabled={props.disabled}
+                disabled={props.disabled || props.pending}
                 aria-label={accessibleName("开启池模式")}
                 onCheckedChange={(checked) =>
                   form.setValue("poolMode", checked, { shouldDirty: true })
@@ -172,7 +182,7 @@ export function AccountCreationPolicyForm(props: {
                     aria-invalid={Boolean(form.formState.errors.retryCount)}
                     min={0}
                     max={10}
-                    disabled={props.disabled}
+                    disabled={props.disabled || props.pending}
                     {...form.register("retryCount")}
                   />
                 </SettingsField>
@@ -184,7 +194,7 @@ export function AccountCreationPolicyForm(props: {
                   <Input
                     aria-label={accessibleName("重试状态码")}
                     aria-invalid={Boolean(form.formState.errors.retryStatusCodes)}
-                    disabled={props.disabled}
+                    disabled={props.disabled || props.pending}
                     placeholder="401, 403, 429"
                     {...form.register("retryStatusCodes")}
                   />

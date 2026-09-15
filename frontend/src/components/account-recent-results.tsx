@@ -128,12 +128,10 @@ function tooltipDetail(result: AccountRecentResult): ReactElement {
     .filter(Boolean)
     .join(" · ");
   return (
-    <div className="grid w-fit max-w-[min(56rem,calc(100vw-1rem))] gap-1 text-xs leading-5">
-      <span className="whitespace-nowrap">{summary}</span>
+    <div className="grid w-fit min-w-0 max-w-full gap-1 text-xs leading-5">
+      <span>{summary}</span>
       {compactReason ? (
-        <span className="text-destructive/90 max-w-[min(56rem,calc(100vw-1rem))] break-all">
-          {compactReason}
-        </span>
+        <span className="text-destructive/90 break-all">{compactReason}</span>
       ) : null}
     </div>
   );

@@ -20,7 +20,7 @@ it("连接设置首次读取时显示骨架屏，不使用进度条占位", () =
       <ConfigPage activeTab="connection" />
     </QueryClientProvider>,
   );
-  const loading = screen.getByRole("status", { name: /正在读取/ });
+  const loading = screen.getByRole("status", { name: "正在读取连接设置" });
   expect(loading).toHaveAttribute("aria-busy", "true");
   expect(loading.querySelector('[data-slot="skeleton"]')).not.toBeNull();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();

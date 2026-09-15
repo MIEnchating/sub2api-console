@@ -29,6 +29,7 @@ type Manager struct {
 type session struct {
 	mu      sync.Mutex
 	op      sync.Mutex
+	frame   sync.Mutex
 	owner   string
 	view    View
 	browser Browser
@@ -175,17 +176,24 @@ func (m *Manager) Read(ctx context.Context, owner, id string) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	s.op.Lock()
-	defer s.op.Unlock()
+	s.frame.Lock()
+	defer s.frame.Unlock()
 	s.mu.Lock()
 	v, b := s.view, s.browser
 	s.mu.Unlock()
 	if v.Status == "waiting" && b != nil {
 		shot, err := b.Screenshot(ctx)
+		s.mu.Lock()
+		current := s.view
+		s.mu.Unlock()
+		if current.Status != "waiting" {
+			return current, nil
+		}
 		if err != nil {
 			return View{}, errors.New("浏览器画面读取失败，请重试或重新打开验证")
 		}
 		v.Image = "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(shot)
+		v.ChallengeCode = challengeCode(b)
 	}
 	return v, nil
 }

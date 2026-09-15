@@ -18,7 +18,7 @@ const browserKeys = new Set([
 ]);
 
 export function BrowserSurface(props: {
-  session: BrowserLoginSession;
+  session: Pick<BrowserLoginSession, "image" | "width" | "height">;
   disabled: boolean;
   onInput: (value: BrowserLoginInput) => Promise<unknown>;
 }): ReactElement {

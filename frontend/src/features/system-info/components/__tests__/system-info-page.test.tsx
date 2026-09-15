@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Task, TaskSummary } from "@/api";
@@ -81,6 +82,12 @@ function renderPage(
       usage_percent: 40,
     },
   });
+  queryClient.setQueryData(["dictionaries", "task_status"], {
+    items: [
+      { value: "queued", enabled: true },
+      { value: "running", enabled: true },
+    ],
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <SystemInfoPage />
@@ -89,6 +96,23 @@ function renderPage(
 }
 
 describe("系统信息任务页面", () => {
+  it("任务状态按字典顺序筛选，选择状态只显示匹配任务", async () => {
+    const view = renderPage([
+      runningTask,
+      { ...runningTask, id: "queued", status: "queued", message: "等待执行" },
+    ]);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "任务状态筛选" }));
+    expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual([
+      "排队中",
+      "进行中",
+      "等待输入",
+    ]);
+    await user.click(screen.getByRole("option", { name: "排队中" }));
+    expect(screen.getByText("等待执行")).toBeVisible();
+    expect(screen.queryByText("正在探活")).not.toBeInTheDocument();
+    view.unmount();
+  });
   it("显示 CPU、内存和硬盘实时占用", () => {
     renderPage();
 

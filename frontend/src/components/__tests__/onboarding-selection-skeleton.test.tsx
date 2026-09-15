@@ -1,9 +1,24 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { OnboardingSelectionSkeleton } from "../onboarding-selection-skeleton";
 
 describe("OnboardingSelectionSkeleton", () => {
+  it.each([true, false])(
+    "分组锁定为 %s 时，窄屏字段和汇总允许收缩且控件保持 32px",
+    (groupLocked) => {
+      render(<OnboardingSelectionSkeleton fillAvailableHeight={false} groupLocked={groupLocked} />);
+      const loading = screen.getByRole("status");
+      expect(loading).toHaveAttribute("aria-busy", "true");
+      const controls = loading.querySelectorAll(
+        '[data-onboarding-skeleton="form"] [data-slot="skeleton-control"]',
+      );
+      expect(controls.length).toBeGreaterThan(0);
+      for (const control of controls) expect(control).toHaveClass("h-8", "w-full");
+      expect(loading.querySelector('[data-onboarding-skeleton="form"]')).toHaveClass("min-w-0");
+    },
+  );
   it("preserves the complete Host onboarding layout while loading", () => {
     const markup = renderToStaticMarkup(
       <OnboardingSelectionSkeleton fillAvailableHeight groupLocked={false} />,

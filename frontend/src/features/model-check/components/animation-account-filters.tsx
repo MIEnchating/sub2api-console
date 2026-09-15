@@ -3,6 +3,7 @@ import type { AccountStatus } from "@/api";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import {
   defaultAnimationFilters,
   priorityLabels,
@@ -22,14 +23,12 @@ export function AnimationAccountFilters(props: {
     [props.accounts],
   );
   const platforms = useMemo(
-    () =>
-      [
-        ...new Set(
-          props.accounts.flatMap((account) => (account.platform ? [account.platform] : [])),
-        ),
-      ].sort(),
+    () => [
+      ...new Set(props.accounts.flatMap((account) => (account.platform ? [account.platform] : []))),
+    ],
     [props.accounts],
   );
+  const orderedPlatforms = useDictionaryOrder("platform", platforms, (platform) => platform);
   return (
     <div
       role="group"
@@ -51,7 +50,7 @@ export function AnimationAccountFilters(props: {
       />
       <FilterMenu
         label="平台"
-        options={platforms}
+        options={orderedPlatforms}
         value={props.value.platform}
         onValueChange={(platform) => props.onChange({ ...props.value, platform })}
       />

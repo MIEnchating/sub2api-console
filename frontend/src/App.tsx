@@ -1,8 +1,16 @@
 import { BrowserLogin } from "@/features/upstreams/components/browser-login/browser-login";
+import { inspectionAuthRecoveryActions } from "@/features/auto-inspection/constants";
+import { LoginPage } from "@/features/auth/components/login-page";
+
 import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
+import { TableEmptyState } from "@/components/data-table/empty-state";
 import { FieldError } from "@/components/field-error";
+import { FormField } from "@/components/form-field";
+import { SelectionToolbar } from "@/components/data-table/selection-toolbar";
+export { FormField } from "@/components/form-field";
 import { StartupLoading } from "@/components/startup-loading";
-import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { FormFieldsSkeleton } from "@/components/form-fields-skeleton";
 import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
 import { useAccountResultEvents } from "@/features/accounts/hooks/use-account-result-events";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
@@ -15,6 +23,7 @@ import { GroupBatchDialog } from "./features/groups/components/group-batch-dialo
 import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
 import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
 import * as React from "react";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import {
@@ -119,6 +128,7 @@ import {
   TaskStartupState,
 } from "./components/task-startup-state";
 import { Textarea } from "./components/ui/textarea";
+import { JsonEditor } from "@/components/json-editor";
 import {
   Select,
   SelectContent,
@@ -136,6 +146,7 @@ import {
 } from "./features/upstreams/components/upstream-group-dialog-header";
 import {
   accountTypeLabel,
+  alertStatusDictionary,
   accountTypeOptions,
   accountTypeValue,
   configurableUpstreamTypeOptions,
@@ -267,6 +278,12 @@ import { SettingsFooter } from "./features/config/components/settings-footer";
 import { ModelSyncSettingsCard } from "./features/config/components/model-sync-settings-card";
 import { ConfigSectionTabs } from "./features/config/components/config-section-tabs";
 import { DictionaryManagement } from "./features/config/components/dictionary-management";
+import { settingsLayout } from "./features/config/components/settings-layout";
+import {
+  ConnectionSettingsSkeleton,
+  NotificationSettingsSkeleton,
+  LogCleanupSettingsSkeleton,
+} from "./features/config/components/settings-loading";
 import type { ConfigTab } from "./features/config/constants";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
@@ -397,6 +414,7 @@ import { AppShellContext } from "./app-shell-context";
 export type View =
   | "overview"
   | "accounts"
+  | "account-workbench"
   | "upstreams"
   | "groups"
   | "uptime-kuma-templates"
@@ -432,6 +450,7 @@ export const navItems: Array<{
   to:
     | "/"
     | "/accounts"
+    | "/account-workbench"
     | "/upstreams"
     | "/groups"
     | "/uptime-kuma/templates"
@@ -471,6 +490,7 @@ export const navItems: Array<{
     to: "/revenue-analysis",
   },
   { id: "accounts", label: "账号管理", icon: UsersRound, to: "/accounts" },
+  { id: "account-workbench", label: "账号工作台", icon: UserPlus, to: "/account-workbench" },
   {
     id: "auto-inspection",
     label: "自动巡检",
@@ -549,6 +569,7 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
       "pricing",
       "revenue-analysis",
       "accounts",
+      "account-workbench",
       "auto-inspection",
       "model-check",
       "traffic",
@@ -589,6 +610,7 @@ const navigationSettingsSections: Array<NavigationSettingsSection<View>> = navSe
 const viewByPath: Record<string, View> = {
   "/": "overview",
   "/accounts": "accounts",
+  "/account-workbench": "account-workbench",
   "/upstreams": "upstreams",
   "/groups": "groups",
   "/uptime-kuma/config": "uptime-kuma-config",
@@ -735,6 +757,8 @@ function App() {
     return (
       <LoginPage
         reason={loginReason}
+        theme={theme}
+        onThemeChange={() => setTheme(theme === "dark" ? "light" : "dark")}
         onLogin={() => {
           setLoginReason(null);
           void session.refetch();
@@ -752,7 +776,7 @@ function App() {
   else if (overview.isLoading) openAlertsLabel = "…";
   return (
     <>
-      <SidebarProvider className="h-svh max-h-svh flex-col overflow-hidden" defaultOpen>
+      <SidebarProvider className="h-svh max-h-svh flex-col overflow-clip" defaultOpen>
         <header className="sticky top-0 z-40 h-[var(--app-header-height)] w-full shrink-0 bg-transparent">
           <div className="flex h-full items-center gap-1.5 px-2 sm:gap-2 sm:px-3">
             <SidebarTrigger variant="ghost" className="size-8" />
@@ -760,9 +784,13 @@ function App() {
               to="/"
               className="text-foreground inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-sm font-medium transition-colors hover:bg-accent"
             >
-              <span className="flex size-5 items-center justify-center overflow-hidden rounded-md bg-primary/15 text-primary">
-                <Activity size={14} />
-              </span>
+              <img
+                src="/console-mark.svg"
+                width={20}
+                height={20}
+                alt=""
+                className="size-5 shrink-0"
+              />
               <span>Sub2API</span>
             </Link>
             <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
@@ -1064,7 +1092,7 @@ export function SchedulerHeaderControls() {
           <Button
             variant={schedulingEnabled ? "destructive" : "default"}
             className="gap-1.5"
-            disabled={status.isLoading || toggle.isPending}
+            disabled={!status.data || toggle.isPending}
             aria-label={schedulingEnabled ? "取消自动调度" : "启动自动调度"}
             onClick={() => toggle.mutate()}
           >
@@ -1177,9 +1205,7 @@ function StartupState(props: { text: string; error?: boolean; onRetry?: () => vo
     <div className="bg-background text-foreground grid min-h-svh place-items-center p-6">
       <Card className={cn("w-full max-w-md p-6", props.error && "border-destructive")}>
         <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
-            <Activity size={20} />
-          </span>
+          <img src="/console-mark.svg" width={36} height={36} alt="" className="size-9 shrink-0" />
           <div>
             <strong className="block text-sm">{props.text}</strong>
             {props.onRetry ? (
@@ -1201,6 +1227,7 @@ function StartupState(props: { text: string; error?: boolean; onRetry?: () => vo
 function createSetupSchema(setupTokenRequired: boolean) {
   return z
     .object({
+      local_export_only: z.boolean(),
       username: z.string().min(2, "账号至少 2 个字符"),
       password: z.string().min(10, "密码至少 10 个字符"),
       confirm_password: z.string().min(1, "请再次输入密码"),
@@ -1214,6 +1241,7 @@ function createSetupSchema(setupTokenRequired: boolean) {
     })
     .refine(
       (value) =>
+        value.local_export_only ||
         (value.admin_base_url === "" && value.admin_key === "") ||
         (value.admin_base_url !== "" && value.admin_key !== ""),
       {
@@ -1230,6 +1258,7 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
   const form = useForm<SetupForm>({
     resolver: zodResolver(createSetupSchema(setupTokenRequired)),
     defaultValues: {
+      local_export_only: false,
       username: "",
       password: "",
       confirm_password: "",
@@ -1244,8 +1273,13 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
         {
           username: values.username,
           password: values.password,
-          admin_base_url: props.status?.target_configured ? "" : values.admin_base_url,
-          admin_key: props.status?.target_configured ? "" : values.admin_key,
+          local_export_only: values.local_export_only,
+          admin_base_url:
+            props.status?.target_configured || values.local_export_only
+              ? ""
+              : values.admin_base_url,
+          admin_key:
+            props.status?.target_configured || values.local_export_only ? "" : values.admin_key,
         },
         setupTokenRequired ? values.setup_token : undefined,
       );
@@ -1259,9 +1293,13 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
       <Card className="w-full max-w-md">
         <CardHeader>
           <div className="flex items-start gap-3">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
-              <Activity size={20} />
-            </span>
+            <img
+              src="/console-mark.svg"
+              width={36}
+              height={36}
+              alt=""
+              className="size-9 shrink-0"
+            />
             <div>
               <div className="text-muted-foreground text-[11px] font-medium tracking-wider uppercase">
                 FIRST RUN / SETUP
@@ -1336,33 +1374,53 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
             ) : null}
             {!props.status?.target_configured && (
               <>
-                <FormField
-                  label="Admin Base URL"
-                  htmlFor={`${fieldID}-admin-base-url`}
-                  error={form.formState.errors.admin_base_url?.message}
-                >
-                  <Input
-                    id={`${fieldID}-admin-base-url`}
-                    type="url"
-                    aria-invalid={Boolean(form.formState.errors.admin_base_url)}
-                    {...form.register("admin_base_url")}
-                    placeholder="https://sub2api.example.com"
+                <label className="flex items-start gap-2 text-sm">
+                  <Checkbox
+                    checked={form.watch("local_export_only")}
+                    disabled={form.formState.isSubmitting}
+                    onCheckedChange={(value) => {
+                      const local = value === true;
+                      form.setValue("local_export_only", local);
+                      if (local) {
+                        form.setValue("admin_base_url", "");
+                        form.setValue("admin_key", "");
+                        form.clearErrors(["admin_base_url", "admin_key"]);
+                      }
+                    }}
                   />
-                </FormField>
-                <FormField
-                  label="Admin Key"
-                  htmlFor={`${fieldID}-admin-key`}
-                  error={form.formState.errors.admin_key?.message}
-                >
-                  <Input
-                    id={`${fieldID}-admin-key`}
-                    type="password"
-                    autoComplete="off"
-                    aria-invalid={Boolean(form.formState.errors.admin_key)}
-                    {...form.register("admin_key")}
-                    placeholder="只提交到后端，不会回显"
-                  />
-                </FormField>
+                  仅使用本地账号工作台（不配置线上管理目标）
+                </label>
+                {!form.watch("local_export_only") && (
+                  <>
+                    <FormField
+                      label="Admin Base URL"
+                      htmlFor={`${fieldID}-admin-base-url`}
+                      error={form.formState.errors.admin_base_url?.message}
+                    >
+                      <Input
+                        id={`${fieldID}-admin-base-url`}
+                        type="url"
+                        aria-invalid={Boolean(form.formState.errors.admin_base_url)}
+                        {...form.register("admin_base_url")}
+                        placeholder="https://sub2api.example.com"
+                      />
+                    </FormField>
+                    <FormField
+                      label="Admin Key"
+                      htmlFor={`${fieldID}-admin-key`}
+                      error={form.formState.errors.admin_key?.message}
+                    >
+                      <Input
+                        id={`${fieldID}-admin-key`}
+                        type="password"
+                        autoComplete="off"
+                        aria-invalid={Boolean(form.formState.errors.admin_key)}
+                        {...form.register("admin_key")}
+                        placeholder="只提交到后端，不会回显"
+                      />
+                    </FormField>
+                  </>
+                )}
               </>
             )}
             <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -1382,114 +1440,6 @@ export function SetupPage(props: { status?: SetupStatus; onComplete: () => void 
   );
 }
 
-const loginSchema = z.object({
-  username: z.string().min(1, "请输入账号"),
-  password: z.string().min(1, "请输入密码"),
-});
-type LoginForm = z.infer<typeof loginSchema>;
-
-export function LoginPage(props: { onLogin: () => void; reason?: string | null }) {
-  const fieldID = React.useId();
-  const form = useForm<LoginForm>({
-    resolver: zodResolver(loginSchema),
-    defaultValues: { username: "", password: "" },
-  });
-  const submit = form.handleSubmit(async (values) => {
-    try {
-      await api.login(values);
-      props.onLogin();
-    } catch (reason) {
-      notifyOperationError(reason, "登录失败");
-    }
-  });
-  return (
-    <div className="bg-background text-foreground relative min-h-svh overflow-hidden">
-      <header className="absolute inset-x-0 top-0 z-10 flex h-16 items-center px-5 sm:h-20 sm:px-8">
-        <div className="flex items-center gap-3">
-          <span className="bg-primary/12 text-primary flex size-9 items-center justify-center rounded-xl ring-1 ring-primary/15">
-            <Activity size={19} />
-          </span>
-          <div className="leading-none">
-            <strong className="block text-sm font-semibold tracking-tight">Sub2API</strong>
-            <span className="text-muted-foreground mt-1 block text-[10px] font-medium tracking-[0.16em] uppercase">
-              Console
-            </span>
-          </div>
-        </div>
-      </header>
-      <main className="flex min-h-svh items-center justify-center px-5 py-20 sm:px-8">
-        <section className="w-full max-w-[440px]">
-          <div className="mb-8">
-            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">登录</h1>
-          </div>
-          {props.reason ? (
-            <div
-              className="border-warning/35 bg-warning/10 text-warning mb-5 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
-              role="alert"
-            >
-              <CircleAlert className="mt-0.5 shrink-0" size={16} aria-hidden="true" />
-              <span>{props.reason}</span>
-            </div>
-          ) : null}
-          <form className="grid gap-5" onSubmit={submit}>
-            <FormField
-              reserveErrorSpace
-              label="账号"
-              htmlFor={`${fieldID}-username`}
-              error={form.formState.errors.username?.message}
-            >
-              <Input
-                id={`${fieldID}-username`}
-                autoComplete="username"
-                aria-invalid={Boolean(form.formState.errors.username)}
-                {...form.register("username")}
-                className="h-10 bg-card/35 px-3"
-              />
-            </FormField>
-            <FormField
-              reserveErrorSpace
-              label="密码"
-              htmlFor={`${fieldID}-password`}
-              error={form.formState.errors.password?.message}
-            >
-              <Input
-                id={`${fieldID}-password`}
-                type="password"
-                autoComplete="current-password"
-                aria-invalid={Boolean(form.formState.errors.password)}
-                {...form.register("password")}
-                className="h-10 bg-card/35 px-3"
-              />
-            </FormField>
-            <Button type="submit" className="mt-2 w-full" disabled={form.formState.isSubmitting}>
-              <ShieldCheck size={16} />
-              {form.formState.isSubmitting ? "登录中…" : "登录"}
-            </Button>
-          </form>
-        </section>
-      </main>
-    </div>
-  );
-}
-
-export function FormField(props: {
-  label: string;
-  htmlFor?: string;
-  description?: React.ReactNode;
-  error?: string;
-  children: React.ReactNode;
-  reserveErrorSpace?: boolean;
-}) {
-  return (
-    <div className="grid gap-1.5 text-sm font-medium">
-      <FieldLabel label={props.label} description={props.description} htmlFor={props.htmlFor} />
-      {props.children}
-      {((props.reserveErrorSpace ?? "error" in props) || props.error) && (
-        <FieldError message={props.error} />
-      )}
-    </div>
-  );
-}
 function searchable(values: Array<string | number | null | undefined>, query: string) {
   const normalizedQuery = query.trim().toLocaleLowerCase();
   return (
@@ -1691,6 +1641,7 @@ const keyLabels: Record<string, string> = {
   evidence: "请求记录与探针",
   traffic_persisted: "写入真实请求样本",
   probes_persisted: "写入主动探针样本",
+  probes_deferred: "待后续巡检账号数",
   monitored_accounts: "读取请求记录的账号数",
   monitoring_available: "运维请求记录可用",
   probe_duration_second: "主动探针耗时（秒）",
@@ -1715,26 +1666,26 @@ function formatKey(value: string) {
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
+function ownLabel(labels: Record<string, string>, value: string): string | undefined {
+  return Object.hasOwn(labels, value) ? labels[value] : undefined;
+}
 function displayLabel(value: string | null | undefined, labels = statusLabels) {
   if (value === null || value === undefined) return "未配置";
   if (value === "") return "空值";
   const raw = String(value);
-  const exact = labels[raw] ?? labels[raw.toLowerCase()];
+  const exact = ownLabel(labels, raw) ?? ownLabel(labels, raw.toLowerCase());
   if (exact !== undefined) return exact;
   const match = raw.match(/^([a-z_]+)(\s+.*)$/i);
-  if (match && labels[match[1].toLowerCase()] !== undefined)
-    return `${labels[match[1].toLowerCase()]}${match[2]}`;
+  const prefix = match ? ownLabel(labels, match[1].toLowerCase()) : undefined;
+  if (match && prefix !== undefined) return `${prefix}${match[2]}`;
   return raw.includes("_") ? formatKey(raw) : raw;
 }
 function displayResultKey(value: string) {
-  const exact = keyLabels[value];
-  if (exact) return exact;
   const normalized = value.trim().toLowerCase();
-  const match = Object.entries(keyLabels).find(([key]) => key.toLowerCase() === normalized);
-  return match?.[1] ?? (normalized === "outcome" ? "结果" : formatKey(value));
+  return ownLabel(keyLabels, normalized) ?? formatKey(value);
 }
 function displayResultValue(value: string) {
-  const exact = resultLabels[value.trim().toLowerCase()];
+  const exact = ownLabel(resultLabels, value.trim().toLowerCase());
   return exact ?? displayLabel(value);
 }
 function displayTaskMessage(value: string | null | undefined) {
@@ -1749,10 +1700,10 @@ function displayText(value: string | null | undefined) {
     .split(/(\s|·|：|:|\/)/)
     .map(
       (part) =>
-        eventLabels[part] ??
-        operationLabels[part] ??
-        phaseLabels[part] ??
-        statusLabels[part.toLowerCase()] ??
+        ownLabel(eventLabels, part) ??
+        ownLabel(operationLabels, part) ??
+        ownLabel(phaseLabels, part) ??
+        ownLabel(statusLabels, part.toLowerCase()) ??
         part,
     )
     .join("");
@@ -1955,6 +1906,16 @@ function policyNumberInput(value: string): number | null {
   return Number.isFinite(parsed) && Number.isInteger(parsed) ? parsed : null;
 }
 export function UpstreamsPage() {
+  const orderedUpstreamTypes = useDictionaryOrder(
+    "upstream_type",
+    upstreamTypeOptions,
+    (item) => item.value,
+  );
+  const orderedAuthStatuses = useDictionaryOrder(
+    "auth_status",
+    upstreamAuthStatusOptions,
+    (item) => item.value,
+  );
   const navigate = useNavigate();
   const [groupHistoryOverviewOpen, setGroupHistoryOverviewOpen] = useState(false);
   const [clearGroupHistoryDialogOpen, setClearGroupHistoryDialogOpen] = useState(false);
@@ -2284,28 +2245,27 @@ export function UpstreamsPage() {
   const maximumBalance = filters.maximumBalance ? Number(filters.maximumBalance) : null;
   const hasActiveFilters =
     onlyGroupAuditIssues || Object.values(filters).some((value) => value !== "" && value !== "all");
-  const allHosts = upstreams.error
-    ? []
-    : (data?.hosts.filter((host) => {
-        const balance = host.balance === null ? null : Number(host.balance);
-        const balanceMatches =
-          minimumBalance === null && maximumBalance === null
-            ? true
-            : balance !== null &&
-              Number.isFinite(balance) &&
-              (minimumBalance === null || balance >= minimumBalance) &&
-              (maximumBalance === null || balance <= maximumBalance);
-        const auditMatches =
-          !onlyGroupAuditIssues ||
-          upstreamHasGroupBindingAuditIssue(groupAuditItemsByHost.get(host.host) ?? []);
-        return (
-          searchable([host.host, host.name], filters.keyword) &&
-          (filters.upstreamType === "all" || host.upstream_type === filters.upstreamType) &&
-          (filters.authStatus === "all" || host.auth_status === filters.authStatus) &&
-          balanceMatches &&
-          auditMatches
-        );
-      }) ?? []);
+  const allHosts =
+    data?.hosts.filter((host) => {
+      const balance = host.balance === null ? null : Number(host.balance);
+      const balanceMatches =
+        minimumBalance === null && maximumBalance === null
+          ? true
+          : balance !== null &&
+            Number.isFinite(balance) &&
+            (minimumBalance === null || balance >= minimumBalance) &&
+            (maximumBalance === null || balance <= maximumBalance);
+      const auditMatches =
+        !onlyGroupAuditIssues ||
+        upstreamHasGroupBindingAuditIssue(groupAuditItemsByHost.get(host.host) ?? []);
+      return (
+        searchable([host.host, host.name], filters.keyword) &&
+        (filters.upstreamType === "all" || host.upstream_type === filters.upstreamType) &&
+        (filters.authStatus === "all" || host.auth_status === filters.authStatus) &&
+        balanceMatches &&
+        auditMatches
+      );
+    }) ?? [];
   const hostPagination = useClientPagination(allHosts);
   const hosts = hostPagination.visibleItems;
   const pageHosts = hosts.map((host) => host.host);
@@ -2494,7 +2454,7 @@ export function UpstreamsPage() {
           />
           <FilterMenu
             label="类型"
-            options={upstreamTypeOptions.map((option) => option.value)}
+            options={orderedUpstreamTypes.map((option) => option.value)}
             value={filterDraft.upstreamType === "all" ? null : filterDraft.upstreamType}
             onValueChange={(upstreamType) =>
               setFilterDraft((current) => ({
@@ -2506,7 +2466,7 @@ export function UpstreamsPage() {
           />
           <FilterMenu
             label="状态"
-            options={upstreamAuthStatusOptions.map((option) => option.value)}
+            options={orderedAuthStatuses.map((option) => option.value)}
             value={filterDraft.authStatus === "all" ? null : filterDraft.authStatus}
             onValueChange={(authStatus) =>
               setFilterDraft((current) => ({
@@ -3520,15 +3480,13 @@ export function ManualAuthHeadersEditor(props: {
   const fieldID = React.useId();
   return (
     <FormField label="Headers JSON" htmlFor={fieldID}>
-      <Textarea
+      <JsonEditor
         id={fieldID}
+        aria-label="Headers JSON"
         aria-invalid={Boolean(props.error)}
         aria-describedby={props.error ? `${fieldID}-error` : undefined}
-        autoGrow
-        className="min-h-24 min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere]"
-        wrap="soft"
         value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
+        onChange={props.onChange}
         placeholder='例如 {"Authorization":"Bearer ..."}'
       />
       <FieldError id={`${fieldID}-error`} message={props.error} />
@@ -3965,113 +3923,79 @@ export function AccountSelectionToolbar(props: {
   onProbe: () => void;
   onDelete: () => void;
 }) {
-  if (props.selectedCount === 0) return null;
-
   return (
-    <div
-      role="toolbar"
-      aria-label={`已选择 ${props.selectedCount} 个账号的批量操作`}
-      aria-describedby="account-bulk-actions-description"
-      tabIndex={-1}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          props.onClear();
-        }
-      }}
-      className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-xl transition-all duration-300 ease-out hover:scale-105 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+    <SelectionToolbar
+      selectedCount={props.selectedCount}
+      entityLabel="账号"
+      pending={props.pending}
+      onClear={props.onClear}
     >
-      <div className="flex items-center gap-x-2 rounded-xl border bg-background/95 p-2 shadow-xl supports-[backdrop-filter]:bg-background/60 supports-[backdrop-filter]:backdrop-blur-lg">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label="清空选择"
-                onClick={props.onClear}
-              />
-            }
-          >
-            <X />
-          </TooltipTrigger>
-          <TooltipContent>清空选择（Esc）</TooltipContent>
-        </Tooltip>
-        <div className="h-5 border-l" aria-hidden="true" />
-        <div
-          id="account-bulk-actions-description"
-          className="flex items-center gap-x-1 text-sm"
-          aria-live="polite"
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={`探活已选择的 ${props.selectedCount} 个账号`}
+              disabled={props.pending}
+              onClick={props.onProbe}
+            />
+          }
         >
-          <Badge
-            variant="default"
-            className="min-w-8 rounded-lg"
-            aria-label={`${props.selectedCount} 个已选择账号`}
-          >
-            {props.selectedCount}
-          </Badge>
-          <span className="hidden sm:inline">账号</span>
-          <span>已选择</span>
-        </div>
-        <div className="h-5 border-l" aria-hidden="true" />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label={`探活已选择的 ${props.selectedCount} 个账号`}
-                disabled={props.pending}
-                onClick={props.onProbe}
-              />
-            }
-          >
-            <Activity aria-hidden="true" />
-          </TooltipTrigger>
-          <TooltipContent>探活已选择账号</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label={`同步已选择的 ${props.selectedCount} 个账号模型`}
-                disabled={props.pending}
-                onClick={props.onSyncModels}
-              />
-            }
-          >
-            <RefreshCw />
-          </TooltipTrigger>
-          <TooltipContent>同步已选择账号模型</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="destructive"
-                size="icon"
-                aria-label={`删除已选择的 ${props.selectedCount} 个账号`}
-                disabled={props.pending}
-                onClick={props.onDelete}
-              />
-            }
-          >
-            <Trash2 />
-          </TooltipTrigger>
-          <TooltipContent>删除已选择账号</TooltipContent>
-        </Tooltip>
-      </div>
-    </div>
+          <Activity aria-hidden="true" />
+        </TooltipTrigger>
+        <TooltipContent>探活已选择账号</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label={`同步已选择的 ${props.selectedCount} 个账号模型`}
+              disabled={props.pending}
+              onClick={props.onSyncModels}
+            />
+          }
+        >
+          <RefreshCw />
+        </TooltipTrigger>
+        <TooltipContent>同步已选择账号模型</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="destructive"
+              size="icon"
+              aria-label={`删除已选择的 ${props.selectedCount} 个账号`}
+              disabled={props.pending}
+              onClick={props.onDelete}
+            />
+          }
+        >
+          <Trash2 />
+        </TooltipTrigger>
+        <TooltipContent>删除已选择账号</TooltipContent>
+      </Tooltip>
+    </SelectionToolbar>
   );
 }
 
 export function AccountsPage() {
+  const orderedAccountTypes = useDictionaryOrder(
+    "account_type",
+    accountTypeOptions,
+    (item) => item.value,
+  );
+  const groupDictionary = useQuery({
+    queryKey: ["dictionaries", "group"],
+    queryFn: () => api.dictionaries("group"),
+    staleTime: 60_000,
+  });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
@@ -4130,8 +4054,13 @@ export function AccountsPage() {
   const [batchProbeOpen, setBatchProbeOpen] = useState(false);
   const [batchProbeAccounts, setBatchProbeAccounts] = useState<AccountStatus[]>([]);
   const [batchProbePending, setBatchProbePending] = useState(false);
-  const groupOptions = Array.from(new Set(rows.flatMap((account) => account.groups))).sort((a, b) =>
-    a.localeCompare(b),
+  const groupOptions = Array.from(
+    new Set([
+      ...(groupDictionary.data?.items ?? [])
+        .filter((item) => item.enabled)
+        .map((item) => item.name),
+      ...rows.flatMap((account) => account.groups),
+    ]),
   );
   const platformOptions = orderedDictionaryOptions(
     platformDictionary.data?.items,
@@ -4450,7 +4379,7 @@ export function AccountsPage() {
           />
           <FilterMenu
             label="类型"
-            options={accountTypeOptions.map((option) => option.value)}
+            options={orderedAccountTypes.map((option) => option.value)}
             value={typeFilter}
             onValueChange={(value) => {
               setTypeFilter(value);
@@ -4581,22 +4510,28 @@ export function AccountsPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-              {!accounts.isLoading && !filteredRows.length && (
-                <TableRow>
-                  <TableCell colSpan={10}>
-                    <EmptyRow
-                      text={
-                        search ||
-                        statusFilter !== "all" ||
-                        groupFilter ||
-                        typeFilter ||
-                        platformFilter
-                          ? "没有匹配的账号"
-                          : "当前没有账号"
-                      }
-                    />
-                  </TableCell>
-                </TableRow>
+              {!accounts.data && accounts.isError && (
+                <TableEmptyState columns={10}>
+                  <ContentRetry
+                    pending={accounts.isFetching}
+                    onRetry={() => void accounts.refetch()}
+                  />
+                </TableEmptyState>
+              )}
+              {accounts.data && !filteredRows.length && (
+                <TableEmptyState columns={10}>
+                  <EmptyRow
+                    text={
+                      search ||
+                      statusFilter !== "all" ||
+                      groupFilter ||
+                      typeFilter ||
+                      platformFilter
+                        ? "没有匹配的账号"
+                        : "当前没有账号"
+                    }
+                  />
+                </TableEmptyState>
               )}
               {!accounts.isLoading &&
                 pageRows.map((account) => (
@@ -4930,7 +4865,7 @@ export function AccountsPage() {
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
             {batchDeletePreview.isLoading && !batchDeleteTaskId ? (
-              <TaskStartupState message="正在读取批量删除影响范围" />
+              <ContentLoading label="正在读取批量删除影响范围" />
             ) : null}
             {batchDeletePreview.error && !batchDeleteTaskId ? (
               <QueryError
@@ -5933,18 +5868,6 @@ export function GroupsPage() {
   );
   const allPageSelected = pageIDs.length > 0 && pageIDs.every((id) => batch.selectedIDs.has(id));
   const somePageSelected = pageIDs.some((id) => batch.selectedIDs.has(id));
-  if (groups.error)
-    return (
-      <PageLayout>
-        <PageHeading
-          eyebrow="ROUTING / GROUPS"
-          title="分组管理"
-          description="查看各分组的账号规模、调度状态和策略。"
-          action={headingActions}
-        />
-        <QueryError error={groups.error} fallback="分组读取失败" />
-      </PageLayout>
-    );
   return (
     <PageLayout fixedContent>
       <PageHeading
@@ -5954,6 +5877,7 @@ export function GroupsPage() {
         action={headingActions}
       />
       <div className="flex h-full min-h-0 flex-col gap-2.5 sm:gap-3">
+        {groups.error && <QueryError error={groups.error} fallback="分组读取失败" />}
         {policy.error && (
           <QueryError error={policy.error} fallback="全局策略读取失败，请刷新后再编辑分组" />
         )}
@@ -5998,10 +5922,15 @@ export function GroupsPage() {
             </TableHeader>
             <TableBody>
               {groups.isLoading && <TableLoadingRows columns={9} />}
-              {!groups.isLoading && !filteredRows.length && (
-                <TableMessageRow columns={9}>
+              {!groups.data && groups.isError && (
+                <TableEmptyState columns={9}>
+                  <ContentRetry pending={groups.isFetching} onRetry={() => void groups.refetch()} />
+                </TableEmptyState>
+              )}
+              {groups.data && !filteredRows.length && (
+                <TableEmptyState columns={9}>
                   <EmptyRow text={search ? "没有匹配的分组" : "当前没有分组"} />
-                </TableMessageRow>
+                </TableEmptyState>
               )}
               {pageRows.map((group) => (
                 <TableRow
@@ -6154,6 +6083,7 @@ export function GroupsPage() {
             {editor && (
               <GroupPolicyEditorFields
                 value={editor}
+                disabled={updateGroup.isPending}
                 onChange={setEditor}
                 globalStrategy={policy.data?.global_strategy}
                 globalProbeModel={policy.data?.probe_model}
@@ -6199,6 +6129,12 @@ export function GroupsPage() {
 }
 
 export function AlertsPage() {
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const statusOptions = useDictionaryOrder(
+    "alert_status",
+    Object.keys(alertStatusDictionary),
+    (value) => value,
+  );
   const alerts = useQuery({
     queryKey: ["alerts"],
     queryFn: api.alerts,
@@ -6211,7 +6147,10 @@ export function AlertsPage() {
   });
   const queryClient = useQueryClient();
   const alertRows = Array.isArray(alerts.data) ? alerts.data : [];
-  const pagination = useClientPagination(alertRows);
+  const filteredAlerts = alertRows.filter(
+    (alert) => statusFilter === null || alert.status === statusFilter,
+  );
+  const pagination = useClientPagination(filteredAlerts);
   const pageAlerts = pagination.visibleItems;
   const clearableAlertCount = alertRows.filter((alert) => alert.status !== "firing").length;
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -6293,15 +6232,27 @@ export function AlertsPage() {
           <PanelHeading
             title="告警列表"
             action={
-              <AlertListActions
-                loading={alerts.isLoading}
-                failed={Boolean(alerts.error)}
-                clearableCount={clearableAlertCount}
-                onClear={() => {
-                  clearAlerts.reset();
-                  setClearDialogOpen(true);
-                }}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <FilterMenu
+                  label="告警状态"
+                  options={statusOptions}
+                  value={statusFilter}
+                  onValueChange={(value) => {
+                    setStatusFilter(value);
+                    pagination.setCurrentPage(1);
+                  }}
+                  optionLabel={alertStatusLabel}
+                />
+                <AlertListActions
+                  loading={alerts.isLoading}
+                  failed={Boolean(alerts.error)}
+                  clearableCount={clearableAlertCount}
+                  onClear={() => {
+                    clearAlerts.reset();
+                    setClearDialogOpen(true);
+                  }}
+                />
+              </div>
             }
           />
           <div
@@ -6309,31 +6260,30 @@ export function AlertsPage() {
             data-testid="alert-list-scroll-area"
           >
             {alerts.isLoading && <LoadingRows columns={1} />}
-            {!alerts.isLoading && !alerts.error && !alertRows.length && (
+            {!alerts.isLoading && !alerts.error && !filteredAlerts.length && (
               <EmptyRow text="暂无告警" detail="新的鉴权、余额或主动探测异常会出现在这里。" />
             )}
-            {!alerts.error &&
-              pageAlerts.map((alert) => {
-                let status: "failed" | "suppressed" | "succeeded" = "succeeded";
-                if (alert.status === "firing") status = "failed";
-                else if (alert.status === "suppressed") status = "suppressed";
-                return (
-                  <RunRow
-                    key={alert.incident_key}
-                    status={status}
-                    title={`${alertTypeLabel(alert.event_type, alert.status)} · ${alertObjectLabel(alert)}`}
-                    detail={`${alertCauseLabel(alert.cause_code, alert.status)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
-                    state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
-                    icon={<BellRing size={15} />}
-                  />
-                );
-              })}
+            {pageAlerts.map((alert) => {
+              let status: "failed" | "suppressed" | "succeeded" = "succeeded";
+              if (alert.status === "firing") status = "failed";
+              else if (alert.status === "suppressed") status = "suppressed";
+              return (
+                <RunRow
+                  key={alert.incident_key}
+                  status={status}
+                  title={`${alertTypeLabel(alert.event_type, alert.status)} · ${alertObjectLabel(alert)}`}
+                  detail={`${alertCauseLabel(alert.cause_code, alert.status)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
+                  state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
+                  icon={<BellRing size={15} />}
+                />
+              );
+            })}
           </div>
-          {!alerts.error && alertRows.length > 0 && (
+          {filteredAlerts.length > 0 && (
             <DataTablePagination
               currentPage={pagination.currentPage}
               totalPages={pagination.totalPages}
-              totalItems={alertRows.length}
+              totalItems={filteredAlerts.length}
               pageSize={pagination.pageSize}
               onPageChange={pagination.setCurrentPage}
               onPageSizeChange={pagination.setPageSize}
@@ -6442,6 +6392,11 @@ export function onboardingProbeTarget(
   };
 }
 export function OnboardingPage() {
+  const orderedUpstreamTypes = useDictionaryOrder(
+    "upstream_type",
+    configurableUpstreamTypeOptions,
+    (option) => option.value,
+  );
   const fieldID = React.useId();
   const navigate = useNavigate();
   const onboardingSearch = useSearch({ from: "/onboarding" });
@@ -7069,7 +7024,7 @@ export function OnboardingPage() {
   const preparedData = prepareMatchesEntry ? prepare.data : undefined;
   const preparedError = prepareMatchesEntry ? prepare.error : null;
   const preparing = prepareMatchesEntry && prepare.isPending;
-  const localGroups = groups.error ? [] : (groups.data?.filter((group) => group.id) ?? []);
+  const localGroups = groups.data?.filter((group) => group.id) ?? [];
   const allCandidates = (preparedData?.candidates ?? []).map((candidate) =>
     candidate.unavailable_reason === "" ? { ...candidate, unavailable_reason: "空值" } : candidate,
   );
@@ -7250,7 +7205,7 @@ export function OnboardingPage() {
     }
     setSelectedGroupId(entryGroupId);
   }, [entryGroupId, form, preparedData]);
-  if (groups.error)
+  if (groups.error && !groups.data)
     return (
       <PageLayout>
         <PageHeading
@@ -7260,6 +7215,7 @@ export function OnboardingPage() {
           action={onboardingHeadingActions}
         />
         <QueryError error={groups.error} fallback="本地分组读取失败" />
+        <ContentRetry pending={groups.isFetching} onRetry={() => void groups.refetch()} />
       </PageLayout>
     );
   const onboardingPending = onboardingSubmitting || taskIsPending(taskId, task);
@@ -7297,6 +7253,7 @@ export function OnboardingPage() {
         description={onboardingEntryDescription(entryKind)}
         action={onboardingHeadingActions}
       />
+      {groups.error && <QueryError error={groups.error} fallback="本地分组读取失败" />}
       {!entryHost ? <OnboardingStepIndicator completed={Boolean(verifiedUpstream)} /> : null}
 
       {!entryHost && !verifiedUpstream ? (
@@ -7381,7 +7338,7 @@ export function OnboardingPage() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {configurableUpstreamTypeOptions.map((option) => (
+                            {orderedUpstreamTypes.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
@@ -7574,14 +7531,14 @@ export function OnboardingPage() {
               )}
               {authMode === "custom_headers" && (
                 <FormField htmlFor={`${fieldID}-headers`} label="Headers JSON">
-                  <Textarea
+                  <JsonEditor
                     id={`${fieldID}-headers`}
-                    className="min-h-24"
+                    aria-label="Headers JSON"
                     value={credentials.headers}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setCredentials((current) => ({
                         ...current,
-                        headers: event.target.value,
+                        headers: value,
                       }))
                     }
                     placeholder='例如 {"Authorization":"Bearer ..."}'
@@ -7590,14 +7547,14 @@ export function OnboardingPage() {
               )}
               {authMode === "cookie" && (
                 <FormField htmlFor={`${fieldID}-cookies`} label="Cookies JSON">
-                  <Textarea
+                  <JsonEditor
                     id={`${fieldID}-cookies`}
-                    className="min-h-24"
+                    aria-label="Cookies JSON"
                     value={credentials.cookies}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setCredentials((current) => ({
                         ...current,
-                        cookies: event.target.value,
+                        cookies: value,
                       }))
                     }
                     placeholder='例如 {"session":"..."}'
@@ -7621,14 +7578,13 @@ export function OnboardingPage() {
                     />
                   </div>
                   {showCustomHeaders ? (
-                    <Textarea
+                    <JsonEditor
                       aria-label="自定义请求头 JSON"
-                      className="min-h-24"
                       value={credentials.headers}
-                      onChange={(event) =>
+                      onChange={(value) =>
                         setCredentials((current) => ({
                           ...current,
-                          headers: event.target.value,
+                          headers: value,
                         }))
                       }
                       placeholder='例如 {"X-Custom-Header":"value"}'
@@ -9713,11 +9669,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   if (logCleanup.isLoading) logCleanupStatusLabel = "读取中";
   else if (logCleanup.error) logCleanupStatusLabel = "读取失败";
   else if (logCleanup.data?.enabled) logCleanupStatusLabel = "自动清理已开启";
-  const settingsLoading =
-    config.isLoading ||
-    (activeTab === "notifications" && notifications.isLoading) ||
-    (activeTab === "interface" && logCleanup.isLoading);
-  if (config.error)
+  if (activeTab === "connection" && config.error && !config.data)
     return (
       <PageLayout fixedContent>
         <PageHeading
@@ -9735,6 +9687,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           }
         />
         <QueryError error={config.error} fallback="系统设置读取失败" />
+        <ContentRetry pending={config.isFetching} onRetry={() => void config.refetch()} />
       </PageLayout>
     );
   return (
@@ -9760,6 +9713,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
         className="flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden"
         data-testid="system-settings-page"
       >
+        {config.error && <QueryError error={config.error} fallback="系统设置读取失败" />}
         {config.data?.configuration_errors?.length ? (
           <div className="border-warning/40 bg-warning/10 text-warning rounded-lg border px-3 py-2 text-sm">
             配置存在无效值：{config.data.configuration_errors.join("、")}
@@ -9771,162 +9725,160 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           id={`config-panel-${activeTab}`}
           className={cn(
             "grid min-h-0 flex-1 min-w-0 auto-rows-[100%] items-stretch gap-4 overflow-y-auto overscroll-contain xl:overflow-hidden",
-            activeTab === "interface" &&
-              !settingsLoading &&
-              "xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]",
+            activeTab === "interface" && settingsLayout.interface,
           )}
           data-testid="system-settings-panel"
           role="tabpanel"
           aria-labelledby={`config-tab-${activeTab}`}
         >
-          {settingsLoading ? <PageLoadingSkeleton label="正在读取系统设置" variant="form" /> : null}
-          {activeTab === "connection" && !settingsLoading ? (
-            <div
-              className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.75fr)]"
-              data-testid="connection-settings-layout"
-            >
-              <Card size="sm" className="h-full min-h-0 min-w-0">
-                <CardHeader className="shrink-0">
-                  <CardTitle>Sub2API 连接</CardTitle>
-                  <CardDescription>
-                    Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
-                  </CardDescription>
-                </CardHeader>
-                <CardContent
-                  data-slot="settings-scroll"
-                  className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(0,1fr)_minmax(0,0.4fr)]"
-                >
-                  <div className="lg:col-span-2" data-testid="runtime-controls">
-                    <SettingsControlRow
-                      title="执行模式"
+          {activeTab === "connection" ? (
+            <div className={settingsLayout.connection} data-testid="connection-settings-layout">
+              {config.isLoading ? (
+                <ConnectionSettingsSkeleton />
+              ) : (
+                <Card size="sm" className="h-full min-h-0 min-w-0">
+                  <CardHeader className="shrink-0">
+                    <CardTitle>Sub2API 连接</CardTitle>
+                    <CardDescription>
+                      Admin API Key 可在 Sub2API 后台的系统设置中获取，保存后不会回显
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent
+                    data-slot="settings-scroll"
+                    className={settingsLayout.connectionFields}
+                  >
+                    <div className="lg:col-span-2" data-testid="runtime-controls">
+                      <SettingsControlRow
+                        title="执行模式"
+                        description={
+                          runtimeModeOptions.find((option) => option.value === config.data?.mode)
+                            ?.description ?? "正在读取运行配置"
+                        }
+                      >
+                        <SegmentedControl
+                          className="flex-wrap justify-end"
+                          role="group"
+                          aria-label="执行模式"
+                        >
+                          {runtimeModeOptions.map((option) => (
+                            <Tooltip key={option.value}>
+                              <TooltipTrigger render={<span className="inline-flex" />}>
+                                <SegmentedControlItem
+                                  selected={config.data?.mode === option.value}
+                                  disabled={config.isLoading || updateRuntimeMode.isPending}
+                                  aria-label={`${option.value}：${option.description}`}
+                                  onClick={() => {
+                                    if (config.data?.mode !== option.value) {
+                                      updateRuntimeMode.mutate(option.value);
+                                    }
+                                  }}
+                                >
+                                  {option.value}
+                                </SegmentedControlItem>
+                              </TooltipTrigger>
+                              <TooltipContent>{option.description}</TooltipContent>
+                            </Tooltip>
+                          ))}
+                        </SegmentedControl>
+                      </SettingsControlRow>
+                    </div>
+                    <div className="min-w-0 lg:col-span-2">
+                      <FormField label="Sub2API 地址">
+                        <Input
+                          type="url"
+                          value={targetForm.admin_base_url}
+                          onChange={(event) => {
+                            setTargetEdited(true);
+                            setTargetForm({
+                              ...targetForm,
+                              admin_base_url: event.target.value,
+                            });
+                          }}
+                          placeholder="https://sub2api.example.com"
+                        />
+                      </FormField>
+                    </div>
+                    <FormField
+                      label="Admin API Key"
                       description={
-                        runtimeModeOptions.find((option) => option.value === config.data?.mode)
-                          ?.description ?? "正在读取运行配置"
+                        config.data?.target_configured ? "已配置，留空则不修改。" : undefined
                       }
                     >
-                      <SegmentedControl
-                        className="flex-wrap justify-end"
-                        role="group"
-                        aria-label="执行模式"
-                      >
-                        {runtimeModeOptions.map((option) => (
-                          <Tooltip key={option.value}>
-                            <TooltipTrigger render={<span className="inline-flex" />}>
-                              <SegmentedControlItem
-                                selected={config.data?.mode === option.value}
-                                disabled={config.isLoading || updateRuntimeMode.isPending}
-                                aria-label={`${option.value}：${option.description}`}
-                                onClick={() => {
-                                  if (config.data?.mode !== option.value) {
-                                    updateRuntimeMode.mutate(option.value);
-                                  }
-                                }}
-                              >
-                                {option.value}
-                              </SegmentedControlItem>
-                            </TooltipTrigger>
-                            <TooltipContent>{option.description}</TooltipContent>
-                          </Tooltip>
-                        ))}
-                      </SegmentedControl>
-                    </SettingsControlRow>
-                  </div>
-                  <div className="min-w-0 lg:col-span-2">
-                    <FormField label="Sub2API 地址">
                       <Input
-                        type="url"
-                        value={targetForm.admin_base_url}
+                        type="password"
+                        value={targetForm.admin_key}
                         onChange={(event) => {
                           setTargetEdited(true);
                           setTargetForm({
                             ...targetForm,
-                            admin_base_url: event.target.value,
+                            admin_key: event.target.value,
                           });
                         }}
-                        placeholder="https://sub2api.example.com"
+                        placeholder={sensitiveFieldPlaceholder(
+                          config.data?.target_configured === true,
+                          "输入 Admin API Key",
+                        )}
                       />
                     </FormField>
-                  </div>
-                  <FormField
-                    label="Admin API Key"
-                    description={
-                      config.data?.target_configured ? "已配置，留空则不修改。" : undefined
-                    }
-                  >
-                    <Input
-                      type="password"
-                      value={targetForm.admin_key}
-                      onChange={(event) => {
-                        setTargetEdited(true);
-                        setTargetForm({
-                          ...targetForm,
-                          admin_key: event.target.value,
-                        });
-                      }}
-                      placeholder={sensitiveFieldPlaceholder(
-                        config.data?.target_configured === true,
-                        "输入 Admin API Key",
-                      )}
-                    />
-                  </FormField>
-                  <FormField
-                    label="请求超时（秒）"
-                    description="Admin API 请求超时，允许 1–120 秒。"
-                  >
-                    <Input
-                      type="number"
-                      min={1}
-                      max={120}
-                      inputMode="numeric"
-                      value={targetForm.request_timeout_seconds}
-                      onChange={(event) => {
-                        setTargetEdited(true);
-                        setTargetForm({
-                          ...targetForm,
-                          request_timeout_seconds: event.target.value,
-                        });
-                      }}
-                    />
-                  </FormField>
-                </CardContent>
-                <SettingsFooter>
-                  {managementTaskId && taskIsPending(managementTaskId, managementTask) ? (
-                    <TaskCancelButton taskId={managementTaskId} />
-                  ) : null}
-                  <Button
-                    onClick={() => saveTarget.mutate(false)}
-                    disabled={
-                      saveTarget.isPending ||
-                      !targetForm.admin_base_url.trim() ||
-                      (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
-                      !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
-                      Number(targetForm.request_timeout_seconds) < 1 ||
-                      Number(targetForm.request_timeout_seconds) > 120
-                    }
-                  >
-                    <Save size={16} />
-                    {saveTarget.isPending ? "保存中…" : "保存连接"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => saveTarget.mutate(true)}
-                    disabled={
-                      saveTarget.isPending ||
-                      taskIsPending(managementTaskId, managementTask) ||
-                      !targetForm.admin_base_url.trim() ||
-                      (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
-                      !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
-                      Number(targetForm.request_timeout_seconds) < 1 ||
-                      Number(targetForm.request_timeout_seconds) > 120
-                    }
-                  >
-                    <RefreshCw size={16} />
-                    {taskIsPending(managementTaskId, managementTask)
-                      ? `测试同步 ${managementTask.data?.progress ?? 0}%`
-                      : "保存并测试同步"}
-                  </Button>
-                </SettingsFooter>
-              </Card>
+                    <FormField
+                      label="请求超时（秒）"
+                      description="Admin API 请求超时，允许 1–120 秒。"
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        max={120}
+                        inputMode="numeric"
+                        value={targetForm.request_timeout_seconds}
+                        onChange={(event) => {
+                          setTargetEdited(true);
+                          setTargetForm({
+                            ...targetForm,
+                            request_timeout_seconds: event.target.value,
+                          });
+                        }}
+                      />
+                    </FormField>
+                  </CardContent>
+                  <SettingsFooter>
+                    {managementTaskId && taskIsPending(managementTaskId, managementTask) ? (
+                      <TaskCancelButton taskId={managementTaskId} />
+                    ) : null}
+                    <Button
+                      onClick={() => saveTarget.mutate(false)}
+                      disabled={
+                        saveTarget.isPending ||
+                        !targetForm.admin_base_url.trim() ||
+                        (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
+                        !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
+                        Number(targetForm.request_timeout_seconds) < 1 ||
+                        Number(targetForm.request_timeout_seconds) > 120
+                      }
+                    >
+                      <Save size={16} />
+                      {saveTarget.isPending ? "保存中…" : "保存连接"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => saveTarget.mutate(true)}
+                      disabled={
+                        saveTarget.isPending ||
+                        taskIsPending(managementTaskId, managementTask) ||
+                        !targetForm.admin_base_url.trim() ||
+                        (!config.data?.target_configured && !targetForm.admin_key.trim()) ||
+                        !Number.isInteger(Number(targetForm.request_timeout_seconds)) ||
+                        Number(targetForm.request_timeout_seconds) < 1 ||
+                        Number(targetForm.request_timeout_seconds) > 120
+                      }
+                    >
+                      <RefreshCw size={16} />
+                      {taskIsPending(managementTaskId, managementTask)
+                        ? `测试同步 ${managementTask.data?.progress ?? 0}%`
+                        : "保存并测试同步"}
+                    </Button>
+                  </SettingsFooter>
+                </Card>
+              )}
               <LastInspectionSummaryCard
                 status={autoInspection.data}
                 loading={autoInspection.isLoading}
@@ -9935,11 +9887,8 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </div>
           ) : null}
 
-          {activeTab === "accounts" && !settingsLoading ? (
-            <div
-              className="grid h-full min-h-0 auto-rows-[100%] items-stretch gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)]"
-              data-testid="account-settings-layout"
-            >
+          {activeTab === "accounts" ? (
+            <div className={settingsLayout.accounts} data-testid="account-settings-layout">
               <AccountCreationSettingsCard
                 fallbackConcurrency={config.data?.account_default_concurrency ?? 10}
                 fallbackPriority={config.data?.account_default_priority ?? 1}
@@ -9948,7 +9897,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </div>
           ) : null}
 
-          {activeTab === "notifications" && !settingsLoading ? (
+          {activeTab === "notifications" && notifications.isLoading ? (
+            <NotificationSettingsSkeleton />
+          ) : null}
+          {activeTab === "notifications" && !notifications.isLoading ? (
             <Card size="sm" className="h-full min-h-0 min-w-0">
               <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -9966,13 +9918,13 @@ export function ConfigPage(props: ConfigPageProps = {}) {
               </CardHeader>
               <CardContent
                 data-slot="settings-scroll"
-                className="grid min-h-0 flex-1 content-start gap-5 overflow-y-auto overscroll-contain"
+                className={settingsLayout.notificationFields}
               >
                 {notifications.error ? (
                   <QueryError error={notifications.error} fallback="通知状态读取失败" embedded />
                 ) : null}
                 <div
-                  className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-2"
+                  className={settingsLayout.notificationCredentials}
                   data-testid="notification-credentials"
                 >
                   <FormField
@@ -10029,7 +9981,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   </FormField>
                 </div>
                 <div
-                  className="grid items-start gap-x-5 gap-y-4 sm:grid-cols-[minmax(10rem,0.7fr)_minmax(0,1.3fr)]"
+                  className={settingsLayout.notificationDestination}
                   data-testid="notification-destination"
                 >
                   <FormField label="目标类型">
@@ -10211,9 +10163,9 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </Card>
           ) : null}
 
-          {activeTab === "dictionaries" && !settingsLoading ? <DictionaryManagement /> : null}
+          {activeTab === "dictionaries" ? <DictionaryManagement /> : null}
 
-          {activeTab === "interface" && !settingsLoading ? (
+          {activeTab === "interface" ? (
             <NavigationSettingsCard
               sections={navigationSettingsSections}
               hiddenItemIDs={props.hiddenNavigationItemIDs ?? emptyHiddenNavigationItemIDs}
@@ -10225,7 +10177,10 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             />
           ) : null}
 
-          {activeTab === "interface" && !settingsLoading ? (
+          {activeTab === "interface" && logCleanup.isLoading ? (
+            <LogCleanupSettingsSkeleton />
+          ) : null}
+          {activeTab === "interface" && !logCleanup.isLoading ? (
             <Card size="sm" className="h-full min-h-0 min-w-0">
               <CardHeader className="flex shrink-0 items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -10239,10 +10194,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                   tone={logCleanup.data?.enabled && !logCleanup.error ? "success" : "neutral"}
                 />
               </CardHeader>
-              <CardContent
-                data-slot="settings-scroll"
-                className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto overscroll-contain"
-              >
+              <CardContent data-slot="settings-scroll" className={settingsLayout.logFields}>
                 {logCleanup.error ? (
                   <div>
                     <QueryError error={logCleanup.error} fallback="日志清理配置读取失败" embedded />
@@ -10261,7 +10213,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
                     />
                   </div>
                 ) : null}
-                <div className="grid gap-x-5 gap-y-3 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                <div className={settingsLayout.logControls}>
                   <div className="flex min-w-0 items-center justify-between gap-3">
                     <FieldLabel
                       label="定时清理"
@@ -10526,12 +10478,24 @@ function LastInspectionSummaryCard(props: {
         ) : null}
       </CardHeader>
       {props.error ? (
-        <CardContent>
-          <QueryError error={props.error} fallback="上一轮巡检概要读取失败" embedded />
-        </CardContent>
+        <QueryError error={props.error} fallback="上一轮巡检概要读取失败" embedded />
       ) : null}
-      {props.loading ? <Skeleton className="m-3 h-20 w-auto" /> : null}
-      {!props.loading && !props.error && props.status?.last_run_at ? (
+      {props.loading ? (
+        <div
+          role="status"
+          aria-label="正在读取上一轮概要"
+          aria-busy="true"
+          className="grid grid-cols-2 gap-px bg-border/70 sm:grid-cols-4"
+        >
+          {Array.from({ length: 8 }, (_, index) => (
+            <div key={index} className="grid gap-2 bg-card px-3 py-3">
+              <Skeleton className="h-4 w-16" />
+              <Skeleton className="h-6 w-12" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!props.loading && props.status?.last_run_at ? (
         <CardContent className="p-0 group-data-[size=sm]/card:p-0">
           <div
             className="border-border/70 bg-border/70 grid grid-cols-2 gap-px border-b sm:grid-cols-4"
@@ -10594,6 +10558,7 @@ type InspectionUpstreamHost = {
   status: string;
   keyCount: number;
   reason: string | null;
+  nextStep?: string;
 };
 
 function inspectionUpstreamHosts(task?: Task): InspectionUpstreamHost[] {
@@ -10614,6 +10579,103 @@ function inspectionUpstreamHosts(task?: Task): InspectionUpstreamHost[] {
       },
     ];
   });
+}
+
+function inspectionPendingHostFailures(
+  hosts: InspectionUpstreamHost[],
+  task?: Task,
+): InspectionUpstreamHost[] {
+  const failures = new Map(
+    hosts.filter((host) => host.status !== "succeeded").map((host) => [host.host, host]),
+  );
+  const recovery = inspectionTaskResultObject(task, "auth_recovery");
+  if (!Array.isArray(recovery?.results)) return [...failures.values()];
+  for (const value of recovery.results) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const row = value as Record<string, unknown>;
+    if (typeof row.host !== "string" || !row.host.trim() || typeof row.success !== "boolean")
+      continue;
+    const host = row.host.trim();
+    if (row.success) {
+      if (failures.get(host)?.status === "auth_failed") failures.delete(host);
+      continue;
+    }
+    failures.set(host, {
+      host,
+      status: "auth_recovery_failed",
+      keyCount: failures.get(host)?.keyCount ?? 0,
+      reason:
+        typeof row.reason === "string" && row.reason.trim()
+          ? row.reason.trim()
+          : "鉴权恢复未返回具体原因，请在上游管理中查看恢复结果。",
+      nextStep:
+        typeof row.code === "string"
+          ? ownLabel(inspectionAuthRecoveryActions, row.code)
+          : undefined,
+    });
+  }
+  return [...failures.values()];
+}
+
+type InspectionWritebackFailure = {
+  accountID: string;
+  accountName: string | null;
+  reason: string;
+};
+
+function inspectionWritebackFailures(
+  task?: Task,
+  accounts?: Pick<AccountStatus, "id" | "name">[],
+): InspectionWritebackFailure[] {
+  const result = inspectionTaskResultObject(task, "writeback");
+  if (!result || !Array.isArray(result.results)) return [];
+  const accountNames = new Map(
+    (accounts ?? []).map((account) => [account.id, account.name.trim()] as const),
+  );
+  return result.results
+    .flatMap((item) => {
+      if (item === null || typeof item !== "object" || Array.isArray(item)) return [];
+      const row = item as Record<string, unknown>;
+      const rawAccountID = row.account_id;
+      let accountID = "";
+      if (typeof rawAccountID === "string" && /^[1-9]\d*$/.test(rawAccountID)) {
+        accountID = rawAccountID;
+      }
+      if (
+        typeof rawAccountID === "number" &&
+        Number.isSafeInteger(rawAccountID) &&
+        rawAccountID > 0
+      ) {
+        accountID = String(rawAccountID);
+      }
+      const rawReason = row.error;
+      if (typeof rawReason !== "string") return [];
+      const accountName =
+        typeof row.account_name === "string" && row.account_name.trim()
+          ? row.account_name.trim()
+          : accountNames.get(accountID) || null;
+      return [
+        {
+          accountID,
+          accountName,
+          reason: displayTaskMessage(
+            rawReason.trim() || "未返回具体原因，请在日志中心核对自动写回失败记录。",
+          ),
+        },
+      ];
+    })
+    .sort((first, second) =>
+      first.accountID.localeCompare(second.accountID, "zh-CN", { numeric: true }),
+    );
+}
+
+function inspectionWritebackFailureCount(
+  task: Task | undefined,
+  failures: InspectionWritebackFailure[],
+): number {
+  const result = inspectionTaskResultObject(task, "writeback");
+  const count = result ? inspectionResultCount(result, "failed") : null;
+  return Math.max(count ?? 0, failures.length);
 }
 
 function inspectionResultCount(value: Record<string, unknown>, key: string): number | null {
@@ -10747,7 +10809,7 @@ function inspectionTaskQueueOperations(task?: Task): InspectionTaskQueueOperatio
       label:
         typeof rawLabel === "string" && rawLabel.trim()
           ? rawLabel
-          : (autoInspectionOperationLabels[operation] ?? operation),
+          : (ownLabel(autoInspectionOperationLabels, operation) ?? operation),
       targetCount:
         typeof rawTargetCount === "number" && Number.isInteger(rawTargetCount)
           ? rawTargetCount
@@ -10927,7 +10989,12 @@ function inspectionOperationDetail(operation: string, task?: Task): string {
       const traffic = inspectionResultCount(evidence, "traffic_persisted");
       const probes = inspectionResultCount(evidence, "probes_persisted");
       if (accounts !== null && traffic !== null && probes !== null) {
-        return `监控 ${accounts} 个账号，新增 ${traffic} 条流量样本、${probes} 条探测样本`;
+        const summary = `监控 ${accounts} 个账号，新增 ${traffic} 条流量样本、${probes} 条探测样本`;
+        const deferred = inspectionResultCount(evidence, "probes_deferred");
+        if (deferred !== null && deferred > 0) {
+          return `待后续巡检 ${deferred} 个账号；${summary}`;
+        }
+        return summary;
       }
     }
   }
@@ -10966,7 +11033,7 @@ function inspectionOperationDetail(operation: string, task?: Task): string {
     const findings = alert ? inspectionResultCount(alert, "findings") : null;
     if (findings !== null) return `发现 ${findings} 项异常`;
   }
-  return autoInspectionOperationDescriptions[operation] ?? "完成本步骤的巡检处理。";
+  return ownLabel(autoInspectionOperationDescriptions, operation) ?? "完成本步骤的巡检处理。";
 }
 
 function formatAutoInspectionStepTime(
@@ -11025,7 +11092,7 @@ function AutoInspectionOperationTimeline(props: {
   return (
     <ol data-slot="operation-timing-list" className="divide-y rounded-lg border">
       {timings.map((timing, index) => {
-        const label = autoInspectionOperationLabels[timing.operation] ?? timing.operation;
+        const label = ownLabel(autoInspectionOperationLabels, timing.operation) ?? timing.operation;
         const stepTime = formatAutoInspectionStepTime(
           props.record.checked_at,
           elapsedSeconds,
@@ -11083,15 +11150,21 @@ function AutoInspectionOperationTimeline(props: {
 
 function autoInspectionOperationSummary(
   record: AutoInspectionStatus["heartbeat_history"][number],
+  task?: Task,
 ): string {
+  if (record.status === "running" && task?.id === record.task_id && task.message.trim()) {
+    return task.message;
+  }
   const operationSource = (record.operation_timings ?? []).length
     ? (record.operation_timings ?? []).map((timing) => timing.operation)
     : (record.operations ?? []);
   const operations = [...new Set(operationSource)].map(
-    (operation) => autoInspectionOperationLabels[operation] ?? operation,
+    (operation) => ownLabel(autoInspectionOperationLabels, operation) ?? operation,
   );
   if (operations.length) return operations.join("、");
-  if (record.status === "running") return "正在检查到期任务";
+  if (record.status === "running") {
+    return record.task_id ? "正在执行本轮巡检任务" : "正在检查到期任务";
+  }
   return "本轮仅检查任务是否到期，未执行其他操作";
 }
 
@@ -11099,6 +11172,9 @@ function AutoInspectionFailureSummary(props: {
   error: string;
   partiallyFailed: boolean;
   failedHosts: InspectionUpstreamHost[];
+  failedAccounts: InspectionWritebackFailure[];
+  failedAccountCount: number;
+  children?: React.ReactNode;
 }) {
   return (
     <section
@@ -11150,14 +11226,67 @@ function AutoInspectionFailureSummary(props: {
                         {displayResultValue(host.status)}
                       </span>
                     </div>
-                    <p className="text-muted-foreground text-xs leading-5">
+                    <p className="text-muted-foreground text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere]">
                       {host.reason ?? "未返回具体原因，请查看上游同步任务明细"}
                     </p>
+                    {host.nextStep ? (
+                      <p className="text-muted-foreground text-xs leading-5">{host.nextStep}</p>
+                    ) : null}
                   </li>
                 ))}
               </ul>
             </div>
           ) : null}
+          {props.failedAccountCount > 0 ? (
+            <div className="border-foreground/10 mt-3 min-w-0 border-t pt-2.5">
+              <p className="text-muted-foreground mb-1.5 text-xs font-medium">
+                失败账号（{props.failedAccountCount}）
+              </p>
+              {props.failedAccounts.length ? (
+                <ul
+                  aria-label="自动执行失败账号"
+                  tabIndex={0}
+                  className="divide-foreground/10 focus-visible:ring-ring max-h-60 min-w-0 divide-y overflow-x-hidden overflow-y-auto overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                >
+                  {props.failedAccounts.map((account, index) => (
+                    <li
+                      key={`${account.accountID}:${index}`}
+                      data-slot="heartbeat-failed-account-row"
+                      className="grid min-w-0 gap-0.5 py-2 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">
+                          {account.accountName ||
+                            (account.accountID ? `账号 ${account.accountID}` : "账号 ID 未记录")}
+                        </span>
+                        {account.accountID ? (
+                          <span className="text-muted-foreground min-w-0 font-mono text-xs [overflow-wrap:anywhere]">
+                            ID {account.accountID}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="text-muted-foreground min-w-0 text-xs leading-5 whitespace-pre-wrap [overflow-wrap:anywhere]">
+                        {account.reason}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-muted-foreground text-xs leading-5">
+                  任务结果未返回逐账号明细，请在日志中心查看自动写回失败记录。
+                </p>
+              )}
+              {props.failedAccounts.length > 0 &&
+              props.failedAccounts.length < props.failedAccountCount ? (
+                <p className="text-muted-foreground mt-2 text-xs leading-5">
+                  已显示 {props.failedAccounts.length} 项，另{" "}
+                  {props.failedAccountCount - props.failedAccounts.length}{" "}
+                  项未返回明细，请在日志中心核对自动写回失败记录。
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {props.children}
         </div>
       </div>
     </section>
@@ -11168,7 +11297,10 @@ export function AutoInspectionHeartbeatDetails(props: {
   record: AutoInspectionStatus["heartbeat_history"][number];
   task?: Task;
   taskLoading?: boolean;
+  taskFetching?: boolean;
+  onTaskRetry?: () => void;
   upstreams?: UpstreamSummary;
+  accounts?: Pick<AccountStatus, "id" | "name">[];
   upstreamSyncTask?: Task;
   accountRateSyncTask?: Task;
   accountRateSyncTaskLoading?: boolean;
@@ -11180,6 +11312,9 @@ export function AutoInspectionHeartbeatDetails(props: {
     (first, second) => Number(first.status === "succeeded") - Number(second.status === "succeeded"),
   );
   const failedUpstreamHosts = orderedUpstreamHosts.filter((host) => host.status !== "succeeded");
+  const pendingHostFailures = inspectionPendingHostFailures(upstreamHosts, props.task);
+  const failedAccounts = inspectionWritebackFailures(props.task, props.accounts);
+  const failedAccountCount = inspectionWritebackFailureCount(props.task, failedAccounts);
   const accountRateResult = inspectionTaskResultObject(props.task, "account_rate_sync");
   const accountRateScheduled =
     props.accountRateSyncTask !== undefined ||
@@ -11222,12 +11357,26 @@ export function AutoInspectionHeartbeatDetails(props: {
         </dl>
       </section>
 
-      {props.record.error ? (
+      {props.record.error || failedAccountCount > 0 || pendingHostFailures.length > 0 ? (
         <AutoInspectionFailureSummary
-          error={props.record.error}
+          error={props.record.error ?? "本轮巡检存在失败项，请查看以下明细。"}
           partiallyFailed={partiallyFailed}
-          failedHosts={failedUpstreamHosts}
-        />
+          failedHosts={pendingHostFailures}
+          failedAccounts={failedAccounts}
+          failedAccountCount={failedAccountCount}
+        >
+          {!props.task && props.taskLoading ? (
+            <ContentLoading label="正在读取失败明细" compact />
+          ) : null}
+          {!props.task && !props.taskLoading && props.onTaskRetry ? (
+            <ContentRetry onRetry={props.onTaskRetry} pending={props.taskFetching} />
+          ) : null}
+          {!props.task && !props.taskLoading && !props.record.task_id ? (
+            <p className="text-muted-foreground mt-2 text-xs leading-5">
+              本轮未关联任务记录，无法读取逐项结果。
+            </p>
+          ) : null}
+        </AutoInspectionFailureSummary>
       ) : null}
 
       {props.record.status === "running" ? (
@@ -11493,7 +11642,7 @@ export function AutoInspectionQueueDetails(props: { item: AutoInspectionStatus["
                       />
                     </div>
                     <p className="text-muted-foreground mt-1 text-xs leading-5">
-                      {autoInspectionOperationDescriptions[operation.operation] ??
+                      {ownLabel(autoInspectionOperationDescriptions, operation.operation) ??
                         "按照当前巡检策略执行该项操作。"}
                     </p>
                     <div className="text-muted-foreground mt-2 grid gap-1 border-t pt-2 text-xs sm:grid-cols-2">
@@ -11538,6 +11687,16 @@ function AutoInspectionCard() {
     queryFn: api.autoInspection,
     refetchInterval: 15_000,
   });
+  const runningTaskID = status.data?.heartbeat_history.find(
+    (record) => record.status === "running",
+  )?.task_id;
+  const runningTask = useQuery({
+    queryKey: ["auto-inspection-heartbeat-task", runningTaskID],
+    queryFn: () => api.task(runningTaskID!),
+    enabled: Boolean(runningTaskID),
+    retry: false,
+    refetchInterval: (query) => taskPollInterval(query, 2_000),
+  });
   const [draft, setDraft] = useState<AutoInspectionDraft | null>(null);
   const syncedConfig = React.useRef<AutoInspectionConfig | null>(null);
   const [selectedHeartbeat, setSelectedHeartbeat] = useState<
@@ -11575,6 +11734,14 @@ function AutoInspectionCard() {
     queryKey: ["upstreams"],
     queryFn: api.upstreams,
     enabled: selectedHeartbeat !== null,
+    staleTime: 30_000,
+  });
+  const heartbeatAccounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: api.accounts,
+    enabled:
+      selectedHeartbeat !== null && inspectionWritebackFailures(heartbeatTask.data).length > 0,
+    retry: false,
     staleTime: 30_000,
   });
   const save = useMutation({
@@ -11669,7 +11836,27 @@ function AutoInspectionCard() {
               {status.error && (
                 <QueryError error={status.error} fallback="自动巡检状态读取失败" embedded />
               )}
-              {status.isLoading && !current ? <Skeleton className="h-28 w-full" /> : null}
+              {status.isLoading && !current ? (
+                <div
+                  role="status"
+                  aria-label="正在读取巡检服务"
+                  aria-busy="true"
+                  className="grid gap-2.5 lg:grid-cols-2"
+                >
+                  {[0, 1].map((index) => (
+                    <div
+                      key={index}
+                      className="flex min-w-0 items-center gap-3 rounded-lg border p-3"
+                    >
+                      <div className="grid min-w-0 flex-1 gap-2">
+                        <Skeleton className="h-4 w-24" />
+                        <Skeleton className="h-4 w-3/4" />
+                      </div>
+                      <Skeleton className="h-8 w-20" />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {current ? (
                 <div className="grid gap-2.5 lg:grid-cols-2" data-testid="auto-inspection-settings">
                   <PolicySwitchRow
@@ -11902,8 +12089,10 @@ function AutoInspectionCard() {
                           )}
                         </span>
                       </TableCell>
-                      <TableCell tooltipContent={autoInspectionOperationSummary(record)}>
-                        {autoInspectionOperationSummary(record)}
+                      <TableCell
+                        tooltipContent={autoInspectionOperationSummary(record, runningTask.data)}
+                      >
+                        {autoInspectionOperationSummary(record, runningTask.data)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -11985,7 +12174,10 @@ function AutoInspectionCard() {
                 record={selectedHeartbeat}
                 task={heartbeatTask.data}
                 taskLoading={heartbeatTask.isLoading || heartbeatUpstreams.isLoading}
+                taskFetching={heartbeatTask.isFetching}
+                onTaskRetry={heartbeatTask.isError ? () => void heartbeatTask.refetch() : undefined}
                 upstreams={heartbeatUpstreams.data}
+                accounts={heartbeatAccounts.data}
                 upstreamSyncTask={upstreamSyncTask.data}
                 accountRateSyncTask={accountRateSyncTask.data}
                 accountRateSyncTaskLoading={accountRateSyncTask.isLoading}
@@ -12019,16 +12211,22 @@ const runtimeModeOptions: ReadonlyArray<{
 
 function PolicyPageLoading() {
   return (
-    <div className="flex flex-col gap-4" data-testid="policy-loading" aria-label="正在加载调度策略">
+    <div
+      className="flex min-w-0 flex-col gap-4"
+      data-testid="policy-loading"
+      role="status"
+      aria-busy="true"
+      aria-label="正在加载调度策略"
+    >
       <Card size="sm">
         <CardHeader>
           <Skeleton className="h-5 w-32" />
           <Skeleton className="h-4 w-full max-w-lg" />
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
+          <FormFieldsSkeleton fields={1} />
+          <FormFieldsSkeleton fields={1} />
+          <FormFieldsSkeleton fields={1} />
         </CardContent>
       </Card>
       <Card size="sm">
@@ -12037,8 +12235,8 @@ function PolicyPageLoading() {
           <Skeleton className="h-4 w-full max-w-sm" />
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
+          <FormFieldsSkeleton fields={1} />
+          <FormFieldsSkeleton fields={1} />
         </CardContent>
       </Card>
     </div>
@@ -12046,6 +12244,11 @@ function PolicyPageLoading() {
 }
 
 export function PolicyPage() {
+  const orderedStrategies = useDictionaryOrder(
+    "scheduling_strategy",
+    schedulingStrategyOptions,
+    (item) => item.value,
+  );
   const policy = useQuery({
     queryKey: ["policy"],
     queryFn: api.policy,
@@ -12119,10 +12322,11 @@ export function PolicyPage() {
     onError: (error) => notifyOperationError(error, "主动探测设置失败"),
   });
   const data = policy.data;
-  const current = policy.error ? null : (draft ?? (data ? policyDraft(data) : null));
+  const current = draft ?? (data ? policyDraft(data) : null);
   const payload = current ? policyPayload(current) : null;
   const relationshipError = current ? policyRelationshipError(current) : null;
   function submitPolicy() {
+    if (policy.error) return;
     setSaveAttempted(true);
     const latest = queryClient.getQueryData<import("./api").PolicySnapshot>(["policy"]) ?? data;
     const value = draft ?? (latest ? policyDraft(latest) : null);
@@ -12147,7 +12351,7 @@ export function PolicyPage() {
   }
   async function refreshPolicy() {
     const result = await policy.refetch();
-    if (result.data) {
+    if (!result.isError && result.data) {
       setDraft(null);
     }
   }
@@ -12164,7 +12368,10 @@ export function PolicyPage() {
               ariaLabel="刷新策略"
               onClick={() => void refreshPolicy()}
             />
-            <Button disabled={!current || save.isPending} onClick={submitPolicy}>
+            <Button
+              disabled={!current || Boolean(policy.error) || save.isPending}
+              onClick={submitPolicy}
+            >
               <ShieldCheck size={16} />
               {save.isPending ? "保存中…" : "保存策略"}
             </Button>
@@ -12197,7 +12404,7 @@ export function PolicyPage() {
             <div className="flex flex-col gap-3" data-testid="policy-operations-layout">
               <div className="grid items-stretch gap-3" data-testid="policy-routing-overview">
                 {current && (
-                  <Card size="sm" className="rounded-xl">
+                  <Card size="sm">
                     <CardHeader className="bg-muted/20">
                       <CardTitle>全局默认策略</CardTitle>
                       <CardDescription className="mt-1 text-xs leading-5">
@@ -12227,7 +12434,7 @@ export function PolicyPage() {
                             <SelectValue>{displayStrategy(current.global_strategy)}</SelectValue>
                           </SelectTrigger>
                           <SelectContent>
-                            {schedulingStrategyOptions.map((option) => (
+                            {orderedStrategies.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
@@ -12419,9 +12626,9 @@ export function PolicyPage() {
             </Button>
             <Button
               variant="destructive"
-              disabled={save.isPending}
+              disabled={save.isPending || Boolean(policy.error)}
               onClick={() => {
-                if (!pendingPolicySave) return;
+                if (!pendingPolicySave || policy.error) return;
                 setDangerousSaveOpen(false);
                 save.mutate(pendingPolicySave);
               }}
@@ -12748,11 +12955,7 @@ function PolicyConfigCard(props: {
     </>
   );
   return (
-    <Card
-      size="sm"
-      className={cn("rounded-xl", props.wide && "xl:col-span-2")}
-      data-policy-section={props.title}
-    >
+    <Card size="sm" className={cn(props.wide && "xl:col-span-2")} data-policy-section={props.title}>
       <CardHeader className="bg-muted/20 flex items-start justify-between gap-4">
         {props.switchAction ? (
           <label
@@ -13706,6 +13909,7 @@ export function PolicyScopeLayout(props: PolicyScopeEditorProps) {
 }
 
 export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
+  const orderedGroups = useDictionaryOrder("group", props.groups, (item) => item.id ?? "");
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
     queryFn: () => api.dictionaries("platform"),
@@ -13731,17 +13935,21 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
   const selectedExcludedAccounts = policyStringArray(
     policyAdvancedValue(props.value, "scope", "excluded_account_ids"),
   );
-  const accountTypeOptionsForScope = policyScopeValueOptions(
-    [
-      ...accountTypeOptions.map((option) => option.value),
-      ...props.accounts.flatMap((account) => {
-        const value = accountTypeValue(account.account_type);
-        return value ? [value] : [];
-      }),
-    ],
-    selectedAccountTypes,
-    (value, stale) =>
-      `${accountTypeLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+  const accountTypeOptionsForScope = useDictionaryOrder(
+    "account_type",
+    policyScopeValueOptions(
+      [
+        ...accountTypeOptions.map((option) => option.value),
+        ...props.accounts.flatMap((account) => {
+          const value = accountTypeValue(account.account_type);
+          return value ? [value] : [];
+        }),
+      ],
+      selectedAccountTypes,
+      (value, stale) =>
+        `${accountTypeLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
+    ),
+    (item) => item.value,
   );
   const platformOptions = policyScopeValueOptions(
     orderedDictionaryOptions(
@@ -13761,27 +13969,31 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
       `${accountPlatformLabel(value) ?? value}${stale ? "（当前配置，账号中未发现）" : ""}`,
     false,
   );
-  const excludedGroupOptions = policyScopeEntityOptions(
-    props.groups.flatMap((group) =>
-      group.id === null
-        ? []
-        : [
-            {
-              value: group.id,
-              label: [
-                `${group.name}（#${group.id}）`,
-                group.platforms
-                  .map((platform) => accountPlatformLabel(platform) ?? platform)
-                  .join("、"),
-                `${group.account_count} 个账号`,
-              ]
-                .filter(Boolean)
-                .join(" · "),
-            },
-          ],
+  const excludedGroupOptions = useDictionaryOrder(
+    "group",
+    policyScopeEntityOptions(
+      props.groups.flatMap((group) =>
+        group.id === null
+          ? []
+          : [
+              {
+                value: group.id,
+                label: [
+                  `${group.name}（#${group.id}）`,
+                  group.platforms
+                    .map((platform) => accountPlatformLabel(platform) ?? platform)
+                    .join("、"),
+                  `${group.account_count} 个账号`,
+                ]
+                  .filter(Boolean)
+                  .join(" · "),
+              },
+            ],
+      ),
+      selectedExcludedGroups,
+      "分组",
     ),
-    selectedExcludedGroups,
-    "分组",
+    (item) => item.value,
   );
   const accountOptions = policyScopeEntityOptions(
     props.accounts.map((account) => ({
@@ -13837,7 +14049,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
             className="col-span-full grid gap-2 sm:grid-cols-2 xl:grid-cols-3"
             data-testid="managed-group-options"
           >
-            {props.groups.map((group) => {
+            {orderedGroups.map((group) => {
               const disabled = group.id === null;
               const checked = group.id !== null && selectedIDs.has(group.id);
               const detail = [
@@ -13987,19 +14199,17 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
 
 function PanelHeading(props: { title: string; subtitle?: string; action?: React.ReactNode }) {
   return (
-    <div className="console-panel-heading bg-card text-card-foreground relative z-10 box-border flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-      <div
-        className={cn("min-w-0 flex-1", props.subtitle ? "py-0.5" : "flex min-h-5 items-center")}
-      >
-        <h2 className="truncate text-sm font-semibold leading-5">{props.title}</h2>
-        {props.subtitle && (
-          <p className="text-muted-foreground mt-1 truncate text-xs leading-4">{props.subtitle}</p>
-        )}
+    <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+      <div className="min-w-0 flex-1">
+        <CardTitle>
+          <h2>{props.title}</h2>
+        </CardTitle>
+        {props.subtitle && <CardDescription className="mt-1">{props.subtitle}</CardDescription>}
       </div>
       {props.action && (
-        <div className="flex shrink-0 items-center gap-2 leading-none">{props.action}</div>
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">{props.action}</div>
       )}
-    </div>
+    </CardHeader>
   );
 }
 function StatusPill(props: {

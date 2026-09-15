@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -27,7 +28,13 @@ import (
 const passwordRounds = 310_000
 
 type Store struct {
-	db *sql.DB
+	db                        *sql.DB
+	workbenchExecutionClock   func() time.Time
+	workbenchExecutionMu      sync.RWMutex
+	workbenchExecutionWriteMu sync.Mutex
+	workbenchTemplateWriteMu  sync.Mutex
+	sessionOwnerMu            sync.Mutex
+	sessionOwnerChanges       chan struct{}
 }
 
 type PublicStatus struct {
@@ -115,6 +122,26 @@ func Open(path string) (*Store, error) {
 	if err := store.ensureSchema(context.Background()); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
+	if err := store.PurgeExpiredWorkbenchExecutions(context.Background()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if err := store.PurgeExpiredWorkbenchOAuthCheckpoints(context.Background(), time.Now()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if err := store.RecoverInterruptedWorkbenchOAuthCheckpoints(context.Background()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if err := store.PurgeExpiredWorkbenchQueues(context.Background(), time.Now()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if err := store.RecoverInterruptedWorkbenchQueues(context.Background()); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	for kind, values := range builtInDictionaryValues {
+		if err := store.SyncDictionaryValues(context.Background(), kind, values); err != nil {
+			return nil, errors.Join(err, db.Close())
+		}
+	}
 	if err := sqliteutil.Secure(path); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
@@ -122,6 +149,7 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) Close() error {
+	s.notifySessionOwners()
 	return s.db.Close()
 }
 
@@ -137,6 +165,33 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			body_encoding TEXT NOT NULL, PRIMARY KEY(base_url, monitor_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS workbench_sms_receipts (
+			operation_id TEXT NOT NULL,action TEXT NOT NULL,state TEXT NOT NULL,
+			owner TEXT NOT NULL,target TEXT NOT NULL,task_id TEXT NOT NULL,provider TEXT NOT NULL,
+			config_hash TEXT NOT NULL,request_id TEXT NOT NULL,phone TEXT NOT NULL,
+			created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(operation_id,action)
+		)`,
+		`CREATE TABLE IF NOT EXISTS workbench_queues (
+			id TEXT PRIMARY KEY,owner TEXT NOT NULL,target TEXT NOT NULL,kind TEXT NOT NULL,
+			task_id TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,
+			created_at TEXT NOT NULL,expires_at TEXT NOT NULL,payload BLOB NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS ix_workbench_queues_owner_target ON workbench_queues(owner,target,expires_at)`,
+		`CREATE INDEX IF NOT EXISTS ix_workbench_sms_owner_target ON workbench_sms_receipts(owner,target,created_at)`,
+		`CREATE TABLE IF NOT EXISTS workbench_oauth_checkpoints (
+ id TEXT PRIMARY KEY, owner_hash TEXT NOT NULL, target_fingerprint TEXT NOT NULL, target_url TEXT NOT NULL, scope TEXT NOT NULL,
+ source_task_id TEXT NOT NULL, task_id TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL,
+ revision INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+ worker_id TEXT NOT NULL, worker_lease TEXT NOT NULL, automatic INTEGER NOT NULL, worker_revision INTEGER NOT NULL, parent_id TEXT NOT NULL, payload BLOB)`,
+		`CREATE TABLE IF NOT EXISTS workbench_login_profiles (
+			id TEXT PRIMARY KEY, target_url TEXT NOT NULL, target_fingerprint TEXT NOT NULL,
+			account_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL, email TEXT NOT NULL,
+			revision INTEGER NOT NULL CHECK(revision>0), updated_at TEXT NOT NULL,
+			has_password INTEGER NOT NULL, has_totp INTEGER NOT NULL, mail_kind TEXT NOT NULL, sms_provider TEXT NOT NULL,
+			has_proxy INTEGER NOT NULL,
+			login BLOB NOT NULL, UNIQUE(target_fingerprint,account_id)
+		)`,
+		workbenchSourceProfileSchema,
 		`CREATE TABLE IF NOT EXISTS model_pricing_cache (
 			cache_key TEXT PRIMARY KEY, content TEXT NOT NULL, fetched_at TEXT NOT NULL
 		)`,
@@ -189,7 +244,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 }
 
 func (s *Store) PublicStatus(ctx context.Context) (PublicStatus, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "console.username", "console.password_hash", "target.base_url", "target.admin_key")
 	if err != nil {
 		return PublicStatus{}, err
 	}
@@ -228,15 +283,14 @@ func (s *Store) IsInitialized(ctx context.Context) (bool, error) {
 }
 
 func (s *Store) RuntimeSettings(ctx context.Context) (RuntimeSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "target.base_url", "target.timeout_seconds", "accounts.creation_settings", "accounts.default_concurrency", "accounts.default_priority")
 	if err != nil {
 		return RuntimeSettings{}, err
 	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
+	keys, err := s.settingKeys(ctx)
+	if err != nil {
+		return RuntimeSettings{}, err
 	}
-	sort.Strings(keys)
 	var adminBaseURL *string
 	if raw := strings.TrimSpace(values["target.base_url"]); raw != "" {
 		if normalized, validationErr := ValidateBaseURL(raw); validationErr == nil {
@@ -268,7 +322,7 @@ func (s *Store) RuntimeSettings(ctx context.Context) (RuntimeSettings, error) {
 }
 
 func (s *Store) AccountDefaults(ctx context.Context) (AccountDefaultsSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "accounts.creation_settings", "accounts.default_concurrency", "accounts.default_priority")
 	if err != nil {
 		return AccountDefaultsSettings{}, err
 	}
@@ -326,7 +380,7 @@ func legacyAccountDefaultsFromValues(values map[string]string) (AccountDefaultsS
 }
 
 func (s *Store) AccountCreationSettings(ctx context.Context) (AccountCreationSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "accounts.creation_settings", "accounts.default_concurrency", "accounts.default_priority")
 	if err != nil {
 		return AccountCreationSettings{}, err
 	}
@@ -550,7 +604,7 @@ func validateAccountDefaults(settings AccountDefaultsSettings) error {
 }
 
 func (s *Store) LogCleanupSettings(ctx context.Context) (LogCleanupSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "logs.cleanup_enabled", "logs.retention_days", "logs.cleanup_last_run_at")
 	if err != nil {
 		return LogCleanupSettings{}, err
 	}
@@ -622,6 +676,14 @@ func MaskUsername(username *string) *string {
 }
 
 func (s *Store) Initialize(ctx context.Context, username string, password string, baseURL string, adminKey string) error {
+	return s.initialize(ctx, username, password, baseURL, adminKey, false)
+}
+
+func (s *Store) InitializeLocalExport(ctx context.Context, username, password string) error {
+	return s.initialize(ctx, username, password, "", "", true)
+}
+
+func (s *Store) initialize(ctx context.Context, username string, password string, baseURL string, adminKey string, localExportOnly bool) error {
 	username = strings.TrimSpace(username)
 	adminKey = strings.TrimSpace(adminKey)
 	if textLength(username) < 2 || textLength(username) > 80 {
@@ -653,7 +715,7 @@ func (s *Store) Initialize(ctx context.Context, username string, password string
 		return err
 	}
 	defer tx.Rollback()
-	values, err := settingsFrom(ctx, tx)
+	values, err := settingsFrom(ctx, tx, "console.username", "console.password_hash", "target.base_url", "target.admin_key")
 	if err != nil {
 		return err
 	}
@@ -663,7 +725,7 @@ func (s *Store) Initialize(ctx context.Context, username string, password string
 	if _, found := values["console.password_hash"]; found {
 		return errors.New("控制台已有损坏的初始化记录，不能覆盖；请先修复现有配置")
 	}
-	if normalizedURL == "" && !validTarget(values) {
+	if !localExportOnly && normalizedURL == "" && !validTarget(values) {
 		return errors.New("未找到 Sub2API 管理目标，请填写 Admin Base URL 和 Admin Key")
 	}
 	updates := map[string]string{
@@ -683,7 +745,7 @@ func (s *Store) Initialize(ctx context.Context, username string, password string
 }
 
 func (s *Store) Authenticate(ctx context.Context, username string, password string) (bool, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "console.username", "console.password_hash")
 	if err != nil {
 		return false, err
 	}
@@ -727,7 +789,7 @@ func (s *Store) createSession(ctx context.Context, username string, password *st
 	}
 	defer tx.Rollback()
 	if password != nil {
-		values, err := settingsFrom(ctx, tx)
+		values, err := settingsFrom(ctx, tx, "console.username", "console.password_hash")
 		if err != nil {
 			return "", err
 		}
@@ -786,6 +848,9 @@ func (s *Store) RevokeSession(ctx context.Context, token string) error {
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx, `DELETE FROM console_sessions WHERE token_hash=?`, hashSessionToken(token))
+	if err == nil {
+		s.notifySessionOwners()
+	}
 	return err
 }
 
@@ -853,6 +918,7 @@ func (s *Store) UpdateCredentials(ctx context.Context, currentPassword string, u
 	if err := tx.Commit(); err != nil {
 		return "", err
 	}
+	s.notifySessionOwners()
 	return username, nil
 }
 
@@ -864,7 +930,7 @@ func (s *Store) ConfigureTarget(ctx context.Context, baseURL string, adminKey st
 	if _, err := validateRequestTimeout(strconv.Itoa(timeoutSeconds)); err != nil {
 		return err
 	}
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "target.base_url", "target.admin_key")
 	if err != nil {
 		return err
 	}
@@ -894,7 +960,7 @@ func (s *Store) ConfigureTarget(ctx context.Context, baseURL string, adminKey st
 }
 
 func (s *Store) TargetSettings(ctx context.Context) (TargetSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "target.base_url", "target.admin_key", "target.timeout_seconds")
 	if err != nil {
 		return TargetSettings{}, err
 	}
@@ -918,7 +984,7 @@ func (s *Store) TargetSettings(ctx context.Context) (TargetSettings, error) {
 }
 
 func (s *Store) NotificationPublicStatus(ctx context.Context) (NotificationStatus, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "qqbot.app_id", "qqbot.client_secret", "qqbot.home_channel", "qqbot.home_channel_type")
 	if err != nil {
 		return NotificationStatus{}, err
 	}
@@ -999,7 +1065,7 @@ func (s *Store) ConfigureNotifications(ctx context.Context, appID string, client
 }
 
 func (s *Store) NotificationSettings(ctx context.Context) (NotificationSettings, error) {
-	values, err := s.settings(ctx)
+	values, err := s.settings(ctx, "qqbot.app_id", "qqbot.client_secret", "qqbot.home_channel", "qqbot.home_channel_type")
 	if err != nil {
 		return NotificationSettings{}, err
 	}
@@ -1011,14 +1077,22 @@ func (s *Store) NotificationSettings(ctx context.Context) (NotificationSettings,
 	}, nil
 }
 
-func (s *Store) settings(ctx context.Context) (map[string]string, error) {
-	return settingsFrom(ctx, s.db)
+func (s *Store) settings(ctx context.Context, keys ...string) (map[string]string, error) {
+	return settingsFrom(ctx, s.db, keys...)
 }
 
 func settingsFrom(ctx context.Context, queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}) (map[string]string, error) {
-	rows, err := queryer.QueryContext(ctx, `SELECT key,value FROM settings`)
+}, keys ...string) (map[string]string, error) {
+	query := `SELECT key,value FROM settings`
+	arguments := make([]any, len(keys))
+	if len(keys) > 0 {
+		query += ` WHERE key IN (` + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + `)`
+		for index, key := range keys {
+			arguments[index] = key
+		}
+	}
+	rows, err := queryer.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -1032,6 +1106,23 @@ func settingsFrom(ctx context.Context, queryer interface {
 		values[key] = value
 	}
 	return values, rows.Err()
+}
+
+func (s *Store) settingKeys(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key FROM settings ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	return keys, rows.Err()
 }
 
 func ValidateBaseURL(raw string) (string, error) {
@@ -1094,7 +1185,7 @@ func hashPassword(password string) (string, error) {
 
 func verifyPassword(password string, encoded string) bool {
 	algorithm, rounds, salt, expected, ok := decodePasswordHash(encoded)
-	if !ok || algorithm != "pbkdf2_sha256" {
+	if !ok || algorithm != "pbkdf2_sha256" || rounds != passwordRounds || len(salt) != 16 || len(expected) != 32 {
 		return false
 	}
 	actual := pbkdf2.Key([]byte(password), salt, rounds, len(expected), sha256.New)

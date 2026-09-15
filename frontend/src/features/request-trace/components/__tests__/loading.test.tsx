@@ -26,6 +26,8 @@ it("提交 request_id 查询后显示日志骨架，查询期间禁用重复提�
   fireEvent.click(screen.getByRole("button", { name: "查询" }));
   const loading = await screen.findByRole("status", { name: "正在读取 Sub2API 系统日志" });
   expect(loading.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+  expect(loading).toHaveClass("h-full", "min-h-0");
+  expect(loading.querySelector(".border")).toBeNull();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "查询中" })).toBeDisabled();
 });

@@ -289,5 +289,5 @@ export function strategyLabel(value: string): string {
     stability: "稳定优先",
     stability_first: "稳定优先",
   };
-  return labels[value] ?? value;
+  return Object.hasOwn(labels, value) ? labels[value] : value;
 }

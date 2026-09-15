@@ -142,9 +142,17 @@ func parseQwenTable(table *html.Node, prices map[string]*Price) error {
 			if r == nil {
 				return fmt.Errorf("%s 上下文条件格式已变更：%s", name, label)
 			}
-			condition = "len <= " + tokenCount(r[3], r[4])
-			if r[1] != "0" {
-				condition = "len > " + tokenCount(r[1], r[2]) + " && " + condition
+			lower, err := tokenCount(r[1], r[2])
+			if err != nil {
+				return err
+			}
+			upper, err := tokenCount(r[3], r[4])
+			if err != nil {
+				return err
+			}
+			condition = "len <= " + upper
+			if lower != "0" {
+				condition = "len > " + lower + " && " + condition
 			}
 		}
 		count := 1

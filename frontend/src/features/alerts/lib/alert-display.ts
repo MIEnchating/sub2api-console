@@ -149,13 +149,17 @@ export function alertTypeLabel(eventType: string, status?: string): string {
       "group.routing_survivor": "分组已恢复正常",
       "routing.apply_failure": "自动处理已恢复",
     };
-    if (recoveredLabels[eventType]) return recoveredLabels[eventType];
+    if (Object.hasOwn(recoveredLabels, eventType)) return recoveredLabels[eventType];
   }
-  return alertTypeLabels[eventType] ?? unknownLabel("其他告警", eventType);
+  return Object.hasOwn(alertTypeLabels, eventType)
+    ? alertTypeLabels[eventType]
+    : unknownLabel("其他告警", eventType);
 }
 
 export function alertSubjectLabel(eventType: string): string {
-  return alertSubjectLabels[eventType] ?? unknownLabel("其他告警", eventType);
+  return Object.hasOwn(alertSubjectLabels, eventType)
+    ? alertSubjectLabels[eventType]
+    : unknownLabel("其他告警", eventType);
 }
 
 export function alertCauseLabel(causeCode: string, status?: string): string {
@@ -200,7 +204,7 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
       GROUP_SURVIVOR_ONLY: "分组已恢复正常",
       APPLY_FAILED: "自动处理已恢复",
     };
-    return recoveredCauses[code] ?? "相关问题已恢复";
+    return Object.hasOwn(recoveredCauses, code) ? recoveredCauses[code] : "相关问题已恢复";
   }
   if (causeCode.startsWith("RATE_SYNC:")) {
     const reason = causeCode.slice("RATE_SYNC:".length).trim();
@@ -227,7 +231,9 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
     const label = causeLabels[code] ?? code;
     return reason ? `${label}：${reason}` : label;
   }
-  return causeLabels[causeCode] ?? unknownLabel("未分类原因", causeCode);
+  return Object.hasOwn(causeLabels, causeCode)
+    ? causeLabels[causeCode]
+    : unknownLabel("未分类原因", causeCode);
 }
 
 function accountGroupPrefix(eventType: string, objectId: string): string {
@@ -260,16 +266,22 @@ export function alertObjectLabel(
     return group ? `${account} · 分组 ${group}` : account;
   }
   if (objectId) return objectId;
-  return objectKindLabels[alert.object_kind] ?? unknownLabel("告警对象", alert.object_kind);
+  return Object.hasOwn(objectKindLabels, alert.object_kind)
+    ? objectKindLabels[alert.object_kind]
+    : unknownLabel("告警对象", alert.object_kind);
 }
 
 export function alertStatusLabel(status: string) {
-  return alertStatusLabels[status] ?? unknownLabel("状态未知", status);
+  return Object.hasOwn(alertStatusLabels, status)
+    ? alertStatusLabels[status]
+    : unknownLabel("状态未知", status);
 }
 
 export function alertDeliveryLabel(status: string | null | undefined, attempts = 0) {
   if (!status) return "通知状态未知";
-  const label = deliveryStatusLabels[status] ?? unknownLabel("通知状态未知", status);
+  const label = Object.hasOwn(deliveryStatusLabels, status)
+    ? deliveryStatusLabels[status]
+    : unknownLabel("通知状态未知", status);
   if (attempts > 0 && ["sent", "delivered", "已发送"].includes(status)) {
     return `${label} ${attempts} 次`;
   }

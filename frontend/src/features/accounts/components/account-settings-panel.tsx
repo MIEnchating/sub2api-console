@@ -5,7 +5,7 @@ import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, Save } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -116,9 +116,13 @@ export function AccountSettingsPanel(props: {
       excluded: false,
     },
   });
+  const initializedAccountID = useRef<string | null>(null);
+  const isDirty = form.formState.isDirty;
 
   useEffect(() => {
     if (!detail) return;
+    if (initializedAccountID.current === detail.id && isDirty) return;
+    initializedAccountID.current = detail.id;
     form.reset({
       priority: detail.priority == null ? "" : String(detail.priority),
       loadFactor: detail.load_factor ?? "",
@@ -127,7 +131,7 @@ export function AccountSettingsPanel(props: {
       paused: detail.paused === true,
       excluded: accountPoolState(detail).value === "excluded",
     });
-  }, [detail, form]);
+  }, [detail, form, isDirty]);
 
   const save = useMutation({
     mutationFn: async (values: AccountSettingsValues) => {
@@ -253,7 +257,7 @@ export function AccountSettingsPanel(props: {
                 description="控制账号是否参与调度、探测和健康评分。"
               />
               <div
-                className="divide-border divide-y overflow-hidden rounded-xl border bg-muted/10"
+                className="divide-border divide-y overflow-hidden rounded-lg border bg-muted/10"
                 data-testid="account-control-group"
               >
                 <SettingsSwitch

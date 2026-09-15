@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link2, Save } from "lucide-react";
 import { FieldError } from "@/components/field-error";
@@ -51,16 +51,19 @@ function createDraftBindings(
 ): Record<string, DraftBinding> {
   const bindingByGroupID = new Map(bindings.map((binding) => [binding.newapi_group_id, binding]));
   const localGroupByID = new Map(localGroups.map((group) => [group.id, group]));
-  const next: Record<string, DraftBinding> = {};
-  for (const group of groups) {
-    const binding = bindingByGroupID.get(group.id);
-    next[group.id] = {
-      localGroupId: binding?.sub2api_group_id ?? "",
-      sub2APIRatio: binding ? (localGroupByID.get(binding.sub2api_group_id)?.ratio ?? "") : "",
-      syncRatio: binding?.sync_ratio ?? false,
-    };
-  }
-  return next;
+  return Object.fromEntries(
+    groups.map((group) => {
+      const binding = bindingByGroupID.get(group.id);
+      return [
+        group.id,
+        {
+          localGroupId: binding?.sub2api_group_id ?? "",
+          sub2APIRatio: binding ? (localGroupByID.get(binding.sub2api_group_id)?.ratio ?? "") : "",
+          syncRatio: binding?.sync_ratio ?? false,
+        },
+      ];
+    }),
+  );
 }
 
 function validSub2APIRatio(value: string): boolean {
@@ -102,6 +105,7 @@ export function NewAPIGroupBindings(props: Props) {
   const [drafts, setDrafts] = useState<Record<string, DraftBinding>>(() =>
     createDraftBindings(props.groups, props.localGroups, props.bindings),
   );
+  const sourceDrafts = useRef(drafts);
   const filteredGroups = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
     if (!query) return props.groups;
@@ -148,7 +152,24 @@ export function NewAPIGroupBindings(props: Props) {
   }
 
   useEffect(() => {
-    setDrafts(createDraftBindings(props.groups, props.localGroups, props.bindings));
+    const previous = sourceDrafts.current;
+    const next = createDraftBindings(props.groups, props.localGroups, props.bindings);
+    sourceDrafts.current = next;
+    setDrafts((current) =>
+      Object.fromEntries(
+        Object.entries(next).map(([id, incoming]) => {
+          const baseline = Object.hasOwn(previous, id) ? previous[id] : undefined;
+          const draft = Object.hasOwn(current, id) ? current[id] : undefined;
+          const edited =
+            baseline &&
+            draft &&
+            (baseline.localGroupId !== draft.localGroupId ||
+              baseline.sub2APIRatio !== draft.sub2APIRatio ||
+              baseline.syncRatio !== draft.syncRatio);
+          return [id, edited ? draft : incoming];
+        }),
+      ),
+    );
   }, [props.bindings, props.groups, props.localGroups]);
 
   function save() {
@@ -183,7 +204,7 @@ export function NewAPIGroupBindings(props: Props) {
           <Switch
             aria-label="统一倍率同步"
             checked={allBoundGroupsSyncRatio}
-            disabled={boundDrafts.length === 0}
+            disabled={props.pending || boundDrafts.length === 0}
             onCheckedChange={(checked) =>
               setDrafts((current) => updateBoundGroupRatioSync(current, checked))
             }
@@ -226,6 +247,7 @@ export function NewAPIGroupBindings(props: Props) {
                       <TableCell className="font-mono text-xs">{group.ratio ?? "-"}</TableCell>
                       <TableCell>
                         <Select
+                          disabled={props.pending}
                           value={draft.localGroupId || unboundGroupValue}
                           itemToStringLabel={groupValueLabel}
                           onValueChange={(value) =>
@@ -260,7 +282,7 @@ export function NewAPIGroupBindings(props: Props) {
                         <Input
                           value={draft.sub2APIRatio}
                           inputMode="decimal"
-                          disabled={!draft.localGroupId}
+                          disabled={props.pending || !draft.localGroupId}
                           aria-label={`${group.name} 的 Sub2API 管理平台倍率`}
                           aria-invalid={
                             draft.localGroupId ? !validSub2APIRatio(draft.sub2APIRatio) : undefined
@@ -280,7 +302,7 @@ export function NewAPIGroupBindings(props: Props) {
                         <Switch
                           aria-label={`${group.name} 倍率同步`}
                           checked={draft.syncRatio}
-                          disabled={!draft.localGroupId}
+                          disabled={props.pending || !draft.localGroupId}
                           onCheckedChange={(checked) =>
                             setDrafts((current) => ({
                               ...current,

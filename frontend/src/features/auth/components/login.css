@@ -1,0 +1,83 @@
+.login-map {
+  --map-surface: var(--card);
+  --map-line: color-mix(in oklch, var(--foreground) 25%, var(--background));
+  --map-ink: var(--foreground);
+  --map-accent: var(--primary);
+  --map-center: var(--accent);
+}
+
+.login-map-links {
+  stroke: var(--map-line);
+}
+
+.login-map-mobile-console {
+  background: var(--map-center);
+  border-color: var(--map-accent);
+  color: var(--map-ink);
+}
+
+.login-map-mobile-service {
+  background: var(--map-surface);
+  border-color: var(--map-line);
+  color: var(--map-ink);
+}
+
+.login-map-node,
+.login-map-service,
+.login-map-center {
+  rx: var(--radius);
+}
+
+.login-map-node,
+.login-map-service {
+  fill: var(--map-surface);
+  stroke: var(--map-line);
+  stroke-width: 1;
+}
+
+.login-map-label {
+  fill: var(--map-ink);
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.login-map-icon {
+  color: var(--map-accent);
+}
+
+.login-map-center {
+  fill: var(--map-center);
+  stroke: var(--map-accent);
+  stroke-width: 1.5;
+}
+
+.login-map-console,
+.login-map-service-name {
+  fill: var(--map-ink);
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.login-map-signals path {
+  stroke: var(--map-accent);
+  stroke-dasharray: 12 160;
+  animation: login-route-flow 6s linear infinite;
+}
+
+.login-map-signals path:nth-child(2n) {
+  animation-delay: -3s;
+}
+
+@keyframes login-route-flow {
+  to {
+    stroke-dashoffset: -172;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-map-signals path {
+    animation: none;
+    stroke-dasharray: none;
+    opacity: 0.25;
+  }
+}

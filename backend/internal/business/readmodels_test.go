@@ -70,7 +70,7 @@ func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	readOnly.SetMaxOpenConns(8)
-	store.db = readOnly
+	store.db = &database{DB: readOnly, reader: readOnly}
 	if err := store.db.PingContext(ctx); err != nil {
 		t.Fatal(err)
 	}

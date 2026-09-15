@@ -5,12 +5,14 @@ import { toast } from "sonner";
 
 import { api, type NewAPIModelPrice, type NewAPIPlatform } from "@/api";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
+import { ContentRetry } from "@/components/content-retry";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { NewAPIFormSkeleton } from "./newapi-form-skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import type { NewAPIManagementView } from "../constants";
@@ -24,7 +26,7 @@ import {
   remotePriceToNewAPIModelPrice,
 } from "./model-prices";
 import { NewAPIPlatformDialog } from "./platform-dialog";
-import { NewAPIPriceComparison } from "./price-comparison";
+import { comparePlatformModelPrice, NewAPIPriceComparison } from "./price-comparison";
 import { RawPricingSourceDialog } from "./raw-pricing-source-dialog";
 
 type Props = {
@@ -83,35 +85,11 @@ export function NewAPIHeadingAction(props: {
   return null;
 }
 
-export function NewAPIRemoteLoading(props: { label: string }) {
-  return (
-    <section
-      className="overflow-hidden rounded-md border bg-background"
-      role="status"
-      aria-label={props.label}
-    >
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <div className="grid gap-2">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-3 w-16" />
-        </div>
-        <Skeleton className="h-7 w-24" />
-      </div>
-      <div className="grid gap-px bg-border">
-        {Array.from({ length: 6 }, (_, index) => (
-          <div
-            key={index}
-            className="grid h-15 grid-cols-[minmax(8rem,1fr)_7rem_minmax(12rem,1fr)_5rem] items-center gap-4 bg-background px-4"
-          >
-            <Skeleton className="h-3 w-32 max-w-full" />
-            <Skeleton className="h-3 w-12" />
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-4 w-8 justify-self-center" />
-          </div>
-        ))}
-      </div>
-    </section>
-  );
+export function NewAPIRemoteLoading(props: { label: string; view?: Props["view"] }) {
+  if (props.view === "channels" || props.view === "platform") {
+    return <NewAPIFormSkeleton label={props.label} channel={props.view === "channels"} />;
+  }
+  return <PageLoadingSkeleton label={props.label} fill />;
 }
 
 export function NewAPIPlatformDetails(props: {
@@ -249,11 +227,15 @@ export function NewAPIManagementPage(props: Props) {
       const writtenPrice =
         nextSnapshot.models.find((model) => model.model === write.price.model) ?? null;
       setWrittenModelPrice(writtenPrice);
-      if (writtenPrice) {
+      if (writtenPrice && comparePlatformModelPrice(write.price, [writtenPrice]) === "matched") {
         toast.success(`${write.price.model} ${write.action}成功并已读回`);
         return;
       }
-      toast.error(`${write.price.model} 已提交，但平台读回结果中没有该模型`);
+      toast.error(
+        writtenPrice
+          ? `${write.price.model} 已提交，但平台读回价格与目标不一致，请核对`
+          : `${write.price.model} 已提交，但平台读回结果中没有该模型`,
+      );
     },
     onError: (error) => notifyOperationError(error, "模型价格写入平台失败"),
   });
@@ -261,7 +243,7 @@ export function NewAPIManagementPage(props: Props) {
   async function writeModelPrice(price: NewAPIModelPrice, action: string): Promise<boolean> {
     try {
       const nextSnapshot = await saveModelPrice.mutateAsync({ price, action });
-      return nextSnapshot.models.some((model) => model.model === price.model);
+      return comparePlatformModelPrice(price, nextSnapshot.models) === "matched";
     } catch {
       return false;
     }
@@ -368,7 +350,7 @@ export function NewAPIManagementPage(props: Props) {
         title={pageTitles[props.view]}
         description=""
         action={
-          selectedPlatform && !needsRemoteSnapshot ? undefined : (
+          !workspace.data || (selectedPlatform && !needsRemoteSnapshot) ? undefined : (
             <NewAPIHeadingAction
               hasPlatform={selectedPlatform !== null}
               needsRemoteSnapshot={needsRemoteSnapshot}
@@ -396,7 +378,12 @@ export function NewAPIManagementPage(props: Props) {
       ) : null}
 
       <div className="flex h-full min-h-0 flex-col gap-3">
-        {workspace.isLoading && <NewAPIRemoteLoading label="正在加载 New API 平台配置" />}
+        {workspace.isLoading && (
+          <NewAPIRemoteLoading label="正在加载 New API 平台配置" view={props.view} />
+        )}
+        {!workspace.data && workspace.isError && (
+          <ContentRetry pending={workspace.isFetching} onRetry={() => void workspace.refetch()} />
+        )}
         {!workspace.isLoading && selectedPlatform && (
           <>
             <div
@@ -407,7 +394,16 @@ export function NewAPIManagementPage(props: Props) {
               }
             >
               {needsRemoteSnapshot && remoteSnapshot.isFetching && snapshot === null ? (
-                <NewAPIRemoteLoading label={`正在加载${pageTitles[props.view]}`} />
+                <NewAPIRemoteLoading
+                  label={`正在加载${pageTitles[props.view]}`}
+                  view={props.view}
+                />
+              ) : null}
+              {needsRemoteSnapshot && snapshot === null && remoteSnapshot.isError ? (
+                <ContentRetry
+                  pending={remoteSnapshot.isFetching}
+                  onRetry={() => void remoteSnapshot.refetch()}
+                />
               ) : null}
               {props.view === "platform" ? (
                 <NewAPIPlatformDetails
@@ -419,7 +415,7 @@ export function NewAPIManagementPage(props: Props) {
                   onDelete={() => setDeleteOpen(true)}
                 />
               ) : null}
-              {props.view === "groups" && !(remoteSnapshot.isFetching && snapshot === null) ? (
+              {props.view === "groups" && snapshot ? (
                 <NewAPIGroupBindings
                   groups={snapshot?.groups ?? []}
                   localGroups={workspace.data?.local_groups ?? []}
@@ -428,7 +424,7 @@ export function NewAPIManagementPage(props: Props) {
                   onSave={(bindings) => saveBindings.mutate(bindings)}
                 />
               ) : null}
-              {props.view === "channels" && !(remoteSnapshot.isFetching && snapshot === null) ? (
+              {props.view === "channels" && snapshot ? (
                 <NewAPIChannelForm
                   groups={workspace.data?.local_groups ?? []}
                   newAPIGroups={snapshot?.groups ?? []}
@@ -450,7 +446,7 @@ export function NewAPIManagementPage(props: Props) {
                   }}
                 />
               ) : null}
-              {props.view === "prices" && !(remoteSnapshot.isFetching && snapshot === null) ? (
+              {props.view === "prices" && snapshot ? (
                 <NewAPIModelPrices
                   key={platformId}
                   models={snapshot?.models ?? []}
@@ -497,7 +493,7 @@ export function NewAPIManagementPage(props: Props) {
             </div>
           </>
         )}
-        {!workspace.isLoading && !selectedPlatform && (
+        {workspace.data && !workspace.data.platforms.length && (
           <div className="text-muted-foreground flex min-h-72 flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-background px-6 text-center text-sm">
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
             <span>尚未添加 New API 平台配置</span>

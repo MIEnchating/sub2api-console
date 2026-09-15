@@ -79,7 +79,9 @@ describe("AccountStatusFilter", () => {
 
   it("shows the filter name and selected state using the shared faceted style", () => {
     const markup = renderToStaticMarkup(
-      <AccountStatusFilter value="degraded" onValueChange={() => {}} />,
+      <QueryClientProvider client={new QueryClient()}>
+        <AccountStatusFilter value="degraded" onValueChange={() => {}} />,
+      </QueryClientProvider>,
     );
 
     expect(markup).toContain('aria-label="状态筛选"');
@@ -96,7 +98,9 @@ describe("AccountStatusFilter", () => {
 
   it("maps the internal all state to an empty filter without offering an all option", () => {
     const markup = renderToStaticMarkup(
-      <AccountStatusFilter value="all" onValueChange={() => {}} />,
+      <QueryClientProvider client={new QueryClient()}>
+        <AccountStatusFilter value="all" onValueChange={() => {}} />,
+      </QueryClientProvider>,
     );
 
     expect(markup).toContain(">状态<");

@@ -1,4 +1,5 @@
 import { ContentRetry } from "@/components/content-retry";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -31,7 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
+import { JsonEditorField } from "@/components/json-editor/form-field";
 import { TableActionButton } from "@/components/data-table/table-action-button";
 import { TaskCancelButton } from "@/components/task-startup-state";
 import { AccountDeleteDialog } from "@/features/accounts/components/account-delete-dialog";
@@ -385,6 +386,11 @@ export function UpstreamAccounts(props: {
 }
 
 export function UpstreamEditDialog(props: Props) {
+  const orderedUpstreamTypes = useDictionaryOrder(
+    "upstream_type",
+    configurableUpstreamTypeOptions,
+    (option) => option.value,
+  );
   const queryClient = useQueryClient();
   const [showHeadersEditor, setShowHeadersEditor] = useState(false);
   const [clearHeaders, setClearHeaders] = useState(false);
@@ -406,12 +412,22 @@ export function UpstreamEditDialog(props: Props) {
     resolver: zodResolver(upstreamEditSchema),
     defaultValues: emptyValues,
   });
+  const initializedHost = useRef<string | null>(null);
+  const pendingSave = useRef<{ host: string; payload: UpstreamConfigurationUpdate } | null>(null);
+  const isDirty = form.formState.isDirty;
   const platform = form.watch("upstream_type");
   const authMode = form.watch("auth_mode");
   const authModes = useMemo(() => authModesForPlatform(platform), [platform]);
 
   useEffect(() => {
+    if (props.host === null) {
+      initializedHost.current = null;
+      form.reset(emptyValues);
+      return;
+    }
     if (!configuration.data) return;
+    if (initializedHost.current === props.host && isDirty) return;
+    initializedHost.current = props.host;
     form.reset({
       ...emptyValues,
       name: configuration.data.name,
@@ -423,7 +439,7 @@ export function UpstreamEditDialog(props: Props) {
     });
     setShowHeadersEditor(configuration.data.header_names.length > 0);
     setClearHeaders(false);
-  }, [configuration.data, form]);
+  }, [configuration.data, form, isDirty, props.host]);
 
   useEffect(() => {
     if (authModes.some((item) => item.value === authMode)) return;
@@ -433,17 +449,27 @@ export function UpstreamEditDialog(props: Props) {
   }, [authMode, authModes, form]);
 
   const save = useMutation({
-    mutationFn: (payload: UpstreamConfigurationUpdate) =>
-      api.updateUpstreamConfiguration(props.host!, payload),
-    onSuccess: (value) => {
-      const hostChanged = props.host !== null && value.host !== props.host;
-      queryClient.setQueryData(["upstream-configuration", props.host], value);
+    gcTime: 0,
+    mutationFn: (host: string) => {
+      const submission = pendingSave.current;
+      pendingSave.current = null;
+      if (!submission || submission.host !== host)
+        throw new Error("上游提交内容已清除，请重新填写");
+      return api.updateUpstreamConfiguration(host, submission.payload);
+    },
+    onSuccess: (value, host) => {
+      const hostChanged = value.host !== host;
+      queryClient.setQueryData(["upstream-configuration", host], value);
       if (hostChanged) {
-        queryClient.removeQueries({ queryKey: ["upstream-configuration", props.host] });
+        queryClient.removeQueries({ queryKey: ["upstream-configuration", host] });
         queryClient.setQueryData(["upstream-configuration", value.host], value);
       }
       void queryClient.invalidateQueries({ queryKey: ["upstreams"] });
       void queryClient.invalidateQueries({ queryKey: ["upstream-groups"] });
+      if (props.host !== host) {
+        props.onSaved();
+        return;
+      }
       form.reset({
         ...emptyValues,
         name: value.name,
@@ -473,6 +499,7 @@ export function UpstreamEditDialog(props: Props) {
   });
 
   function onSubmit(values: UpstreamEditValues) {
+    if (!props.host || save.isPending || pendingSave.current) return;
     form.clearErrors(["entry", "headers", "cookies"]);
     const payload: UpstreamConfigurationUpdate = {
       name: values.name.trim(),
@@ -522,7 +549,8 @@ export function UpstreamEditDialog(props: Props) {
       payload.save_to_vault = true;
       if (values.entry.trim()) payload.entry = values.entry.trim();
     }
-    save.mutate(payload);
+    pendingSave.current = { host: props.host, payload };
+    save.mutate(props.host);
   }
 
   const data: UpstreamConfiguration | undefined = configuration.data;
@@ -626,7 +654,7 @@ export function UpstreamEditDialog(props: Props) {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {configurableUpstreamTypeOptions.map((option) => (
+                            {orderedUpstreamTypes.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
@@ -798,15 +826,17 @@ export function UpstreamEditDialog(props: Props) {
                           htmlFor="upstream-edit-headers-json"
                           error={form.formState.errors.headers?.message}
                         >
-                          <Textarea
+                          <JsonEditorField
                             id="upstream-edit-headers-json"
+                            aria-label="Headers JSON"
                             aria-invalid={Boolean(form.formState.errors.headers)}
-                            className="min-h-24"
                             placeholder={sensitiveFieldPlaceholder(
                               Boolean(data?.header_names.length),
                               '例如 {"Authorization":"Bearer ..."}',
                             )}
-                            {...form.register("headers")}
+                            control={form.control}
+                            name="headers"
+                            disabled={save.isPending}
                           />
                         </Field>
                       ) : null}
@@ -817,13 +847,15 @@ export function UpstreamEditDialog(props: Props) {
                       label={`Cookies JSON（${data?.cookie_names.length ? data.cookie_names.join("、") : "未配置"}）`}
                       error={form.formState.errors.cookies?.message}
                     >
-                      <Textarea
-                        className="min-h-24"
+                      <JsonEditorField
+                        aria-label="Cookies JSON"
                         placeholder={sensitiveFieldPlaceholder(
                           Boolean(data?.cookie_names.length),
                           '例如 {"session":"..."}',
                         )}
-                        {...form.register("cookies")}
+                        control={form.control}
+                        name="cookies"
+                        disabled={save.isPending}
                       />
                     </Field>
                   ) : null}

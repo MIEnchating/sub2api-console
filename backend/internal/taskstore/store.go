@@ -19,6 +19,7 @@ var (
 	ErrNotFound        = errors.New("任务不存在或已过期")
 	ErrOperationActive = errors.New("同类任务正在运行，请等待当前任务完成")
 	ErrTaskTerminal    = errors.New("任务已经结束，不能覆盖最终状态")
+	ErrTaskDeleted     = errors.New("处理记录已删除，不能重新保存")
 )
 
 const (
@@ -79,6 +80,11 @@ func Open(path string) (*Store, error) {
 	}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS active_task_operations (
 		operation TEXT PRIMARY KEY,task_id TEXT NOT NULL UNIQUE
+	)`); err != nil {
+		return nil, errors.Join(err, db.Close())
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS deleted_tasks (
+		id TEXT PRIMARY KEY,deleted_at TEXT NOT NULL
 	)`); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
@@ -145,10 +151,11 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 		}
 	}
 	writeResult, err := tx.ExecContext(ctx, `INSERT INTO tasks(id,skill,operation,status,progress,message,result_json,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+		SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM deleted_tasks WHERE id=?)
+		ON CONFLICT(id) DO UPDATE SET
 		status=excluded.status,progress=excluded.progress,message=excluded.message,result_json=excluded.result_json,updated_at=excluded.updated_at
 		WHERE tasks.status NOT IN ('succeeded','partial','failed','cancelled') OR tasks.status=excluded.status`,
-		task.ID, task.Skill, task.Operation, task.Status, task.Progress, task.Message, string(encoded), task.CreatedAt, task.UpdatedAt)
+		task.ID, task.Skill, task.Operation, task.Status, task.Progress, task.Message, string(encoded), task.CreatedAt, task.UpdatedAt, task.ID)
 	if err != nil {
 		return err
 	}
@@ -157,6 +164,13 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 		return err
 	}
 	if written == 0 {
+		var deleted bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM deleted_tasks WHERE id=?)`, task.ID).Scan(&deleted); err != nil {
+			return err
+		}
+		if deleted {
+			return ErrTaskDeleted
+		}
 		return fmt.Errorf("%w：%s", ErrTaskTerminal, task.ID)
 	}
 	if !activeTaskStatus(task.Status) {
@@ -400,7 +414,12 @@ func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) 
 	}
 	defer tx.Rollback()
 	query := `UPDATE tasks SET status='failed',progress=100,message='进程重启导致任务中断',
-		result_json='{"error":"进程重启导致任务中断","interrupted":true}',updated_at=?
+		result_json=CASE WHEN skill='account-workbench' AND operation='account-workbench-oauth-batch' AND json_valid(result_json)
+		THEN json_object('error','进程重启导致任务中断','interrupted',json('true'),'phase','failed',
+			'items',json(COALESCE((SELECT json_group_array(CASE WHEN json_extract(value,'$.status') IN ('queued','running')
+			THEN json_set(value,'$.status','cancelled','$.message','原授权已中断，请重新授权') ELSE value END)
+			FROM json_each(result_json,'$.items')), '[]')))
+		ELSE '{"error":"进程重启导致任务中断","interrupted":true}' END,updated_at=?
 		WHERE status IN ('queued','running','waiting_input')`
 	args := []any{now}
 	if !cutoff.IsZero() {
@@ -472,22 +491,39 @@ func compactAutomaticInspectionHistory(
 }
 
 func (s *Store) ClearLogs(ctx context.Context, before *time.Time) (int64, int64, error) {
-	var protected int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running','waiting_input')`).Scan(&protected); err != nil {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return 0, 0, err
 	}
-	query := `DELETE FROM tasks WHERE status NOT IN ('queued','running','waiting_input')`
+	defer tx.Rollback()
+	where := ` WHERE status NOT IN ('queued','running','waiting_input')`
 	arguments := []any{}
 	if before != nil {
-		query += ` AND updated_at < ?`
+		where += ` AND updated_at < ?`
 		arguments = append(arguments, before.UTC().Format(storageTimeLayout))
 	}
-	result, err := s.db.ExecContext(ctx, query, arguments...)
+	// Acquire the write lock before reading counts, and preserve tombstones in
+	// the same transaction so late finalization cannot recreate cleaned tasks.
+	tombstoneArguments := append([]any{time.Now().UTC().Format(storageTimeLayout)}, arguments...)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO deleted_tasks(id,deleted_at) SELECT id,? FROM tasks`+where, tombstoneArguments...); err != nil {
+		return 0, 0, err
+	}
+	var protected int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running','waiting_input')`).Scan(&protected); err != nil {
+		return 0, 0, err
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM tasks`+where, arguments...)
 	if err != nil {
 		return 0, protected, err
 	}
 	deleted, err := result.RowsAffected()
-	return deleted, protected, err
+	if err != nil {
+		return 0, protected, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, protected, err
+	}
+	return deleted, protected, nil
 }
 
 type scanner interface {

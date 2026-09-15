@@ -16,7 +16,7 @@ import type {
   AnimationTarget,
   Task,
 } from "@/api";
-import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
+import { AnimationAccountsSkeleton } from "./animation-accounts-skeleton";
 import { ContentRetry } from "@/components/content-retry";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { useClientPagination } from "@/hooks/use-client-pagination";
@@ -160,9 +160,7 @@ export function AnimationSelection(props: {
         aria-label="动画账号卡片"
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-muted/10 p-3 sm:p-4"
       >
-        {props.accounts.isLoading ? (
-          <PageLoadingSkeleton label="正在读取账号" variant="list" />
-        ) : null}
+        {props.accounts.isLoading ? <AnimationAccountsSkeleton /> : null}
         {props.accounts.isError && !props.accounts.data ? (
           <ContentRetry
             onRetry={() => void props.accounts.refetch()}

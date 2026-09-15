@@ -1,7 +1,7 @@
 import { Controller, type UseFormReturn } from "react-hook-form";
 import type { KumaMonitor } from "@/api";
 import { FormField } from "@/App";
-import { Textarea } from "@/components/ui/textarea";
+import { JsonEditorField } from "@/components/json-editor/form-field";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -53,10 +53,12 @@ export function MonitorRequestForm(props: {
           htmlFor="kuma-headers"
           error={errors?.headers?.message}
         >
-          <Textarea
+          <JsonEditorField
             id="kuma-headers"
-            className="min-h-28 font-mono text-xs"
-            {...form.register("options.headers")}
+            aria-label={props.monitor ? "请求头（JSON，留空保留）" : "请求头（JSON）"}
+            control={form.control}
+            name="options.headers"
+            disabled={props.pending}
             placeholder={
               props.monitor?.options?.headers_configured
                 ? "已配置，留空保留"
@@ -70,10 +72,13 @@ export function MonitorRequestForm(props: {
           htmlFor="kuma-body"
           error={errors?.body?.message}
         >
-          <Textarea
+          <JsonEditorField
             id="kuma-body"
-            className="min-h-28 font-mono text-xs"
-            {...form.register("options.body")}
+            aria-label={props.monitor ? "请求体（留空保留）" : "请求体"}
+            control={form.control}
+            name="options.body"
+            disabled={props.pending}
+            language="auto"
             placeholder={props.monitor?.options?.body_configured ? "已配置，留空保留" : "请求体"}
           />
         </FormField>

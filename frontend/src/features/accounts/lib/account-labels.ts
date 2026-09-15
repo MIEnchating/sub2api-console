@@ -38,7 +38,8 @@ function mappedLabel(
 ): string | null {
   const normalized = value?.trim();
   if (!normalized) return null;
-  return labels[normalized.toLowerCase()] ?? normalized;
+  const key = normalized.toLowerCase();
+  return Object.hasOwn(labels, key) ? labels[key] : normalized;
 }
 
 export function accountPlatformLabel(value: string | null | undefined): string | null {

@@ -534,7 +534,7 @@ func effectiveGroupWeightBudget(control map[string]any, override *GroupPolicyOve
 	return 400
 }
 
-func countByString(ctx context.Context, db *sql.DB, query string, arguments ...any) (map[string]int64, error) {
+func countByString(ctx context.Context, db policyQueryer, query string, arguments ...any) (map[string]int64, error) {
 	rows, err := db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err

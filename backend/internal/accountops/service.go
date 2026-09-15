@@ -20,6 +20,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
@@ -370,17 +371,9 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 	if !runtimepolicy.Valid(mode) {
 		return nil, fmt.Errorf("运行模式无效：%s", mode)
 	}
-	if patch.PriorityPresent && patch.Priority != nil {
-		manualRepository, ok := s.repository.(manualPriorityRepository)
-		if ok {
-			config, configErr := manualRepository.ManualPriorityConfig(ctx)
-			if configErr != nil {
-				return nil, configErr
-			}
-			insideReservedRange := *patch.Priority <= config.ReservedMax
-			if insideReservedRange && !allowReservedPriority {
-				return nil, fmt.Errorf("优先级 1 到 %d 为人工优先位，请使用账号操作中的人工优先位设置", config.ReservedMax)
-			}
+	if patch.PriorityPresent && patch.Priority != nil && !allowReservedPriority {
+		if err := s.validateOrdinaryPriority(ctx, *patch.Priority); err != nil {
+			return nil, err
 		}
 	}
 	body := map[string]any{}
@@ -582,6 +575,9 @@ func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input S
 	if input.Priority < 1 || input.Priority > 10_000_000 {
 		return taskstore.Task{}, errors.New("优先级必须是 1 到 10000000 之间的整数")
 	}
+	if err := s.validateOrdinaryPriority(ctx, input.Priority); err != nil {
+		return taskstore.Task{}, err
+	}
 	loadFactor, err := decimalAtLeastOne(input.LoadFactor)
 	if err != nil {
 		return taskstore.Task{}, errors.New("负载因子必须大于或等于 1")
@@ -632,6 +628,9 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	}
 	if mode != runtimepolicy.Full || local.ManualPriority != nil {
 		return nil, errors.New("账号设置执行条件已变化，请刷新后重试")
+	}
+	if err := s.validateOrdinaryPriority(ctx, input.Priority); err != nil {
+		return nil, err
 	}
 	ctx, err = targetguard.Bind(ctx, s.targets)
 	if err != nil {
@@ -713,6 +712,21 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		"operation_id": operationID, "account_id": accountID, "before": beforeValues,
 		"after": afterValues, "remote_write": true, "readback_confirmed": true,
 	}, nil
+}
+
+func (s *Service) validateOrdinaryPriority(ctx context.Context, priority int64) error {
+	repository, ok := s.repository.(manualPriorityRepository)
+	if !ok {
+		return nil
+	}
+	config, err := repository.ManualPriorityConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if priority <= config.ReservedMax {
+		return fmt.Errorf("优先级 1 到 %d 为人工优先位，请使用账号操作中的人工优先位设置", config.ReservedMax)
+	}
+	return nil
 }
 
 func normalizeTestModels(models []string) ([]string, error) {
@@ -1281,7 +1295,7 @@ func decimalAtLeastOne(value string) (string, error) {
 }
 
 func decimal(value string) (string, error) {
-	parsed, ok := new(big.Rat).SetString(strings.TrimSpace(value))
+	parsed, ok := decimalutil.Parse(value)
 	if !ok {
 		return "", errors.New("not decimal")
 	}

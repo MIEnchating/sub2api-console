@@ -223,6 +223,7 @@ export type NewAPIRemoteSnapshot = {
   newapi_models?: NewAPIModelPrice[];
   sub2api_models?: Sub2APIModelPrice[];
   upstream_prices?: NewAPIUpstreamPriceCatalog[];
+  upstream_price_warning?: string;
   differences: Array<{
     model: string;
     kind: "missing_in_model_plaza" | "missing_in_platform" | "ratio_mismatch";
@@ -774,6 +775,7 @@ export type PricingConfig = {
   profit_margin: number;
   exchange_group_sets: string[][];
   exchange_group_set_names: string[];
+  group_min_cost_multipliers?: Record<string, string>;
   interval_seconds: number;
   write_concurrency: number;
 };
@@ -1100,12 +1102,13 @@ export type BrowserLoginSession = {
   message: string;
   expires_at: string;
   image?: string;
+  challenge_code?: string;
   width: number;
   height: number;
 };
 
 export type BrowserLoginInput = {
-  kind: "click" | "text" | "key" | "scroll";
+  kind: "click" | "text" | "key" | "scroll" | "reload";
   x?: number;
   y?: number;
   text?: string;
@@ -1333,7 +1336,17 @@ export type SystemMetrics = {
 };
 
 export type AnimationTarget = { account_id: string; model: string };
-export type AnimationRequest = { targets: AnimationTarget[]; timeout_seconds: number };
+export type AnimationCustomEndpoint = {
+  base_url: string;
+  api_key: string;
+  platform: "openai" | "anthropic";
+  model: string;
+};
+export type AnimationRequest = {
+  targets: AnimationTarget[];
+  timeout_seconds: number;
+  custom?: AnimationCustomEndpoint;
+};
 export type AnimationResult = {
   account_id: string;
   account_name: string;
@@ -1758,7 +1771,1159 @@ export type KumaWriteInput = {
 
 export type KumaSnapshot = { config: KumaConfig; monitors: KumaMonitor[]; warning: string };
 
+export type WorkbenchConfig = {
+  concurrency: number;
+  priority: number;
+  rate_multiplier: string;
+  group_ids: string[];
+  auto_pause_on_expired: boolean;
+  notes?: string;
+  proxy_id?: string | null;
+  load_factor?: string | null;
+  expires_at?: number | null;
+  credential_extras?: Record<string, unknown>;
+  extra?: Record<string, unknown>;
+};
+
+export type WorkbenchTemplateInput = {
+  name: string;
+  priority: number;
+  match: { plan_type: string; email_domain: string };
+  config: WorkbenchConfig;
+  revision?: number;
+  preferred?: boolean;
+  source_account_id?: string;
+  source_revision?: string;
+};
+
+export type WorkbenchTemplate = WorkbenchTemplateInput & {
+  id: string;
+  revision: number;
+  target_url?: string;
+  source_name?: string;
+  source_synced_at?: string;
+};
+
+export type WorkbenchTemplateSource = {
+  account_id: string;
+  account_name: string;
+  config: WorkbenchConfig;
+  target: string;
+  source_revision: string;
+  synced_at: string;
+  match: WorkbenchTemplateInput["match"];
+  priority: number;
+};
+
+export type WorkbenchScope = "managed" | "local-export";
+export type WorkbenchPreviewInput = {
+  scope?: WorkbenchScope;
+  export_only?: boolean;
+  content: string;
+  template_id?: string;
+  check_after_import: boolean;
+  model: string;
+};
+
+export type WorkbenchOAuthPreviewInput = Omit<WorkbenchPreviewInput, "content">;
+
+export type WorkbenchRunInput = WorkbenchPreviewInput & {
+  recovery_enabled?: boolean;
+  proxy_url?: string;
+  sms?: WorkbenchOAuthSMSInput;
+};
+export type WorkbenchRunRow = {
+  index: number;
+  kind: string;
+  name: string;
+  email?: string;
+  workspace_id?: string;
+  has_password: boolean;
+  has_totp: boolean;
+  has_proxy: boolean;
+  mail_kind?: string;
+  sms_provider?: string;
+  status: string;
+  message: string;
+};
+export type WorkbenchRunPreview = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  id: string;
+  expires_at: string;
+  target: string;
+  export_only: boolean;
+  items: WorkbenchRunRow[];
+  errors: { index: number; message: string }[];
+};
+export type WorkbenchRunView = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  recovery_id?: string;
+  id: string;
+  task_id: string;
+  status: "queued" | "running" | "waiting_input" | "ready" | "failed" | "cancelled";
+  message: string;
+  expires_at: string;
+  export_only: boolean;
+  oauth_batch_id?: string;
+  current_oauth_id?: string;
+  available: number;
+  items: WorkbenchRunRow[];
+  errors: { index: number; message: string }[];
+};
+
+type WorkbenchOAuthMailbox =
+  | {
+      kind: "http";
+      url: string;
+      method: "GET" | "POST";
+      headers?: Record<string, string>;
+      body?: string;
+    }
+  | { kind: "microsoft"; email: string; client_id: string; refresh_token: string };
+
+export type WorkbenchOAuthStartInput = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  proxy_url?: string;
+  login?: {
+    proxy_url?: string;
+    email: string;
+    password?: string;
+    totp_secret?: string;
+    workspace_id?: string;
+    mailbox?: WorkbenchOAuthMailbox;
+    sms?: WorkbenchOAuthSMSInput;
+  };
+};
+
+export type WorkbenchOAuthSMSInput = {
+  provider: "smsbower" | "luban" | "custom";
+  api_key?: string;
+  service_id?: string;
+  service?: string;
+  country?: string;
+  max_price?: string;
+  custom_entries?: string;
+  confirmed: boolean;
+};
+
+export type WorkbenchSMSOption = {
+  country: string;
+  title: string;
+  iso: string;
+  prefix: string;
+  price: string;
+  count: number;
+};
+
+export type WorkbenchSMSReceipt = {
+  scope?: WorkbenchScope;
+  id: string;
+  task_id: string;
+  provider: WorkbenchOAuthSMSInput["provider"];
+  order_id?: string;
+  phone?: string;
+  action: "acquire" | "ready" | "complete" | "release";
+  state: "submitted" | "confirmed" | "uncertain";
+  updated_at: string;
+  can_inspect: boolean;
+};
+
+export type WorkbenchOAuthCheckpoint = {
+  active?: boolean;
+  parent_task_id?: string;
+  scope?: WorkbenchScope;
+  automatic?: boolean;
+  checkpoint_revision?: number;
+  id: string;
+  source_task_id: string;
+  task_id?: string;
+  status: "watching" | "saving" | "ready" | "restoring" | "restored" | "failed" | "deleting";
+  stage?: string;
+  revision: number;
+  created_at: string;
+  expires_at: string;
+  can_restore: boolean;
+};
+
+export type WorkbenchQueueRecovery = {
+  active?: boolean;
+  pending?: number;
+  succeeded?: number;
+  review?: number;
+  items?: { index: number; email: string; workspace_id?: string; status: string }[];
+  scope?: WorkbenchScope;
+  id: string;
+  kind: "oauth-batch" | "mixed";
+  task_id: string;
+  status: "running" | "interrupted" | "completed";
+  revision: number;
+  expires_at: string;
+  can_resume: boolean;
+};
+
+export type WorkbenchOAuthSession = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  checkpoint_id?: string;
+  id: string;
+  task_id: string;
+  host: "auth.openai.com";
+  status:
+    | "starting"
+    | "waiting"
+    | "checkpointing"
+    | "verifying"
+    | "authorized"
+    | "failed"
+    | "cancelled"
+    | "expired";
+  message: string;
+  expires_at: string;
+  width: number;
+  height: number;
+  image?: string;
+};
+
+export type WorkbenchOAuthBatchInput = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  proxy_url?: string;
+  content: string;
+  sms?: WorkbenchOAuthSMSInput;
+};
+
+export type WorkbenchOAuthBatchRow = {
+  account_id?: string;
+  user_id?: string;
+  profile_id?: string;
+  profile_revision?: number;
+  index: number;
+  email: string;
+  workspace_id?: string;
+  has_password: boolean;
+  has_totp: boolean;
+  mail_kind?: string;
+  sms_provider?: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  message: string;
+};
+
+export type WorkbenchOAuthBatchPreview = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  fresh_login?: boolean;
+  id: string;
+  expires_at: string;
+  target: string;
+  items: WorkbenchOAuthBatchRow[];
+  errors: Array<{ index: number; message: string }>;
+};
+
+export type WorkbenchOAuthBatch = {
+  scope?: WorkbenchScope;
+  recovery_enabled?: boolean;
+  recovery_id?: string;
+  fresh_login?: boolean;
+  id: string;
+  task_id: string;
+  status: "queued" | "running" | "authorized" | "failed" | "cancelled";
+  message: string;
+  expires_at: string;
+  current_oauth_id?: string;
+  available: number;
+  items: WorkbenchOAuthBatchRow[];
+};
+
+export type WorkbenchSecurityInput = {
+  proxy_url?: string;
+  account_id?: string;
+  source_oauth_id?: string;
+  source_checkpoint?: WorkbenchOAuthCheckpoint;
+  scope?: WorkbenchScope;
+  operation: "password" | "totp";
+  confirmed: boolean;
+  password?: string;
+};
+
+export type WorkbenchSecuritySource = {
+  source_oauth_id: string;
+  scope: WorkbenchScope;
+  email: string;
+  user_id: string;
+  workspace_id: string;
+  expires_at: string;
+};
+
+export type WorkbenchOAuthSMSAttachment = {
+  scope: WorkbenchScope;
+  stage: string;
+  revision: string;
+  configured: boolean;
+  can_attach: boolean;
+};
+
+export type WorkbenchLoginProfile = {
+  has_proxy?: boolean;
+  id: string;
+  account_id: string;
+  user_id: string;
+  workspace_id: string;
+  email: string;
+  revision: number;
+  updated_at: string;
+  has_password: boolean;
+  has_totp: boolean;
+  mail_kind?: string;
+  sms_provider?: string;
+};
+export type WorkbenchLoginProfileInput = {
+  id?: string;
+  account_id: string;
+  revision: number;
+  confirmed: boolean;
+  login: NonNullable<WorkbenchOAuthStartInput["login"]>;
+};
+export type WorkbenchSourceProfile = Omit<WorkbenchLoginProfile, "account_id"> & {
+  scope: "local-export";
+};
+export type WorkbenchSourceProfileReference = {
+  source_oauth_id?: string;
+  artifact_id?: string;
+  index?: number;
+};
+export type WorkbenchSourceProfileIdentity = {
+  scope: "local-export";
+  source: WorkbenchSourceProfileReference;
+  source_revision: string;
+  email: string;
+  user_id: string;
+  workspace_id: string;
+  expires_at: string;
+};
+export type WorkbenchSourceProfileInput = {
+  scope: "local-export";
+  id?: string;
+  revision?: number;
+  source?: WorkbenchSourceProfileReference;
+  source_revision?: string;
+  login: NonNullable<WorkbenchOAuthStartInput["login"]>;
+  confirmed: true;
+};
+export type WorkbenchSourceReauthorizationInput = {
+  items: Array<{ id: string; revision: number }>;
+  fresh_login: true;
+  failed_batch_id?: string;
+};
+export type WorkbenchReauthorizationInput = {
+  source_task_id?: string;
+  account_ids: string[];
+  failed_batch_id?: string;
+  fresh_login: true;
+};
+
+export type WorkbenchSecuritySession = {
+  id: string;
+  task_id: string;
+  account_id?: string;
+  source_oauth_id?: string;
+  source_checkpoint_id?: string;
+  user_id?: string;
+  workspace_id?: string;
+  identity_confirmed?: boolean;
+  scope?: WorkbenchScope;
+  operation: "password" | "totp";
+  email: string;
+  status:
+    | "starting"
+    | "waiting"
+    | "awaiting_confirmation"
+    | "running"
+    | "succeeded"
+    | "failed"
+    | "cancelled"
+    | "expired";
+  message: string;
+  expires_at: string;
+  image?: string;
+  width: number;
+  height: number;
+  artifact_id?: string;
+};
+
+export type WorkbenchSecurityBatchInput = {
+  scope?: WorkbenchScope;
+  sources?: WorkbenchSecurityBatchSource[];
+  proxy_url?: string;
+  account_ids?: string[];
+  operation: "password" | "totp";
+  password?: string;
+};
+export type WorkbenchSecurityBatchSource =
+  | { oauth_id: string }
+  | { oauth_batch_id: string; index: number }
+  | { checkpoint_id: string; revision: number; checkpoint_revision?: number };
+type WorkbenchSecurityBatchRow = {
+  index: number;
+  account_id?: string;
+  source?: WorkbenchSecurityBatchSource;
+  security_id?: string;
+  workspace_id?: string;
+  user_id: string;
+  email: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  message: string;
+  artifact_id?: string;
+};
+export type WorkbenchSecurityBatchPreview = {
+  scope?: WorkbenchScope;
+  id: string;
+  target: string;
+  operation: "password" | "totp";
+  expires_at: string;
+  items: WorkbenchSecurityBatchRow[];
+  errors: Array<{ index: number; message: string }>;
+};
+export type WorkbenchSecurityBatch = {
+  scope?: WorkbenchScope;
+  id: string;
+  task_id: string;
+  operation: "password" | "totp";
+  status: "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled";
+  message: string;
+  expires_at: string;
+  current_security_id?: string;
+  completed: number;
+  succeeded: number;
+  items: WorkbenchSecurityBatchRow[];
+};
+
+export type WorkbenchPreviewItem = {
+  refresh_required?: boolean;
+  id: string;
+  index: number;
+  name: string;
+  email: string;
+  plan_type: string;
+  template_id: string;
+  template_name: string;
+  template_revision: number;
+  group_ids: string[];
+  duplicate: boolean;
+  account_id?: string;
+  action?: "import" | "check" | "reconcile";
+};
+
+export type WorkbenchPreview = {
+  scope?: WorkbenchScope;
+  export_only?: boolean;
+  id: string;
+  expires_at: string;
+  target: string;
+  items: WorkbenchPreviewItem[];
+  errors: Array<{ index: number; message: string }>;
+  check_after_import: boolean;
+  model: string;
+};
+
+export type WorkbenchPendingUpload = {
+  id: string;
+  account_id: string;
+  email: string;
+  status: "pending" | "running" | "cooldown" | "waiting_session" | "review";
+  message: string;
+  next_retry_at?: string;
+  expires_at: string;
+  source_task_id: string;
+};
+
+export type WorkbenchMaintenance = {
+  pending_uploads?: WorkbenchPendingUpload[];
+  reauthorize_with_profiles?: boolean;
+  enabled: boolean;
+  interval_minutes: number;
+  cooldown_minutes: number;
+  group_ids: string[];
+  check_after_repair: boolean;
+  model: string;
+  revision: number;
+  last_run_at?: string;
+  last_task_id?: string;
+};
+
+export type WorkbenchExportPreview = {
+  id: string;
+  revision: string;
+  expires_at: string;
+  target: string;
+  items: Array<{ account_id: string; name: string; revision: string }>;
+};
+
+export type WorkbenchHistoryQuery = {
+  search: string;
+  emails: string[];
+  status: string;
+  operation: string;
+  offset: number;
+  limit: number;
+};
+export type WorkbenchHistoryPage = { items: Task[]; total: number; offset: number; limit: number };
+
+export type WorkbenchProfileExportPreview = {
+  id: string;
+  kind: "login-profiles";
+  expires_at: string;
+  target?: string;
+  scope?: WorkbenchScope;
+  items: Array<WorkbenchLoginProfile | WorkbenchSourceProfile>;
+};
+
+export type WorkbenchRegenerationInput = {
+  scope?: WorkbenchScope;
+  artifact_id?: string;
+  account_ids?: string[];
+  source_task_id?: string;
+  indexes?: number[];
+};
+
+type WorkbenchCleanupItem = {
+  id: string;
+  kind:
+    | "login_profile"
+    | "execution"
+    | "history"
+    | "account_export"
+    | "profile_export"
+    | "security_result";
+  account_ids: string[];
+  count: number;
+  action: "delete" | "retain";
+  reason: string;
+};
+export type WorkbenchCleanupPreview = {
+  id: string;
+  target: string;
+  expires_at: string;
+  profiles: WorkbenchLoginProfile[];
+  items: WorkbenchCleanupItem[];
+  blocked: boolean;
+  blockers: { task_id: string; operation: string; status: Task["status"]; message: string }[];
+};
+export type WorkbenchRegenerationPreview = {
+  scope?: WorkbenchScope;
+  artifact_id?: string;
+  id: string;
+  target: string;
+  expires_at: string;
+  source_task_id?: string;
+  items: {
+    index: number;
+    account_id?: string;
+    name: string;
+    email?: string;
+    user_id: string;
+    workspace_id: string;
+    revision: string;
+  }[];
+};
+
+export type WorkbenchExportMetadata = {
+  kind: "accounts" | "login-profiles";
+  id: string;
+  count: number;
+  created_at: string;
+  expires_at: string;
+};
+
+export type WorkbenchRetryInput = {
+  task_id: string;
+  indexes: number[];
+  template_id?: string;
+  model: string;
+};
+
 export const api = {
+  previewWorkbenchCleanup: (items: { id: string; revision: number }[]) =>
+    request<WorkbenchCleanupPreview>("/api/account-workbench/cleanup/preview", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
+  discardWorkbenchCleanupPreview: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/cleanup/preview/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  cleanupWorkbenchAccounts: (previewId: string) =>
+    request<Task>("/api/account-workbench/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  previewWorkbenchRegeneration: (input: WorkbenchRegenerationInput) =>
+    request<WorkbenchRegenerationPreview>("/api/account-workbench/exports/regenerate/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  regenerateWorkbenchExport: (previewId: string) =>
+    request<Task>("/api/account-workbench/exports/regenerate", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  previewWorkbenchProfileExport: (items: { id: string; revision: number }[]) =>
+    request<WorkbenchProfileExportPreview>("/api/account-workbench/exports/profiles/preview", {
+      method: "POST",
+      body: JSON.stringify({ items }),
+    }),
+  createWorkbenchProfileExport: (previewId: string) =>
+    request<Task>("/api/account-workbench/exports/profiles", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  previewWorkbenchRun: (input: WorkbenchRunInput) =>
+    request<WorkbenchRunPreview>("/api/account-workbench/runs/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  discardWorkbenchRunPreview: (id: string) =>
+    request<{ deleted: boolean }>(`/api/account-workbench/runs/preview/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  startWorkbenchRun: (previewId: string) =>
+    request<WorkbenchRunView>("/api/account-workbench/runs", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  workbenchRun: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchRunView>(`/api/account-workbench/runs/${encodeURIComponent(id)}`, {
+      signal,
+      cache: "no-store",
+    }),
+  cancelWorkbenchRun: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/account-workbench/runs/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  previewWorkbenchRunResult: (id: string) =>
+    request<WorkbenchPreview>(`/api/account-workbench/runs/${encodeURIComponent(id)}/preview`, {
+      method: "POST",
+    }),
+  convertWorkbenchInput: (previewId: string) =>
+    request<Task>("/api/account-workbench/exports/from-input", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  previewWorkbenchSecurityBatch: (input: WorkbenchSecurityBatchInput) =>
+    request<WorkbenchSecurityBatchPreview>("/api/account-workbench/security-batches/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  discardWorkbenchSecurityBatchPreview: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/security-batches/preview/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  startWorkbenchSecurityBatch: (previewId: string) =>
+    request<WorkbenchSecurityBatch>("/api/account-workbench/security-batches", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+      cache: "no-store",
+    }),
+  workbenchSecurityBatch: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchSecurityBatch>(
+      `/api/account-workbench/security-batches/${encodeURIComponent(id)}`,
+      { signal, cache: "no-store" },
+    ),
+  cancelWorkbenchSecurityBatch: (id: string) =>
+    request<{ cancelled: boolean }>(
+      `/api/account-workbench/security-batches/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  startWorkbenchSecurity: (input: WorkbenchSecurityInput) =>
+    request<WorkbenchSecuritySession>(
+      input.source_checkpoint
+        ? `/api/account-workbench/oauth-checkpoints/${encodeURIComponent(input.source_checkpoint.id)}/security`
+        : "/api/account-workbench/security",
+      {
+        method: "POST",
+        body: JSON.stringify(
+          input.source_checkpoint
+            ? {
+                scope: input.source_checkpoint.scope,
+                revision: input.source_checkpoint.revision,
+                checkpoint_revision: input.source_checkpoint.checkpoint_revision,
+                operation: input.operation,
+                password: input.password,
+                confirmed: input.confirmed,
+              }
+            : input,
+        ),
+        cache: "no-store",
+      },
+    ),
+  confirmWorkbenchSecurityIdentity: (
+    id: string,
+    input: { email: string; user_id: string; confirmed: true },
+  ) =>
+    request<{ accepted: boolean }>(
+      `/api/account-workbench/security/${encodeURIComponent(id)}/confirm-identity`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+        cache: "no-store",
+      },
+    ),
+  authorizeWorkbenchSecurity: (id: string) =>
+    request<WorkbenchOAuthSession>(
+      `/api/account-workbench/security/${encodeURIComponent(id)}/oauth`,
+      {
+        method: "POST",
+        body: JSON.stringify({ confirmed: true }),
+        cache: "no-store",
+      },
+    ),
+  workbenchSecuritySource: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchSecuritySource>(
+      `/api/account-workbench/oauth/${encodeURIComponent(id)}/security-source`,
+      { signal, cache: "no-store" },
+    ),
+  workbenchOAuthSMSAttachment: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchOAuthSMSAttachment>(
+      `/api/account-workbench/oauth/${encodeURIComponent(id)}/sms`,
+      { signal, cache: "no-store" },
+    ),
+  attachWorkbenchOAuthSMS: (
+    id: string,
+    input: { scope: WorkbenchScope; revision: string; sms: WorkbenchOAuthSMSInput },
+  ) =>
+    request<{ accepted: boolean }>(`/api/account-workbench/oauth/${encodeURIComponent(id)}/sms`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  workbenchSecurity: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchSecuritySession>(`/api/account-workbench/security/${encodeURIComponent(id)}`, {
+      signal,
+      cache: "no-store",
+    }),
+  workbenchSecurityInput: (id: string, input: BrowserLoginInput) =>
+    request<{ accepted: boolean }>(
+      `/api/account-workbench/security/${encodeURIComponent(id)}/input`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+        cache: "no-store",
+      },
+    ),
+  continueWorkbenchSecurity: (id: string) =>
+    request<{ accepted: boolean }>(
+      `/api/account-workbench/security/${encodeURIComponent(id)}/continue`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+        cache: "no-store",
+      },
+    ),
+  cancelWorkbenchSecurity: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/account-workbench/security/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  previewWorkbenchOAuthBatch: (input: WorkbenchOAuthBatchInput) =>
+    request<WorkbenchOAuthBatchPreview>("/api/account-workbench/oauth-batches/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  discardWorkbenchOAuthBatchPreview: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/oauth-batches/preview/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  startWorkbenchOAuthBatch: (previewId: string) =>
+    request<WorkbenchOAuthBatch>("/api/account-workbench/oauth-batches", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+      cache: "no-store",
+    }),
+  workbenchOAuthBatch: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchOAuthBatch>(`/api/account-workbench/oauth-batches/${encodeURIComponent(id)}`, {
+      signal,
+      cache: "no-store",
+    }),
+  cancelWorkbenchOAuthBatch: (id: string) =>
+    request<{ cancelled: boolean }>(
+      `/api/account-workbench/oauth-batches/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  previewWorkbenchOAuthBatchImport: (id: string, input: WorkbenchOAuthPreviewInput) =>
+    request<WorkbenchPreview>(
+      `/api/account-workbench/oauth-batches/${encodeURIComponent(id)}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+        cache: "no-store",
+      },
+    ),
+  workbenchSMSOptions: (input: Omit<WorkbenchOAuthSMSInput, "confirmed">, signal?: AbortSignal) =>
+    request<WorkbenchSMSOption[]>("/api/account-workbench/sms/options", {
+      method: "POST",
+      body: JSON.stringify(input),
+      signal,
+      cache: "no-store",
+    }),
+  workbenchSMSReceipts: (signal?: AbortSignal, scope?: WorkbenchScope) =>
+    request<WorkbenchSMSReceipt[]>(
+      `/api/account-workbench/sms/receipts${scope ? `?scope=${scope}` : ""}`,
+      {
+        signal,
+        cache: "no-store",
+      },
+    ),
+  workbenchQueueRecoveries: (signal?: AbortSignal, scope?: WorkbenchScope) =>
+    request<WorkbenchQueueRecovery[]>(
+      `/api/account-workbench/queue-recoveries${scope ? `?scope=${scope}` : ""}`,
+      {
+        signal,
+        cache: "no-store",
+      },
+    ),
+  resumeWorkbenchOAuthQueue: (queue: Pick<WorkbenchQueueRecovery, "id" | "revision" | "scope">) =>
+    request<WorkbenchOAuthBatch>(
+      `/api/account-workbench/queue-recoveries/${encodeURIComponent(queue.id)}/oauth`,
+      {
+        method: "POST",
+        body: JSON.stringify({ scope: queue.scope, revision: queue.revision, confirmed: true }),
+        cache: "no-store",
+      },
+    ),
+  resumeWorkbenchMixedQueue: (queue: Pick<WorkbenchQueueRecovery, "id" | "revision" | "scope">) =>
+    request<WorkbenchRunView>(
+      `/api/account-workbench/queue-recoveries/${encodeURIComponent(queue.id)}/mixed`,
+      {
+        method: "POST",
+        body: JSON.stringify({ scope: queue.scope, revision: queue.revision, confirmed: true }),
+        cache: "no-store",
+      },
+    ),
+  deleteWorkbenchQueueRecovery: (
+    queue: Pick<WorkbenchQueueRecovery, "id" | "revision" | "scope">,
+  ) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/queue-recoveries/${encodeURIComponent(queue.id)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ scope: queue.scope, revision: queue.revision, confirmed: true }),
+        cache: "no-store",
+      },
+    ),
+  inspectWorkbenchSMSReceipt: (
+    id: string,
+    input: Omit<WorkbenchOAuthSMSInput, "confirmed"> & { scope?: WorkbenchScope },
+  ) => {
+    const { scope, ...credentials } = input;
+    const query = scope ? `?${new URLSearchParams({ scope })}` : "";
+    return request<{ pending: boolean; code_available: boolean; message: string }>(
+      `/api/account-workbench/sms/receipts/${encodeURIComponent(id)}/inspect${query}`,
+      { method: "POST", body: JSON.stringify(credentials), cache: "no-store" },
+    );
+  },
+  workbenchOAuthCheckpoints: (signal?: AbortSignal, scope?: WorkbenchScope) =>
+    request<WorkbenchOAuthCheckpoint[]>(
+      `/api/account-workbench/oauth-checkpoints${scope ? `?scope=${scope}` : ""}`,
+      {
+        signal,
+        cache: "no-store",
+      },
+    ),
+  suspendWorkbenchOAuth: (id: string) =>
+    request<WorkbenchOAuthCheckpoint>(
+      `/api/account-workbench/oauth/${encodeURIComponent(id)}/checkpoint`,
+      { method: "POST", body: JSON.stringify({ confirmed: true }), cache: "no-store" },
+    ),
+  restoreWorkbenchOAuth: (
+    checkpoint: Pick<WorkbenchOAuthCheckpoint, "id" | "revision" | "scope" | "checkpoint_revision">,
+  ) =>
+    request<WorkbenchOAuthSession>(
+      `/api/account-workbench/oauth-checkpoints/${encodeURIComponent(checkpoint.id)}/restore`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          scope: checkpoint.scope,
+          revision: checkpoint.revision,
+          checkpoint_revision: checkpoint.checkpoint_revision,
+          confirmed: true,
+        }),
+        cache: "no-store",
+      },
+    ),
+  deleteWorkbenchOAuthCheckpoint: (
+    checkpoint: Pick<WorkbenchOAuthCheckpoint, "id" | "revision" | "scope">,
+  ) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/oauth-checkpoints/${encodeURIComponent(checkpoint.id)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({
+          scope: checkpoint.scope,
+          revision: checkpoint.revision,
+          confirmed: true,
+        }),
+        cache: "no-store",
+      },
+    ),
+  workbenchRetryPreview: (input: WorkbenchRetryInput) =>
+    request<WorkbenchPreview>("/api/account-workbench/retry-preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  workbenchExportPreview: (accountIds: string[]) =>
+    request<WorkbenchExportPreview>("/api/account-workbench/exports/preview", {
+      method: "POST",
+      body: JSON.stringify({ account_ids: accountIds }),
+      cache: "no-store",
+    }),
+  discardWorkbenchExportPreview: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/exports/preview/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+      },
+    ),
+  createWorkbenchExport: (previewId: string) =>
+    request<Task>("/api/account-workbench/exports", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  workbenchExports: () =>
+    request<WorkbenchExportMetadata[]>("/api/account-workbench/exports", { cache: "no-store" }),
+  workbenchLocalExports: () =>
+    request<WorkbenchExportMetadata[]>("/api/account-workbench/local-exports", {
+      cache: "no-store",
+    }),
+  deleteWorkbenchLocalExport: (id: string) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/local-exports/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  deleteWorkbenchExport: (id: string) =>
+    request<{ deleted: boolean }>(`/api/account-workbench/exports/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  startWorkbenchOAuth: (input: WorkbenchOAuthStartInput = {}) =>
+    request<WorkbenchOAuthSession>("/api/account-workbench/oauth", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  workbenchOAuth: (id: string, signal?: AbortSignal) =>
+    request<WorkbenchOAuthSession>(`/api/account-workbench/oauth/${encodeURIComponent(id)}`, {
+      signal,
+      cache: "no-store",
+    }),
+  workbenchOAuthInput: (id: string, input: BrowserLoginInput) =>
+    request<{ accepted: boolean }>(`/api/account-workbench/oauth/${encodeURIComponent(id)}/input`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  finishWorkbenchOAuth: (id: string) =>
+    request<{ accepted: boolean }>(
+      `/api/account-workbench/oauth/${encodeURIComponent(id)}/finish`,
+      {
+        method: "POST",
+        body: JSON.stringify({}),
+      },
+    ),
+  cancelWorkbenchOAuth: (id: string) =>
+    request<{ cancelled: boolean }>(`/api/account-workbench/oauth/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  previewWorkbenchOAuth: (id: string, input: WorkbenchOAuthPreviewInput) =>
+    request<WorkbenchPreview>(`/api/account-workbench/oauth/${encodeURIComponent(id)}/preview`, {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  workbenchTemplates: () => request<WorkbenchTemplate[]>("/api/account-workbench/templates"),
+  setPreferredWorkbenchTemplate: (id: string, revision: number, preferred: boolean) =>
+    request<WorkbenchTemplate>(
+      `/api/account-workbench/templates/${encodeURIComponent(id)}/preference`,
+      { method: "PUT", body: JSON.stringify({ revision, preferred }) },
+    ),
+  saveWorkbenchTemplate: (id: string | undefined, input: WorkbenchTemplateInput) =>
+    request<WorkbenchTemplate>(
+      `/api/account-workbench/templates${id ? `/${encodeURIComponent(id)}` : ""}`,
+      {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(input),
+      },
+    ),
+  deleteWorkbenchTemplate: (id: string, revision: number) =>
+    request<{ deleted: boolean }>(`/api/account-workbench/templates/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ revision }),
+    }),
+  workbenchTemplateFromAccount: (accountId: string) =>
+    request<WorkbenchTemplateSource>("/api/account-workbench/template-from-account", {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId }),
+      cache: "no-store",
+    }),
+  workbenchPreview: (input: WorkbenchPreviewInput) =>
+    request<WorkbenchPreview>("/api/account-workbench/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  discardWorkbenchPreview: (id: string) =>
+    request<{ deleted: boolean }>(`/api/account-workbench/preview/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  importWorkbenchPreview: (previewId: string) =>
+    request<Task>("/api/account-workbench/import", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+    }),
+  workbenchHistory: () => request<Task[]>("/api/account-workbench/history"),
+  queryWorkbenchHistory: (input: WorkbenchHistoryQuery) =>
+    request<WorkbenchHistoryPage>("/api/account-workbench/history/query", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  activeWorkbenchHistory: () => request<Task[]>("/api/account-workbench/history/active"),
+  workbenchLoginProfiles: () =>
+    request<WorkbenchLoginProfile[]>("/api/account-workbench/login-profiles", {
+      cache: "no-store",
+    }),
+  saveWorkbenchLoginProfile: (input: WorkbenchLoginProfileInput) =>
+    request<WorkbenchLoginProfile>("/api/account-workbench/login-profiles", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  workbenchSourceProfiles: (signal?: AbortSignal) =>
+    request<WorkbenchSourceProfile[]>("/api/account-workbench/source-profiles?scope=local-export", {
+      signal,
+      cache: "no-store",
+    }),
+  workbenchSourceProfileIdentity: (source: WorkbenchSourceProfileReference, signal?: AbortSignal) =>
+    request<WorkbenchSourceProfileIdentity>("/api/account-workbench/source-profiles/source", {
+      method: "POST",
+      body: JSON.stringify({ scope: "local-export", source }),
+      signal,
+      cache: "no-store",
+    }),
+  saveWorkbenchSourceProfile: (input: WorkbenchSourceProfileInput) =>
+    request<WorkbenchSourceProfile>("/api/account-workbench/source-profiles", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  deleteWorkbenchSourceProfile: (id: string, revision: number) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/source-profiles/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ scope: "local-export", revision, confirmed: true }),
+        cache: "no-store",
+      },
+    ),
+  previewWorkbenchSourceReauthorization: (input: WorkbenchSourceReauthorizationInput) =>
+    request<WorkbenchOAuthBatchPreview>(
+      "/api/account-workbench/source-profiles/reauthorization/preview",
+      {
+        method: "POST",
+        body: JSON.stringify({ scope: "local-export", ...input }),
+        cache: "no-store",
+      },
+    ),
+  previewWorkbenchSourceProfileExport: (items: Array<{ id: string; revision: number }>) =>
+    request<WorkbenchProfileExportPreview>(
+      "/api/account-workbench/source-profiles/exports/preview",
+      { method: "POST", body: JSON.stringify({ scope: "local-export", items }), cache: "no-store" },
+    ),
+  createWorkbenchSourceProfileExport: (previewId: string) =>
+    request<Task>("/api/account-workbench/source-profiles/exports", {
+      method: "POST",
+      body: JSON.stringify({ preview_id: previewId, confirmed: true }),
+      cache: "no-store",
+    }),
+  applyWorkbenchSecurityToSourceProfile: (
+    id: string,
+    input: { revision: number; security_id: string; confirmed: true },
+  ) =>
+    request<WorkbenchSourceProfile>(
+      `/api/account-workbench/source-profiles/${encodeURIComponent(id)}/security`,
+      {
+        method: "POST",
+        body: JSON.stringify({ scope: "local-export", ...input }),
+        cache: "no-store",
+      },
+    ),
+  deleteWorkbenchLoginProfile: (id: string, revision: number) =>
+    request<{ deleted: boolean }>(
+      `/api/account-workbench/login-profiles/${encodeURIComponent(id)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ revision, confirmed: true }),
+      },
+    ),
+  previewWorkbenchReauthorization: (input: WorkbenchReauthorizationInput) =>
+    request<WorkbenchOAuthBatchPreview>("/api/account-workbench/reauthorization/preview", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  applyWorkbenchSecurityToProfile: (input: {
+    profile_id: string;
+    revision: number;
+    security_id?: string;
+    batch_id?: string;
+    account_id?: string;
+    confirmed: boolean;
+  }) =>
+    request<WorkbenchLoginProfile>("/api/account-workbench/login-profiles/security-result", {
+      method: "POST",
+      body: JSON.stringify(input),
+      cache: "no-store",
+    }),
+  deleteWorkbenchHistory: (items: { id: string; updated_at: string }[]) =>
+    request<{ deleted: number }>("/api/account-workbench/history/delete", {
+      method: "POST",
+      body: JSON.stringify({ items, confirmed: true }),
+    }),
+  cancelWorkbenchHistory: (items: { id: string; updated_at: string }[]) =>
+    request<{ items: { id: string; cancelled: boolean; message: string }[] }>(
+      "/api/account-workbench/history/cancel",
+      {
+        method: "POST",
+        body: JSON.stringify({ items, confirmed: true }),
+      },
+    ),
+  workbenchMaintenance: () => request<WorkbenchMaintenance>("/api/account-workbench/maintenance"),
+  workbenchMaintenanceAuthorization: () =>
+    request<{
+      attached: boolean;
+      current_reauthorization_id?: string;
+      current_import_task_id?: string;
+    }>("/api/account-workbench/maintenance/authorization", { cache: "no-store" }),
+  attachWorkbenchMaintenance: (revision: number) =>
+    request<{ attached: boolean }>("/api/account-workbench/maintenance/authorization", {
+      method: "POST",
+      body: JSON.stringify({ revision, confirmed: true }),
+      cache: "no-store",
+    }),
+  saveWorkbenchMaintenance: (input: WorkbenchMaintenance) =>
+    request<WorkbenchMaintenance>("/api/account-workbench/maintenance", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  checkWorkbenchMaintenance: (revision: number) =>
+    request<Task>("/api/account-workbench/maintenance/check", {
+      method: "POST",
+      body: JSON.stringify({ revision, confirmed: true }),
+    }),
   kumaTemplatePreset: (input: { request_profile: string; model: string }) =>
     request<KumaTemplateDetail>("/api/uptime-kuma/template-preset", {
       method: "POST",
@@ -1813,6 +2978,7 @@ export const api = {
     payload: {
       username: string;
       password: string;
+      local_export_only?: boolean;
       admin_base_url: string;
       admin_key: string;
     },
@@ -2364,6 +3530,12 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     }),
   animationHistory: () => request<Task[]>("/api/model-checks/animations"),
+  customAnimationModels: (payload: Omit<AnimationCustomEndpoint, "model">, signal?: AbortSignal) =>
+    request<{ models: string[] }>("/api/model-checks/animations/models", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    }),
   runAnimation: (payload: AnimationRequest) =>
     request<Task>("/api/model-checks/animations", {
       method: "POST",
@@ -2421,8 +3593,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ host }),
     }),
-  browserLogin: (id: string) =>
-    request<BrowserLoginSession>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`),
+  browserLogin: (id: string, signal?: AbortSignal) =>
+    request<BrowserLoginSession>(`/api/auth-recovery/browser/${encodeURIComponent(id)}`, {
+      signal,
+    }),
   browserLoginInput: (id: string, input: BrowserLoginInput) =>
     request<{ accepted: boolean }>(`/api/auth-recovery/browser/${encodeURIComponent(id)}/input`, {
       method: "POST",

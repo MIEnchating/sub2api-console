@@ -20,3 +20,16 @@ test("release workflow builds one multi-architecture Docker Hub image", () => {
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /\.github\/release-notes\/\$GITHUB_REF_NAME\.md/);
 });
+
+test("release validates source and notes before publishing and serializes latest promotion", () => {
+  assert.match(workflow, /group: release-publication/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /fetch-depth: 0/);
+  assert.match(workflow, /node \.github\/scripts\/validate-release-tag\.mjs "\$GITHUB_REF_NAME"/);
+  assert.match(workflow, /git merge-base --is-ancestor HEAD origin\/main/);
+  assert.match(workflow, /docker\/setup-qemu-action@/);
+  assert.match(workflow, /node \.github\/scripts\/prepare-release-image\.mjs/);
+  assert.ok(workflow.indexOf("prepare-release-image.mjs") < workflow.indexOf("docker/build-push-action@"));
+  assert.doesNotMatch(workflow, /tags:[\s\S]*?\$\{\{ env\.IMAGE \}\}:latest/);
+  assert.match(workflow, /node \.github\/scripts\/promote-release-image\.mjs/);
+});

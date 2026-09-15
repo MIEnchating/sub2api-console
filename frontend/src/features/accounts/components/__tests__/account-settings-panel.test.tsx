@@ -77,6 +77,30 @@ describe("账号设置面板", () => {
     vi.restoreAllMocks();
   });
 
+  it("后台详情刷新时保留正在编辑的探测模型", async () => {
+    const client = new QueryClient();
+    const panel = (data: AccountDetail) => (
+      <QueryClientProvider client={client}>
+        <AccountSettingsPanel
+          accountId={data.id}
+          query={{ data, isLoading: false, isError: false, error: null }}
+          onCancel={() => undefined}
+          onSaved={() => undefined}
+        />
+      </QueryClientProvider>
+    );
+    const view = render(panel(detail));
+    const model = screen.getByRole("textbox", { name: "探测模型" });
+    await userEvent.clear(model);
+    await userEvent.type(model, "custom-probe");
+
+    view.rerender(panel({ ...detail, health_score: 90 }));
+
+    expect(model).toHaveValue("custom-probe");
+    view.unmount();
+    client.clear();
+  });
+
   it("获取模型后去重排序并保留当前单个探测模型供选择", () => {
     expect(
       accountTestModelOptions(["gpt-5.2", "gpt-5.1-codex", "gpt-5.2", ""], "custom-probe-model"),
@@ -131,7 +155,7 @@ describe("账号设置面板", () => {
     expect(markup).toContain('data-testid="account-routing-grid"');
     expect(markup).toContain("sm:grid-cols-2");
     expect(markup).toContain('data-testid="account-control-group"');
-    expect(markup).toContain("rounded-xl border bg-muted/10");
+    expect(markup).toContain("rounded-lg border bg-muted/10");
     expect(markup).not.toContain("border-primary/25");
     expect(markup).not.toContain("bg-primary/5");
   });

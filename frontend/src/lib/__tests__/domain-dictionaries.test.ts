@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  accountTypeValue,
   dictionaryLabel,
   groupStatusDictionary,
   orderedDictionaryOptions,
@@ -25,6 +26,17 @@ describe("领域字典", () => {
   it("未知或空值使用稳定回退文案", () => {
     expect(dictionaryLabel(taskStatusDictionary, "missing")).toBe("配置错误");
     expect(dictionaryLabel(taskStatusDictionary, "")).toBe("配置错误");
+  });
+
+  it.each(["__proto__", "constructor", "toString"])(
+    "状态为继承属性名 %s 时返回回退文案",
+    (value) => {
+      expect(dictionaryLabel(taskStatusDictionary, value, "未识别状态")).toBe("未识别状态");
+    },
+  );
+
+  it.each(["__proto__", "constructor"])("账号类型为 %s 时保留字符串协议值", (value) => {
+    expect(accountTypeValue(value)).toBe(value);
   });
 
   it("按字典顺序返回启用项并追加未登记值", () => {

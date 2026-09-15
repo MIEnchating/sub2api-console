@@ -3,7 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api, ApiError, type AccountModelSyncPreview, type Task } from "@/api";
+import {
+  api,
+  ApiError,
+  type AccountModelSyncPreview,
+  type DictionaryEntry,
+  type Task,
+} from "@/api";
 import {
   AccountModelSyncDialog,
   accountModelSyncDialogLayout,
@@ -32,6 +38,38 @@ function task(items: unknown[]): Task {
 }
 
 describe("账号批量模型同步", () => {
+  it("分组字典反向排列时按管理顺序展示，模型和账号归属不变", () => {
+    const preview: AccountModelSyncPreview = {
+      account_count: 1,
+      accounts_with_catalog: 1,
+      blocked_patterns: [],
+      blocked_models: [],
+      models: [{ model: "gpt-test", account_count: 1 }],
+      fingerprint: "fixture",
+      accounts: [
+        {
+          account_id: "41",
+          account_name: "账号 A",
+          platform: "openai",
+          models: ["gpt-test"],
+          probe_model: "gpt-test",
+        },
+      ],
+    };
+    const entries = [
+      { value: "2", name: "B", enabled: true },
+      { value: "1", name: "A", enabled: true },
+    ] as DictionaryEntry[];
+    const result = modelSyncPlatformGroups(
+      preview,
+      new Map([["41", "openai"]]),
+      new Map([["41", ["A", "B"]]]),
+      undefined,
+      entries,
+    );
+    expect(result[0].groups.map((group) => group.label)).toEqual(["B", "A"]);
+    expect(result[0].groups[0].models[0].supportingAccounts[0].accountId).toBe("41");
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });

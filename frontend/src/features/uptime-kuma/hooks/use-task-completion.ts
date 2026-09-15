@@ -5,6 +5,7 @@ import { operationErrorMessage } from "@/lib/operation-feedback";
 import { isSessionExpiredError } from "@/lib/session-auth";
 
 const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "partial"]);
+const pageClosedMessage = "页面已关闭，后台任务仍可在日志中心查看";
 
 async function readTaskProgress(taskID: string): Promise<Task> {
   try {
@@ -22,6 +23,7 @@ async function readTaskProgress(taskID: string): Promise<Task> {
 // task. Neither a failed poll nor a disconnected page resubmits the operation.
 export function useTaskCompletion() {
   const [task, setTask] = useState<Task | null>(null);
+  const mounted = useRef(true);
   const completion = useRef<{
     resolve: (task: Task) => void;
     reject: (error: Error) => void;
@@ -52,15 +54,20 @@ export function useTaskCompletion() {
     completion.current = null;
     setTask(null);
   }, [task, query.data, query.error]);
-  useEffect(
-    () => () => {
-      completion.current?.reject(new Error("页面已关闭，后台任务仍可在日志中心查看"));
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      completion.current?.reject(new Error(pageClosedMessage));
       completion.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
   const wait = (task: Task): Promise<Task> =>
     new Promise((resolve, reject) => {
+      if (!mounted.current) {
+        reject(new Error(pageClosedMessage));
+        return;
+      }
       completion.current = { resolve, reject };
       setTask(task);
     });

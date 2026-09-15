@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/decimalutil"
 	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 )
 
@@ -239,7 +240,7 @@ func exactJSONDecimal(value any) (string, error) {
 	default:
 		return "", errors.New("数值字段类型无效")
 	}
-	parsed, ok := new(big.Rat).SetString(text)
+	parsed, ok := decimalutil.Parse(text)
 	if !ok {
 		return "", errors.New("数值字段不是有限十进制数")
 	}
@@ -421,7 +422,7 @@ func (c *Client) AccountUpstreamMultipliers(ctx context.Context, accountIDs []st
 
 func upstreamMultiplierFromProbeResult(result map[string]any) (string, error) {
 	if detail := strings.TrimSpace(fmt.Sprint(result["error"])); detail != "" && detail != "<nil>" {
-		return "", errors.New("上游倍率探测失败：" + detail)
+		return "", errors.New("上游倍率探测失败：" + truncate(redact.Secrets(detail), 300))
 	}
 	snapshot, ok := result["snapshot"].(map[string]any)
 	if !ok {
@@ -435,7 +436,7 @@ func upstreamMultiplierFromProbeResult(result map[string]any) (string, error) {
 		if detail == "" || detail == "<nil>" {
 			detail = "未返回成功快照"
 		}
-		return "", errors.New("上游倍率探测失败：" + detail)
+		return "", errors.New("上游倍率探测失败：" + truncate(redact.Secrets(detail), 300))
 	}
 	data, ok := snapshot["data"].(map[string]any)
 	if !ok {
@@ -452,7 +453,7 @@ func upstreamMultiplierFromProbeResult(result map[string]any) (string, error) {
 		if !present || raw == nil {
 			continue
 		}
-		value, ok := new(big.Rat).SetString(strings.TrimSpace(fmt.Sprint(raw)))
+		value, ok := decimalutil.Parse(strings.TrimSpace(fmt.Sprint(raw)))
 		if !ok || value.Sign() <= 0 {
 			return "", errors.New("上游倍率探测返回非法倍率")
 		}
@@ -576,7 +577,7 @@ func (c *Client) UpdateGroupRateMultiplier(ctx context.Context, groupID, multipl
 	if !stableID(groupID) {
 		return nil, errors.New("分组 ID 必须是稳定正整数")
 	}
-	value, ok := new(big.Rat).SetString(strings.TrimSpace(multiplier))
+	value, ok := decimalutil.Parse(multiplier)
 	if !ok || value.Sign() <= 0 {
 		return nil, errors.New("分组倍率必须是正数")
 	}
@@ -1106,7 +1107,7 @@ func (c *Client) fetchEvidence(ctx context.Context, path, label string, params m
 			if idField == "request_id" {
 				result = append(result, item)
 			} else {
-				if id == "" {
+				if !stableID(id) {
 					return nil, &Error{label + "项目缺少稳定 ID"}
 				}
 				if _, ok := seen[id]; ok {
@@ -1229,11 +1230,11 @@ func decodeResponse(response *http.Response) (map[string]any, error, bool) {
 	if len(raw) > maximumResponseBytes {
 		return nil, &responseOutcomeUnknown{cause: &Error{"管理 API 响应超过 4 MiB 安全上限"}}, false
 	}
-	detail := errorDetail(raw)
-	if (response.StatusCode == 404 || response.StatusCode == 503) && containsMonitoringDisabled(detail) {
-		return nil, &MonitoringDisabled{}, false
-	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		detail := errorDetail(raw)
+		if (response.StatusCode == 404 || response.StatusCode == 503) && containsMonitoringDisabled(detail) {
+			return nil, &MonitoringDisabled{}, false
+		}
 		httpError := &HTTPError{response.StatusCode, detail}
 		retry := response.StatusCode == 408 || response.StatusCode == 425 || response.StatusCode == 429 || response.StatusCode >= 500
 		return nil, httpError, retry

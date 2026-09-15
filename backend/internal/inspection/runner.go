@@ -123,6 +123,7 @@ type duePlan struct {
 	policy                  map[string]any
 	mode                    string
 	probeIDs                []string
+	probeBatchSize          int
 	accountRateInterval     int
 	accountRateBatchSize    int
 	accountRateBatchPercent int
@@ -351,7 +352,13 @@ func previewOperations(plan duePlan) ([]QueueOperation, error) {
 		var targets *int
 		if plan.probes {
 			count := len(plan.probeIDs)
+			if plan.probeBatchSize > 0 {
+				count = min(count, plan.probeBatchSize)
+			}
 			targets = &count
+		}
+		if plan.probeBatchSize > 0 {
+			cycle += fmt.Sprintf("，每轮最多 %d 个账号，按等待时间轮转", plan.probeBatchSize)
 		}
 		operations = append(operations, QueueOperation{
 			Operation: operationActiveProbe, Label: "主动探测", TargetCount: targets,
@@ -539,6 +546,12 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 	if capabilities.AutomaticActiveProbe {
 		result.probeIDs = evidencePlan.ProbeAccountIDs
 		result.probes = len(evidencePlan.ProbeAccountIDs) > 0
+		if request.Automatic {
+			result.probeBatchSize, err = evidence.AutomaticProbeBatchSize(policy)
+			if err != nil {
+				return duePlan{}, err
+			}
+		}
 	}
 	if capabilities.AutomaticUpstreamSync {
 		multiplier, sectionErr := inspectionSection(policy, "upstream_multiplier")
@@ -721,6 +734,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 	persistStage := func(progress int, message string, active []string) {
 		resultPayload["active_operations"] = append([]string{}, active...)
 		resultPayload["completed_operations"] = append([]string{}, operations...)
+		resultPayload["operation_timings"] = append([]business.OperationTiming{}, timings...)
 		task.Status, task.Progress, task.Message = "running", progress, message
 		task.UpdatedAt, task.Result = r.now().UTC().Format(time.RFC3339Nano), resultPayload
 		taskstore.PersistProgress(r.tasks, task)
@@ -800,6 +814,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 				AccountID: request.AccountID, GroupName: request.GroupName, FetchTraffic: plan.traffic,
 				StrictFallback: strictEvidenceFallback(request),
 				ProbesAllowed:  plan.probes, Now: started,
+				ProbeBatchSize: plan.probeBatchSize,
 			})
 			evidenceResults <- evidenceCollectionOutcome{result: evidenceResult, err: collectErr, startedAt: evidenceStarted, duration: time.Since(evidenceStarted)}
 		}()
@@ -834,6 +849,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 	}
 	if request.Automatic && r.authRecovery != nil && len(plan.authRecoveryHosts) > 0 {
+		persistStage(45, "正在恢复失效上游鉴权", []string{operationAuthRecovery})
 		recoveryStarted := time.Now()
 		recoverySummary, recoveryErr := r.authRecovery.RecoverInvalid(ctx, plan.authRecoveryHosts, request.Actor)
 		timings = append(timings, operationTiming(operationAuthRecovery, recoveryStarted))
@@ -867,6 +883,14 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 		}
 	}
 	if runInspection {
+		active := make([]string, 0, 2)
+		if plan.traffic {
+			active = append(active, operationTrafficRefresh)
+		}
+		if plan.probes {
+			active = append(active, operationActiveProbe)
+		}
+		persistStage(60, collectionStageMessage(false, plan.traffic, plan.probes), active)
 		outcome := <-evidenceResults
 		evidenceResult, err := outcome.result, outcome.err
 		monitoringEnabled = evidenceResult.MonitoringAvailable

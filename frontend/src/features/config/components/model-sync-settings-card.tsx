@@ -51,13 +51,31 @@ export function ModelSyncSettingsCard() {
 
   if (settings.isLoading && settings.data === undefined) {
     return (
-      <Card size="sm" className="h-full" aria-label="正在读取全局屏蔽模型">
+      <Card
+        size="sm"
+        className="h-full min-h-0"
+        role="status"
+        aria-busy="true"
+        aria-label="正在读取全局屏蔽模型"
+      >
         <CardHeader>
           <CardTitle>全局屏蔽模型</CardTitle>
+          <Skeleton className="h-4 w-3/4" />
         </CardHeader>
-        <CardContent>
-          <Skeleton className="h-36" />
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-3">
+          <Skeleton className="h-4 w-24 shrink-0" />
+          <div
+            aria-hidden="true"
+            className="flex min-h-32 flex-1 flex-col gap-2 rounded-lg border p-3"
+          >
+            <Skeleton className="h-4 w-1/2" />
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-4 w-2/5" />
+          </div>
         </CardContent>
+        <SettingsFooter>
+          <Skeleton className="h-8 w-28" />
+        </SettingsFooter>
       </Card>
     );
   }
@@ -92,6 +110,7 @@ export function ModelSyncSettingsCard() {
                 className="field-sizing-fixed min-h-0 max-h-none flex-1 resize-none font-mono text-xs leading-5"
                 rows={7}
                 spellCheck={false}
+                disabled={save.isPending}
                 aria-invalid={error ? "true" : undefined}
                 aria-describedby={error ? "model-sync-blocked-patterns-error" : undefined}
                 placeholder={"例如：\nclaude-*\ngemini-*\n*-image-*"}

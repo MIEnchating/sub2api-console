@@ -156,6 +156,27 @@ func (sender directBundleSender) sendRequest(ctx context.Context, endpoint strin
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, response.StatusCode, raw, visibleRequestError{message: "上游直连接口响应包含尾随数据"}
 	}
+	if result == nil || result["error"] != nil || result["success"] == false || stringField(result, "type") == "error" {
+		return nil, response.StatusCode, nil, visibleRequestError{message: "上游报告检测失败，请检查模型权限、余额或稍后重试"}
+	}
+	if status := stringField(result, "status"); status != "" && status != "completed" {
+		return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应未完整生成，请稍后重试"}
+	}
+	if stringField(result, "stop_reason") == "max_tokens" {
+		return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应被截断，请检查模型后重试"}
+	}
+	if choices, ok := result["choices"].([]any); ok && len(choices) > 0 {
+		choice, _ := choices[0].(map[string]any)
+		if reason := stringField(choice, "finish_reason"); reason == "length" || reason == "content_filter" {
+			return nil, response.StatusCode, nil, visibleRequestError{message: "上游检测响应被截断或拦截，请检查模型后重试"}
+		}
+	}
+	if model := stringField(result, "model"); model != "" {
+		if sender.credential.Secret != "" {
+			model = strings.ReplaceAll(model, sender.credential.Secret, "[已隐藏]")
+		}
+		result["model"] = safeCredentialText(model)
+	}
 	return result, response.StatusCode, raw, nil
 }
 

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { monitorTypeLabels } from "../constants";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { defaultMonitorOptions, type MonitorValues } from "../lib/schemas";
 import { MonitorFormSection } from "./monitor-form-section";
 
@@ -21,6 +22,11 @@ export function MonitorBasicsForm(props: {
   groupOnly?: boolean;
 }) {
   const form = props.form;
+  const monitorTypes = useDictionaryOrder(
+    "kuma_monitor_type",
+    Object.entries(monitorTypeLabels),
+    (item) => item[0],
+  );
   const type = form.watch("type");
   return (
     <MonitorFormSection title="基本信息">
@@ -68,7 +74,7 @@ export function MonitorBasicsForm(props: {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(monitorTypeLabels).map(([value, label]) => (
+                    {monitorTypes.map(([value, label]) => (
                       <SelectItem key={value} value={value}>
                         {label}
                       </SelectItem>

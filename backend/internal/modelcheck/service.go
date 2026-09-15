@@ -99,6 +99,7 @@ type Service struct {
 	solProfile        solProfile
 	configuration     configurationState
 	profileRepository configurationRepository
+	oauthTransport    http.RoundTripper
 	taskRunner        taskrunner.Runner
 	taskTimeout       time.Duration
 	animation         animationState
@@ -439,7 +440,7 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	completedResults := make([]map[string]any, 0, len(combinations))
 	completed := 0
 	active := map[int]map[string]any{}
-	for completed < len(combinations) {
+	for outcomes != nil {
 		select {
 		case current, ok := <-activeEvents:
 			if !ok {
@@ -447,7 +448,11 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 				continue
 			}
 			active[current.index] = current.value
-		case outcome := <-outcomes:
+		case outcome, ok := <-outcomes:
+			if !ok {
+				outcomes = nil
+				continue
+			}
 			if outcome.result == nil {
 				continue
 			}

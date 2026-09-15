@@ -371,7 +371,7 @@ func TestDeleteRemoteFailureLeavesPrivateAndLocalStateUntouched(t *testing.T) {
 }
 
 func TestDeleteReportsAccountsRemovedBeforeALaterRemoteFailure(t *testing.T) {
-	deleted := map[string]bool{}
+	var deleted atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		accountID := strings.TrimPrefix(request.URL.Path, "/api/v1/admin/accounts/")
 		if request.Method == http.MethodDelete && accountID == "42" {
@@ -380,11 +380,11 @@ func TestDeleteReportsAccountsRemovedBeforeALaterRemoteFailure(t *testing.T) {
 			return
 		}
 		if request.Method == http.MethodDelete && accountID == "41" {
-			deleted[accountID] = true
+			deleted.Store(true)
 			_, _ = response.Write([]byte(`{"success":true}`))
 			return
 		}
-		if request.Method == http.MethodGet && deleted[accountID] {
+		if request.Method == http.MethodGet && accountID == "41" && deleted.Load() {
 			response.WriteHeader(http.StatusNotFound)
 			_, _ = response.Write([]byte(`{"message":"not found"}`))
 			return

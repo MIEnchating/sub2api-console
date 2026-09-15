@@ -209,6 +209,16 @@ func (c *batchWriteCoordinator) groups() [][]coordinatedWriteRequest {
 }
 
 func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
+	// Sub2API's bulk service drops a zero load factor before reaching the
+	// repository. Clear it through the individual route, which supports NULL.
+	if clearsLoadFactor(group[0].desired) {
+		var wait sync.WaitGroup
+		for _, request := range group {
+			wait.Go(func() { c.executeSingle(request) })
+		}
+		wait.Wait()
+		return
+	}
 	if len(group) == 1 {
 		c.executeSingle(group[0])
 		return
@@ -299,6 +309,21 @@ func (c *batchWriteCoordinator) confirmAmbiguousBatchWrite(request coordinatedWr
 func (c *batchWriteCoordinator) executeSingle(request coordinatedWriteRequest) {
 	write := writeRoutingValues(request.ctx, c.admin, request.accountID, request.desired)
 	outcome := coordinatedWriteOutcome{remoteConfirmed: write.remoteConfirmed, err: write.err}
+	if write.err == nil && clearsLoadFactor(request.desired) {
+		// A reset cannot be inferred from the submitted zero or a success count.
+		// Require an explicit field in a fresh account read even when optional
+		// verification is disabled, before releasing the saved baseline.
+		payload, err := c.admin.Account(request.ctx, request.accountID)
+		if err == nil {
+			outcome.after, err = remoteValues(payload)
+		}
+		if err == nil {
+			err = verifyReadback(request.desired, outcome.after)
+		}
+		outcome.err, outcome.readbackConfirmed = err, err == nil
+		c.setOutcome(request.accountID, outcome)
+		return
+	}
 	if write.err != nil && write.remoteConfirmed {
 		payload, err := c.admin.Account(request.ctx, request.accountID)
 		if err != nil {
@@ -465,6 +490,7 @@ func valuesWithDesired(current values, desired map[string]any) values {
 	if raw, present := desired["load_factor"]; present {
 		value, _ := optionalNonnegativeIntegerText(raw)
 		result.loadFactor = value
+		result.loadFactorPresent = true
 	}
 	if raw, present := desired["concurrency"]; present {
 		value, _ := integer(raw)
@@ -475,6 +501,15 @@ func valuesWithDesired(current values, desired map[string]any) values {
 		result.status = &value
 	}
 	return result
+}
+
+func clearsLoadFactor(desired map[string]any) bool {
+	raw, present := desired["load_factor"]
+	if !present {
+		return false
+	}
+	value, err := optionalNonnegativeIntegerText(raw)
+	return err == nil && value != nil && *value == "0"
 }
 
 func mutationResponseValues(payload map[string]any, accountID string) (values, bool) {

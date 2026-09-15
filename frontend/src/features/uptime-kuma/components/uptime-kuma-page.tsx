@@ -165,7 +165,9 @@ export function UptimeKumaPage() {
         />
       )}
       <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
-        {configQuery.isPending && <PageLoadingSkeleton label="正在读取接入配置…" variant="table" />}
+        {configQuery.isPending && (
+          <PageLoadingSkeleton label="正在读取接入配置…" variant="table" fill />
+        )}
         {config && !config.api_key_configured && (
           <Card size="sm">
             <CardHeader>
@@ -180,7 +182,7 @@ export function UptimeKumaPage() {
         {config?.api_key_configured && (
           <>
             {monitorsQuery.isPending && (
-              <PageLoadingSkeleton label="正在读取监控项…" variant="table" />
+              <PageLoadingSkeleton label="正在读取监控项…" variant="table" fill />
             )}
             {monitorsQuery.data?.warning && (
               <Card size="sm">

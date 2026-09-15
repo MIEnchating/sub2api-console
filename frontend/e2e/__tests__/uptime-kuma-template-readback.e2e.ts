@@ -36,8 +36,8 @@ test("打开编辑时等待详情回显，修改后提交最新版本和请求�
   await expect(dialog.getByRole("button", { name: "保存模板" })).toBeDisabled();
   release();
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求头（JSON）")).toHaveValue(detail.headers);
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(detail.body);
+  await expect(dialog.getByLabel("请求头（JSON）")).toHaveText(detail.headers);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(detail.body);
   await expect(dialog.getByRole("combobox", { name: "鉴权方式", exact: true })).toHaveCount(0);
   await dialog.getByLabel("请求体", { exact: true }).fill('{"input":"updated"}');
   await dialog.getByRole("button", { name: "保存模板" }).click();
@@ -58,7 +58,7 @@ test("清空回显文本时提交明确清空标记", async ({ page }) => {
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "编辑功能模板" });
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).not.toHaveValue("");
+  await expect(dialog.getByLabel("请求体", { exact: true })).not.toHaveText("");
   await dialog.getByLabel("请求体", { exact: true }).fill("");
   await dialog.getByLabel("请求头（JSON）").fill("");
   await dialog.getByRole("button", { name: "保存模板" }).click();
@@ -88,7 +88,7 @@ test("详情读取失败时禁止保存，重试成功后恢复回显", async ({
   failed = false;
   await dialog.getByRole("button", { name: "重新读取" }).click();
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(detail.body);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(detail.body);
   await expect(dialog.getByRole("button", { name: "保存模板" })).toBeEnabled();
 });
 
@@ -100,7 +100,7 @@ test("关闭编辑后再次打开重新读取内容，不保留上次未保存�
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   let dialog = page.getByRole("dialog", { name: "编辑功能模板" });
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(body);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(body);
   await dialog.getByLabel("请求体", { exact: true }).fill("unsaved body");
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   await expect(dialog).toBeHidden();
@@ -108,5 +108,5 @@ test("关闭编辑后再次打开重新读取内容，不保留上次未保存�
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   dialog = page.getByRole("dialog", { name: "编辑功能模板" });
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(body);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(body);
 });

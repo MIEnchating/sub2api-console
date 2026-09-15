@@ -5,6 +5,7 @@ import { FormField } from "@/App";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { JsonEditorField } from "@/components/json-editor/form-field";
 import type { TemplateValues } from "../lib/template-schema";
 import { requestBodyFields, updateRequestBody } from "../lib/request-body";
 
@@ -69,19 +70,36 @@ export function TemplateBodyForm(props: {
         {visible && (
           <div id={`${id}-body`} className="mt-3">
             <FormField label="请求体" htmlFor="template-body" error={error?.message}>
-              <Textarea
-                id="template-body"
-                {...form.register("body")}
-                disabled={props.disabled}
-                aria-invalid={!!error}
-                onChange={(event) => {
-                  form.setValue("body", event.target.value, { shouldDirty: true });
-                  const next = requestBodyFields(event.target.value);
-                  if (next.editable) form.setValue("model", next.model);
-                }}
-                placeholder="填写请求体"
-                className="min-h-48 font-mono"
-              />
+              {encoding === "json" ? (
+                <JsonEditorField
+                  id="template-body"
+                  aria-label="请求体"
+                  control={form.control}
+                  name="body"
+                  disabled={props.disabled}
+                  aria-invalid={!!error}
+                  onValueChange={(value) => {
+                    const next = requestBodyFields(value);
+                    if (next.editable) form.setValue("model", next.model);
+                  }}
+                  placeholder="填写请求体"
+                  className="h-72"
+                />
+              ) : (
+                <Textarea
+                  id="template-body"
+                  {...form.register("body")}
+                  disabled={props.disabled}
+                  aria-invalid={!!error}
+                  onChange={(event) => {
+                    form.setValue("body", event.target.value, { shouldDirty: true });
+                    const next = requestBodyFields(event.target.value);
+                    if (next.editable) form.setValue("model", next.model);
+                  }}
+                  placeholder="填写请求体"
+                  className="min-h-48 font-mono"
+                />
+              )}
             </FormField>
           </div>
         )}

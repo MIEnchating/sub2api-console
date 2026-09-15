@@ -13,7 +13,7 @@ describe("DataTablePanel", () => {
 
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('data-slot="card"');
-    expect(markup).toContain("rounded-[8px]");
+    expect(markup).toContain("rounded-lg");
     expect(markup).toContain("ring-1");
     expect(markup).toContain("min-h-0");
     expect(markup).toContain("overflow-hidden");

@@ -369,18 +369,22 @@ func sendModelSyncJobs(ctx context.Context, total int, jobs chan<- int) {
 
 func (s *Service) discoverAccountModels(ctx context.Context, accountID string) modelSyncItem {
 	item := modelSyncItem{AccountID: accountID, Status: "failed"}
-	_, local, err := s.localAccount(ctx, accountID)
-	if err != nil {
-		item.Error = err.Error()
-		return item
-	}
-	item.AccountName = local.Name
 	guarded, release, err := s.acquireAccountMutation(ctx, accountID)
 	if err != nil {
 		item.Error = err.Error()
 		return item
 	}
 	defer release()
+	_, local, err := s.localAccount(guarded, accountID)
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
+	item.AccountName = local.Name
+	if local.ManualPriority != nil {
+		item.Error = "账号在任务执行前进入人工优先位，模型同步已禁用"
+		return item
+	}
 	guarded, err = targetguard.Bind(guarded, s.targets)
 	if err != nil {
 		item.Error = err.Error()

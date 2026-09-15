@@ -29,6 +29,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     command: ["sub2api-console", "browser-worker"]
+    environment:
+      SUB2API_BROWSER_CHECKPOINT_DIR: /var/lib/browser-checkpoints/private
     restart: unless-stopped
     read_only: true
     shm_size: "256mb"
@@ -46,8 +48,10 @@ services:
       - /tmp:size=512m,mode=1777
     volumes:
       - browser-socket:/run/browser
+      - browser-checkpoints:/var/lib/browser-checkpoints
     mem_limit: 1g
     pids_limit: 256
 
 volumes:
   browser-socket:
+  browser-checkpoints:

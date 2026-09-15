@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { monitorTypeLabels } from "../constants";
+import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import type { TemplateValues } from "../lib/template-schema";
 import { MonitorFormSection } from "./monitor-form-section";
 
@@ -21,6 +22,11 @@ export function TemplateMonitoringForm(props: {
   editing: boolean;
 }) {
   const form = props.form;
+  const monitorTypes = useDictionaryOrder(
+    "kuma_monitor_type",
+    Object.entries(monitorTypeLabels),
+    (item) => item[0],
+  );
   const type = form.watch("monitoring.type");
   const http = ["http", "keyword"].includes(type);
   const errors = form.formState.errors.monitoring;
@@ -46,7 +52,7 @@ export function TemplateMonitoringForm(props: {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(monitorTypeLabels).map(([value, label]) => (
+                  {monitorTypes.map(([value, label]) => (
                     <SelectItem key={value} value={value}>
                       {label}
                     </SelectItem>

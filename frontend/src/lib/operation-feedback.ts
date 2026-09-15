@@ -1,4 +1,7 @@
+import { createElement } from "react";
 import { toast } from "sonner";
+
+import { OperationErrorDetails } from "@/components/operation-error-details";
 
 import { isSessionExpiredError } from "./session-auth";
 
@@ -22,5 +25,17 @@ export function notifyOperationError(
   }
   const detail = operationErrorMessage(error, fallback);
   const message = options?.context ? `${options.context}：${detail}` : detail;
+  if (message.length > 120 || /[\r\n]/.test(message)) {
+    toast.error(options?.context ?? fallback, {
+      id: `operation-error:${message}`,
+      description: createElement(OperationErrorDetails, { message }),
+      duration: Infinity,
+      closeButton: true,
+      classNames: { toast: "items-start!", icon: "mt-0.5" },
+      // Sonner disables touch scrolling for swipe dismissal by default.
+      style: { touchAction: "pan-y" },
+    });
+    return;
+  }
   toast.error(message, { id: `operation-error:${message}` });
 }

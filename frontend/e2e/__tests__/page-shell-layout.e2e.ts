@@ -193,7 +193,7 @@ test("价格比对选择上游和模型后显示结果，过滤无匹配项时�
   );
   await page.goto("/newapi/differences");
   await page.getByRole("combobox", { name: "比对上游", exact: true }).click();
-  await page.getByRole("option", { name: /比对上游/ }).click();
+  await page.getByRole("option", { name: "upstream.example.test · Sub2API", exact: true }).click();
   await page.getByRole("checkbox", { name: "选择当前页全部模型" }).check();
   await page.getByRole("button", { name: "批量比对", exact: true }).click();
   await expect(page.getByLabel("test-model 比对结果")).toContainText("一致");

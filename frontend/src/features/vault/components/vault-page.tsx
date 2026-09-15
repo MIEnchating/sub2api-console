@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { FieldError } from "@/components/field-error";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eraser, KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
@@ -13,6 +13,7 @@ import { PageActions } from "@/components/page-actions";
 import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { RefreshButton } from "@/components/refresh-button";
+import { ContentRetry } from "@/components/content-retry";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { StatusBadge } from "@/components/status-badge";
@@ -39,6 +40,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { parseJsonStringMap } from "@/lib/json-string-map";
+import { JsonEditor } from "@/components/json-editor";
 import { sensitiveFieldPlaceholder } from "@/lib/sensitive-field";
 
 type VaultForm = {
@@ -149,6 +151,7 @@ function VaultValueList(props: { values: string[]; emptyLabel: string; warning?:
 export function VaultEntryTable(props: {
   entries: VaultEntryIndex[];
   conflictEntries?: Set<string>;
+  disabled?: boolean;
   onEdit: (entry: VaultEntryIndex) => void;
   onDelete: (entry: VaultEntryIndex) => void;
 }) {
@@ -193,11 +196,16 @@ export function VaultEntryTable(props: {
               </TableCell>
               <TableCell className="text-right" overflowTooltip={false}>
                 <div className="flex justify-end gap-1">
-                  <TableActionButton label="编辑凭据" onClick={() => props.onEdit(entry)}>
+                  <TableActionButton
+                    label="编辑凭据"
+                    disabled={props.disabled}
+                    onClick={() => props.onEdit(entry)}
+                  >
                     <Pencil />
                   </TableActionButton>
                   <TableActionButton
                     label="删除凭据"
+                    disabled={props.disabled}
                     tone="danger"
                     onClick={() => props.onDelete(entry)}
                   >
@@ -249,6 +257,7 @@ export function VaultPage() {
   const [overwritePayload, setOverwritePayload] = useState<
     Parameters<typeof api.configureVaultEntry>[0] | null
   >(null);
+  const pendingSave = useRef<Parameters<typeof api.configureVaultEntry>[0] | null>(null);
 
   const entries = useMemo(() => {
     const keyword = search.trim().toLowerCase();
@@ -302,7 +311,13 @@ export function VaultPage() {
   }
 
   const save = useMutation({
-    mutationFn: api.configureVaultEntry,
+    gcTime: 0,
+    mutationFn: () => {
+      const payload = pendingSave.current;
+      pendingSave.current = null;
+      if (!payload) throw new Error("凭据提交内容已清除，请重新填写");
+      return api.configureVaultEntry(payload);
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["auth-recovery-config"] });
       setEditorOpen(false);
@@ -313,6 +328,23 @@ export function VaultPage() {
     },
     onError: (error) => notifyOperationError(error, "凭据保存失败"),
   });
+
+  function savePayload(payload: Parameters<typeof api.configureVaultEntry>[0]): void {
+    if (save.isPending || pendingSave.current) return;
+    pendingSave.current = payload;
+    save.mutate();
+  }
+
+  function closeEditor(): void {
+    if (save.isPending) return;
+    setEditorOpen(false);
+    setForm(emptyVaultForm);
+    setCleared(new Set());
+    setTouched(new Set());
+    setOverwritePayload(null);
+    pendingSave.current = null;
+    save.reset();
+  }
 
   function submitSave() {
     if (!configReady) return;
@@ -352,7 +384,7 @@ export function VaultPage() {
       setOverwritePayload(payload);
       return;
     }
-    save.mutate(payload);
+    savePayload(payload);
   }
 
   const remove = useMutation({
@@ -412,7 +444,7 @@ export function VaultPage() {
 
         <DataTablePanel className="flex-1">
           {config.error && <QueryErrorToast error={config.error} fallback="密码箱读取失败" />}
-          {!config.error && config.isLoading && (
+          {config.isLoading && (
             <Table containerClassName="min-h-0 flex-1 overflow-auto">
               <TableBody>
                 {Array.from({ length: 4 }, (_, row) => (
@@ -427,7 +459,10 @@ export function VaultPage() {
               </TableBody>
             </Table>
           )}
-          {!config.error && !config.isLoading && entries.length === 0 && (
+          {!config.data && config.isError && (
+            <ContentRetry pending={config.isFetching} onRetry={() => void config.refetch()} />
+          )}
+          {config.data && entries.length === 0 && (
             <div className="grid min-h-48 place-items-center p-6 text-center">
               <div>
                 <KeyRound className="text-muted-foreground mx-auto mb-3 size-6" />
@@ -438,9 +473,10 @@ export function VaultPage() {
               </div>
             </div>
           )}
-          {!config.error && !config.isLoading && entries.length > 0 && (
+          {config.data && entries.length > 0 && (
             <VaultEntryTable
               entries={entries}
+              disabled={!configReady}
               conflictEntries={conflictEntries}
               onEdit={openEdit}
               onDelete={setDeleteTarget}
@@ -452,13 +488,7 @@ export function VaultPage() {
       <Dialog
         open={editorOpen}
         onOpenChange={(open) => {
-          if (save.isPending) return;
-          setEditorOpen(open);
-          if (!open) {
-            setForm(emptyVaultForm);
-            setCleared(new Set());
-            setTouched(new Set());
-          }
+          if (!open) closeEditor();
         }}
       >
         <DialogContent
@@ -598,19 +628,19 @@ export function VaultPage() {
                     : "仅在登录接口需要额外请求头时填写"
                 }
               >
-                <Textarea
-                  className="min-h-24 font-mono"
+                <JsonEditor
+                  aria-label="Headers JSON"
                   id={`${fieldId}-headers`}
                   aria-invalid={headersError !== null}
                   value={form.headers}
-                  onChange={(event) => {
+                  onChange={(value) => {
                     markTouched("headers");
                     setCleared((current) => {
                       const next = new Set(current);
                       next.delete("headers");
                       return next;
                     });
-                    setForm({ ...form, headers: event.target.value });
+                    setForm({ ...form, headers: value });
                   }}
                   placeholder={sensitiveFieldPlaceholder(
                     Boolean(editing?.header_names.length),
@@ -636,11 +666,7 @@ export function VaultPage() {
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setEditorOpen(false)}
-              disabled={save.isPending}
-            >
+            <Button variant="outline" onClick={closeEditor} disabled={save.isPending}>
               取消
             </Button>
             <Button
@@ -678,7 +704,7 @@ export function VaultPage() {
             <Button
               onClick={() => {
                 if (!overwritePayload) return;
-                save.mutate(overwritePayload);
+                savePayload(overwritePayload);
                 setOverwritePayload(null);
               }}
               disabled={save.isPending || overwritePayload === null}

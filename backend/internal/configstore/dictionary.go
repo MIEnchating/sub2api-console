@@ -32,30 +32,39 @@ func (s *Store) SyncDictionaryValues(ctx context.Context, kind string, values []
 	if !validDictionaryKind(kind) {
 		return fmt.Errorf("无效的字典类型")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var nextOrder int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort_order),-1)+1 FROM dictionary_entries WHERE kind=?`, kind).Scan(&nextOrder); err != nil {
+		return err
+	}
 	current := make(map[string]bool, len(values))
 	for index := range values {
-		values[index].Kind = kind
-		values[index].Name = strings.TrimSpace(values[index].Name)
-		values[index].Value = strings.TrimSpace(values[index].Value)
-		if values[index].Name == "" || values[index].Value == "" {
+		name := strings.TrimSpace(values[index].Name)
+		value := strings.TrimSpace(values[index].Value)
+		if name == "" || value == "" {
 			continue
 		}
-		current[values[index].Value] = true
+		current[value] = true
 		var id string
-		err := s.db.QueryRowContext(ctx, `SELECT id FROM dictionary_entries WHERE kind=? AND value=?`, kind, values[index].Value).Scan(&id)
+		err := tx.QueryRowContext(ctx, `SELECT id FROM dictionary_entries WHERE kind=? AND value=?`, kind, value).Scan(&id)
 		if errors.Is(err, sql.ErrNoRows) {
 			id = uuid.NewString()
 			now := time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err = s.db.ExecContext(ctx, `INSERT INTO dictionary_entries(id,kind,name,value,sort_order,created_at,updated_at,version) VALUES(?,?,?,?,?,?,?,1)`, id, kind, values[index].Name, values[index].Value, index, now, now); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO dictionary_entries(id,kind,name,value,sort_order,created_at,updated_at,version) VALUES(?,?,?,?,?,?,?,1)`, id, kind, name, value, nextOrder, now, now); err != nil {
 				return err
 			}
+			nextOrder++
 		} else if err != nil {
 			return err
-		} else if _, err = s.db.ExecContext(ctx, `UPDATE dictionary_entries SET name=?,updated_at=? WHERE id=?`, values[index].Name, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+		} else if _, err = tx.ExecContext(ctx, `UPDATE dictionary_entries SET name=?,updated_at=? WHERE id=? AND name<>?`, name, time.Now().UTC().Format(time.RFC3339Nano), id, name); err != nil {
 			return err
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT value FROM dictionary_entries WHERE kind=?`, kind)
+	rows, err := tx.QueryContext(ctx, `SELECT value FROM dictionary_entries WHERE kind=?`, kind)
 	if err != nil {
 		return err
 	}
@@ -77,11 +86,11 @@ func (s *Store) SyncDictionaryValues(ctx context.Context, kind string, values []
 		return err
 	}
 	for _, value := range stale {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM dictionary_entries WHERE kind=? AND value=?`, kind, value); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM dictionary_entries WHERE kind=? AND value=?`, kind, value); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func validDictionaryKind(k string) bool {
@@ -185,9 +194,25 @@ func (s *Store) ReorderDictionaries(ctx context.Context, kind string, ids []stri
 		return err
 	}
 	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM dictionary_entries WHERE kind=?`, kind).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(ids) {
+		return ErrDictionaryConflict
+	}
+	seen := make(map[string]bool, len(ids))
 	for i, id := range ids {
-		if _, err = tx.ExecContext(ctx, `UPDATE dictionary_entries SET sort_order=?,updated_at=?,version=version+1 WHERE id=? AND kind=?`, i, time.Now().UTC().Format(time.RFC3339Nano), id, kind); err != nil {
+		if seen[id] {
+			return ErrDictionaryConflict
+		}
+		seen[id] = true
+		result, err := tx.ExecContext(ctx, `UPDATE dictionary_entries SET sort_order=?,updated_at=?,version=version+1 WHERE id=? AND kind=?`, i, time.Now().UTC().Format(time.RFC3339Nano), id, kind)
+		if err != nil {
 			return err
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return ErrDictionaryConflict
 		}
 	}
 	return tx.Commit()

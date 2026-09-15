@@ -17,6 +17,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
 	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
 	"github.com/MIEnchating/sub2api-console/backend/internal/api"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
@@ -60,7 +61,7 @@ func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "browser-worker" {
 		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer cancel()
-		return browserlogin.RunWorker(ctx, "/run/browser/worker.sock", browserlogin.Chromium{})
+		return browserlogin.RunWorker(ctx, "/run/browser/worker.sock", browserlogin.Chromium{CheckpointDirectory: os.Getenv("SUB2API_BROWSER_CHECKPOINT_DIR")})
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -111,9 +112,11 @@ func run() error {
 	serviceContext, cancelServices := context.WithCancel(context.Background())
 	backgroundTasks := taskrunner.NewBounded(serviceContext, 4)
 	liveTasks := taskrunner.NewBounded(serviceContext, 500)
+	workbenchTasks := taskrunner.NewBounded(serviceContext, 4)
 	defer cancelServices()
 	defer backgroundTasks.Cancel()
 	defer liveTasks.Cancel()
+	defer workbenchTasks.Cancel()
 	if err := backgroundTasks.Go(func(ctx context.Context) {
 		compacted, compactErr := taskStore.CompactAutomaticInspectionHistory(ctx, 100)
 		if compactErr != nil {
@@ -204,6 +207,21 @@ func run() error {
 	managementTasks.UseUpstreamAuthResolver(authRecoveryService)
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
+	accountWorkbench := accountworkbench.New(privateStore, taskStore, businessStore, modelChecks, workbenchTasks)
+	if err := accountWorkbench.UseExportDirectory(filepath.Join(cfg.DataDir, "account-workbench-exports")); err != nil {
+		return err
+	}
+	defer accountWorkbench.CloseExports()
+	accountWorkbench.UseOAuthBrowser(browserlogin.NewRemote("/run/browser/worker.sock"))
+	accountWorkbench.UseSecurityBrowser(browserlogin.NewRemote("/run/browser/worker.sock"))
+	if err := accountWorkbench.UseSecurityDirectory(filepath.Join(cfg.DataDir, "account-workbench-security")); err != nil {
+		return err
+	}
+	defer accountWorkbench.CloseSecurity()
+	accountWorkbench.UseAccountSync(func(ctx context.Context, actor string) (business.ManagementSyncResult, error) {
+		return managementTasks.Sync(ctx, actor)
+	})
+	go accountWorkbench.RunScheduler(serviceContext)
 	if err := modelChecks.StartAnimationScheduler(); err != nil {
 		return err
 	}
@@ -277,7 +295,7 @@ func run() error {
 		InspectionTasks:    manualInspections,
 		RoutingControl:     routingWriteService,
 		Tasks:              taskStore,
-		TaskCanceller:      backgroundTasks,
+		TaskCanceller:      taskrunner.CompositeCanceller{Groups: []taskrunner.TaskRunner{backgroundTasks, liveTasks, workbenchTasks}},
 		Logs:               logService,
 		LogMaintenance:     logMaintenance,
 		AlertTasks:         alertTasks,
@@ -288,6 +306,7 @@ func run() error {
 		AccountDelete:      accountDeleteService,
 		ProbeTasks:         probeTasks,
 		ModelChecks:        modelChecks,
+		AccountWorkbench:   accountWorkbench,
 		UpstreamDetect:     upstreamDetector,
 		UpstreamConfigs:    upstreamConfigurations,
 		UpstreamSync:       upstreamSyncTasks,
@@ -353,6 +372,7 @@ func run() error {
 	}
 	taskErr := backgroundTasks.Shutdown(shutdown)
 	liveErr := liveTasks.Shutdown(shutdown)
+	workbenchErr := workbenchTasks.Shutdown(shutdown)
 	var httpErr error
 	for range servers {
 		httpErr = errors.Join(httpErr, <-httpShutdowns)
@@ -361,11 +381,11 @@ func run() error {
 		serveErr = errors.Join(serveErr, <-serveErrors)
 		remainingServers--
 	}
-	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || liveErr != nil || httpErr != nil {
+	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || liveErr != nil || workbenchErr != nil || httpErr != nil {
 		// Do not explicitly close databases while a task or HTTP handler may still be finalizing.
 		closeStores = false
 	}
-	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr, liveErr)
+	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr, liveErr, workbenchErr)
 }
 
 func frontendHandler(apiHandler http.Handler, directory string) http.Handler {

@@ -56,6 +56,9 @@ test("勾选和清空分组时表格高度与分页位置保持不变，批量�
     originalPaginationOffset,
   );
 
+  // Selection must not cover the pagination controls on a narrow screen.
+  await page.getByRole("combobox", { name: "每页行数" }).click({ trial: true, timeout: 3000 });
+
   await toolbar.getByRole("button", { name: "清空选择" }).click();
   await expect(toolbar).toHaveCount(0);
   await expect(selectPage).toHaveAttribute("aria-checked", "false");

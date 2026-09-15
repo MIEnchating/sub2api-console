@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Toaster, toast } from "sonner";
 
 import type { NewAPIRemoteSnapshot } from "@/api";
 import { NewAPIPriceComparison, comparePlatformModelPrice } from "../price-comparison";
@@ -29,10 +30,68 @@ const snapshot: NewAPIRemoteSnapshot = {
   fetched_at: "2026-09-05T00:00:00Z",
 };
 
-beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
-afterAll(() => vi.unstubAllGlobals());
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
+afterEach(() => toast.dismiss());
 
 describe("New API 价格比对", () => {
+  it("比对按 Token 计费的 New API 上游时展示输入、输出及缓存价格", async () => {
+    const user = userEvent.setup();
+    const tokenSnapshot: NewAPIRemoteSnapshot = {
+      ...snapshot,
+      upstream_prices: [
+        {
+          host: "newapi.example.test",
+          name: "New API 上游",
+          upstream_type: "newapi",
+          models: [
+            {
+              model: "model-a",
+              input_ratio: "1",
+              completion_ratio: "2",
+              input_price: "2",
+              completion_price: "4",
+              cache_read_price: "0.2",
+            },
+          ],
+        },
+      ],
+    };
+    render(<NewAPIPriceComparison snapshot={tokenSnapshot} />);
+
+    await user.click(screen.getByRole("combobox", { name: "比对上游" }));
+    await user.click(screen.getByRole("option", { name: /newapi\.example\.test · New API/ }));
+    await user.click(screen.getByRole("button", { name: "比对 model-a" }));
+
+    const dialog = within(screen.getByRole("dialog", { name: "model-a 价格比对" }));
+    for (const [label, expected] of [
+      ["计费方式", "按 Token"],
+      ["输入价格", "2"],
+      ["输出价格", "4"],
+      ["缓存读取", "0.2"],
+    ]) {
+      const row = dialog.getByRole("row", { name: new RegExp(label!) });
+      expect(within(row).getAllByRole("cell")[2]).toHaveTextContent(expected!);
+    }
+  });
+
+  it("部分上游读取失败时悬浮提示原因并保留可用上游的比对操作", async () => {
+    const user = userEvent.setup();
+    const warning = "failed.example.test：上游鉴权失败（HTTP 401），请恢复该上游鉴权后刷新";
+    const failedSnapshot = { ...snapshot, upstream_price_warning: warning };
+    render(
+      <>
+        <Toaster />
+        <NewAPIPriceComparison snapshot={failedSnapshot} />
+      </>,
+    );
+
+    expect(await screen.findByText(warning)).toBeInTheDocument();
+    expect(screen.getAllByText(warning)).toHaveLength(1);
+    await user.click(screen.getByRole("combobox", { name: "比对上游" }));
+    await user.click(screen.getByRole("option", { name: /upstream\.example\.test · Sub2API/ }));
+    expect(screen.getByRole("button", { name: "比对 model-a" })).toBeEnabled();
+  });
+
   it("选择上游和模型后执行批量比对并显示逐项结果", async () => {
     const user = userEvent.setup();
     render(<NewAPIPriceComparison snapshot={snapshot} />);
@@ -41,7 +100,7 @@ describe("New API 价格比对", () => {
     expect(batchButton).toBeDisabled();
 
     await user.click(screen.getByRole("combobox", { name: "比对上游" }));
-    await user.click(screen.getByRole("option", { name: /上游 A/ }));
+    await user.click(screen.getByRole("option", { name: /upstream\.example\.test · Sub2API/ }));
     await user.click(screen.getByRole("checkbox", { name: "选择 model-a" }));
     await user.click(screen.getByRole("checkbox", { name: "选择 model-b" }));
     await user.click(batchButton);
@@ -55,7 +114,7 @@ describe("New API 价格比对", () => {
     render(<NewAPIPriceComparison snapshot={snapshot} />);
 
     await user.click(screen.getByRole("combobox", { name: "比对上游" }));
-    await user.click(screen.getByRole("option", { name: /上游 A/ }));
+    await user.click(screen.getByRole("option", { name: /upstream\.example\.test · Sub2API/ }));
     await user.click(screen.getByRole("button", { name: "比对 model-b" }));
 
     expect(screen.getByRole("dialog", { name: "model-b 价格比对" })).toBeInTheDocument();
@@ -96,6 +155,6 @@ describe("New API 价格比对", () => {
 
     expect(selector).toHaveAttribute("aria-expanded", "true");
     await user.tab();
-    expect(screen.getByRole("option", { name: /上游 A/ })).toHaveFocus();
+    expect(screen.getByRole("option", { name: /upstream\.example\.test · Sub2API/ })).toHaveFocus();
   });
 });

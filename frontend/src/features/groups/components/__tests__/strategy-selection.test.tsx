@@ -1,4 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, render as renderComponent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render } from "./dictionary-render";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { expect, it } from "vitest";
@@ -45,4 +47,31 @@ it("通过键盘选择策略后可回到全局默认且保留探活模型", asyn
   expect(inherited).toHaveAttribute("aria-checked", "true");
   expect(price).toHaveAttribute("aria-checked", "false");
   expect(screen.getByRole("textbox", { name: "手动输入探活模型" })).toHaveValue("saved-model");
+});
+
+it("字典排序变化立即调整策略选项，全局默认固定首位且保留当前选择", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["dictionaries", "scheduling_strategy"], {
+    items: [{ value: "price_first", enabled: true }],
+  });
+  const view = renderComponent(
+    <QueryClientProvider client={client}>
+      <Editor />
+    </QueryClientProvider>,
+  );
+  expect(
+    screen
+      .getAllByRole("radio")
+      .slice(0, 2)
+      .map((item) => item.textContent),
+  ).toEqual(["全局默认", "价格优先"]);
+  act(() =>
+    client.setQueryData(["dictionaries", "scheduling_strategy"], {
+      items: [{ value: "speed_first", enabled: true }],
+    }),
+  );
+  await waitFor(() => expect(screen.getAllByRole("radio")[1]).toHaveTextContent("速度优先"));
+  expect(screen.getByRole("radio", { name: "全局默认" })).toHaveAttribute("aria-checked", "true");
+  view.unmount();
+  client.clear();
 });

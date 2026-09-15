@@ -26,9 +26,10 @@ type AuthRecoveryOutcome struct {
 }
 
 type AuthRecoverySummary struct {
-	Hosts     int `json:"hosts"`
-	Recovered int `json:"recovered"`
-	Failed    int `json:"failed"`
+	Hosts     int                   `json:"hosts"`
+	Recovered int                   `json:"recovered"`
+	Failed    int                   `json:"failed"`
+	Results   []AuthRecoveryOutcome `json:"results,omitempty"`
 }
 
 func (s *Store) AuthRecoveryRequiredHosts(ctx context.Context, retryBefore time.Time) ([]string, error) {
@@ -64,7 +65,19 @@ func (s *Store) AuthRecoveryRequiredHosts(ctx context.Context, retryBefore time.
 }
 
 func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRecoveryOutcome, _ string) (AuthRecoverySummary, error) {
+	return s.persistAuthRecoveryOutcomes(ctx, values, values)
+}
+
+func (s *Store) PersistAuthRecoveryProgress(ctx context.Context, snapshot []AuthRecoveryOutcome, latest AuthRecoveryOutcome, _ string) (AuthRecoverySummary, error) {
+	return s.persistAuthRecoveryOutcomes(ctx, snapshot, []AuthRecoveryOutcome{latest})
+}
+
+func (s *Store) persistAuthRecoveryOutcomes(ctx context.Context, values, updates []AuthRecoveryOutcome) (AuthRecoverySummary, error) {
 	values, err := normalizeAuthRecoveryOutcomes(values)
+	if err != nil {
+		return AuthRecoverySummary{}, err
+	}
+	updates, err = normalizeAuthRecoveryOutcomes(updates)
 	if err != nil {
 		return AuthRecoverySummary{}, err
 	}
@@ -85,15 +98,18 @@ func (s *Store) PersistAuthRecoveryOutcomes(ctx context.Context, values []AuthRe
 	}
 	result := AuthRecoverySummary{Hosts: len(values)}
 	for _, item := range values {
-		status := UpstreamAuthStatusInvalid
 		if item.Success {
-			status = UpstreamAuthStatusRecovered
 			result.Recovered++
 		} else {
 			result.Failed++
-			if item.Transient {
-				status = UpstreamAuthStatusRecoveryTemporarilyFailed
-			}
+		}
+	}
+	for _, item := range updates {
+		status := UpstreamAuthStatusInvalid
+		if item.Success {
+			status = UpstreamAuthStatusRecovered
+		} else if item.Transient {
+			status = UpstreamAuthStatusRecoveryTemporarilyFailed
 		}
 		var metadataRaw string
 		resolvedHost := item.Host

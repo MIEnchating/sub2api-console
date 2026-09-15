@@ -21,10 +21,18 @@ func glmCondition(label string) (string, error) {
 		variable string
 	}{{glmInput, "len"}, {glmOutput, "c"}} {
 		if m := entry.re.FindStringSubmatch(s); m != nil {
-			if m[1] != "0" {
-				parts = append(parts, entry.variable+" >= "+tokenCount(m[1], m[2]))
+			lower, err := tokenCount(m[1], m[2])
+			if err != nil {
+				return "", err
 			}
-			parts = append(parts, entry.variable+" < "+tokenCount(m[3], m[4]))
+			upper, err := tokenCount(m[3], m[4])
+			if err != nil {
+				return "", err
+			}
+			if lower != "0" {
+				parts = append(parts, entry.variable+" >= "+lower)
+			}
+			parts = append(parts, entry.variable+" < "+upper)
 		}
 	}
 	for _, m := range glmLower.FindAllStringSubmatch(s, -1) {
@@ -32,7 +40,11 @@ func glmCondition(label string) (string, error) {
 		if m[1] == "输出" {
 			variable = "c"
 		}
-		parts = append(parts, variable+" >= "+tokenCount(m[2], m[3]))
+		lower, err := tokenCount(m[2], m[3])
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, variable+" >= "+lower)
 	}
 	if len(parts) == 0 && (strings.Contains(s, "输入") || strings.Contains(s, "输出")) {
 		return "", errors.New("GLM 阶梯条件格式已变更")

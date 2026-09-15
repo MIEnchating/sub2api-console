@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -183,10 +184,11 @@ type RemoteSnapshot struct {
 	// populated from the public model-plaza endpoint.
 	NewAPIModels []ModelPrice `json:"newapi_models"`
 	// Sub2APIModels is the locally maintained Sub2API model-price catalog.
-	Sub2APIModels  []Sub2APIModelPrice    `json:"sub2api_models"`
-	UpstreamPrices []UpstreamPriceCatalog `json:"upstream_prices,omitempty"`
-	Differences    []PriceDifference      `json:"differences"`
-	FetchedAt      string                 `json:"fetched_at"`
+	Sub2APIModels        []Sub2APIModelPrice    `json:"sub2api_models"`
+	UpstreamPrices       []UpstreamPriceCatalog `json:"upstream_prices,omitempty"`
+	UpstreamPriceWarning string                 `json:"upstream_price_warning,omitempty"`
+	Differences          []PriceDifference      `json:"differences"`
+	FetchedAt            string                 `json:"fetched_at"`
 }
 
 type UpstreamPriceCatalog struct {
@@ -432,10 +434,11 @@ func (s *Service) Refresh(ctx context.Context, platformID string) (RemoteSnapsho
 	// itself can never reveal a mismatch.
 	differences := compareCatalogPrices(configuredModels, pricingCatalog)
 	toolPrices := decodeToolPrices(options["tool_price_setting.prices"])
+	upstreamPrices, upstreamWarning := s.readUpstreamPriceCatalogs(ctx)
 	return RemoteSnapshot{
 		Groups: groups, Models: configuredModels, UnsetModels: unsetModels, ToolPrices: toolPrices,
 		References: references, NewAPIModels: pricingCatalog,
-		UpstreamPrices: s.readUpstreamPriceCatalogs(ctx), Differences: differences,
+		UpstreamPrices: upstreamPrices, UpstreamPriceWarning: upstreamWarning, Differences: differences,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, nil
 }
@@ -464,17 +467,23 @@ func (s *Service) RemoteModelPricingSource(ctx context.Context, platformID strin
 	return source, err
 }
 
-func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) []UpstreamPriceCatalog {
+func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) ([]UpstreamPriceCatalog, string) {
 	reader, ok := s.private.(upstreamAuthReader)
 	if !ok {
-		return nil
+		return nil, "上游配置读取不可用，请检查控制台配置后刷新"
 	}
 	index, err := reader.AuthRecordIndex(ctx)
 	if err != nil {
-		return nil
+		return nil, "上游配置读取失败，请检查控制台配置后刷新"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	type catalogResult struct {
+		catalog UpstreamPriceCatalog
+		warning string
 	}
 	jobs := make(chan configstore.AuthRecordSummary)
-	items := make(chan UpstreamPriceCatalog, len(index))
+	items := make(chan catalogResult, len(index))
 	workers := min(4, len(index))
 	var wait sync.WaitGroup
 	for range workers {
@@ -482,110 +491,119 @@ func (s *Service) readUpstreamPriceCatalogs(ctx context.Context) []UpstreamPrice
 		go func() {
 			defer wait.Done()
 			for summary := range jobs {
-				if ctx.Err() != nil {
-					return
-				}
+				item := catalogResult{catalog: UpstreamPriceCatalog{Host: summary.Host, Name: summary.Host, UpstreamType: summary.UpstreamType}}
 				record, err := reader.AuthRecord(ctx, summary.Host)
 				if err != nil || record == nil {
+					item.warning = "上游鉴权配置读取失败，请检查该上游配置后刷新"
+					items <- item
 					continue
 				}
 				models, err := s.fetchUpstreamPriceCatalog(ctx, *record)
-				if err == nil && len(models) > 0 {
-					items <- UpstreamPriceCatalog{Host: summary.Host, Name: summary.Host, UpstreamType: record.UpstreamType, Models: models}
+				if err != nil {
+					item.warning = err.Error()
+				} else {
+					item.catalog.Models = models
 				}
+				items <- item
 			}
 		}()
 	}
 	go func() {
 		defer close(jobs)
 		for _, summary := range index {
-			select {
-			case jobs <- summary:
-			case <-ctx.Done():
-				return
-			}
+			jobs <- summary
 		}
 	}()
 	go func() { wait.Wait(); close(items) }()
 	result := make([]UpstreamPriceCatalog, 0, len(index))
+	warnings := []string{}
 	for item := range items {
-		result = append(result, item)
+		if item.warning != "" {
+			warnings = append(warnings, item.catalog.Host+"："+item.warning)
+		} else {
+			result = append(result, item.catalog)
+		}
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Host < result[j].Host })
-	return result
+	sort.Strings(warnings)
+	return result, strings.Join(warnings, "\n")
 }
 
 func (s *Service) fetchUpstreamPriceCatalog(ctx context.Context, record configstore.AuthRecord) ([]ModelPrice, error) {
-	path := "/api/v1/model-plaza"
-	if strings.EqualFold(record.UpstreamType, "newapi") || strings.EqualFold(record.UpstreamType, "oneapi") {
+	var path string
+	switch strings.ToLower(strings.TrimSpace(record.UpstreamType)) {
+	case "sub2api":
+		path = "/api/v1/model-plaza"
+	case "newapi", "oneapi":
 		path = "/api/pricing"
+	default:
+		return nil, errors.New("当前平台类型不支持价卡读取，请检查上游平台类型配置")
 	}
 	payload, err := s.requestUpstream(ctx, record, path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%s：%w", path, err)
 	}
+	var models []ModelPrice
 	if path == "/api/v1/model-plaza" {
-		return sub2APIModelRatios(decodeSub2APIModelPlaza(payload)), nil
+		models = sub2APIModelRatios(decodeSub2APIModelPlaza(payload))
+	} else {
+		models = decodePricingCatalog(payload)
 	}
-	return decodePricingCatalog(payload), nil
+	if len(models) == 0 {
+		return nil, errors.New("上游未返回有效模型价格，请检查价卡内容及当前账号可见分组后刷新")
+	}
+	return models, nil
 }
 
 func (s *Service) requestUpstream(ctx context.Context, record configstore.AuthRecord, path string) (any, error) {
 	base, err := configstore.ValidateBaseURL(record.BaseURL)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("上游地址无效，请检查该上游配置后刷新")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+path, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("上游价格请求地址无效，请检查该上游配置后刷新")
 	}
 	req.Header.Set("Accept", "application/json")
-	for key, value := range record.Headers {
-		req.Header.Set(key, value)
-	}
-	if req.Header.Get("Authorization") == "" {
-		var token *string
-		if record.AuthMode == "newapi_admin_key" {
-			token = record.AdminKey
-		} else {
-			token = record.AccessToken
-		}
-		if token != nil && strings.TrimSpace(*token) != "" {
-			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(*token))
-		}
-	}
-	if record.UserID != nil {
-		req.Header.Set("New-Api-User", strings.TrimSpace(*record.UserID))
-	}
-	for key, value := range record.Cookies {
-		req.AddCookie(&http.Cookie{Name: key, Value: value})
-	}
+	upstreamsync.ApplyAuthentication(req, record)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("上游价格请求未完成，请检查网络连接并稍后刷新")
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, errors.New("上游鉴权失败（HTTP 401），请在“鉴权恢复”中恢复该上游登录态后刷新")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, errors.New("上游拒绝价卡访问（HTTP 403），请检查价卡功能、账号访问权限及站点防护后刷新")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		if path == "/api/v1/model-plaza" {
+			return nil, errors.New("上游价格接口未开放或不存在（HTTP 404），请确认站点版本支持并启用“模型广场”，同时检查平台类型和上游地址")
+		}
+		return nil, errors.New("上游价格接口未开放或不存在（HTTP 404），请检查平台类型、上游地址及站点是否支持 /api/pricing")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("上游价格获取失败（HTTP %d），请检查上游服务后刷新", resp.StatusCode)
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maximumResponseBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, errors.New("上游价格响应读取失败，请稍后刷新")
 	}
 	if len(raw) > maximumResponseBytes {
-		return nil, errors.New("上游价格响应超过大小限制")
+		return nil, errors.New("上游价格响应超过大小限制，请检查上游价卡接口")
 	}
 	var payload any
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	if err := dec.Decode(&payload); err != nil {
-		return nil, err
+		return nil, errors.New("上游价格接口未返回有效 JSON，请检查接口地址及站点防护后刷新")
 	}
 	if err := ensureJSONEOF(dec); err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("上游价格获取失败（HTTP %d）", resp.StatusCode)
+		return nil, errors.New("上游价格接口返回了无效 JSON，请检查上游价卡接口后刷新")
 	}
 	if err := responseBusinessError(payload); err != nil {
-		return nil, err
+		return nil, errors.New("上游拒绝价格读取请求，请检查该上游鉴权及价卡访问权限后刷新")
 	}
 	return payload, nil
 }
@@ -1845,6 +1863,11 @@ func decodePricingCatalog(payload any) []ModelPrice {
 		inputPrice := firstDecimal(item, "input_price")
 		completion := firstDecimal(item, "completion_ratio", "output_ratio")
 		fixedPrice := firstDecimal(item, "model_price", "price")
+		// New API always emits model_price, including zero for token billing.
+		// quota_type, when present, decides whether that field is a fixed price.
+		if firstDecimal(item, "quota_type") == "0" {
+			fixedPrice = ""
+		}
 		if completion == "" {
 			completion = "1"
 		}
@@ -2041,6 +2064,9 @@ func decodeSub2APIPricingJSON(raw []byte) ([]Sub2APIModelPrice, error) {
 		if !ok {
 			continue
 		}
+		if !validPriceFields(entry, "input_cost_per_token", "output_cost_per_token", "input_cost_per_image_token", "output_cost_per_image_token", "output_cost_per_image", "cache_creation_input_token_cost", "cache_creation_input_token_cost_above_1hr", "cache_read_input_token_cost") {
+			return nil, errors.New("远程价卡包含无效价格，请检查价卡来源后重新刷新")
+		}
 		input := firstDecimal(entry, "input_cost_per_token")
 		output := firstDecimal(entry, "output_cost_per_token")
 		imageInput := firstDecimal(entry, "input_cost_per_image_token")
@@ -2094,7 +2120,7 @@ func applyRemoteLongContextPrices(entry map[string]any, item *Sub2APIModelPrice)
 		}
 		thousands, err := strconv.Atoi(match[2])
 		value := firstDecimal(entry, key)
-		if err != nil || thousands <= 0 || !positiveDecimal(value) {
+		if err != nil || thousands <= 0 || thousands > math.MaxInt/1000 || !positiveDecimal(value) {
 			continue
 		}
 		threshold := thousands * 1000
@@ -2167,6 +2193,9 @@ func positiveDecimal(value string) bool {
 }
 
 func sub2APIRatios(inputPrice, outputPrice string) (string, string, bool) {
+	if !validDecimal(inputPrice) || !validDecimal(outputPrice) {
+		return "", "", false
+	}
 	input, ok := new(big.Rat).SetString(strings.TrimSpace(inputPrice))
 	if !ok || input.Sign() < 0 {
 		return "", "", false
@@ -2187,7 +2216,7 @@ func sub2APIRatios(inputPrice, outputPrice string) (string, string, bool) {
 }
 
 func priceRatio(basePrice, value string) string {
-	if strings.TrimSpace(value) == "" {
+	if !validDecimal(basePrice) || !validDecimal(value) {
 		return ""
 	}
 	base, ok := new(big.Rat).SetString(strings.TrimSpace(basePrice))
@@ -2314,12 +2343,55 @@ func compareCatalogPrices(configured, references []ModelPrice) []PriceDifference
 }
 
 func samePrice(left, right ModelPrice) bool {
-	return left.ModelPrice == right.ModelPrice && left.InputRatio == right.InputRatio && left.CompletionRatio == right.CompletionRatio &&
-		left.InputPrice == right.InputPrice && left.CompletionPrice == right.CompletionPrice && left.BillingMode == right.BillingMode && left.BillingExpr == right.BillingExpr &&
-		left.CacheCreatePrice == right.CacheCreatePrice && left.CacheReadPrice == right.CacheReadPrice &&
-		left.CacheRatio == right.CacheRatio && left.CreateCacheRatio == right.CreateCacheRatio &&
-		left.CreateCache1hRatio == right.CreateCache1hRatio && left.ImageRatio == right.ImageRatio &&
-		left.AudioRatio == right.AudioRatio && left.AudioCompletionRatio == right.AudioCompletionRatio
+	if effectiveBillingMode(left) != effectiveBillingMode(right) || left.BillingExpr != right.BillingExpr {
+		return false
+	}
+	for _, values := range [][2]string{
+		{left.ModelPrice, right.ModelPrice}, {left.InputRatio, right.InputRatio}, {left.CompletionRatio, right.CompletionRatio},
+		{left.InputPrice, right.InputPrice}, {left.CompletionPrice, right.CompletionPrice},
+		{left.CacheCreatePrice, right.CacheCreatePrice}, {left.CacheReadPrice, right.CacheReadPrice},
+		{left.CacheRatio, right.CacheRatio}, {left.CreateCacheRatio, right.CreateCacheRatio},
+		{left.CreateCache1hRatio, right.CreateCache1hRatio}, {left.ImageRatio, right.ImageRatio},
+		{left.AudioRatio, right.AudioRatio}, {left.AudioCompletionRatio, right.AudioCompletionRatio},
+	} {
+		if values[0] == values[1] {
+			continue
+		}
+		if !validDecimal(values[0]) || !validDecimal(values[1]) {
+			return false
+		}
+		a, _ := new(big.Rat).SetString(values[0])
+		b, _ := new(big.Rat).SetString(values[1])
+		if a.Cmp(b) != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func effectiveBillingMode(price ModelPrice) string {
+	switch price.BillingMode {
+	case "per_second", "per-second":
+		return "per-second"
+	case "", "per_token", "per-token":
+		if price.ModelPrice != "" {
+			return "per-request"
+		}
+		return "per-token"
+	case "per_request":
+		return "per-request"
+	default:
+		return price.BillingMode
+	}
+}
+
+func validPriceFields(item map[string]any, keys ...string) bool {
+	for _, key := range keys {
+		if item[key] != nil && !validDecimal(firstDecimal(item, key)) {
+			return false
+		}
+	}
+	return true
 }
 
 func firstText(item map[string]any, keys ...string) string {

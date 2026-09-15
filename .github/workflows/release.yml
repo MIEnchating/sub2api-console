@@ -3,6 +3,9 @@ on:
   push:
     tags: ["v*"]
 permissions: {}
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
 env:
   IMAGE: mienvirtuoso/sub2api-console
   REGISTRY: docker.io
@@ -17,6 +20,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Validate release source and notes
+        run: |
+          git merge-base --is-ancestor HEAD origin/main
+          node .github/scripts/validate-release-tag.mjs "$GITHUB_REF_NAME"
       - name: Validate deployment configuration
         run: node --test .github/scripts/*.test.mjs
       - name: Set up Bun
@@ -59,8 +68,8 @@ jobs:
       - name: Backend mandatory checks
         working-directory: backend
         run: |
-          go vet ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
-          go test -race ./... ./internal/newapimanagement/__tests__ ./internal/notification/__tests__ ./internal/officialpricing/__tests__ ./internal/onboarding/__tests__ ./internal/pricing/__tests__ ./internal/routing/__tests__ ./internal/upstreamsync/__tests__
+          bash scripts/check-go.sh vet
+          bash scripts/check-go.sh test
           go build ./...
 
   build-and-push:
@@ -70,6 +79,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
       - name: Check Docker Hub token
         env:
@@ -80,18 +90,22 @@ jobs:
           registry: https://index.docker.io/v1/
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Verify release order and existing version
+        id: version
+        run: node .github/scripts/prepare-release-image.mjs
       - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        if: steps.version.outputs.reuse != 'true'
         with:
           context: .
           file: backend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.ref_name }}
-            ${{ env.IMAGE }}:latest
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
           build-args: |
             VERSION=${{ github.ref_name }}
             VCS_REF=${{ github.sha }}
+      - name: Verify both architectures and promote latest
+        run: node .github/scripts/promote-release-image.mjs
 
   create-release:
     name: Create GitHub Release

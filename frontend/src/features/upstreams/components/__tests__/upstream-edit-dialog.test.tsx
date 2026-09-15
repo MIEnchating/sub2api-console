@@ -174,10 +174,11 @@ describe("upstream edit dialog", () => {
     expect(accounts).toContain(">操作</span>");
     expect(accounts).toContain("Codex 主账号");
     expect(accounts.match(/稳定账号 ID 41/g)).toHaveLength(2);
-    expect(accounts.match(/重复绑定/g)).toHaveLength(2);
+    const content = new DOMParser().parseFromString(accounts, "text/html").body.textContent;
+    expect(content?.match(/重复绑定/g)).toHaveLength(2);
     expect(accounts).toContain(">codex</span>");
     expect(accounts).toContain(">claude</span>");
-    expect(accounts.match(/存在 · 启用/g)).toHaveLength(4);
+    expect(content?.match(/存在 · 启用/g)).toHaveLength(4);
     expect(accounts).toContain("Codex 备用账号");
     expect(accounts).toContain("稳定账号 ID 42");
     expect(accounts).toContain("Claude 账号");

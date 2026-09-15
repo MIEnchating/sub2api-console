@@ -1,4 +1,5 @@
 import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
@@ -458,6 +459,7 @@ export function LogDetailsContent(props: {
   entry: UnifiedLogEntry;
   details?: Record<string, unknown>;
   loading?: boolean;
+  onRetry?: () => void;
 }): ReactElement {
   const details = logDisplayDetails(props.entry, props.details ?? props.entry.details);
   const duplicateKey = props.entry.kind === "task" ? "operation" : "event_type";
@@ -518,6 +520,7 @@ export function LogDetailsContent(props: {
       </section>
 
       {props.loading ? <ContentLoading label="正在读取完整任务结果…" compact /> : null}
+      {props.onRetry ? <ContentRetry onRetry={props.onRetry} pending={props.loading} /> : null}
 
       {detailRows.length > 0 ? (
         <section aria-labelledby="log-detail-heading">
@@ -655,6 +658,11 @@ export function LogDetailsDialog(props: {
             entry={currentEntry}
             details={details}
             loading={taskDetail.isLoading}
+            onRetry={
+              taskDetail.isError && props.entry?.source === "task"
+                ? () => void taskDetail.refetch()
+                : undefined
+            }
           />
         ) : null}
       </DialogContent>

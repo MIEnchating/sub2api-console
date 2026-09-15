@@ -18,7 +18,13 @@ import (
 )
 
 func TestAnimationAPIRequiresAuthenticationAndReturnsStoredResults(t *testing.T) {
-	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) { _, _ = fmt.Fprintf(w, `{"output_text":%q}`, fixtureSVG) })
+	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"custom-model"}]}`))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"output_text":%q}`, fixtureSVG)
+	})
 	private, err := configstore.Open(filepath.Join(t.TempDir(), "config.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -70,4 +76,37 @@ func TestAnimationAPIRequiresAuthenticationAndReturnsStoredResults(t *testing.T)
 	if invalid.Code != 422 {
 		t.Fatalf("mismatched route ID accepted: %d", invalid.Code)
 	}
+	t.Run("custom endpoint authenticates and omits credentials from task responses", func(t *testing.T) {
+		payload := customRequest(t, *f.catalog.rows[0].BaseURL, "openai", fixtureSecret, "custom-model")
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res := call(http.MethodPost, "/api/model-checks/animations", string(raw), false); res.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated custom request accepted: %d", res.Code)
+		}
+		res := call(http.MethodPost, "/api/model-checks/animations", string(raw), true)
+		if res.Code != http.StatusOK || res.Header().Get("Cache-Control") != "no-store" || strings.Contains(res.Body.String(), fixtureSecret) {
+			t.Fatalf("custom request: %d %s", res.Code, res.Body)
+		}
+		completed := finished(t, f)
+		detail := call(http.MethodGet, "/api/tasks/"+completed.ID, "", true)
+		if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "custom-") || strings.Contains(detail.Body.String(), fixtureSecret) {
+			t.Fatalf("custom detail: %d %s", detail.Code, detail.Body)
+		}
+	})
+	t.Run("custom model list authenticates and never caches credentials", func(t *testing.T) {
+		payload := customRequest(t, *f.catalog.rows[0].BaseURL, "openai", fixtureSecret, "")
+		raw, err := json.Marshal(payload.Custom)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res := call(http.MethodPost, "/api/model-checks/animations/models", string(raw), false); res.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated list accepted: %d", res.Code)
+		}
+		res := call(http.MethodPost, "/api/model-checks/animations/models", string(raw), true)
+		if res.Code != http.StatusOK || res.Header().Get("Cache-Control") != "no-store" || strings.Contains(res.Body.String(), fixtureSecret) || !strings.Contains(res.Body.String(), `"models":["custom-model"]`) {
+			t.Fatalf("custom model list: %d %s", res.Code, res.Body)
+		}
+	})
 }

@@ -43,6 +43,7 @@ export const accountCreationSettingsSchema = z.object({
   loadFactor: z
     .string()
     .trim()
+    .max(128, "负载因子不能超过 128 个字符")
     .refine(
       (value) =>
         value === "" ||

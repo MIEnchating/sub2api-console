@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Controller, type UseFormReturn } from "react-hook-form";
 import { api, type KumaTemplate } from "@/api";
 import { FormField } from "@/App";
-import { Textarea } from "@/components/ui/textarea";
+import { JsonEditorField } from "@/components/json-editor/form-field";
 import {
   Select,
   SelectContent,
@@ -131,13 +131,14 @@ export function TemplateRequestForm(props: {
             htmlFor="template-headers"
             error={errors.headers?.message}
           >
-            <Textarea
+            <JsonEditorField
               id="template-headers"
-              {...form.register("headers")}
+              aria-label="请求头（JSON）"
+              control={form.control}
+              name="headers"
               disabled={disabled}
               aria-invalid={!!errors.headers}
               placeholder="可选，填写需要发送的请求头"
-              className="min-h-24 font-mono"
             />
           </FormField>
         </div>

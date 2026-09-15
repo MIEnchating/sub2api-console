@@ -32,6 +32,10 @@ type Repository interface {
 	PersistAuthRecoveryOutcomes(context.Context, []business.AuthRecoveryOutcome, string) (business.AuthRecoverySummary, error)
 }
 
+type progressRepository interface {
+	PersistAuthRecoveryProgress(context.Context, []business.AuthRecoveryOutcome, business.AuthRecoveryOutcome, string) (business.AuthRecoverySummary, error)
+}
+
 type HostMetadataSource interface {
 	UpstreamAuthSeed(context.Context, string) (*business.UpstreamAuthSeed, error)
 }
@@ -337,6 +341,7 @@ func (s *Service) RecoverInvalid(ctx context.Context, hosts []string, actor stri
 		return business.AuthRecoverySummary{}, err
 	}
 	result, err := s.recoverRecords(ctx, records, actor)
+	result.Summary.Results = result.Outcomes
 	return result.Summary, err
 }
 
@@ -578,7 +583,13 @@ func (s *Service) recoverRecords(ctx context.Context, records []configstore.Auth
 		// Persist after every host. A cancellation or process restart can then
 		// recover the exact completed prefix instead of losing the whole batch.
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-		persisted, persistErr := s.repository.PersistAuthRecoveryOutcomes(persistCtx, outcomes, actor)
+		var persisted business.AuthRecoverySummary
+		var persistErr error
+		if repository, ok := s.repository.(progressRepository); ok {
+			persisted, persistErr = repository.PersistAuthRecoveryProgress(persistCtx, outcomes, outcome, actor)
+		} else {
+			persisted, persistErr = s.repository.PersistAuthRecoveryOutcomes(persistCtx, outcomes, actor)
+		}
 		cancel()
 		if persistErr != nil {
 			// Refresh tokens may be single-use. A projection failure must not

@@ -21,8 +21,8 @@ test("接口模式补全地址，模型和消息同步到默认收起的请求�
   const toggle = dialog.getByRole("button", { name: "查看请求体" });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await toggle.click();
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/custom-model/);
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(/检查服务是否正常/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/custom-model/);
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(/检查服务是否正常/);
   await dialog.getByRole("button", { name: "收起请求体" }).click();
   await dialog.getByRole("button", { name: "保存模板" }).click();
   await expect(dialog).toBeHidden();

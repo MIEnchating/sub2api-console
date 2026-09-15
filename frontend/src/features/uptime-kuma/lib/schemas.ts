@@ -117,7 +117,8 @@ export const createMonitorSchema = (existingAuthMethod?: string) =>
       if (!o) return;
       if (
         ["http", "keyword"].includes(values.type) &&
-        ((values.template_id && values.template_auth_override) ||
+        (!values.template_id ||
+          values.template_auth_override ||
           existingAuthMethod !== undefined) &&
         o.auth_method !== existingAuthMethod &&
         !o.clear_auth
@@ -174,13 +175,15 @@ export const createMonitorSchema = (existingAuthMethod?: string) =>
           });
         }
       }
-      for (const code of o.accepted_status_codes)
-        if (!/^[1-5]\d{2}(-[1-5]\d{2})?$/.test(code))
+      for (const code of o.accepted_status_codes) {
+        const [start, end = start] = code.split("-").map(Number);
+        if (!/^[1-5]\d{2}(-[1-5]\d{2})?$/.test(code) || start > end)
           ctx.addIssue({
             code: "custom",
             path: ["options", "accepted_status_codes"],
-            message: "正常状态码格式：200-299 或 301",
+            message: "正常状态码格式：200-299 或 301，区间起始值不能大于结束值",
           });
+      }
     });
 export const monitorSchema = createMonitorSchema();
 export type MonitorValues = z.infer<typeof monitorSchema>;

@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, GripVertical, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
+import { SortableList, SortableItem } from "@/components/sortable-list";
 import type { KumaMonitor } from "@/api";
 import { FormField } from "@/App";
 import { MultiSelect } from "@/components/multi-select";
@@ -17,7 +17,6 @@ export function StatusPageMonitors(props: {
   onChange: (value: PublicMonitors) => void;
 }) {
   const names = new Map(props.monitors.map((monitor) => [monitor.id, monitor.name]));
-  const [draggingId, setDraggingId] = useState<number | null>(null);
   const nameOf = (id: number): string => names.get(id) ?? `监控项 #${id}`;
   const move = (index: number, target: number): void => {
     if (props.pending || target < 0 || target >= props.value.length) return;
@@ -55,91 +54,90 @@ export function StatusPageMonitors(props: {
         />
       </FormField>
       {props.value.length === 0 && <p className="text-muted-foreground text-sm">暂无展示监控项</p>}
-      <ol aria-label={`分组 ${props.groupIndex + 1} 展示顺序`} className="grid min-w-0 gap-2">
-        {props.value.map((monitor, index) => (
-          <li
-            key={monitor.id}
-            className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center"
-            draggable={!props.pending}
-            aria-grabbed={draggingId === monitor.id}
-            onDragStart={(event) => {
-              if (props.pending) return;
-              setDraggingId(monitor.id);
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", String(monitor.id));
-            }}
-            onDragEnd={() => setDraggingId(null)}
-            onDragOver={(event) => {
-              if (draggingId !== null && draggingId !== monitor.id) event.preventDefault();
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              const sourceId = Number(event.dataTransfer.getData("text/plain"));
-              const sourceIndex = props.value.findIndex((item) => item.id === sourceId);
-              const targetIndex = props.value.findIndex((item) => item.id === monitor.id);
-              if (sourceIndex >= 0 && targetIndex >= 0 && sourceIndex !== targetIndex)
-                move(sourceIndex, targetIndex);
-              setDraggingId(null);
-            }}
-          >
-            <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-sm [overflow-wrap:anywhere]">
-              <GripVertical aria-hidden="true" className="shrink-0 text-muted-foreground" />
-              {nameOf(monitor.id)}
-            </span>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  aria-label={`公开${nameOf(monitor.id)}的监控地址`}
-                  checked={monitor.sendUrl}
-                  disabled={props.pending}
-                  onCheckedChange={(checked) =>
-                    props.onChange(
-                      props.value.map((item) =>
-                        item.id === monitor.id ? { ...item, sendUrl: checked } : item,
-                      ),
-                    )
-                  }
-                />
-                公开地址
-              </label>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`上移监控项 ${nameOf(monitor.id)}`}
-                  disabled={props.pending || index === 0}
-                  onClick={() => move(index, index - 1)}
+      <SortableList
+        items={props.value.map((monitor) => ({
+          id: String(monitor.id),
+          label: nameOf(monitor.id),
+        }))}
+        disabled={props.pending}
+        onMove={move}
+      >
+        <ol aria-label={`分组 ${props.groupIndex + 1} 展示顺序`} className="grid min-w-0 gap-2">
+          {props.value.map((monitor, index) => (
+            <SortableItem
+              key={monitor.id}
+              id={String(monitor.id)}
+              label={nameOf(monitor.id)}
+              disabled={props.pending}
+            >
+              {(sortable) => (
+                <li
+                  ref={sortable.ref}
+                  style={sortable.style}
+                  className="flex min-w-0 flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center"
+                  data-dragging={sortable.dragging || undefined}
                 >
-                  <ArrowUp aria-hidden="true" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`下移监控项 ${nameOf(monitor.id)}`}
-                  disabled={props.pending || index === props.value.length - 1}
-                  onClick={() => move(index, index + 1)}
-                >
-                  <ArrowDown aria-hidden="true" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`移除监控项 ${nameOf(monitor.id)}`}
-                  disabled={props.pending}
-                  onClick={() =>
-                    props.onChange(props.value.filter((item) => item.id !== monitor.id))
-                  }
-                >
-                  <Trash2 aria-hidden="true" />
-                </Button>
-              </div>
-            </div>
-          </li>
-        ))}
-      </ol>
+                  <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-sm [overflow-wrap:anywhere]">
+                    {sortable.handle}
+                    {nameOf(monitor.id)}
+                  </span>
+                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        aria-label={`公开${nameOf(monitor.id)}的监控地址`}
+                        checked={monitor.sendUrl}
+                        disabled={props.pending}
+                        onCheckedChange={(checked) =>
+                          props.onChange(
+                            props.value.map((item) =>
+                              item.id === monitor.id ? { ...item, sendUrl: checked } : item,
+                            ),
+                          )
+                        }
+                      />
+                      公开地址
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`上移监控项 ${nameOf(monitor.id)}`}
+                        disabled={props.pending || index === 0}
+                        onClick={() => move(index, index - 1)}
+                      >
+                        <ArrowUp aria-hidden="true" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`下移监控项 ${nameOf(monitor.id)}`}
+                        disabled={props.pending || index === props.value.length - 1}
+                        onClick={() => move(index, index + 1)}
+                      >
+                        <ArrowDown aria-hidden="true" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`移除监控项 ${nameOf(monitor.id)}`}
+                        disabled={props.pending}
+                        onClick={() =>
+                          props.onChange(props.value.filter((item) => item.id !== monitor.id))
+                        }
+                      >
+                        <Trash2 aria-hidden="true" />
+                      </Button>
+                    </div>
+                  </div>
+                </li>
+              )}
+            </SortableItem>
+          ))}
+        </ol>
+      </SortableList>
     </div>
   );
 }

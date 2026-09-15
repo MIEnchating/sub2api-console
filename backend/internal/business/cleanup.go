@@ -271,6 +271,20 @@ func confirmAccountDeleteScope(
 	return nil
 }
 
+func (s *Store) removeDeletedAccountPolicyReferences(ctx context.Context, tx *sql.Tx, accountIDs []string, now string) error {
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	document, err := s.readPolicyDocument(ctx, tx, "control-plane")
+	if err != nil || document == nil {
+		return err
+	}
+	for _, accountID := range accountIDs {
+		removeAccountPolicyReferences(document, accountID)
+	}
+	return s.writePolicyDocument(ctx, tx, "control-plane", document, now)
+}
+
 func removeAccountPolicyReferences(document map[string]any, accountID string) {
 	if models, ok := document["account_test_models"].(map[string]any); ok {
 		delete(models, accountID)

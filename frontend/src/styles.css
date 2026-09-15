@@ -10,25 +10,15 @@ body:has(#root [data-slot="sidebar-wrapper"]),
   overflow: hidden;
 }
 
-/* Keep panel headings aligned with the New API card header. Rows start directly
- * below the divider; adding an extra first-row margin makes dense tables look
- * disconnected and creates the excessive bottom whitespace seen in compact
- * views. */
-.console-panel-heading {
-  min-height: 3.5rem !important;
-  padding-block: 0.875rem !important;
-}
-
-/* New API uses compact cards for table/list panels while regular form cards
- * retain the primitive's default gap and vertical padding. */
-.console-page [data-slot="card"]:has(> .console-panel-heading),
-.console-page [data-slot="card"]:has(> [data-slot="card-content"].p-0) {
-  gap: 0;
-  padding-block: 0;
-}
-
 /* Error banners must remain inside their parent action/content row. */
 [role="alert"] {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin,
+  .animate-pulse {
+    animation: none;
+  }
 }

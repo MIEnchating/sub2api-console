@@ -98,7 +98,7 @@ function MetricCard(props: {
         <div className="min-w-0 flex-1">
           <p className="text-muted-foreground text-sm">{props.label}</p>
           {props.loading ? (
-            <Skeleton className="mt-1.5 h-6 w-20" />
+            <Skeleton className="mt-0.5 h-6 w-20" />
           ) : (
             <strong className="mt-0.5 block wrap-anywhere text-xl leading-6 font-semibold tabular-nums">
               {props.value ?? "—"}
@@ -173,18 +173,24 @@ function GroupHealthCard(props: { health: GroupHealth; onOpen: () => void }) {
 
 function MatrixSkeleton() {
   return Array.from({ length: 6 }, (_, index) => (
-    <div className="border-border min-h-48 rounded-[6px] border p-4" key={index}>
+    <div
+      aria-hidden="true"
+      className="border-border flex min-h-48 min-w-0 flex-col rounded-[6px] border p-4"
+      key={index}
+    >
       <div className="flex justify-between gap-4">
-        <Skeleton className="h-6 w-28" />
-        <Skeleton className="h-6 w-20 rounded-full" />
+        <Skeleton className="h-5 w-28" />
+        <Skeleton className="h-5 w-16 shrink-0" />
       </div>
-      <Skeleton className="mt-2 h-4 w-40" />
-      <div className="mt-8 flex items-end justify-between">
-        <Skeleton className="h-5 w-20 rounded-full" />
+      <Skeleton className="mt-1 h-4 w-40" />
+      <div className="mt-4 flex items-end justify-between">
+        <Skeleton className="h-5 w-20" />
         <Skeleton className="h-9 w-14" />
       </div>
-      <Skeleton className="mt-5 h-2 w-full" />
-      <Skeleton className="mt-5 h-4 w-40" />
+      <Skeleton className="mt-4 h-2 w-full" />
+      <div className="mt-auto pt-4">
+        <Skeleton className="h-4 w-40" />
+      </div>
     </div>
   ));
 }
@@ -343,6 +349,9 @@ export function OverviewPage(props: OverviewPageProps) {
 
         <CardContent
           data-testid="group-health-grid"
+          role={loading ? "status" : undefined}
+          aria-label={loading ? "正在读取分组健康" : undefined}
+          aria-busy={loading}
           className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3"
         >
           {loading && <MatrixSkeleton />}

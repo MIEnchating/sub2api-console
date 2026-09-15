@@ -31,7 +31,25 @@ describe("global focus policy", () => {
       // trigger; account-operation-buttons interaction tests protect that lifecycle.
       const allowsAccountDialogFocus =
         relativePath === "features/accounts/components/account-operation-buttons.tsx";
-      if (allowsDropdownSearchFocus || allowsKeyboardNavigationFocus || allowsAccountDialogFocus)
+      // Raw pricing details focus their heading and restore the selected model;
+      // raw-pricing-source.e2e.ts verifies both transitions and dialog close focus.
+      const allowsPricingDetailFocus = [
+        "features/newapi-management/components/raw-pricing-model-browser.tsx",
+        "features/newapi-management/components/raw-pricing-model-detail.tsx",
+      ].includes(relativePath);
+      // Editor commands return focus to the document, while search opens on its
+      // input; json-editor-search.e2e.ts protects keyboard entry and Escape.
+      const allowsJSONEditorFocus = [
+        "components/json-editor/editor.tsx",
+        "components/json-editor/search-panel.tsx",
+      ].includes(relativePath);
+      if (
+        allowsDropdownSearchFocus ||
+        allowsKeyboardNavigationFocus ||
+        allowsAccountDialogFocus ||
+        allowsPricingDetailFocus ||
+        allowsJSONEditorFocus
+      )
         return [];
       return source.includes(nativeFocusAttribute) ||
         programmaticFocusCall.test(source) ||

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin/loginproxy"
 )
 
 // Only fixed, pre-resolved HTTPS destinations are reachable through this proxy.
@@ -19,7 +21,11 @@ type loginProxy struct {
 	cancel   context.CancelFunc
 }
 
-func startLoginProxy(parent context.Context, destinations map[string]string) (*loginProxy, error) {
+func startLoginProxy(parent context.Context, destinations map[string]string, upstreamURL string, resolve loginproxy.Resolver) (*loginProxy, error) {
+	dialer, err := loginproxy.NewDialer(parent, loginproxy.Config{Destinations: destinations, UpstreamURL: upstreamURL, Resolve: resolve})
+	if err != nil {
+		return nil, err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -27,12 +33,12 @@ func startLoginProxy(parent context.Context, destinations map[string]string) (*l
 	ctx, cancel := context.WithCancel(parent)
 	p := &loginProxy{listener: listener, tunnels: map[net.Conn]struct{}{}, cancel: cancel}
 	p.server = &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8192, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		address, allowed := destinations[r.Host]
+		_, allowed := destinations[r.Host]
 		if r.Method != http.MethodConnect || !allowed {
 			http.Error(w, "Destination not permitted", http.StatusForbidden)
 			return
 		}
-		upstream, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", address)
+		upstream, err := dialer.DialContext(ctx, "tcp", r.Host)
 		if err != nil {
 			http.Error(w, "Upstream unavailable", http.StatusBadGateway)
 			return

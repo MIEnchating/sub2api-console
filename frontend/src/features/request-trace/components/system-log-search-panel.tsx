@@ -78,11 +78,14 @@ function readableDuration(value: string): string {
   return `${seconds} 秒 (${milliseconds} ms)`;
 }
 
+const tokenFormatter = new Intl.NumberFormat("zh-CN");
+
 function readableTokens(value: string | null | undefined): string {
   if (value === null || value === undefined || value === "") return "未提供";
+  if (/^\d+$/.test(value.trim())) return tokenFormatter.format(BigInt(value.trim()));
   const number = Number(value);
   if (!Number.isFinite(number)) return value;
-  return new Intl.NumberFormat("zh-CN").format(number);
+  return tokenFormatter.format(number);
 }
 
 export type ReadableUsage = {
@@ -362,7 +365,12 @@ export function SystemLogSearchPanel() {
       {submitted && (
         <DataTablePanel className="mt-3 flex-1 sm:mt-4">
           {logs.isLoading && (
-            <PageLoadingSkeleton label="正在读取 Sub2API 系统日志" variant="list" />
+            <PageLoadingSkeleton
+              label="正在读取 Sub2API 系统日志"
+              variant="list"
+              fill
+              framed={false}
+            />
           )}
           {!logs.isLoading && logPage && logPage.items.length > 0 && (
             <>

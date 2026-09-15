@@ -377,11 +377,11 @@ export function ModelCheckResult(props: { task: Task }) {
               <TooltipTrigger
                 render={<p className="text-muted-foreground mt-1 truncate text-xs" />}
               >
-                画像版本 {profileVersion}
+                规则版本 {profileVersion}
                 {profileFingerprint ? ` · ${profileFingerprint.slice(0, 12)}` : ""}
               </TooltipTrigger>
               <TooltipContent className="max-w-md break-all">
-                {profileFingerprint ?? `画像版本 ${profileVersion}`}
+                {profileFingerprint ?? `规则版本 ${profileVersion}`}
               </TooltipContent>
             </Tooltip>
           ) : null}

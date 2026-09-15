@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toast, Toaster } from "sonner";
 
-import type { ModelCheckConfiguration } from "@/api";
+import { api, type ModelCheckConfiguration } from "@/api";
 
 import { ModelCheckConfigurationDialog } from "../model-check-configuration-dialog";
 
@@ -70,47 +71,142 @@ const configuration: ModelCheckConfiguration = {
   history: [],
 };
 
-function renderDialog() {
+const clients: QueryClient[] = [];
+
+function renderDialog(initial = configuration) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
-  client.setQueryData(["model-check-configuration"], configuration);
+  clients.push(client);
+  client.setQueryData(["model-check-configuration"], initial);
   render(
     <QueryClientProvider client={client}>
+      <Toaster />
       <ModelCheckConfigurationDialog open onOpenChange={() => undefined} />
     </QueryClientProvider>,
   );
+  return client;
 }
 
-describe("模型检测画像管理弹窗", () => {
-  it("展示生效版本、题目统计和草稿发布状态", () => {
+describe("模型检测规则管理弹窗", () => {
+  it("首次打开显示两个系列的生效规则和题目，JSON 编辑默认收起", () => {
     renderDialog();
 
-    expect(screen.getByRole("dialog", { name: "检测题库与行为画像" })).toBeVisible();
-    expect(screen.getByText("profile-current", { selector: "p" })).toBeVisible();
-    expect(screen.getByText("1 个")).toBeVisible();
-    expect(screen.getByText("2 道")).toBeVisible();
-    expect(screen.getByRole("button", { name: "发布生效" })).toBeDisabled();
-    const editor = screen.getByRole<HTMLTextAreaElement>("textbox", {
-      name: "题库与画像 JSON",
-    });
-    expect(editor.value).toContain('"claude_profiles"');
+    expect(screen.getByRole("dialog", { name: "检测规则与题库" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "规则与题目" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "claude-opus-5" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "gpt-5.6-sol" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "gpt-5.6-luna" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "gpt-5.6-terra" })).toBeVisible();
+    expect(screen.queryByText("选择答案")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "判定标准" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("回答特征匹配下限")).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "规则与题库 JSON" })).not.toBeInTheDocument();
   });
 
   it("输入无效 JSON 时显示字段错误且不提交", async () => {
     const user = userEvent.setup();
     renderDialog();
-    const editor = screen.getByRole("textbox", { name: "题库与画像 JSON" });
+    await user.click(screen.getByRole("tab", { name: "高级设置" }));
+    const editor = await screen.findByRole("textbox", { name: "规则与题库 JSON" });
 
-    fireEvent.change(editor, { target: { value: "{" } });
+    await user.click(editor);
+    await user.keyboard("{Control>}a{/Control}");
+    await user.paste("{");
     await user.click(screen.getByRole("button", { name: "保存草稿" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("配置必须是有效的 JSON 对象");
   });
+
+  it("保存规则失败时保留输入并允许重试，只显示一次悬浮错误", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ detail: "配置版本冲突，请重新读取" }, { status: 409 })),
+    );
+    renderDialog();
+    await userEvent.click(screen.getByRole("tab", { name: "高级设置" }));
+    const note = screen.getByRole("textbox", { name: "版本说明" });
+    fireEvent.change(note, { target: { value: "保留这次修改" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+    expect(await screen.findByText("配置版本冲突，请重新读取")).toBeVisible();
+    expect(screen.getAllByText("配置版本冲突，请重新读取")).toHaveLength(1);
+    expect(note).toHaveValue("保留这次修改");
+    expect(screen.getByRole("button", { name: "保存草稿" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "发布生效" })).toBeDisabled();
+  });
 });
 
-afterEach(() => vi.unstubAllGlobals());
-it("画像配置读取中提供具名轻量反馈并禁止保存", () => {
+afterEach(() => {
+  cleanup();
+  clients.splice(0).forEach((client) => client.clear());
+  toast.dismiss();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+it("规则后台刷新时保留编辑草稿，保存仍校验开始编辑时的指纹", async () => {
+  const save = vi.spyOn(api, "saveModelCheckDraft").mockRejectedValue(new Error("配置版本冲突"));
+  const client = renderDialog();
+  await userEvent.click(screen.getByRole("tab", { name: "高级设置" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "版本说明" }), {
+    target: { value: "本地草稿" },
+  });
+  await act(async () =>
+    client.setQueryData(["model-check-configuration"], {
+      ...configuration,
+      active: {
+        ...configuration.active,
+        id: "profile-next",
+        note: "远端更新",
+        fingerprint: "next-fingerprint",
+      },
+    }),
+  );
+  await screen.findByText("profile-next");
+  expect(screen.getByRole("textbox", { name: "版本说明" })).toHaveValue("本地草稿");
+  await userEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expected_fingerprint: configuration.active.fingerprint,
+        note: "本地草稿",
+      }),
+    ),
+  );
+});
+
+it.each([
+  { action: "发布生效", confirm: "确认发布", method: "publishModelCheckDraft" as const },
+  { action: "删除草稿", confirm: "确认删除", method: "discardModelCheckDraft" as const },
+])("$action 确认期间版本刷新时仍只操作原先确认的草稿", async (fixture) => {
+  const request = vi.spyOn(api, fixture.method).mockRejectedValue(new Error("草稿版本已变化"));
+  const draft = {
+    ...configuration.active,
+    id: "draft-original",
+    status: "draft" as const,
+    fingerprint: "original-draft",
+  };
+  const initial = { ...configuration, draft };
+  const client = renderDialog(initial);
+  await userEvent.click(screen.getByRole("tab", { name: "高级设置" }));
+  await userEvent.click(screen.getByRole("button", { name: fixture.action }));
+  await act(async () =>
+    client.setQueryData(["model-check-configuration"], {
+      ...initial,
+      draft: { ...draft, id: "draft-next", fingerprint: "next-draft" },
+    }),
+  );
+  await screen.findByText("draft-next");
+  await userEvent.click(screen.getByRole("button", { name: fixture.confirm }));
+  await waitFor(() => expect(request).toHaveBeenCalledWith("original-draft"));
+});
+it("规则读取中保留关闭入口，尚未进入高级设置时不提供保存操作", () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(() => new Promise<Response>(() => {})),
@@ -121,11 +217,58 @@ it("画像配置读取中提供具名轻量反馈并禁止保存", () => {
       <ModelCheckConfigurationDialog open onOpenChange={vi.fn()} />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("status", { name: "正在读取画像配置" })).toHaveAttribute(
+  expect(screen.getByRole("status", { name: "正在读取检测规则" })).toHaveAttribute(
     "aria-busy",
     "true",
   );
-  expect(screen.getByRole("button", { name: "保存草稿" })).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "保存草稿" })).not.toBeInTheDocument();
+  expect(within(screen.getByRole("dialog")).getByRole("button", { name: "关闭" })).toBeEnabled();
   view.unmount();
   client.clear();
+});
+
+it("恢复历史版本确认期间配置刷新时保留原目标指纹", async () => {
+  const restore = vi
+    .spyOn(api, "restoreModelCheckVersion")
+    .mockRejectedValue(new Error("配置版本已变化"));
+  const initial = {
+    ...configuration,
+    history: [
+      {
+        ...configuration.active,
+        id: "history-1",
+        note: "历史版本",
+        claude_profiles: 1,
+        probe_count: 2,
+      },
+    ],
+  };
+  const client = renderDialog(initial);
+  await userEvent.click(screen.getByRole("tab", { name: "高级设置" }));
+  await userEvent.click(screen.getByRole("button", { name: "版本历史" }));
+  await userEvent.click(
+    within(screen.getByRole("dialog", { name: "版本历史" })).getByRole("button", {
+      name: "恢复为草稿",
+    }),
+  );
+  await screen.findByRole("dialog", { name: "恢复历史规则" });
+  await act(async () =>
+    client.setQueryData(["model-check-configuration"], {
+      ...initial,
+      active: { ...configuration.active, id: "profile-next", fingerprint: "next-fingerprint" },
+    }),
+  );
+  await screen.findByText("profile-next");
+  await userEvent.click(
+    within(screen.getByRole("dialog", { name: "恢复历史规则" })).getByRole("button", {
+      name: "恢复为草稿",
+    }),
+  );
+  await waitFor(() =>
+    expect(restore).toHaveBeenCalledWith(
+      "history-1",
+      configuration.active.fingerprint,
+      "恢复自版本 history-1",
+    ),
+  );
 });

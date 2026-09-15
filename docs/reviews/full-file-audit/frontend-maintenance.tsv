@@ -1,0 +1,2 @@
+frontend/src/features/account-workbench/__tests__/maintenance-refresh.test.tsx	2d370a29efc21e5c6c9403f3ea588476978812a87a1f02ef74a052dbb90bd644	fixed	逐行审查；后台版本更新的草稿、原版本提交、任务、pending与键盘重置回归
+frontend/src/features/account-workbench/components/workbench-maintenance.tsx	eae7d733c6ad55958ce25e5feaefc6859e86c7e31dede39285680c60137d66e5	fixed	逐行审查；移除版本key重挂载，保留编辑基线与执行状态，增加显式重置修改

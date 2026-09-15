@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AccountCreationSettingsSkeleton } from "./account-creation-settings-skeleton";
 import { Switch } from "@/components/ui/switch";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
@@ -72,9 +73,7 @@ function groupOptions(
   for (const group of settings.groups) {
     if (!names.has(group.group_id)) names.set(group.group_id, `分组 ${group.group_id}`);
   }
-  return [...names]
-    .map(([id, name]) => ({ id, name }))
-    .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  return [...names].map(([id, name]) => ({ id, name }));
 }
 
 export function AccountCreationSettingsCard(props: {
@@ -153,8 +152,8 @@ export function AccountCreationSettingsCard(props: {
     onError: (error) => notifyOperationError(error, "账号设置保存失败"),
   });
 
-  function saveDefault(policy: AccountCreationPolicy): void {
-    save.mutate({
+  async function saveDefault(policy: AccountCreationPolicy): Promise<void> {
+    await save.mutateAsync({
       settings: {
         default: policy,
         groups: currentSettings.groups.map((group) => ({ ...group })),
@@ -164,16 +163,16 @@ export function AccountCreationSettingsCard(props: {
     });
   }
 
-  function saveGroup(
+  async function saveGroup(
     groupID: string,
     groupName: string,
     policy: AccountCreationPolicy | null,
-  ): void {
+  ): Promise<void> {
     const nextGroups = currentSettings.groups
       .filter((group) => group.group_id !== groupID)
       .map((group) => ({ ...group }));
     if (policy) nextGroups.push({ group_id: groupID, ...policy });
-    save.mutate({
+    await save.mutateAsync({
       settings: {
         default: currentSettings.default,
         groups: nextGroups,
@@ -183,8 +182,8 @@ export function AccountCreationSettingsCard(props: {
     });
   }
 
-  function savePlatformProbeModels(models: Record<string, string>): void {
-    save.mutate({
+  async function savePlatformProbeModels(models: Record<string, string>): Promise<void> {
+    await save.mutateAsync({
       settings: {
         default: currentSettings.default,
         groups: currentSettings.groups.map((group) => ({ ...group })),
@@ -195,17 +194,7 @@ export function AccountCreationSettingsCard(props: {
   }
 
   if (settings.isPlaceholderData || (settings.isLoading && settings.data === undefined)) {
-    return (
-      <Card size="sm" className="h-full" aria-label="正在读取账号设置">
-        <CardHeader>
-          <CardTitle>账号设置</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <Skeleton className="h-9" />
-          <Skeleton className="h-40" />
-        </CardContent>
-      </Card>
-    );
+    return <AccountCreationSettingsSkeleton />;
   }
 
   const saveDisabled = save.isPending || Boolean(settings.error);
@@ -231,9 +220,16 @@ export function AccountCreationSettingsCard(props: {
   );
   if (groups.isLoading && groups.data === undefined) {
     groupSettingsContent = (
-      <div className="grid gap-2" aria-label="正在读取分组列表">
-        <Skeleton className="h-16" />
-        <Skeleton className="h-16" />
+      <div className="grid gap-2" role="status" aria-busy="true" aria-label="正在读取分组列表">
+        {[0, 1].map((index) => (
+          <div key={index} className="flex min-w-0 items-center gap-3 rounded-md border p-3">
+            <div className="grid min-w-0 flex-1 gap-2">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+            <Skeleton className="h-8 w-16" />
+          </div>
+        ))}
       </div>
     );
   } else if (availableGroups.length === 0) {
@@ -472,16 +468,21 @@ function GroupSettingsEditor(props: {
   initiallyExpanded: boolean;
   pending: boolean;
   disabled: boolean;
-  onSave: (policy: AccountCreationPolicy | null) => void;
+  onSave: (policy: AccountCreationPolicy | null) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(props.initiallyExpanded);
   const [enabled, setEnabled] = useState(props.policy !== undefined);
   const [enabledEdited, setEnabledEdited] = useState(false);
 
   useEffect(() => {
+    if (enabledEdited) return;
     setEnabled(props.policy !== undefined);
+  }, [enabledEdited, props.policy]);
+
+  async function savePolicy(policy: AccountCreationPolicy | null): Promise<void> {
+    await props.onSave(policy);
     setEnabledEdited(false);
-  }, [props.policy]);
+  }
 
   const summary = groupPolicySummary(props.policy, enabled, enabledEdited);
   const panelID = `account-group-settings-${props.group.id}`;
@@ -531,7 +532,7 @@ function GroupSettingsEditor(props: {
               disabled={props.disabled}
               forceDirty={enabledEdited}
               submitLabel={`保存 ${props.group.name} 设置`}
-              onSubmit={props.onSave}
+              onSubmit={savePolicy}
             />
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -539,7 +540,11 @@ function GroupSettingsEditor(props: {
               <Button
                 type="button"
                 disabled={props.disabled || !enabledEdited}
-                onClick={() => props.onSave(null)}
+                onClick={() => {
+                  void savePolicy(null).catch(() => {
+                    // 父级 mutation 已展示错误，保留待保存的继承设置。
+                  });
+                }}
               >
                 <Save aria-hidden="true" />
                 {props.pending ? "保存中…" : "保存继承设置"}

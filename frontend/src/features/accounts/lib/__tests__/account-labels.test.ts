@@ -49,6 +49,10 @@ describe("account type dictionary", () => {
 });
 
 describe("group platform dictionary", () => {
+  it.each(["__proto__", "constructor"])("平台为 %s 时按原文显示未知平台", (platform) => {
+    expect(groupPlatformSummary({ ...group, platform })).toBe(platform);
+  });
+
   it("matches the Sub2API account and group platform catalogs", () => {
     expect(concreteAccountPlatformOptions.map((option) => option.value)).toEqual([
       "anthropic",

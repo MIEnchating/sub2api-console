@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './app-routes/__root'
 import { Route as IndexRouteImport } from './app-routes/index'
+import { Route as AccountWorkbenchRouteImport } from './app-routes/account-workbench'
 import { Route as AccountsRouteImport } from './app-routes/accounts'
 import { Route as AlertPolicyRouteImport } from './app-routes/alert-policy'
 import { Route as AlertsRouteImport } from './app-routes/alerts'
@@ -44,6 +45,11 @@ import { Route as UptimeKumaTemplatesRouteImport } from './app-routes/uptime-kum
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AccountWorkbenchRoute = AccountWorkbenchRouteImport.update({
+  id: '/account-workbench',
+  path: '/account-workbench',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AccountsRoute = AccountsRouteImport.update({
@@ -201,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
   '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
+  '/account-workbench': typeof AccountWorkbenchRoute
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
@@ -232,6 +239,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/account-workbench': typeof AccountWorkbenchRoute
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
@@ -266,6 +274,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
   '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
+  '/account-workbench': typeof AccountWorkbenchRoute
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
@@ -301,6 +310,7 @@ export interface FileRouteTypes {
     | '/'
     | '/newapi'
     | '/uptime-kuma'
+    | '/account-workbench'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
@@ -332,6 +342,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/account-workbench'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
@@ -365,6 +376,7 @@ export interface FileRouteTypes {
     | '/'
     | '/newapi'
     | '/uptime-kuma'
+    | '/account-workbench'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
@@ -399,6 +411,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   NewapiRouteRoute: typeof NewapiRouteRouteWithChildren
   UptimeKumaRouteRoute: typeof UptimeKumaRouteRouteWithChildren
+  AccountWorkbenchRoute: typeof AccountWorkbenchRoute
   AccountsRoute: typeof AccountsRoute
   AlertPolicyRoute: typeof AlertPolicyRoute
   AlertsRoute: typeof AlertsRoute
@@ -427,6 +440,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/account-workbench': {
+      id: '/account-workbench'
+      path: '/account-workbench'
+      fullPath: '/account-workbench'
+      preLoaderRoute: typeof AccountWorkbenchRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/accounts': {
@@ -684,6 +704,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   NewapiRouteRoute: NewapiRouteRouteWithChildren,
   UptimeKumaRouteRoute: UptimeKumaRouteRouteWithChildren,
+  AccountWorkbenchRoute: AccountWorkbenchRoute,
   AccountsRoute: AccountsRoute,
   AlertPolicyRoute: AlertPolicyRoute,
   AlertsRoute: AlertsRoute,

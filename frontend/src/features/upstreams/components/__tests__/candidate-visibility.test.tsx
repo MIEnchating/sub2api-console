@@ -1,12 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defaultOnlyShowEnabledOnboardingGroups } from "../../lib/onboarding-candidate-visibility";
 import { OnboardingCandidateVisibilityFilter } from "../onboarding-candidate-visibility-filter";
 
-beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterAll(() => vi.unstubAllGlobals());
 
 function VisibilityFilterHarness() {

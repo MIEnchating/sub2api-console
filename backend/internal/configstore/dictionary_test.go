@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestDictionarySyncLeavesUnchangedEntriesUntouched(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	saved, err := store.SaveDictionary(ctx, DictionaryEntry{Kind: "group", Name: "主分组", Value: "10", Enabled: true}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SyncDictionaryValues(ctx, "group", []DictionaryEntry{{Name: saved.Name, Value: saved.Value}}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListDictionaries(ctx, "group")
+	if err != nil || len(items) != 1 || items[0] != saved {
+		t.Fatalf("unchanged entry rewritten: %v, %v", items, err)
+	}
+}
+
 func TestDictionaryCRUDAndReorder(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

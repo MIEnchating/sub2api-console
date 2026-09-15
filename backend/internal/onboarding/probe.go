@@ -612,23 +612,22 @@ func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, e
 	}
 
 	var lastPayload any
+	var contentPayload any
 	actualModel := ""
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, ":") || strings.HasPrefix(line, "event:") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "" || data == "[DONE]" {
 			continue
 		}
-		decoder := json.NewDecoder(strings.NewReader(data))
-		decoder.UseNumber()
-		var event any
-		if err := decoder.Decode(&event); err != nil {
-			continue
+		event, err := decodeGatewayJSON([]byte(data), "上游探活流")
+		if err != nil {
+			return nil, actualModel, "", err
 		}
 		lastPayload = event
 		if actualModel == "" {
@@ -637,12 +636,15 @@ func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, e
 		if err := gatewayBusinessError(event); err != nil {
 			return event, actualModel, probeResponseText(event), err
 		}
-		if eventHasProbeContent(event) {
-			return event, actualModel, probeResponseText(event), nil
+		if contentPayload == nil && eventHasProbeContent(event) {
+			contentPayload = event
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, actualModel, "", errors.New("上游探活流读取失败")
+	}
+	if contentPayload != nil {
+		return contentPayload, actualModel, probeResponseText(contentPayload), nil
 	}
 	if lastPayload != nil {
 		return lastPayload, actualModel, probeResponseText(lastPayload), errors.New("上游探活流未返回有效文本")
@@ -798,6 +800,11 @@ func gatewayBusinessError(payload any) error {
 	object, ok := payload.(map[string]any)
 	if !ok {
 		return nil
+	}
+	if response, ok := object["response"].(map[string]any); ok {
+		if err := gatewayBusinessError(response); err != nil {
+			return err
+		}
 	}
 	failed := false
 	for _, key := range []string{"success", "ok"} {

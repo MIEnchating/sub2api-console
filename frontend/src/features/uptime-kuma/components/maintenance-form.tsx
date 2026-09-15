@@ -12,6 +12,7 @@ export function MaintenanceForm(props: {
   pending: boolean;
 }) {
   const strategy = props.form.watch("maintenance.strategy");
+  const daysError = props.form.formState.errors.maintenance?.days_of_month;
   const common = { form: props.form };
   return (
     <div className="grid gap-4 sm:grid-cols-2">
@@ -104,7 +105,7 @@ export function MaintenanceForm(props: {
       {strategy === "recurring-day-of-month" && (
         <FormField
           label="每月日期（逗号分隔）"
-          error={props.form.formState.errors.maintenance?.days_of_month?.message}
+          error={daysError?.message ?? (daysError ? "每个日期必须为 1 到 31 的整数" : undefined)}
         >
           <Controller
             control={props.form.control}
@@ -112,6 +113,7 @@ export function MaintenanceForm(props: {
             render={({ field }) => (
               <Input
                 aria-label="每月日期（逗号分隔）"
+                aria-invalid={!!daysError}
                 value={field.value.join(",")}
                 onChange={(e) =>
                   field.onChange(e.target.value ? e.target.value.split(",").map(Number) : [])

@@ -34,6 +34,7 @@ export function useAnimationTasks(active = true) {
   const state = collectAnimationTasks(tasks, submitting);
   const run = useMutation({
     mutationFn: api.runAnimation,
+    gcTime: 0,
     onSuccess: (created) => {
       client.setQueryData(["model-animation", "task", created.id], created);
       setCreatedIDs((current) => [...new Set([...current, created.id])]);
@@ -52,6 +53,7 @@ export function useAnimationTasks(active = true) {
     onError: (error) => notifyOperationError(error, "动画检测取消失败"),
   });
   const mutateAsync = run.mutateAsync;
+  const resetMutation = run.reset;
   const start = useCallback(
     async (request: AnimationRequest): Promise<boolean> => {
       // Guard synchronously too: a second click can precede React's next render.
@@ -74,11 +76,12 @@ export function useAnimationTasks(active = true) {
       } catch {
         return false;
       } finally {
+        resetMutation();
         for (const target of request.targets) submittingRef.current.delete(target.account_id);
         setSubmitting(new Set(submittingRef.current));
       }
     },
-    [client, ids, mutateAsync],
+    [client, ids, mutateAsync, resetMutation],
   );
   const cancelActive = useCallback(async (): Promise<void> => {
     const taskIDs = [...state.activeTaskIDs];
@@ -88,6 +91,7 @@ export function useAnimationTasks(active = true) {
     ...state,
     start,
     historyError: history.isError || queries.some((query) => query.isError),
+    historyLoading: history.isPending || queries.some((query) => query.isLoading),
     retryingHistory: history.isFetching || queries.some((query) => query.isFetching),
     retryHistory: (): void => {
       if (history.isError) void history.refetch();

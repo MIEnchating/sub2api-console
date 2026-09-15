@@ -114,7 +114,7 @@ test("首次加载在剩余高度内展示骨架并禁用预览，读取完成�
     await route.fulfill({ json: catalog });
   });
   await page.goto("/pricing");
-  const loading = page.getByRole("status", { name: "正在读取价格数据" });
+  const loading = page.getByRole("status", { name: "正在读取价格目录" });
   try {
     await expect(loading).toBeVisible();
     await expect(

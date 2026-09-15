@@ -21,3 +21,14 @@ func TestInputAcceptsClickTextScrollAndKeyboardNavigation(t *testing.T) {
 		}
 	}
 }
+
+func TestReloadAcceptsOnlyTheFixedLoginPageWithoutAnArbitraryURL(t *testing.T) {
+	if err := (browserlogin.Input{Kind: "reload"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []browserlogin.Input{{Kind: "reload", Text: "https://private.example"}, {Kind: "reload", Key: "F5"}, {Kind: "reload", X: 1}} {
+		if input.Validate() == nil {
+			t.Fatal("reload accepted extra navigation parameters")
+		}
+	}
+}

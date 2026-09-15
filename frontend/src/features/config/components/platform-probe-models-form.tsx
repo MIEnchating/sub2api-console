@@ -29,31 +29,36 @@ const emptyPlatformProbeModels: PlatformProbeModelsValues = {
 };
 
 function isPlatformProbeKey(value: string): value is keyof PlatformProbeModelsValues {
-  return value in emptyPlatformProbeModels;
+  return Object.hasOwn(emptyPlatformProbeModels, value);
 }
 
 function platformProbeModelFormValues(models: Record<string, string>): PlatformProbeModelsValues {
   return {
     ...emptyPlatformProbeModels,
     ...Object.fromEntries(
-      Object.entries(models).filter(([platform]) => platform in emptyPlatformProbeModels),
+      Object.entries(models).filter(([platform]) => isPlatformProbeKey(platform)),
     ),
   } as PlatformProbeModelsValues;
 }
 
-function platformProbeModelsFromForm(values: PlatformProbeModelsValues): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(values)
-      .map(([platform, model]) => [platform, model.trim()] as const)
-      .filter((entry) => entry[1] !== ""),
-  );
+function platformProbeModelsFromForm(
+  values: PlatformProbeModelsValues,
+  current: Record<string, string>,
+): Record<string, string> {
+  const models = { ...current };
+  for (const [platform, value] of Object.entries(values)) {
+    const model = value.trim();
+    if (model) models[platform] = model;
+    else delete models[platform];
+  }
+  return models;
 }
 
 export function PlatformProbeModelsForm(props: {
   models: Record<string, string>;
   pending: boolean;
   disabled?: boolean;
-  onSubmit: (models: Record<string, string>) => void;
+  onSubmit: (models: Record<string, string>) => void | Promise<void>;
 }) {
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
@@ -63,10 +68,12 @@ export function PlatformProbeModelsForm(props: {
     resolver: zodResolver(platformProbeModelsSchema),
     defaultValues: platformProbeModelFormValues(props.models),
   });
+  const isDirty = form.formState.isDirty;
 
   useEffect(() => {
+    if (isDirty) return;
     form.reset(platformProbeModelFormValues(props.models));
-  }, [form, props.models]);
+  }, [form, isDirty, props.models]);
   const platformOptions = orderedDictionaryOptions(
     platformDictionary.data?.items,
     groupPlatformOptions,
@@ -77,7 +84,14 @@ export function PlatformProbeModelsForm(props: {
   return (
     <form
       className="flex h-full min-h-0 flex-col overflow-hidden"
-      onSubmit={form.handleSubmit((values) => props.onSubmit(platformProbeModelsFromForm(values)))}
+      onSubmit={form.handleSubmit(async (values) => {
+        try {
+          await props.onSubmit(platformProbeModelsFromForm(values, props.models));
+          form.reset(values);
+        } catch {
+          // 父级 mutation 展示写入错误，表单保留草稿供重试。
+        }
+      })}
     >
       <div
         data-slot="settings-scroll"
@@ -91,7 +105,7 @@ export function PlatformProbeModelsForm(props: {
               <Input
                 aria-label={`${platform.label} 默认探活模型`}
                 aria-invalid={Boolean(error)}
-                disabled={props.disabled}
+                disabled={props.disabled || props.pending}
                 placeholder="留空则自动选择"
                 {...form.register(platform.value)}
               />

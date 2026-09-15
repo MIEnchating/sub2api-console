@@ -157,15 +157,29 @@ func (s *Service) RequestTrace(ctx context.Context, requestID string) (business.
 		return result, nil
 	}
 	result.AccountID = stringPointer(accountID)
-	detail, detailErr := s.accounts.Account(traceCtx, accountID)
-	if detailErr == nil {
+	var detail *business.AccountDetail
+	if s.accounts != nil {
+		detail, _ = s.accounts.Account(traceCtx, accountID)
+	}
+	if detail != nil {
 		result.AccountName = stringPointer(detail.Name)
-		for index := range result.Records {
-			if fromSystemLogs {
-				result.Records[index] = systemLogRecord(result.Records[index].ID, matchedRows[index], detail, result.AccountName)
-			} else {
-				result.Records[index] = usageRecord(result.Records[index].ID, matchedRows[index], detail, result.AccountName)
-			}
+	}
+	details := map[string]*business.AccountDetail{accountID: detail}
+	for index, row := range matchedRows {
+		rowAccountID := accountIDFromRow(row)
+		rowDetail, found := details[rowAccountID]
+		if !found && s.accounts != nil && positiveID(rowAccountID) {
+			rowDetail, _ = s.accounts.Account(traceCtx, rowAccountID)
+			details[rowAccountID] = rowDetail
+		}
+		var rowName *string
+		if rowDetail != nil {
+			rowName = stringPointer(rowDetail.Name)
+		}
+		if fromSystemLogs {
+			result.Records[index] = systemLogRecord(result.Records[index].ID, row, rowDetail, rowName)
+		} else {
+			result.Records[index] = usageRecord(result.Records[index].ID, row, rowDetail, rowName)
 		}
 	}
 

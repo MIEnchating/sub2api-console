@@ -131,14 +131,21 @@ export function RegularCheckPanel() {
       ? commonDetectableModels(modelLists, capabilities.data)
       : [];
   const detectableModelKey = detectableModels.join("\u0000");
+  const modelsReady =
+    !!capabilities.data &&
+    !capabilities.isError &&
+    !modelsRefreshing &&
+    !modelsError &&
+    modelLists.length === selectedAccountIDs.length;
 
   useEffect(() => {
+    if (selectedAccountIDs.length > 0 && !modelsReady) return;
     const available = new Set(detectableModels);
     const next = selectedModels.filter((model) => available.has(model));
     if (next.length !== selectedModels.length) {
       form.setValue("models", next, { shouldValidate: true });
     }
-  }, [detectableModelKey, form, selectedModels]);
+  }, [detectableModelKey, form, modelsReady, selectedAccountIDs.length, selectedModels]);
 
   const task = useQuery({
     queryKey: ["model-check-task", taskID],
@@ -269,7 +276,7 @@ export function RegularCheckPanel() {
       <PageActions>
         <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
           <Database aria-hidden="true" />
-          检测画像
+          检测规则与题库
         </Button>
         {task.data ? (
           <Button type="button" variant="outline" onClick={() => setResultOpen(true)}>
@@ -283,6 +290,8 @@ export function RegularCheckPanel() {
           accounts={filteredAccounts}
           accountsLoading={accounts.isLoading}
           accountsError={accounts.error instanceof Error ? accounts.error.message : null}
+          accountsRefreshing={accounts.isFetching}
+          onRetryAccounts={() => void accounts.refetch()}
           accountQuery={accountQuery}
           accountGroups={Array.from(
             new Set((accounts.data ?? []).flatMap((account) => account.groups)),
@@ -292,7 +301,7 @@ export function RegularCheckPanel() {
           models={detectableModels}
           selectedModels={selectedModels}
           modelsLoading={modelsLoading || capabilities.isLoading}
-          modelsRefreshing={modelsRefreshing}
+          modelsRefreshing={modelsRefreshing || capabilities.isFetching}
           modelsError={
             modelsError ?? (capabilities.error instanceof Error ? capabilities.error.message : null)
           }
@@ -337,7 +346,12 @@ export function RegularCheckPanel() {
               shouldValidate: true,
             })
           }
-          onRefreshModels={() => void Promise.all(modelQueries.map((query) => query.refetch()))}
+          onRefreshModels={() =>
+            void Promise.all([
+              ...modelQueries.map((query) => query.refetch()),
+              ...(capabilities.isError ? [capabilities.refetch()] : []),
+            ])
+          }
           onRoundsChange={(value) =>
             form.setValue("rounds", Number.isFinite(value) ? value : 1, {
               shouldValidate: true,

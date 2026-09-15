@@ -1,5 +1,5 @@
 import { useQueries } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode, type ReactElement } from "react";
+import { useState, type ReactNode, type ReactElement } from "react";
 import { useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
@@ -31,11 +31,6 @@ export function AnimationModelSettings(props: {
     })),
   });
   const loading = queries.some((query) => query.isFetching);
-  const failedQuery = queries.find((query) => query.isError);
-  const failedMessage = failedQuery?.error instanceof Error ? failedQuery.error.message : null;
-  useEffect(() => {
-    if (failedMessage) toast.error(`模型列表读取失败：${failedMessage}`);
-  }, [failedMessage]);
   const ready =
     requested &&
     queries.length > 0 &&

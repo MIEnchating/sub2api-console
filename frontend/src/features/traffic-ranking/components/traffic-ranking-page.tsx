@@ -5,6 +5,7 @@ import { api, type TrafficRankingSort } from "@/api";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { TableEmptyState } from "@/components/data-table/empty-state";
+import { ContentRetry } from "@/components/content-retry";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { PageActions } from "@/components/page-actions";
@@ -14,7 +15,7 @@ import { RefreshButton } from "@/components/refresh-button";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { SearchField } from "@/components/data-table/search-field";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import {
   Table,
   TableBody,
@@ -58,13 +59,7 @@ function latestTrafficLabel(value: string | null): string {
 }
 
 function TrafficRankingSkeleton() {
-  return (
-    <div className="space-y-2 p-3" aria-label="流量排行加载中">
-      {Array.from({ length: 6 }, (_, index) => (
-        <Skeleton key={index} className="h-12 w-full" />
-      ))}
-    </div>
-  );
+  return <PageLoadingSkeleton label="流量排行加载中" fill framed={false} />;
 }
 
 export function TrafficRankingPage() {
@@ -192,7 +187,15 @@ export function TrafficRankingPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pagination.visibleItems.length === 0 ? (
+                    {!ranking.data && ranking.isError && (
+                      <TableEmptyState columns={10}>
+                        <ContentRetry
+                          pending={ranking.isFetching}
+                          onRetry={() => void ranking.refetch()}
+                        />
+                      </TableEmptyState>
+                    )}
+                    {ranking.data && pagination.visibleItems.length === 0 ? (
                       <TableEmptyState columns={10}>当前范围没有匹配的账号流量</TableEmptyState>
                     ) : (
                       pagination.visibleItems.map((row) => {

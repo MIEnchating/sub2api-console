@@ -639,8 +639,9 @@ var advancedRules = map[string]map[string]advancedRule{
 	"price_management": {
 		"enabled": {kind: "bool"}, "profit_margin": {kind: "number", minimum: 0, maximum: 0.99},
 		"exchange_group_sets": {kind: "string_groups"}, "exchange_group_set_names": {kind: "strings"},
-		"interval_seconds":  {kind: "int", minimum: 30, maximum: 86400},
-		"write_concurrency": {kind: "int", minimum: 1, maximum: 16},
+		"group_min_cost_multipliers": {kind: "group_decimal_minimums"},
+		"interval_seconds":           {kind: "int", minimum: 30, maximum: 86400},
+		"write_concurrency":          {kind: "int", minimum: 1, maximum: 16},
 	},
 	"writeback": {
 		"concurrency": {kind: "int", minimum: 1, maximum: 16}, "verification": {kind: "bool"},
@@ -674,6 +675,22 @@ func validateAdvancedSection(section string, values map[string]any) (map[string]
 		batchPercent, _ := result["batch_percent"].(int64)
 		if batchSize > 0 && batchPercent > 0 {
 			return nil, errors.New("账号倍率同步每轮只能配置固定数量或比例之一")
+		}
+	}
+	if section == "price_management" {
+		minimums, _ := result["group_min_cost_multipliers"].(map[string]any)
+		sets, _ := result["exchange_group_sets"].([]any)
+		managedIDs := map[string]struct{}{}
+		for _, rawSet := range sets {
+			groupIDs := rawSet.([]any)
+			for _, rawID := range groupIDs {
+				managedIDs[rawID.(string)] = struct{}{}
+			}
+		}
+		for groupID := range minimums {
+			if _, managed := managedIDs[groupID]; !managed {
+				return nil, fmt.Errorf("高级策略字段 price_management.group_min_cost_multipliers.%s 的分组必须属于互换组", groupID)
+			}
 		}
 	}
 	return result, nil
@@ -730,6 +747,31 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 		return text, nil
 	case "strings":
 		return normalizedStringArray(path, value)
+	case "group_decimal_minimums":
+		minimums, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("高级策略字段 %s 必须是对象", path)
+		}
+		result := make(map[string]any, len(minimums))
+		for groupID, rawMinimum := range minimums {
+			if !stableNumericID(groupID) {
+				return nil, fmt.Errorf("高级策略字段 %s 的分组 ID %q 无效", path, groupID)
+			}
+			minimum, ok := rawMinimum.(string)
+			if !ok {
+				return nil, fmt.Errorf("高级策略字段 %s.%s 必须是非负十进制字符串", path, groupID)
+			}
+			minimum = strings.TrimSpace(minimum)
+			if minimum == "" {
+				continue
+			}
+			parsed, valid := decimalutil.Parse(minimum)
+			if !valid || parsed.Sign() < 0 {
+				return nil, fmt.Errorf("高级策略字段 %s.%s 必须是非负十进制字符串", path, groupID)
+			}
+			result[groupID] = minimum
+		}
+		return result, nil
 	case "string_groups":
 		items, ok := value.([]any)
 		if !ok {

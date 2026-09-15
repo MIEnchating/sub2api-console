@@ -56,7 +56,7 @@ func (s *Store) HasFreshTraffic(ctx context.Context, accountID string, since, un
 
 func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *string) ([]EvidenceTarget, error) {
 	clauses := []string{}
-	arguments := []any{}
+	arguments := []any{time.Now().UTC().Add(time.Minute).Format(healthSampleTimeLayout)}
 	if accountID != nil {
 		clauses = append(clauses, "a.id=?")
 		arguments = append(arguments, strings.TrimSpace(*accountID))
@@ -75,7 +75,7 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1),
 		(SELECT st.updated_at FROM app_state st WHERE st.key='evidence-traffic-fetch:' || a.id),
 		(SELECT hs.observed_at FROM health_samples hs
-		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='active-probe'
+		 WHERE hs.account_id=a.id AND LOWER(REPLACE(hs.source,'_','-'))='active-probe' AND hs.observed_at<=?
 		 ORDER BY hs.observed_at DESC,hs.id DESC LIMIT 1)
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
 		LEFT JOIN app_state decision_epoch ON decision_epoch.key='routing-decision-epoch'`

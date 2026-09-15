@@ -460,6 +460,9 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := s.removeDeletedAccountPolicyReferences(ctx, tx, accountIDs, now); err != nil {
+		return MissingBindingCleanupResult{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE local_groups SET account_count=(
 		SELECT COUNT(*) FROM account_groups WHERE group_name=local_groups.name
 	),updated_at=?`, now); err != nil {

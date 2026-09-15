@@ -63,8 +63,13 @@ export function NewAPIPlatformDialog(props: Props) {
   }, [form, props.platform, props.open]);
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!props.pending) props.onOpenChange(open);
+      }}
+    >
+      <DialogContent className="sm:max-w-lg" showCloseButton={!props.pending}>
         <DialogHeader>
           <DialogTitle>
             {props.platform ? "编辑 New API 平台配置" : "添加 New API 平台配置"}
@@ -74,16 +79,20 @@ export function NewAPIPlatformDialog(props: Props) {
           <form
             id="newapi-platform-form"
             className="grid gap-4"
-            onSubmit={form.handleSubmit(props.onSubmit)}
+            onSubmit={form.handleSubmit((values) => {
+              if (!props.pending) props.onSubmit(values);
+            })}
           >
             <Field label="平台名称" error={form.formState.errors.name?.message}>
               <Input
+                disabled={props.pending}
                 {...form.register("name")}
                 aria-invalid={Boolean(form.formState.errors.name)}
               />
             </Field>
             <Field label="平台地址" error={form.formState.errors.base_url?.message}>
               <Input
+                disabled={props.pending}
                 placeholder="https://newapi.example.com"
                 {...form.register("base_url")}
                 aria-invalid={Boolean(form.formState.errors.base_url)}
@@ -92,12 +101,14 @@ export function NewAPIPlatformDialog(props: Props) {
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="User ID" error={form.formState.errors.user_id?.message}>
                 <Input
+                  disabled={props.pending}
                   {...form.register("user_id")}
                   aria-invalid={Boolean(form.formState.errors.user_id)}
                 />
               </Field>
               <Field label="Admin Key" error={form.formState.errors.admin_key?.message}>
                 <Input
+                  disabled={props.pending}
                   type="password"
                   autoComplete="new-password"
                   placeholder={sensitiveFieldPlaceholder(Boolean(props.platform), "sk-...")}
@@ -109,7 +120,11 @@ export function NewAPIPlatformDialog(props: Props) {
           </form>
         </DialogBody>
         <DialogFooter>
-          <Button variant="outline" onClick={() => props.onOpenChange(false)}>
+          <Button
+            variant="outline"
+            disabled={props.pending}
+            onClick={() => props.onOpenChange(false)}
+          >
             取消
           </Button>
           <Button form="newapi-platform-form" type="submit" disabled={props.pending}>

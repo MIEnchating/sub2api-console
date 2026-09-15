@@ -216,6 +216,15 @@ func ClassifySample(sample Sample, policy map[string]any) (Classified, error) {
 	return classify(sample, config), nil
 }
 
+// NewSampleClassifier parses a policy once for a batch of samples.
+func NewSampleClassifier(policy map[string]any) (func(Sample) Classified, error) {
+	config, err := parseScoringConfig(policy)
+	if err != nil {
+		return nil, err
+	}
+	return func(sample Sample) Classified { return classify(sample, config) }, nil
+}
+
 func classify(sample Sample, config scoringConfig) Classified {
 	result := normalizeReason(sample.Result)
 	reason := normalizeReason(sample.FailureReason)

@@ -105,7 +105,7 @@ describe("模型检测结果", () => {
     expect(markup).toContain("12.4%");
     expect(markup).toContain("2/2");
     expect(markup).toContain("rewritten-model");
-    expect(markup).toContain("画像版本 profile-20260905");
+    expect(markup).toContain("规则版本 profile-20260905");
     expect(markup).toContain("0123456789ab");
     expect(markup).toContain('data-table-panel=""');
   });

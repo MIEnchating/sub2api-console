@@ -1145,15 +1145,17 @@ func writeSchedulablePayload(ctx context.Context, admin Admin, accountID string,
 }
 
 type values struct {
-	schedulable *bool
-	priority    *int64
-	loadFactor  *string
-	concurrency *int64
-	status      *string
+	schedulable       *bool
+	priority          *int64
+	loadFactor        *string
+	loadFactorPresent bool
+	concurrency       *int64
+	status            *string
 }
 
 func remoteValues(raw map[string]any) (values, error) {
 	result := values{}
+	_, result.loadFactorPresent = raw["load_factor"]
 	if value, present := raw["schedulable"]; present && value != nil {
 		parsed, ok := value.(bool)
 		if !ok {
@@ -1272,6 +1274,15 @@ func parseWritePolicy(document map[string]any) (writePolicy, error) {
 }
 
 func (s *Service) baseline(ctx context.Context, accountID, targetFingerprint string) (business.RoutingBaseline, bool, error) {
+	if repository, ok := s.repository.(interface {
+		RoutingBaseline(context.Context, string) (business.RoutingBaseline, bool, error)
+	}); ok {
+		item, found, err := repository.RoutingBaseline(ctx, accountID)
+		if err == nil && found && item.TargetFingerprint != targetFingerprint {
+			return business.RoutingBaseline{}, false, ErrRoutingBaselineTargetChanged
+		}
+		return item, found, err
+	}
 	rows, err := s.repository.RoutingBaselines(ctx)
 	if err != nil {
 		return business.RoutingBaseline{}, false, err
@@ -1360,6 +1371,9 @@ func changedFields(desired map[string]any, current values) map[string]any {
 		case "load_factor":
 			wanted, err := optionalNonnegativeIntegerText(value)
 			matched = err == nil && wanted != nil && current.loadFactor != nil && *wanted == *current.loadFactor
+			if err == nil && wanted != nil && *wanted == "0" && current.loadFactorPresent && current.loadFactor == nil {
+				matched = true
+			}
 		case "status":
 			wanted, ok := value.(string)
 			matched = ok && current.status != nil && strings.EqualFold(strings.TrimSpace(wanted), *current.status)

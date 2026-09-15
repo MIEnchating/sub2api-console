@@ -16,6 +16,30 @@ type animationCheckService interface {
 	SaveAnimationSchedule(context.Context, modelcheck.AnimationSchedule, string) ([]modelcheck.AnimationScheduleView, error)
 }
 
+func (s *Server) customAnimationModels(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	service, ok := s.modelChecks.(interface {
+		CustomAnimationModels(context.Context, modelcheck.AnimationCustomEndpoint) ([]string, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型列表服务尚未就绪")
+		return
+	}
+	var payload modelcheck.AnimationCustomEndpoint
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "模型列表参数无效")
+		return
+	}
+	models, err := service.CustomAnimationModels(c.Request.Context(), payload)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, "模型列表读取失败："+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, struct {
+		Models []string `json:"models"`
+	}{Models: models})
+}
+
 func (s *Server) animationService(c *gin.Context) (animationCheckService, bool) {
 	service, ok := s.modelChecks.(animationCheckService)
 	if !ok {

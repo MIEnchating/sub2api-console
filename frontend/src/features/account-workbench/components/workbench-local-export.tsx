@@ -1,0 +1,54 @@
+import { useState, type ReactElement } from "react";
+import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
+import { WorkbenchImport } from "./workbench-import";
+import { WorkbenchOAuth } from "./workbench-oauth";
+import { WorkbenchOAuthBatch } from "./workbench-oauth-batch";
+import { WorkbenchMixed } from "./workbench-mixed";
+import { WorkbenchExportArtifacts } from "./workbench-export-artifacts";
+import { WorkbenchSMSReceipts } from "./workbench-sms-receipts";
+
+const modes = [
+  { id: "json", label: "JSON 转换" },
+  { id: "oauth", label: "单个授权" },
+  { id: "batch", label: "批量授权" },
+  { id: "mixed", label: "混合运行" },
+  { id: "files", label: "私有文件" },
+  { id: "receipts", label: "短信订单" },
+  { id: "profiles", label: "登录资料" },
+] as const;
+
+export function WorkbenchLocalExport(): ReactElement {
+  const [mode, setMode] = useState<(typeof modes)[number]["id"]>("json");
+  return (
+    <div className="min-w-0 space-y-4">
+      <SegmentedControl role="tablist" aria-label="本地导出来源">
+        {modes.map((item) => (
+          <SegmentedControlItem
+            key={item.id}
+            id={`local-export-${item.id}`}
+            role="tab"
+            selected={mode === item.id}
+            aria-controls="local-export-content"
+            onClick={() => setMode(item.id)}
+          >
+            {item.label}
+          </SegmentedControlItem>
+        ))}
+      </SegmentedControl>
+      <section
+        id="local-export-content"
+        role="tabpanel"
+        aria-labelledby={`local-export-${mode}`}
+        className="min-w-0"
+      >
+        {mode === "json" && <WorkbenchImport output="export" scope="local-export" />}
+        {mode === "oauth" && <WorkbenchOAuth scope="local-export" />}
+        {mode === "batch" && <WorkbenchOAuthBatch scope="local-export" />}
+        {mode === "mixed" && <WorkbenchMixed scope="local-export" />}
+        {mode === "files" && <WorkbenchExportArtifacts scope="local-export" />}
+        {mode === "receipts" && <WorkbenchSMSReceipts scope="local-export" />}
+        {mode === "profiles" && <WorkbenchOAuthBatch scope="local-export" localProfiles />}
+      </section>
+    </div>
+  );
+}

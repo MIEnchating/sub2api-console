@@ -46,6 +46,10 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
 }
 
 describe("accountPoolState", () => {
+  it.each(["__proto__", "constructor"])("健康状态为 %s 时归入待探测", (health) => {
+    expect(accountPoolState(account({ health })).value).toBe("unknown");
+  });
+
   it("人工优先位单独统计和筛选，不计入成本墙拦截或待探测", () => {
     const manual = account({ manual_priority: 1, health: "manual_priority" });
     const accounts = [manual, account({ health: "cost_blocked" })];

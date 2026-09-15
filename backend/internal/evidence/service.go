@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +43,8 @@ type Options struct {
 	FetchTraffic   bool
 	StrictFallback bool
 	ProbesAllowed  bool
+	// ProbeBatchSize bounds automatic rounds by account count; zero keeps the full scope.
+	ProbeBatchSize int
 	Now            time.Time
 }
 
@@ -51,6 +54,7 @@ type Result struct {
 	TrafficPersisted      int      `json:"traffic_persisted"`
 	TrafficChecked        bool     `json:"traffic_checked"`
 	ProbesPersisted       int      `json:"probes_persisted"`
+	ProbesDeferred        int      `json:"probes_deferred"`
 	MalformedRows         int      `json:"malformed_rows"`
 	MonitoredAccounts     int      `json:"monitored_accounts"`
 	FallbackReason        *string  `json:"fallback_reason"`
@@ -66,8 +70,10 @@ type Plan struct {
 }
 
 type Service struct {
-	repository Repository
-	probes     ProbeRunner
+	repository      Repository
+	probes          ProbeRunner
+	probeBatchMu    sync.Mutex
+	probeSelectedAt map[string]time.Time
 }
 
 type collectionPolicy struct {
@@ -122,6 +128,9 @@ func (s *Service) Plan(ctx context.Context, policy map[string]any, accountID, gr
 }
 
 func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admin, options Options) (Result, error) {
+	if options.ProbeBatchSize < 0 {
+		return Result{}, errors.New("主动探测批次大小不能为负数")
+	}
 	configured, err := parsePolicy(policy)
 	if err != nil {
 		return Result{}, err
@@ -219,6 +228,11 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		} else if s.probes == nil {
 			result.SourceErrors = append(result.SourceErrors, "需要主动探测回退，但探测执行器不可用")
 		} else {
+			if options.ProbeBatchSize > 0 {
+				selected := s.selectProbeBatch(dueAccounts, byAccount, now, options.ProbeBatchSize)
+				result.ProbesDeferred = len(dueAccounts) - len(selected)
+				dueAccounts = selected
+			}
 			started := time.Now()
 			request := probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName, Automatic: true}
 			if configured.source == "traffic" && configured.skipFreshTraffic && admin != nil && !monitoringUnavailable {
@@ -449,7 +463,14 @@ func parsePolicy(policy map[string]any) (collectionPolicy, error) {
 	if err != nil {
 		return collectionPolicy{}, err
 	}
-	managedGroupMode, _ := scope["managed_group_mode"].(string)
+	managedGroupMode := ""
+	if raw, present := scope["managed_group_mode"]; present && raw != nil {
+		var valid bool
+		managedGroupMode, valid = raw.(string)
+		if !valid {
+			return collectionPolicy{}, errors.New("scope.managed_group_mode 配置无效")
+		}
+	}
 	managedGroupMode = strings.ToLower(strings.TrimSpace(managedGroupMode))
 	if managedGroupMode == "" {
 		managedGroupMode = "all"
@@ -512,7 +533,8 @@ func fetchTrafficAccounts(ctx context.Context, admin Admin, accountIDs []string,
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
-				if ctx.Err() != nil {
+				if err := ctx.Err(); err != nil {
+					result[index] = trafficFetchOutcome{accountID: accountIDs[index], err: err}
 					return
 				}
 				accountID := accountIDs[index]
@@ -920,7 +942,8 @@ func optionalDecimalText(raw any) (*string, bool) {
 	if text == "" {
 		return nil, false
 	}
-	if _, err := strconv.ParseFloat(text, 64); err != nil {
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
 		return nil, false
 	}
 	return &text, true

@@ -26,6 +26,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountdelete"
 	"github.com/MIEnchating/sub2api-console/backend/internal/accountops"
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountworkbench"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
@@ -62,6 +63,7 @@ const (
 )
 
 type Business interface {
+	DictionaryValues(context.Context, string) ([]configstore.DictionaryEntry, error)
 	Bootstrap(context.Context) error
 	Mode(context.Context) (string, error)
 	Ready(context.Context) (bool, error)
@@ -319,6 +321,7 @@ type Dependencies struct {
 	AccountDelete      AccountDeleteService
 	ProbeTasks         ProbeTaskEnqueuer
 	ModelChecks        ModelCheckService
+	AccountWorkbench   *accountworkbench.Service
 	UpstreamDetect     UpstreamDetector
 	UpstreamConfigs    UpstreamConfigurationService
 	UpstreamSync       UpstreamSyncTaskEnqueuer
@@ -356,6 +359,7 @@ type Server struct {
 	accountDelete      AccountDeleteService
 	probeTasks         ProbeTaskEnqueuer
 	modelChecks        ModelCheckService
+	accountWorkbench   *accountworkbench.Service
 	upstreamDetect     UpstreamDetector
 	upstreamConfigs    UpstreamConfigurationService
 	upstreamSync       UpstreamSyncTaskEnqueuer
@@ -378,10 +382,11 @@ const (
 )
 
 type initializeRequest struct {
-	Username     string `json:"username" binding:"required,min=2,max=80"`
-	Password     string `json:"password" binding:"required,min=10,max=256"`
-	AdminBaseURL string `json:"admin_base_url" binding:"max=2048"`
-	AdminKey     string `json:"admin_key" binding:"max=4096"`
+	LocalExportOnly bool   `json:"local_export_only,omitempty"`
+	Username        string `json:"username" binding:"required,min=2,max=80"`
+	Password        string `json:"password" binding:"required,min=10,max=256"`
+	AdminBaseURL    string `json:"admin_base_url" binding:"max=2048"`
+	AdminKey        string `json:"admin_key" binding:"max=4096"`
 }
 
 type loginRequest struct {
@@ -592,6 +597,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		accountDelete:      services.AccountDelete,
 		probeTasks:         services.ProbeTasks,
 		modelChecks:        services.ModelChecks,
+		accountWorkbench:   services.AccountWorkbench,
 		upstreamDetect:     services.UpstreamDetect,
 		upstreamConfigs:    services.UpstreamConfigs,
 		upstreamSync:       services.UpstreamSync,
@@ -761,6 +767,99 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/run", server.runInspection)
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
+	authorized.GET("/account-workbench/templates", server.accountWorkbenchTemplates)
+	authorized.POST("/account-workbench/oauth", server.accountWorkbenchStartOAuth)
+	authorized.GET("/account-workbench/oauth-checkpoints", server.accountWorkbenchOAuthCheckpoints)
+	authorized.POST("/account-workbench/oauth/:id/checkpoint", server.accountWorkbenchSaveOAuthCheckpoint)
+	authorized.POST("/account-workbench/oauth-checkpoints/:id/restore", server.accountWorkbenchRestoreOAuthCheckpoint)
+	authorized.DELETE("/account-workbench/oauth-checkpoints/:id", server.accountWorkbenchDeleteOAuthCheckpoint)
+	authorized.POST("/account-workbench/sms/options", server.accountWorkbenchSMSOptions)
+	authorized.GET("/account-workbench/sms/receipts", server.accountWorkbenchSMSReceipts)
+	authorized.POST("/account-workbench/sms/receipts/:id/inspect", server.accountWorkbenchInspectSMSReceipt)
+	authorized.GET("/account-workbench/oauth/:id", server.accountWorkbenchReadOAuth)
+	authorized.GET("/account-workbench/oauth/:id/sms", server.accountWorkbenchReadOAuthSMS)
+	authorized.POST("/account-workbench/oauth/:id/sms", server.accountWorkbenchAttachOAuthSMS)
+	authorized.GET("/account-workbench/oauth/:id/security-source", server.accountWorkbenchSecuritySource)
+	authorized.POST("/account-workbench/oauth-checkpoints/:id/security", server.accountWorkbenchCheckpointSecurity)
+	authorized.POST("/account-workbench/security/:id/confirm-identity", server.accountWorkbenchConfirmSecurityIdentity)
+	authorized.POST("/account-workbench/security/:id/oauth", server.accountWorkbenchOAuthAfterSecurity)
+	authorized.POST("/account-workbench/oauth/:id/input", server.accountWorkbenchInputOAuth)
+	authorized.POST("/account-workbench/oauth/:id/finish", server.accountWorkbenchFinishOAuth)
+	authorized.DELETE("/account-workbench/oauth/:id", server.accountWorkbenchCancelOAuth)
+	authorized.POST("/account-workbench/oauth/:id/preview", server.accountWorkbenchOAuthPreview)
+	authorized.POST("/account-workbench/oauth-batches/preview", server.accountWorkbenchBatchPreview)
+	authorized.DELETE("/account-workbench/oauth-batches/preview/:id", server.accountWorkbenchDiscardBatchPreview)
+	authorized.POST("/account-workbench/oauth-batches", server.accountWorkbenchStartBatch)
+	authorized.GET("/account-workbench/queue-recoveries", server.accountWorkbenchQueueRecoveries)
+	authorized.POST("/account-workbench/queue-recoveries/:id/oauth", server.accountWorkbenchResumeOAuthQueue)
+	authorized.POST("/account-workbench/queue-recoveries/:id/mixed", server.accountWorkbenchResumeMixedQueue)
+	authorized.DELETE("/account-workbench/queue-recoveries/:id", server.accountWorkbenchDeleteQueueRecovery)
+	authorized.GET("/account-workbench/oauth-batches/:id", server.accountWorkbenchReadBatch)
+	authorized.DELETE("/account-workbench/oauth-batches/:id", server.accountWorkbenchCancelBatch)
+	authorized.POST("/account-workbench/oauth-batches/:id/preview", server.accountWorkbenchBatchImportPreview)
+	authorized.POST("/account-workbench/security", server.accountWorkbenchStartSecurity)
+	authorized.GET("/account-workbench/security/:id", server.accountWorkbenchReadSecurity)
+	authorized.POST("/account-workbench/security/:id/input", server.accountWorkbenchInputSecurity)
+	authorized.POST("/account-workbench/security/:id/continue", server.accountWorkbenchContinueSecurity)
+	authorized.DELETE("/account-workbench/security/:id", server.accountWorkbenchCancelSecurity)
+	authorized.POST("/account-workbench/security-batches/preview", server.accountWorkbenchSecurityBatchPreview)
+	authorized.DELETE("/account-workbench/security-batches/preview/:id", server.accountWorkbenchDiscardSecurityBatchPreview)
+	authorized.POST("/account-workbench/security-batches", server.accountWorkbenchStartSecurityBatch)
+	authorized.GET("/account-workbench/security-batches/:id", server.accountWorkbenchReadSecurityBatch)
+	authorized.DELETE("/account-workbench/security-batches/:id", server.accountWorkbenchCancelSecurityBatch)
+	authorized.POST("/account-workbench/templates", server.accountWorkbenchSaveTemplate)
+	authorized.PUT("/account-workbench/templates/:template_id", server.accountWorkbenchSaveTemplate)
+	authorized.PUT("/account-workbench/templates/:template_id/preference", server.accountWorkbenchPreferTemplate)
+	authorized.DELETE("/account-workbench/templates/:template_id", server.accountWorkbenchDeleteTemplate)
+	authorized.POST("/account-workbench/template-from-account", server.accountWorkbenchTemplateFromAccount)
+	authorized.POST("/account-workbench/preview", server.accountWorkbenchPreview)
+	authorized.DELETE("/account-workbench/preview/:preview_id", server.accountWorkbenchDeletePreview)
+	authorized.POST("/account-workbench/import", server.accountWorkbenchImport)
+	authorized.POST("/account-workbench/retry-preview", server.accountWorkbenchRetryPreview)
+	authorized.POST("/account-workbench/runs/preview", server.accountWorkbenchRunPreview)
+	authorized.DELETE("/account-workbench/runs/preview/:id", server.accountWorkbenchDiscardRunPreview)
+	authorized.POST("/account-workbench/runs", server.accountWorkbenchStartRun)
+	authorized.GET("/account-workbench/runs/:id", server.accountWorkbenchReadRun)
+	authorized.POST("/account-workbench/runs/:id/preview", server.accountWorkbenchRunResultPreview)
+	authorized.DELETE("/account-workbench/runs/:id", server.accountWorkbenchCancelRun)
+	authorized.POST("/account-workbench/exports/preview", server.accountWorkbenchExportPreview)
+	authorized.DELETE("/account-workbench/exports/preview/:id", server.accountWorkbenchDiscardExportPreview)
+	authorized.GET("/account-workbench/exports", server.accountWorkbenchExports)
+	authorized.GET("/account-workbench/local-exports", server.accountWorkbenchLocalExports)
+	authorized.DELETE("/account-workbench/local-exports/:id", server.accountWorkbenchDeleteLocalExport)
+	authorized.POST("/account-workbench/exports", server.accountWorkbenchExport)
+	authorized.POST("/account-workbench/exports/from-input", server.accountWorkbenchExportInput)
+	authorized.POST("/account-workbench/exports/profiles/preview", server.accountWorkbenchProfileExportPreview)
+	authorized.POST("/account-workbench/exports/profiles", server.accountWorkbenchExportProfiles)
+	authorized.POST("/account-workbench/exports/regenerate/preview", server.accountWorkbenchRegenerationPreview)
+	authorized.POST("/account-workbench/exports/regenerate", server.accountWorkbenchRegenerate)
+	authorized.DELETE("/account-workbench/exports/:id", server.accountWorkbenchDeleteExport)
+	authorized.GET("/account-workbench/history", server.accountWorkbenchHistory)
+	authorized.POST("/account-workbench/history/query", server.accountWorkbenchQueryHistory)
+	authorized.GET("/account-workbench/history/active", server.accountWorkbenchActiveHistory)
+	authorized.GET("/account-workbench/login-profiles", server.accountWorkbenchProfiles)
+	authorized.GET("/account-workbench/source-profiles", server.accountWorkbenchSourceProfiles)
+	authorized.POST("/account-workbench/source-profiles/source", server.accountWorkbenchSourceProfileIdentity)
+	authorized.POST("/account-workbench/source-profiles", server.accountWorkbenchSaveSourceProfile)
+	authorized.DELETE("/account-workbench/source-profiles/:id", server.accountWorkbenchDeleteSourceProfile)
+	authorized.POST("/account-workbench/source-profiles/:id/security", server.accountWorkbenchSourceProfileSecurity)
+	authorized.POST("/account-workbench/source-profiles/reauthorization/preview", server.accountWorkbenchSourceProfileAuthorization)
+	authorized.POST("/account-workbench/source-profiles/exports/preview", server.accountWorkbenchSourceProfileExportPreview)
+	authorized.POST("/account-workbench/source-profiles/exports", server.accountWorkbenchExportSourceProfiles)
+	authorized.POST("/account-workbench/login-profiles", server.accountWorkbenchSaveProfile)
+	authorized.POST("/account-workbench/login-profiles/security-result", server.accountWorkbenchProfileSecurity)
+	authorized.DELETE("/account-workbench/login-profiles/:profile_id", server.accountWorkbenchDeleteProfile)
+	authorized.POST("/account-workbench/reauthorization/preview", server.accountWorkbenchReauthorizationPreview)
+	authorized.POST("/account-workbench/history/delete", server.accountWorkbenchDeleteHistory)
+	authorized.POST("/account-workbench/history/cancel", server.accountWorkbenchCancelHistory)
+	authorized.POST("/account-workbench/cleanup/preview", server.accountWorkbenchCleanupPreview)
+	authorized.DELETE("/account-workbench/cleanup/preview/:id", server.accountWorkbenchDiscardCleanupPreview)
+	authorized.POST("/account-workbench/cleanup", server.accountWorkbenchCleanup)
+	authorized.GET("/account-workbench/maintenance", server.accountWorkbenchMaintenance)
+	authorized.PUT("/account-workbench/maintenance", server.accountWorkbenchSaveMaintenance)
+	authorized.POST("/account-workbench/maintenance/check", server.accountWorkbenchCheckMaintenance)
+	authorized.GET("/account-workbench/maintenance/authorization", server.accountWorkbenchMaintenanceAuthorization)
+	authorized.POST("/account-workbench/maintenance/authorization", server.accountWorkbenchAttachMaintenance)
 	authorized.GET("/model-checks/account-statuses", server.modelCheckAccountStatuses)
 	authorized.GET("/model-checks/configuration", server.modelCheckConfiguration)
 	authorized.PUT("/model-checks/configuration/draft", server.saveModelCheckDraft)
@@ -770,6 +869,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/model-checks/animations", server.animationCheckHistory)
 	authorized.POST("/model-checks/animations", server.runAnimationCheck)
+	authorized.POST("/model-checks/animations/models", server.customAnimationModels)
 	authorized.GET("/model-checks/animation-schedules", server.animationCheckSchedules)
 	authorized.PUT("/model-checks/animation-schedules/:id", server.saveAnimationCheckSchedule)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
@@ -875,7 +975,16 @@ func (s *Server) initialize(c *gin.Context) {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
-	if err := s.private.Initialize(c.Request.Context(), payload.Username, payload.Password, payload.AdminBaseURL, payload.AdminKey); err != nil {
+	if payload.LocalExportOnly && (strings.TrimSpace(payload.AdminBaseURL) != "" || strings.TrimSpace(payload.AdminKey) != "") {
+		writeError(c, http.StatusUnprocessableEntity, "独立导出初始化不能同时提交管理目标")
+		return
+	}
+	if payload.LocalExportOnly {
+		err = s.private.InitializeLocalExport(c.Request.Context(), payload.Username, payload.Password)
+	} else {
+		err = s.private.Initialize(c.Request.Context(), payload.Username, payload.Password, payload.AdminBaseURL, payload.AdminKey)
+	}
+	if err != nil {
 		writeError(c, http.StatusConflict, err.Error())
 		return
 	}
@@ -1693,16 +1802,17 @@ func (s *Server) enrichRecentResults(ctx context.Context, accounts []business.Ac
 	if current, err := s.business.ControlPolicy(ctx); err == nil && current != nil {
 		policy = current
 	}
+	classify, err := routing.NewSampleClassifier(policy)
+	if err != nil {
+		return
+	}
 	for accountIndex := range accounts {
 		for resultIndex := range accounts[accountIndex].RecentResults {
 			result := &accounts[accountIndex].RecentResults[resultIndex]
-			classification, err := routing.ClassifySample(routing.Sample{
+			classification := classify(routing.Sample{
 				Result: pointerText(result.Result), FailureReason: pointerText(result.FailureReason),
 				Source: result.Source, LatencyP95: result.ClassificationLatency, Payload: result.ClassificationPayload,
-			}, policy)
-			if err != nil {
-				continue
-			}
+			})
 			eventType := string(classification.Event)
 			score := classification.Score
 			result.EventType, result.Score = &eventType, &score
@@ -3097,7 +3207,7 @@ func groupDictionaryValue(row business.GroupStatus) string {
 	if row.ID != nil {
 		return strings.TrimSpace(*row.ID)
 	}
-	return strings.TrimSpace(row.Name)
+	return ""
 }
 
 func (s *Server) groupAllocation(c *gin.Context) {
@@ -5254,7 +5364,15 @@ func (s *Server) cancelTask(c *gin.Context) {
 		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
 		return
 	}
-	if s.taskCanceller.CancelTask(taskID) {
+	oauthCancelled := false
+	if task.Skill == accountworkbench.Skill && s.accountWorkbench != nil {
+		oauthCancelled, err = s.accountWorkbench.CancelOAuthTask(taskID)
+		if err != nil {
+			writeError(c, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	if s.taskCanceller.CancelTask(taskID) || oauthCancelled {
 		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
 		return
 	}
@@ -5897,32 +6015,15 @@ func (s *Server) listDictionaries(c *gin.Context) {
 	if kind == "" {
 		kind = "platform"
 	}
-	if s.business != nil {
-		values := make([]configstore.DictionaryEntry, 0)
-		if kind == "group" {
-			if groups, err := s.business.Groups(c.Request.Context()); err == nil {
-				for _, group := range groups {
-					if group.ID != nil && strings.TrimSpace(*group.ID) != "" {
-						values = append(values, configstore.DictionaryEntry{Name: group.Name, Value: *group.ID})
-					}
-				}
-			}
-		} else if kind == "platform" {
-			if accounts, err := s.business.Accounts(c.Request.Context()); err == nil {
-				seen := map[string]bool{}
-				for _, account := range accounts {
-					if account.Platform != nil && strings.TrimSpace(*account.Platform) != "" && !seen[*account.Platform] {
-						seen[*account.Platform] = true
-						values = append(values, configstore.DictionaryEntry{Name: *account.Platform, Value: *account.Platform})
-					}
-				}
-			}
+	if s.business != nil && (kind == "group" || kind == "platform") {
+		values, err := s.business.DictionaryValues(c.Request.Context(), kind)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "字典目录读取失败，请重试")
+			return
 		}
-		if kind == "group" || kind == "platform" {
-			if err := s.private.SyncDictionaryValues(c.Request.Context(), kind, values); err != nil {
-				writeError(c, http.StatusInternalServerError, "字典同步失败")
-				return
-			}
+		if err := s.private.SyncDictionaryValues(c.Request.Context(), kind, values); err != nil {
+			writeError(c, http.StatusInternalServerError, "字典同步失败")
+			return
 		}
 	}
 	items, err := s.private.ListDictionaries(c.Request.Context(), kind)
@@ -5987,12 +6088,16 @@ func (s *Server) reorderDictionaries(c *gin.Context) {
 		Kind string   `json:"kind"`
 		IDs  []string `json:"ids"`
 	}
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数无效"})
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusBadRequest, "请求参数无效，请提交完整的字典排序 JSON 对象")
 		return
 	}
 	if err := s.private.ReorderDictionaries(c.Request.Context(), payload.Kind, payload.IDs); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		status := http.StatusBadRequest
+		if errors.Is(err, configstore.ErrDictionaryConflict) {
+			status = http.StatusConflict
+		}
+		writeError(c, status, err.Error())
 		return
 	}
 	c.Status(http.StatusNoContent)

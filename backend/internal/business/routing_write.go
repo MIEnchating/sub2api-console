@@ -45,10 +45,32 @@ type RoutingReadback struct {
 }
 
 func (s *Store) RoutingBaselines(ctx context.Context) ([]RoutingBaseline, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT account_id,target_fingerprint,schedulable,priority,load_factor,concurrency,status,captured_at,
+	return s.routingBaselines(ctx, nil)
+}
+
+func (s *Store) RoutingBaseline(ctx context.Context, accountID string) (RoutingBaseline, bool, error) {
+	if !positiveNumericID(accountID) {
+		return RoutingBaseline{}, false, errors.New("账号必须使用有效的稳定 ID")
+	}
+	items, err := s.routingBaselines(ctx, &accountID)
+	if err != nil || len(items) == 0 {
+		return RoutingBaseline{}, false, err
+	}
+	return items[0], true, nil
+}
+
+func (s *Store) routingBaselines(ctx context.Context, accountID *string) ([]RoutingBaseline, error) {
+	query := `SELECT account_id,target_fingerprint,schedulable,priority,load_factor,concurrency,status,captured_at,
 		ownership_version,managed_schedulable,managed_priority,managed_load_factor,managed_concurrency,managed_status
-		FROM routing_baselines WHERE ownership_version<>2
-		ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`)
+		FROM routing_baselines WHERE ownership_version<>2`
+	arguments := []any{}
+	if accountID != nil {
+		query += ` AND account_id=?`
+		arguments = append(arguments, *accountID)
+	} else {
+		query += ` ORDER BY CASE WHEN account_id GLOB '[0-9]*' THEN CAST(account_id AS INTEGER) ELSE 0 END,account_id`
+	}
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}

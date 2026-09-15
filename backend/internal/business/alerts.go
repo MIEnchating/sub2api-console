@@ -368,8 +368,8 @@ func (s *Store) NotificationQueueDetails(ctx context.Context, channelKey string,
 		}
 		if incidentUsesStateChangeCooldown(incident) && found && previous.status == "transition" &&
 			!deliveryCooldownDue(previous.updatedAt, policy.StateChangeCooldownMinute, now) {
-			item.QueueStatus = "账号降级变化冷却中"
-			item.QueueReason = fmt.Sprintf("账号降级状态变化后等待 %d 分钟再通知", policy.StateChangeCooldownMinute)
+			item.QueueStatus = "状态变化冷却中"
+			item.QueueReason = fmt.Sprintf("状态变化后等待 %d 分钟再通知，避免短暂波动反复提醒", policy.StateChangeCooldownMinute)
 			result.ConsumerItems = append(result.ConsumerItems, item)
 			continue
 		}
@@ -416,7 +416,7 @@ func pointerTextValue(value *string) string {
 }
 
 func incidentUsesStateChangeCooldown(incident AlertIncident) bool {
-	return incident.EventType == "account.routing_degraded"
+	return incident.EventType == "account.routing_degraded" || incident.EventType == "account.routing_breaker"
 }
 
 func (s *Store) FinalizeAlertDelivery(ctx context.Context, channelKey string, outcomes []AlertDeliveryOutcome) error {

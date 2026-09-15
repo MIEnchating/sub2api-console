@@ -49,17 +49,13 @@ describe("manual upstream authentication form", () => {
     expect(markup).toContain("sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
   });
 
-  it("uses the dialog as the only scroll container for long headers", () => {
+  it("uses the shared JSON editor with formatting and a named input for headers", async () => {
     render(<ManualAuthHeadersEditor value="long-token" onChange={() => undefined} />);
-    const headers = screen.getByRole("textbox", { name: "Headers JSON" });
-    expect(headers).toHaveAttribute("wrap", "soft");
-    expect(headers).toHaveClass(
-      "max-h-none",
-      "overflow-hidden",
-      "resize-none",
-      "[overflow-wrap:anywhere]",
+    expect(await screen.findByRole("textbox", { name: "Headers JSON" })).toHaveAttribute(
+      "contenteditable",
+      "true",
     );
-    expect(headers).not.toHaveClass("max-h-96", "overflow-y-auto");
+    expect(screen.getByRole("button", { name: "格式化 JSON" })).toBeEnabled();
   });
 
   it("requires an unchecked explicit consent control before accepting an upstream agreement", () => {

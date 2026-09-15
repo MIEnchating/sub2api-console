@@ -22,6 +22,7 @@ import {
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { TableActionButton } from "@/components/data-table/table-action-button";
 import { TableEmptyState } from "@/components/data-table/empty-state";
+import { ContentRetry } from "@/components/content-retry";
 import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { SearchField } from "@/components/data-table/search-field";
 import { DataTablePagination } from "@/components/data-table/pagination";
@@ -89,7 +90,10 @@ export function KumaTemplatesPage() {
       />
       {query.error && <QueryErrorToast error={query.error} fallback="模板读取失败" />}
       <div className="flex h-full min-h-0 min-w-0 flex-col gap-3">
-        {query.isPending && <PageLoadingSkeleton label="正在读取功能模板…" variant="table" />}
+        {query.isPending && <PageLoadingSkeleton label="正在读取功能模板…" variant="table" fill />}
+        {!query.data && query.isError && (
+          <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
+        )}
         {query.data && (
           <>
             <TableFilterToolbar>

@@ -27,6 +27,23 @@ const alert: AlertIncident = {
 };
 
 describe("alert display labels", () => {
+  it.each([
+    ["类型", alertTypeLabel, "其他告警（__proto__）"],
+    ["恢复类型", (value: string) => alertTypeLabel(value, "recovered"), "其他告警（__proto__）"],
+    ["主题", alertSubjectLabel, "其他告警（__proto__）"],
+    ["原因", alertCauseLabel, "未分类原因（__proto__）"],
+    ["恢复原因", (value: string) => alertCauseLabel(value, "recovered"), "相关问题已恢复"],
+    ["状态", alertStatusLabel, "状态未知（__proto__）"],
+    ["通知状态", alertDeliveryLabel, "通知状态未知（__proto__）"],
+    [
+      "对象类型",
+      (value: string) => alertObjectLabel({ ...alert, object_id: "", object_kind: value }),
+      "告警对象（__proto__）",
+    ],
+  ] as const)("%s 为原型键时返回明确的未知文案", (_name, label, expected) => {
+    expect(label("__proto__")).toBe(expected);
+  });
+
   it("translates known alert fields into business language", () => {
     expect(alertSubjectLabel(alert.event_type)).toBe("账号主动探测");
     expect(alertTypeLabel(alert.event_type)).toBe("账号主动探测失败");

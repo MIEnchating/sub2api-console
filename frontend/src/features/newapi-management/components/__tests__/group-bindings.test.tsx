@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NewAPIGroupBindings } from "../group-bindings";
 
@@ -17,8 +17,7 @@ const bindings = groups.map((group) => ({
   sync_ratio: false,
 }));
 
-beforeAll(() => vi.stubGlobal("PointerEvent", MouseEvent));
-afterAll(() => vi.unstubAllGlobals());
+beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 
 describe("New API 分组绑定倍率", () => {
   it("编辑 Sub2API 管理平台倍率并开启同步后提交两端同步标记", async () => {

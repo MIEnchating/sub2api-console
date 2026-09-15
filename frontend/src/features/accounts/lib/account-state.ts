@@ -54,7 +54,8 @@ const aliases: Record<string, CanonicalAccountState> = {
 };
 
 function normalizeAccountState(value: string | null | undefined): CanonicalAccountState {
-  return aliases[(value ?? "").trim().toLowerCase()] ?? "unknown";
+  const key = (value ?? "").trim().toLowerCase();
+  return Object.hasOwn(aliases, key) ? aliases[key] : "unknown";
 }
 
 export function effectiveAccountState(account: AccountStatus): CanonicalAccountState {

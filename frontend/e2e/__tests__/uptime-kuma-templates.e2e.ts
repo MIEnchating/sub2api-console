@@ -33,8 +33,8 @@ test("功能模板支持新增、请求回显编辑和删除确认，旧导航�
     .click();
   dialog = page.getByRole("dialog", { name: "编辑功能模板" });
   await dialog.getByRole("button", { name: "查看请求体" }).click();
-  await expect(dialog.getByLabel("请求头（JSON）")).toHaveValue('{"X-Key":"saved-header"}');
-  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("请求头（JSON）")).toHaveText('{"X-Key":"saved-header"}');
+  await expect(dialog.getByLabel("请求体", { exact: true })).toHaveText(
     '{"model":"saved-model","messages":[]}',
   );
   await expect(dialog.getByRole("combobox", { name: "鉴权方式", exact: true })).toHaveCount(0);

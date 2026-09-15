@@ -80,7 +80,12 @@ export function defaultProbeModelForPlatform(
 ): string | null {
   const options = onboardingProbeModelOptions(models);
   if (options.length === 0) return null;
-  const configured = settings?.platform_probe_models?.[canonicalProbePlatform(platform)]?.trim();
+  const platformModels = settings?.platform_probe_models;
+  const platformKey = canonicalProbePlatform(platform);
+  const configured =
+    platformModels && Object.hasOwn(platformModels, platformKey)
+      ? platformModels[platformKey]?.trim()
+      : undefined;
   if (!configured) return options[0] ?? null;
   return (
     options.find((model) => model.toLocaleLowerCase() === configured.toLocaleLowerCase()) ??

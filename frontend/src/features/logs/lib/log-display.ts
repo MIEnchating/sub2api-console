@@ -642,6 +642,7 @@ const detailLabels: Record<string, string> = {
   monitoring_available: "监控数据可用",
   probe_duration_seconds: "主动探测耗时",
   probes_persisted: "已保存主动探测样本",
+  probes_deferred: "待后续巡检账号数",
   requested_source: "请求的数据来源",
   source_errors: "数据源错误",
   traffic_checked: "已检查真实流量",
@@ -708,13 +709,14 @@ export function logKindLabel(kind: UnifiedLogKind | UnifiedLogEntry["kind"]): st
 
 export function logTitleLabel(title: string): string {
   const normalized = title.trim();
-  return (
-    titleLabels[normalized] ?? operationTypeLabels[normalized] ?? normalized.replaceAll("_", " ")
-  );
+  if (Object.hasOwn(titleLabels, normalized)) return titleLabels[normalized];
+  if (Object.hasOwn(operationTypeLabels, normalized)) return operationTypeLabels[normalized];
+  return normalized.replaceAll("_", " ");
 }
 
 export function logStatusLabel(status: string): string {
-  return statusLabels[status.trim().toLowerCase()] ?? status;
+  const normalized = status.trim().toLowerCase();
+  return Object.hasOwn(statusLabels, normalized) ? statusLabels[normalized] : status;
 }
 
 export function logStateLabel(state: UnifiedLogState): string {
@@ -745,21 +747,24 @@ export function logStatusVariant(status: string): StatusVariant {
   return "info";
 }
 
+const logDateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+const logSecondsFormatter = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
+
 export function formatLogDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value || "未记录";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
+  return logDateFormatter.format(date);
 }
 
 export function logDetailLabel(key: string): string {
-  return detailLabels[key] ?? key.replaceAll("_", " ");
+  return Object.hasOwn(detailLabels, key) ? detailLabels[key] : key.replaceAll("_", " ");
 }
 
 function formatBooleanValue(key: string | undefined, value: boolean): string {
@@ -779,32 +784,40 @@ function formatBooleanValue(key: string | undefined, value: boolean): string {
 function formatScalarLogValue(value: unknown, key?: string): string {
   const text = String(value);
   const normalized = text.trim().toLowerCase();
-  if (key === "operation_type") return operationTypeLabels[text] ?? logTitleLabel(text);
+  if (key === "operation_type") {
+    return Object.hasOwn(operationTypeLabels, text)
+      ? operationTypeLabels[text]
+      : logTitleLabel(text);
+  }
   if (key === "operation" || key === "task_name" || key === "event_type") {
     return logTitleLabel(text);
   }
-  if (key === "phase" || key === "stage") return phaseLabels[text] ?? text;
-  if (key === "skill") return skillLabels[text] ?? text;
-  if (key === "source") return sourceValueLabels[text] ?? text;
+  if (key === "phase" || key === "stage")
+    return Object.hasOwn(phaseLabels, text) ? phaseLabels[text] : text;
+  if (key === "skill") return Object.hasOwn(skillLabels, text) ? skillLabels[text] : text;
+  if (key === "source")
+    return Object.hasOwn(sourceValueLabels, text) ? sourceValueLabels[text] : text;
   if (key === "image_data") return "已生成";
-  if (key === "status" || key === "state") return statusLabels[normalized] ?? text;
+  if (key === "status" || key === "state") return logStatusLabel(text);
   if (key === "field_name") {
     return text
       .split(",")
       .map((field) => logDetailLabel(field.trim()))
       .join("、");
   }
-  return contextualValueLabels[key ?? ""]?.[normalized] ?? commonValueLabels[normalized] ?? text;
+  const contextual =
+    key && Object.hasOwn(contextualValueLabels, key) ? contextualValueLabels[key] : undefined;
+  if (contextual && Object.hasOwn(contextual, normalized)) return contextual[normalized];
+  return Object.hasOwn(commonValueLabels, normalized) ? commonValueLabels[normalized] : text;
 }
 
 export function formatLogDurationSeconds(value: unknown): string {
   const duration = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(duration) || duration < 0) return `${String(value)} 秒`;
-  const formattedSeconds = new Intl.NumberFormat("zh-CN", {
-    maximumFractionDigits: 1,
-  }).format(duration % 60);
-  if (duration < 60) return `${formattedSeconds} 秒`;
-  const minutes = Math.floor(duration / 60);
+  const remainder = Math.round((duration % 60) * 10) / 10;
+  const formattedSeconds = logSecondsFormatter.format(remainder % 60);
+  const minutes = Math.floor(duration / 60) + (remainder === 60 ? 1 : 0);
+  if (minutes === 0) return `${formattedSeconds} 秒`;
   return `${minutes} 分 ${formattedSeconds} 秒`;
 }
 
@@ -919,7 +932,9 @@ function auditOperation(value: Record<string, unknown>): string {
     return "更新账号";
   }
   if (value.readback_confirmed === true) return "读取并复核账号";
-  return operationTypeLabels[operationType] ?? logTitleLabel(operationType || "未记录");
+  return Object.hasOwn(operationTypeLabels, operationType)
+    ? operationTypeLabels[operationType]
+    : logTitleLabel(operationType || "未记录");
 }
 
 function auditGroups(value: unknown): string[] {

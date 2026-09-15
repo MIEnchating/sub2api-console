@@ -27,6 +27,7 @@ import {
   Siren,
   SlidersHorizontal,
   UsersRound,
+  UserPlus,
 } from "lucide-react";
 
 import { navItems, navSections, viewForPath } from "../App";
@@ -47,6 +48,7 @@ describe("侧边菜单", () => {
       "价格管理",
       "收益分析",
       "账号管理",
+      "账号工作台",
       "自动巡检",
       "模型检测",
       "流量排行",
@@ -79,6 +81,7 @@ describe("侧边菜单", () => {
       CircleDollarSign,
       ChartNoAxesCombined,
       UsersRound,
+      UserPlus,
       HeartPulse,
       Fingerprint,
       ChartNoAxesColumnIncreasing,
@@ -115,6 +118,7 @@ describe("侧边菜单", () => {
           "pricing",
           "revenue-analysis",
           "accounts",
+          "account-workbench",
           "auto-inspection",
           "model-check",
           "traffic",

@@ -29,8 +29,8 @@ test("release publishing waits for successful frontend and backend preflight che
   for (const command of ["format:check", "typecheck", "lint", "test", "build"]) {
     assert.ok(preflight.includes(`bun run ${command}`), `missing frontend ${command}`);
   }
-  assert.match(preflight, /go vet /);
-  assert.match(preflight, /go test -race /);
+  assert.match(preflight, /bash scripts\/check-go\.sh vet/);
+  assert.match(preflight, /bash scripts\/check-go\.sh test/);
   assert.match(preflight, /go build /);
   assert.match(preflight, /node --test \.github\/scripts\/\*\.test\.mjs/);
 });
