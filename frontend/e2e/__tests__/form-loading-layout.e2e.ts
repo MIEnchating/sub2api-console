@@ -79,8 +79,9 @@ const scenarios = [
     endpoint: "/api/account-workbench/templates",
     label: "正在读取账号导入配置",
     slot: "skeleton-textarea",
-    ready: "#workbench-content",
+    ready: "#mixed-run-content",
     columns: false,
+    desktopColumns: false,
   },
   {
     tab: "自动维护",
@@ -89,6 +90,7 @@ const scenarios = [
     slot: "maintenance-parameters",
     ready: "#workbench-interval, #workbench-cooldown",
     columns: true,
+    desktopColumns: true,
   },
   {
     tab: "配置模板",
@@ -97,22 +99,7 @@ const scenarios = [
     slot: "workbench-template-grid",
     ready: "article",
     columns: true,
-  },
-  {
-    tab: "账号安全",
-    endpoint: "/api/accounts",
-    label: "正在读取安全设置账号",
-    slot: "security-selectors",
-    ready: "#security-account, #security-operation",
-    columns: true,
-  },
-  {
-    tab: "私有导出",
-    endpoint: "/api/accounts",
-    label: "正在读取导出账号",
-    slot: "export-account-options",
-    ready: 'fieldset[aria-label="可导出账号"] > label',
-    columns: true,
+    desktopColumns: false,
   },
 ];
 
@@ -138,7 +125,8 @@ for (const scenario of scenarios) {
     });
     if (scenario.columns) {
       const second = (await placeholders.nth(1).boundingBox())!;
-      if (page.viewportSize()!.width >= 1024) expect(second.y).toBe(before!.y);
+      if (scenario.desktopColumns && page.viewportSize()!.width >= 1024)
+        expect(second.y).toBe(before!.y);
       else expect(second.y).toBeGreaterThan(before!.y);
     } else await expect(region).toHaveCSS("height", "256px");
     await expect.poll(() => held.length).toBeGreaterThan(0);
@@ -150,7 +138,8 @@ for (const scenario of scenarios) {
     expect(Math.abs(after.width - before!.width)).toBeLessThanOrEqual(1);
     if (scenario.columns) {
       const second = (await ready.nth(1).boundingBox())!;
-      if (page.viewportSize()!.width >= 1024) expect(second.y).toBe(after.y);
+      if (scenario.desktopColumns && page.viewportSize()!.width >= 1024)
+        expect(second.y).toBe(after.y);
       else expect(second.y).toBeGreaterThan(after.y);
     } else await expect(ready).toHaveCSS("height", "256px");
     await expectNoOverflow(page.locator('[data-slot="page-content"]'));

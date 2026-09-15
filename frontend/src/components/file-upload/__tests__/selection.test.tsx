@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
@@ -81,4 +81,16 @@ it("长文件名不会挤压选择按钮，清空受控文件名后恢复空状�
   expect(screen.getByRole("button", { name: "重新选择" })).toHaveClass("shrink-0");
   view.rerender(<FileUpload {...base} onSelect={() => {}} />);
   expect(screen.getByRole("status")).toHaveTextContent("未选择文件");
+});
+
+it("悬停文件名时通过共享提示展示完整名称", async () => {
+  const user = userEvent.setup();
+  const name = "very-long-account-file-".repeat(20) + ".json";
+  render(<FileUpload {...base} fileName={name} onSelect={() => {}} />);
+  const status = screen.getByRole("status");
+  expect(status).not.toHaveAttribute("title");
+  await user.hover(status);
+  await waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-content"]')).toHaveTextContent(name),
+  );
 });

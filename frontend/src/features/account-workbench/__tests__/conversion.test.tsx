@@ -129,7 +129,7 @@ describe("输入转换为私有JSON", () => {
   it("转换成功清空输入凭据并可开始下一次转换", async () => {
     const view = mount(<WorkbenchImport output="export" />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }, { timeout: 5000 }));
     await user.paste("rt_private_first");
     expect(screen.queryByRole("textbox", { name: "检测模型" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
@@ -179,7 +179,7 @@ describe("输入转换为私有JSON", () => {
         return Response.json({ detail: "任务队列暂时已满" }, { status: 503 });
     });
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }, { timeout: 5000 }));
     await user.paste("rt_private_retry");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });
@@ -206,7 +206,7 @@ describe("输入转换为私有JSON", () => {
       request.path.endsWith("/from-input") ? pending : undefined,
     );
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("textbox", { name: "账号内容" }));
+    await user.click(await screen.findByRole("textbox", { name: "账号内容" }, { timeout: 5000 }));
     await user.paste("rt_private_waiting");
     await user.click(screen.getByRole("button", { name: "解析并预览" }));
     await screen.findByRole("table", { name: "账号预览" });

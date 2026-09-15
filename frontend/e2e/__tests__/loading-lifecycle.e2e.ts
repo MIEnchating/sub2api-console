@@ -141,7 +141,9 @@ test("动画账号首次读取按卡片网格占位，返回后卡片高度及�
   const region = page.getByRole("region", { name: "动画账号卡片" });
   const loading = region.getByRole("status", { name: "正在读取账号" });
   await expect(loading).toBeVisible();
-  await expect(loading.locator(":scope > div").first()).toHaveCSS("height", "360px");
+  const loadingCards = loading.locator(":scope > div");
+  await expect(loadingCards).toHaveCount(4);
+  const placeholderHeight = (await loadingCards.first().boundingBox())!.height;
   const footer = page.getByRole("navigation", { name: "动画账号分页" });
   const initial = await footer.boundingBox();
   await page.screenshot({
@@ -149,8 +151,12 @@ test("动画账号首次读取按卡片网格占位，返回后卡片高度及�
     animations: "disabled",
   });
   await expect.poll(() => held.length).toBeGreaterThan(0);
-  for (const route of held) await route.fulfill({ json: [overviewAccount] });
-  await expect(region.getByRole("article")).toHaveCSS("height", "360px");
+  for (const route of held)
+    await route.fulfill({
+      json: [1, 2, 3, 4].map((id) => ({ ...overviewAccount, id: String(id) })),
+    });
+  await expect(region.getByRole("article")).toHaveCount(4);
+  expect((await region.getByRole("article").first().boundingBox())!.height).toBe(placeholderHeight);
   await expect(loading).toHaveCount(0);
   expect((await footer.boundingBox())!.y).toBe(initial!.y);
 });

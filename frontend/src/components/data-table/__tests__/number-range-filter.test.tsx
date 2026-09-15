@@ -36,7 +36,8 @@ describe("NumberRangeFilter", () => {
     expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
     view.rerender(<NumberRangeFilter {...props} error="最低余额不能大于最高余额" />);
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveClass("h-8", "shrink-0");
+    expect(alert).toHaveClass("shrink-0", "wrap-anywhere");
+    expect(alert).not.toHaveClass("h-8");
     for (const input of screen.getAllByRole("spinbutton")) {
       expect(input).toHaveAttribute("aria-invalid", "true");
       expect(input).toHaveAttribute("aria-describedby", alert.id);

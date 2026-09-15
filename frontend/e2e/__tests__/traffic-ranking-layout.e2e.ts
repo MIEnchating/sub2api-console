@@ -86,11 +86,17 @@ test("长账号名称限制在固定身份列内，并保留完整名称和账�
   const name = table.getByText(longAccountName, { exact: true });
   await expect(name).toHaveCSS("text-overflow", "ellipsis");
   expect(await name.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
-  await expect(name).toHaveAttribute("title", longAccountName);
+  await expect(name).not.toHaveAttribute("title");
+  await name.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(longAccountName);
+  await page.keyboard.press("Escape");
   await expect(name).toHaveText(longAccountName);
   const metadata = table.getByText(`#41 · ${longGroupName}`, { exact: true });
   await expect(metadata).toHaveCSS("font-size", "12px");
-  await expect(metadata).toHaveAttribute("title", `#41 · ${longGroupName}`);
+  await expect(metadata).not.toHaveAttribute("title");
+  await metadata.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(`#41 · ${longGroupName}`);
+  await page.keyboard.press("Escape");
   await expect(table.getByText(upstreamHost, { exact: true }).first()).toHaveCSS(
     "font-size",
     "12px",

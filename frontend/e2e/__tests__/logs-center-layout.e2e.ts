@@ -83,6 +83,9 @@ test("长摘要使用 12px 辅助字号，标题保持 14px 并限制摘要为�
   await expect(table.getByText(longTitle, { exact: true })).toHaveCSS("font-size", "14px");
   await expect(summary).toHaveCSS("-webkit-line-clamp", "2");
   await expect(summary).toHaveCSS("overflow", "hidden");
+  await summary.hover();
+  await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(longSummary);
+  await page.keyboard.press("Escape");
   const record = table.getByRole("cell").filter({ hasText: longSummary });
   await expect(record.getByText("关联 131 条", { exact: true })).toBeVisible();
   expect(await summary.getByText("关联 131 条", { exact: true }).count()).toBe(0);

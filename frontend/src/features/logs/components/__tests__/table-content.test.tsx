@@ -55,9 +55,10 @@ describe("日志记录内容", () => {
       items: [{ ...entry, title, summary, object_label: object, actor: "巡检调度器" }],
     });
 
-    expect(screen.getByText(title)).toHaveAttribute("title", title);
-    expect(screen.getByText(summary)).toHaveAttribute("title", summary);
-    expect(screen.getByText(object)).toHaveAttribute("title", object);
+    for (const text of [title, summary, object]) {
+      expect(screen.getByText(text)).toHaveTextContent(text);
+      expect(screen.getByText(text)).not.toHaveAttribute("title");
+    }
     expect(screen.getByText("执行人：巡检调度器")).toBeVisible();
   });
 

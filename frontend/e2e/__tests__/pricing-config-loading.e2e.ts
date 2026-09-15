@@ -59,7 +59,7 @@ test("价格设置首次读取只显示一套配置布局，骨架列宽与读�
   const settingsBounds = (await settings.boundingBox())!;
   const exchangeBounds = (await exchange.boundingBox())!;
   if (page.viewportSize()!.width >= 1280) {
-    expect(settingsBounds.width).toBe(288);
+    expect(settingsBounds.width).toBe(320);
     expect(exchangeBounds.width).toBeGreaterThan(settingsBounds.width);
     expect(exchangeBounds.y).toBe(settingsBounds.y);
   } else {

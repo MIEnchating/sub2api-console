@@ -31,6 +31,10 @@ describe("global focus policy", () => {
       // trigger; account-operation-buttons interaction tests protect that lifecycle.
       const allowsAccountDialogFocus =
         relativePath === "features/accounts/components/account-operation-buttons.tsx";
+      // The upstream editor focuses its heading; upstream-editor.e2e.ts covers
+      // keyboard navigation through its tabs and form.
+      const allowsUpstreamDialogFocus =
+        relativePath === "features/upstreams/components/upstream-edit-dialog.tsx";
       // Raw pricing details focus their heading and restore the selected model;
       // raw-pricing-source.e2e.ts verifies both transitions and dialog close focus.
       const allowsPricingDetailFocus = [
@@ -47,6 +51,7 @@ describe("global focus policy", () => {
         allowsDropdownSearchFocus ||
         allowsKeyboardNavigationFocus ||
         allowsAccountDialogFocus ||
+        allowsUpstreamDialogFocus ||
         allowsPricingDetailFocus ||
         allowsJSONEditorFocus
       )

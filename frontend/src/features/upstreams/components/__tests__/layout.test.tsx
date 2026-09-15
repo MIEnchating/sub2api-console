@@ -62,7 +62,7 @@ describe("上游管理列表布局", () => {
     expect(view.getByRole("columnheader", { name: "状态" })).toHaveClass("w-[16%]");
     expect(view.getByRole("columnheader", { name: "余额" })).toHaveClass("w-[10%]");
     expect(view.getByRole("columnheader", { name: /并发/ })).toHaveClass("w-[12%]");
-    expect(view.getByRole("columnheader", { name: "操作" })).toHaveClass("w-36");
+    expect(view.getByRole("columnheader", { name: "操作" })).toHaveClass("w-40");
     expect(view.getAllByRole("columnheader")).toHaveLength(10);
     expect(view.getAllByRole("cell")).toHaveLength(10);
     expect(view.getByLabelText("已配置并发")).toHaveTextContent("10");

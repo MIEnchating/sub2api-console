@@ -12017,15 +12017,23 @@ function AutoInspectionCard() {
                           {autoInspectionOperationSummary(record, runningTask.data)}
                         </div>
                         {record.error ? (
-                          <p
-                            className={cn(
-                              "mt-1 line-clamp-2 text-xs leading-5 wrap-anywhere",
-                              record.status === "partial" ? "text-warning" : "text-destructive",
-                            )}
-                            title={record.error}
-                          >
-                            {record.error}
-                          </p>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <p
+                                  className={cn(
+                                    "mt-1 line-clamp-2 text-xs leading-5 wrap-anywhere",
+                                    record.status === "partial"
+                                      ? "text-warning"
+                                      : "text-destructive",
+                                  )}
+                                />
+                              }
+                            >
+                              {record.error}
+                            </TooltipTrigger>
+                            <TooltipContent>{record.error}</TooltipContent>
+                          </Tooltip>
                         ) : null}
                       </TableCell>
                       <TableCell className="text-right" overflowTooltip={false}>

@@ -7,6 +7,7 @@ import { ContentRetry } from "@/components/content-retry";
 import { FormField } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -57,17 +58,23 @@ export function WorkbenchTemplateSourcePicker(props: {
           disabled={props.disabled}
           onChange={(event) => setSearch(event.target.value)}
         />
-        <Button
-          type="button"
-          size="icon"
-          variant="outline"
-          aria-label="刷新账号列表"
-          title="刷新账号列表"
-          disabled={props.disabled || accounts.isFetching}
-          onClick={() => void accounts.refetch()}
-        >
-          <RefreshCw aria-hidden="true" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                aria-label="刷新账号列表"
+                disabled={props.disabled || accounts.isFetching}
+                onClick={() => void accounts.refetch()}
+              />
+            }
+          >
+            <RefreshCw aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>刷新账号列表</TooltipContent>
+        </Tooltip>
       </div>
       <FormField label="来源账号">
         <Select

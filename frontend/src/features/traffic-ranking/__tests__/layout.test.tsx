@@ -61,7 +61,8 @@ describe("流量排行布局", () => {
     expect(screen.getByRole("columnheader", { name: "排名 / 账号" })).toHaveClass("left-0");
     expect(screen.getByRole("table", { name: "账号流量排行" })).not.toHaveClass("[&_td_*]:text-sm");
     expect(screen.getByText("#41 · codex")).toHaveClass("text-xs", "truncate");
-    expect(screen.getByText("api.example")).toHaveAttribute("title", "api.example");
+    expect(screen.getByText("api.example")).toHaveTextContent("api.example");
+    expect(screen.getByText("api.example")).not.toHaveAttribute("title");
   });
 
   it("账号没有流量或用量时保留账号，并明确显示缺失值", () => {

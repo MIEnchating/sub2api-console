@@ -9,6 +9,7 @@ import {
 import { FileUp, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContentLoading } from "@/components/content-loading";
 import { cn } from "@/lib/utils";
 
@@ -106,9 +107,12 @@ export function FileUpload(props: FileUploadProps): ReactElement {
         {props.busy ? (
           <ContentLoading label="正在读取文件" compact className="min-h-5 py-0" />
         ) : (
-          <p role="status" className="truncate text-sm" title={props.fileName}>
-            {props.fileName || "未选择文件"}
-          </p>
+          <Tooltip>
+            <TooltipTrigger render={<p role="status" className="truncate text-sm" />}>
+              {props.fileName || "未选择文件"}
+            </TooltipTrigger>
+            <TooltipContent>{props.fileName || "未选择文件"}</TooltipContent>
+          </Tooltip>
         )}
         <p
           id={`${id}-description`}

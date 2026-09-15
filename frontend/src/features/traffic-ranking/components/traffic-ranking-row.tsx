@@ -3,6 +3,8 @@ import type { ReactElement } from "react";
 import type { TrafficRanking, TrafficRankingRow as RankingRow } from "@/api";
 import { Badge } from "@/components/ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import {
@@ -18,15 +20,15 @@ function MetricLine(props: { label: string; value: string; secondary?: boolean }
   return (
     <div className={cn("flex items-baseline justify-between gap-2", props.secondary && "mt-1")}>
       <span className="text-muted-foreground shrink-0 text-xs">{props.label}</span>
-      <span
+      <TableOverflowTooltip
         className={cn(
           "min-w-0 truncate",
           props.secondary ? "text-muted-foreground text-xs" : "font-medium",
         )}
-        title={props.value}
+        content={props.value}
       >
         {props.value}
-      </span>
+      </TableOverflowTooltip>
     </div>
   );
 }
@@ -34,15 +36,18 @@ function MetricLine(props: { label: string; value: string; secondary?: boolean }
 function LatestTraffic(props: { value: string | null }): ReactElement {
   if (props.value === null) return <span>-</span>;
   return (
-    <time dateTime={props.value} title={new Date(props.value).toLocaleString("zh-CN")}>
-      {new Date(props.value).toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })}
-    </time>
+    <Tooltip>
+      <TooltipTrigger render={<time dateTime={props.value} />}>
+        {new Date(props.value).toLocaleString("zh-CN", {
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        })}
+      </TooltipTrigger>
+      <TooltipContent>{new Date(props.value).toLocaleString("zh-CN")}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -71,15 +76,15 @@ export function TrafficRankingRow(props: {
             {row.rank}
           </span>
           <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="truncate font-medium" title={row.account_name}>
+            <TableOverflowTooltip className="font-medium" content={row.account_name}>
               {row.account_name}
-            </div>
-            <div className="text-muted-foreground truncate text-xs" title={identity}>
+            </TableOverflowTooltip>
+            <TableOverflowTooltip className="text-muted-foreground text-xs" content={identity}>
               {identity}
-            </div>
-            <div className="text-muted-foreground truncate text-xs" title={upstream}>
+            </TableOverflowTooltip>
+            <TableOverflowTooltip className="text-muted-foreground text-xs" content={upstream}>
               {upstream}
-            </div>
+            </TableOverflowTooltip>
           </div>
         </div>
       </TableCell>
@@ -108,15 +113,17 @@ export function TrafficRankingRow(props: {
       </TableCell>
       <TableCell className="px-3 text-right">
         <div className="font-medium">{formatTrafficPercent(row.success_rate)}</div>
-        <div
-          className="text-muted-foreground mt-1 text-xs"
-          title={`成功 ${formatTrafficCount(row.successful)} 次 / 失败 ${formatTrafficCount(row.failed)} 次`}
-        >
-          {formatTrafficCount(row.successful)} /{" "}
-          <span className={cn(row.failed > 0 && "text-destructive")}>
-            {formatTrafficCount(row.failed)}
-          </span>
-        </div>
+        <Tooltip>
+          <TooltipTrigger render={<div className="text-muted-foreground mt-1 text-xs" />}>
+            {formatTrafficCount(row.successful)} /{" "}
+            <span className={cn(row.failed > 0 && "text-destructive")}>
+              {formatTrafficCount(row.failed)}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            成功 {formatTrafficCount(row.successful)} 次 / 失败 {formatTrafficCount(row.failed)} 次
+          </TooltipContent>
+        </Tooltip>
       </TableCell>
       <TableCell className="px-3 text-right">
         <MetricLine label="平均" value={formatTrafficLatency(row.average_latency_ms)} />

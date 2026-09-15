@@ -120,17 +120,21 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
   await page.getByRole("tab", { name: "动画检测", exact: true }).click();
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   await expect(panel.getByRole("img", { name: /生成的/ })).toHaveCount(1);
-  await test.step("表单和完整动画结果适应面板高度，无需滚动且不隐藏滚动条", async () => {
+  await test.step("桌面表单与结果适应面板，窄屏可滚动到达操作与完整结果", async () => {
     const content = panel.getByRole("region", { name: "自定义动画检测内容", exact: true });
     await expect(content).not.toHaveCSS("scrollbar-width", "none");
     await expect(content).toHaveCSS("overflow-y", "auto");
-    expect(await content.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
-      true,
-    );
-    await expect(panel.getByRole("button", { name: "开始检测", exact: true })).toBeInViewport({
-      ratio: 1,
-    });
-    await expect(panel.getByText("耗时 1.0 秒", { exact: true })).toBeInViewport({ ratio: 1 });
+    if (page.viewportSize()!.width >= 640) {
+      expect(
+        await content.evaluate((element) => element.scrollHeight <= element.clientHeight),
+      ).toBe(true);
+    }
+    const start = panel.getByRole("button", { name: "开始检测", exact: true });
+    await start.scrollIntoViewIfNeeded();
+    await expect(start).toBeInViewport({ ratio: 1 });
+    const duration = panel.getByText("耗时 1.0 秒", { exact: true });
+    await duration.scrollIntoViewIfNeeded();
+    await expect(duration).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: testInfo.outputPath("custom-animation-fitted.png") });
   });
 });

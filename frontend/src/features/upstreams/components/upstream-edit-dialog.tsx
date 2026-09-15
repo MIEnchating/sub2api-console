@@ -619,9 +619,7 @@ export function UpstreamEditDialog(props: Props) {
               <DialogTitle ref={titleRef} tabIndex={-1} className="outline-none">
                 编辑上游
               </DialogTitle>
-              <DialogDescription className="truncate text-xs" title={props.host || undefined}>
-                {props.host}
-              </DialogDescription>
+              <DialogDescription className="text-xs wrap-anywhere">{props.host}</DialogDescription>
             </div>
             <SegmentedControl role="tablist" aria-label="上游编辑分类" className="shrink-0">
               <SegmentedControlItem

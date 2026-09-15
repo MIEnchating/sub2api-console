@@ -15,6 +15,7 @@ import { TableActionButton } from "@/components/data-table/table-action-button";
 import { StatusBadge, type StatusVariant } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
+import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
 import { cn } from "@/lib/utils";
 import {
   formatLogDate,
@@ -91,9 +92,9 @@ export function LogEntryRow(props: {
       <TableCell overflowTooltip={false}>
         <div className="grid min-w-0 gap-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate text-sm font-medium" title={title}>
+            <TableOverflowTooltip className="text-sm font-medium" content={title}>
               {title}
-            </span>
+            </TableOverflowTooltip>
             {props.entry.related_count > 0 && (
               <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
                 关联 {props.entry.related_count} 条
@@ -101,27 +102,27 @@ export function LogEntryRow(props: {
             )}
           </div>
           {props.entry.summary && (
-            <span
+            <TableOverflowTooltip
               className="text-muted-foreground line-clamp-2 text-xs leading-5 break-all whitespace-normal"
-              title={props.entry.summary}
+              content={props.entry.summary}
             >
               {props.entry.summary}
-            </span>
+            </TableOverflowTooltip>
           )}
         </div>
       </TableCell>
       <TableCell overflowTooltip={false}>
         <div className="grid min-w-0 gap-1">
-          <span
+          <TableOverflowTooltip
             className={object ? "truncate text-sm" : "text-muted-foreground truncate text-xs"}
-            title={object || source}
+            content={object || source}
           >
             {object || source}
-          </span>
+          </TableOverflowTooltip>
           {secondary && (
-            <span className="text-muted-foreground truncate text-xs" title={secondary}>
+            <TableOverflowTooltip className="text-muted-foreground text-xs" content={secondary}>
               {secondary}
-            </span>
+            </TableOverflowTooltip>
           )}
         </div>
       </TableCell>

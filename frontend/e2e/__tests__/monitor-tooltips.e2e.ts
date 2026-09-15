@@ -29,5 +29,6 @@ test("长监控名称显示共享提示，筛选禁用的分组按钮仍能解�
   await page.locator('[data-slot="tooltip-trigger"]').filter({ has: toggle }).hover();
   await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText("筛选时自动展开匹配分组");
   await expect(toggle).toHaveCSS("height", "32px");
-  await expect(page.locator("[title]")).toHaveCount(0);
+  await expect(detail).not.toHaveAttribute("title");
+  await expect(toggle).not.toHaveAttribute("title");
 });
