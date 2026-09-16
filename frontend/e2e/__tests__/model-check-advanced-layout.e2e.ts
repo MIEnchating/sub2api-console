@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 import { configurationFixture, mockReadRoutes } from "./fixtures/model-check-configuration";
 
 test.beforeEach(async ({ page, colorScheme }) => {
@@ -22,6 +23,7 @@ test("高级设置将高度留给编辑区，版本说明和底部操作无需�
   expect(await panel.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
     true,
   );
+  await waitForLayoutAnimations(dialog);
   const editorBounds = (await editor.boundingBox())!;
   const panelBounds = (await panel.boundingBox())!;
   expect(editorBounds.height).toBeGreaterThan(panelBounds.height / 2);

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 import { pageFixtures } from "./fixtures/page-shell";
 
 async function setupDictionary(page: Page): Promise<string[][]> {
@@ -37,6 +38,7 @@ async function setupDictionary(page: Page): Promise<string[][]> {
   await page.goto("/config?tab=dictionaries");
   await page.getByRole("tab", { name: "字典管理", exact: true }).click();
   await expect(page.getByRole("button", { name: "拖动openai", exact: true })).toBeVisible();
+  await waitForLayoutAnimations(page.getByRole("table"));
   return writes;
 }
 
@@ -73,6 +75,7 @@ test("移出列表和 Escape 取消不提交，键盘排序按稳定 ID 提交",
   await page.mouse.up();
   await expect(source).toHaveAttribute("aria-pressed", "false");
   expect(writes).toEqual([]);
+  await waitForLayoutAnimations(page.getByRole("table"));
   await source.focus();
   await page.keyboard.press("Space");
   await expect(source).toHaveAttribute("aria-pressed", "true");
@@ -81,6 +84,7 @@ test("移出列表和 Escape 取消不提交，键盘排序按稳定 ID 提交",
   await page.keyboard.press("Escape");
   await expect(source).toHaveAttribute("aria-pressed", "false");
   expect(writes).toEqual([]);
+  await waitForLayoutAnimations(page.getByRole("table"));
   await source.focus();
   await page.keyboard.press("Space");
   await expect(source).toHaveAttribute("aria-pressed", "true");

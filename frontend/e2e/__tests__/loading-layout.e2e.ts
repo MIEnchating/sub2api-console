@@ -122,7 +122,7 @@ for (const scenario of scenarios) {
       ).toBeLessThanOrEqual(2);
     }
     await page.screenshot({
-      path: test.info().outputPath(`${scenario.path.replaceAll("/", "_")}.png`),
+      path: test.info().outputPath(`${encodeURIComponent(scenario.path)}.png`),
       animations: "disabled",
     });
     for (const route of held) await route.abort();

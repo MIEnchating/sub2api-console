@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 import { pageFixtures } from "./fixtures/page-shell";
 
 import { configurationFixture, mockReadRoutes } from "./fixtures/model-check-configuration";
@@ -39,12 +40,17 @@ test("长题目滚动和翻页后，搜索与分页保持固定且新页从顶�
   const pager = dialog.getByRole("navigation", { name: "表格分页" });
   const search = dialog.getByRole("textbox", { name: "搜索检测题目" });
   await expect(pager).toBeInViewport({ ratio: 1 });
+  await waitForLayoutAnimations(dialog);
   const pagerPosition = await pager.boundingBox();
   const searchPosition = await search.boundingBox();
   const list = dialog.getByRole("list", { name: "检测题目列表" });
   await list.focus();
   await page.keyboard.press("Control+End");
-  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect
+    .poll(() =>
+      list.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop),
+    )
+    .toBeLessThanOrEqual(1);
   await expect(pager).toBeInViewport({ ratio: 1 });
   expect(await pager.boundingBox()).toEqual(pagerPosition);
   expect(await search.boundingBox()).toEqual(searchPosition);

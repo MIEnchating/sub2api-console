@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 
 let bundleDirectory: string;
 test.beforeAll(() => {
@@ -100,6 +101,7 @@ test("低高度弹窗滚动长正文时标题、关闭和底部操作保持可�
   const close = dialog.getByRole("button", { name: "关闭", exact: true });
   await close.click({ trial: true });
   await expect(confirm).toBeInViewport({ ratio: 1 });
+  await waitForLayoutAnimations(dialog);
   const titleBounds = await title.boundingBox();
   const footerBounds = await confirm.boundingBox();
   const body = dialog.locator('[data-slot="dialog-body"]');

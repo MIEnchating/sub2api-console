@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 import { setupKuma } from "../kuma-fixture";
 import {
   statusOptions,
@@ -21,12 +22,15 @@ test("组内监控与外层分组独立拖动，取消不关闭弹窗，保存�
     .getByRole("button", { name: "编辑", exact: true })
     .click();
   const dialog = page.getByRole("dialog");
+  await waitForLayoutAnimations(dialog);
+  const monitorList = dialog.getByRole("list", { name: "分组 1 展示顺序" });
   const monitor = dialog.getByRole("button", { name: "拖动智谱", exact: true });
   await monitor.hover();
   await monitor.focus();
   await monitor.evaluate((node) => node.scrollIntoView({ block: "center" }));
   await page.keyboard.press("Space");
   await expect(monitor).toHaveAttribute("aria-pressed", "true");
+  await waitForLayoutAnimations(monitorList);
   await expect(page.getByText("目标位置 1", { exact: true })).toBeAttached();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByText("目标位置 2", { exact: true })).toBeAttached();
@@ -38,11 +42,12 @@ test("组内监控与外层分组独立拖动，取消不关闭弹窗，保存�
       has: page.getByRole("button", { name: "拖动智谱", exact: true }),
     }),
   ).toHaveCSS("opacity", "1");
-  await dialog
-    .getByRole("list", { name: "分组 1 展示顺序" })
-    .evaluate((node) => node.scrollIntoView({ block: "center" }));
-  await dialog.getByRole("button", { name: "拖动备用接口", exact: true }).hover();
+  await waitForLayoutAnimations(monitorList);
   await monitor.hover();
+  await monitorList.evaluate((node) =>
+    node.scrollIntoView({ block: "center", behavior: "instant" }),
+  );
+  await expect(monitorList).toBeInViewport({ ratio: 1 });
   const from = (await monitor.boundingBox())!;
   const to = (await dialog
     .getByRole("button", { name: "拖动备用接口", exact: true })
@@ -59,6 +64,7 @@ test("组内监控与外层分组独立拖动，取消不关闭弹窗，保存�
   await group.evaluate((node) => node.scrollIntoView({ block: "center" }));
   await page.keyboard.press("Space");
   await expect(group).toHaveAttribute("aria-pressed", "true");
+  await waitForLayoutAnimations(dialog);
   await expect(page.getByText("目标位置 2", { exact: true })).toBeAttached();
   await page.keyboard.press("ArrowUp");
   await expect(page.getByText("目标位置 1", { exact: true })).toBeAttached();

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { waitForLayoutAnimations } from "../layout-motion";
 import { pageFixtures } from "./fixtures/page-shell";
 
 test.beforeEach(async ({ page, colorScheme }) => {
@@ -69,6 +70,7 @@ for (const height of [480, 900]) {
     await expect
       .poll(() => dialog.evaluate((element) => element.scrollHeight <= element.clientHeight))
       .toBe(true);
+    await waitForLayoutAnimations(dialog);
     const initialTitle = await title.boundingBox();
     const initialClose = await close.boundingBox();
     const overflowing = await body.evaluate(
