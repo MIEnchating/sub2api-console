@@ -433,6 +433,10 @@ func (f fakeBusiness) UpdatePolicy(_ context.Context, patch map[string]any, acto
 	}
 	return f.policySnapshot, nil
 }
+func (f fakeBusiness) SetAccountIgnoreCostWall(context.Context, string, bool, string) error {
+	return nil
+}
+
 func (f fakeBusiness) SetAccountTestModels(context.Context, string, []string, string) error {
 	return nil
 }
@@ -2269,6 +2273,20 @@ func TestAccountFieldMutationPreservesTypedPayloadsAndRetiresLegacyRoutes(t *tes
 		settingsInput.Concurrency != 8 || !reflect.DeepEqual(settingsInput.TestModels, []string{"gpt-5.2", "claude-sonnet-4"}) ||
 		!settingsInput.Paused || settingsInput.Excluded {
 		t.Fatalf("settings contract=%#v", settingsCalls[0])
+	}
+	following := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/settings", map[string]any{
+		"priority": 120, "load_factor": "", "follow_concurrency": true, "concurrency": 8,
+		"test_models": []string{}, "paused": false, "excluded": false,
+	})
+	if following.Code != http.StatusOK || len(settingsCalls) != 2 || !settingsCalls[1].input.FollowConcurrency {
+		t.Fatalf("following concurrency contract lost: %d %s", following.Code, following.Body.String())
+	}
+	missingLoad := authenticatedRequest(t, router, http.MethodPut, "/api/accounts/41/settings", map[string]any{
+		"priority": 120, "load_factor": "", "concurrency": 8,
+		"test_models": []string{}, "paused": false, "excluded": false,
+	})
+	if missingLoad.Code != http.StatusUnprocessableEntity || len(settingsCalls) != 2 {
+		t.Fatalf("fixed mode accepted missing load factor: %d %s", missingLoad.Code, missingLoad.Body.String())
 	}
 
 	models := authenticatedRequest(t, router, http.MethodGet, "/api/accounts/41/models", nil)

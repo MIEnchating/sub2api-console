@@ -2,7 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import type { GroupStatus, OnboardingCandidate } from "@/api";
+import { api, type GroupStatus, type OnboardingCandidate } from "@/api";
 
 import { boundCandidate, renderOnboarding } from "./onboarding-fixture";
 
@@ -44,6 +44,7 @@ it("仅选择 Composite 本地分组时按 OpenAI 账号类型启用预览", asy
     participation_reason: null,
     status: "healthy",
   };
+  vi.spyOn(api, "previewOnboardingConcurrency").mockResolvedValue({ items: [{ concurrency: 10 }] });
   client = renderOnboarding(candidate, false, [compositeGroup]);
 
   fireEvent.click(await screen.findByRole("combobox", { name: "国模 本地分组" }));

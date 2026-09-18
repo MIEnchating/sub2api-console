@@ -28,13 +28,10 @@ import (
 const passwordRounds = 310_000
 
 type Store struct {
-	db                        *sql.DB
-	workbenchExecutionClock   func() time.Time
-	workbenchExecutionMu      sync.RWMutex
-	workbenchExecutionWriteMu sync.Mutex
-	workbenchTemplateWriteMu  sync.Mutex
-	sessionOwnerMu            sync.Mutex
-	sessionOwnerChanges       chan struct{}
+	db                  *sqliteutil.Database
+	sessionOwnerMu      sync.Mutex
+	sessionOwnerChanges chan struct{}
+	workbenchWriteMu    sync.Mutex
 }
 
 type PublicStatus struct {
@@ -112,29 +109,12 @@ func Open(path string) (*Store, error) {
 	if err := sqliteutil.Prepare(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", sqliteDSN(path))
+	db, err := sqliteutil.OpenDatabase(path)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
 	store := &Store{db: db}
 	if err := store.ensureSchema(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := store.PurgeExpiredWorkbenchExecutions(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := store.PurgeExpiredWorkbenchOAuthCheckpoints(context.Background(), time.Now()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := store.RecoverInterruptedWorkbenchOAuthCheckpoints(context.Background()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := store.PurgeExpiredWorkbenchQueues(context.Background(), time.Now()); err != nil {
-		return nil, errors.Join(err, db.Close())
-	}
-	if err := store.RecoverInterruptedWorkbenchQueues(context.Background()); err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
 	for kind, values := range builtInDictionaryValues {
@@ -165,33 +145,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 			body_encoding TEXT NOT NULL, PRIMARY KEY(base_url, monitor_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS workbench_sms_receipts (
-			operation_id TEXT NOT NULL,action TEXT NOT NULL,state TEXT NOT NULL,
-			owner TEXT NOT NULL,target TEXT NOT NULL,task_id TEXT NOT NULL,provider TEXT NOT NULL,
-			config_hash TEXT NOT NULL,request_id TEXT NOT NULL,phone TEXT NOT NULL,
-			created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(operation_id,action)
-		)`,
-		`CREATE TABLE IF NOT EXISTS workbench_queues (
-			id TEXT PRIMARY KEY,owner TEXT NOT NULL,target TEXT NOT NULL,kind TEXT NOT NULL,
-			task_id TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,
-			created_at TEXT NOT NULL,expires_at TEXT NOT NULL,payload BLOB NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS ix_workbench_queues_owner_target ON workbench_queues(owner,target,expires_at)`,
-		`CREATE INDEX IF NOT EXISTS ix_workbench_sms_owner_target ON workbench_sms_receipts(owner,target,created_at)`,
-		`CREATE TABLE IF NOT EXISTS workbench_oauth_checkpoints (
- id TEXT PRIMARY KEY, owner_hash TEXT NOT NULL, target_fingerprint TEXT NOT NULL, target_url TEXT NOT NULL, scope TEXT NOT NULL,
- source_task_id TEXT NOT NULL, task_id TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL,
- revision INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
- worker_id TEXT NOT NULL, worker_lease TEXT NOT NULL, automatic INTEGER NOT NULL, worker_revision INTEGER NOT NULL, parent_id TEXT NOT NULL, payload BLOB)`,
-		`CREATE TABLE IF NOT EXISTS workbench_login_profiles (
-			id TEXT PRIMARY KEY, target_url TEXT NOT NULL, target_fingerprint TEXT NOT NULL,
-			account_id TEXT NOT NULL, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL, email TEXT NOT NULL,
-			revision INTEGER NOT NULL CHECK(revision>0), updated_at TEXT NOT NULL,
-			has_password INTEGER NOT NULL, has_totp INTEGER NOT NULL, mail_kind TEXT NOT NULL, sms_provider TEXT NOT NULL,
-			has_proxy INTEGER NOT NULL,
-			login BLOB NOT NULL, UNIQUE(target_fingerprint,account_id)
-		)`,
-		workbenchSourceProfileSchema,
+		`CREATE TABLE IF NOT EXISTS account_workbench_documents (id TEXT PRIMARY KEY,revision INTEGER NOT NULL CHECK(revision>0),payload BLOB NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS model_pricing_cache (
 			cache_key TEXT PRIMARY KEY, content TEXT NOT NULL, fetched_at TEXT NOT NULL
 		)`,
@@ -240,7 +194,7 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM settings WHERE key='runtime.probes_enabled'`); err != nil {
 		return err
 	}
-	return nil
+	return s.removeEmptyRetiredTables(ctx)
 }
 
 func (s *Store) PublicStatus(ctx context.Context) (PublicStatus, error) {
@@ -1220,10 +1174,6 @@ func decodePasswordHash(encoded string) (string, int, []byte, []byte, bool) {
 func hashSessionToken(token string) string {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	return hex.EncodeToString(digest[:])
-}
-
-func sqliteDSN(path string) string {
-	return sqliteutil.DSN(path, "_txlock=immediate&_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29")
 }
 
 func formatTime(value time.Time) string {

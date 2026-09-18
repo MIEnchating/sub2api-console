@@ -53,6 +53,7 @@ it("跨页勾选和搜索后保留统一模型，并提交完整的已选范围"
   const view = setup(25);
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 1\b/ }));
   await user.type(screen.getByRole("combobox", { name: "检测模型" }), "first-model");
+  await user.keyboard("{Escape}");
   fireEvent.click(screen.getByRole("button", { name: "转到下一页" }));
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 13\b/ }));
   const search = screen.getByRole("textbox", { name: "搜索动画检测账号" });

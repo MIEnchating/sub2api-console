@@ -1137,6 +1137,15 @@ func (c *Client) requestWithSemantics(ctx context.Context, method, path string, 
 	}
 	var last error
 	for attempt := 0; attempt < attempts; attempt++ {
+		if method != http.MethodGet && method != http.MethodHead {
+			if err := AuthorizeMutation(ctx); err != nil {
+				var denied *MutationAuthorizationError
+				if errors.As(err, &denied) {
+					denied.Attempted = attempt > 0
+				}
+				return nil, errors.Join(last, err)
+			}
+		}
 		endpoint, err := url.Parse(c.baseURL + "/api/v1" + path)
 		if err != nil {
 			return nil, err

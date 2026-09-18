@@ -274,6 +274,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "布局测试" },
       "/api/accounts": accounts,
+      "/api/model-checks/account-statuses": [],
       "/api/groups": [],
       "/api/policy": { advanced_policy: { manual_priority: { reserved_max: 10 } } },
       "/api/inspection/automation": {
@@ -301,7 +302,7 @@ test("宽屏下状态文案和不同数量的操作按钮均保持在各自列�
   await expect(page.getByRole("columnheader", { name: "Sub2API 状态", exact: true })).toHaveCount(
     0,
   );
-  await expect(rows.first().getByRole("cell")).toHaveCount(10);
+  await expect(rows.first().getByRole("cell")).toHaveCount(11);
   await expect(
     page.getByRole("button", { name: "更多账号操作", exact: true }).first(),
   ).toBeInViewport({
@@ -310,7 +311,7 @@ test("宽屏下状态文案和不同数量的操作按钮均保持在各自列�
   await page.evaluate(() => document.fonts.ready);
   const overflow = await rows.evaluateAll((elements) =>
     elements.flatMap((row, rowIndex) =>
-      [8, 9].flatMap((column) => {
+      [9, 10].flatMap((column) => {
         const cell = row.children[column];
         const bounds = cell.getBoundingClientRect();
         return Array.from(cell.querySelectorAll("button, .truncate"))
@@ -326,7 +327,7 @@ test("宽屏下状态文案和不同数量的操作按钮均保持在各自列�
   await page.screenshot({ path: test.info().outputPath("accounts-layout.png") });
   const clip = await page.locator("table").evaluate((table) => {
     const first = table.querySelector("thead tr")!.children[2].getBoundingClientRect();
-    const last = table.querySelector("tbody tr:last-child")!.children[4].getBoundingClientRect();
+    const last = table.querySelector("tbody tr:last-child")!.children[5].getBoundingClientRect();
     return {
       x: first.x,
       y: first.y,
@@ -501,7 +502,7 @@ test("没有流量或探针时显示十格空色条且不增加键盘停靠点",
   ).toBeVisible();
 });
 
-test("账号加载骨架保留十列，空列表提示跨越十列", async ({ page }) => {
+test("账号加载骨架保留十一列，空列表提示跨越十一列", async ({ page }) => {
   let releaseResponse = (): void => {};
   const responseGate = new Promise<void>((resolve) => {
     releaseResponse = resolve;
@@ -511,16 +512,16 @@ test("账号加载骨架保留十列，空列表提示跨越十列", async ({ pa
     await route.fulfill({ json: [] });
   });
   await page.goto("/accounts");
-  await expect(page.getByRole("columnheader")).toHaveCount(10);
+  await expect(page.getByRole("columnheader")).toHaveCount(11);
   const loadingRows = page.getByRole("row", { name: "正在加载账号", exact: true });
   await expect(loadingRows).toHaveCount(6);
   for (const row of await loadingRows.all()) {
-    await expect(row.getByRole("cell")).toHaveCount(10);
+    await expect(row.getByRole("cell")).toHaveCount(11);
     await expect(row.locator("td[colspan]")).toHaveCount(0);
   }
   releaseResponse();
   await expect(page.locator("tbody td")).toHaveCount(1);
-  await expect(page.locator("tbody td")).toHaveAttribute("colspan", "10");
+  await expect(page.locator("tbody td")).toHaveAttribute("colspan", "11");
   await expect(page.locator("tbody td")).toContainText("当前没有账号");
 });
 

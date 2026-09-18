@@ -9,15 +9,34 @@ import (
 )
 
 func decodeOAuthResponse(raw []byte) (map[string]any, error) {
-	raw = bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(raw), []byte{0xef, 0xbb, 0xbf}))
-	if bytes.HasPrefix(raw, []byte("{")) {
+	return readOAuthResponse(bytes.NewReader(raw), false)
+}
+
+func readOAuthResponse(body io.Reader, completeOnEvent bool) (map[string]any, error) {
+	limited := &io.LimitedReader{R: body, N: maximumDirectResponseBytes + 1}
+	reader := bufio.NewReader(limited)
+	jsonResponse, err := generationResponseIsJSON(reader)
+	if err != nil {
+		return nil, animationReadError(err)
+	}
+	if jsonResponse {
+		raw, err := io.ReadAll(reader)
+		if limited.N <= 0 {
+			return nil, visibleRequestError{message: "OAuth 检测响应过大，请稍后重试"}
+		}
+		if err != nil {
+			return nil, animationReadError(err)
+		}
 		payload, err := decodeOAuthObject(raw)
 		if err != nil {
 			return nil, err
 		}
+		if completeOnEvent {
+			return payload, validateOAuthAnimationResponse(payload)
+		}
 		return payload, validateOAuthResponse(payload)
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maximumDirectResponseBytes)
 	var data []string
 	var terminal map[string]any
@@ -37,6 +56,9 @@ func decodeOAuthResponse(raw []byte) (map[string]any, error) {
 		}
 		kind := stringField(event, "type")
 		if event["error"] != nil || kind == "error" || kind == "response.failed" || kind == "response.incomplete" {
+			if completeOnEvent {
+				return animationPayloadError(event, "OAuth 动画检测上游返回失败或不完整结果")
+			}
 			return visibleRequestError{message: "OAuth 检测上游返回失败或不完整结果，请稍后重试"}
 		}
 		switch kind {
@@ -54,13 +76,26 @@ func decodeOAuthResponse(raw []byte) (map[string]any, error) {
 			if !ok {
 				return visibleRequestError{message: "OAuth 检测完成事件缺少结果，请稍后重试"}
 			}
-			if err := validateOAuthResponse(terminal); err != nil {
+			validator := validateOAuthResponse
+			if completeOnEvent {
+				validator = validateOAuthAnimationResponse
+			}
+			if err := validator(terminal); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
+	finish := func() (map[string]any, error) {
+		if openAIResponseText(terminal) == "" && deltas.Len() > 0 {
+			terminal["output_text"] = deltas.String()
+		}
+		return terminal, nil
+	}
 	for scanner.Scan() {
+		if limited.N <= 0 {
+			return nil, visibleRequestError{message: "OAuth 检测响应过大，请稍后重试"}
+		}
 		line := scanner.Text()
 		if strings.HasPrefix(line, ":") {
 			continue
@@ -68,6 +103,9 @@ func decodeOAuthResponse(raw []byte) (map[string]any, error) {
 		if line == "" {
 			if err := process(); err != nil {
 				return nil, err
+			}
+			if completeOnEvent && terminal != nil {
+				return finish()
 			}
 			continue
 		}
@@ -77,23 +115,26 @@ func decodeOAuthResponse(raw []byte) (map[string]any, error) {
 				if err := process(); err != nil {
 					return nil, err
 				}
+				if completeOnEvent && terminal != nil {
+					return finish()
+				}
 			}
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
 	}
-	if scanner.Err() != nil {
-		return nil, visibleRequestError{message: "OAuth 检测事件流无效，请稍后重试"}
+	if err := scanner.Err(); err != nil {
+		return nil, animationReadError(err)
 	}
 	if err := process(); err != nil {
 		return nil, err
 	}
 	if terminal == nil {
+		if completeOnEvent {
+			return nil, retryableAnimationError{err: visibleRequestError{message: "OAuth 检测响应未正常结束，请稍后重试"}}
+		}
 		return nil, visibleRequestError{message: "OAuth 检测响应未正常结束，请稍后重试"}
 	}
-	if openAIResponseText(terminal) == "" && deltas.Len() > 0 {
-		terminal["output_text"] = deltas.String()
-	}
-	return terminal, nil
+	return finish()
 }
 
 func decodeOAuthObject(raw []byte) (map[string]any, error) {
@@ -113,6 +154,14 @@ func validateOAuthResponse(payload map[string]any) error {
 	status := stringField(payload, "status")
 	if payload["error"] != nil || payload["success"] == false || stringField(payload, "type") == "error" || (status != "" && status != "completed") {
 		return visibleRequestError{message: "OAuth 检测上游返回失败或不完整结果，请稍后重试"}
+	}
+	return nil
+}
+
+func validateOAuthAnimationResponse(payload map[string]any) error {
+	status := stringField(payload, "status")
+	if payload["error"] != nil || payload["success"] == false || stringField(payload, "type") == "error" || (status != "" && status != "completed") {
+		return animationPayloadError(payload, "OAuth 动画检测上游返回失败或不完整结果")
 	}
 	return nil
 }

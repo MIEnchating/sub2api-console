@@ -155,7 +155,7 @@ export function KumaResourcesPage(props: { kind: KumaResourceKind }) {
         )}
         {config.data && !config.data.management_configured && (
           <p className="text-muted-foreground text-sm">
-            请在侧栏「接入配置」中验证管理账号后使用此功能。
+            请在系统设置「监控平台」中验证管理账号后使用此功能。
           </p>
         )}
         {config.data?.management_configured && (

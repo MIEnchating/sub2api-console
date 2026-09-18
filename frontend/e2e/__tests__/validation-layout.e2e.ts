@@ -28,7 +28,7 @@ test("登录表单从空值校验到错误清除时，居中的表单及按钮�
   expect(await form.boundingBox()).toEqual(initial);
 });
 
-test("个人信息多字段校验及错误换行时，字段和保存按钮相对表单的位置不变", async ({ page }) => {
+test("个人信息无错误时字段紧凑排列，错误在字段下方展开且修正后收起", async ({ page }) => {
   await page.route("**/api/**", (route) => {
     const path = new URL(route.request().url()).pathname;
     const fixtures: Record<string, unknown> = {
@@ -42,31 +42,34 @@ test("个人信息多字段校验及错误换行时，字段和保存按钮相�
   await page.goto("/profile");
   const form = page.locator("form");
   const username = page.getByRole("textbox", { name: "账号", exact: true });
+  const password = page.getByLabel("当前密码", { exact: true });
+  const submit = page.getByRole("button", { name: "保存修改", exact: true });
   await expect(username).toHaveValue("layout-user");
-  const positions = (): Promise<number[]> =>
-    form.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      return [
-        bounds.width,
-        bounds.height,
-        ...Array.from(element.querySelectorAll("input,button")).flatMap((child) => {
-          const box = child.getBoundingClientRect();
-          return [box.x - bounds.x, box.y - bounds.y, box.width, box.height];
-        }),
-      ].map((value) => Math.round(value));
-    });
-  const initial = await positions();
+  await expect(form.locator('[data-slot="field-error"]')).toHaveCount(0);
+  const initialHeight = (await form.boundingBox())!.height;
+  const usernameBox = (await username.boundingBox())!;
+  const passwordLabelBox = (await page
+    .locator('label[for="profile-current-password"]')
+    .boundingBox())!;
+  expect(passwordLabelBox.y - usernameBox.y - usernameBox.height).toBeLessThanOrEqual(16);
   await username.fill("x");
-  await page.getByLabel("新密码（可选）", { exact: true }).fill("123");
-  await page.getByRole("button", { name: "保存修改", exact: true }).click();
+  await submit.click();
   await expect(username).toHaveAttribute("aria-invalid", "true");
-  expect(await positions()).toEqual(initial);
+  await expect(username).toHaveAccessibleDescription("账号至少 2 个字符");
   await username.fill("a".repeat(81));
-  await expect(page.getByRole("alert").filter({ hasText: "账号不能超过 80 个字符" })).toBeVisible();
-  expect(await positions()).toEqual(initial);
+  const error = page.locator("#profile-username-error");
+  await expect(error).toHaveText("账号不能超过 80 个字符");
+  const errorBox = (await error.boundingBox())!;
+  const invalidUsernameBox = (await username.boundingBox())!;
+  expect(errorBox.y).toBeGreaterThanOrEqual(invalidUsernameBox.y + invalidUsernameBox.height);
+  expect(errorBox.y + errorBox.height).toBeLessThanOrEqual((await password.boundingBox())!.y);
   await username.fill("layout-user");
+  await password.fill("layout-test-password");
+  await expect(form.locator('[data-slot="field-error"]')).toHaveCount(0);
   await expect(username).toHaveAttribute("aria-invalid", "false");
-  expect(await positions()).toEqual(initial);
+  expect((await form.boundingBox())!.height).toBe(initialHeight);
+  await submit.scrollIntoViewIfNeeded();
+  await expect(submit).toBeInViewport();
 });
 
 test("动画检测错误显示在字段下方且无重叠，清除错误后恢复紧凑布局", async ({ page }) => {

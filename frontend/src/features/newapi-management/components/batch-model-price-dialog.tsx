@@ -104,14 +104,20 @@ export function BatchModelPriceDialog(props: {
                     </TableCell>
                     <TableCell className="align-top">
                       {row.differences.map((field) => (
-                        <div key={field.label} className="whitespace-nowrap text-xs leading-6">
+                        <div
+                          key={field.label}
+                          className="max-w-sm text-xs leading-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
+                        >
                           {field.label}：{field.configured}
                         </div>
                       ))}
                     </TableCell>
                     <TableCell className="align-top">
                       {row.differences.map((field) => (
-                        <div key={field.label} className="whitespace-nowrap text-xs leading-6">
+                        <div
+                          key={field.label}
+                          className="max-w-sm text-xs leading-6 whitespace-pre-wrap [overflow-wrap:anywhere]"
+                        >
                           {field.label}：{field.remote}
                         </div>
                       ))}

@@ -4,6 +4,10 @@ import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { api } from "@/api";
 import type { AccountRecentResult, AccountStatus } from "@/api";
+import {
+  healthTimestampSchema,
+  isOlderAccountHealthSnapshot,
+} from "../lib/account-health-snapshot";
 
 const resultSchema = z.object({
   id: z.string().regex(/^[1-9]\d*$/),
@@ -17,9 +21,26 @@ const resultSchema = z.object({
   source: z.string(),
 });
 const updateSchema = z.object({ account_id: z.string(), result: resultSchema });
+const healthScoreSchema = z.number().finite().min(0).max(100).nullable();
+const sampleCountSchema = z.number().int().nonnegative();
+const latencySchema = z.number().finite().nonnegative().nullable();
+const healthSchema = z.object({
+  health_score: healthScoreSchema,
+  short_score: healthScoreSchema,
+  long_score: healthScoreSchema,
+  sample_count: sampleCountSchema,
+  short_sample_count: sampleCountSchema,
+  long_sample_count: sampleCountSchema,
+  ttfb_p50_ms: latencySchema,
+  ttfb_p95_ms: latencySchema,
+  health_evaluated_at: healthTimestampSchema,
+  health_evidence_at: healthTimestampSchema.nullable(),
+});
+type HealthSnapshot = z.infer<typeof healthSchema>;
 const snapshotSchema = z.object({
   account_id: z.string(),
   results: z.array(resultSchema).max(100),
+  health: healthSchema.optional(),
 });
 const collectionSchema = z.object({
   account_id: z.string(),
@@ -59,18 +80,48 @@ export function useAccountResultEvents(accountIDs: readonly string[]): LiveResul
     const allowed = new Set(ids);
     const retrying = new Set<string>();
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const pending = new Map<
+      string,
+      Array<{ results: AccountRecentResult[]; health?: HealthSnapshot }>
+    >();
     const source = new EventSource(api.accountResultsEventsURL(ids), { withCredentials: true });
-    const merge = (id: string, results: AccountRecentResult[]): void => {
-      if (!active || !allowed.has(id)) return;
+    const flush = (): void => {
+      timer = undefined;
+      if (!active) return;
       client.setQueryData<AccountStatus[]>(["accounts"], (accounts) =>
         accounts?.map((account) => {
-          if (account.id !== id) return account;
-          return {
-            ...account,
-            recent_results: mergeAccountResults(account.recent_results, results),
-          };
+          const updates = pending.get(account.id);
+          if (!updates) return account;
+          let next = account;
+          for (const update of updates) {
+            const health = update.health;
+            if (
+              health &&
+              isOlderAccountHealthSnapshot(health.health_evaluated_at, next.health_evaluated_at)
+            )
+              continue;
+            next = {
+              ...next,
+              ...health,
+              recent_results: mergeAccountResults(
+                health ? [] : next.recent_results,
+                update.results,
+              ),
+            };
+          }
+          return next;
         }),
       );
+      pending.clear();
+    };
+    const merge = (id: string, results: AccountRecentResult[], health?: HealthSnapshot): void => {
+      if (!active || !allowed.has(id)) return;
+      const updates = pending.get(id) ?? [];
+      updates.push({ results, health });
+      pending.set(id, updates);
+      // Bound live-update latency without repainting the table for every SSE message.
+      timer ??= setTimeout(flush, 100);
     };
     const update = (event: Event): void => {
       try {
@@ -83,7 +134,7 @@ export function useAccountResultEvents(accountIDs: readonly string[]): LiveResul
     const snapshot = (event: Event): void => {
       try {
         const parsed = snapshotSchema.safeParse(JSON.parse((event as MessageEvent<string>).data));
-        if (parsed.success) merge(parsed.data.account_id, parsed.data.results);
+        if (parsed.success) merge(parsed.data.account_id, parsed.data.results, parsed.data.health);
       } catch {
         /* Reconnection will fetch a fresh snapshot. */
       }
@@ -111,6 +162,8 @@ export function useAccountResultEvents(accountIDs: readonly string[]): LiveResul
     source.addEventListener("collection", collection);
     return () => {
       active = false;
+      clearTimeout(timer);
+      pending.clear();
       source.close();
     };
   }, [client, idsKey]);

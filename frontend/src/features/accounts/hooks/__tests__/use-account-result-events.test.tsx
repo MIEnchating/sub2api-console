@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountStatus } from "@/api";
 import { useAccountResultEvents } from "../use-account-result-events";
 
@@ -44,18 +44,21 @@ function fixture() {
   }
   return { client, Wrapper };
 }
+beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
 describe("账号实时请求追加", () => {
-  it("收到单条新请求立即追加，重复推送只更新原记录", () => {
+  it("收到单条新请求在刷新窗口内追加，重复推送只更新原记录", () => {
     const setup = fixture();
     const view = renderHook(() => useAccountResultEvents(["41"]), { wrapper: setup.Wrapper });
     const source = FakeEventSource.instances[0]!;
     expect(source.options.withCredentials).toBe(true);
     act(() => {
       source.emit("result", { account_id: "41", result: sample("2", 102) });
+      vi.advanceTimersByTime(100);
     });
     expect(
       setup.client
@@ -64,6 +67,7 @@ describe("账号实时请求追加", () => {
     ).toEqual(["2", "1"]);
     act(() => {
       source.emit("result", { account_id: "41", result: sample("2", 202) });
+      vi.advanceTimersByTime(100);
     });
     expect(
       setup.client.getQueryData<AccountStatus[]>(["accounts"])?.[0].recent_results,
@@ -87,6 +91,7 @@ describe("账号实时请求追加", () => {
     act(() => {
       old.emit("result", { account_id: "41", result: sample("2", 102) });
       FakeEventSource.instances[1]!.emit("result", { account_id: "41", result: sample("3", 103) });
+      vi.advanceTimersByTime(100);
     });
     expect(
       setup.client.getQueryData<AccountStatus[]>(["accounts"])?.[0].recent_results,
@@ -101,10 +106,12 @@ describe("账号实时请求追加", () => {
     const source = FakeEventSource.instances[0]!;
     act(() => {
       source.emit("snapshot", { account_id: "41", results: [sample("2", 102), sample("1", 101)] });
+      vi.advanceTimersByTime(100);
     });
     act(() => {
       source.emit("snapshot", { account_id: "41", results: [sample("2", 102), sample("1", 101)] });
       source.emit("result", { account_id: "41", result: { id: "bad" } });
+      vi.advanceTimersByTime(100);
     });
     expect(
       setup.client
@@ -124,6 +131,7 @@ describe("账号实时请求追加", () => {
         account_id: "41",
         result: { ...sample("2", 102), observed_at: sample("1", 101).observed_at },
       });
+      vi.advanceTimersByTime(100);
     });
     expect(
       setup.client

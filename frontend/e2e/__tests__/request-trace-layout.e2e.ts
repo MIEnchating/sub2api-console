@@ -22,6 +22,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const fixtures: Record<string, unknown> = {
+      "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "布局测试" },
       "/api/inspection/automation": {

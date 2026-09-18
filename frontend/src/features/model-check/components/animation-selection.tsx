@@ -1,3 +1,4 @@
+import { SelectTrafficAccounts } from "@/features/accounts/components/account-traffic";
 import {
   useCallback,
   useEffect,
@@ -40,6 +41,7 @@ const emptyAccounts: AccountStatus[] = [];
 const emptyPrecheckResults = new Map<string, AnimationResult>();
 
 export function AnimationSelection(props: {
+  accountID?: string;
   form: UseFormReturn<AnimationForm>;
   statuses: Map<string, Task["status"]>;
   activities: Map<string, AnimationActivity>;
@@ -64,8 +66,17 @@ export function AnimationSelection(props: {
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
   const model = useWatch({ control: props.form.control, name: "unified_model", exact: true });
   const accounts = props.accounts.data ?? emptyAccounts;
-  const availableSelected = selected.filter((id) => !props.busyIDs.has(id));
-  const filtered = useMemo(() => filterAnimationAccounts(accounts, filters), [accounts, filters]);
+  const availableSelected = selected.filter(
+    (id) => accounts.some((account) => account.id === id) && !props.busyIDs.has(id),
+  );
+  const filtered = useMemo(
+    () =>
+      filterAnimationAccounts(
+        accounts.filter((account) => !props.accountID || account.id === props.accountID),
+        filters,
+      ),
+    [accounts, filters, props.accountID],
+  );
   const precheckQuestions = props.precheckQuestions ?? allPrecheckQuestions;
   const passedIDs = selectPrecheckAccounts(
     filtered,
@@ -99,6 +110,14 @@ export function AnimationSelection(props: {
     [props.schedules.data],
   );
   const form = props.form;
+  useEffect(() => {
+    if (!props.accounts.data) return;
+    const ids = new Set(props.accounts.data.map((account) => account.id));
+    const current = form.getValues("account_ids");
+    const next = current.filter((id) => ids.has(id));
+    if (next.length !== current.length)
+      form.setValue("account_ids", next, { shouldValidate: true });
+  }, [props.accounts.data, form]);
   const startLabel = props.pending
     ? "正在启动检测"
     : `开始检测（${availableSelected.length} 个账号）`;
@@ -132,7 +151,7 @@ export function AnimationSelection(props: {
           aria-label="动画筛选与模型"
           className="flex min-w-0 flex-wrap items-start gap-x-5 gap-y-3 px-3 py-3 sm:px-4"
         >
-          <div className="min-w-0 flex-1 basis-[28rem] sm:pt-[22px]">
+          <div className="min-w-0 flex-1 basis-[28rem]">
             <AnimationAccountFilters
               accounts={accounts}
               value={filters}
@@ -150,6 +169,18 @@ export function AnimationSelection(props: {
           className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t bg-muted/20 px-3 py-2 sm:px-4"
         >
           <div className="flex shrink-0 items-center gap-2">
+            <SelectTrafficAccounts
+              accountIDs={filtered
+                .filter(
+                  (account) =>
+                    !props.busyIDs.has(account.id) &&
+                    (account.platform == null ||
+                      ["openai", "anthropic"].includes(account.platform)),
+                )
+                .map((account) => account.id)}
+              disabled={props.pending || !props.accounts.isSuccess}
+              onSelect={(ids) => form.setValue("account_ids", ids, { shouldValidate: true })}
+            />
             <Tooltip>
               <TooltipTrigger
                 render={

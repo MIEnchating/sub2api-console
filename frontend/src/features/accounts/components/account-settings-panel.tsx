@@ -1,3 +1,4 @@
+import { ProbeModelInheritance } from "@/components/probe-model-inheritance";
 import { ContentRetry } from "@/components/content-retry";
 import { FieldError } from "@/components/field-error";
 import { ContentLoading } from "@/components/content-loading";
@@ -25,10 +26,12 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { accountPoolState } from "@/features/accounts/lib/account-pool";
+import { effectiveAccountLoadFactor } from "../lib/account-routing-values";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { taskStopsPolling } from "@/lib/task-state";
 
 import { accountDetailDialogLayout } from "./account-detail-dialog";
+import { AccountCostWallSwitch } from "./account-cost-wall-switch";
 
 const positiveInteger = z
   .string()
@@ -36,20 +39,28 @@ const positiveInteger = z
   .regex(/^\d+$/, "请输入正整数")
   .refine((value) => Number(value) >= 1 && Number(value) <= 10_000_000, "请输入 1 到 10000000");
 
-const settingsSchema = z.object({
-  priority: positiveInteger,
-  loadFactor: z
-    .string()
-    .trim()
-    .refine(
-      (value) => Number.isFinite(Number(value)) && Number(value) >= 1,
-      "负载因子必须大于或等于 1",
-    ),
-  concurrency: positiveInteger,
-  testModel: z.string().trim().max(256, "探测模型不能超过 256 个字符"),
-  paused: z.boolean(),
-  excluded: z.boolean(),
-});
+const settingsSchema = z
+  .object({
+    priority: positiveInteger,
+    loadFactor: z.string().trim().max(128, "负载因子不能超过 128 个字符"),
+    followConcurrency: z.boolean(),
+    concurrency: positiveInteger,
+    testModel: z.string().trim().max(256, "探测模型不能超过 256 个字符"),
+    paused: z.boolean(),
+    excluded: z.boolean(),
+  })
+  .superRefine((values, context) => {
+    if (
+      !values.followConcurrency &&
+      (!Number.isFinite(Number(values.loadFactor)) || Number(values.loadFactor) < 1)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["loadFactor"],
+        message: "负载因子必须大于或等于 1",
+      });
+    }
+  });
 
 type AccountSettingsValues = z.infer<typeof settingsSchema>;
 
@@ -110,6 +121,7 @@ export function AccountSettingsPanel(props: {
     defaultValues: {
       priority: "",
       loadFactor: "",
+      followConcurrency: false,
       concurrency: "",
       testModel: "",
       paused: false,
@@ -125,7 +137,8 @@ export function AccountSettingsPanel(props: {
     initializedAccountID.current = detail.id;
     form.reset({
       priority: detail.priority == null ? "" : String(detail.priority),
-      loadFactor: detail.load_factor ?? "",
+      loadFactor: effectiveAccountLoadFactor(detail) ?? "",
+      followConcurrency: !detail.load_factor?.trim() || Number(detail.load_factor) <= 0,
       concurrency: detail.concurrency == null ? "" : String(detail.concurrency),
       testModel: detail.test_models[0] ?? "",
       paused: detail.paused === true,
@@ -138,7 +151,8 @@ export function AccountSettingsPanel(props: {
       if (!detail) throw new Error("账号详情尚未读取完成");
       const task = await api.saveAccountSettings(props.accountId, {
         priority: Number(values.priority),
-        load_factor: values.loadFactor,
+        load_factor: values.followConcurrency ? "" : values.loadFactor,
+        follow_concurrency: values.followConcurrency,
         concurrency: Number(values.concurrency),
         test_models: values.testModel ? [values.testModel] : [],
         paused: values.paused,
@@ -188,6 +202,9 @@ export function AccountSettingsPanel(props: {
 
   const formId = `account-settings-${props.accountId}`;
   const testModel = form.watch("testModel");
+  const followConcurrency = form.watch("followConcurrency");
+  const concurrency = form.watch("concurrency");
+  const loadFactor = form.watch("loadFactor");
   const modelOptions = accountTestModelOptions(models, testModel);
   const fetchedModelCount = accountTestModelOptions(models, "").length;
   let modelsButtonLabel = "获取上游模型";
@@ -229,10 +246,39 @@ export function AccountSettingsPanel(props: {
                   <Input type="number" min={1} {...form.register("priority")} />
                 </SettingsField>
                 <SettingsField label="负载因子" error={form.formState.errors.loadFactor?.message}>
-                  <Input type="number" min={1} step="any" {...form.register("loadFactor")} />
+                  <Input
+                    type="number"
+                    min={1}
+                    step="any"
+                    aria-label="负载因子"
+                    {...form.register("loadFactor")}
+                    value={followConcurrency ? concurrency : loadFactor}
+                    disabled={followConcurrency}
+                  />
+                  <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <label htmlFor={`${formId}-follow-concurrency`}>跟随并发上限</label>
+                    <Switch
+                      id={`${formId}-follow-concurrency`}
+                      aria-label="跟随并发上限"
+                      checked={followConcurrency}
+                      onCheckedChange={(checked) => {
+                        if (!checked)
+                          form.setValue("loadFactor", concurrency, { shouldDirty: true });
+                        form.setValue("followConcurrency", checked, {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        });
+                      }}
+                    />
+                  </div>
                 </SettingsField>
                 <SettingsField label="并发上限" error={form.formState.errors.concurrency?.message}>
-                  <Input type="number" min={1} {...form.register("concurrency")} />
+                  <Input
+                    type="number"
+                    min={1}
+                    aria-label="并发上限"
+                    {...form.register("concurrency")}
+                  />
                 </SettingsField>
                 <SettingsField
                   label="账号成本"
@@ -277,6 +323,12 @@ export function AccountSettingsPanel(props: {
                   onCheckedChange={(checked) =>
                     form.setValue("excluded", checked, { shouldDirty: true })
                   }
+                />
+                <AccountCostWallSwitch
+                  key={props.accountId}
+                  accountId={props.accountId}
+                  enabled={detail.ignore_cost_wall}
+                  disabled={save.isPending}
                 />
               </div>
             </section>
@@ -340,14 +392,18 @@ export function AccountSettingsPanel(props: {
                   {modelsButtonLabel}
                 </Button>
               </div>
+              {!testModel.trim() ? (
+                <ProbeModelInheritance
+                  groupIds={Object.values(detail.group_ids)}
+                  metadata={detail.metadata}
+                />
+              ) : null}
               {form.formState.errors.testModel?.message ? (
                 <FieldError message={form.formState.errors.testModel.message} />
               ) : null}
-              {modelsLoaded ? (
+              {modelsLoaded && fetchedModelCount === 0 ? (
                 <p className="text-muted-foreground text-xs" role="status">
-                  {fetchedModelCount > 0
-                    ? `已读取 ${fetchedModelCount} 个上游模型`
-                    : "上游未返回可用模型，可继续手动输入"}
+                  上游未返回可用模型，可继续手动输入
                 </p>
               ) : null}
             </section>

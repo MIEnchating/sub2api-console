@@ -1,3 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { KumaConfigPage } from "@/features/uptime-kuma/components/kuma-config-page";
-export const Route = createFileRoute("/uptime-kuma/config")({ component: KumaConfigPage });
+import { createFileRoute, redirect } from "@tanstack/react-router";
+export const Route = createFileRoute("/uptime-kuma/config")({
+  beforeLoad: () => {
+    throw redirect({ to: "/config", search: { tab: "monitoring" }, replace: true });
+  },
+});

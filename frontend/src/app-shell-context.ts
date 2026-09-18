@@ -6,6 +6,10 @@ export type AppShellContextValue = {
   hiddenNavigationItemIDs: Set<View>;
   setNavigationItemVisibility: (itemID: View, visible: boolean) => void;
   resetNavigation: () => void;
+  navigationPending?: boolean;
+  navigationLoading?: boolean;
+  navigationReadFailed?: boolean;
+  retryNavigation?: () => void;
 };
 
 export const AppShellContext = createContext<AppShellContextValue | null>(null);

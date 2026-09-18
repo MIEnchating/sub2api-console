@@ -9,7 +9,8 @@ import (
 )
 
 type healthSampleSelection struct {
-	id int64
+	id          int64
+	evidenceKey string
 }
 
 type selectedHealthSample struct {
@@ -33,6 +34,23 @@ type healthSampleCandidate struct {
 	evidenceKey sql.NullString
 }
 
+func (s *Store) healthSampleAccountIDs(ctx context.Context, clauses []string, arguments []any) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT account_id FROM health_samples`+whereSQL(clauses)+` ORDER BY account_id`, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []string{}
+	for rows.Next() {
+		var accountID string
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		result = append(result, accountID)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) selectHealthSampleWindow(
 	ctx context.Context,
 	clauses []string,
@@ -41,8 +59,12 @@ func (s *Store) selectHealthSampleWindow(
 	normalizeSource bool,
 	stopAfterLimit bool,
 ) ([]healthSampleSelection, error) {
+	index := "ix_health_samples_account_recent"
+	if normalizeSource {
+		index = "ix_health_samples_normalized_source_latest"
+	}
 	query := `SELECT id,account_id,observed_at,source,evidence_key
-		FROM health_samples INDEXED BY ix_health_samples_account_recent` + whereSQL(clauses) +
+		FROM health_samples INDEXED BY ` + index + whereSQL(clauses) +
 		` ORDER BY account_id,observed_at DESC,id DESC`
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
@@ -79,7 +101,7 @@ func (s *Store) selectHealthSampleWindow(
 		if selectedForAccount >= limit {
 			continue
 		}
-		result = append(result, healthSampleSelection{id: item.id})
+		result = append(result, healthSampleSelection{id: item.id, evidenceKey: evidence})
 		selectedForAccount++
 		if stopAfterLimit && selectedForAccount >= limit {
 			break

@@ -18,11 +18,15 @@ func TestQueuedCostWallChangeStopsAutomaticProbeButKeepsManualDiagnosis(t *testi
 		name          string
 		automatic     bool
 		disabledField string
+		ignoreBefore  bool
+		ignoreAfter   bool
 	}{
 		{name: "automatic probe rechecks queued cost change", automatic: true},
 		{name: "manual diagnosis remains available"},
 		{name: "queued master switch change allows automatic probe", automatic: true, disabledField: "enabled"},
 		{name: "queued probe switch change allows automatic probe", automatic: true, disabledField: "stop_auto_probe"},
+		{name: "queued account exemption allows automatic probe", automatic: true, ignoreAfter: true},
+		{name: "removing queued account exemption stops automatic probe", automatic: true, ignoreBefore: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "cost-wall.sqlite3")
@@ -69,6 +73,11 @@ func TestQueuedCostWallChangeStopsAutomaticProbeButKeepsManualDiagnosis(t *testi
 			service := probe.New(store, protectionTarget{endpoint: server.URL}, tasks)
 			service.UseTaskRunner(runner)
 			id := "41"
+			if test.ignoreBefore {
+				if err := store.SetAccountIgnoreCostWall(t.Context(), id, true, "test"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if _, err := service.Enqueue(t.Context(), probe.Request{AccountID: &id, Automatic: test.automatic}, "test"); err != nil {
 				t.Fatal(err)
 			}
@@ -82,12 +91,17 @@ func TestQueuedCostWallChangeStopsAutomaticProbeButKeepsManualDiagnosis(t *testi
 					t.Fatal(err)
 				}
 			}
+			if test.ignoreBefore || test.ignoreAfter {
+				if err := store.SetAccountIgnoreCostWall(t.Context(), id, test.ignoreAfter, "test"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			runner.run(t.Context())
 			var samples int
 			if err := db.QueryRow(`SELECT COUNT(*) FROM health_samples`).Scan(&samples); err != nil {
 				t.Fatal(err)
 			}
-			if test.automatic && test.disabledField == "" {
+			if test.automatic && test.disabledField == "" && !test.ignoreAfter {
 				if reads.Load() != 0 || generated.Load() != 0 || samples != 0 {
 					t.Fatalf("queued automatic probe must skip credentials, generation and evidence: reads=%d generated=%d samples=%d", reads.Load(), generated.Load(), samples)
 				}

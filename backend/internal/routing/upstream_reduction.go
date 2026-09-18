@@ -2,7 +2,6 @@ package routing
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 )
@@ -59,12 +58,7 @@ func (pool *upstreamScalingPool) reduceOverage(primary map[string]*candidate, co
 	if len(items) == 0 {
 		return false
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].weight != items[j].weight {
-			return items[i].weight > items[j].weight
-		}
-		return stableIDLess(items[i].account.ID, items[j].account.ID)
-	})
+	sortCapacityWithHysteresis(items, configs)
 	reserved := int64(0)
 	for id, capacity := range pool.current {
 		if !selected[id] {

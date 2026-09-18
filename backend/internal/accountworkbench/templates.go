@@ -2,257 +2,254 @@ package accountworkbench
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
-	"unicode/utf8"
-
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
-	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
+	"strings"
+	"time"
 )
 
+type Template struct {
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	SourceID      string         `json:"source_id"`
+	SourceName    string         `json:"source_name"`
+	SourceVersion string         `json:"source_version"`
+	SyncedAt      string         `json:"synced_at"`
+	Revision      int64          `json:"revision"`
+	Config        TemplateConfig `json:"config"`
+	Summary       Account        `json:"summary"`
+}
+type TemplateLibrary struct {
+	Revision    int64      `json:"revision"`
+	PreferredID string     `json:"preferred_id"`
+	Items       []Template `json:"items"`
+}
 type TemplateInput struct {
-	Name            string                              `json:"name"`
-	Priority        int64                               `json:"priority"`
-	Revision        int64                               `json:"revision"`
-	Match           configstore.WorkbenchTemplateMatch  `json:"match"`
-	Config          configstore.WorkbenchTemplateConfig `json:"config"`
-	Preferred       *bool                               `json:"preferred,omitempty"`
-	SourceAccountID string                              `json:"source_account_id,omitempty"`
-	SourceRevision  string                              `json:"source_revision,omitempty"`
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	SourceID      string          `json:"source_id"`
+	SourceVersion string          `json:"source_version"`
+	Revision      int64           `json:"revision"`
+	Config        *TemplateConfig `json:"config,omitempty"`
 }
 
-type TemplateSource struct {
-	AccountID      string                              `json:"account_id"`
-	AccountName    string                              `json:"account_name"`
-	Config         configstore.WorkbenchTemplateConfig `json:"config"`
-	Target         string                              `json:"target"`
-	SourceRevision string                              `json:"source_revision"`
-	SyncedAt       string                              `json:"synced_at"`
-	Match          configstore.WorkbenchTemplateMatch  `json:"match"`
-	Priority       int64                               `json:"priority"`
+func targetKey(target configstore.TargetSettings) string {
+	sum := sha256.Sum256([]byte(target.BaseURL + "\x00" + target.AdminKey))
+	return hex.EncodeToString(sum[:])
+}
+func digest(value any) string {
+	raw, _ := json.Marshal(value)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+func newID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(raw[:])
 }
 
-func (s *Service) Templates(ctx context.Context) ([]configstore.WorkbenchTemplate, error) {
-	target, err := s.private.TargetSettings(ctx)
+func (s *Service) Templates(ctx context.Context) (TemplateLibrary, error) {
+	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
-		return nil, err
+		return TemplateLibrary{}, err
 	}
-	items, err := s.private.WorkbenchTemplates(ctx, target.BaseURL)
-	if err != nil {
-		return nil, err
-	}
-	for i := range items {
-		items[i].Config = publicConfig(items[i].Config)
-	}
-	return items, nil
+	return s.readTemplates(ctx, target)
 }
-
-func (s *Service) TemplateFromAccount(ctx context.Context, id string) (TemplateSource, error) {
-	if !validTemplateSourceID(id) {
-		return TemplateSource{}, errors.New("请选择有效的稳定来源账号 ID")
-	}
-	ctx, err := targetguard.Capture(ctx, s.private)
-	if err != nil {
-		return TemplateSource{}, err
-	}
-	guarded, release, err := targetguard.Acquire(ctx, s.repository, mutationguard.Account(id))
-	if err != nil {
-		return TemplateSource{}, err
-	}
-	defer func() { _ = release() }()
-	guarded, err = targetguard.Bind(guarded, s.private)
-	if err != nil {
-		return TemplateSource{}, err
-	}
-	target, err := targetguard.Settings(guarded, s.private)
-	if err != nil {
-		return TemplateSource{}, err
-	}
-	source, _, err := s.readTemplateSource(guarded, id, target)
-	return source, err
-}
-
-func (s *Service) SaveTemplate(ctx context.Context, id string, input TemplateInput) (configstore.WorkbenchTemplate, error) {
-	var result configstore.WorkbenchTemplate
-	input.Name = strings.TrimSpace(input.Name)
-	if input.Name == "" || utf8.RuneCountInString(input.Name) > 120 || input.Priority < 0 || input.Priority > 1000000 || input.Revision < 0 {
-		return result, errors.New("模板名称、优先级或版本无效")
-	}
-	if len(input.Match.PlanType) > 100 || len(input.Match.EmailDomain) > 253 || strings.ContainsAny(input.Match.EmailDomain, " /\\\r\n@") {
-		return result, errors.New("模板匹配规则无效")
-	}
-	if id == "" {
-		if input.Revision != 0 {
-			return result, errors.New("新增模板不能指定旧版本")
-		}
-		var err error
-		id, err = randomID()
-		if err != nil {
-			return result, err
-		}
-	} else if input.Revision <= 0 {
-		return result, errors.New("修改模板必须提交当前版本")
-	}
-	ctx, err := targetguard.Capture(ctx, s.private)
+func (s *Service) readTemplates(ctx context.Context, target configstore.TargetSettings) (TemplateLibrary, error) {
+	result := TemplateLibrary{Items: []Template{}}
+	raw, revision, err := s.private.WorkbenchDocument(ctx, "templates:"+targetKey(target))
 	if err != nil {
 		return result, err
 	}
-	target, err := targetguard.Expected(ctx, s.private)
-	if err != nil {
-		return result, err
-	}
-	var previous *configstore.WorkbenchTemplate
-	if input.Revision > 0 {
-		current, err := s.private.WorkbenchTemplate(ctx, target.BaseURL, id)
-		if err != nil {
-			return result, err
+	if len(raw) > 0 {
+		if err = json.Unmarshal(raw, &result); err != nil {
+			return result, errors.New("模板记录无法读取")
 		}
-		if current.Revision != input.Revision {
-			return result, configstore.ErrWorkbenchTemplateConflict
-		}
-		previous = &current
 	}
-	sourceID := input.SourceAccountID
-	if sourceID == "" && previous != nil {
-		sourceID = previous.SourceAccountID
-	}
-	verifySource := input.SourceRevision != "" || (sourceID != "" && (previous == nil || sourceID != previous.SourceAccountID))
-	if sourceID != "" && !validTemplateSourceID(sourceID) {
-		return result, errors.New("来源账号 ID 无效")
-	}
-	if verifySource && (sourceID == "" || input.SourceRevision == "") {
-		return result, errors.New("请先提取并确认来源账号配置预览")
-	}
-	resources := []string{}
-	if verifySource {
-		resources = append(resources, mutationguard.Account(sourceID))
-	}
-	guarded, release, err := targetguard.Acquire(ctx, s.repository, resources...)
-	if err != nil {
-		return result, err
-	}
-	defer func() { _ = release() }()
-	guarded, err = targetguard.Bind(guarded, s.private)
-	if err != nil {
-		return result, err
-	}
-	if previous != nil {
-		current, err := s.private.WorkbenchTemplate(guarded, target.BaseURL, id)
-		if err != nil {
-			return result, err
-		}
-		if current.Revision != input.Revision {
-			return result, configstore.ErrWorkbenchTemplateConflict
-		}
-		previous = &current
-	}
-	result = configstore.WorkbenchTemplate{ID: id, Revision: input.Revision, Name: input.Name, Priority: input.Priority, TargetURL: target.BaseURL, Match: input.Match, Config: input.Config}
-	if previous != nil {
-		result.Preferred = previous.Preferred
-		result.SourceAccountID, result.SourceName = previous.SourceAccountID, previous.SourceName
-		result.SourceRevision, result.SourceSyncedAt = previous.SourceRevision, previous.SourceSyncedAt
-	}
-	if input.Preferred != nil {
-		result.Preferred = *input.Preferred
-	}
-	secrets := []string{target.AdminKey}
-	if verifySource {
-		source, sourceSecrets, err := s.readTemplateSource(guarded, sourceID, target)
-		if err != nil {
-			return result, err
-		}
-		if source.SourceRevision != input.SourceRevision {
-			return result, errors.New("来源账号配置或管理目标已变化，请重新提取预览")
-		}
-		result.SourceAccountID, result.SourceName = source.AccountID, source.AccountName
-		result.SourceRevision, result.SourceSyncedAt = source.SourceRevision, source.SyncedAt
-		secrets = append(secrets, sourceSecrets...)
-	}
-	if err := validatePublicTemplate(input, secrets); err != nil {
-		return configstore.WorkbenchTemplate{}, err
-	}
-	// Applying the same whitelist used by imports validates every submitted field.
-	payload, err := ApplyTemplate(InputItem{Credentials: map[string]any{"access_token": "validation-only"}}, &result)
-	if err != nil {
-		return result, err
-	}
-	result.Config, err = ExtractTemplate(payload)
-	if err != nil {
-		return result, err
-	}
-	if _, err := targetguard.Pin(guarded, s.private); err != nil {
-		return configstore.WorkbenchTemplate{}, err
-	}
-	if err := s.private.SaveWorkbenchTemplate(guarded, result); err != nil {
-		return result, err
-	}
-	result.Revision++
-	result.Config = publicConfig(result.Config)
+	result.Revision = revision
 	return result, nil
 }
-
-func (s *Service) DeleteTemplate(ctx context.Context, id string, revision int64) error {
-	if id == "" || revision <= 0 {
-		return errors.New("模板 ID 或版本无效")
+func (s *Service) TemplateSource(ctx context.Context, id string) (Template, error) {
+	if id == "" || strings.ContainsAny(id, "/\\?#\x00") {
+		return Template{}, errors.New("来源账号 ID 无效")
 	}
 	ctx, err := targetguard.Capture(ctx, s.private)
 	if err != nil {
-		return err
+		return Template{}, err
 	}
-	guarded, release, err := targetguard.Acquire(ctx, s.repository)
+	ctx, err = targetguard.Pin(ctx, s.private)
 	if err != nil {
-		return err
+		return Template{}, err
 	}
-	defer func() { _ = release() }()
-	guarded, err = targetguard.Bind(guarded, s.private)
+	target, err := targetguard.Settings(ctx, s.private)
 	if err != nil {
-		return err
+		return Template{}, err
 	}
-	target, err := targetguard.Settings(guarded, s.private)
+	client, err := s.client(target)
 	if err != nil {
-		return err
+		return Template{}, err
 	}
-	return s.private.DeleteWorkbenchTemplate(guarded, target.BaseURL, id, revision)
+	row, err := client.Account(ctx, id)
+	if err != nil {
+		return Template{}, errors.New("来源账号读取失败，请刷新账号列表")
+	}
+	if text(row["id"]) != id {
+		return Template{}, errors.New("来源账号 ID 不匹配")
+	}
+	config, err := ExtractConfig(row)
+	if err != nil {
+		return Template{}, err
+	}
+	summary := publicAccount(row)
+	result := Template{SourceID: id, SourceName: summary.Name, Config: config, Summary: summary}
+	result.SourceVersion = digest(struct {
+		Config   TemplateConfig
+		Identity any
+		Target   string
+	}{config, []string{text(object(row["credentials"])["chatgpt_account_id"]), text(object(row["credentials"])["chatgpt_user_id"])}, targetKey(target)})
+	if _, err = targetguard.Pin(ctx, s.private); err != nil {
+		return Template{}, err
+	}
+	return result, nil
 }
-
-func (s *Service) SetPreferredTemplate(ctx context.Context, id string, revision int64, preferred bool) (configstore.WorkbenchTemplate, error) {
+func (s *Service) SaveTemplate(ctx context.Context, input TemplateInput) (TemplateLibrary, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || len(input.Name) > 200 || strings.ContainsAny(input.Name, "\r\n\x00") {
+		return TemplateLibrary{}, errors.New("请填写有效的模板名称")
+	}
 	ctx, err := targetguard.Capture(ctx, s.private)
 	if err != nil {
-		return configstore.WorkbenchTemplate{}, err
+		return TemplateLibrary{}, err
 	}
-	target, err := targetguard.Expected(ctx, s.private)
+	ctx, release, err := targetguard.Acquire(ctx, s.private)
 	if err != nil {
-		return configstore.WorkbenchTemplate{}, err
+		return TemplateLibrary{}, err
 	}
-	current, err := s.private.WorkbenchTemplate(ctx, target.BaseURL, id)
+	defer release()
+	ctx, err = targetguard.Bind(ctx, s.private)
 	if err != nil {
-		return configstore.WorkbenchTemplate{}, err
+		return TemplateLibrary{}, err
 	}
-	if current.Revision != revision {
-		return configstore.WorkbenchTemplate{}, configstore.ErrWorkbenchTemplateConflict
+	var source Template
+	if input.Config != nil {
+		if input.SourceID != "" || input.SourceVersion != "" {
+			return TemplateLibrary{}, errors.New("手动配置不能同时指定来源账号")
+		}
+		if err = input.Config.Validate(); err != nil {
+			return TemplateLibrary{}, err
+		}
+		source = manualTemplate(*input.Config)
+	} else {
+		if input.SourceVersion == "" {
+			return TemplateLibrary{}, errors.New("请先读取来源账号")
+		}
+		source, err = s.TemplateSource(ctx, input.SourceID)
+		if err != nil {
+			return TemplateLibrary{}, err
+		}
+		if source.SourceVersion != input.SourceVersion {
+			return TemplateLibrary{}, errors.New("来源配置已变化，请重新读取后保存")
+		}
 	}
-	return s.SaveTemplate(ctx, id, TemplateInput{Name: current.Name, Priority: current.Priority, Revision: revision, Match: current.Match, Config: current.Config, Preferred: &preferred})
+	target, err := targetguard.Settings(ctx, s.private)
+	if err != nil {
+		return TemplateLibrary{}, err
+	}
+	library, err := s.readTemplates(ctx, target)
+	if err != nil {
+		return library, err
+	}
+	if input.Revision != library.Revision {
+		return library, configstore.ErrWorkbenchVersion
+	}
+	source.ID, source.Name, source.SyncedAt = input.ID, input.Name, time.Now().UTC().Format(time.RFC3339)
+	if input.ID == "" {
+		source.ID = newID()
+		source.Revision = 1
+		library.Items = append(library.Items, source)
+	} else {
+		found := false
+		for i, item := range library.Items {
+			if item.ID == input.ID {
+				if item.SourceID != source.SourceID {
+					return library, errors.New("不能更改模板来源，请创建新模板")
+				}
+				source.Revision = item.Revision + 1
+				library.Items[i] = source
+				found = true
+				break
+			}
+		}
+		if !found {
+			return library, errors.New("待刷新模板不存在")
+		}
+	}
+	library.PreferredID = source.ID
+	return s.saveTemplates(ctx, target, library)
 }
-
-func publicConfig(config configstore.WorkbenchTemplateConfig) configstore.WorkbenchTemplateConfig {
-	result := make(configstore.WorkbenchTemplateConfig, len(config))
-	for key, raw := range config {
-		result[key] = append(json.RawMessage(nil), raw...)
+func (s *Service) ChangeTemplate(ctx context.Context, id string, revision int64, remove bool) (TemplateLibrary, error) {
+	ctx, err := targetguard.Capture(ctx, s.private)
+	if err != nil {
+		return TemplateLibrary{}, err
 	}
-	for _, key := range []string{"rate_multiplier", "load_factor", "proxy_id"} {
-		raw, ok := result[key]
-		if !ok || string(raw) == "null" {
-			continue
-		}
-		var value any
-		decoder := json.NewDecoder(strings.NewReader(string(raw)))
-		decoder.UseNumber()
-		if decoder.Decode(&value) == nil {
-			result[key], _ = json.Marshal(stringValue(value))
+	ctx, release, err := targetguard.Acquire(ctx, s.private)
+	if err != nil {
+		return TemplateLibrary{}, err
+	}
+	defer release()
+	ctx, err = targetguard.Bind(ctx, s.private)
+	if err != nil {
+		return TemplateLibrary{}, err
+	}
+	target, err := targetguard.Settings(ctx, s.private)
+	if err != nil {
+		return TemplateLibrary{}, err
+	}
+	library, err := s.readTemplates(ctx, target)
+	if err != nil {
+		return library, err
+	}
+	if revision != library.Revision {
+		return library, configstore.ErrWorkbenchVersion
+	}
+	found := id == "" && !remove
+	for i, item := range library.Items {
+		if item.ID == id {
+			found = true
+			if remove {
+				library.Items = append(library.Items[:i], library.Items[i+1:]...)
+			}
+			break
 		}
 	}
-	result["group_ids"], _ = json.Marshal(configIDs(config["group_ids"]))
-	return result
+	if !found {
+		return library, errors.New("模板不存在，请刷新")
+	}
+	if remove {
+		if library.PreferredID == id {
+			library.PreferredID = ""
+		}
+	} else {
+		library.PreferredID = id
+	}
+	return s.saveTemplates(ctx, target, library)
+}
+func (s *Service) saveTemplates(ctx context.Context, target configstore.TargetSettings, library TemplateLibrary) (TemplateLibrary, error) {
+	if _, err := targetguard.Pin(targetguard.Expect(ctx, target), s.private); err != nil {
+		return library, err
+	}
+	raw, err := json.Marshal(library)
+	if err != nil {
+		return library, err
+	}
+	revision, err := s.private.SaveWorkbenchDocument(ctx, "templates:"+targetKey(target), library.Revision, raw)
+	library.Revision = revision
+	return library, err
 }

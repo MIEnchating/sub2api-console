@@ -29,7 +29,8 @@ test.beforeEach(async ({ page, colorScheme }) => {
         endpoints: [{ name: "测试接口", base_url: endpoint, default: true }],
       },
       "/api/newapi/platforms/layout/channel-models": { models: ["test-model"] },
-      "/api/newapi/platforms/layout/channels": { id: "layout-channel" },
+      "/api/newapi/platforms/layout/channels": { items: [], total: 0 },
+      "/api/newapi/platforms/layout/channel-groups": { version: "1", groups: [] },
     };
     if (path.endsWith("/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
@@ -40,6 +41,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
 
 test("渠道表单随容器分栏，长名称与地址不撑宽页面，两步提交操作均可达", async ({ page }, info) => {
   await page.goto("/newapi/channels");
+  await page.getByRole("button", { name: "新增渠道", exact: true }).click();
   await page.getByRole("button", { name: "自定义账号密码" }).click();
   const layout = page.locator("[data-channel-credentials-layout]");
   const columns = await layout.evaluate((element) =>
@@ -91,6 +93,7 @@ test("渠道表单随容器分栏，长名称与地址不撑宽页面，两步�
 test("低高度窗口可滚动到底部且常规按钮保持32像素", async ({ page }) => {
   await page.setViewportSize({ width: 640, height: 420 });
   await page.goto("/newapi/channels");
+  await page.getByRole("button", { name: "新增渠道", exact: true }).click();
   await page.getByRole("button", { name: "自定义账号密码" }).click();
   const submit = page.getByRole("button", { name: "创建密钥", exact: true });
   await submit.scrollIntoViewIfNeeded();
@@ -103,6 +106,7 @@ test("低高度窗口可滚动到底部且常规按钮保持32像素", async ({ 
 
 test("默认账号表单与全局工作区对齐，宽屏账号和分组同行且面板保持紧凑", async ({ page }, info) => {
   await page.goto("/newapi/channels");
+  await page.getByRole("button", { name: "新增渠道", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "密码箱账号", exact: true })).toBeVisible();
   const form = page
     .locator('[data-slot="card"]')

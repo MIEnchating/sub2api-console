@@ -30,6 +30,7 @@ type RoutingAccount struct {
 	Priority                  *int64
 	ManualPriority            *int64
 	BaselinePriority          *int64
+	HasRoutingBaseline        bool
 	ManagedSchedulable        *bool
 	ManagedPriority           *int64
 	ManagedLoadFactor         *string
@@ -48,6 +49,7 @@ type RoutingAccount struct {
 
 type RoutingSample struct {
 	AccountID     string
+	EvidenceKey   string
 	GroupName     string
 	Result        string
 	LatencyP95    *string
@@ -107,21 +109,22 @@ type RuntimeEventWrite struct {
 }
 
 type AccountRoutingTarget struct {
-	AccountID              string   `json:"account_id"`
-	Priority               *int64   `json:"target_priority"`
-	LoadFactor             *string  `json:"target_load_factor"`
-	Schedulable            *bool    `json:"target_schedulable"`
-	Concurrency            *int64   `json:"target_concurrency"`
-	GroupNames             []string `json:"group_names"`
-	DesiredHealth          string   `json:"desired_health"`
-	WriteCooldown          bool     `json:"write_cooldown_active"`
-	ScalingCooldown        bool     `json:"scaling_cooldown_active"`
-	ReleaseControl         bool     `json:"release_control,omitempty"`
-	AbandonControl         bool     `json:"abandon_control,omitempty"`
-	CleanupAction          *string  `json:"cleanup_action,omitempty"`
-	ConfigurationError     *string  `json:"configuration_error,omitempty"`
-	UpstreamReductionID    string   `json:"upstream_reduction_id,omitempty"`
-	UpstreamReductionLimit *int64   `json:"upstream_reduction_limit,omitempty"`
+	CalculatedPolicyFingerprint string   `json:"-"`
+	AccountID                   string   `json:"account_id"`
+	Priority                    *int64   `json:"target_priority"`
+	LoadFactor                  *string  `json:"target_load_factor"`
+	Schedulable                 *bool    `json:"target_schedulable"`
+	Concurrency                 *int64   `json:"target_concurrency"`
+	GroupNames                  []string `json:"group_names"`
+	DesiredHealth               string   `json:"desired_health"`
+	WriteCooldown               bool     `json:"write_cooldown_active"`
+	ScalingCooldown             bool     `json:"scaling_cooldown_active"`
+	ReleaseControl              bool     `json:"release_control,omitempty"`
+	AbandonControl              bool     `json:"abandon_control,omitempty"`
+	CleanupAction               *string  `json:"cleanup_action,omitempty"`
+	ConfigurationError          *string  `json:"configuration_error,omitempty"`
+	UpstreamReductionID         string   `json:"upstream_reduction_id,omitempty"`
+	UpstreamReductionLimit      *int64   `json:"upstream_reduction_limit,omitempty"`
 }
 
 func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *string) ([]RoutingAccount, error) {
@@ -139,7 +142,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		lg.rate_multiplier,lg.profit_control_enabled,lg.profit_min_margin,lg.profit_safety_buffer,
 		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,
 		rb.managed_schedulable,rb.managed_priority,rb.managed_load_factor,rb.managed_concurrency,
-		CASE WHEN rb.ownership_version=2 THEN 1 ELSE 0 END,a.load_factor,
+		CASE WHEN rb.ownership_version=2 THEN 1 ELSE 0 END,rb.account_id IS NOT NULL,a.load_factor,
 		a.concurrency,a.multiplier,a.paused,a.paused_reason,COALESCE(a.routing_state,''),a.metadata_json
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
@@ -169,7 +172,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 			&item.ID, &item.Name, &item.GroupName, &groupID,
 			&costWall, &profitEnabled, &profitMargin, &profitBuffer,
 			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority,
-			&managedSchedulable, &managedPriority, &managedLoadFactor, &managedConcurrency, &externalControl, &loadFactor,
+			&managedSchedulable, &managedPriority, &managedLoadFactor, &managedConcurrency, &externalControl, &item.HasRoutingBaseline, &loadFactor,
 			&concurrency, &multiplier, &paused, &pausedReason, &item.EffectiveState, &metadataRaw,
 		); err != nil {
 			return nil, err
@@ -247,6 +250,10 @@ func (s *Store) RoutingSamples(
 		clauses = append(clauses, "account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
+	accountIDs, err := s.healthSampleAccountIDs(ctx, clauses, arguments)
+	if err != nil {
+		return nil, err
+	}
 	selections := []healthSampleSelection{}
 	sources := []string{"active-probe"}
 	if mode == "traffic" {
@@ -255,7 +262,7 @@ func (s *Store) RoutingSamples(
 	for _, normalizedSource := range sources {
 		sourceClauses := append(append([]string{}, clauses...), "LOWER(REPLACE(source,'_','-'))=?")
 		sourceArguments := append(append([]any{}, arguments...), normalizedSource)
-		selected, err := s.selectHealthSampleWindow(ctx, sourceClauses, sourceArguments, limit, true, false)
+		selected, err := s.selectHealthSampleWindowsForAccounts(ctx, accountIDs, sourceClauses, sourceArguments, limit, true)
 		if err != nil {
 			return nil, err
 		}
@@ -273,6 +280,7 @@ func (s *Store) RoutingSamples(
 		}
 		var item RoutingSample
 		item.AccountID, item.GroupName, item.Source = sample.accountID, sample.groupName, sample.source
+		item.EvidenceKey = selection.evidenceKey
 		item.Result, item.FailureReason = pointerValue(nullString(sample.result)), pointerValue(nullString(sample.failureReason))
 		item.LatencyP95, item.ObservedAt = nullString(sample.latencyP95), pointerValue(nullString(sample.observedAt))
 		if err := json.Unmarshal([]byte(sample.payloadJSON), &item.Payload); err != nil || item.Payload == nil {
@@ -289,7 +297,17 @@ func (s *Store) RoutingSamples(
 	return result, nil
 }
 
+// Performance discovery needs the independently retained probe window so
+// multiple configured models do not divide the smaller health-scoring window.
+func (s *Store) RoutingProbePerformanceSamples(ctx context.Context, accountID, groupName *string) ([]RoutingSample, error) {
+	return s.RoutingSamples(ctx, accountID, groupName, "active_probe", retainedHealthSamplesPerAccount)
+}
+
 func previousRoutingDecisionsQuery(accountID, groupName *string) (string, []any) {
+	return previousDecisionsQuery(accountID, groupName, true)
+}
+
+func previousDecisionsQuery(accountID, groupName *string, includeWriteTimes bool) (string, []any) {
 	clauses := []string{`julianday(rd.updated_at)>=COALESCE(
 		(SELECT julianday(updated_at) FROM app_state WHERE key='routing-decision-epoch'),julianday(rd.updated_at))`}
 	arguments := []any{}
@@ -301,26 +319,29 @@ func previousRoutingDecisionsQuery(accountID, groupName *string) (string, []any)
 		clauses = append(clauses, "rd.account_id IN (SELECT account_id FROM account_groups WHERE group_name=?)")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	query := `SELECT rd.account_id,rd.group_name,rd.priority,rd.schedulable,rd.routing_state,rd.updated_at,rd.payload_json,
-		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+	writeTimes := `NULL,NULL,NULL`
+	if includeWriteTimes {
+		writeTimes = `(SELECT oa.created_at FROM operation_audit oa
 		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
-		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
+		 AND oa.remote_confirmed=1 AND oa.field_name IS NOT NULL AND oa.object_id=rd.account_id
 		 ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
 		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1),
-		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+		(SELECT oa.created_at FROM operation_audit oa
 		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
-		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
+		 AND oa.remote_confirmed=1 AND oa.object_id=rd.account_id
 		 AND oa.field_name LIKE '%load_factor%' ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
 		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1),
-		(SELECT oa.created_at FROM operation_audit oa INDEXED BY ix_operation_audit_routing_lookup
+		(SELECT oa.created_at FROM operation_audit oa
 		 WHERE oa.operation_type='routing.writeback' AND oa.state='succeeded'
-		 AND oa.remote_confirmed=1 AND oa.readback_confirmed=1 AND oa.object_id=rd.account_id
+		 AND oa.remote_confirmed=1 AND oa.object_id=rd.account_id
 		 AND oa.field_name LIKE '%concurrency%' ORDER BY oa.created_at DESC,
 		 CASE WHEN oa.source_id < 0 THEN 0 ELSE 1 END,CASE WHEN oa.source_id < 0 THEN oa.source_id END ASC,
-		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1)
-		FROM routing_decisions rd`
+		 CASE WHEN oa.source_id >= 0 THEN oa.source_id END DESC LIMIT 1)`
+	}
+	query := `SELECT rd.account_id,rd.group_name,rd.priority,rd.schedulable,rd.routing_state,rd.updated_at,rd.payload_json,` +
+		writeTimes + ` FROM routing_decisions rd`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
@@ -330,6 +351,16 @@ func previousRoutingDecisionsQuery(accountID, groupName *string) (string, []any)
 
 func (s *Store) PreviousRoutingDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
 	query, arguments := previousRoutingDecisionsQuery(accountID, groupName)
+	return s.readPreviousDecisions(ctx, query, arguments)
+}
+
+// Health projection needs prior state, but not scheduling write cooldowns.
+func (s *Store) PreviousHealthDecisions(ctx context.Context, accountID, groupName *string) ([]PreviousRoutingDecision, error) {
+	query, arguments := previousDecisionsQuery(accountID, groupName, false)
+	return s.readPreviousDecisions(ctx, query, arguments)
+}
+
+func (s *Store) readPreviousDecisions(ctx context.Context, query string, arguments []any) ([]PreviousRoutingDecision, error) {
 	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err

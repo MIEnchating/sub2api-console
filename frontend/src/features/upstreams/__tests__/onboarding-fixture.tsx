@@ -77,7 +77,11 @@ export function renderOnboarding(
   candidate?: OnboardingCandidate,
   directGroup = true,
   groupOverrides?: GroupStatus[],
-  options?: { cacheEntryConfiguration?: boolean; strictMode?: boolean },
+  options?: {
+    cacheEntryConfiguration?: boolean;
+    strictMode?: boolean;
+    candidates?: OnboardingCandidate[];
+  },
 ): QueryClient {
   // JSDOM 26 recurses while matching top-layer selectors; these tests use ordinary popups.
   const matches = Element.prototype.matches;
@@ -140,7 +144,7 @@ export function renderOnboarding(
   vi.spyOn(api, "upstreamConfiguration").mockResolvedValue(upstream);
   vi.spyOn(api, "prepareOnboarding").mockResolvedValue({
     upstream,
-    candidates: candidate ? [candidate] : [],
+    candidates: options?.candidates ?? (candidate ? [candidate] : []),
   });
   const root = createRootRoute();
   const route = createRoute({

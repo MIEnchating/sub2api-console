@@ -115,7 +115,7 @@ export const runtimeStatusDictionary: Readonly<Record<string, string>> = {
   browser_challenge_required: "需要浏览器验证",
   probe_failed: "探测失败",
   gateway_error: "网关错误",
-  rate_limited_or_exhausted: "限流或额度不足",
+  rate_limited_or_exhausted: "上游请求失败",
   unknown_upstream_error: "上游错误",
   empty_response: "疑似空回复",
   apply: "自动执行",

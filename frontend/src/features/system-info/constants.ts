@@ -29,6 +29,7 @@ const taskStatusVariants: Record<TaskSummary["status"], StatusVariant> = {
 };
 
 const taskOperationLabels: Record<string, string> = {
+  "newapi-channel-models": "渠道模型批量维护",
   "active-probe": "主动探活",
   "automatic-inspection": "自动巡检",
   "account-model-behavior-check": "模型检测",

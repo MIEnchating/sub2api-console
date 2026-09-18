@@ -459,6 +459,7 @@ export function UpstreamEditDialog(props: Props) {
       account_base_url: configuration.data.account_base_url,
       upstream_type: configuration.data.upstream_type,
       auth_mode: configuration.data.auth_mode,
+      entry: configuration.data.entry ?? "",
       recharge_rate: configuration.data.recharge_rate || "1",
     });
     setShowHeadersEditor(configuration.data.header_names.length > 0);
@@ -501,6 +502,7 @@ export function UpstreamEditDialog(props: Props) {
         account_base_url: value.account_base_url,
         upstream_type: value.upstream_type,
         auth_mode: value.auth_mode,
+        entry: value.entry ?? "",
         recharge_rate: value.recharge_rate,
       });
       setShowHeadersEditor(value.header_names.length > 0);
@@ -599,11 +601,11 @@ export function UpstreamEditDialog(props: Props) {
   );
   const selectedVaultEntry = form.watch("entry");
   useEffect(() => {
-    if (!showVaultLogin) return;
+    if (!showVaultLogin || !vaultConfiguration.data) return;
     if (selectedVaultEntry && vaultOptions.some((item) => item.entry === selectedVaultEntry))
       return;
     form.setValue("entry", defaultVaultEntryForHost(vaultOptions, props.host));
-  }, [form, props.host, selectedVaultEntry, showVaultLogin, vaultOptions]);
+  }, [form, props.host, selectedVaultEntry, showVaultLogin, vaultConfiguration.data, vaultOptions]);
 
   return (
     <Dialog open={props.host !== null} onOpenChange={props.onOpenChange}>
@@ -868,7 +870,7 @@ export function UpstreamEditDialog(props: Props) {
                             value={form.watch("entry")}
                             onValueChange={(value) => {
                               if (!value) return;
-                              form.setValue("entry", value);
+                              form.setValue("entry", value, { shouldDirty: true });
                             }}
                           >
                             <SelectTrigger id="upstream-edit-vault-entry">

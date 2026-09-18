@@ -87,6 +87,7 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   await expect(start).toHaveCSS("height", "32px");
   await dialog.getByRole("checkbox", { name: /检测 动画检测/ }).check();
   await dialog.getByRole("combobox", { name: "检测模型" }).fill("fixture-model");
+  await page.keyboard.press("Escape");
   const settings = dialog.getByRole("group", { name: "动画检测设置", exact: true });
   const region = dialog.getByRole("region", { name: "动画账号卡片", exact: true });
   const settingsHeight = (await settings.boundingBox())!.height;
@@ -244,6 +245,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await page.keyboard.press("Space");
   await expect(cards.first()).toBeChecked();
   await dialog.getByRole("combobox", { name: "检测模型" }).fill("shared-model");
+  await page.keyboard.press("Escape");
   const settings = dialog.getByRole("group", { name: "动画检测设置", exact: true });
   expect(await settings.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,

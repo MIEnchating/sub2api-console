@@ -1,5 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { NewAPIPlatformRoute } from "@/routes/newapi-routes";
-
-export const Route = createFileRoute("/newapi/")({ component: NewAPIPlatformRoute });
+import { createFileRoute, redirect } from "@tanstack/react-router";
+export const Route = createFileRoute("/newapi/")({
+  beforeLoad: () => {
+    throw redirect({ to: "/config", search: { tab: "newapi" }, replace: true });
+  },
+});

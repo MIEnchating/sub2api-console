@@ -1,165 +1,90 @@
-import type { Task, WorkbenchConfig, WorkbenchOAuthSession, WorkbenchOAuthBatch } from "@/api";
-
-export const workbenchKeys = {
-  root: ["account-workbench"] as const,
-  templates: ["account-workbench", "templates"] as const,
-  history: ["account-workbench", "history"] as const,
-  profiles: ["account-workbench", "profiles"] as const,
-  smsReceipts: ["account-workbench", "sms-receipts"] as const,
-  checkpoints: ["account-workbench", "oauth-checkpoints"] as const,
-  queueRecoveries: ["account-workbench", "queue-recoveries"] as const,
-  maintenance: ["account-workbench", "maintenance"] as const,
-  exports: ["account-workbench", "exports"] as const,
-  localExports: ["account-workbench", "local-exports"] as const,
-  task: (id: string) => ["account-workbench", "task", id] as const,
-  oauth: (id: string | null) => ["account-workbench", "oauth", id] as const,
-  batch: (id: string | null) => ["account-workbench", "oauth-batch", id] as const,
-  run: (id: string | null) => ["account-workbench", "run", id] as const,
-};
-export const workbenchPrimaryTabs = [
-  { id: "accounts", label: "导入账号" },
+export const workbenchTabs = [
+  { id: "import", label: "导入账号" },
+  { id: "accounts", label: "账号列表" },
   { id: "templates", label: "配置模板" },
-  { id: "history", label: "处理记录" },
+  { id: "records", label: "处理记录" },
   { id: "maintenance", label: "自动维护" },
 ] as const;
-export type WorkbenchPrimaryTab = (typeof workbenchPrimaryTabs)[number]["id"];
-export const oauthStatusLabels: Record<WorkbenchOAuthSession["status"], string> = {
-  starting: "正在启动授权浏览器",
-  waiting: "等待完成授权登录",
-  checkpointing: "正在保存授权检查点",
-  verifying: "正在验证授权结果",
-  authorized: "授权成功",
-  failed: "授权失败",
-  cancelled: "授权已取消",
-  expired: "授权会话已过期",
+export const subscriptionLabels: Record<string, string> = {
+  free: "Free",
+  plus: "Plus",
+  pro: "Pro 20x",
+  prolite: "Pro 5x",
+  self_serve_business_prolite: "Business Premium",
 };
-export const oauthPollingStatuses = new Set<WorkbenchOAuthSession["status"]>([
-  "starting",
-  "waiting",
-  "checkpointing",
-  "verifying",
-]);
-export const maxInputBytes = 2 * 1024 * 1024;
-export const behaviorVerdictLabels: Record<string, string> = {
-  SOL_CONSISTENT: "Sol 行为一致",
-  LUNA_LIKE: "更接近 Luna",
-  TERRA_LIKE: "更接近 Terra",
-  NOT_SOL: "与 Sol 不符",
-  SOL_INCONSISTENT: "与 Sol 不符",
-  INCONCLUSIVE: "证据不足",
-  ERROR: "检测请求失败",
-  MATCH: "行为匹配",
-  MISMATCH: "行为不匹配",
+export const fingerprintLabels: Record<string, string> = {
+  off: "关闭（透传）",
+  device: "仅设备",
+  session: "设备+会话",
+  full: "完全收敛",
 };
-export const batchStatusLabels: Record<WorkbenchOAuthBatch["status"], string> = {
-  queued: "等待批量授权",
-  running: "正在逐项授权",
-  authorized: "授权结束，等待导入",
-  failed: "批量授权失败",
-  cancelled: "批量授权已结束",
+export const accountStatusLabels: Record<string, string> = {
+  active: "正常",
+  error: "异常",
+  inactive: "已停用",
+  unknown: "未知",
 };
-export const batchRowStatusLabels = {
-  queued: "等待授权",
-  running: "正在授权",
-  succeeded: "授权成功",
-  failed: "授权失败",
-  cancelled: "已取消",
+export const workbenchKeys = { accounts: ["account-workbench", "accounts"] as const };
+export const templateKeys = { library: ["account-workbench", "templates"] as const };
+export const runKeys = { list: ["account-workbench", "runs"] as const };
+export const maintenanceKey = ["account-workbench", "maintenance"] as const;
+export const maintenanceStatusLabels: Record<string, string> = {
+  healthy: "正常",
+  repaired: "已恢复",
+  cooldown: "冷却中",
+  blocked: "已停用",
+  manual: "需要处理",
 };
-export const previewActionLabels = { check: "重新检测", reconcile: "只读核对" } as const;
-export const defaultConfig: WorkbenchConfig = {
-  concurrency: 10,
-  priority: 0,
-  rate_multiplier: "1",
-  group_ids: [],
-  auto_pause_on_expired: true,
+export const maintenanceActionLabels: Record<string, string> = {
+  none: "检查",
+  refresh: "刷新授权",
+  reauthorize: "重新授权",
 };
-export const taskStatusLabels: Record<Task["status"], string> = {
-  queued: "等待执行",
-  running: "正在处理",
-  waiting_input: "等待操作",
-  succeeded: "处理完成",
-  partial: "部分完成",
-  failed: "处理失败",
-  cancelled: "已取消",
+export const maintenanceReasonLabels: Record<string, string> = {
+  account_healthy: "账号状态正常",
+  authorization_repaired: "授权已恢复并通过核对",
+  account_deactivated: "账号已被上游停用，需人工确认",
+  rate_limited: "上游限流，冷却后再检查",
+  upstream_unavailable: "上游暂不可用，冷却后再检查",
+  permission_denied: "权限不足，请检查账号授权",
+  account_error_requires_review: "账号异常，请检查站点错误详情",
+  account_changed: "账号配置已变化，请刷新后核对",
+  account_busy: "账号正在被其他任务修改，稍后再检查",
+  account_read_failed: "账号读取失败，请检查站点连接",
+  identity_missing: "缺少稳定身份，请重新导入账号",
+  private_save_failed: "私有记录保存失败，请检查服务器存储",
+  refresh_unconfirmed: "刷新结果待核对，未重复提交",
+  authorization_expired: "本次维护授权资料已到期，请重新导入账号",
+  manual_login_required: "需要人工登录，请通过导入页重新授权",
+  upload_unconfirmed: "新授权待上传核对，未再次登录",
+  verification_failed: "恢复检测未通过，请查看账号检测结果",
+  recovery_unconfirmed: "调度恢复结果待核对，请检查站点状态",
 };
-export const workbenchOperationLabels: Record<string, string> = {
-  "account-workbench-cleanup": "账号关联资料清理",
-  "account-workbench-import": "账号导入",
-  "account-workbench-retry": "重新处理",
-  "account-workbench-oauth": "授权登录",
-  "account-workbench-oauth-recovery": "恢复授权登录",
-  "account-workbench-oauth-batch": "批量授权",
-  "account-workbench-export": "线上账号导出",
-  "account-workbench-convert": "输入转换",
-  "account-workbench-profile-export": "登录资料导出",
-  "account-workbench-regenerate": "重新生成授权",
-  "account-workbench-mixed": "账号批次处理",
-  "account-workbench-security": "账号安全",
-  "account-workbench-security-password": "设置账号密码",
-  "account-workbench-security-totp": "启用账号双重验证",
-  "account-workbench-security-batch": "批量账号安全",
-  "account-workbench-maintenance": "自动维护",
+export const inputKindLabels: Record<string, string> = {
+  login: "登录资料",
+  refresh_token: "刷新令牌",
+  sub2api_json: "Sub2API JSON",
+  codex_json: "Codex JSON",
 };
-
-export const cleanupKindLabels = {
-  login_profile: "登录资料",
-  execution: "导入检查点",
-  history: "处理记录",
-  account_export: "私有账号文件",
-  profile_export: "私有登录资料文件",
-  security_result: "账号安全结果",
-};
-export const maintenanceUploadStatusLabels = {
-  pending: "等待上传",
-  running: "正在处理",
-  cooldown: "等待冷却",
-  waiting_session: "等待连接会话",
-  review: "待人工核对",
-};
-export const smsReceiptActionLabels = {
-  acquire: "申请号码",
-  ready: "开始接码",
-  complete: "结束订单",
-  release: "释放号码",
-};
-export const smsReceiptStateLabels = {
-  submitted: "已提交，待核对",
-  confirmed: "已确认",
-  uncertain: "结果待核对",
-};
-export const checkpointStatusLabels = {
-  watching: "自动保存中",
-  saving: "正在保存",
-  ready: "已暂停",
-  restoring: "正在恢复",
-  restored: "已恢复",
-  failed: "需重新授权",
-  deleting: "正在删除",
-};
-export const queueItemStatusLabels: Record<string, string> = {
-  queued: "等待执行",
-  running: "进行中，恢复前核对检查点",
+export const runStatusLabels: Record<string, string> = {
+  queued: "排队中",
+  running: "处理中",
+  completed: "已完成",
+  needs_attention: "需要处理",
+  interrupted: "已中断",
+  failed: "失败",
+  exported: "JSON 已就绪",
+  preparing: "准备中",
+  authorizing: "授权中",
   waiting_input: "等待验证",
-  succeeded: "结果已保存",
-  failed: "需核对",
-  cancelled: "已停止",
+  checking: "检测中",
+  review: "待复核",
 };
-export const resultStatusLabels: Record<string, string> = {
-  waiting_input: "等待人工验证",
-  review: "待人工核对",
-  queued: "等待执行",
-  running: "正在处理",
-  updated: "已更新凭据",
-  created: "已创建",
-  imported: "已导入",
-  skipped: "已跳过",
-  duplicate: "重复账号",
-  failed: "处理失败",
-  succeeded: "处理完成",
-  success: "处理成功",
-  repaired: "已修复",
-  healthy: "健康",
-  unchanged: "无需处理",
-  cancelled: "已取消",
-  checked: "已检查",
+export const checkVerdictLabels: Record<string, string> = {
+  SOL_CONSISTENT: "检测通过",
+  MISMATCH: "检测不匹配",
+  INCONCLUSIVE: "证据不足",
+  ERROR: "检测失败",
+  LUNA_CONSISTENT: "更接近 Luna",
+  TERRA_CONSISTENT: "更接近 Terra",
 };

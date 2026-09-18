@@ -130,7 +130,7 @@ export function MonitorWorkspace(props: {
       </TableFilterToolbar>
       {!props.management && (
         <p className="text-muted-foreground text-sm">
-          当前仅查看指标；管理账号请在侧栏「接入配置」中设置。暂停项可能不会出现在指标列表中。
+          当前仅查看指标；管理账号请在系统设置「监控平台」中设置。暂停项可能不会出现在指标列表中。
         </p>
       )}
       <DataTablePanel role="region" aria-label="监控项列表" className="flex-1">

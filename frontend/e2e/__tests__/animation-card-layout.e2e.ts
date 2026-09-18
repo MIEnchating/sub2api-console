@@ -114,7 +114,7 @@ test.beforeEach(async ({ page, colorScheme }) => {
   );
 });
 
-test("单题双题和未检测混排时底部按内容收紧，预览保持对齐", async ({ page }) => {
+test("单题双题和未检测混排时不重复展示结果，卡片和预览保持对齐", async ({ page }) => {
   await openAnimationCards(page);
   const cards = page.getByRole("article");
   const image = cards.first().getByRole("img");
@@ -144,8 +144,8 @@ test("单题双题和未检测混排时底部按内容收紧，预览保持对�
   }
   const singleQuestionBox = (await cards.nth(1).boundingBox())!;
   const uncheckedBox = (await cards.nth(3).boundingBox())!;
-  expect(singleQuestionBox.height).toBeLessThan(firstBox.height);
-  expect(uncheckedBox.height).toBeLessThan(singleQuestionBox.height);
+  expect(singleQuestionBox.height).toBe(firstBox.height);
+  expect(uncheckedBox.height).toBe(singleQuestionBox.height);
   const region = page.getByRole("region", { name: "动画账号卡片", exact: true });
   expect(await region.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

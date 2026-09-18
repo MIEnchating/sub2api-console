@@ -73,3 +73,9 @@ export const rawPricingOtherPriceLabels: Record<string, string> = {
   output_cost_per_second: "输出（每秒）",
   input_cost_per_audio_per_second: "音频输入（每秒）",
 };
+
+export const channelStatusLabels: Record<number, string> = {
+  1: "启用",
+  2: "手动停用",
+  3: "自动停用",
+};

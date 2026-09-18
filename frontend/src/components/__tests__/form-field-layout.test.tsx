@@ -14,9 +14,9 @@ describe("form field layout", () => {
     );
     expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
   });
-  it("校验错误出现和清除时始终保留字段提示行", () => {
+  it("显式预留错误空间时，校验错误出现和清除均保留字段提示行", () => {
     const view = render(
-      <FormField label="账号" error={undefined}>
+      <FormField reserveErrorSpace label="账号" error={undefined}>
         <input />
       </FormField>,
     );
@@ -24,18 +24,40 @@ describe("form field layout", () => {
     expect(slot).toHaveClass("min-h-8", "shrink-0");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     view.rerender(
-      <FormField label="账号" error="请输入账号">
+      <FormField reserveErrorSpace label="账号" error="请输入账号">
         <input />
       </FormField>,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("请输入账号");
     expect(view.container.querySelector('[data-slot="field-error"]')).toBe(slot);
     view.rerender(
-      <FormField label="账号" error={undefined}>
+      <FormField reserveErrorSpace label="账号" error={undefined}>
         <input />
       </FormField>,
     );
     expect(slot).toBeEmptyDOMElement();
+  });
+
+  it("默认校验字段仅在有错误时显示提示，修正后移除空白行", () => {
+    const view = render(
+      <FormField label="倍率" error={undefined}>
+        <input />
+      </FormField>,
+    );
+    expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
+    view.rerender(
+      <FormField label="倍率" error="倍率必须大于 0">
+        <input />
+      </FormField>,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("倍率必须大于 0");
+    expect(screen.getByRole("alert")).not.toHaveClass("min-h-8");
+    view.rerender(
+      <FormField label="倍率" error={undefined}>
+        <input />
+      </FormField>,
+    );
+    expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
   });
 
   it("does not make the whole field row an implicit select click target", () => {

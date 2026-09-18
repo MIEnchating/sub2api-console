@@ -201,11 +201,8 @@ it.each([false, true])(
     expect(dialog).toHaveTextContent(single ? "前置检测请求（糖果题）" : "糖果题和知识截止日期题");
     await userEvent.click(within(dialog).getByRole("button", { name: "确认并开始检测" }));
     const result = await screen.findByRole("region", { name: "前置检测结果" });
-    const questions = await within(result).findByRole("list", { name: "前置检测题目结果" });
-    expect(questions).toHaveTextContent("糖果题通过");
-    expect(within(questions).getAllByRole("listitem")).toHaveLength(single ? 1 : 2);
-    if (single) expect(result).not.toHaveTextContent("知识截止日期");
-    else expect(questions).toHaveTextContent("知识截止日期通过");
+    expect(result).toHaveTextContent("通过");
+    expect(within(result).queryByRole("list")).not.toBeInTheDocument();
     await userEvent.click(within(result).getByRole("button", { name: "查看前置检测详情" }));
     const detail = await screen.findByRole("dialog", { name: "前置检测详情" });
     expect(within(detail).getByText("21")).toBeVisible();

@@ -206,16 +206,17 @@ func reductionSetScopeProtection(t *testing.T, fixture *upstreamCapacityFixture,
 
 func TestUpstreamReductionRechecksPolicyAndIdentityAfterAcquiringLeases(t *testing.T) {
 	for _, scenario := range []struct {
-		name   string
-		change func(*testing.T, *upstreamCapacityFixture)
+		name          string
+		policyChanged bool
+		change        func(*testing.T, *upstreamCapacityFixture)
 	}{
-		{name: "dedicated switch disabled while waiting", change: func(t *testing.T, fixture *upstreamCapacityFixture) {
+		{name: "dedicated switch disabled while waiting", policyChanged: true, change: func(t *testing.T, fixture *upstreamCapacityFixture) {
 			setReductionWritePolicy(t, fixture, false)
 		}},
-		{name: "manual pause added while waiting", change: func(t *testing.T, fixture *upstreamCapacityFixture) {
+		{name: "manual pause added while waiting", policyChanged: true, change: func(t *testing.T, fixture *upstreamCapacityFixture) {
 			reductionSetScopeProtection(t, fixture, "paused_account_ids")
 		}},
-		{name: "manual fuse added while waiting", change: func(t *testing.T, fixture *upstreamCapacityFixture) {
+		{name: "manual fuse added while waiting", policyChanged: true, change: func(t *testing.T, fixture *upstreamCapacityFixture) {
 			reductionSetScopeProtection(t, fixture, "manual_fused_account_ids")
 		}},
 		{name: "finite limit changed while waiting", change: func(t *testing.T, fixture *upstreamCapacityFixture) {
@@ -244,7 +245,11 @@ func TestUpstreamReductionRechecksPolicyAndIdentityAfterAcquiringLeases(t *testi
 			if fixture.states["41"]["concurrency"] != 8 || result.RemoteWrite || result.Changed != 0 {
 				t.Fatalf("stale plan bypassed changed policy or ownership: states=%v result=%+v err=%v", fixture.states, result, err)
 			}
-			if err == nil && result.Failed == 0 {
+			if scenario.policyChanged {
+				if err != nil || result.Failed != 0 || len(result.Results) != 1 || !result.Results[0].Skipped || result.Results[0].Reason == nil {
+					t.Fatalf("policy change must defer the old reduction target: %+v err=%v", result, err)
+				}
+			} else if err == nil && result.Failed == 0 {
 				t.Fatalf("changed authorization must report a rejected plan: %+v", result)
 			}
 		})

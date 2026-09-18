@@ -12,6 +12,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/evidence"
+	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,6 +29,7 @@ type accountResultEvent struct {
 type accountResultsSnapshot struct {
 	AccountID string                         `json:"account_id"`
 	Results   []business.AccountRecentResult `json:"results"`
+	Health    *routing.HealthProjection      `json:"health,omitempty"`
 }
 type accountCollectionEvent struct {
 	AccountID string `json:"account_id"`
@@ -100,12 +102,15 @@ func (s *Server) accountResultsEvents(c *gin.Context) {
 	}
 	previous := map[string]map[string]string{}
 	refresh := func(id string, initial bool) error {
-		results, err := reader.RecentAccountResults(c.Request.Context(), id, 100)
+		snapshot, err := s.readAccountResultsSnapshot(c.Request.Context(), reader, id)
 		if err != nil {
 			return err
 		}
-		accounts := []business.AccountStatus{{RecentResults: results}}
-		s.enrichRecentResults(c.Request.Context(), accounts)
+		if snapshot.Health != nil {
+			// Release the read transaction before sending this complete snapshot.
+			return send("snapshot", snapshot)
+		}
+		results := snapshot.Results
 		current := map[string]string{}
 		for index := len(results) - 1; index >= 0; index-- {
 			result := results[index]

@@ -87,7 +87,7 @@ describe("分组管理页面", () => {
     expect(markup).toContain("已排除");
     expect(markup).not.toContain(">原因</");
     expect(markup).not.toContain(">来源</");
-    expect(markup).toContain("全局默认");
+    expect(markup).toContain("全局默认 · 均衡");
     expect(markup).toContain("排除");
     expect(markup).toContain("恢复管控");
     expect(markup).toContain("编辑");

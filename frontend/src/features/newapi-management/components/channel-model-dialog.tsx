@@ -1,6 +1,5 @@
 import { ContentLoading } from "@/components/content-loading";
 import { useEffect, useMemo, useState } from "react";
-import { Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -13,7 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import { SearchField } from "@/components/data-table/search-field";
+import { TableFilterToolbar } from "@/components/data-table/filter-toolbar";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -61,21 +61,13 @@ export function NewAPIChannelModelDialog(props: Props) {
           <DialogDescription>选择要添加到 New API 渠道的模型。</DialogDescription>
         </DialogHeader>
         <DialogBody className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-48 flex-1">
-              <Search
-                className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2"
-                aria-hidden="true"
-              />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="搜索模型"
-                aria-label="搜索上游模型"
-                className="pl-8"
-                disabled={props.pending}
-              />
-            </div>
+          <TableFilterToolbar>
+            <SearchField
+              placeholder="搜索上游模型"
+              value={search}
+              onChange={setSearch}
+              disabled={props.pending}
+            />
             <Button
               type="button"
               variant="outline"
@@ -86,13 +78,13 @@ export function NewAPIChannelModelDialog(props: Props) {
             </Button>
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               disabled={props.pending || props.selected.length === 0}
               onClick={() => props.onSelectedChange([])}
             >
               清空
             </Button>
-          </div>
+          </TableFilterToolbar>
           <div
             className="min-h-0 overflow-y-auto rounded-md border"
             role="list"

@@ -203,7 +203,7 @@ func TestPreviousRoutingDecisionUsesAnySuccessfulWriteForSharedCooldown(t *testi
 	}
 }
 
-func TestPreviousRoutingDecisionQueryUsesDedicatedAuditIndex(t *testing.T) {
+func TestPreviousRoutingDecisionQueryUsesIndexedAccountAuditLookups(t *testing.T) {
 	store := openPolicyStore(t)
 	query, arguments := previousRoutingDecisionsQuery(nil, nil)
 	rows, err := store.db.Query("EXPLAIN QUERY PLAN "+query, arguments...)
@@ -218,7 +218,8 @@ func TestPreviousRoutingDecisionQueryUsesDedicatedAuditIndex(t *testing.T) {
 		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(detail, "ix_operation_audit_routing_lookup") {
+		if strings.HasPrefix(detail, "SEARCH oa USING INDEX ") && strings.Contains(detail, "object_id=?") {
+			t.Logf("audit lookup: %s", detail)
 			indexUses++
 		}
 	}
@@ -226,7 +227,7 @@ func TestPreviousRoutingDecisionQueryUsesDedicatedAuditIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	if indexUses != 3 {
-		t.Fatalf("routing history used dedicated audit index %d times, want 3", indexUses)
+		t.Fatalf("routing history used indexed account audit lookups %d times, want 3", indexUses)
 	}
 }
 

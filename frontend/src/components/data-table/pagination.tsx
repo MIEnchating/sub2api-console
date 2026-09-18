@@ -19,15 +19,18 @@ export const paginationPageSizeSearchable = false;
 export type DataTablePaginationProps = {
   currentPage: number;
   totalPages: number;
+  /** -1 表示远端未提供总数，此时 totalPages 仅表示当前可继续访问的页数。 */
   totalItems: number;
   pageSize: number;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
   pageSizes?: number[];
+  disabled?: boolean;
 };
 
 export function DataTablePagination(props: DataTablePaginationProps) {
-  const pageNumbers = getPageNumbers(props.currentPage, props.totalPages);
+  const unknownTotal = props.totalItems < 0;
+  const pageNumbers = unknownTotal ? [] : getPageNumbers(props.currentPage, props.totalPages);
   const pageSizes = props.pageSizes ?? defaultPageSizes;
   const pageSizeItems = pageSizes.map((pageSize) => ({
     value: `${pageSize}`,
@@ -42,9 +45,9 @@ export function DataTablePagination(props: DataTablePaginationProps) {
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2 @xl/pagination:gap-3">
           <div className="flex shrink-0 items-baseline gap-1.5 text-xs font-medium whitespace-nowrap sm:text-sm">
-            <span className="text-muted-foreground/80">共</span>
+            <span className="text-muted-foreground/80">{unknownTotal ? "总数" : "共"}</span>
             <span className="text-foreground tabular-nums">
-              {props.totalItems.toLocaleString()}
+              {unknownTotal ? "未提供" : props.totalItems.toLocaleString()}
             </span>
           </div>
 
@@ -53,6 +56,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
               每页行数
             </span>
             <Select
+              disabled={props.disabled}
               items={pageSizeItems}
               value={`${props.pageSize}`}
               onValueChange={(value) => props.onPageSizeChange(Number(value))}
@@ -85,24 +89,33 @@ export function DataTablePagination(props: DataTablePaginationProps) {
             <PaginationButton
               label="转到第一页"
               hiddenOnCompact
-              disabled={props.currentPage <= 1}
+              disabled={!!props.disabled || props.currentPage <= 1}
               onClick={() => props.onPageChange(1)}
             >
               <ChevronsLeft />
             </PaginationButton>
             <PaginationButton
               label="转到上一页"
-              disabled={props.currentPage <= 1}
+              disabled={!!props.disabled || props.currentPage <= 1}
               onClick={() => props.onPageChange(props.currentPage - 1)}
             >
               <ChevronLeft />
             </PaginationButton>
 
             <span
-              className="text-muted-foreground text-sm tabular-nums @lg/pagination:hidden"
-              aria-label={`当前第 ${props.currentPage} 页，共 ${props.totalPages} 页`}
+              className={cn(
+                "text-muted-foreground text-sm tabular-nums",
+                !unknownTotal && "@lg/pagination:hidden",
+              )}
+              aria-label={
+                unknownTotal
+                  ? `当前第 ${props.currentPage} 页`
+                  : `当前第 ${props.currentPage} 页，共 ${props.totalPages} 页`
+              }
             >
-              {props.currentPage} / {props.totalPages}
+              {unknownTotal
+                ? `第 ${props.currentPage} 页`
+                : `${props.currentPage} / ${props.totalPages}`}
             </span>
             {pageNumbers.map((pageNumber, index) =>
               typeof pageNumber === "string" ? (
@@ -114,6 +127,7 @@ export function DataTablePagination(props: DataTablePaginationProps) {
                 </span>
               ) : (
                 <Button
+                  disabled={props.disabled}
                   key={pageNumber}
                   variant={props.currentPage === pageNumber ? "default" : "outline"}
                   className={cn(
@@ -133,19 +147,21 @@ export function DataTablePagination(props: DataTablePaginationProps) {
 
             <PaginationButton
               label="转到下一页"
-              disabled={props.currentPage >= props.totalPages}
+              disabled={!!props.disabled || props.currentPage >= props.totalPages}
               onClick={() => props.onPageChange(props.currentPage + 1)}
             >
               <ChevronRight />
             </PaginationButton>
-            <PaginationButton
-              label="转到最后一页"
-              hiddenOnCompact
-              disabled={props.currentPage >= props.totalPages}
-              onClick={() => props.onPageChange(props.totalPages)}
-            >
-              <ChevronsRight />
-            </PaginationButton>
+            {!unknownTotal && (
+              <PaginationButton
+                label="转到最后一页"
+                hiddenOnCompact
+                disabled={!!props.disabled || props.currentPage >= props.totalPages}
+                onClick={() => props.onPageChange(props.totalPages)}
+              >
+                <ChevronsRight />
+              </PaginationButton>
+            )}
           </div>
         </div>
       </div>

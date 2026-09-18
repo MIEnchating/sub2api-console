@@ -45,10 +45,16 @@ const item: OnboardingBindingPreview = {
 };
 
 const clients: QueryClient[] = [];
-function render(element: ReactElement) {
+function render(element: ReactElement, inheritedModel?: string) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+  if (inheritedModel) {
+    client.setQueryDefaults(["policy"], { staleTime: Infinity });
+    client.setQueryDefaults(["groups"], { staleTime: Infinity });
+    client.setQueryData(["policy"], { available: true, probe_model: inheritedModel });
+    client.setQueryData(["groups"], [{ id: "3", name: "默认", override: null }]);
+  }
   clients.push(client);
   return renderView(element, {
     wrapper: (props) => <QueryClientProvider client={client}>{props.children}</QueryClientProvider>,
@@ -99,7 +105,10 @@ it("获取上游模型后可多选并按当前账号提交，无需手写", asyn
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "确认提交 1 项变更" }));
   await waitFor(() =>
-    expect(submit).toHaveBeenCalledWith({ "account-one": ["gpt-5.2", "gpt-5.1"] }),
+    expect(submit).toHaveBeenCalledWith(
+      { "account-one": ["gpt-5.2", "gpt-5.1"] },
+      { "account-one": {} },
+    ),
   );
 });
 
@@ -159,7 +168,9 @@ it("获取模型失败后提供重试且仍可留空使用默认模型", async (
   expect(await screen.findByRole("button", { name: "重新读取" })).toBeEnabled();
   expect(screen.queryByRole("status", { name: "正在获取上游模型" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "确认提交 1 项变更" }));
-  await waitFor(() => expect(submit).toHaveBeenCalledWith({ "account-one": [] }));
+  await waitFor(() =>
+    expect(submit).toHaveBeenCalledWith({ "account-one": [] }, { "account-one": {} }),
+  );
 });
 
 it("新增账号确认时可输入探活模型并将去重后的模型交给提交", async () => {
@@ -179,7 +190,10 @@ it("新增账号确认时可输入探活模型并将去重后的模型交给提�
   });
   fireEvent.click(screen.getByRole("button", { name: "确认提交 1 项变更" }));
   await waitFor(() =>
-    expect(submit).toHaveBeenCalledWith({ "account-one": ["gpt-5.2", "gpt-5.1"] }),
+    expect(submit).toHaveBeenCalledWith(
+      { "account-one": ["gpt-5.2", "gpt-5.1"] },
+      { "account-one": {} },
+    ),
   );
 });
 
@@ -196,7 +210,9 @@ it("留空探活模型时使用默认模型并明确不立即发送探活请求"
   );
   expect(screen.getByText(/留空使用默认探活模型/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "确认提交 1 项变更" }));
-  await waitFor(() => expect(submit).toHaveBeenCalledWith({ "account-one": [] }));
+  await waitFor(() =>
+    expect(submit).toHaveBeenCalledWith({ "account-one": [] }, { "account-one": {} }),
+  );
 });
 
 it("模型名称超长时阻止提交并在模型字段说明原因", async () => {
@@ -252,7 +268,10 @@ it("同批两个新增账号分别设置模型，提交时不互相覆盖", asyn
   });
   fireEvent.click(screen.getByRole("button", { name: "确认提交 2 项变更" }));
   await waitFor(() =>
-    expect(submit).toHaveBeenCalledWith({ "account-one": ["gpt-5.2"], "account-two": ["gpt-5.1"] }),
+    expect(submit).toHaveBeenCalledWith(
+      { "account-one": ["gpt-5.2"], "account-two": ["gpt-5.1"] },
+      { "account-one": {}, "account-two": {} },
+    ),
   );
 });
 
@@ -295,5 +314,58 @@ it("重新预览不同稳定账号时清除前一账号的模型草稿", () => {
   );
   expect(screen.getByRole("combobox", { name: "分组 → 默认 探活模型" })).toHaveTextContent(
     "默认模型",
+  );
+});
+
+it("切换填写方式使用有选中状态的按钮且保留模型草稿和标准单行高度", () => {
+  render(
+    <OnboardingConfirmDialog
+      open
+      items={[item]}
+      pending={false}
+      onOpenChange={vi.fn()}
+      onConfirm={vi.fn()}
+    />,
+  );
+  const manual = screen.getByRole("button", { name: "手动填写" });
+  const automatic = screen.getByRole("button", { name: "从列表选择" });
+  expect(automatic).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("combobox", { name: "分组 → 默认 探活模型" })).toHaveClass(
+    "h-8",
+    "min-h-8",
+  );
+  fireEvent.click(manual);
+  const input = screen.getByRole("textbox", { name: "分组 → 默认 探活模型" });
+  expect(input).toHaveClass("h-8", "min-h-8", "resize-none", "field-sizing-fixed");
+  expect(manual).toHaveAttribute("aria-pressed", "true");
+  fireEvent.change(input, { target: { value: "custom-one\ncustom-two" } });
+  fireEvent.click(automatic);
+  expect(screen.getByRole("combobox", { name: "分组 → 默认 探活模型" })).toHaveTextContent(
+    "custom-one",
+  );
+  fireEvent.click(manual);
+  expect(screen.getByRole("textbox", { name: "分组 → 默认 探活模型" })).toHaveValue(
+    "custom-one\ncustom-two",
+  );
+});
+
+it("确认添加时显示继承的具体模型，提交仍留空以跟随后续策略变化", async () => {
+  const submit = vi.fn();
+  render(
+    <OnboardingConfirmDialog
+      open
+      items={[{ ...item, localGroupIds: ["3"] }]}
+      pending={false}
+      onOpenChange={vi.fn()}
+      onConfirm={submit}
+    />,
+    "global-model",
+  );
+  expect(screen.getByRole("note", { name: "继承的探活配置" })).toHaveTextContent(
+    "继承全局模型：global-model",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "确认提交 1 项变更" }));
+  await waitFor(() =>
+    expect(submit).toHaveBeenCalledWith({ "account-one": [] }, { "account-one": {} }),
   );
 });

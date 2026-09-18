@@ -1,8 +1,9 @@
 import { useQueries } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
-import { useFormState, useWatch, type UseFormReturn } from "react-hook-form";
+import { Controller, useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
+import { SuggestionInput } from "@/components/suggestion-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -46,27 +47,44 @@ export function AnimationModelSettings(props: {
     <div
       role="group"
       aria-label="动画模型参数"
-      className="grid w-full max-w-full min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_7rem] items-start gap-3 sm:w-[27rem]"
+      className="grid w-full max-w-full min-w-0 shrink-0 grid-cols-1 items-start gap-3 sm:w-[36rem] sm:grid-cols-[minmax(0,1fr)_12rem]"
     >
-      <div role="group" aria-label="检测模型设置" className="grid min-w-0 gap-1.5">
+      <div
+        role="group"
+        aria-label="检测模型设置"
+        className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
+      >
         <label
+          id="animation-unified-model-label"
           htmlFor="animation-unified-model"
           className="shrink-0 whitespace-nowrap text-xs font-medium"
         >
           检测模型
         </label>
         <div className="flex min-w-0 gap-2">
-          <Input
-            className="min-w-0 flex-1"
-            id="animation-unified-model"
-            {...props.form.register("unified_model")}
-            list="animation-common-models"
-            disabled={props.pending}
-            placeholder="输入模型 ID，或获取共同模型"
-            aria-invalid={!!state.errors.unified_model}
-            aria-describedby={
-              state.errors.unified_model ? "animation-unified-model-error" : undefined
-            }
+          <Controller
+            control={props.form.control}
+            name="unified_model"
+            render={({ field }) => (
+              <SuggestionInput
+                className="flex-1"
+                id="animation-unified-model"
+                aria-labelledby="animation-unified-model-label"
+                ref={field.ref}
+                name={field.name}
+                value={field.value}
+                onValueChange={field.onChange}
+                onBlur={field.onBlur}
+                options={options}
+                disabled={props.pending}
+                placeholder="输入模型 ID，或获取共同模型"
+                emptyText={ready ? "所选账号暂无共同模型" : "尚未获取共同模型"}
+                aria-invalid={!!state.errors.unified_model}
+                aria-describedby={
+                  state.errors.unified_model ? "animation-unified-model-error" : undefined
+                }
+              />
+            )}
           />
           <Tooltip>
             <TooltipTrigger
@@ -102,17 +120,17 @@ export function AnimationModelSettings(props: {
         </div>
         {state.errors.unified_model ? (
           <FieldError
+            className="col-start-2"
             id="animation-unified-model-error"
             message={state.errors.unified_model.message}
           />
         ) : null}
-        <datalist id="animation-common-models">
-          {options.map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
       </div>
-      <div className="grid min-w-0 gap-1.5">
+      <div
+        role="group"
+        aria-label="请求超时设置"
+        className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
+      >
         <label
           htmlFor="animation-timeout"
           className="shrink-0 whitespace-nowrap text-xs font-medium"
@@ -130,7 +148,11 @@ export function AnimationModelSettings(props: {
           aria-invalid={!!state.errors.timeout_seconds}
           aria-describedby={state.errors.timeout_seconds ? "animation-timeout-error" : undefined}
         />
-        <FieldError id="animation-timeout-error" message={state.errors.timeout_seconds?.message} />
+        <FieldError
+          className="col-start-2"
+          id="animation-timeout-error"
+          message={state.errors.timeout_seconds?.message}
+        />
       </div>
     </div>
   );

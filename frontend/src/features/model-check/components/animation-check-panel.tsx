@@ -21,7 +21,11 @@ import { AnimationScheduleDialog } from "./animation-schedule-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CustomAnimationPanel } from "./custom-animation-panel";
 
-export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
+export function AnimationCheckPanel(props: {
+  active?: boolean;
+  accountID?: string;
+  showAllAccounts?: boolean;
+}): ReactElement {
   const tasks = useAnimationTasks(props.active);
   const [scheduleAccount, setScheduleAccount] = useState<AccountStatus | null>(null);
   const [confirmation, setConfirmation] = useState<AnimationRequest | null>(null);
@@ -30,7 +34,7 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
   const form = useForm<AnimationForm>({
     resolver: zodResolver(animationSchema),
     defaultValues: {
-      account_ids: [],
+      account_ids: props.accountID ? [props.accountID] : [],
       unified_model: "",
       timeout_seconds: 120,
     },
@@ -88,6 +92,7 @@ export function AnimationCheckPanel(props: { active?: boolean }): ReactElement {
           </Tabs.List>
           <Tabs.Panel value="accounts" keepMounted className="min-h-0 flex-1 data-[hidden]:hidden">
             <AnimationSelection
+              accountID={props.showAllAccounts ? undefined : props.accountID}
               precheckQuestions={precheckQuestions}
               onPrecheckQuestionsChange={setPrecheckQuestions}
               precheckResults={tasks.precheckResults}

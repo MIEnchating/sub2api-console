@@ -52,16 +52,31 @@ it("尚未检测时仅按状态行高度展示且不提供空详情", () => {
   expect(screen.queryByRole("button", { name: "查看前置检测详情" })).not.toBeInTheDocument();
 });
 
-it("两题返回超长回答时卡片仅展示题目结论，原文和元数据在详情中查看", async () => {
+it("单题不通过时卡片仅在前置检测标题旁展示一次结论", () => {
+  const fixture = result();
+  fixture.precheck = {
+    verdict: "not_passed",
+    profile_version: "astra-v1",
+    questions: [{ id: "candy", verdict: "not_passed", answer: "20", request_id: "candy-41" }],
+  };
+  render(<PrecheckAccountResult result={fixture} />);
+  const summary = screen.getByRole("region", { name: "前置检测结果" });
+  expect(within(summary).getAllByText("不通过")).toHaveLength(1);
+  expect(within(summary).getByText("前置检测").parentElement).toHaveClass("h-8");
+  expect(within(summary).queryByRole("list")).not.toBeInTheDocument();
+  expect(summary).not.toHaveTextContent("糖果题");
+  expect(within(summary).getByRole("button", { name: "查看前置检测详情" })).toBeEnabled();
+});
+
+it("两题返回超长回答时卡片仅展示汇总结论，逐题结果和原文在详情中查看", async () => {
   const user = userEvent.setup();
   const fixture = result();
   render(<PrecheckAccountResult result={fixture} />);
   const summary = screen.getByRole("region", { name: "前置检测结果" });
   expect(summary).toHaveClass("h-auto", "shrink-0");
-  expect(within(summary).getByRole("list", { name: "前置检测题目结果" })).toHaveTextContent(
-    "糖果题",
-  );
-  expect(within(summary).getAllByRole("listitem")).toHaveLength(2);
+  expect(within(summary).getAllByText("通过")).toHaveLength(1);
+  expect(within(summary).queryByRole("list")).not.toBeInTheDocument();
+  expect(summary).not.toHaveTextContent("糖果题");
   expect(summary).not.toHaveTextContent(fixture.precheck!.questions[1].answer!);
   expect(summary).not.toHaveTextContent(fixture.model);
 
@@ -70,6 +85,7 @@ it("两题返回超长回答时卡片仅展示题目结论，原文和元数据�
   await user.click(trigger);
   const dialog = await screen.findByRole("dialog", { name: "前置检测详情" });
   expect(trigger).toHaveAttribute("aria-expanded", "true");
+  expect(dialog).toHaveTextContent("糖果题");
   expect(dialog).toHaveTextContent(fixture.model);
   expect(dialog).toHaveTextContent("candy-41");
   expect(dialog).toHaveTextContent("cutoff-41");
@@ -97,9 +113,9 @@ it("单题检测失败时长错误只在详情中展示一次，键盘关闭后�
   };
   render(<PrecheckAccountResult result={fixture} />);
   expect(screen.queryByText(error)).not.toBeInTheDocument();
-  expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
   expect(screen.getByRole("region", { name: "前置检测结果" })).toHaveClass("h-auto");
-  expect(screen.getByRole("list", { name: "前置检测题目结果" })).toHaveClass("pb-2");
+  expect(screen.queryByRole("list", { name: "前置检测题目结果" })).not.toBeInTheDocument();
   const trigger = screen.getByRole("button", { name: "查看前置检测详情" });
   trigger.focus();
   await user.keyboard("{Enter}");

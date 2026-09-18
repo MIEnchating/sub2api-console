@@ -36,7 +36,7 @@ export const onboardingProbeModeOptions: Array<{
   label: string;
 }> = [
   { value: "default", label: "常规请求" },
-  { value: "stream", label: "Compact 探测" },
+  { value: "stream", label: "流式请求" },
 ];
 
 export const accountProbeDialogLayout = {

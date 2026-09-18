@@ -1,7 +1,9 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Pin, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 
-import type { AccountStatus } from "@/api";
+import { api, type AccountStatus } from "@/api";
+import { shareAccountHealthSnapshots } from "../lib/account-health-snapshot";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,7 +79,7 @@ export function manualPrioritySlots(
   }));
 }
 
-export function ManualPriorityDialog(props: {
+type ManualPriorityDialogProps = {
   open: boolean;
   account: AccountStatus;
   accounts: AccountStatus[];
@@ -86,7 +88,20 @@ export function ManualPriorityDialog(props: {
   onOpenChange: (open: boolean) => void;
   onAssign: (values: ManualPriorityValues) => void;
   onClear: () => void;
-}) {
+};
+
+export function AccountManualPriorityDialog(props: Omit<ManualPriorityDialogProps, "accounts">) {
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: api.accounts,
+    structuralSharing: shareAccountHealthSnapshots,
+    enabled: false,
+    subscribed: props.open,
+  });
+  return <ManualPriorityDialog {...props} accounts={accounts.data ?? []} />;
+}
+
+export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
   const currentPriority = props.account.manual_priority ?? null;
   const [selected, setSelected] = useState<number | null>(currentPriority);
   const initialValues = manualPriorityInitialValues(props.account);

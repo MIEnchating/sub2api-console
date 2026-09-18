@@ -7,12 +7,13 @@ import (
 )
 
 type UpstreamGroupChange struct {
-	ID         int64  `json:"id"`
-	UpstreamID string `json:"upstream_id"`
-	GroupID    string `json:"group_id"`
-	GroupName  string `json:"group_name"`
-	ChangeType string `json:"change_type"`
-	ChangedAt  string `json:"changed_at"`
+	ID            int64   `json:"id"`
+	UpstreamID    string  `json:"upstream_id"`
+	GroupID       string  `json:"group_id"`
+	GroupName     string  `json:"group_name"`
+	EffectiveRate *string `json:"effective_rate"`
+	ChangeType    string  `json:"change_type"`
+	ChangedAt     string  `json:"changed_at"`
 }
 
 func (s *Store) UpstreamGroupHistory(ctx context.Context, host string, limit int) ([]UpstreamGroupChange, error) {
@@ -46,14 +47,18 @@ func (s *Store) ClearUpstreamGroupHistory(ctx context.Context) (int64, error) {
 }
 
 func (s *Store) readUpstreamGroupHistory(ctx context.Context, upstreamID *string, limit int) ([]UpstreamGroupChange, error) {
-	query := `SELECT id,upstream_id,group_id,group_name,change_type,changed_at
-		FROM upstream_group_change_events`
+	query := `SELECT e.id,e.upstream_id,e.group_id,e.group_name,e.change_type,e.changed_at,
+		(SELECT g.effective_rate FROM upstream_groups g
+		 JOIN upstream_identity_hosts h ON h.host=g.host
+		 WHERE h.upstream_id=e.upstream_id AND g.group_id=e.group_id
+		 ORDER BY g.updated_at DESC,h.is_primary DESC,h.host LIMIT 1)
+		FROM upstream_group_change_events e`
 	args := []any{}
 	if upstreamID != nil {
-		query += ` WHERE upstream_id=?`
+		query += ` WHERE e.upstream_id=?`
 		args = append(args, *upstreamID)
 	}
-	query += ` ORDER BY changed_at DESC,id DESC LIMIT ?`
+	query += ` ORDER BY e.changed_at DESC,e.id DESC LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -63,7 +68,7 @@ func (s *Store) readUpstreamGroupHistory(ctx context.Context, upstreamID *string
 	result := []UpstreamGroupChange{}
 	for rows.Next() {
 		var item UpstreamGroupChange
-		if err := rows.Scan(&item.ID, &item.UpstreamID, &item.GroupID, &item.GroupName, &item.ChangeType, &item.ChangedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.UpstreamID, &item.GroupID, &item.GroupName, &item.ChangeType, &item.ChangedAt, &item.EffectiveRate); err != nil {
 			return nil, err
 		}
 		result = append(result, item)

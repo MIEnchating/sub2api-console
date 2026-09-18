@@ -80,12 +80,13 @@ type FieldPatch struct {
 }
 
 type SettingsInput struct {
-	Priority    int64
-	LoadFactor  string
-	Concurrency int64
-	TestModels  []string
-	Paused      bool
-	Excluded    bool
+	Priority          int64
+	LoadFactor        string
+	FollowConcurrency bool
+	Concurrency       int64
+	TestModels        []string
+	Paused            bool
+	Excluded          bool
 }
 
 type OperationError struct {
@@ -578,18 +579,23 @@ func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input S
 	if err := s.validateOrdinaryPriority(ctx, input.Priority); err != nil {
 		return taskstore.Task{}, err
 	}
-	loadFactor, err := decimalAtLeastOne(input.LoadFactor)
-	if err != nil {
-		return taskstore.Task{}, errors.New("负载因子必须大于或等于 1")
+	if input.FollowConcurrency {
+		input.LoadFactor = ""
+	} else {
+		loadFactor, err := decimalAtLeastOne(input.LoadFactor)
+		if err != nil {
+			return taskstore.Task{}, errors.New("负载因子必须大于或等于 1")
+		}
+		input.LoadFactor = loadFactor
 	}
-	input.LoadFactor = loadFactor
 	if input.Concurrency < 1 || input.Concurrency > 10_000_000 {
 		return taskstore.Task{}, errors.New("并发上限必须是 1 到 10000000 之间的整数")
 	}
-	input.TestModels, err = normalizeTestModels(input.TestModels)
+	models, err := normalizeTestModels(input.TestModels)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
+	input.TestModels = models
 	if _, ok := s.repository.(accountSettingsRepository); !ok {
 		return taskstore.Task{}, errors.New("账号设置服务尚未就绪")
 	}
@@ -652,6 +658,11 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		"priority": input.Priority, "load_factor": json.Number(input.LoadFactor),
 		"concurrency": input.Concurrency, "schedulable": !input.Paused,
 	}
+	var expectedLoadFactor *string = &input.LoadFactor
+	if input.FollowConcurrency {
+		body["load_factor"] = json.Number("0")
+		expectedLoadFactor = nil
+	}
 	if _, err := client.Mutate(ctx, http.MethodPut, "/admin/accounts/"+accountID, body); err != nil {
 		return nil, &OperationError{Message: err.Error()}
 	}
@@ -672,8 +683,14 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		PriorityPresent: true, Priority: &input.Priority, LoadFactorPresent: true, LoadFactor: &input.LoadFactor,
 		ConcurrencyPresent: true, Concurrency: &input.Concurrency,
 	}
-	if err := verifyFieldReadback(after, nil, &input.Priority, &input.LoadFactor, &input.Concurrency, nil, nil, nil, patch); err != nil {
+	if err := verifyFieldReadback(after, nil, &input.Priority, expectedLoadFactor, &input.Concurrency, nil, nil, nil, patch); err != nil {
 		return nil, rollback(err)
+	}
+	if input.FollowConcurrency {
+		loadFactor, err := accountSettingsLoadFactor(after)
+		if err != nil || loadFactor != "0" {
+			return nil, rollback(errors.New("账号负载因子未恢复为跟随并发上限"))
+		}
 	}
 	schedulable, err := accountSchedulable(after)
 	if err != nil || schedulable != !input.Paused {
@@ -688,12 +705,12 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 	}
 	field := "priority,load_factor,concurrency,schedulable,test_models,excluded"
 	beforeValues := map[string]any{
-		"priority": rollbackBody["priority"], "load_factor": rollbackBody["load_factor"],
+		"priority": rollbackBody["priority"], "load_factor": before["load_factor"],
 		"concurrency": rollbackBody["concurrency"], "schedulable": rollbackBody["schedulable"],
 		"test_models": local.TestModels,
 	}
 	afterValues := map[string]any{
-		"priority": input.Priority, "load_factor": input.LoadFactor, "concurrency": input.Concurrency,
+		"priority": input.Priority, "load_factor": expectedLoadFactor, "follow_concurrency": input.FollowConcurrency, "concurrency": input.Concurrency,
 		"schedulable": !input.Paused, "test_models": input.TestModels, "excluded": input.Excluded,
 	}
 	operation := business.AccountOperation{
@@ -703,7 +720,7 @@ func (s *Service) applySettings(ctx context.Context, accountID string, input Set
 		After: afterValues, Writeback: true,
 	}
 	if err := repository.CommitAccountSettings(ctx, accountID, actor, business.AccountSettingsUpdate{
-		Priority: input.Priority, LoadFactor: input.LoadFactor, Concurrency: input.Concurrency,
+		Priority: input.Priority, LoadFactor: input.LoadFactor, FollowConcurrency: input.FollowConcurrency, Concurrency: input.Concurrency,
 		TestModels: input.TestModels, Paused: input.Paused, Excluded: input.Excluded, Operation: operation,
 	}); err != nil {
 		return nil, rollback(fmt.Errorf("远端设置已写入，但本地原子提交失败：%w", err))
@@ -753,12 +770,23 @@ func normalizeTestModels(models []string) ([]string, error) {
 	return result, nil
 }
 
+func accountSettingsLoadFactor(account map[string]any) (string, error) {
+	raw, present := account["load_factor"]
+	if !present {
+		return "", errors.New("账号原负载因子未返回")
+	}
+	if raw == nil {
+		return "0", nil
+	}
+	return decimal(fmt.Sprint(raw))
+}
+
 func accountSettingsRollbackBody(account map[string]any) (map[string]any, error) {
 	priority, err := readbackInteger(account["priority"])
 	if err != nil || priority < 1 {
 		return nil, errors.New("账号原优先级不可读")
 	}
-	loadFactor, err := decimal(fmt.Sprint(account["load_factor"]))
+	loadFactor, err := accountSettingsLoadFactor(account)
 	if err != nil {
 		return nil, errors.New("账号原负载因子不可读")
 	}

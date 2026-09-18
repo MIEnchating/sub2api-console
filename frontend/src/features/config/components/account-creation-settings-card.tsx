@@ -486,7 +486,7 @@ function GroupSettingsEditor(props: {
     setEnabledEdited(false);
   }
 
-  const summary = groupPolicySummary(props.policy, enabled, enabledEdited);
+  const summary = groupPolicySummary(props.policy, enabled, enabledEdited, props.defaultPolicy);
   const panelID = `account-group-settings-${props.group.id}`;
 
   return (
@@ -538,7 +538,18 @@ function GroupSettingsEditor(props: {
             />
           ) : (
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-muted-foreground text-sm">该分组将使用全局默认配置</span>
+              <div className="min-w-0 flex-1 space-y-2 text-sm">
+                <p className="text-muted-foreground">该分组将使用全局默认配置</p>
+                <p className="break-all">
+                  模型：{props.defaultPolicy.models.join("、") || "自动同步上游模型"}
+                </p>
+                <p>
+                  并发 {props.defaultPolicy.concurrency} · 负载{" "}
+                  {props.defaultPolicy.load_factor ?? "跟随并发"} · 优先级{" "}
+                  {props.defaultPolicy.priority}
+                </p>
+                <PoolModePolicySummary label="池模式" policy={props.defaultPolicy} />
+              </div>
               <Button
                 type="button"
                 disabled={props.disabled || !enabledEdited}
@@ -563,8 +574,12 @@ function groupPolicySummary(
   policy: AccountCreationPolicy | undefined,
   enabled: boolean,
   enabledEdited: boolean,
+  defaultPolicy: AccountCreationPolicy,
 ): string {
-  if (!enabled) return enabledEdited ? "待保存：恢复继承全局默认" : "继承全局默认";
+  if (!enabled) {
+    const label = enabledEdited ? "待保存：恢复继承全局默认" : "继承全局默认";
+    return `${label} · ${groupPolicySummary(defaultPolicy, true, false, defaultPolicy)}`;
+  }
   if (!policy) return "待保存独立配置";
   const models = policy.models.length > 0 ? `${policy.models.length} 个模型` : "自动同步模型";
   const loadFactor = policy.load_factor ?? "跟随并发";

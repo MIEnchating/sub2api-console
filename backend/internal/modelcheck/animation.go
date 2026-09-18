@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
@@ -42,6 +43,7 @@ type AnimationResult struct {
 	Status        string          `json:"status"`
 	SVG           string          `json:"svg,omitempty"`
 	Error         string          `json:"error,omitempty"`
+	RetryCount    int             `json:"retry_count,omitempty"`
 	DurationMS    int64           `json:"duration_ms"`
 	CompletedAt   string          `json:"completed_at"`
 }
@@ -90,6 +92,12 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		return request, nil, err
 	}
 	for _, account := range accounts {
+		if account.AccountType == "oauth" {
+			if account.Platform != "openai" {
+				return request, nil, fmt.Errorf("账号 %s 暂不支持 OAuth 检测，请选择 OpenAI OAuth 账号", account.ID)
+			}
+			continue
+		}
 		if account.CredentialError != "" {
 			return request, nil, fmt.Errorf("账号 %s：%s", account.ID, account.CredentialError)
 		}
@@ -102,6 +110,10 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 
 func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest) (taskstore.Task, error) {
 	request, accounts, err := s.prepareAnimation(ctx, request)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	oauthTarget, err := s.prepareOAuthTarget(ctx, accounts)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -154,7 +166,13 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 		release()
 		return taskstore.Task{}, err
 	}
-	if err := taskrunner.GoTask(s.taskRunner, id, func(parent context.Context) { defer release(); s.executeAnimation(parent, task, request, accounts) }); err != nil {
+	if err := taskrunner.GoTask(s.taskRunner, id, func(parent context.Context) {
+		defer release()
+		if oauthTarget != nil {
+			parent = targetguard.Expect(parent, *oauthTarget)
+		}
+		s.executeAnimation(parent, task, request, accounts)
+	}); err != nil {
 		release()
 		taskstore.PersistLaunchFailure(s.tasks, task, err)
 		return taskstore.Task{}, err
@@ -210,7 +228,7 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 					result.RequestID += "-" + mode
 				}
 				started := time.Now()
-				err := s.runAnimationTarget(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result)
+				err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result)
 				result.DurationMS = time.Since(started).Milliseconds()
 				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				if err != nil {
@@ -261,6 +279,9 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 		return errors.New("动画检测已取消或任务超时")
 	}
 	defer func() { <-s.animation.slots }()
+	if custom == nil && account.AccountType == "oauth" {
+		return s.runOAuthAnimationTarget(ctx, account, timeout, questions, result)
+	}
 	guarded, release, credential, err := s.animationCredential(ctx, account, custom)
 	if err != nil {
 		return err

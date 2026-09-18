@@ -1,3 +1,4 @@
+import { AccountTrafficBadge } from "./account-traffic";
 import type { AccountStatus } from "@/api";
 import type { ReactElement } from "react";
 import { AccountHealthScore } from "@/components/account-health-score";
@@ -14,6 +15,11 @@ import { accountIdentityMeta } from "@/features/accounts/lib/account-labels";
 import { cn } from "@/lib/utils";
 import { formatHealthScore as healthScoreValue } from "@/lib/health-score";
 import { accountConcurrencyLimitedHelp, accountConcurrencyLimitedReason } from "../constants";
+import {
+  accountLoadFactorLabel,
+  effectiveAccountLoadFactor,
+  effectiveTargetLoadFactor,
+} from "../lib/account-routing-values";
 
 export { AccountLatencyCell } from "./account-latency-cell";
 
@@ -64,10 +70,37 @@ export function AccountHealthCell(props: { account: AccountStatus }) {
         <div className="flex items-start justify-between gap-3">
           <div className="grid gap-0.5">
             <strong className="text-sm">健康评分详情</strong>
-            <span className="text-muted-foreground">本轮调度采用的健康评估</span>
+            <span className="text-muted-foreground">
+              {account.health_evaluated_at ? "当前证据评分" : "本轮调度采用的健康评估"}
+            </span>
           </div>
           <StatusBadge label={state.label} variant={state.tone} />
         </div>
+
+        {account.health_evaluated_at ? (
+          <dl className="grid gap-1.5">
+            <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-3">
+              <dt className="text-muted-foreground">评估时间</dt>
+              <dd className="text-right break-words tabular-nums">
+                <time dateTime={account.health_evaluated_at}>
+                  {new Date(account.health_evaluated_at).toLocaleString("zh-CN")}
+                </time>
+              </dd>
+            </div>
+            <div className="grid grid-cols-[5rem_minmax(0,1fr)] gap-3">
+              <dt className="text-muted-foreground">最新证据时间</dt>
+              <dd className="text-right break-words tabular-nums">
+                {account.health_evidence_at ? (
+                  <time dateTime={account.health_evidence_at}>
+                    {new Date(account.health_evidence_at).toLocaleString("zh-CN")}
+                  </time>
+                ) : (
+                  "暂无有效证据"
+                )}
+              </dd>
+            </div>
+          </dl>
+        ) : null}
 
         <dl className="grid gap-1.5">
           <div className="flex items-center justify-between gap-4">
@@ -85,7 +118,7 @@ export function AccountHealthCell(props: { account: AccountStatus }) {
         </dl>
 
         <div className="border-border grid gap-2 border-t pt-2.5">
-          <strong>本轮依据</strong>
+          <strong>{account.health_evaluated_at ? "评分依据" : "本轮依据"}</strong>
           <dl className="grid grid-cols-2 gap-3">
             <div className="grid gap-0.5">
               <dt className="text-muted-foreground">短期样本数</dt>
@@ -109,6 +142,11 @@ export function AccountHealthCell(props: { account: AccountStatus }) {
           <p className="text-muted-foreground">
             实际参与评分的有效样本数；短期取长期样本中最新的一部分，不重复相加。
           </p>
+          {account.health_evaluated_at ? (
+            <p className="text-muted-foreground">
+              调度状态与连续失败、连续恢复次数沿用最近一次调度评估。
+            </p>
+          ) : null}
         </div>
       </TooltipContent>
     </Tooltip>
@@ -121,6 +159,16 @@ export function AccountRecentResultsCell(props: { account: AccountStatus }) {
 
 export function AccountRoutingParametersCell(props: { account: AccountStatus }) {
   const account = props.account;
+  const loadFactor = accountLoadFactorLabel(
+    effectiveAccountLoadFactor(account),
+    account.load_factor,
+    account.concurrency,
+  );
+  const targetLoadFactor = accountLoadFactorLabel(
+    effectiveTargetLoadFactor(account),
+    account.target_load_factor ?? account.load_factor,
+    account.target_concurrency ?? account.concurrency,
+  );
   const targetChanged =
     (account.target_priority != null && account.target_priority !== account.priority) ||
     (account.target_load_factor != null && account.target_load_factor !== account.load_factor) ||
@@ -139,7 +187,7 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
         <span className="font-medium">当前优先级 {account.priority ?? "—"}</span>
       )}
       <span className="text-muted-foreground text-xs">
-        负载 {account.load_factor ?? "—"} · 并发 {account.concurrency ?? "—"}
+        负载 {loadFactor} · 并发 {account.concurrency ?? "—"}
       </span>
       {targetChanged ? (
         <div className="border-primary/40 mt-1 grid gap-1 border-l-2 pl-2">
@@ -147,7 +195,7 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
             目标优先级 {account.target_priority ?? account.priority ?? "—"}
           </span>
           <span className="text-muted-foreground text-xs">
-            负载 {account.target_load_factor ?? account.load_factor ?? "—"} · 并发{" "}
+            负载 {targetLoadFactor} · 并发{" "}
             {account.target_concurrency ?? account.concurrency ?? "—"}
           </span>
         </div>
@@ -168,26 +216,62 @@ export function AccountIdentityCell(props: { account: AccountStatus }) {
   const groups = props.account.groups.length ? props.account.groups.join("、") : "未分组";
   return (
     <div className="grid min-w-0 gap-0.5">
+      <div
+        data-slot="account-identity-heading"
+        className="flex min-w-0 flex-nowrap items-center gap-2"
+      >
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <strong
+                tabIndex={0}
+                className="block min-w-0 flex-1 truncate rounded-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            }
+          >
+            {props.account.name}
+          </TooltipTrigger>
+          <TooltipContent role="tooltip" className="max-w-sm">
+            {props.account.name}
+          </TooltipContent>
+        </Tooltip>
+        <AccountTrafficBadge accountID={props.account.id} compact />
+      </div>
+      <div
+        data-slot="account-identity-meta"
+        className="flex min-w-0 flex-nowrap items-center gap-2 text-xs text-muted-foreground"
+      >
+        <AccountIdentityMeta account={props.account} className="block min-w-0 flex-1" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <p
+                tabIndex={0}
+                className="min-w-0 max-w-[35%] shrink-0 truncate rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            }
+          >
+            {props.account.upstream_host ?? "Host 未记录"}
+          </TooltipTrigger>
+          <TooltipContent role="tooltip" className="max-w-sm">
+            {props.account.upstream_host ?? "Host 未记录"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
       <Tooltip>
-        <TooltipTrigger render={<strong className="block truncate font-semibold" />}>
-          {props.account.name}
-        </TooltipTrigger>
-        <TooltipContent className="max-w-sm">{props.account.name}</TooltipContent>
-      </Tooltip>
-      <AccountIdentityMeta account={props.account} className="mt-0.5 block" />
-      <Tooltip>
-        <TooltipTrigger render={<p className="mt-0.5 truncate text-xs text-muted-foreground" />}>
-          {props.account.upstream_host ?? "Host 未记录"}
-        </TooltipTrigger>
-        <TooltipContent className="max-w-sm">
-          {props.account.upstream_host ?? "Host 未记录"}
-        </TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger render={<p className="mt-0.5 truncate text-xs text-muted-foreground" />}>
+        <TooltipTrigger
+          render={
+            <p
+              tabIndex={0}
+              className="w-full min-w-0 truncate rounded-sm text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          }
+        >
           分组：{groups}
         </TooltipTrigger>
-        <TooltipContent className="max-w-sm">{groups}</TooltipContent>
+        <TooltipContent role="tooltip" className="max-w-sm">
+          分组：{groups}
+        </TooltipContent>
       </Tooltip>
     </div>
   );

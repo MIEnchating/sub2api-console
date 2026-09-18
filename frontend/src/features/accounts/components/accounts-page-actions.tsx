@@ -23,6 +23,7 @@ export function AccountsPageActions(props: {
   rateSyncDisabled: boolean;
   onRefresh: () => void;
   onProbe: () => void;
+  onModelCheck?: () => void;
   onCheck: () => void;
   onRateSync: () => void;
   onModelSync: () => void;
@@ -32,6 +33,12 @@ export function AccountsPageActions(props: {
   return (
     <PageActions>
       <RefreshButton pending={props.refreshing} ariaLabel="刷新账号池" onClick={props.onRefresh} />
+      {props.onModelCheck ? (
+        <Button variant="outline" onClick={props.onModelCheck} aria-label="模型检测">
+          <ScanSearch aria-hidden="true" />
+          <span className="hidden sm:inline">模型检测</span>
+        </Button>
+      ) : null}
       <Button onClick={props.onProbe} aria-label="平台模型探活">
         <Activity aria-hidden="true" />
         <span className="hidden sm:inline">平台模型探活</span>

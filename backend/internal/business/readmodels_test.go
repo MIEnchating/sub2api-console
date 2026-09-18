@@ -62,7 +62,7 @@ func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
 	if err := store.ensureStableUpstreamRelations(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Close(); err != nil {
+	if err := store.db.DB.Close(); err != nil {
 		t.Fatal(err)
 	}
 	readOnly, err := sql.Open("sqlite", "file:"+store.path+"?mode=ro&_pragma=query_only%281%29&_pragma=foreign_keys%28ON%29")
@@ -70,7 +70,7 @@ func TestReadModelsDoNotRequireSQLiteWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	readOnly.SetMaxOpenConns(8)
-	store.db = &database{DB: readOnly, reader: readOnly}
+	store.db.DB = readOnly
 	if err := store.db.PingContext(ctx); err != nil {
 		t.Fatal(err)
 	}

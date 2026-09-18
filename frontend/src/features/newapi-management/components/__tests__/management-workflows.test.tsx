@@ -14,9 +14,9 @@ import {
 import { NewAPIModelPrices, NewAPIPriceDifferences } from "../model-prices";
 
 describe("New API 页面加载", () => {
-  it("主平台不刷新远端数据且渠道读取 New API 分组", () => {
+  it("主平台和渠道列表不预读分组，分组与价格页仍读取远端快照", () => {
     expect(newAPIViewNeedsRemoteSnapshot("platform")).toBe(false);
-    expect(newAPIViewNeedsRemoteSnapshot("channels")).toBe(true);
+    expect(newAPIViewNeedsRemoteSnapshot("channels")).toBe(false);
     expect(newAPIViewNeedsRemoteSnapshot("groups")).toBe(true);
     expect(newAPIViewNeedsRemoteSnapshot("prices")).toBe(true);
     expect(newAPIViewNeedsRemoteSnapshot("differences")).toBe(true);

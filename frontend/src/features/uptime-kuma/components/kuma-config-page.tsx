@@ -1,3 +1,5 @@
+import { SettingsSectionLayout } from "@/features/config/components/settings-section-layout";
+import { ContentRetry } from "@/components/content-retry";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +20,7 @@ import type { ConfigValues } from "../lib/schemas";
 import { useTaskCompletion } from "../hooks/use-task-completion";
 import { ConfigForm } from "./config-form";
 
-export function KumaConfigPage() {
+export function KumaConfigPage(props: { embedded?: boolean } = {}) {
   const client = useQueryClient();
   const task = useTaskCompletion();
   const query = useQuery({
@@ -50,12 +52,13 @@ export function KumaConfigPage() {
     onError: (error) => notifyOperationError(error, "断开接入失败"),
   });
   const pending = save.isPending || disconnect.isPending;
+  const Layout = props.embedded ? SettingsSectionLayout : PageLayout;
   return (
-    <PageLayout>
+    <Layout>
       <PageHeading
         eyebrow="Uptime Kuma"
-        title="接入配置"
-        description="配置 Uptime Kuma 的服务地址、API 密钥和管理账号"
+        title="Uptime Kuma 接入配置"
+        description="选填接入：查看监控需配置服务地址和 API 密钥；管理监控项时再填写管理账号。"
         action={
           <PageActions>
             <RefreshButton
@@ -83,6 +86,9 @@ export function KumaConfigPage() {
       />
       <div className="grid min-w-0 gap-3">
         {query.error && <QueryErrorToast error={query.error} fallback="接入配置读取失败" />}
+        {!config && query.isError && (
+          <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
+        )}
         {query.isPending && (
           <PageLoadingSkeleton label="正在读取接入配置…" variant="form" panels={2} />
         )}
@@ -110,6 +116,6 @@ export function KumaConfigPage() {
         onOpenChange={setDisconnectOpen}
         onConfirm={() => disconnect.mutate()}
       />
-    </PageLayout>
+    </Layout>
   );
 }

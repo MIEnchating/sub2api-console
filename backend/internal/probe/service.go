@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
@@ -81,6 +80,7 @@ type RunSummary struct {
 }
 
 type Config struct {
+	beforeAttempt  func(context.Context) (string, error)
 	Timeout        time.Duration
 	MaxConcurrency int
 	Prompt         string
@@ -104,41 +104,47 @@ type Target struct {
 }
 
 type Result struct {
-	FailureCode        string  `json:"failure_code,omitempty"`
-	AccountID          string  `json:"account_id"`
-	AccountName        string  `json:"account_name"`
-	GroupName          string  `json:"group_name"`
-	Result             string  `json:"result"`
-	DurationMS         int64   `json:"duration_ms"`
-	LatencyP50         *string `json:"latency_p50_ms"`
-	LatencyP95         *string `json:"latency_p95_ms"`
-	LatencyP99         *string `json:"latency_p99_ms"`
-	Attempts           int     `json:"attempts"`
-	FailureReason      *string `json:"failure_reason"`
-	StatusCode         *int    `json:"status_code"`
-	ObservedAt         string  `json:"observed_at"`
-	RequestModel       string  `json:"request_model"`
-	ActualModel        string  `json:"actual_model"`
-	ModelRewritten     bool    `json:"model_rewritten"`
-	AttemptStatusCodes []int   `json:"attempt_status_codes"`
-	RetryRecovered     bool    `json:"retry_recovered"`
+	ProbeProtocol           string  `json:"-"`
+	ProbePromptFingerprint  string  `json:"-"`
+	ProbeRequestFingerprint string  `json:"-"`
+	MeasuredFirstToken      bool    `json:"-"`
+	FailureCode             string  `json:"failure_code,omitempty"`
+	AccountID               string  `json:"account_id"`
+	AccountName             string  `json:"account_name"`
+	GroupName               string  `json:"group_name"`
+	Result                  string  `json:"result"`
+	DurationMS              int64   `json:"duration_ms"`
+	LatencyP50              *string `json:"latency_p50_ms"`
+	LatencyP95              *string `json:"latency_p95_ms"`
+	LatencyP99              *string `json:"latency_p99_ms"`
+	Attempts                int     `json:"attempts"`
+	FailureReason           *string `json:"failure_reason"`
+	StatusCode              *int    `json:"status_code"`
+	ObservedAt              string  `json:"observed_at"`
+	RequestModel            string  `json:"request_model"`
+	ActualModel             string  `json:"actual_model"`
+	ModelRewritten          bool    `json:"model_rewritten"`
+	AttemptStatusCodes      []int   `json:"attempt_status_codes"`
+	RetryRecovered          bool    `json:"retry_recovered"`
 }
 
 type preparedRun struct {
-	keyResolver    adminclient.ProbeKeyResolver
-	request        Request
-	config         Config
-	target         configstore.TargetSettings
-	targets        []Target
-	retryByAccount map[string]RetryConfig
+	manualFusedDiagnostics map[string]struct{}
+	keyResolver            adminclient.ProbeKeyResolver
+	request                Request
+	config                 Config
+	target                 configstore.TargetSettings
+	targets                []Target
+	retryByAccount         map[string]RetryConfig
 }
 
 type targetOptions struct {
-	applySchedulingPolicy bool
-	allowDisabledProbe    bool
-	probeModel            string
-	probeModels           map[string]string
-	forceProbeModel       bool
+	manualFusedDiagnostics map[string]struct{}
+	applySchedulingPolicy  bool
+	allowDisabledProbe     bool
+	probeModel             string
+	probeModels            map[string]string
+	forceProbeModel        bool
 }
 
 type Service struct {
@@ -276,12 +282,19 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 			return preparedRun{}, err
 		}
 	}
+	var manualFusedDiagnostics map[string]struct{}
+	if !automatic {
+		// A manual diagnosis may inspect an existing fuse without releasing it.
+		// Fuses applied after enqueue remain protected at execution time.
+		manualFusedDiagnostics = manualFusedAccountSet(policy)
+	}
 	targets, err := buildTargets(candidates, policy, targetOptions{
-		applySchedulingPolicy: automatic,
-		allowDisabledProbe:    recoverySelection,
-		probeModel:            request.ProbeModel,
-		probeModels:           request.ProbeModels,
-		forceProbeModel:       request.Platform != nil,
+		manualFusedDiagnostics: manualFusedDiagnostics,
+		applySchedulingPolicy:  automatic,
+		allowDisabledProbe:     recoverySelection,
+		probeModel:             request.ProbeModel,
+		probeModels:            request.ProbeModels,
+		forceProbeModel:        request.Platform != nil,
 	})
 	if err != nil {
 		return preparedRun{}, err
@@ -332,7 +345,7 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	if err != nil {
 		return preparedRun{}, err
 	}
-	return preparedRun{request: request, config: config, target: targetSettings, targets: targets, retryByAccount: retryByAccount}, nil
+	return preparedRun{request: request, config: config, target: targetSettings, targets: targets, retryByAccount: retryByAccount, manualFusedDiagnostics: manualFusedDiagnostics}, nil
 }
 
 func firstProbeTargetPerAccount(targets []Target) []Target {
@@ -424,7 +437,7 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 	if err != nil {
 		return RunSummary{}, err
 	}
-	prepared.targets, err = s.applyCurrentProtections(ctx, prepared.targets)
+	prepared.targets, err = s.applyCurrentProtections(ctx, prepared.targets, prepared.manualFusedDiagnostics)
 	if err != nil {
 		return RunSummary{}, err
 	}
@@ -432,6 +445,15 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 		return RunSummary{}, err
 	}
 	prepared.keyResolver = s.resolveProbeKey
+	if prepared.request.Automatic || len(prepared.request.AccountIDs) > 0 {
+		prepared.config.beforeAttempt = func(ctx context.Context) (string, error) {
+			policy, err := s.repository.ControlPolicy(ctx)
+			if err != nil {
+				return "", err
+			}
+			return business.ProbePauseReason(policy, time.Now())
+		}
+	}
 	results, err := run(ctx, prepared)
 	if err != nil {
 		return RunSummary{}, err
@@ -454,6 +476,8 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 			FailureReason: result.FailureReason, ObservedAt: result.ObservedAt, StatusCode: result.StatusCode,
 			RequestModel: result.RequestModel, ActualModel: result.ActualModel,
 			AttemptStatusCodes: result.AttemptStatusCodes, RetryRecovered: result.RetryRecovered,
+			ProbeProtocol: result.ProbeProtocol, ProbePromptFingerprint: result.ProbePromptFingerprint,
+			ProbeRequestFingerprint: result.ProbeRequestFingerprint, MeasuredFirstToken: result.MeasuredFirstToken,
 		})
 		if result.Result == "通过" {
 			passed++
@@ -551,6 +575,9 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if target.Model == nil {
 		return skippedProbeResult(target, "缺少探测模型，请配置后重试")
 	}
+	if skipped := scheduledProbeSkip(ctx, target, config); skipped != nil {
+		return *skipped
+	}
 	accountProbe, err := client.PrepareAccountProbe(ctx, target.AccountID, resolvers...)
 	if err != nil {
 		result := skippedProbeResult(target, err.Error())
@@ -560,6 +587,16 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 		}
 		return result
 	}
+	descriptor, err := accountProbe.PerformanceDescriptor(*target.Model, config.Prompt)
+	if err != nil {
+		result := skippedProbeResult(target, err.Error())
+		var unavailable *adminclient.ProbeUnavailableError
+		if errors.As(err, &unavailable) {
+			result.FailureCode = unavailable.Code
+		}
+		return result
+	}
+	promptFingerprint := business.ProbePromptFingerprint(config.Prompt)
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	started := time.Now()
 	var lastStatus *int
@@ -568,6 +605,12 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	attempts := 0
 	attemptStatusCodes := []int{}
 	for {
+		if skipped := scheduledProbeSkip(ctx, target, config); skipped != nil {
+			if attempts == 0 {
+				return *skipped
+			}
+			break
+		}
 		attempts++
 		outcome := probeAttempt(ctx, accountProbe, target, config)
 		if outcome.unavailable {
@@ -603,7 +646,8 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 			value := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
 			latency = &value
 		}
-		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1}
+		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1,
+			ProbeProtocol: descriptor.Protocol, ProbePromptFingerprint: promptFingerprint, ProbeRequestFingerprint: descriptor.RequestFingerprint, MeasuredFirstToken: measuredFirstToken}
 	}
 	result := "失败"
 	if lastReason == "主动探测超时" {
@@ -614,7 +658,8 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	if lastReason == "" {
 		lastReason = "主动探测请求失败"
 	}
-	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, DurationMS: durationMS, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes}
+	return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: result, DurationMS: durationMS, Attempts: attempts, FailureReason: &lastReason, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes,
+		ProbeProtocol: descriptor.Protocol, ProbePromptFingerprint: promptFingerprint, ProbeRequestFingerprint: descriptor.RequestFingerprint}
 }
 
 func skippedProbeResult(target Target, reason string) Result {
@@ -654,17 +699,11 @@ func upstreamStatusFromError(reason string) (int, bool) {
 }
 
 func failure(status int, body string) string {
-	text := strings.ToLower(body)
-	if status == http.StatusUnauthorized || status == http.StatusForbidden || containsAny(text, "unauthorized", "invalid api key", "鉴权", "认证") {
-		return "鉴权失败"
+	detail := strings.TrimSpace(body)
+	if detail == "" {
+		return fmt.Sprintf("HTTP %d（上游未返回错误详情）", status)
 	}
-	if status == http.StatusTooManyRequests || containsAny(text, "rate limit", "too many", "quota", "限流", "额度") {
-		return "上游限流或额度不足"
-	}
-	if status >= 500 {
-		return "上游网关错误"
-	}
-	return "主动探测请求失败"
+	return fmt.Sprintf("HTTP %d：%s", status, detail)
 }
 
 func decimalMilliseconds(value float64) string {
@@ -872,7 +911,9 @@ func buildTargets(candidates []business.ProbeCandidate, policy map[string]any, o
 	manualFused := manualFusedAccountSet(policy)
 	for _, candidate := range candidates {
 		if _, fused := manualFused[candidate.AccountID]; fused {
-			continue
+			if _, diagnostic := options.manualFusedDiagnostics[candidate.AccountID]; !diagnostic {
+				continue
+			}
 		}
 		if options.applySchedulingPolicy && excludedByMetadata(candidate.Metadata) {
 			continue
@@ -1013,7 +1054,7 @@ func eligibleScope(candidate business.ProbeCandidate, policy map[string]any) (bo
 			if err != nil {
 				return false, errors.New("范围配置无效：scope.managed_group_ids")
 			}
-			if !containsFold(managed, candidate.GroupName) && (candidate.GroupID == nil || !containsFold(managed, *candidate.GroupID)) {
+			if candidate.GroupID == nil || !containsFold(managed, *candidate.GroupID) {
 				return false, nil
 			}
 		}
@@ -1287,15 +1328,6 @@ func excludedByMetadata(metadata map[string]any) bool {
 func containsFold(values []string, expected string) bool {
 	for _, value := range values {
 		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(expected)) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsAny(value string, needles ...string) bool {
-	for _, needle := range needles {
-		if strings.Contains(value, needle) {
 			return true
 		}
 	}

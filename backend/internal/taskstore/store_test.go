@@ -458,13 +458,13 @@ func TestOpenCreatesAndRepairsTaskIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_operation_status_updated_at", "ix_tasks_log_listing", "ix_tasks_log_search", "sqlite_autoindex_active_task_operations_1"} {
+	for _, name := range []string{"ix_tasks_updated_at", "ix_tasks_status_updated_at", "ix_tasks_skill_updated_at", "ix_tasks_operation_status_updated_at", "ix_tasks_log_search", "sqlite_autoindex_active_task_operations_1"} {
 		var count int
 		if err := store.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&count); err != nil || count != 1 {
 			t.Fatalf("task index %s missing: count=%d err=%v", name, count, err)
 		}
 	}
-	if _, err := store.db.Exec(`DROP INDEX ix_tasks_log_listing`); err != nil {
+	if _, err := store.db.Exec(`DROP INDEX ix_tasks_log_search`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -476,7 +476,7 @@ func TestOpenCreatesAndRepairsTaskIndexes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
 	var repaired int
-	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_tasks_log_listing'`).Scan(&repaired); err != nil || repaired != 1 {
+	if err := reopened.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='ix_tasks_log_search'`).Scan(&repaired); err != nil || repaired != 1 {
 		t.Fatalf("reopening an existing task database did not repair indexes: count=%d err=%v", repaired, err)
 	}
 }

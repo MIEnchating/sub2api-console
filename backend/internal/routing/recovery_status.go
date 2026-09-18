@@ -11,6 +11,9 @@ import (
 
 func recoveryStatus(item *candidate, config engineConfig, now time.Time, withCooldown bool) *business.AccountRecovery {
 	span := recoverySpan(item.rows, item.health.RecoveryPassStreak, now)
+	if item.recoveryHoldSpan != nil {
+		span = *item.recoveryHoldSpan
+	}
 	automaticDetail := "自动恢复已开启"
 	if !config.recoveryEnabled {
 		automaticDetail = "自动恢复未开启，请在调度策略中开启或手动恢复"

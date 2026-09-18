@@ -242,7 +242,7 @@ func testTrafficProbePolicy() map[string]any {
 		},
 		"probe": map[string]any{
 			"enabled": true, "interval_seconds": int64(300), "concurrency": int64(4),
-			"skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180),
+			"skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "performance_exploration_enabled": false,
 		},
 		"recovery": map[string]any{"enabled": true, "probe_interval_seconds": int64(180)},
 	}
@@ -578,7 +578,7 @@ func TestDueProbeAccountsSkipsRegularProbeForFreshTraffic(t *testing.T) {
 		"traffic": map[string]any{"enabled": true},
 		"probe": map[string]any{
 			"enabled": true, "interval_seconds": int64(60), "skip_when_traffic_fresh": true,
-			"traffic_fresh_seconds": int64(180),
+			"traffic_fresh_seconds": int64(180), "performance_exploration_enabled": false,
 		},
 		"recovery": map[string]any{"enabled": true, "probe_interval_seconds": int64(180)},
 	})

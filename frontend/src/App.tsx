@@ -1,3 +1,9 @@
+import { AccountTrafficProvider } from "@/features/accounts/components/account-traffic";
+import { PlatformSettingsPage } from "@/features/config/components/platform-settings-page";
+import {
+  withOnboardingModelMappings,
+  type OnboardingAccountModelMappings,
+} from "@/features/upstreams/lib/onboarding-model-mapping";
 import { useOnboardingPreparation } from "@/features/upstreams/hooks/use-onboarding-preparation";
 import { inspectionAuthRecoveryActions } from "@/features/auto-inspection/constants";
 import { ServiceSettings } from "@/features/auto-inspection/components/service-settings";
@@ -15,6 +21,7 @@ import { StartupLoading } from "@/components/startup-loading";
 import { FormFieldsSkeleton } from "@/components/form-fields-skeleton";
 import { AccountLiveStatus } from "@/features/accounts/components/account-live-status";
 import { useAccountResultEvents } from "@/features/accounts/hooks/use-account-result-events";
+import { shareAccountHealthSnapshots } from "@/features/accounts/lib/account-health-snapshot";
 import { GroupsPageActions } from "./features/groups/components/groups-page-actions";
 import { UpstreamsPageActions } from "./features/upstreams/components/upstreams-page-actions";
 import {
@@ -30,6 +37,8 @@ import { PolicyConfigCard } from "./features/policy/components/policy-config-car
 import { PolicySwitchRow } from "./features/policy/components/policy-switch-row";
 import { UpstreamConcurrencyPolicyCard } from "./features/policy/components/upstream-concurrency-policy-card";
 import { CostWallPolicyCard } from "./features/policy/components/cost-wall-policy-card";
+import { ProbePauseFields } from "./features/policy/components/probe-pause-fields";
+import { probePauseWindowSchema } from "./features/policy/lib/probe-pause-schema";
 import { GroupBatchDialog } from "./features/groups/components/group-batch-dialog";
 import { GroupSelectionToolbar } from "./features/groups/components/group-selection-toolbar";
 import { useGroupBatchActions } from "./features/groups/hooks/use-group-batch-actions";
@@ -39,7 +48,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "reac
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
-  Cable,
   Files,
   PanelsTopLeft,
   Ban,
@@ -64,6 +72,7 @@ import {
   Layers3,
   Link2,
   ListTodo,
+  LoaderCircle,
   LogOut,
   Moon,
   MoreHorizontal,
@@ -79,7 +88,6 @@ import {
   ScanSearch,
   Search,
   ScrollText,
-  ServerCog,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -96,7 +104,13 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useIsFetching,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link, Outlet, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
@@ -292,6 +306,7 @@ import {
 import { AccountCreationSettingsCard } from "./features/config/components/account-creation-settings-card";
 import { SettingsFooter } from "./features/config/components/settings-footer";
 import { ModelSyncSettingsCard } from "./features/config/components/model-sync-settings-card";
+import { TaskConcurrencySettingsCard } from "./features/config/components/task-concurrency-settings-card";
 import { ConfigSectionTabs } from "./features/config/components/config-section-tabs";
 import { DictionaryManagement } from "./features/config/components/dictionary-management";
 import { settingsLayout } from "./features/config/components/settings-layout";
@@ -304,6 +319,7 @@ import type { ConfigTab } from "./features/config/constants";
 import { OnboardingKeyCleanupDialog } from "./features/upstreams/components/onboarding-key-cleanup-dialog";
 import { OnboardingGroupBindingSelect } from "./features/upstreams/components/onboarding-group-binding-select";
 import { OnboardingCandidateVisibilityFilter } from "./features/upstreams/components/onboarding-candidate-visibility-filter";
+import { searchOnboardingCandidates } from "./features/upstreams/lib/onboarding-candidate-search";
 import {
   OnboardingBatchActionBar,
   OnboardingAccountType,
@@ -340,7 +356,7 @@ import {
 } from "./features/upstreams/components/onboarding-probe-action";
 import { AccountStatusFilter } from "./features/accounts/components/account-status-tabs";
 import { AccountSortTableHead } from "./features/accounts/components/account-sort-header";
-import { ManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
+import { AccountManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
 import { AccountsPageActions } from "./features/accounts/components/accounts-page-actions";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
 import {
@@ -349,6 +365,7 @@ import {
 } from "./features/accounts/components/account-delete-dialog";
 import { AccountDetailDialog } from "./features/accounts/components/account-detail-dialog";
 import { AccountSettingsPanel } from "./features/accounts/components/account-settings-panel";
+import { AccountQualityCell } from "./features/accounts/components/account-quality-cell";
 import {
   AccountProbeDialog,
   type ProbeDialogTarget,
@@ -395,11 +412,8 @@ import {
   vaultEntriesForHost,
   vaultEntryLabel,
 } from "./lib/vault-entry-label";
-import {
-  readHiddenNavigationItemIDs,
-  visibleNavigationSections,
-  writeHiddenNavigationItemIDs,
-} from "./lib/navigation-preferences";
+import { visibleNavigationSections } from "./lib/navigation-preferences";
+import { useNavigationPreferences } from "./hooks/use-navigation-preferences";
 import { browserPreferenceStorage } from "./lib/browser-preferences";
 import {
   adjacentOnboardingUpstreams,
@@ -532,7 +546,6 @@ export const navItems: Array<{
   },
   { id: "trace", label: "请求查询", icon: FileSearch, to: "/trace" },
   { id: "alerts", label: "告警通知", icon: Siren, to: "/alerts" },
-  { id: "newapi", label: "平台配置", icon: ServerCog, to: "/newapi" },
   { id: "newapi-groups", label: "分组绑定", icon: Link2, to: "/newapi/groups" },
   { id: "newapi-channels", label: "渠道管理", icon: RadioTower, to: "/newapi/channels" },
   { id: "newapi-prices", label: "模型价格", icon: BadgeDollarSign, to: "/newapi/prices" },
@@ -542,7 +555,6 @@ export const navItems: Array<{
     icon: GitCompareArrows,
     to: "/newapi/differences",
   },
-  { id: "uptime-kuma-config", label: "接入配置", icon: Cable, to: "/uptime-kuma/config" },
   { id: "uptime-kuma", label: "监控管理", icon: Activity, to: "/uptime-kuma" },
   {
     id: "uptime-kuma-templates",
@@ -600,16 +612,11 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
   },
   {
     label: "New API",
-    itemIDs: ["newapi", "newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
+    itemIDs: ["newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
   },
   {
     label: "Uptime Kuma",
-    itemIDs: [
-      "uptime-kuma-config",
-      "uptime-kuma",
-      "uptime-kuma-templates",
-      "uptime-kuma-status-pages",
-    ],
+    itemIDs: ["uptime-kuma", "uptime-kuma-templates", "uptime-kuma-status-pages"],
   },
   { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
   { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
@@ -634,11 +641,11 @@ const viewByPath: Record<string, View> = {
   "/account-workbench": "account-workbench",
   "/upstreams": "upstreams",
   "/groups": "groups",
-  "/uptime-kuma/config": "uptime-kuma-config",
+  "/uptime-kuma/config": "config",
   "/uptime-kuma/templates": "uptime-kuma-templates",
   "/uptime-kuma/status-pages": "uptime-kuma-status-pages",
   "/uptime-kuma": "uptime-kuma",
-  "/newapi": "newapi",
+  "/newapi": "config",
   "/newapi/groups": "newapi-groups",
   "/newapi/channels": "newapi-channels",
   "/newapi/prices": "newapi-prices",
@@ -672,12 +679,6 @@ function App() {
     if (typeof window === "undefined") return "dark";
     return browserPreferenceStorage.getItem("sub2api-console-theme") === "light" ? "light" : "dark";
   });
-  const [hiddenNavigationItemIDs, setHiddenNavigationItemIDs] = useState<Set<View>>(() => {
-    if (typeof window === "undefined") return new Set();
-    return readHiddenNavigationItemIDs(browserPreferenceStorage, navigationItemIDs, [
-      ...lockedNavigationItemIDs,
-    ]);
-  });
   const location = useLocation();
   const navigate = useNavigate();
   const shouldReduceMotion = useReducedMotion();
@@ -696,14 +697,6 @@ function App() {
     browserPreferenceStorage.setItem("sub2api-console-theme", theme);
   }, [theme]);
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    writeHiddenNavigationItemIDs(
-      browserPreferenceStorage,
-      hiddenNavigationItemIDs,
-      navigationItemIDs,
-    );
-  }, [hiddenNavigationItemIDs]);
-  useEffect(() => {
     const handleSessionExpired = () => {
       clearSession();
       setLoginReason(sessionExpiredMessage);
@@ -711,20 +704,6 @@ function App() {
     window.addEventListener(sessionExpiredEvent, handleSessionExpired);
     return () => window.removeEventListener(sessionExpiredEvent, handleSessionExpired);
   }, [clearSession]);
-  const setNavigationItemVisibility = useCallback((itemID: View, visible: boolean) => {
-    if (lockedNavigationItemIDs.has(itemID)) return;
-    setHiddenNavigationItemIDs((current) => {
-      const next = new Set(current);
-      if (visible) next.delete(itemID);
-      else next.add(itemID);
-      return next;
-    });
-  }, []);
-  const resetNavigation = useCallback(() => setHiddenNavigationItemIDs(new Set()), []);
-  const shellContext = useMemo(
-    () => ({ hiddenNavigationItemIDs, setNavigationItemVisibility, resetNavigation }),
-    [hiddenNavigationItemIDs, resetNavigation, setNavigationItemVisibility],
-  );
   const setup = useQuery({
     queryKey: ["setup-status"],
     queryFn: api.setupStatus,
@@ -736,6 +715,12 @@ function App() {
     enabled: setup.data?.initialized === true,
     retry: false,
   });
+  const shellContext = useNavigationPreferences(
+    session.data?.authenticated === true,
+    navigationItemIDs,
+    lockedNavigationItemIDs,
+  );
+  const hiddenNavigationItemIDs = shellContext.hiddenNavigationItemIDs;
   const overview = useQuery({
     queryKey: ["overview"],
     queryFn: api.overview,
@@ -1538,7 +1523,7 @@ const statusLabels: Record<string, string> = {
   browser_challenge_required: "需要浏览器验证",
   probe_failed: "探测失败",
   gateway_error: "网关错误",
-  rate_limited_or_exhausted: "限流或额度不足",
+  rate_limited_or_exhausted: "上游请求失败",
   unknown_upstream_error: "上游错误",
   empty_response: "疑似空回复",
   apply: "自动执行",
@@ -1816,6 +1801,9 @@ function policyAdvancedDraft(value: Record<string, unknown>): Record<string, unk
   return draft;
 }
 export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
+  const pauseWindow = policyAdvancedValue(value, "probe", "pause_window");
+  if (pauseWindow !== undefined && !probePauseWindowSchema.safeParse(pauseWindow).success)
+    return null;
   const numeric = [
     value.cooldown_seconds,
     value.probe_interval_seconds,
@@ -4037,6 +4025,20 @@ export function AccountSelectionToolbar(props: {
 }
 
 export function AccountsPage() {
+  return (
+    <AccountTrafficProvider>
+      <AccountsPageContent />
+    </AccountTrafficProvider>
+  );
+}
+
+function AccountsPageContent() {
+  const navigate = useNavigate();
+  const checks = useQuery({
+    queryKey: ["model-check-account-statuses"],
+    queryFn: api.modelCheckAccountStatuses,
+    refetchInterval: 30_000,
+  });
   const orderedAccountTypes = useDictionaryOrder(
     "account_type",
     accountTypeOptions,
@@ -4047,14 +4049,26 @@ export function AccountsPage() {
     queryFn: () => api.dictionaries("group"),
     staleTime: 60_000,
   });
-  const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const accounts = useQuery({
+    queryKey: ["accounts"],
+    queryFn: api.accounts,
+    structuralSharing: shareAccountHealthSnapshots,
+    refetchInterval: 30_000,
+  });
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
     queryFn: () => api.dictionaries("platform"),
   });
   const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
   const queryClient = useQueryClient();
-  const rows = accounts.data ?? [];
+  const rows = useMemo(() => accounts.data ?? [], [accounts.data]);
+  const checksByID = useMemo(
+    () => new Map((checks.data ?? []).map((item) => [item.account_id, item])),
+    [checks.data],
+  );
+  let checkFallback: AccountStatus["model_check_status"] = null;
+  if (!checks.data && checks.isLoading) checkFallback = "loading";
+  if (!checks.data && checks.isError) checkFallback = "unavailable";
   const accountPlatforms = useMemo(
     () =>
       new Map(
@@ -4087,6 +4101,9 @@ export function AccountsPage() {
   const [accountSort, setAccountSort] = useState<AccountSort>("default");
   const [showManualPriorityAccounts, setShowManualPriorityAccounts] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<string>>(() => new Set());
+  const onAccountSelectedChange = useCallback((id: string, selected: boolean) => {
+    setSelectedAccountIds((current) => updateAccountSelection(current, [id], selected));
+  }, []);
   const [baseURLCheckOpen, setBaseURLCheckOpen] = useState(false);
   const [baseURLCheckTaskId, setBaseURLCheckTaskId] = useState<string | null>(null);
   const [baseURLCheckAccountIds, setBaseURLCheckAccountIds] = useState<string[]>([]);
@@ -4398,8 +4415,9 @@ export function AccountsPage() {
             refreshing={accounts.isFetching}
             automaticDisabled={batchOperationPending || automaticAccountIDs.length === 0}
             rateSyncDisabled={batchOperationPending || rateSyncAccountIDs.length === 0}
-            onRefresh={() => void accounts.refetch()}
+            onRefresh={() => void Promise.all([accounts.refetch(), checks.refetch()])}
             onProbe={() => setPlatformProbeOpen(true)}
+            onModelCheck={() => void navigate({ to: "/model-check" })}
             onCheck={startBaseURLCheck}
             onRateSync={() => startMaintenance("rate")}
             onModelSync={() => startModelSync(automaticAccountIDs)}
@@ -4475,7 +4493,7 @@ export function AccountsPage() {
             actionColumn
             containerClassName="min-h-0 flex-1 overflow-auto"
             uniformTextSize={false}
-            className="min-w-[1336px] [&_td]:py-3"
+            className="min-w-[1560px] [&_td]:py-3"
           >
             <TableHeader className="sticky top-0 z-20">
               <TableRow>
@@ -4512,6 +4530,7 @@ export function AccountsPage() {
                     <AccountLiveStatus status={liveResultsStatus} />
                   </span>
                 </TableHead>
+                <TableHead className="w-60">置信度 / 稳定性</TableHead>
                 <AccountSortTableHead
                   className="w-28"
                   label="流量首字"
@@ -4548,13 +4567,13 @@ export function AccountsPage() {
               {accounts.isLoading &&
                 Array.from({ length: 6 }, (_, row) => (
                   <TableRow key={`loading:${row}`} aria-label="正在加载账号">
-                    {Array.from({ length: 10 }, (_, column) => (
+                    {Array.from({ length: 11 }, (_, column) => (
                       <TableCell key={column} overflowTooltip={false}>
                         <Skeleton
                           className={cn(
                             "h-4 max-w-full",
                             column === 0 ? "w-4" : "w-20",
-                            column === 9 && "ml-auto",
+                            column === 10 && "ml-auto",
                           )}
                         />
                       </TableCell>
@@ -4562,7 +4581,7 @@ export function AccountsPage() {
                   </TableRow>
                 ))}
               {!accounts.data && accounts.isError && (
-                <TableEmptyState columns={10}>
+                <TableEmptyState columns={11}>
                   <ContentRetry
                     pending={accounts.isFetching}
                     onRetry={() => void accounts.refetch()}
@@ -4570,7 +4589,7 @@ export function AccountsPage() {
                 </TableEmptyState>
               )}
               {accounts.data && !filteredRows.length && (
-                <TableEmptyState columns={10}>
+                <TableEmptyState columns={11}>
                   <EmptyRow
                     text={
                       search ||
@@ -4589,14 +4608,11 @@ export function AccountsPage() {
                   <AccountRow
                     key={account.id}
                     account={account}
-                    accounts={rows}
+                    modelCheck={checksByID.get(account.id)}
+                    checkFallback={checkFallback}
                     reservedMax={reservedMax}
                     selected={selectedAccountIds.has(account.id)}
-                    onSelectedChange={(selected) =>
-                      setSelectedAccountIds((current) =>
-                        updateAccountSelection(current, [account.id], selected),
-                      )
-                    }
+                    onSelectedChange={onAccountSelectedChange}
                   />
                 ))}
             </TableBody>
@@ -5514,15 +5530,24 @@ export function AccountMaintenanceTaskStatus(props: {
   );
 }
 
-function AccountRow(props: {
+const AccountRow = React.memo(function AccountRow(props: {
   account: AccountStatus;
-  accounts: AccountStatus[];
+  modelCheck: AccountStatus["model_check"];
+  checkFallback: AccountStatus["model_check_status"];
   reservedMax: number;
   selected: boolean;
-  onSelectedChange: (selected: boolean) => void;
+  onSelectedChange: (id: string, selected: boolean) => void;
 }) {
-  const account = props.account;
+  const account = useMemo(
+    () => ({
+      ...props.account,
+      model_check: props.modelCheck,
+      model_check_status: props.modelCheck?.status ?? props.checkFallback,
+    }),
+    [props.account, props.modelCheck, props.checkFallback],
+  );
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [taskId, setTaskId] = useState<string | null>(null);
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
@@ -5621,7 +5646,7 @@ function AccountRow(props: {
           <Checkbox
             checked={props.selected}
             aria-label={`选择账号 ${account.name}（#${account.id}）`}
-            onCheckedChange={props.onSelectedChange}
+            onCheckedChange={(selected) => props.onSelectedChange(account.id, selected)}
           />
         </TableCell>
         <TableCell className="align-middle">
@@ -5632,6 +5657,9 @@ function AccountRow(props: {
         </TableCell>
         <TableCell className="align-middle">
           <AccountRecentResultsCell account={account} />
+        </TableCell>
+        <TableCell className="align-middle" overflowTooltip={false}>
+          <AccountQualityCell account={account} />
         </TableCell>
         <TableCell className="align-middle">
           <AccountLatencyCell account={account} />
@@ -5657,15 +5685,13 @@ function AccountRow(props: {
         </TableCell>
         <TableCell className="align-middle text-right" overflowTooltip={false}>
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-            <AccountTaskCancelButton
-              taskId={taskId}
-              pending={pending}
-              activeAction={activeAction}
-            />
             <AccountOperationButtons
               account={account}
               pending={pending || activeAction !== null}
               probePending={activeAction === "探活测试"}
+              onModelCheck={() =>
+                void navigate({ to: "/model-check", search: { account_id: account.id } })
+              }
               onProbe={() =>
                 void startTask("探活测试", () => api.runActiveProbe({ account_id: account.id }))
               }
@@ -5694,10 +5720,9 @@ function AccountRow(props: {
           onSaved={() => setDetailsOpen(false)}
         />
       </AccountDetailDialog>
-      <ManualPriorityDialog
+      <AccountManualPriorityDialog
         open={manualPriorityOpen}
         account={account}
-        accounts={props.accounts}
         reservedMax={props.reservedMax}
         pending={pending || activeAction !== null}
         onOpenChange={setManualPriorityOpen}
@@ -5747,22 +5772,7 @@ function AccountRow(props: {
       />
     </>
   );
-}
-
-export function AccountTaskCancelButton(props: {
-  taskId: string | null;
-  pending: boolean;
-  activeAction: string | null;
-}) {
-  if (
-    !props.taskId ||
-    !props.pending ||
-    props.activeAction === "删除账号" ||
-    props.activeAction === "探活测试"
-  )
-    return null;
-  return <TaskCancelButton taskId={props.taskId} compact />;
-}
+});
 
 export function GroupsPage() {
   const groups = useQuery({
@@ -5860,7 +5870,7 @@ export function GroupsPage() {
     const scaling = section("scaling");
     const probe = section("probe");
     setEditor({
-      enabled: override.enabled ?? group.participation_status === "participating",
+      enabled: override.enabled ?? true,
       strategy:
         group.strategy_source === "global_default"
           ? null
@@ -5891,7 +5901,9 @@ export function GroupsPage() {
         group.strategy,
         group.platform,
         ...(group.platforms ?? []),
-        group.strategy_source === "global_default" ? "全局默认" : displayStrategy(group.strategy),
+        group.strategy_source === "global_default"
+          ? `全局默认 · ${displayStrategy(group.strategy)}`
+          : displayStrategy(group.strategy),
         groupStatusMeta(group.status).label,
       ],
       search,
@@ -6015,7 +6027,7 @@ export function GroupsPage() {
                   </TableCell>
                   <TableCell>
                     {group.strategy_source === "global_default"
-                      ? "全局默认"
+                      ? `全局默认 · ${displayStrategy(group.strategy)}`
                       : displayStrategy(group.strategy)}
                   </TableCell>
                   <TableCell>
@@ -6402,10 +6414,10 @@ const onboardingSchema = z.object({
   upstream_type: z.string().min(2, "请选择上游类型"),
   concurrency: z
     .string()
-    .regex(/^\d+$/, "并发必须是整数")
     .refine(
-      (value) => Number(value) >= 1 && Number(value) <= 10_000_000,
-      "并发必须在 1 到 10000000 之间",
+      (value) =>
+        value === "" || (/^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 10_000_000),
+      "并发必须在 1 到 10000000 之间，留空自动分配",
     ),
   priority: z
     .string()
@@ -6477,6 +6489,7 @@ export function OnboardingPage() {
   const [onlyShowEnabledGroups, setOnlyShowEnabledGroups] = useState(
     defaultOnlyShowEnabledOnboardingGroups,
   );
+  const [candidateSearch, setCandidateSearch] = useState("");
   const [onboardingConfirmation, setOnboardingConfirmation] =
     useState<OnboardingConfirmation | null>(null);
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
@@ -6507,7 +6520,7 @@ export function OnboardingPage() {
       base_url_protocol: "https",
       account_base_url: "",
       upstream_type: "sub2api",
-      concurrency: "10",
+      concurrency: "",
       priority: "1",
       target_group: "",
       local_group_id: "",
@@ -6525,6 +6538,7 @@ export function OnboardingPage() {
     setVerifiedUpstream(null);
     setSelectedGroupId(null);
     setBatchBindings({});
+    setCandidateSearch("");
   }, [form, onboardingSearch.host, onboardingSearch.upstream_type]);
   const groups = useQuery({
     queryKey: ["groups"],
@@ -6537,9 +6551,6 @@ export function OnboardingPage() {
   });
   useEffect(() => {
     if (!accountDefaults.data) return;
-    if (!form.getFieldState("concurrency").isDirty) {
-      form.setValue("concurrency", String(accountDefaults.data.account_default_concurrency));
-    }
     if (!form.getFieldState("priority").isDirty) {
       form.setValue("priority", String(accountDefaults.data.account_default_priority));
     }
@@ -6617,6 +6628,42 @@ export function OnboardingPage() {
       toast.success("上游已添加并通过验证");
     },
   });
+  const concurrencyPreview = useMutation({ mutationFn: api.previewOnboardingConcurrency });
+  async function prepareOnboardingConfirmation(
+    confirmation: OnboardingConfirmation,
+  ): Promise<void> {
+    if (concurrencyPreview.isPending) return;
+    if (confirmation.requests.every((request) => (request.account_ids?.length ?? 0) > 0)) {
+      setOnboardingConfirmation(confirmation);
+      return;
+    }
+    try {
+      const allocation = await concurrencyPreview.mutateAsync(confirmation.requests);
+      if (allocation.items.length !== confirmation.requests.length) {
+        throw new Error("并发预览数量不一致，请重新预览");
+      }
+      setOnboardingConfirmation({
+        ...confirmation,
+        requests: confirmation.requests.map((request, index) => ({
+          ...request,
+          concurrency: allocation.items[index]!.concurrency ?? undefined,
+          waiting_for_capacity: allocation.items[index]!.waiting_for_capacity || undefined,
+        })),
+        previews: confirmation.previews.map((preview, index) => ({
+          ...preview,
+          localGroupIds: (
+            confirmation.requests[index]!.local_group_ids ?? [
+              confirmation.requests[index]!.local_group_id,
+            ]
+          ).map(String),
+          concurrency: allocation.items[index]!.concurrency ?? preview.concurrency,
+          waitingForCapacity: allocation.items[index]!.waiting_for_capacity ?? false,
+        })),
+      });
+    } catch (error) {
+      notifyOperationError(error, "并发分配失败");
+    }
+  }
   const detection = useMutation({ mutationFn: api.detectUpstream });
   const balanceSync = useMutation({
     mutationFn: api.runBalanceSync,
@@ -6892,7 +6939,7 @@ export function OnboardingPage() {
       upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
       base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
       notes: values.notes,
-      concurrency: Number(values.concurrency),
+      concurrency: values.concurrency === "" ? undefined : Number(values.concurrency),
       priority: Number(values.priority),
       local_group_ids: localGroupIDs.map(Number),
       upstream_group_id: candidate.group_id,
@@ -6930,7 +6977,7 @@ export function OnboardingPage() {
           priority: request.priority ?? 0,
           status: "待添加" as const,
         }));
-    setOnboardingConfirmation({
+    await prepareOnboardingConfirmation({
       mode: requests.length === 1 ? "single" : "batch",
       requests,
       previews: previews.map((preview, index) => ({
@@ -6978,8 +7025,7 @@ export function OnboardingPage() {
         host: onboardingRequestHost(verifiedUpstream, values.host),
         upstream_type: verifiedUpstream?.upstream_type ?? values.upstream_type,
         base_url: existingBinding ? undefined : verifiedUpstream?.account_base_url,
-        notes: values.notes,
-        concurrency: Number(values.concurrency),
+        concurrency: values.concurrency === "" ? undefined : Number(values.concurrency),
         priority: Number(values.priority),
         local_group_ids: localGroupIDs.map(Number),
         upstream_group_id: candidate.group_id,
@@ -7015,17 +7061,23 @@ export function OnboardingPage() {
       toast.error("请至少为一个上游分组选择本地分组");
       return;
     }
-    setOnboardingConfirmation({
+    await prepareOnboardingConfirmation({
       mode: "batch",
       requests: selections.map((selection) => selection.request),
       previews: selections.map((selection) => selection.preview),
     });
   }
-  async function confirmOnboarding(probeModels: OnboardingAccountProbeModels) {
+  async function confirmOnboarding(
+    probeModels: OnboardingAccountProbeModels,
+    modelMappings: OnboardingAccountModelMappings,
+  ) {
     if (!onboardingConfirmation || onboardingSubmitting) return;
     setOnboardingSubmitting(true);
     try {
-      const requests = withOnboardingProbeModels(onboardingConfirmation.requests, probeModels);
+      const requests = withOnboardingModelMappings(
+        withOnboardingProbeModels(onboardingConfirmation.requests, probeModels),
+        modelMappings,
+      );
       const created =
         onboardingConfirmation.mode === "single"
           ? await api.onboard(requests[0]!)
@@ -7084,7 +7136,17 @@ export function OnboardingPage() {
   );
   const visibleCandidates = filterOnboardingCandidates(allCandidates, onlyShowEnabledGroups);
   const hiddenCandidateCount = allCandidates.length - visibleCandidates.length;
-  const candidatePagination = useClientPagination(visibleCandidates);
+  const searchedCandidates = searchOnboardingCandidates(visibleCandidates, candidateSearch);
+  const candidatePagination = useClientPagination(searchedCandidates);
+  let candidateEmptyText = "上游没有返回分组";
+  let candidateEmptyDetail: string | undefined;
+  if (candidateSearch.trim()) {
+    candidateEmptyText = "没有匹配的上游分组";
+    candidateEmptyDetail = "请修改搜索条件，或关闭“仅显示启用分组”后重试。";
+  } else if (allCandidates.length > 0) {
+    candidateEmptyText = "没有已启用的上游分组";
+    candidateEmptyDetail = "关闭“仅显示启用分组”可查看未启用分组。";
+  }
   useEffect(() => {
     if (!preparedData) return;
     const bindings: Record<string, string[]> = {};
@@ -7185,7 +7247,9 @@ export function OnboardingPage() {
     );
   });
   let entrySubmitLabel = "预览添加账号";
-  if (onboardingSubmitting || taskIsPending(taskId, task)) {
+  if (concurrencyPreview.isPending) {
+    entrySubmitLabel = "正在预览";
+  } else if (onboardingSubmitting || taskIsPending(taskId, task)) {
     entrySubmitLabel = "正在提交";
   } else if (entryCandidate && candidateHasExistingBinding(entryCandidate)) {
     entrySubmitLabel = "预览更新绑定";
@@ -7272,7 +7336,8 @@ export function OnboardingPage() {
         <ContentRetry pending={groups.isFetching} onRetry={() => void groups.refetch()} />
       </PageLayout>
     );
-  const onboardingPending = onboardingSubmitting || taskIsPending(taskId, task);
+  const onboardingPending =
+    concurrencyPreview.isPending || onboardingSubmitting || taskIsPending(taskId, task);
   let entryInteractionDisabledReason = entryUnavailableReason;
   if (onboardingPending) {
     entryInteractionDisabledReason = "账号添加任务进行中";
@@ -7767,14 +7832,27 @@ export function OnboardingPage() {
                   boundCount={candidateStats.bound}
                   controls={
                     !entryGroupId ? (
-                      <OnboardingCandidateVisibilityFilter
-                        onlyShowEnabled={onlyShowEnabledGroups}
-                        hiddenCount={hiddenCandidateCount}
-                        onOnlyShowEnabledChange={(checked) => {
-                          setOnlyShowEnabledGroups(checked);
-                          candidatePagination.setCurrentPage(1);
-                        }}
-                      />
+                      <>
+                        <Input
+                          type="search"
+                          aria-label="搜索上游分组"
+                          placeholder="搜索分组名称、ID 或说明"
+                          className="w-full sm:w-64"
+                          value={candidateSearch}
+                          onChange={(event) => {
+                            setCandidateSearch(event.target.value);
+                            candidatePagination.setCurrentPage(1);
+                          }}
+                        />
+                        <OnboardingCandidateVisibilityFilter
+                          onlyShowEnabled={onlyShowEnabledGroups}
+                          hiddenCount={hiddenCandidateCount}
+                          onOnlyShowEnabledChange={(checked) => {
+                            setOnlyShowEnabledGroups(checked);
+                            candidatePagination.setCurrentPage(1);
+                          }}
+                        />
+                      </>
                     ) : undefined
                   }
                 />
@@ -7850,20 +7928,9 @@ export function OnboardingPage() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {!visibleCandidates.length ? (
+                        {!searchedCandidates.length ? (
                           <TableMessageRow columns={5}>
-                            <EmptyRow
-                              text={
-                                allCandidates.length > 0
-                                  ? "没有已启用的上游分组"
-                                  : "上游没有返回分组"
-                              }
-                              detail={
-                                allCandidates.length > 0
-                                  ? "关闭“仅显示启用分组”可查看未启用分组。"
-                                  : undefined
-                              }
-                            />
+                            <EmptyRow text={candidateEmptyText} detail={candidateEmptyDetail} />
                           </TableMessageRow>
                         ) : null}
                         {candidatePagination.visibleItems.map((candidate) => {
@@ -7974,11 +8041,11 @@ export function OnboardingPage() {
                         })}
                       </TableBody>
                     </Table>
-                    {visibleCandidates.length > 0 ? (
+                    {searchedCandidates.length > 0 ? (
                       <DataTablePagination
                         currentPage={candidatePagination.currentPage}
                         totalPages={candidatePagination.totalPages}
-                        totalItems={visibleCandidates.length}
+                        totalItems={searchedCandidates.length}
                         pageSize={candidatePagination.pageSize}
                         pageSizes={[10, 20, 50, 100]}
                         onPageChange={candidatePagination.setCurrentPage}
@@ -8056,7 +8123,8 @@ export function OnboardingPage() {
                         <Input
                           id={`${fieldID}-concurrency`}
                           {...form.register("concurrency")}
-                          disabled={!selectedGroupId}
+                          placeholder="自动平分剩余额度"
+                          disabled={!selectedGroupId || concurrencyPreview.isPending}
                           type="number"
                           min={1}
                           max={10_000_000}
@@ -8100,9 +8168,14 @@ export function OnboardingPage() {
                               : "",
                           ) || !entryCandidateSelectable
                         }
+                        aria-busy={onboardingPending}
                         onClick={() => void execute()}
                       >
-                        <Eye size={16} />
+                        {concurrencyPreview.isPending ? (
+                          <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />
+                        ) : (
+                          <Eye size={16} aria-hidden="true" />
+                        )}
                         {entrySubmitLabel}
                       </Button>
                     </div>
@@ -8112,14 +8185,6 @@ export function OnboardingPage() {
                   <OnboardingBatchActionBar
                     controls={
                       <>
-                        <FormField htmlFor={`${fieldID}-batch-notes`} label="批量备注（可选）">
-                          <Input
-                            id={`${fieldID}-batch-notes`}
-                            {...form.register("notes")}
-                            disabled={onboardingPending}
-                            placeholder="应用到本批次的所有账号"
-                          />
-                        </FormField>
                         <FormField
                           htmlFor={`${fieldID}-concurrency`}
                           label="并发"
@@ -8129,6 +8194,7 @@ export function OnboardingPage() {
                           <Input
                             id={`${fieldID}-concurrency`}
                             {...form.register("concurrency")}
+                            placeholder="自动平分剩余额度"
                             disabled={onboardingPending}
                             type="number"
                             min={1}
@@ -8156,6 +8222,7 @@ export function OnboardingPage() {
                     }
                     selectedCount={batchBindingCount}
                     pending={onboardingPending}
+                    previewPending={concurrencyPreview.isPending}
                     disabled={
                       batchBindingCount === 0 || batchBindingCount > 50 || batchMissingProtocol
                     }
@@ -8224,7 +8291,7 @@ export function OnboardingPage() {
         onOpenChange={(open) => {
           if (!open) setOnboardingConfirmation(null);
         }}
-        onConfirm={(models) => void confirmOnboarding(models)}
+        onConfirm={(models, mappings) => void confirmOnboarding(models, mappings)}
       />
 
       <Dialog
@@ -9491,9 +9558,47 @@ type ConfigPageProps = {
   hiddenNavigationItemIDs?: ReadonlySet<View>;
   onNavigationItemVisibilityChange?: (itemID: View, visible: boolean) => void;
   onResetNavigation?: () => void;
+  navigationPending?: boolean;
+  navigationLoading?: boolean;
+  navigationReadFailed?: boolean;
+  onRetryNavigation?: () => void;
 };
 
 export function ConfigPage(props: ConfigPageProps = {}) {
+  const activeTab = props.activeTab ?? "connection";
+  const client = useQueryClient();
+  const settingsQueryKey = activeTab === "tasks" ? "task-concurrency" : "config";
+  const fetching = useIsFetching({ queryKey: [settingsQueryKey], exact: true }) > 0;
+  const platformTab = activeTab === "newapi" || activeTab === "monitoring";
+  return (
+    <PageLayout
+      fixedContent
+      navigation={<ConfigSectionTabs activeTab={activeTab} onTabChange={props.onTabChange} />}
+    >
+      <PageHeading
+        eyebrow="SYSTEM / SETTINGS"
+        title="系统设置"
+        description="管理全局运行模式、菜单显示、外部平台接入、分组账号设置和本地日志维护；业务规则分别在对应策略页面配置。"
+        action={
+          platformTab ? undefined : (
+            <PageActions>
+              <RefreshButton
+                pending={fetching}
+                ariaLabel="刷新系统设置"
+                onClick={() =>
+                  void client.refetchQueries({ queryKey: [settingsQueryKey], exact: true })
+                }
+              />
+            </PageActions>
+          )
+        }
+      />
+      {platformTab ? <PlatformSettingsPage activeTab={activeTab} /> : <CoreConfigPage {...props} />}
+    </PageLayout>
+  );
+}
+
+function CoreConfigPage(props: ConfigPageProps) {
   const activeTab = props.activeTab ?? "connection";
   const queryClient = useQueryClient();
   const config = useQuery({ queryKey: ["config"], queryFn: api.config });
@@ -9740,44 +9845,13 @@ export function ConfigPage(props: ConfigPageProps = {}) {
   else if (logCleanup.data?.enabled) logCleanupStatusLabel = "自动清理已开启";
   if (activeTab === "connection" && config.error && !config.data)
     return (
-      <PageLayout fixedContent>
-        <PageHeading
-          eyebrow="SYSTEM / SETTINGS"
-          title="系统设置"
-          description="管理全局运行模式、菜单显示、外部平台接入、分组账号设置和本地日志维护；业务规则分别在对应策略页面配置。"
-          action={
-            <PageActions>
-              <RefreshButton
-                pending={config.isFetching}
-                ariaLabel="刷新系统设置"
-                onClick={() => void config.refetch()}
-              />
-            </PageActions>
-          }
-        />
+      <>
         <QueryError error={config.error} fallback="系统设置读取失败" />
         <ContentRetry pending={config.isFetching} onRetry={() => void config.refetch()} />
-      </PageLayout>
+      </>
     );
   return (
-    <PageLayout
-      fixedContent
-      navigation={<ConfigSectionTabs activeTab={activeTab} onTabChange={props.onTabChange} />}
-    >
-      <PageHeading
-        eyebrow="SYSTEM / SETTINGS"
-        title="系统设置"
-        description="管理全局运行模式、菜单显示、外部平台接入、分组账号设置和本地日志维护；业务规则分别在对应策略页面配置。"
-        action={
-          <PageActions>
-            <RefreshButton
-              pending={config.isFetching}
-              ariaLabel="刷新系统设置"
-              onClick={() => void config.refetch()}
-            />
-          </PageActions>
-        }
-      />
+    <>
       <div
         className="flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden"
         data-testid="system-settings-page"
@@ -10232,11 +10306,17 @@ export function ConfigPage(props: ConfigPageProps = {}) {
             </Card>
           ) : null}
 
+          {activeTab === "tasks" ? <TaskConcurrencySettingsCard /> : null}
+
           {activeTab === "dictionaries" ? <DictionaryManagement /> : null}
 
           {activeTab === "interface" ? (
             <NavigationSettingsCard
               sections={navigationSettingsSections}
+              pending={props.navigationPending}
+              loading={props.navigationLoading}
+              readFailed={props.navigationReadFailed}
+              onRetry={props.onRetryNavigation}
               hiddenItemIDs={props.hiddenNavigationItemIDs ?? emptyHiddenNavigationItemIDs}
               lockedItemIDs={lockedNavigationItemIDs}
               onItemVisibilityChange={(itemID, visible) =>
@@ -10416,7 +10496,7 @@ export function ConfigPage(props: ConfigPageProps = {}) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </PageLayout>
+    </>
   );
 }
 
@@ -12461,7 +12541,7 @@ export function PolicyPage() {
                     />
                     <PolicyNumberField
                       label="性能最小样本数"
-                      description="不足时向同模型组内基准收缩，避免偶然快请求占优"
+                      description="不足时性能权重向同模型基准收缩，且不凭短期优势晋升排位"
                       unit="次"
                       min={1}
                       max={200}
@@ -13523,14 +13603,27 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
               onCheckedChange={props.onProbesEnabledChange}
             />
             <PolicySwitchRow
+              label="持续评估候选速度"
+              description="定期探测在用和候选账号，会增加上游请求。"
+              checked={
+                policyAdvancedValue(props.value, "probe", "performance_exploration_enabled") !==
+                false
+              }
+              onCheckedChange={(value) => set("probe", "performance_exploration_enabled", value)}
+            />
+            <PolicySwitchRow
               label="有新鲜流量时跳过探测"
-              description="减少对上游的额外请求。"
+              description="持续速度评估启用时仍保留参考探测。"
               checked={
                 policyAdvancedValue(props.value, "probe", "skip_when_traffic_fresh") !== false
               }
               onCheckedChange={(value) => set("probe", "skip_when_traffic_fresh", value)}
             />
           </div>
+          <ProbePauseFields
+            value={policyAdvancedValue(props.value, "probe", "pause_window")}
+            onChange={(value) => set("probe", "pause_window", value)}
+          />
         </PolicyConfigCard>
       ) : null}
     </div>
@@ -14142,13 +14235,7 @@ function TableLoadingRows(props: { columns: number; rows?: number }) {
   );
 }
 function TableMessageRow(props: { columns: number; children: React.ReactNode }) {
-  return (
-    <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={props.columns} className="h-auto p-0 whitespace-normal">
-        {props.children}
-      </TableCell>
-    </TableRow>
-  );
+  return <TableEmptyState columns={props.columns}>{props.children}</TableEmptyState>;
 }
 function LoadingRows(props: { columns: number; rows?: number; rowClass?: string }) {
   return (

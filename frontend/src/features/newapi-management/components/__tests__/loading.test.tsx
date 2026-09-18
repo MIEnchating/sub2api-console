@@ -18,12 +18,11 @@ it("远程价格目录首次读取时展示骨架屏，不把数据尚未返回�
   expect(loading.querySelector(".border")).toBeNull();
 });
 
-it("渠道首次读取时显示一张包含步骤和凭据分栏的卡片", () => {
+it("渠道首次读取时使用表格骨架，不再展示新增渠道表单", () => {
   render(<NewAPIRemoteLoading label="正在加载渠道管理" view="channels" />);
   const loading = screen.getByRole("status", { name: "正在加载渠道管理" });
-  expect(loading.querySelectorAll('[data-slot="card"]')).toHaveLength(1);
-  expect(loading.querySelector("[data-channel-credentials-layout]")).toHaveClass("grid-cols-1");
-  expect(loading.querySelector('[data-slot="skeleton-pagination"]')).toBeNull();
+  expect(loading.querySelector('[data-slot="skeleton-table-header"]')).not.toBeNull();
+  expect(loading.querySelector("[data-channel-credentials-layout]")).toBeNull();
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 });
 

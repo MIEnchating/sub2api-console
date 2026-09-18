@@ -21,6 +21,22 @@ const value: GroupPolicyOverrideUpdate = {
 };
 
 describe("分组探活模型输入", () => {
+  it("获取模型时仅按钮显示忙碌状态且仍可手动填写", () => {
+    render(
+      <GroupPolicyEditorFields
+        value={value}
+        onChange={vi.fn()}
+        probeModelsLoading
+        onReloadProbeModels={vi.fn()}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "正在获取" });
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "手动输入探活模型" })).toBeEnabled();
+  });
+
   it("有组内模型时仍可手动输入任意模型", () => {
     const onChange = vi.fn();
     render(
@@ -176,4 +192,9 @@ it("定时测试关闭时两种输入方式和模型输入均禁用", () => {
   expect(screen.getByRole("button", { name: "选择模型" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "手动输入" })).toBeDisabled();
   expect(screen.getByRole("textbox", { name: "手动输入探活模型" })).toBeDisabled();
+});
+
+it("全局模型未指定时显示按账号模型回退且不伪造固定模型", () => {
+  render(<GroupPolicyEditorFields value={value} onChange={vi.fn()} globalProbeModel={null} />);
+  expect(screen.getByText(/全局未指定模型.*各账号已同步的首个可用模型/)).toBeVisible();
 });

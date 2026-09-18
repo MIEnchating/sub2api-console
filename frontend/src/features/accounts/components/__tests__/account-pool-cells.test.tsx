@@ -100,6 +100,22 @@ const account: AccountStatus = {
   weight: 88.4,
 };
 
+it("负载因子为空时展示跟随并发后的有效值", () => {
+  render(
+    <AccountRoutingParametersCell
+      account={{
+        ...account,
+        load_factor: null,
+        concurrency: 1,
+        target_load_factor: null,
+        target_concurrency: null,
+        target_priority: null,
+      }}
+    />,
+  );
+  expect(screen.getByText("负载 1（跟随并发） · 并发 1")).toBeVisible();
+});
+
 describe("account pool cells", () => {
   it.each([false, true])(
     "账号等待并发额度且 compact 为 %s 时展示等待原因和重新评估入口",

@@ -85,6 +85,18 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 	sort.Strings(ids)
 	for _, id := range ids {
 		pool := pools[id]
+		// Recovery requires confirmed capacity even when scaling is disabled or
+		// health evidence is still pending. Do not generate an impossible write.
+		for accountID := range pool.accounts {
+			item := primary[accountID]
+			if item == nil || !item.schedulable || remoteSchedulable(item.account) || !placementLoadFactorEligible(item) {
+				continue
+			}
+			if pool.unknown || pool.stale || pool.limit == nil || (!configs[item.account.GroupName].scalingEnabled && (item.account.Concurrency == nil || *item.account.Concurrency <= 0)) {
+				item.schedulable = false
+				appendConcurrencyReason(item, "恢复前共享并发或账号并发尚未确认，保持暂停；请同步上游与账号")
+			}
+		}
 		correcting := pool.reduceOverage(primary, configs)
 		items := []*candidate{}
 		for accountID := range pool.accounts {
@@ -118,6 +130,10 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 				}
 				continue
 			}
+			if remoteSchedulable(item.account) && item.account.Concurrency == nil {
+				appendConcurrencyReason(item, "账号当前并发尚未确认，保持当前配置；请同步账号后再分配")
+				continue
+			}
 			if pool.limit != nil && *pool.limit > 0 && (!config.applyConcurrency || !config.applySchedulable) {
 				message := "上游有限并发分配需要同时启用并发与可调度状态自动写入；当前仅保留计算预览，请补全开关后重新执行"
 				item.concurrencyConfigurationError = &message
@@ -128,12 +144,7 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 		if len(items) == 0 {
 			continue
 		}
-		sort.Slice(items, func(i, j int) bool {
-			if items[i].weight != items[j].weight {
-				return items[i].weight > items[j].weight
-			}
-			return stableIDLess(items[i].account.ID, items[j].account.ID)
-		})
+		sortCapacityWithHysteresis(items, configs)
 		pool.apply(items, configs, global)
 	}
 }

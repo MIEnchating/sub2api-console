@@ -20,7 +20,7 @@ export function OnboardingSelectionSkeleton(props: {
       aria-busy="true"
       className={
         props.fillAvailableHeight
-          ? "grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden"
+          ? "grid min-h-0 grid-rows-[auto_minmax(12rem,1fr)_auto] gap-4 overflow-y-auto overscroll-contain"
           : "grid min-w-0 gap-4"
       }
     >

@@ -136,6 +136,6 @@ describe("Uptime Kuma 页面 API 流程", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("正在读取接入配置");
     expect(screen.queryByRole("link", { name: "配置接入" })).not.toBeInTheDocument();
     resolve(Response.json({ ...config, api_key_configured: false, management_configured: false }));
-    expect(await screen.findByText("请在侧栏「Uptime Kuma → 接入配置」中完成接入。")).toBeVisible();
+    expect(await screen.findByText("请在系统设置「监控平台」中完成接入。")).toBeVisible();
   });
 });

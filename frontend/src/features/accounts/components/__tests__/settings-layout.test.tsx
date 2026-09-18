@@ -66,7 +66,7 @@ it("账号管控使用紧凑的48px开关行，分区之间保持16px留白", ()
   expect(control).toHaveClass("gap-3", "pt-4");
   expect(control.closest("form")).toHaveClass("gap-4");
   expect(screen.getByRole("region", { name: "探测模型" })).toHaveClass("gap-3", "pt-4");
-  for (const label of ["暂停调度", "排除该账号"]) {
+  for (const label of ["暂停调度", "排除该账号", "无视成本墙"]) {
     const row = screen
       .getByRole("switch", { name: label })
       .closest('[data-slot="settings-switch-row"]');

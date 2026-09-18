@@ -65,29 +65,30 @@ type PendingOnboarding struct {
 }
 
 type OnboardingProjection struct {
-	OperationID       string
-	AccountID         string
-	AccountName       string
-	Platform          string
-	UpstreamHost      string
-	UpstreamType      string
-	BaseURL           string
-	UpstreamKeyID     string
-	UpstreamKeyName   string
-	UpstreamGroupID   string
-	UpstreamGroupName string
-	LocalGroupID      string
-	LocalGroupName    string
-	LocalGroups       []LocalOnboardingGroup
-	Multiplier        string
-	Schedulable       bool
-	Priority          *int64
-	Concurrency       *int64
-	Models            []string
-	TestModels        []string
-	Notes             string
-	Actor             string
-	ReadbackConfirmed bool
+	OperationID        string
+	AccountID          string
+	AccountName        string
+	Platform           string
+	UpstreamHost       string
+	UpstreamType       string
+	BaseURL            string
+	UpstreamKeyID      string
+	UpstreamKeyName    string
+	UpstreamGroupID    string
+	UpstreamGroupName  string
+	LocalGroupID       string
+	LocalGroupName     string
+	LocalGroups        []LocalOnboardingGroup
+	Multiplier         string
+	Schedulable        bool
+	Priority           *int64
+	Concurrency        *int64
+	Models             []string
+	TestModels         []string
+	Notes              string
+	Actor              string
+	ReadbackConfirmed  bool
+	WaitingForCapacity bool
 }
 
 func (s *Store) OnboardingCandidates(ctx context.Context, host string) ([]OnboardingCandidate, error) {
@@ -320,6 +321,9 @@ func canonicalPendingLocalGroupIDs(values []string) ([]string, string, error) {
 }
 
 func (s *Store) CommitOnboardingProjection(ctx context.Context, value OnboardingProjection) error {
+	if value.WaitingForCapacity && (value.Schedulable || !value.ReadbackConfirmed || value.Concurrency == nil || *value.Concurrency != 1) {
+		return errors.New("等待并发额度账号必须确认停用且并发为 1")
+	}
 	if !positiveNumericID(value.AccountID) || !positiveNumericID(value.LocalGroupID) ||
 		strings.TrimSpace(value.OperationID) == "" || strings.TrimSpace(value.AccountName) == "" ||
 		canonicalHost(value.UpstreamHost) == "" || strings.TrimSpace(value.UpstreamKeyID) == "" ||
@@ -362,6 +366,11 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		value.AccountID, value.AccountName, canonicalHost(value.UpstreamHost), value.UpstreamType, value.Schedulable,
 		value.Priority, value.Concurrency, value.Multiplier, string(metadata), now); err != nil {
 		return err
+	}
+	if value.WaitingForCapacity {
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET routing_state=? WHERE id=?`, AccountStateConcurrencyLimited, value.AccountID); err != nil {
+			return err
+		}
 	}
 	localGroups := value.LocalGroups
 	if len(localGroups) == 0 {
@@ -412,7 +421,8 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		Actor: actorOrDefault(value.Actor), RemoteConfirmed: true, ReadbackConfirmed: value.ReadbackConfirmed, ObjectID: value.AccountID,
 		ObjectName: &name, GroupNames: onboardingLocalGroupNames(localGroups), FieldName: &field,
 		After: map[string]any{"name": value.AccountName, "group_ids": onboardingLocalGroupIDs(localGroups), "schedulable": value.Schedulable,
-			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority}, Writeback: true,
+			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority,
+			"waiting_for_capacity": value.WaitingForCapacity}, Writeback: true,
 	}
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err

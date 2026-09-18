@@ -98,6 +98,8 @@ type engineConfig struct {
 	trafficEnabled           bool
 	trafficMaxAge            time.Duration
 	probeMaxAge              time.Duration
+	probeInterval            time.Duration
+	probePerformanceEnabled  bool
 	historyMaxAge            time.Duration
 	shortWindow              int
 	longWindow               int
@@ -157,6 +159,7 @@ type engineConfig struct {
 	applySchedulable         bool
 	excludedGroups           map[string]struct{}
 	excludedAccounts         map[string]struct{}
+	ignoreCostWallAccounts   map[string]struct{}
 	pausedAccounts           map[string]struct{}
 	manualFusedAccounts      map[string]struct{}
 	managedMode              string
@@ -181,10 +184,12 @@ type candidate struct {
 	routingHealth                 float64
 	evidencePending               bool
 	rows                          []business.RoutingSample
+	recoveryHoldSpan              *time.Duration
 	performanceP50MS              *float64
 	performanceP95MS              *float64
 	performanceSamples            int
 	performanceModel              string
+	probePerformance              map[probePerformanceKey]probePerformanceSummary
 	rankingLatencyMS              float64
 	rate                          *big.Rat
 	rateText                      *string
@@ -206,6 +211,11 @@ type candidate struct {
 	desiredLoad                   *string
 	desiredConcurrency            *int64
 	writeCooldown                 bool
+	placementCooldown             bool
+	placementPlanned              bool
+	placementConfig               *engineConfig
+	placementQualityScale         float64
+	placementMemberships          []*candidate
 	scalingCooldown               bool
 	stateSince                    time.Time
 	fusedUntil                    time.Time
@@ -226,12 +236,22 @@ const (
 	secondaryStrategyRatio = .20
 )
 
-func NewService(repository Repository) *Service {
-	return &Service{repository: repository, now: time.Now}
+func NewService(repository Repository, options ...ServiceOption) *Service {
+	service := &Service{repository: repository, now: time.Now}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions bool) (Result, error) {
 	policy, err := s.repository.ControlPolicy(ctx)
+	if err != nil {
+		return Result{}, err
+	}
+	policyFingerprint, err := business.RoutingPolicyFingerprint(policy)
 	if err != nil {
 		return Result{}, err
 	}
@@ -263,6 +283,19 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	sampleMap := map[string][]business.RoutingSample{}
 	for _, sample := range samples {
 		sampleMap[sample.AccountID] = append(sampleMap[sample.AccountID], sample)
+	}
+	probePerformanceMap := sampleMap
+	if reader, ok := s.repository.(interface {
+		RoutingProbePerformanceSamples(context.Context, *string, *string) ([]business.RoutingSample, error)
+	}); ok && config.probePerformanceEnabled {
+		probeRows, err := reader.RoutingProbePerformanceSamples(ctx, scope.AccountID, scope.GroupName)
+		if err != nil {
+			return Result{}, fmt.Errorf("读取探针性能证据失败：%w", err)
+		}
+		probePerformanceMap = map[string][]business.RoutingSample{}
+		for _, sample := range probeRows {
+			probePerformanceMap[sample.AccountID] = append(probePerformanceMap[sample.AccountID], sample)
+		}
 	}
 	previous := map[string]business.PreviousRoutingDecision{}
 	for _, item := range previousRows {
@@ -328,34 +361,16 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 				continue
 			}
 			prior, _ := previousDecision(previous, account.ID, groupName)
-			source := "active_probe"
-			if groupConfig.trafficEnabled {
-				source = "traffic"
-			}
-			rows := filterAndLimitSamples(sampleMap[account.ID], source, groupConfig.sampleWindow()*2)
-			healthRows, performanceRows := selectRoutingEvidence(
-				rows, now, groupConfig.trafficMaxAge, groupConfig.probeMaxAge, groupConfig.sampleWindow(),
-			)
-			performanceRows = performanceRows[:min(groupConfig.longWindow, len(performanceRows))]
-			if fusedRoutingState(account.EffectiveState) {
-				healthRows = withRecoveryProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, previousStateSince(prior))
-			}
-			healthRows = withCriticalProbeEvidence(healthRows, rows, now, groupConfig.probeMaxAge, policy)
-			historyRows := selectScoringHistory(rows, healthRows, now, groupConfig.historyMaxAge, groupConfig.longWindow)
-			if fusedRoutingState(account.EffectiveState) {
-				// Recovery uses the existing fresh post-fuse evidence, not pre-fuse history.
-				historyRows = healthRows
-			}
-			health, scoreErr := scoreRoutingHealth(healthRows, historyRows, policy)
+			evidence, scoreErr := evaluateRoutingHealth(account, sampleMap[account.ID], prior, groupConfig, policy, now)
 			if scoreErr != nil {
 				return Result{}, scoreErr
 			}
-			performanceP50, performanceP95, performanceCount, performanceModel := performanceLatencySummary(performanceRows)
-			health.P50MS, health.P95MS = performanceP50, performanceP95
+			health := evidence.health
 			current := &candidate{
-				account: account, health: health, routingHealth: health.HealthScore, rows: healthRows,
-				performanceP50MS: performanceP50, performanceP95MS: performanceP95, performanceSamples: performanceCount,
-				performanceModel: performanceModel,
+				account: account, health: health, routingHealth: health.HealthScore, rows: evidence.rows,
+				performanceP50MS: evidence.performanceP50MS, performanceP95MS: evidence.performanceP95MS, performanceSamples: evidence.performanceSamples,
+				performanceModel: evidence.performanceModel,
+				probePerformance: probePerformanceEvidence(probePerformanceMap[account.ID], policy, account, groupConfig, now),
 				state:            "healthy", reason: "已计算",
 				schedulable: remoteSchedulable(account), strategy: groupConfig.strategy,
 			}
@@ -368,6 +383,9 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 			}
 			current.rate, current.rateText, current.rateKnown, current.rateReason = resolveRate(account, groupConfig, current.costWall)
 			current.costTier, current.costTierRank = costTier(current.rate, current.costWall)
+			if err := s.extendRecoveryHold(ctx, current, groupConfig, prior, now); err != nil {
+				return Result{}, err
+			}
 			applyInitialState(current, groupConfig, prior, now)
 			candidates = append(candidates, current)
 			byAccount[account.ID] = append(byAccount[account.ID], current)
@@ -388,6 +406,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	for groupName, candidates := range candidatesByGroup {
 		calculateGroupWeights(candidates, configsByGroup[groupName])
 	}
+	preparePlacementCooldowns(byAccount, configsByGroup, previous, now)
 	capacityAccounts := accounts
 	if reader, ok := s.repository.(interface {
 		RoutingCapacityAccounts(context.Context) ([]business.RoutingAccount, error)
@@ -481,6 +500,9 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		// determination because other memberships were not loaded.
 		if scope.GroupName == nil {
 			for accountID, memberships := range allMemberships {
+				if !memberships[0].HasRoutingBaseline {
+					continue
+				}
 				if _, manual := manualAccounts[accountID]; manual {
 					continue
 				}
@@ -506,7 +528,10 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	result.Groups = processedGroups
 	targets := make([]business.AccountRoutingTarget, 0, len(result.AccountTargets))
 	for _, id := range sortedTargetIDs(result.AccountTargets) {
-		targets = append(targets, result.AccountTargets[id])
+		target := result.AccountTargets[id]
+		target.CalculatedPolicyFingerprint = policyFingerprint
+		result.AccountTargets[id] = target
+		targets = append(targets, target)
 	}
 	if err := s.repository.PersistRoutingRound(ctx, scope.AccountID, scope.GroupName, evaluations, writes, targets, cleanupWrites, runtimeEvents, persistDecisions, now); err != nil {
 		return Result{}, err
@@ -608,6 +633,7 @@ func alignAccountStateToPrimary(
 			}
 			item.health = primary.health
 			item.rows = primary.rows
+			item.recoveryHoldSpan = primary.recoveryHoldSpan
 			if primary.rate != nil {
 				item.rate = new(big.Rat).Set(primary.rate)
 			} else {
@@ -635,7 +661,7 @@ func alignAccountStateToPrimary(
 }
 
 func applyAccountCostWall(primary *candidate, memberships []*candidate, config engineConfig, now time.Time) {
-	allAbove := config.costWallEnabled && len(memberships) > 0
+	allAbove := config.accountCostWallEnabled(primary.account.ID) && len(memberships) > 0
 	for _, item := range memberships {
 		if !costWallReached(item.costTier) {
 			allAbove = false
@@ -658,6 +684,8 @@ func applyAccountCostWall(primary *candidate, memberships []*candidate, config e
 		primary.reason = "至少一个受管分组的倍率已低于当前成本墙"
 		if !config.costWallEnabled {
 			primary.reason = "成本墙拦截已关闭，恢复正常调度评估"
+		} else if !config.accountCostWallEnabled(primary.account.ID) {
+			primary.reason = "账号已开启无视成本墙，恢复正常调度评估"
 		}
 	}
 }
@@ -787,16 +815,17 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		return engineConfig{}, errors.New("scope.managed_group_mode 配置无效")
 	}
 	reader := &policyReader{}
-	reader.integer(probe, "probe.interval_seconds", "interval_seconds", 300, 1, 86400)
 	config := engineConfig{
 		sampleClassification: classification,
 		strategy:             strategy, trafficEnabled: reader.boolean(traffic, "traffic.enabled", "enabled", true),
-		trafficMaxAge:  time.Duration(reader.integer(traffic, "traffic.lookback_minutes", "lookback_minutes", 120, 1, 10080)) * time.Minute,
-		probeMaxAge:    time.Duration(reader.integer(probe, "probe.freshness_seconds", "freshness_seconds", 900, 1, 86400)) * time.Second,
-		historyMaxAge:  time.Duration(reader.nestedInteger(policy, "scoring", "history_window_minutes", 1440, 1, 10080)) * time.Minute,
-		shortWindow:    reader.nestedInteger(policy, "scoring", "short_window", 10, 1, 10000),
-		longWindow:     reader.nestedInteger(policy, "scoring", "long_window", 60, 1, 100000),
-		breakerEnabled: reader.boolean(breaker, "breaker.enabled", "enabled", true), hardFatal: reader.boolean(breaker, "breaker.hard_fatal", "hard_fatal", true),
+		trafficMaxAge:           time.Duration(reader.integer(traffic, "traffic.lookback_minutes", "lookback_minutes", 120, 1, 10080)) * time.Minute,
+		probeMaxAge:             time.Duration(reader.integer(probe, "probe.freshness_seconds", "freshness_seconds", 900, 1, 86400)) * time.Second,
+		probeInterval:           time.Duration(reader.integer(probe, "probe.interval_seconds", "interval_seconds", 300, 1, 86400)) * time.Second,
+		probePerformanceEnabled: reader.boolean(probe, "probe.performance_exploration_enabled", "performance_exploration_enabled", true),
+		historyMaxAge:           time.Duration(reader.nestedInteger(policy, "scoring", "history_window_minutes", 1440, 1, 10080)) * time.Minute,
+		shortWindow:             reader.nestedInteger(policy, "scoring", "short_window", 10, 1, 10000),
+		longWindow:              reader.nestedInteger(policy, "scoring", "long_window", 60, 1, 100000),
+		breakerEnabled:          reader.boolean(breaker, "breaker.enabled", "enabled", true), hardFatal: reader.boolean(breaker, "breaker.hard_fatal", "hard_fatal", true),
 		httpWindow: reader.integer(breaker, "breaker.http_window", "http_window", 5, 1, 10000), httpFailures: reader.integer(breaker, "breaker.http_failures", "http_failures", 3, 1, 10000),
 		httpScoreBelow:    reader.number(breaker, "breaker.http_score_below", "http_score_below", 60, 0, 100),
 		transientFailures: reader.integer(breaker, "breaker.transient_consecutive_failures", "transient_consecutive_failures", 2, 1, 10000),
@@ -827,13 +856,14 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		costWallStopAutoProbe:    reader.boolean(costWall, "cost_wall.stop_auto_probe", "stop_auto_probe", true),
 		scalingMin:               int64(reader.integer(scaling, "scaling.min_per_account", "min_per_account", 3, 1, 1_000_000)), scalingMax: int64(reader.integer(scaling, "scaling.max_per_account", "max_per_account", 250, 1, 1_000_000)),
 		scalingUpRatio: reader.number(scaling, "scaling.scale_up_ratio", "scale_up_ratio", .8, math.SmallestNonzeroFloat64, 1), scalingStepUp: int64(reader.integer(scaling, "scaling.step_up", "step_up", 5, 1, 1_000_000)),
-		scalingStepDown:  int64(reader.integer(scaling, "scaling.step_down", "step_down", 5, 1, 1_000_000)),
-		scalingCooldown:  time.Duration(reader.integer(scaling, "scaling.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
-		applyConcurrency: reader.boolean(autoApply, "auto_apply.concurrency", "concurrency", false),
-		applySchedulable: reader.boolean(autoApply, "auto_apply.schedulable", "schedulable", false),
-		excludedGroups:   reader.stringSet(scope, "scope.excluded_group_ids", "excluded_group_ids"),
-		excludedAccounts: reader.stringSet(scope, "scope.excluded_account_ids", "excluded_account_ids"),
-		pausedAccounts:   reader.stringSet(scope, "scope.paused_account_ids", "paused_account_ids"), manualFusedAccounts: reader.stringSet(scope, "scope.manual_fused_account_ids", "manual_fused_account_ids"),
+		scalingStepDown:        int64(reader.integer(scaling, "scaling.step_down", "step_down", 5, 1, 1_000_000)),
+		scalingCooldown:        time.Duration(reader.integer(scaling, "scaling.cooldown_seconds", "cooldown_seconds", 60, 0, 86400)) * time.Second,
+		applyConcurrency:       reader.boolean(autoApply, "auto_apply.concurrency", "concurrency", false),
+		applySchedulable:       reader.boolean(autoApply, "auto_apply.schedulable", "schedulable", false),
+		excludedGroups:         reader.stringSet(scope, "scope.excluded_group_ids", "excluded_group_ids"),
+		excludedAccounts:       reader.stringSet(scope, "scope.excluded_account_ids", "excluded_account_ids"),
+		ignoreCostWallAccounts: reader.stringSet(scope, "scope.ignore_cost_wall_account_ids", "ignore_cost_wall_account_ids"),
+		pausedAccounts:         reader.stringSet(scope, "scope.paused_account_ids", "paused_account_ids"), manualFusedAccounts: reader.stringSet(scope, "scope.manual_fused_account_ids", "manual_fused_account_ids"),
 		managedMode: managedMode, managedGroups: reader.stringSet(scope, "scope.managed_group_ids", "managed_group_ids"), accountTypes: reader.stringSet(scope, "scope.account_types", "account_types"),
 		platforms: reader.stringSet(scope, "scope.platforms", "platforms"), groupBindings: bindings,
 		cleanupEnabled: reader.boolean(cleanup, "cleanup.enabled", "enabled", false), cleanupAction: cleanupAction,
@@ -855,7 +885,7 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 
 func (c engineConfig) sampleWindow() int {
 	// Safety and recovery thresholds have independent windows from scoring.
-	return max(c.longWindow, c.httpWindow, c.latencyWindow, c.transientFailures, c.recoverySuccesses, c.cleanupWindow)
+	return max(c.longWindow, c.performanceMinSamples, c.httpWindow, c.latencyWindow, c.transientFailures, c.recoverySuccesses, c.cleanupWindow)
 }
 
 func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
@@ -891,6 +921,7 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 		if err != nil || value < 30 || value > 86400 {
 			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.probe_interval_seconds 必须在 30 到 86400 之间", *groupID)
 		}
+		result.probeInterval = time.Duration(value) * time.Second
 	}
 	for field, target := range map[string]*bool{
 		"breaker_enabled": &result.breakerEnabled, "recovery_enabled": &result.recoveryEnabled,
@@ -1313,7 +1344,7 @@ func minimumPoolBlockedGroup(accountID string, memberships []*candidate, groups 
 			if other.account.ID == accountID || !availableForMinimumPool(other, now) {
 				continue
 			}
-			if other.state == "survivor" {
+			if other.state == "survivor" || other.state == "fuse_pending" {
 				available++
 				continue
 			}
@@ -1343,7 +1374,9 @@ func fuseAffectedGroupNames(items []*candidate, now time.Time) []string {
 }
 
 func availableForMinimumPool(item *candidate, now time.Time) bool {
-	if !item.schedulable {
+	// A pending fuse has not removed remote capacity yet. Count it until the
+	// round either confirms its fuse or selects it as the best remaining survivor.
+	if !item.schedulable && item.state != "fuse_pending" {
 		return false
 	}
 	switch item.state {
@@ -1364,6 +1397,7 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 	eligible := make([]*candidate, 0)
 	for _, item := range items {
 		item.weight = 0
+		item.placementConfig, item.placementQualityScale = &config, 0
 		if !item.schedulable || item.state == "excluded" || item.state == "paused" || item.state == "disabled" || item.state == "fused" || item.state == "cost_blocked" {
 			continue
 		}
@@ -1378,7 +1412,8 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 	}
 	for _, item := range eligible {
 		if qualityTotal > 0 {
-			item.weight = item.quality / qualityTotal * float64(config.weightBudget)
+			item.placementQualityScale = float64(config.weightBudget) / qualityTotal
+			item.weight = item.quality * item.placementQualityScale
 		} else if len(eligible) > 0 {
 			item.weight = float64(config.weightBudget) / float64(len(eligible))
 		}
@@ -1412,6 +1447,10 @@ func assignAccountPlacements(
 			item.weight = average
 			item.rank, item.desiredPriority, item.desiredLoad, item.desiredConcurrency = nil, nil, nil, nil
 		}
+		chosen.placementMemberships = nil
+		if len(memberships) > 1 {
+			chosen.placementMemberships = memberships
+		}
 		primary[accountID] = chosen
 	}
 
@@ -1443,30 +1482,9 @@ func assignAccountPlacements(
 			continue
 		}
 		config := configs[groupName]
-		sortOwnedWithHysteresis(owned, config.changeThreshold)
-		priorities := make([]int64, 0, len(owned))
+		sortOwnedWithHysteresis(owned, config)
+		assignStablePriorities(owned, config)
 		for _, item := range owned {
-			if item.account.BaselinePriority != nil && *item.account.BaselinePriority > 0 {
-				priorities = append(priorities, *item.account.BaselinePriority)
-			} else if item.account.Priority != nil && *item.account.Priority > 0 {
-				priorities = append(priorities, *item.account.Priority)
-			} else {
-				priorities = append(priorities, 1)
-			}
-		}
-		sort.Slice(priorities, func(left, right int) bool { return priorities[left] < priorities[right] })
-		base := max(config.manualPriorityMax+1, priorities[len(priorities)/2]-int64(len(owned)/2))
-		for index, item := range owned {
-			rank := index + 1
-			item.rank = &rank
-			priority := base + int64(index)
-			if item.state == "degraded" && !item.evidencePending {
-				priority += config.degradePriorityStep * int64(max(1, item.health.FailureStreak))
-			} else if item.state == "survivor" {
-				priority += config.degradePriorityStep
-			}
-			priority = max(config.manualPriorityMax+1, priority)
-			item.desiredPriority = &priority
 			if config.weightsEnabled && placementLoadFactorEligible(item) {
 				average := float64(config.weightBudget) / float64(len(owned))
 				scale := 1.0
@@ -1705,7 +1723,7 @@ func applyDeadband(items []*candidate, previous map[string]business.PreviousRout
 		if !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.cooldown {
 			item.writeCooldown = true
 			item.desiredLoad = cloneString(item.account.LoadFactor)
-			if item.account.Priority != nil && strings.EqualFold(strings.TrimSpace(prior.State), strings.TrimSpace(item.state)) {
+			if !item.placementPlanned && item.account.Priority != nil && strings.EqualFold(strings.TrimSpace(prior.State), strings.TrimSpace(item.state)) {
 				item.desiredPriority = cloneInt64(item.account.Priority)
 			}
 		}
@@ -2024,6 +2042,9 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 		if primary == nil {
 			continue
 		}
+		if primary.state == "excluded" && !primary.account.HasRoutingBaseline {
+			continue
+		}
 		groups := make([]string, 0, len(items))
 		for _, item := range items {
 			groups = append(groups, item.account.GroupName)
@@ -2207,9 +2228,6 @@ func strategyQuality(item *candidate, config engineConfig, benchmark strategyInp
 	priceScore := relativePriceScore(inputs.rate, benchmark.rate, config.priceExp)
 	speedScore := math.Pow(min(1, benchmark.latencySeconds/inputs.latencySeconds), config.speedExp)
 	routingHealth := item.routingHealth
-	if routingHealth == 0 && item.health.HealthScore > 0 {
-		routingHealth = item.health.HealthScore
-	}
 	healthValue := min(100.0, max(0.0, routingHealth))
 	if healthValue <= config.gateFloor && item.state != "survivor" {
 		return 0
@@ -2233,7 +2251,7 @@ func strategyQuality(item *candidate, config engineConfig, benchmark strategyInp
 	default:
 		quality = (priceScore*config.balancedPriceRatio + speedScore*(1-config.balancedPriceRatio)) * healthGate
 	}
-	if config.costWallEnabled && costWallReached(item.costTier) && item.state != "survivor" {
+	if config.accountCostWallEnabled(item.account.ID) && costWallReached(item.costTier) && item.state != "survivor" {
 		return 0
 	}
 	return max(0.0, quality)
@@ -2506,25 +2524,6 @@ func successfulRoutingSample(row business.RoutingSample) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func sortOwnedWithHysteresis(items []*candidate, threshold *big.Rat) {
-	sort.SliceStable(items, func(left, right int) bool {
-		leftPriority, leftHasPriority := positivePriority(items[left].account.Priority)
-		rightPriority, rightHasPriority := positivePriority(items[right].account.Priority)
-		if leftHasPriority != rightHasPriority {
-			return leftHasPriority
-		}
-		if leftHasPriority && leftPriority != rightPriority {
-			return leftPriority < rightPriority
-		}
-		return stableIDLess(items[left].account.ID, items[right].account.ID)
-	})
-	for index := 1; index < len(items); index++ {
-		for current := index; current > 0 && weightAdvantageExceeds(items[current].weight, items[current-1].weight, threshold); current-- {
-			items[current], items[current-1] = items[current-1], items[current]
-		}
 	}
 }
 

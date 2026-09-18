@@ -41,6 +41,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
+	"github.com/MIEnchating/sub2api-console/backend/internal/tasksettings"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamauth"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
@@ -110,14 +111,66 @@ func run() error {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
 	}
 	serviceContext, cancelServices := context.WithCancel(context.Background())
-	backgroundTasks := taskrunner.NewBounded(serviceContext, 4)
-	liveTasks := taskrunner.NewBounded(serviceContext, 500)
-	workbenchTasks := taskrunner.NewBounded(serviceContext, 4)
+	// Each task domain has its own capacity. A long running model check or
+	// inspection must not consume the slots needed by account operations,
+	// probes, synchronization, or the workbench.
+	taskPools := map[string]*taskrunner.Group{}
+	newTaskRunner := func(name string) *taskrunner.Group {
+		limit := cfg.TaskConcurrency[name]
+		if limit < 1 {
+			limit = 1
+		}
+		queue := cfg.TaskQueueCapacity
+		if queue < 1 {
+			queue = 100
+		}
+		group := taskrunner.NewQueued(serviceContext, limit, queue)
+		taskPools[name] = group
+		return group
+	}
+	housekeepingTasks := newTaskRunner("housekeeping")
+	notificationTargetTasks := newTaskRunner("notification_target")
+	alertTasksRunner := newTaskRunner("alert")
+	accountTasksRunner := newTaskRunner("account")
+	managementTasksRunner := newTaskRunner("management")
+	pricingTasksRunner := newTaskRunner("pricing")
+	probeTasksRunner := newTaskRunner("probe")
+	modelChecksRunner := newTaskRunner("model_check")
+	modelAnimationSchedulerRunner := newTaskRunner("model_animation_scheduler")
+	upstreamSyncTasksRunner := newTaskRunner("upstream_sync")
+	upstreamDeleteTasksRunner := newTaskRunner("upstream_delete")
+	accountDeleteTasksRunner := newTaskRunner("account_delete")
+	onboardingTasksRunner := newTaskRunner("onboarding")
+	authRecoveryTasksRunner := newTaskRunner("auth_recovery")
+	inspectionTasksRunner := newTaskRunner("inspection")
+	logTasksRunner := newTaskRunner("logs")
+	uptimeKumaTasksRunner := newTaskRunner("uptime_kuma")
+	newAPIChannelTasksRunner := newTaskRunner("newapi_channel")
+	liveTasks := newTaskRunner("live")
+	workbenchTasks := newTaskRunner("workbench")
+	taskGroups := []*taskrunner.Group{
+		housekeepingTasks, notificationTargetTasks, alertTasksRunner, accountTasksRunner,
+		managementTasksRunner, pricingTasksRunner, probeTasksRunner, modelChecksRunner,
+		modelAnimationSchedulerRunner,
+		upstreamSyncTasksRunner, upstreamDeleteTasksRunner, accountDeleteTasksRunner,
+		onboardingTasksRunner, authRecoveryTasksRunner, inspectionTasksRunner, logTasksRunner,
+		uptimeKumaTasksRunner, newAPIChannelTasksRunner, liveTasks, workbenchTasks,
+	}
+	taskRunners := make([]taskrunner.TaskRunner, 0, len(taskGroups))
+	for _, group := range taskGroups {
+		taskRunners = append(taskRunners, group)
+	}
 	defer cancelServices()
-	defer backgroundTasks.Cancel()
-	defer liveTasks.Cancel()
-	defer workbenchTasks.Cancel()
-	if err := backgroundTasks.Go(func(ctx context.Context) {
+	defer func() {
+		for _, group := range taskGroups {
+			group.Cancel()
+		}
+	}()
+	taskSettings, err := tasksettings.New(serviceContext, privateStore, taskPools)
+	if err != nil {
+		return err
+	}
+	if err := housekeepingTasks.Go(func(ctx context.Context) {
 		compacted, compactErr := taskStore.CompactAutomaticInspectionHistory(ctx, 100)
 		if compactErr != nil {
 			if ctx.Err() == nil {
@@ -190,43 +243,57 @@ func run() error {
 		captchaManager,
 	)
 	authRecoveryService.UsePlatformDetector(upstreamDetector)
-	notificationTargetDiscovery.UseTaskRunner(backgroundTasks)
-	alertTasks.UseTaskRunner(backgroundTasks)
-	accountTasks.UseTaskRunner(backgroundTasks)
-	managementTasks.UseTaskRunner(backgroundTasks)
-	pricingTasks.UseTaskRunner(backgroundTasks)
-	probeTasks.UseTaskRunner(backgroundTasks)
-	modelChecks.UseTaskRunner(backgroundTasks)
-	upstreamSyncTasks.UseTaskRunner(backgroundTasks)
-	upstreamDeleteService.UseTaskRunner(backgroundTasks)
-	accountDeleteService.UseTaskRunner(backgroundTasks)
-	onboardingService.UseTaskRunner(backgroundTasks)
-	authRecoveryService.UseTaskRunner(backgroundTasks)
+	notificationTargetDiscovery.UseTaskRunner(notificationTargetTasks)
+	alertTasks.UseTaskRunner(alertTasksRunner)
+	accountTasks.UseTaskRunner(accountTasksRunner)
+	managementTasks.UseTaskRunner(managementTasksRunner)
+	pricingTasks.UseTaskRunner(pricingTasksRunner)
+	probeTasks.UseTaskRunner(probeTasksRunner)
+	modelChecks.UseTaskRunner(modelChecksRunner)
+	upstreamSyncTasks.UseTaskRunner(upstreamSyncTasksRunner)
+	upstreamDeleteService.UseTaskRunner(upstreamDeleteTasksRunner)
+	accountDeleteService.UseTaskRunner(accountDeleteTasksRunner)
+	onboardingService.UseTaskRunner(onboardingTasksRunner)
+	authRecoveryService.UseTaskRunner(authRecoveryTasksRunner)
 	pricingTasks.UseAuthResolver(authRecoveryService)
 	upstreamSyncTasks.SetAuthResolver(authRecoveryService)
 	managementTasks.UseUpstreamAuthResolver(authRecoveryService)
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
-	accountWorkbench := accountworkbench.New(privateStore, taskStore, businessStore, modelChecks, workbenchTasks)
-	if err := accountWorkbench.UseExportDirectory(filepath.Join(cfg.DataDir, "account-workbench-exports")); err != nil {
+	accountWorkbench := accountworkbench.New(privateStore)
+	workbenchSocket := strings.TrimSpace(os.Getenv("SUB2API_BROWSER_SOCKET"))
+	if workbenchSocket == "" {
+		workbenchSocket = "/run/browser/worker.sock"
+	}
+	accountWorkbench.UseExecution(taskStore, workbenchTasks, modelChecks, browserlogin.NewRemote(workbenchSocket), filepath.Join(cfg.DataDir, "account-workbench-private"))
+	if err := accountWorkbench.Recover(serviceContext); err != nil {
 		return err
 	}
-	defer accountWorkbench.CloseExports()
-	accountWorkbench.UseOAuthBrowser(browserlogin.NewRemote("/run/browser/worker.sock"))
-	accountWorkbench.UseSecurityBrowser(browserlogin.NewRemote("/run/browser/worker.sock"))
-	if err := accountWorkbench.UseSecurityDirectory(filepath.Join(cfg.DataDir, "account-workbench-security")); err != nil {
+	if err := housekeepingTasks.Go(func(ctx context.Context) {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := accountWorkbench.Cleanup(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("工作台私有资料清理失败: %v", err)
+				}
+				if err := accountWorkbench.TickMaintenance(ctx); err != nil && ctx.Err() == nil {
+					log.Printf("工作台维护调度失败: %v", err)
+				}
+			}
+		}
+	}); err != nil {
 		return err
 	}
-	defer accountWorkbench.CloseSecurity()
-	accountWorkbench.UseAccountSync(func(ctx context.Context, actor string) (business.ManagementSyncResult, error) {
-		return managementTasks.Sync(ctx, actor)
-	})
-	go accountWorkbench.RunScheduler(serviceContext)
+	modelChecks.UseAnimationSchedulerRunner(modelAnimationSchedulerRunner)
 	if err := modelChecks.StartAnimationScheduler(); err != nil {
 		return err
 	}
 	logService := consolelogs.New(businessStore, taskStore)
-	logService.UseTaskRunner(backgroundTasks)
+	logService.UseTaskRunner(logTasksRunner)
 	logMaintenance := consolelogs.NewMaintenance(privateStore, businessStore, taskStore)
 	evidenceService := evidence.New(businessStore, probeTasks)
 	liveResults := evidence.NewLive(func(ctx context.Context, accountID string) error {
@@ -256,7 +323,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	inspectionScheduler.UseTaskRunner(backgroundTasks)
+	inspectionScheduler.UseTaskRunner(inspectionTasksRunner)
 	if err := logMaintenance.Start(serviceContext); err != nil {
 		return err
 	}
@@ -276,7 +343,7 @@ func run() error {
 		}
 	}()
 	manualInspections := inspection.NewManualService(inspectionScheduler, inspectionRunner, taskStore)
-	manualInspections.UseTaskRunner(backgroundTasks)
+	manualInspections.UseTaskRunner(inspectionTasksRunner)
 	newAPIManagement := newapimanagement.New(
 		privateStore,
 		businessStore,
@@ -287,7 +354,8 @@ func run() error {
 	systemMetrics := systeminfo.New(cfg.DataDir)
 
 	handler := api.New(cfg, privateStore, businessStore, api.Dependencies{
-		UptimeKuma:         uptimekuma.NewTasks(uptimekuma.New(privateStore, nil), taskStore, backgroundTasks),
+		TaskSettings:       taskSettings,
+		UptimeKuma:         uptimekuma.NewTasks(uptimekuma.New(privateStore, nil), taskStore, uptimeKumaTasksRunner),
 		AccountResultsLive: liveResults,
 		Notification:       notificationService,
 		NotificationTarget: notificationTargetDiscovery,
@@ -295,7 +363,7 @@ func run() error {
 		InspectionTasks:    manualInspections,
 		RoutingControl:     routingWriteService,
 		Tasks:              taskStore,
-		TaskCanceller:      taskrunner.CompositeCanceller{Groups: []taskrunner.TaskRunner{backgroundTasks, liveTasks, workbenchTasks}},
+		TaskCanceller:      taskrunner.CompositeCanceller{Groups: taskRunners},
 		Logs:               logService,
 		LogMaintenance:     logMaintenance,
 		AlertTasks:         alertTasks,
@@ -317,6 +385,7 @@ func run() error {
 		SystemLogs:         opsTrafficService,
 		Pricing:            pricingTasks,
 		NewAPIManagement:   newAPIManagement,
+		NewAPIChannelTasks: newapimanagement.NewChannelTasks(newAPIManagement, taskStore, newAPIChannelTasksRunner),
 		SystemMetrics:      systemMetrics,
 	})
 	servers := []httpServeTarget{{
@@ -359,7 +428,9 @@ func run() error {
 		go func() { httpShutdowns <- target.server.Shutdown(shutdown) }()
 	}
 	cancelServices()
-	backgroundTasks.Cancel()
+	for _, group := range taskGroups {
+		group.Cancel()
+	}
 	schedulerErr := inspectionScheduler.StopContext(shutdown)
 	inspectionSchedulerStarted = false
 	if schedulerErr != nil {
@@ -370,9 +441,10 @@ func run() error {
 	if maintenanceErr != nil {
 		maintenanceErr = fmt.Errorf("停止日志维护任务失败: %w", maintenanceErr)
 	}
-	taskErr := backgroundTasks.Shutdown(shutdown)
-	liveErr := liveTasks.Shutdown(shutdown)
-	workbenchErr := workbenchTasks.Shutdown(shutdown)
+	var taskErr error
+	for _, group := range taskGroups {
+		taskErr = errors.Join(taskErr, group.Shutdown(shutdown))
+	}
 	var httpErr error
 	for range servers {
 		httpErr = errors.Join(httpErr, <-httpShutdowns)
@@ -381,11 +453,11 @@ func run() error {
 		serveErr = errors.Join(serveErr, <-serveErrors)
 		remainingServers--
 	}
-	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || liveErr != nil || workbenchErr != nil || httpErr != nil {
+	if schedulerErr != nil || maintenanceErr != nil || taskErr != nil || httpErr != nil {
 		// Do not explicitly close databases while a task or HTTP handler may still be finalizing.
 		closeStores = false
 	}
-	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr, liveErr, workbenchErr)
+	return errors.Join(serveErr, httpErr, schedulerErr, maintenanceErr, taskErr)
 }
 
 func frontendHandler(apiHandler http.Handler, directory string) http.Handler {

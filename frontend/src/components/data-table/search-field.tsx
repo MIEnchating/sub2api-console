@@ -6,6 +6,7 @@ export type SearchFieldProps = {
   value: string;
   onChange: (value: string) => void;
   placeholder: string;
+  disabled?: boolean;
 };
 
 export function SearchField(props: SearchFieldProps) {
@@ -17,6 +18,7 @@ export function SearchField(props: SearchFieldProps) {
         aria-hidden="true"
       />
       <Input
+        disabled={props.disabled}
         value={props.value}
         onChange={(event) => props.onChange(event.target.value)}
         placeholder={props.placeholder}

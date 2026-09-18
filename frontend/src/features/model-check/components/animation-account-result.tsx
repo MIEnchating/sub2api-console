@@ -97,7 +97,10 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
           >
             {compactTimeFormat.format(completedAt)}
           </TooltipTrigger>
-          <TooltipContent>完成于 {completedAt.toLocaleString("zh-CN")}</TooltipContent>
+          <TooltipContent>
+            完成于 {completedAt.toLocaleString("zh-CN")}
+            {result.retry_count ? `，自动重试 ${result.retry_count} 次` : ""}
+          </TooltipContent>
         </Tooltip>
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
       </div>

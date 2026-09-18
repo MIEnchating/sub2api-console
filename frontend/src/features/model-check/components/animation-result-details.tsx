@@ -59,6 +59,12 @@ export function AnimationResultDetails(props: { result: AnimationResult }): Reac
               </dd>
               <dt className="text-muted-foreground">耗时</dt>
               <dd>{(result.duration_ms / 1000).toFixed(1)} 秒</dd>
+              {result.retry_count ? (
+                <>
+                  <dt className="text-muted-foreground">自动重试</dt>
+                  <dd>自动重试 {result.retry_count} 次</dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">请求 ID</dt>
               <dd className="font-mono text-xs leading-5 wrap-anywhere">{result.request_id}</dd>
             </dl>

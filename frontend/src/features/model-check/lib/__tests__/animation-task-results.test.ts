@@ -35,6 +35,8 @@ it.each([
   { duration_ms: -1 },
   { svg: {} },
   { error: {} },
+  { retry_count: -1 },
+  { retry_count: 1.5 },
 ])("动画结果含无效展示字段 %j 时忽略该记录并保留已有结果", (invalid) => {
   const state = collectAnimationTasks(
     [task([result, { ...result, ...invalid, request_id: "invalid-result" }])],
@@ -47,6 +49,11 @@ it("同一账号返回更新的有效动画时展示最新结果", () => {
   const latest = { ...result, request_id: "request-2", completed_at: "2026-09-13T00:02:00Z" };
   const state = collectAnimationTasks([task([latest, result])], new Set());
   expect(state.results.get("41")).toEqual(latest);
+});
+
+it("动画结果返回自动重试次数时保留到详情数据", () => {
+  const retried = { ...result, retry_count: 2 };
+  expect(collectAnimationTasks([task([retried])], new Set()).results.get("41")).toEqual(retried);
 });
 
 it("批量任务中个别结果无效时继续锁定全部账号并等待有效结果", () => {

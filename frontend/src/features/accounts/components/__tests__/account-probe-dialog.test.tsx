@@ -147,10 +147,10 @@ describe("账号探活弹窗", () => {
     ]);
   });
 
-  it("提供与测试连接一致的常规和 Compact 探测模式并默认常规请求", () => {
+  it("提供常规和流式请求模式并准确标注流式选项", () => {
     expect(onboardingProbeModeOptions).toEqual([
       { value: "default", label: "常规请求" },
-      { value: "stream", label: "Compact 探测" },
+      { value: "stream", label: "流式请求" },
     ]);
   });
 

@@ -644,6 +644,14 @@ func (s *Store) deliveryIncidents(ctx context.Context) ([]AlertIncident, error) 
 }
 
 func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string) ([]AlertIncident, error) {
+	var policyDeferrals map[string]struct{}
+	if balanceHost == "" {
+		var err error
+		policyDeferrals, err = legacyPolicyChangeAlertKeys(ctx, s.db)
+		if err != nil {
+			return nil, err
+		}
+	}
 	query := `SELECT i.incident_key,i.event_type,i.object_kind,i.object_id,a.name,i.cause_code,
 		i.status,i.first_seen_at,i.last_seen_at,i.delivery_status,i.last_error,
 		(SELECT json_group_array(group_name ORDER BY group_name) FROM account_groups
@@ -670,6 +678,9 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 			return nil, err
 		}
 		if legacyCapacityWaitAlert(item.EventType, item.CauseCode) {
+			continue
+		}
+		if _, deferred := policyDeferrals[item.IncidentKey]; deferred {
 			continue
 		}
 		if err := json.Unmarshal([]byte(groupNamesJSON), &item.GroupNames); err != nil {

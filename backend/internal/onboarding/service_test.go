@@ -2779,6 +2779,7 @@ func onboardingFixture(t *testing.T, adminURL string) (*business.Store, *configs
 		t.Fatal(err)
 	}
 	statements := []string{
+		`UPDATE upstreams SET metadata_json=json_set(metadata_json,'$.concurrency_limit',0,'$.concurrency_status','unlimited') WHERE host='upstream.test'`,
 		`INSERT INTO upstream_groups(host,group_id,name,description,platform,status,raw_rate,effective_rate,updated_at) VALUES('upstream.test','6','pro','stable','openai','active','0.2','0.2','now')`,
 		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,platform,updated_at) VALUES('codex','3','balanced','global_default','openai','now')`,
 		`INSERT INTO local_groups(name,remote_id,strategy,strategy_source,platform,updated_at) VALUES('pro','4','balanced','global_default','openai','now')`,

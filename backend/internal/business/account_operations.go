@@ -381,6 +381,9 @@ func insertAccountOperation(ctx context.Context, tx *sql.Tx, operation AccountOp
 	if err != nil {
 		return err
 	}
+	if skip, err := repeatedAutomaticReadback(ctx, tx, operation, before, after, string(groups)); err != nil || skip {
+		return err
+	}
 	var minimum sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MIN(source_id) FROM operation_audit WHERE source_id < 0`).Scan(&minimum); err != nil {
 		return err

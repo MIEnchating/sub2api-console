@@ -135,6 +135,7 @@ test("自定义最大宽度允许长提示超过默认宽度，短提示按内�
 test("键盘聚焦账号结果显示完整提示，Escape 关闭并保留焦点", async ({ page, colorScheme }) => {
   await openTooltipFixture(page, "probe", colorScheme);
   const trigger = page.getByLabel(/探测通过 · 100 分 · 首字 3303ms · 探针/);
+  await expect(trigger).toBeVisible();
   await page.keyboard.press("Tab");
   await expect(trigger).toBeFocused();
   const tooltip = page.locator('[data-slot="tooltip-content"]');
@@ -143,3 +144,37 @@ test("键盘聚焦账号结果显示完整提示，Escape 关闭并保留焦点"
   await expect(tooltip).toBeHidden();
   await expect(trigger).toBeFocused();
 });
+
+for (const side of ["top", "bottom", "left", "right", "flip"]) {
+  test(`共享提示位于 ${side} 时鼠标可跨越间隙进入并选择文字`, async ({ page, colorScheme }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await openTooltipFixture(page, `hover-${side}`, colorScheme);
+    const trigger = page.getByRole("button", { name: "查看地址" });
+    await trigger.hover();
+    const tooltip = page.getByRole("tooltip");
+    await expect(tooltip).toHaveText("app.example.test");
+    const actualSide = side === "flip" ? "bottom" : side;
+    await expect(tooltip).toHaveAttribute("data-side", actualSide);
+    const anchor = (await trigger.boundingBox())!;
+    const popup = (await tooltip.boundingBox())!;
+    const point = { x: anchor.x + anchor.width / 2, y: anchor.y + anchor.height / 2 };
+    if (actualSide === "top") point.y = (anchor.y + popup.y + popup.height) / 2;
+    if (actualSide === "bottom") point.y = (anchor.y + anchor.height + popup.y) / 2;
+    if (actualSide === "left") point.x = (anchor.x + popup.x + popup.width) / 2;
+    if (actualSide === "right") point.x = (anchor.x + anchor.width + popup.x) / 2;
+    await page.mouse.move(point.x, point.y, { steps: 8 });
+    expect(
+      await tooltip.evaluate(
+        (element, coordinates) =>
+          element.contains(document.elementFromPoint(coordinates.x, coordinates.y)),
+        point,
+      ),
+    ).toBe(true);
+    await tooltip.hover();
+    await expect(tooltip).toHaveText("app.example.test");
+    await tooltip.click({ clickCount: 3 });
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe("app.example.test");
+    await page.mouse.move(0, 599, { steps: 8 });
+    await expect(tooltip).toBeHidden();
+  });
+}

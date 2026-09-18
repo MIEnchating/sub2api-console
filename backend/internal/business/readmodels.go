@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountquality"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 )
 
@@ -32,65 +33,69 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
-	ID                          string                `json:"id"`
-	Name                        string                `json:"name"`
-	Groups                      []string              `json:"groups"`
-	UpstreamID                  *string               `json:"upstream_id"`
-	UpstreamHost                *string               `json:"upstream_host"`
-	RecordedUpstreamHost        *string               `json:"recorded_upstream_host"`
-	UpstreamHostRepairable      bool                  `json:"upstream_host_repairable"`
-	UpstreamType                *string               `json:"upstream_type"`
-	BaseURL                     *string               `json:"base_url"`
-	BaseURLCheckedAt            *string               `json:"base_url_checked_at"`
-	BaseURLSource               *string               `json:"base_url_source"`
-	UpstreamBaseURL             *string               `json:"upstream_base_url"`
-	BaseURLCheck                string                `json:"base_url_check"`
-	BaseURLCheckReason          *string               `json:"base_url_check_reason"`
-	KeyStatus                   *string               `json:"key_status"`
-	KeyStatusReason             *string               `json:"key_status_reason"`
-	Sub2APIStatus               *string               `json:"sub2api_status"`
-	Sub2APIError                *string               `json:"sub2api_error"`
-	Platform                    *string               `json:"platform"`
-	AccountType                 *string               `json:"account_type"`
-	Schedulable                 *bool                 `json:"schedulable"`
-	Priority                    *int64                `json:"priority"`
-	ManualPriority              *int64                `json:"manual_priority"`
-	ManualSyncBalanceMultiplier bool                  `json:"manual_sync_balance_multiplier"`
-	LoadFactor                  *string               `json:"load_factor"`
-	Concurrency                 *int64                `json:"concurrency"`
-	Multiplier                  *string               `json:"multiplier"`
-	Balance                     *string               `json:"balance"`
-	Paused                      *bool                 `json:"paused"`
-	PausedReason                *string               `json:"paused_reason"`
-	RoutingState                *string               `json:"routing_state"`
-	HealthStatus                *string               `json:"health_status"`
-	Health                      string                `json:"health"`
-	DesiredHealth               *string               `json:"desired_health"`
-	ApplyPending                bool                  `json:"apply_pending"`
-	ApplyError                  *string               `json:"apply_error"`
-	DecisionState               *string               `json:"decision_state"`
-	DecisionReason              *string               `json:"decision_reason"`
-	EvidencePending             bool                  `json:"evidence_pending"`
-	Recovery                    *AccountRecovery      `json:"recovery"`
-	LastError                   *string               `json:"last_error"`
-	UpstreamBlock               *string               `json:"upstream_block"`
-	UpstreamBlockReason         *string               `json:"upstream_block_reason"`
-	FailureStreak               *int64                `json:"failure_streak"`
-	RecoveryPassStreak          *int64                `json:"recovery_pass_streak"`
-	TargetPriority              *int64                `json:"target_priority"`
-	TargetLoadFactor            *string               `json:"target_load_factor"`
-	TargetSchedulable           *bool                 `json:"target_schedulable"`
-	TargetConcurrency           *int64                `json:"target_concurrency"`
-	HealthScore                 *float64              `json:"health_score"`
-	ShortScore                  *float64              `json:"short_score"`
-	LongScore                   *float64              `json:"long_score"`
-	SampleCount                 int64                 `json:"sample_count"`
-	ShortSampleCount            *int64                `json:"short_sample_count"`
-	LongSampleCount             int64                 `json:"long_sample_count"`
-	RecentResults               []AccountRecentResult `json:"recent_results"`
-	TTFBP50MS                   *float64              `json:"ttfb_p50_ms"`
-	TTFBP95MS                   *float64              `json:"ttfb_p95_ms"`
-	Weight                      *float64              `json:"weight"`
+	IgnoreCostWall              bool                       `json:"ignore_cost_wall"`
+	Stability                   *accountquality.Statistics `json:"stability,omitempty"`
+	ID                          string                     `json:"id"`
+	Name                        string                     `json:"name"`
+	Groups                      []string                   `json:"groups"`
+	UpstreamID                  *string                    `json:"upstream_id"`
+	UpstreamHost                *string                    `json:"upstream_host"`
+	RecordedUpstreamHost        *string                    `json:"recorded_upstream_host"`
+	UpstreamHostRepairable      bool                       `json:"upstream_host_repairable"`
+	UpstreamType                *string                    `json:"upstream_type"`
+	BaseURL                     *string                    `json:"base_url"`
+	BaseURLCheckedAt            *string                    `json:"base_url_checked_at"`
+	BaseURLSource               *string                    `json:"base_url_source"`
+	UpstreamBaseURL             *string                    `json:"upstream_base_url"`
+	BaseURLCheck                string                     `json:"base_url_check"`
+	BaseURLCheckReason          *string                    `json:"base_url_check_reason"`
+	KeyStatus                   *string                    `json:"key_status"`
+	KeyStatusReason             *string                    `json:"key_status_reason"`
+	Sub2APIStatus               *string                    `json:"sub2api_status"`
+	Sub2APIError                *string                    `json:"sub2api_error"`
+	Platform                    *string                    `json:"platform"`
+	AccountType                 *string                    `json:"account_type"`
+	Schedulable                 *bool                      `json:"schedulable"`
+	Priority                    *int64                     `json:"priority"`
+	ManualPriority              *int64                     `json:"manual_priority"`
+	ManualSyncBalanceMultiplier bool                       `json:"manual_sync_balance_multiplier"`
+	LoadFactor                  *string                    `json:"load_factor"`
+	Concurrency                 *int64                     `json:"concurrency"`
+	Multiplier                  *string                    `json:"multiplier"`
+	Balance                     *string                    `json:"balance"`
+	Paused                      *bool                      `json:"paused"`
+	PausedReason                *string                    `json:"paused_reason"`
+	RoutingState                *string                    `json:"routing_state"`
+	HealthStatus                *string                    `json:"health_status"`
+	Health                      string                     `json:"health"`
+	DesiredHealth               *string                    `json:"desired_health"`
+	ApplyPending                bool                       `json:"apply_pending"`
+	ApplyError                  *string                    `json:"apply_error"`
+	DecisionState               *string                    `json:"decision_state"`
+	DecisionReason              *string                    `json:"decision_reason"`
+	EvidencePending             bool                       `json:"evidence_pending"`
+	Recovery                    *AccountRecovery           `json:"recovery"`
+	LastError                   *string                    `json:"last_error"`
+	UpstreamBlock               *string                    `json:"upstream_block"`
+	UpstreamBlockReason         *string                    `json:"upstream_block_reason"`
+	FailureStreak               *int64                     `json:"failure_streak"`
+	RecoveryPassStreak          *int64                     `json:"recovery_pass_streak"`
+	TargetPriority              *int64                     `json:"target_priority"`
+	TargetLoadFactor            *string                    `json:"target_load_factor"`
+	TargetSchedulable           *bool                      `json:"target_schedulable"`
+	TargetConcurrency           *int64                     `json:"target_concurrency"`
+	HealthScore                 *float64                   `json:"health_score"`
+	HealthEvaluatedAt           *string                    `json:"health_evaluated_at,omitempty"`
+	HealthEvidenceAt            *string                    `json:"health_evidence_at,omitempty"`
+	ShortScore                  *float64                   `json:"short_score"`
+	LongScore                   *float64                   `json:"long_score"`
+	SampleCount                 int64                      `json:"sample_count"`
+	ShortSampleCount            *int64                     `json:"short_sample_count"`
+	LongSampleCount             int64                      `json:"long_sample_count"`
+	RecentResults               []AccountRecentResult      `json:"recent_results"`
+	TTFBP50MS                   *float64                   `json:"ttfb_p50_ms"`
+	TTFBP95MS                   *float64                   `json:"ttfb_p95_ms"`
+	Weight                      *float64                   `json:"weight"`
 }
 
 type AccountBinding struct {
@@ -392,6 +397,9 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 		return nil, err
 	}
 	if options.includeRecentEvidence {
+		if err := s.loadAccountStability(ctx, byID); err != nil {
+			return nil, err
+		}
 		if err := s.loadRecentEvidence(ctx, byID); err != nil {
 			return nil, err
 		}
@@ -437,8 +445,10 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	}
 	scope, _ := control["scope"].(map[string]any)
 	manualFusedIDs := controlAccountIDs(scope["manual_fused_account_ids"])
+	ignoreCostWallIDs := controlAccountIDs(scope["ignore_cost_wall_account_ids"])
 	for index := range projections {
 		item := &projections[index]
+		item.IgnoreCostWall = containsControlID(ignoreCostWallIDs, item.ID)
 		item.manualFused = containsControlID(manualFusedIDs, item.ID)
 		applyAccountCalculations(item, decisions[item.ID], evaluations[item.ID], applyErrors[item.ID], applyView)
 		if mode == runtimepolicy.Monitoring {
@@ -843,14 +853,7 @@ func (s *Store) loadApplyErrors(ctx context.Context, accountID string) (map[stri
 	at      *string
 }, error) {
 	query := `SELECT a.id,latest.error,latest.created_at
-		FROM accounts a JOIN operation_audit latest ON latest.source_id=(
-			SELECT recent.source_id FROM operation_audit recent INDEXED BY ix_operation_audit_apply_error_recent
-			WHERE recent.operation_type IN ('routing.writeback','cleanup.delete') AND recent.object_id=a.id
-			AND (recent.state='failed' OR recent.readback_confirmed=1)
-			ORDER BY recent.created_at DESC,
-			CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
-			CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
-			CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(` + latestRoutingOutcomeSQL + `
 		) WHERE latest.state='failed'`
 	arguments := []any{}
 	if accountID != "" {

@@ -79,6 +79,17 @@ afterEach(() => {
 });
 
 describe("账号操作", () => {
+  it("提供模型检测回调时显示快捷入口，键盘可触发且忙碌时禁用", async () => {
+    const user = userEvent.setup();
+    const props = { ...operationProps(), onModelCheck: vi.fn() };
+    const view = render(<AccountOperationButtons {...props} />);
+    const button = screen.getByRole("button", { name: "模型检测" });
+    button.focus();
+    await user.keyboard("{Enter}");
+    expect(props.onModelCheck).toHaveBeenCalledOnce();
+    view.rerender(<AccountOperationButtons {...props} pending />);
+    expect(screen.getByRole("button", { name: "模型检测" })).toBeDisabled();
+  });
   it("账号名称较长时，按钮名称和探活悬浮提示仅包含具体操作", async () => {
     const user = userEvent.setup();
     render(

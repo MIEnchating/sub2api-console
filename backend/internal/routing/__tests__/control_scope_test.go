@@ -39,13 +39,17 @@ func TestRoutingGroupScopeUsesStableIDDespiteNumericGroupName(t *testing.T) {
 			store, db := controlScopeStore(t)
 			_, err := db.Exec(`INSERT INTO accounts(id,name,multiplier,schedulable,metadata_json,updated_at)
 				VALUES('41','selected','1',1,'{}','now'),('42','numeric-name','1',1,'{}','now');
-				INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','codex','7'),('42','7','8')`)
+				INSERT INTO account_groups(account_id,group_name,group_id) VALUES('41','codex','7'),('42','7','8');
+				INSERT INTO routing_baselines(account_id,captured_at) VALUES('41','now'),('42','now')`)
 			if err != nil {
 				t.Fatal(err)
 			}
 			policy := map[string]any{"advanced_policy": map[string]any{"scope": map[string]any{"managed_group_mode": "selected", "managed_group_ids": []any{"7"}}}}
 			if excluded {
-				policy = map[string]any{"excluded_group_ids": []any{"7"}}
+				policy = map[string]any{
+					"excluded_group_ids": []any{"7"},
+					"advanced_policy":    map[string]any{"scope": map[string]any{"manage_all_accounts": true}},
+				}
 			}
 			if _, err := store.UpdatePolicy(context.Background(), policy, "test"); err != nil {
 				t.Fatal(err)
@@ -56,6 +60,11 @@ func TestRoutingGroupScopeUsesStableIDDespiteNumericGroupName(t *testing.T) {
 			}
 			if result.AccountTargets["41"].ReleaseControl != excluded || result.AccountTargets["42"].ReleaseControl == excluded {
 				t.Fatalf("scope matched a group name instead of its stable ID: %+v", result.AccountTargets)
+			}
+			if excluded {
+				if _, scheduled := result.AccountDecisions["41"]; scheduled {
+					t.Fatal("manage-all must not create a scheduling decision for an excluded group")
+				}
 			}
 		})
 	}

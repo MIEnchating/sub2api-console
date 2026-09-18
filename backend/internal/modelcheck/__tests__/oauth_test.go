@@ -41,6 +41,13 @@ func oauthService(t *testing.T, transport oauthTransportFunc) *modelcheck.Servic
 	if err != nil {
 		t.Fatal(err)
 	}
+	configureOAuthProfile(t, service)
+	service.UseOAuthTransport(transport)
+	return service
+}
+
+func configureOAuthProfile(t *testing.T, service *modelcheck.Service) {
+	t.Helper()
 	view := service.Configuration()
 	payload := view.Active.Payload
 	payload.SolProfile.CandidateModels = []string{"fixture-sol", "fixture-luna", "fixture-terra"}
@@ -67,8 +74,6 @@ func oauthService(t *testing.T, transport oauthTransportFunc) *modelcheck.Servic
 	}, "isolated-test"); err != nil {
 		t.Fatal(err)
 	}
-	service.UseOAuthTransport(transport)
-	return service
 }
 
 func oauthResponse(status int, contentType, body string) *http.Response {

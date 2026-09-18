@@ -5,7 +5,7 @@ import { expect, it } from "vitest";
 
 import { AccountsPage } from "@/App";
 
-it("账号首次读取时骨架保留十列及固定操作列，不将整行合并", () => {
+it("账号首次读取时骨架保留十一列及固定操作列，不将整行合并", () => {
   const client = new QueryClient();
   const container = document.createElement("div");
   container.innerHTML = renderToStaticMarkup(
@@ -19,8 +19,8 @@ it("账号首次读取时骨架保留十列及固定操作列，不将整行合�
   expect(rows).toHaveLength(6);
   for (const row of rows) {
     const cells = within(row).getAllByRole("cell");
-    expect(cells).toHaveLength(10);
-    expect(cells[9]).not.toHaveAttribute("colspan");
+    expect(cells).toHaveLength(11);
+    expect(cells[10]).not.toHaveAttribute("colspan");
   }
   client.clear();
 });

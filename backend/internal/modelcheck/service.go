@@ -15,9 +15,12 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/accountquality"
+
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
@@ -26,9 +29,8 @@ import (
 type TaskStore interface {
 	Save(context.Context, taskstore.Task) error
 	ListBySkill(context.Context, string, int) ([]taskstore.Task, error)
+	ModelCheckHistory(context.Context, time.Time) ([]taskstore.Task, error)
 }
-
-const accountStatusTaskLimit = 100
 
 type CredentialStore interface {
 	AuthRecord(context.Context, string) (*configstore.AuthRecord, error)
@@ -63,10 +65,11 @@ type Capabilities struct {
 }
 
 type AccountCheckStatus struct {
-	AccountID string `json:"account_id"`
-	Status    string `json:"status"`
-	CheckedAt string `json:"checked_at"`
-	TaskID    string `json:"task_id"`
+	AccountID  string                    `json:"account_id"`
+	Status     string                    `json:"status"`
+	CheckedAt  string                    `json:"checked_at"`
+	TaskID     string                    `json:"task_id"`
+	Confidence accountquality.Statistics `json:"confidence"`
 }
 
 type selectedAccount struct {
@@ -74,6 +77,7 @@ type selectedAccount struct {
 	Name            string
 	BaseURL         string
 	Platform        string
+	AccountType     string
 	AuthHost        string
 	UpstreamKeyID   string
 	UpstreamGroupID string
@@ -87,6 +91,7 @@ type preparedRun struct {
 	solProfile         solProfile
 	profileVersion     string
 	profileFingerprint string
+	oauthTarget        *configstore.TargetSettings
 }
 
 type Service struct {
@@ -102,6 +107,7 @@ type Service struct {
 	profileRepository configurationRepository
 	oauthTransport    http.RoundTripper
 	taskRunner        taskrunner.Runner
+	animationRunner   taskrunner.Runner
 	taskTimeout       time.Duration
 	animation         animationState
 }
@@ -154,6 +160,10 @@ func (s *Service) UseUpstreamAuthResolver(resolver UpstreamAuthResolver) {
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
 
+// UseAnimationSchedulerRunner keeps the long-lived scheduler loop isolated
+// from user-triggered model-check tasks.
+func (s *Service) UseAnimationSchedulerRunner(runner taskrunner.Runner) { s.animationRunner = runner }
+
 func (s *Service) Capabilities() Capabilities {
 	s.profilesMu.RLock()
 	defer s.profilesMu.RUnlock()
@@ -166,7 +176,8 @@ func (s *Service) Capabilities() Capabilities {
 }
 
 func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, error) {
-	tasks, err := s.tasks.ListBySkill(ctx, "sub2api-model-check", accountStatusTaskLimit)
+	now := time.Now().UTC()
+	tasks, err := s.tasks.ModelCheckHistory(ctx, now.Add(-30*24*time.Hour))
 	if err != nil {
 		return nil, fmt.Errorf("模型检测历史读取失败: %w", err)
 	}
@@ -174,6 +185,7 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 		return tasks[left].UpdatedAt > tasks[right].UpdatedAt
 	})
 	statuses := make([]AccountCheckStatus, 0)
+	confidence := accountConfidence(tasks, now)
 	seen := map[string]bool{}
 	for _, task := range tasks {
 		if task.Status == "queued" || task.Status == "running" || task.Status == "waiting_input" {
@@ -185,10 +197,11 @@ func (s *Service) AccountStatuses(ctx context.Context) ([]AccountCheckStatus, er
 			}
 			seen[accountID] = true
 			statuses = append(statuses, AccountCheckStatus{
-				AccountID: accountID,
-				Status:    accountTaskStatus(task, accountID),
-				CheckedAt: task.UpdatedAt,
-				TaskID:    task.ID,
+				AccountID:  accountID,
+				Status:     accountTaskStatus(task, accountID),
+				CheckedAt:  task.UpdatedAt,
+				TaskID:     task.ID,
+				Confidence: confidence[accountID],
 			})
 		}
 	}
@@ -269,10 +282,15 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 	if err != nil {
 		return preparedRun{}, err
 	}
+	target, err := s.prepareOAuthTarget(ctx, selected)
+	if err != nil {
+		return preparedRun{}, err
+	}
 	return preparedRun{
 		request: request, accounts: selected,
 		claudeProfiles: claudeProfiles, solProfile: solProfile,
 		profileVersion: profileVersion, profileFingerprint: profileFingerprint,
+		oauthTarget: target,
 	}, nil
 }
 
@@ -335,6 +353,9 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	if prepared.oauthTarget != nil {
+		ctx = targetguard.Expect(ctx, *prepared.oauthTarget)
+	}
 	guarded, release, err := s.acquirePreparedAccounts(ctx, prepared.accounts)
 	if err != nil {
 		s.finishFailed(ctx, task, prepared.request.AccountIDs, err)
@@ -346,12 +367,27 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 		}
 	}()
 	ctx = guarded
+	if prepared.oauthTarget != nil {
+		ctx, err = targetguard.Pin(ctx, s.credentials.(targetguard.Store))
+		if err != nil {
+			s.finishFailed(guarded, task, prepared.request.AccountIDs, errors.New("管理目标在模型检测排队后已变化或不可用，请重新提交"))
+			return
+		}
+	}
 	credentials := s.resolveCredentials(ctx, prepared.accounts)
 	credentialsPersisted := credentialsResolved(credentials)
 	client := &http.Client{
 		Timeout:       time.Duration(prepared.request.TimeoutSeconds) * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
+	s.profilesMu.RLock()
+	oauthTransport := s.oauthTransport
+	s.profilesMu.RUnlock()
+	if oauthTransport == nil {
+		oauthTransport = newOAuthDirectTransport(prepared.request.TimeoutSeconds)
+	}
+	oauthClient := &http.Client{Transport: oauthTransport, Timeout: client.Timeout, CheckRedirect: client.CheckRedirect}
+	defer oauthClient.CloseIdleConnections()
 	task.Progress, task.Message = 5, "正在并行检测账号与模型组合"
 	task.Result = map[string]any{
 		"account_ids": prepared.request.AccountIDs, "phase": "testing", "completed": 0,
@@ -405,24 +441,14 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, prepared 
 					Model: current.model, Rounds: prepared.request.Rounds,
 					TimeoutSeconds: prepared.request.TimeoutSeconds,
 				}
-				var result map[string]any
-				var runErr error
-				if credential.err != nil {
-					runErr = credential.err
-				} else if current.model == astraModel {
-					result, runErr = runAstraCheck(ctx, directBundleSender{client: client, credential: credential.value}, input)
-				} else if checkerForModel(current.model, prepared.claudeProfiles, prepared.solProfile) == "claude" {
-					result, runErr = runClaudeCheck(ctx, directBundleSender{client: client, credential: credential.value}, prepared.claudeProfiles, input)
-				} else {
-					result, runErr = runSolCheck(ctx, directBundleSender{client: client, credential: credential.value}, prepared.solProfile, input)
-				}
+				result, runErr := runPreparedCheck(ctx, client, oauthClient, credential, prepared, input)
 				if runErr != nil {
 					result = map[string]any{
 						"account_id": current.account.ID, "account_name": current.account.Name,
 						"claimed_model": current.model, "verdict": "ERROR", "error": runErr.Error(),
 					}
 				}
-				result["credentials_persisted"] = credential.err == nil
+				result["credentials_persisted"] = credential.err == nil && credential.oauth == nil
 				outcomes <- outcome{index: index, result: result}
 			}
 		}()
@@ -556,6 +582,7 @@ func (s *Service) finishFailed(ctx context.Context, task taskstore.Task, account
 
 type credentialResolution struct {
 	value directCredential
+	oauth *oauthCredential
 	err   error
 }
 
@@ -572,9 +599,14 @@ func (s *Service) resolveCredentials(ctx context.Context, accounts []selectedAcc
 				if ctx.Err() != nil {
 					return
 				}
-				value, err := s.resolveCredential(ctx, account)
+				var resolution credentialResolution
+				if account.AccountType == "oauth" {
+					resolution.oauth, resolution.err = s.resolveOAuthAccountCredential(ctx, account)
+				} else {
+					resolution.value, resolution.err = s.resolveCredential(ctx, account)
+				}
 				resultsMu.Lock()
-				results[account.ID] = credentialResolution{value: value, err: err}
+				results[account.ID] = resolution
 				resultsMu.Unlock()
 			}
 		}()
@@ -658,7 +690,7 @@ func credentialsResolved(values map[string]credentialResolution) bool {
 		return false
 	}
 	for _, value := range values {
-		if value.err != nil {
+		if value.err != nil || value.oauth != nil {
 			return false
 		}
 	}
@@ -673,6 +705,7 @@ func directAccountSelection(row business.AccountStatus, detail *business.Account
 	}
 	selected.BaseURL = firstPointerText(detail.BaseURL, detail.UpstreamBaseURL)
 	selected.Platform = firstPointerText(detail.Platform)
+	selected.AccountType = strings.ToLower(firstPointerText(detail.AccountType))
 	type bindingKey struct{ authHost, keyID, groupID string }
 	unique := map[bindingKey]struct{}{}
 	for _, binding := range detail.Bindings {

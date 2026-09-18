@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamerror"
 	"github.com/MIEnchating/sub2api-console/backend/internal/usagequality"
 )
 
@@ -87,7 +88,7 @@ var defaultFatalPatterns = []string{
 var defaultQuotaPatterns = []string{
 	"usage limit", "usage_limit", "quota", "rate limit", "rate_limit",
 	"insufficient", "balance", "credit", "billing", "too many requests",
-	"exceeded your current", "resource_exhausted", "resource exhausted", "overloaded",
+	"exceeded your current", "resource_exhausted", "resource exhausted",
 }
 
 var authFailurePatterns = []string{
@@ -252,6 +253,9 @@ func classify(sample Sample, config scoringConfig) Classified {
 		result == "超时" || result == "probe failed" || result == "unhealthy" || reason != ""
 	if quota {
 		return Classified{Score: config.eventScores[EventRateLimited], Event: EventRateLimited, Failure: true, RateLimited: true}
+	}
+	if !success && !decisiveCredential && upstreamerror.IsCapacity(text) {
+		return Classified{Score: config.eventScores[EventGateway], Event: EventGateway, Failure: true, Gateway: true}
 	}
 	if trafficClientError(sample.Source, status, config.clientCodes) && !decisiveCredential {
 		return Classified{Event: EventClientError, Neutral: true}

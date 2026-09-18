@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,7 +62,13 @@ func TestProbeRepositoryReadsStableCandidatesAndPersistsSamplesAtomically(t *tes
 	if err := store.db.QueryRow(`SELECT result,sample_count,payload_json FROM health_samples WHERE account_id='41' AND group_name='codex'`).Scan(&result, &sampleCount, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if result != "通过" || sampleCount != 1 || payload != `{"actual_model":"","latency_metric":"first_token","latency_source":"upstream_direct.first_content","latency_unit":"ms","request_model":"","status_code":200}` {
+	var evidence map[string]any
+	if err := json.Unmarshal([]byte(payload), &evidence); err != nil {
+		t.Fatal(err)
+	}
+	if result != "通过" || sampleCount != 1 || evidence["status_code"] != float64(200) ||
+		evidence["latency_metric"] != "first_token" || evidence["latency_source"] != "upstream_direct.first_content" ||
+		evidence["latency_unit"] != "ms" || evidence["request_model"] != "" || evidence["actual_model"] != "" || evidence["performance_eligible"] != false {
 		t.Fatalf("result=%q sampleCount=%d payload=%s", result, sampleCount, payload)
 	}
 	before := 0

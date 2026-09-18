@@ -43,7 +43,8 @@ describe("OnboardingSelectionSkeleton", () => {
     expect(markup).toContain('data-onboarding-skeleton="form"');
     expect(markup).toContain('data-onboarding-skeleton="groups"');
     expect(markup).not.toContain('data-onboarding-skeleton="action"');
-    expect(markup).toContain("grid-rows-[auto_minmax(0,1fr)_auto]");
+    expect(markup).toContain("grid-rows-[auto_minmax(12rem,1fr)_auto]");
+    expect(markup).toContain("overflow-y-auto");
     expect(markup).toContain("min-w-[800px]");
     expect(markup).toContain("账号类型");
     expect(markup).toContain("本地分组");

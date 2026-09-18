@@ -124,7 +124,7 @@ function InteractiveConfigPage() {
 }
 
 describe("系统设置页面职责", () => {
-  it("默认只挂载连接设置，并提供适配移动端的五个页签", () => {
+  it("默认只挂载连接设置，并提供适配移动端的八个页签", () => {
     const connectionMarkup = configMarkup("connection");
 
     expect(connectionMarkup).toContain("系统设置");
@@ -140,11 +140,12 @@ describe("系统设置页面职责", () => {
     expect(connectionMarkup).toContain('aria-label="系统设置分类"');
     expect(connectionMarkup).toContain('data-testid="system-settings-tabs"');
     expect(connectionMarkup).not.toContain("sticky top-0");
-    expect(connectionMarkup).toContain("grid w-full grid-cols-2 sm:grid-cols-5");
+    expect(connectionMarkup).toContain("grid w-full grid-cols-2 sm:grid-cols-4 xl:grid-cols-8");
     expect(connectionMarkup).toContain("flex h-full min-h-0 w-full flex-col gap-4 overflow-hidden");
-    expect(connectionMarkup.match(/role="tab"/g)).toHaveLength(5);
+    expect(connectionMarkup.match(/role="tab"/g)).toHaveLength(8);
     expect(connectionMarkup).toContain("连接设置");
     expect(connectionMarkup).toContain("账号设置");
+    expect(connectionMarkup).toContain("任务并发");
     expect(connectionMarkup).toContain("通知设置");
     expect(connectionMarkup).toContain("界面与日志");
     expect(connectionMarkup).toContain("字典管理");
@@ -246,8 +247,8 @@ describe("系统设置页面职责", () => {
 
     connectionTab.focus();
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "账号设置" })).toHaveFocus();
-    expect(screen.getByRole("tabpanel", { name: "账号设置" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "New API 平台" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "New API 平台" })).toBeInTheDocument();
   });
 
   it("maps the persisted Sub2API address and timeout back into the form", () => {

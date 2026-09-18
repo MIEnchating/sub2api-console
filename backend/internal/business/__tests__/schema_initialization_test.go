@@ -75,3 +75,111 @@ func BenchmarkBusinessOpenFreshDatabase(b *testing.B) {
 		}
 	}
 }
+
+func TestExistingDatabaseAddsMissingStatisticsTableAndPreservesAccounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade.sqlite3")
+	store, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Bootstrap(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,metadata_json,updated_at) VALUES('41','preserved','{}','now'); DROP TABLE account_stability_samples; PRAGMA user_version=8`); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		store, err = business.Open(path)
+		if err != nil {
+			t.Fatalf("upgrade/reopen failed: %v", err)
+		}
+		account, err := store.Account(t.Context(), "41")
+		if err != nil || account.Name != "preserved" {
+			t.Fatalf("account changed: %+v %v", account, err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM account_stability_samples`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("new table=%d err=%v", count, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='ix_account_stability_window'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("new index=%d err=%v", count, err)
+	}
+}
+
+func TestExistingDatabaseUpgradeFailureRollsBackNewTablesAndVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "upgrade-conflict.sqlite3")
+	store, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE account_stability_samples; DROP INDEX ix_operational_snapshots_state_recent; CREATE TABLE ix_operational_snapshots_state_recent(id INTEGER); PRAGMA user_version=8`); err != nil {
+		t.Fatal(err)
+	}
+	if store, err := business.Open(path); err == nil {
+		store.Close()
+		t.Fatal("conflicting index name accepted")
+	}
+	var count, version int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='account_stability_samples'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || version != 8 {
+		t.Fatalf("failed upgrade left partial changes: tables=%d version=%d", count, version)
+	}
+}
+
+func TestNewerDatabaseVersionIsNotDowngradedOrModified(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "newer.sqlite3")
+	store, err := business.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`DROP TABLE account_stability_samples; PRAGMA user_version=999`); err != nil {
+		t.Fatal(err)
+	}
+	if store, err := business.Open(path); err == nil {
+		store.Close()
+		t.Fatal("newer database accepted")
+	}
+	var version, count int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE name='account_stability_samples'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if version != 999 || count != 0 {
+		t.Fatalf("newer database modified: version=%d table=%d", version, count)
+	}
+}

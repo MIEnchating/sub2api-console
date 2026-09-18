@@ -507,7 +507,7 @@ func TestOpenRejectsLegacySchemaWithoutModifyingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "仅支持使用当前版本创建的全新数据库") {
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "业务数据库无法安全升级") {
 		t.Fatalf("legacy schema was not rejected: %v", err)
 	}
 	database, err = sql.Open("sqlite", "file:"+path)

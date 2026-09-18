@@ -51,11 +51,14 @@ type bundleResult struct {
 
 type visibleRequestError struct {
 	message string
+	cause   error
 }
 
 func (err visibleRequestError) Error() string {
 	return err.message
 }
+
+func (err visibleRequestError) Unwrap() error { return err.cause }
 
 type scoredProfile struct {
 	Fit              float64

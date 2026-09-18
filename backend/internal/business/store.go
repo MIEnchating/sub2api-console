@@ -210,7 +210,7 @@ func (s *Store) OverviewSummary(ctx context.Context) (OverviewSummary, error) {
 		(SELECT COUNT(*) FROM accounts),
 		(SELECT COUNT(*) FROM local_groups),
 		(SELECT COUNT(*) FROM alert_incidents WHERE status='firing'),
-		(SELECT MIN(COUNT(*),100) FROM runtime_events),
+		(SELECT COUNT(*) FROM (SELECT 1 FROM runtime_events LIMIT 100)),
 		(SELECT MAX(created_at) FROM runtime_events)`).Scan(
 		&result.Accounts, &result.Groups, &result.Alerts, &result.Runs, &lastActivity,
 	)

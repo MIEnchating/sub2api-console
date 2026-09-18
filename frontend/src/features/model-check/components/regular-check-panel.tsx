@@ -1,7 +1,7 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Eye } from "lucide-react";
+import { ArrowLeft, Database } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -16,6 +16,8 @@ import {
   type Task,
 } from "@/api";
 import { PageActions } from "@/components/page-actions";
+import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -86,7 +88,12 @@ export function modelCheckDialogLayout(task?: Task) {
   } as const;
 }
 
-export function RegularCheckPanel() {
+export function RegularCheckPanel(props: {
+  accountID?: string;
+  onBackToAccounts?: () => void;
+  hidePageActions?: boolean;
+  showAllAccounts?: boolean;
+}) {
   const queryClient = useQueryClient();
   const [taskID, setTaskID] = useState<string | null>(null);
   const [resultOpen, setResultOpen] = useState(false);
@@ -96,13 +103,22 @@ export function RegularCheckPanel() {
   const [accountGroup, setAccountGroup] = useState<string | null>(null);
   const form = useForm<ModelCheckForm>({
     resolver: zodResolver(modelCheckSchema),
-    defaultValues: defaults,
+    defaultValues: { ...defaults, account_ids: props.accountID ? [props.accountID] : [] },
   });
   const selectedAccountIDs = form.watch("account_ids");
   const selectedModels = form.watch("models");
   const rounds = form.watch("rounds");
   const timeoutSeconds = form.watch("timeout_seconds");
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  useEffect(() => {
+    if (!accounts.data) return;
+    const available = new Set(accounts.data.map((account) => account.id));
+    const next = selectedAccountIDs.filter((id) => available.has(id));
+    if (next.length !== selectedAccountIDs.length) {
+      form.setValue("account_ids", next, { shouldValidate: true });
+      toast.info("所选账号已不存在，请重新选择");
+    }
+  }, [accounts.data, form, selectedAccountIDs]);
   const capabilities = useQuery({
     queryKey: ["model-check-capabilities"],
     queryFn: api.modelCheckCapabilities,
@@ -203,14 +219,18 @@ export function RegularCheckPanel() {
     [accountCheckStatuses.data],
   );
   useEffect(() => {
-    if (taskID !== null) void accountCheckStatuses.refetch();
-  }, [accountCheckStatuses.refetch, task.data?.status, taskID]);
+    if (!task.data || !["succeeded", "partial", "failed", "cancelled"].includes(task.data.status))
+      return;
+    void queryClient.invalidateQueries({ queryKey: ["model-check-account-statuses"] });
+    void queryClient.invalidateQueries({ queryKey: ["accounts"] });
+  }, [queryClient, task.data?.status]);
 
   const filteredAccounts = useMemo(
     () =>
       (accounts.data ?? [])
         .filter(
           (account) =>
+            (!props.accountID || props.showAllAccounts || account.id === props.accountID) &&
             (accountGroup === null || account.groups.includes(accountGroup)) &&
             searchableAccount(
               [
@@ -234,6 +254,7 @@ export function RegularCheckPanel() {
               accountCheckStatuses.isError,
             ),
             model_check_checked_at: checkStatus?.checked_at ?? null,
+            model_check: checkStatus,
           };
         }),
     [
@@ -243,10 +264,13 @@ export function RegularCheckPanel() {
       accountGroup,
       accounts.data,
       checkStatusByAccountID,
+      props.accountID,
+      props.showAllAccounts,
     ],
   );
   const combinationCount = selectedAccountIDs.length * selectedModels.length;
   let resultDialogTitle = "正在检测模型";
+  if (taskID !== null && !task.data) resultDialogTitle = "模型检测结果";
   if (task.data?.status === "succeeded") resultDialogTitle = "模型检测结果";
   else if (task.data?.status === "cancelled") resultDialogTitle = "模型检测已取消";
   else if (task.data?.status === "failed") {
@@ -271,23 +295,41 @@ export function RegularCheckPanel() {
   const submit = form.handleSubmit((value: ModelCheckRequest) => run.mutate(value));
   const selectionError =
     form.formState.errors.account_ids?.message ?? form.formState.errors.models?.message;
+  const hasPreviousResult =
+    selectedAccountIDs.length === 1 && Boolean(checkStatusByAccountID.get(selectedAccountIDs[0]));
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <PageActions>
-        <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
-          <Database aria-hidden="true" />
-          检测规则与题库
-        </Button>
-        {task.data ? (
-          <Button type="button" variant="outline" onClick={() => setResultOpen(true)}>
-            <Eye aria-hidden="true" />
-            查看检测结果
-          </Button>
-        ) : null}
-      </PageActions>
+      {!props.hidePageActions ? (
+        <PageActions>
+          {!props.hidePageActions && props.onBackToAccounts ? (
+            <Button type="button" variant="outline" onClick={props.onBackToAccounts}>
+              <ArrowLeft aria-hidden="true" />
+              账号管理
+            </Button>
+          ) : null}
+          {!props.hidePageActions ? (
+            <Button type="button" variant="outline" onClick={() => setConfigurationOpen(true)}>
+              <Database aria-hidden="true" />
+              检测规则与题库
+            </Button>
+          ) : null}
+        </PageActions>
+      ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <ModelCheckSelection
+          onTrafficAccountsSelect={(ids) =>
+            form.setValue("account_ids", ids, { shouldValidate: true })
+          }
+          onViewResult={task.data ? () => setResultOpen(true) : undefined}
+          onViewPreviousResult={
+            hasPreviousResult
+              ? () => {
+                  setTaskID(checkStatusByAccountID.get(selectedAccountIDs[0])!.task_id);
+                  setResultOpen(true);
+                }
+              : undefined
+          }
           accounts={filteredAccounts}
           accountsLoading={accounts.isLoading}
           accountsError={accounts.error instanceof Error ? accounts.error.message : null}
@@ -377,7 +419,10 @@ export function RegularCheckPanel() {
             <DialogTitle>{resultDialogTitle}</DialogTitle>
           </DialogHeader>
           <DialogBody className={dialogLayout.resultsReady ? "overflow-hidden pr-0" : undefined}>
-            {task.error ? <QueryErrorToast error={task.error} fallback="任务状态读取失败" /> : null}
+            {!task.data && task.isLoading ? <ContentLoading label="正在读取检测结果" /> : null}
+            {!task.data && task.isError ? (
+              <ContentRetry pending={task.isFetching} onRetry={() => void task.refetch()} />
+            ) : null}
             {task.data ? <ModelCheckResult task={task.data} /> : null}
           </DialogBody>
         </DialogContent>

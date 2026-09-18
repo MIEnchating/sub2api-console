@@ -433,7 +433,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain">
       <PriceWarningToast
         warning={props.snapshot.upstream_price_warning}
         fetchedAt={props.snapshot.fetched_at}
@@ -477,7 +477,7 @@ export function NewAPIPriceComparison(props: { snapshot: NewAPIRemoteSnapshot })
         </Button>
       </TableFilterToolbar>
 
-      <DataTablePanel className="flex-1">
+      <DataTablePanel className="min-h-64 flex-1">
         {props.snapshot.models.length === 0 ? (
           <div className="text-muted-foreground flex min-h-52 items-center justify-center px-6 text-sm">
             尚未读取到本平台模型价格

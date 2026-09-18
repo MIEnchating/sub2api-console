@@ -99,6 +99,13 @@ CREATE INDEX IF NOT EXISTS ix_health_samples_probe_recent ON health_samples(
 );
 CREATE INDEX IF NOT EXISTS ix_health_samples_account_recent ON health_samples(account_id,observed_at DESC,id DESC);
 CREATE INDEX IF NOT EXISTS ix_health_samples_recent ON health_samples(COALESCE(observed_at,'') DESC,id DESC);
+CREATE TABLE IF NOT EXISTS account_stability_samples (
+ account_id TEXT NOT NULL,source TEXT NOT NULL,evidence_key TEXT NOT NULL,
+ observed_at TEXT NOT NULL,outcome TEXT NOT NULL CHECK(outcome IN ('passed','failed','inconclusive')),
+ usage_known INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(account_id,source,evidence_key)
+);
+CREATE INDEX IF NOT EXISTS ix_account_stability_window ON account_stability_samples(account_id,observed_at);
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
  rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)
@@ -198,6 +205,10 @@ CREATE INDEX IF NOT EXISTS ix_runtime_events_log_order ON runtime_events(
  CASE WHEN source_id < 0 THEN source_id END ASC,
  CASE WHEN source_id >= 0 THEN source_id END DESC
 );
+CREATE INDEX IF NOT EXISTS ix_runtime_events_pricing_recent ON runtime_events(
+ created_at DESC,CASE WHEN source_id < 0 THEN source_id END ASC,
+ CASE WHEN source_id >= 0 THEN source_id END DESC
+) WHERE event_type='pricing.groups.synced' AND status='succeeded';
 CREATE TABLE IF NOT EXISTS alert_incidents (
  incident_key TEXT PRIMARY KEY,event_type TEXT NOT NULL,object_kind TEXT NOT NULL,object_id TEXT NOT NULL,cause_code TEXT NOT NULL,
  status TEXT NOT NULL,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,delivery_status TEXT,last_error TEXT
@@ -220,7 +231,7 @@ CREATE TABLE IF NOT EXISTS operation_audit (
  before_json TEXT,after_json TEXT,writeback INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_operation_audit_routing_lookup ON operation_audit(object_id,created_at DESC)
- WHERE operation_type='routing.writeback' AND state='succeeded' AND remote_confirmed=1 AND readback_confirmed=1;
+ WHERE operation_type='routing.writeback' AND state='succeeded' AND remote_confirmed=1;
 CREATE INDEX IF NOT EXISTS ix_operation_audit_type_object_recent ON operation_audit(
  operation_type,object_id,created_at DESC,source_id
 );
@@ -284,8 +295,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 ) WHERE upstream_id<>'' AND local_group_ids_json<>'';
 `
 
-// Keep the current schema identity monotonic even though fresh installations
-// now create the complete schema directly instead of replaying migrations.
+// Older compatible schemas can receive additive tables and indexes at startup.
 const businessSchemaVersion = 9
 
 func (s *Store) ensureSchema(ctx context.Context) error {
@@ -299,14 +309,25 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	if !fresh {
-		if err := validateBusinessSchema(ctx, tx); err != nil {
-			return fmt.Errorf("业务数据库结构不是当前版本；本系统仅支持使用当前版本创建的全新数据库: %w", err)
+		if err := validateBusinessSchema(ctx, tx, true); err != nil {
+			return fmt.Errorf("业务数据库无法安全升级，原数据未修改：%w", err)
 		}
 	}
 	// Commit the complete schema and its version together. A failed statement
 	// must not leave a partial database, and each DDL needs no separate fsync.
 	if _, err := tx.ExecContext(ctx, businessSchema); err != nil {
 		return err
+	}
+	// The v2 filter includes all legacy rows and additionally preserves failed
+	// deletions. Keeping both indexes doubles this history index's write cost.
+	if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS ix_operation_audit_log_recent;
+		DROP INDEX IF EXISTS ix_runtime_events_type_status_recent`); err != nil {
+		return err
+	}
+	if !fresh {
+		if err := validateBusinessSchema(ctx, tx, false); err != nil {
+			return fmt.Errorf("业务数据库升级校验失败，已回滚：%w", err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", businessSchemaVersion)); err != nil {
 		return fmt.Errorf("记录业务数据库版本失败: %w", err)
@@ -332,12 +353,12 @@ func databaseHasNoApplicationTables(ctx context.Context, db policyQueryer) (bool
 	return count == 0, nil
 }
 
-func validateBusinessSchema(ctx context.Context, current policyQueryer) error {
+func validateBusinessSchema(ctx context.Context, current policyQueryer, allowMissingTables bool) error {
 	var version int
 	if err := current.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version != 0 && version != businessSchemaVersion {
+	if version < 0 || version > businessSchemaVersion {
 		return fmt.Errorf("schema version=%d, expected=%d", version, businessSchemaVersion)
 	}
 	expected, err := sql.Open("sqlite", ":memory:")
@@ -359,6 +380,9 @@ func validateBusinessSchema(ctx context.Context, current policyQueryer) error {
 	for table, expectedColumns := range expectedTables {
 		currentColumns, found := currentTables[table]
 		if !found {
+			if allowMissingTables {
+				continue
+			}
 			return fmt.Errorf("missing table %s", table)
 		}
 		availableColumns := make(map[string]struct{}, len(currentColumns))
@@ -487,7 +511,7 @@ func readyOnConnection(ctx context.Context, queryer connectionQueryer) (bool, er
 func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]string, error) {
 	tables := []string{
 		"upstream_identities", "upstream_identity_hosts", "upstream_catalog_entities", "upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
-		"routing_decisions", "account_health_evaluations", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations", "pricing_backups", "pricing_backup_accounts",
+		"routing_decisions", "account_health_evaluations", "account_stability_samples", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations", "pricing_backups", "pricing_backup_accounts",
 		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "runtime_events",
 		"alert_incidents", "alert_deliveries", "operation_audit", "run_records", "usage_records",
 		"operational_snapshots", "onboarding_pending",
@@ -522,7 +546,7 @@ func initialControlPolicy() map[string]any {
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
 		"manual_priority":      map[string]any{"reserved_max": int64(10)},
-		"probe":                map[string]any{"enabled": true, "interval_seconds": int64(300), "freshness_seconds": int64(900), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
+		"probe":                map[string]any{"enabled": true, "interval_seconds": int64(300), "freshness_seconds": int64(900), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "performance_exploration_enabled": true, "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":              map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier":  map[string]any{"interval_seconds": int64(120)},
 		"upstream_concurrency": map[string]any{"enabled": false},
@@ -547,6 +571,7 @@ func initialControlPolicy() map[string]any {
 			"manage_all_accounts": true, "managed_group_mode": "all", "managed_group_ids": []any{}, "excluded_group_ids": []any{},
 			"account_types": []any{}, "platforms": []any{}, "paused_account_ids": []any{},
 			"excluded_account_ids": []any{}, "manual_fused_account_ids": []any{},
+			"ignore_cost_wall_account_ids": []any{},
 		},
 		"group_policy_bindings": map[string]any{},
 		"account_test_models":   map[string]any{},

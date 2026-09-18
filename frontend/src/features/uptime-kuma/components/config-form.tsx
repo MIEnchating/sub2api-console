@@ -5,7 +5,7 @@ import { useEffect } from "react";
 import { ApiError, type KumaConfig } from "@/api";
 import { Input } from "@/components/ui/input";
 import { configSchema, type ConfigValues } from "../lib/schemas";
-import { FormField } from "@/App";
+import { FormField } from "@/components/form-field";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -27,6 +27,18 @@ export function ConfigForm(props: {
     },
   });
   const disableManagement = form.watch("disable_management");
+  const baseURL = form
+    .watch("base_url")
+    .replace(/\/dashboard\/?$/, "")
+    .replace(/\/$/, "");
+  const addressChanged = baseURL !== props.config.base_url;
+  const keyRequired = !props.config.api_key_configured || addressChanged;
+  const passwordRequired =
+    !disableManagement &&
+    !!form.watch("username") &&
+    (!props.config.management_configured ||
+      addressChanged ||
+      form.watch("username") !== props.config.username);
   useEffect(() => {
     if (!props.error) return;
     const fields: Record<string, keyof ConfigValues> = {
@@ -80,10 +92,15 @@ export function ConfigForm(props: {
               >
                 <Input
                   id="kuma-config-base_url"
+                  aria-describedby="kuma-base_url-help"
+                  aria-required={true}
                   {...form.register("base_url")}
                   placeholder="https://status.example.com"
                   aria-invalid={!!form.formState.errors.base_url}
                 />
+                <p id="kuma-base_url-help" className="text-xs font-normal text-muted-foreground">
+                  必填 · Uptime Kuma 服务地址，例如 https://status.example.com。
+                </p>
               </FormField>
               <FormField
                 htmlFor="kuma-config-api_key"
@@ -94,10 +111,15 @@ export function ConfigForm(props: {
                   type="password"
                   autoComplete="new-password"
                   id="kuma-config-api_key"
+                  aria-describedby="kuma-api_key-help"
+                  aria-required={keyRequired}
                   {...form.register("api_key")}
                   placeholder={props.config.api_key_configured ? "已配置，留空保留" : "uk…"}
                   aria-invalid={!!form.formState.errors.api_key}
                 />
+                <p id="kuma-api_key-help" className="text-xs font-normal text-muted-foreground">
+                  首次接入或更换服务地址时必填；同一地址已配置时选填，留空保留。仅用于读取指标。
+                </p>
               </FormField>
             </fieldset>
           </CardContent>
@@ -117,11 +139,15 @@ export function ConfigForm(props: {
                 >
                   <Input
                     id="kuma-config-username"
+                    aria-describedby="kuma-username-help"
                     {...form.register("username")}
                     autoComplete="off"
                     disabled={disableManagement}
                     aria-invalid={!!form.formState.errors.username}
                   />
+                  <p id="kuma-username-help" className="text-xs font-normal text-muted-foreground">
+                    选填 · 仅查看指标时无需填写；新增、编辑或暂停监控项时需配置管理账号及密码。
+                  </p>
                 </FormField>
                 <FormField
                   htmlFor="kuma-config-password"
@@ -132,6 +158,8 @@ export function ConfigForm(props: {
                     type="password"
                     autoComplete="new-password"
                     id="kuma-config-password"
+                    aria-describedby="kuma-password-help"
+                    aria-required={passwordRequired}
                     {...form.register("password")}
                     disabled={disableManagement}
                     placeholder={
@@ -139,6 +167,9 @@ export function ConfigForm(props: {
                     }
                     aria-invalid={!!form.formState.errors.password}
                   />
+                  <p id="kuma-password-help" className="text-xs font-normal text-muted-foreground">
+                    填写管理账号后，首次配置、更换地址或账号时必填；原配置可留空保留。
+                  </p>
                 </FormField>
               </div>
               <FormField
@@ -148,6 +179,7 @@ export function ConfigForm(props: {
               >
                 <Input
                   id="kuma-config-otp"
+                  aria-describedby="kuma-otp-help"
                   {...form.register("otp")}
                   inputMode="numeric"
                   autoComplete="one-time-code"
@@ -155,6 +187,9 @@ export function ConfigForm(props: {
                   disabled={disableManagement}
                   aria-invalid={!!form.formState.errors.otp}
                 />
+                <p id="kuma-otp-help" className="text-xs font-normal text-muted-foreground">
+                  条件必填 · 使用账号密码登录且账号开启两步验证时，填写当前 6 位验证码；否则留空。
+                </p>
               </FormField>
               {props.config.management_configured && (
                 <label className="flex items-center gap-2 text-sm">

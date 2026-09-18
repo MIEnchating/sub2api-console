@@ -904,10 +904,17 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			operations = append(operations, operationActiveProbe)
 		}
 		timings = append(timings, operationTimingDuration("evidence_collection", outcome.startedAt, outcome.duration))
+		resultPayload["evidence"] = evidenceResult
 		if err != nil {
 			return finish(append(failures, "请求记录与探针："+err.Error()), partialFailures)
 		}
-		resultPayload["evidence"] = evidenceResult
+		if len(evidenceResult.SourceErrors) > 0 {
+			message := "请求记录与探针：" + strings.Join(evidenceResult.SourceErrors, "；")
+			if evidenceResult.CollectionFailed {
+				return finish(append(failures, message), partialFailures)
+			}
+			partialFailures = append(partialFailures, message)
+		}
 	}
 	if plan.upstreams || runInspection || plan.routing || plan.pricing {
 		persistStage(65, "正在计算健康状态与调度目标", []string{operationRoutingCalculation})

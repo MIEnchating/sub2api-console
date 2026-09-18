@@ -100,3 +100,23 @@ func TestLoadRejectsWeakAdminToken(t *testing.T) {
 		t.Fatalf("weak admin token was accepted: %v", err)
 	}
 }
+
+func TestLoadReadsTaskConcurrencyAndQueueCapacity(t *testing.T) {
+	t.Setenv("SUB2API_TASK_CONCURRENCY_ACCOUNT", "12")
+	t.Setenv("SUB2API_TASK_QUEUE_CAPACITY", "25")
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TaskConcurrency["account"] != 12 || loaded.TaskQueueCapacity != 25 {
+		t.Fatalf("task limits = %#v queue=%d", loaded.TaskConcurrency, loaded.TaskQueueCapacity)
+	}
+}
+
+func TestLoadRejectsInvalidTaskConcurrency(t *testing.T) {
+	t.Setenv("SUB2API_TASK_CONCURRENCY_PROBE", "0")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "SUB2API_TASK_CONCURRENCY_PROBE") {
+		t.Fatalf("invalid task concurrency was accepted: %v", err)
+	}
+}

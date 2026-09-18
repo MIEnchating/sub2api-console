@@ -75,6 +75,84 @@ function renderPanel() {
 describe("账号设置面板", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("未设置负载因子时显示跟随并发，修改并发后保存仍保留跟随模式", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    const save = vi
+      .spyOn(api, "saveAccountSettings")
+      .mockResolvedValue({ id: "saved", status: "succeeded", result: {} } as Task);
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AccountSettingsPanel
+          accountId="41"
+          query={{
+            data: { ...detail, load_factor: null, concurrency: 1 },
+            isLoading: false,
+            isError: false,
+            error: null,
+          }}
+          onCancel={vi.fn()}
+          onSaved={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("switch", { name: "跟随并发上限" })).toBeChecked();
+    expect(screen.getByLabelText("负载因子")).toHaveValue(1);
+    expect(screen.getByLabelText("负载因子")).toBeDisabled();
+    await userEvent.clear(screen.getByLabelText("并发上限"));
+    await userEvent.type(screen.getByLabelText("并发上限"), "5");
+    expect(screen.getByLabelText("负载因子")).toHaveValue(5);
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        "41",
+        expect.objectContaining({ follow_concurrency: true, concurrency: 5 }),
+      ),
+    );
+    expect(screen.queryByText("负载因子必须大于或等于 1")).not.toBeInTheDocument();
+    view.unmount();
+    client.clear();
+  });
+
+  it("关闭跟随模式时可编辑固定负载因子并按固定模式保存", async () => {
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    const client = new QueryClient();
+    const save = vi
+      .spyOn(api, "saveAccountSettings")
+      .mockResolvedValue({ id: "saved", status: "succeeded", result: {} } as Task);
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AccountSettingsPanel
+          accountId="41"
+          query={{
+            data: { ...detail, load_factor: null, concurrency: 1 },
+            isLoading: false,
+            isError: false,
+            error: null,
+          }}
+          onCancel={vi.fn()}
+          onSaved={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("switch", { name: "跟随并发上限" }));
+    const input = screen.getByLabelText("负载因子");
+    expect(input).toBeEnabled();
+    await userEvent.clear(input);
+    await userEvent.type(input, "7");
+    await userEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        "41",
+        expect.objectContaining({ follow_concurrency: false, load_factor: "7" }),
+      ),
+    );
+    view.unmount();
+    client.clear();
   });
 
   it("后台详情刷新时保留正在编辑的探测模型", async () => {
@@ -105,6 +183,28 @@ describe("账号设置面板", () => {
     expect(
       accountTestModelOptions(["gpt-5.2", "gpt-5.1-codex", "gpt-5.2", ""], "custom-probe-model"),
     ).toEqual(["custom-probe-model", "gpt-5.1-codex", "gpt-5.2"]);
+  });
+
+  it("获取上游模型后显示选择框，不在下方显示已读取数量", async () => {
+    vi.spyOn(api, "accountModels").mockResolvedValue({ models: ["gpt-5.1-codex", "gpt-5.2"] });
+    const client = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={client}>
+        <AccountSettingsPanel
+          accountId="41"
+          query={{ data: detail, isLoading: false, isError: false, error: null }}
+          onCancel={() => undefined}
+          onSaved={() => undefined}
+        />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "获取上游模型" }));
+    expect(await screen.findByRole("combobox", { name: "选择探测模型" })).toHaveTextContent(
+      "gpt-5.1-codex",
+    );
+    expect(screen.queryByText(/已读取.*个上游模型/)).not.toBeInTheDocument();
+    view.unmount();
+    client.clear();
   });
 
   it("matches channel settings and omits group editing and multiplier breaker fields", () => {
@@ -251,4 +351,44 @@ it("账号设置读取中显示轻量提示并禁用保存，取消仍可操作"
   expect(cancel).toHaveBeenCalledOnce();
   view.unmount();
   client.clear();
+});
+
+it("账号留空显示绑定分组继承模型，保存不会固化继承值", async () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  client.setQueryData(["policy"], { available: true, probe_model: "global-model" });
+  client.setQueryData(
+    ["groups"],
+    [{ id: "7", name: "codex", override: { probe_model: "group-model" } }],
+  );
+  const save = vi
+    .spyOn(api, "saveAccountSettings")
+    .mockResolvedValue({ id: "saved", status: "succeeded", result: {} } as Task);
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AccountSettingsPanel
+        accountId="41"
+        query={{
+          data: { ...detail, test_models: [] },
+          isLoading: false,
+          isError: false,
+          error: null,
+        }}
+        onCancel={() => undefined}
+        onSaved={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("note", { name: "继承的探活配置" })).toHaveTextContent(
+    "继承分组模型：group-model",
+  );
+  expect(screen.getByRole("textbox", { name: "探测模型" })).toHaveValue("");
+  await userEvent.click(screen.getByRole("button", { name: "保存" }));
+  await waitFor(() =>
+    expect(save).toHaveBeenCalledWith("41", expect.objectContaining({ test_models: [] })),
+  );
+  view.unmount();
+  client.clear();
+  vi.restoreAllMocks();
 });

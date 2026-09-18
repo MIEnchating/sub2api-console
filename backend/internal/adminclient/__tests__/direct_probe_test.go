@@ -24,6 +24,8 @@ func TestDirectProbeSendsOnlyConfiguredUserPromptWithProtocolAuthentication(t *t
 	}{
 		{"openai", "openai", "", "/v1/responses", "", `{"model":"model-1","input":"  只回复 pong\n保留这一行  ","stream":true,"max_output_tokens":4096}`, "Authorization", "Bearer upstream-test-secret"},
 		{"openai-versioned", "openai", "/proxy/v1/", "/proxy/v1/responses", "", `{"model":"model-1","input":"  只回复 pong\n保留这一行  ","stream":true,"max_output_tokens":4096}`, "Authorization", "Bearer upstream-test-secret"},
+		{"grok", "grok", "", "/v1/chat/completions", "", `{"model":"model-1","messages":[{"role":"user","content":"  只回复 pong\n保留这一行  "}],"stream":true,"max_tokens":4096}`, "Authorization", "Bearer upstream-test-secret"},
+		{"grok-versioned", "grok", "/proxy/v1/", "/proxy/v1/chat/completions", "", `{"model":"model-1","messages":[{"role":"user","content":"  只回复 pong\n保留这一行  "}],"stream":true,"max_tokens":4096}`, "Authorization", "Bearer upstream-test-secret"},
 		{"anthropic", "anthropic", "/v1", "/v1/messages", "", `{"model":"model-1","messages":[{"role":"user","content":"  只回复 pong\n保留这一行  "}],"stream":true,"max_tokens":4096}`, "X-Api-Key", "upstream-test-secret"},
 		{"claude", "claude", "/gateway", "/gateway/v1/messages", "", `{"model":"model-1","messages":[{"role":"user","content":"  只回复 pong\n保留这一行  "}],"stream":true,"max_tokens":4096}`, "X-Api-Key", "upstream-test-secret"},
 		{"gemini", "gemini", "", "/v1beta/models/model-1:streamGenerateContent", "alt=sse", `{"contents":[{"role":"user","parts":[{"text":"  只回复 pong\n保留这一行  "}]}],"generationConfig":{"maxOutputTokens":4096}}`, "X-Goog-Api-Key", "upstream-test-secret"},
@@ -276,7 +278,7 @@ func TestPreparedAccountProbeReadsCredentialsOnceAcrossMultipleGenerations(t *te
 }
 
 func TestDirectProbeUsesAdaptiveChatEndpointAndExactModelMapping(t *testing.T) {
-	for _, platform := range []string{"zhipu", "kimi", "deepseek"} {
+	for _, platform := range []string{"zhipu", "kimi", "deepseek", "grok"} {
 		t.Run(platform, func(t *testing.T) {
 			var calls atomic.Int64
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -344,7 +346,10 @@ func TestDirectProbeUsesExplicitProtocolInsteadOfPlatformDefault(t *testing.T) {
 func TestDirectProbeSkipsProxyAndUnsupportedMappingOrProtocolBeforeGeneration(t *testing.T) {
 	for name, patch := range map[string]map[string]any{
 		"proxy":              {"proxy_id": 7},
-		"wildcard-mapping":   {"model_mapping": map[string]any{"*": "actual-model"}},
+		"infix-wildcard":     {"model_mapping": map[string]any{"grok-*-fast": "actual-model"}},
+		"multiple-wildcards": {"model_mapping": map[string]any{"grok-**": "actual-model"}},
+		"empty-target":       {"model_mapping": map[string]any{"grok-*": " "}},
+		"control-target":     {"model_mapping": map[string]any{"grok-*": "grok\n"}},
 		"structured-mapping": {"model_mapping": map[string]any{"model-1": map[string]any{"model": "actual-model"}}},
 		"invalid-mapping":    {"model_mapping": "model-1"},
 		"invalid-protocol":   {"api_protocol": "unsupported"},

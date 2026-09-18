@@ -56,7 +56,7 @@ function Field(props: { id: string; label: string; error?: string; children: Rea
         {props.label}
       </label>
       {props.children}
-      <FieldError id={`${props.id}-error`} message={props.error} reserveSpace />
+      <FieldError id={`${props.id}-error`} message={props.error} />
     </div>
   );
 }

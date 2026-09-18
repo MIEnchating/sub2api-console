@@ -113,12 +113,9 @@ func (c *Client) OpenAccountProbe(ctx context.Context, accountID, model, prompt 
 // Open sends exactly one generation request. It deliberately never falls back
 // to another protocol, another host or Sub2API's account test endpoint.
 func (probe *AccountProbe) Open(ctx context.Context, model, prompt string) (*http.Response, error) {
-	model = strings.TrimSpace(model)
-	if mapped, ok := probe.modelMapping[model]; ok {
-		model = mapped
-	}
-	if model == "" || strings.ContainsFunc(model, unicode.IsControl) {
-		return nil, probeUnavailable("probe_model_invalid", "探活模型缺失或格式无效，请检查模型配置")
+	model, err := probe.resolveModel(model)
+	if err != nil {
+		return nil, err
 	}
 	endpoint, body, err := probe.requestPayload(model, prompt)
 	if err != nil {
@@ -138,7 +135,7 @@ func (probe *AccountProbe) Open(ctx context.Context, model, prompt string) (*htt
 	switch probe.protocol {
 	case "anthropic":
 		request.Header.Set("X-Api-Key", probe.secret)
-		request.Header.Set("Anthropic-Version", "2023-06-01")
+		request.Header.Set("Anthropic-Version", directProbeAnthropicVersion)
 	case "gemini":
 		request.Header.Set("X-Goog-Api-Key", probe.secret)
 	default:
@@ -155,6 +152,34 @@ func (probe *AccountProbe) Open(ctx context.Context, model, prompt string) (*htt
 		return nil, errors.New("上游直连探活连接失败，请检查账号接口地址与网络后重试")
 	}
 	return response, nil
+}
+
+func (probe *AccountProbe) resolveModel(model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if model == "" || strings.ContainsFunc(model, unicode.IsControl) {
+		return "", probeUnavailable("probe_model_invalid", "探活模型缺失或格式无效，请检查模型配置")
+	}
+	if mapped, ok := probe.modelMapping[model]; ok {
+		model = mapped
+	} else {
+		// Sub2API resolves exact names first, then the longest trailing-* prefix.
+		longest := -1
+		mapped := model
+		for source, target := range probe.modelMapping {
+			if !strings.HasSuffix(source, "*") {
+				continue
+			}
+			prefix := strings.TrimSuffix(source, "*")
+			if len(prefix) > longest && strings.HasPrefix(model, prefix) {
+				longest, mapped = len(prefix), target
+			}
+		}
+		model = mapped
+	}
+	if strings.Contains(model, "*") {
+		return "", probeUnavailable("probe_mapping_unsupported", "本次探活命中的模型映射目标包含 *，请将该规则的上游模型改为具体模型名，或为本次探活模型添加精确映射后重试")
+	}
+	return model, nil
 }
 
 type directProbeResponsesRequest struct {
@@ -236,7 +261,7 @@ func directProbeProtocol(platform string, credentials map[string]any) (string, e
 		protocol = "anthropic"
 	case "gemini", "google":
 		protocol = "gemini"
-	case "zhipu", "kimi", "deepseek":
+	case "zhipu", "kimi", "deepseek", "grok":
 		protocol = "chat_completions"
 	default:
 		return "", probeUnavailable("probe_platform_unsupported", "当前账号平台不支持直连探活，请检查账号平台配置")
@@ -298,14 +323,15 @@ func directProbeModelMapping(raw any) (map[string]string, error) {
 	}
 	values, ok := raw.(map[string]any)
 	if !ok {
-		return nil, probeUnavailable("probe_mapping_unsupported", "账号模型映射格式不支持直连探活，请使用精确模型映射")
+		return nil, probeUnavailable("probe_mapping_unsupported", "账号模型映射格式无效，请配置请求模型到上游模型的字符串映射后重试")
 	}
 	mapping := make(map[string]string, len(values))
 	for source, rawTarget := range values {
 		target, ok := rawTarget.(string)
 		if !ok || strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" ||
-			strings.ContainsAny(source+target, "*?[]{}^$|\\") || strings.ContainsFunc(source+target, unicode.IsControl) {
-			return nil, probeUnavailable("probe_mapping_unsupported", "账号模型映射包含不支持的规则，请使用精确模型映射后重试")
+			strings.Contains(strings.TrimSuffix(strings.TrimSpace(source), "*"), "*") ||
+			strings.ContainsFunc(source+target, unicode.IsControl) {
+			return nil, probeUnavailable("probe_mapping_unsupported", "账号模型映射无效，请使用精确模型名或仅在请求模型末尾使用 *，上游模型须为非空的具体模型名")
 		}
 		mapping[strings.TrimSpace(source)] = strings.TrimSpace(target)
 	}

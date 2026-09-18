@@ -24,16 +24,17 @@ func (target routingTarget) TargetSettings(context.Context) (configstore.TargetS
 }
 
 type loadFactorFixture struct {
-	mu           sync.Mutex
-	states       map[string]map[string]any
-	bulkWrites   int
-	singleWrites int
-	ignoreClear  bool
-	omitReadback bool
+	mu              sync.Mutex
+	states          map[string]map[string]any
+	bulkWrites      int
+	singleWrites    int
+	ignoreClear     bool
+	omitReadback    bool
+	partialReadback bool
 }
 
 // Reproduce Sub2API's contract: bulk updates ignore a zero load factor;
-// individual updates clear it and return an explicit JSON null.
+// individual updates clear it; full account DTOs may omit the nullable field.
 func (fixture *loadFactorFixture) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
@@ -89,6 +90,9 @@ func (fixture *loadFactorFixture) ServeHTTP(w http.ResponseWriter, request *http
 			}
 		}
 		data = state
+		if fixture.partialReadback && fixture.singleWrites > 0 && request.Method == http.MethodGet {
+			data = map[string]any{"id": state["id"], "status": state["status"]}
+		}
 	default:
 		http.NotFound(w, request)
 		return
@@ -198,15 +202,33 @@ func TestFailedLoadFactorClearRetainsBaselineForRetry(t *testing.T) {
 	}
 }
 
-func TestClearingLoadFactorDoesNotAcceptUnchangedOrMissingReadback(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "missing"} {
+func TestClearingLoadFactorDoesNotAcceptUnchangedOrPartialReadback(t *testing.T) {
+	for _, scenario := range []string{"unchanged", "partial"} {
 		t.Run(scenario, func(t *testing.T) {
 			service, fixture, targets := newLoadFactorService(t, 1, false)
 			fixture.ignoreClear = scenario == "unchanged"
-			fixture.omitReadback = scenario == "missing"
+			fixture.partialReadback = scenario == "partial"
 			result, err := service.Apply(t.Context(), targets, "test")
 			if err != nil || result.Failed != 1 || result.Changed != 0 || result.Results[0].Error == nil {
 				t.Fatalf("unconfirmed clear must fail even when optional verification is off: result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestClearingLoadFactorAcceptsOmittedNullableFieldInFullAccountReadback(t *testing.T) {
+	for _, verify := range []bool{false, true} {
+		t.Run(strconv.FormatBool(verify), func(t *testing.T) {
+			service, fixture, targets := newLoadFactorService(t, 2, verify)
+			fixture.omitReadback = true
+			result, err := service.Apply(t.Context(), targets, "test")
+			if err != nil || result.Failed != 0 || result.Changed != 2 {
+				t.Fatalf("full account readback with omitted nullable load must confirm clearing: %+v err=%v", result, err)
+			}
+			for _, item := range result.Results {
+				if !item.Restored || item.Error != nil || item.Effective["load_factor"].(*string) != nil {
+					t.Fatalf("baseline was not released after confirmed clearing: %+v", item)
+				}
 			}
 		})
 	}

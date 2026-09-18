@@ -95,6 +95,14 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 		return NewAPIPlatformSummary{}, err
 	}
 	defer tx.Rollback()
+	if current == nil || current.BaseURL != item.BaseURL || current.UserID != item.UserID {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, channelGroupsKey(item.ID)); err != nil {
+			return NewAPIPlatformSummary{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key GLOB 'newapi.channel_groups.*' AND key<>?`, channelGroupsKey(item.ID)); err != nil {
+		return NewAPIPlatformSummary{}, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO newapi_platforms(id,name,base_url,admin_key,user_id,updated_at)
 		VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,
 		admin_key=excluded.admin_key,user_id=excluded.user_id,updated_at=excluded.updated_at`,
@@ -112,10 +120,21 @@ func (s *Store) SaveNewAPIPlatform(ctx context.Context, item NewAPIPlatform) (Ne
 }
 
 func (s *Store) DeleteNewAPIPlatform(ctx context.Context, id string) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM newapi_platforms WHERE id=?`, strings.TrimSpace(id))
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM newapi_platforms WHERE id=?`, strings.TrimSpace(id))
 	if err != nil {
 		return false, err
 	}
 	count, err := result.RowsAffected()
-	return count > 0, err
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM settings WHERE key=?`, channelGroupsKey(strings.TrimSpace(id))); err != nil {
+		return false, err
+	}
+	return count > 0, tx.Commit()
 }

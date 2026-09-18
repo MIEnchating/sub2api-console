@@ -18,13 +18,14 @@ var accountControlFields = map[string]string{
 }
 
 type AccountSettingsUpdate struct {
-	Priority    int64
-	LoadFactor  string
-	Concurrency int64
-	TestModels  []string
-	Paused      bool
-	Excluded    bool
-	Operation   AccountOperation
+	Priority          int64
+	LoadFactor        string
+	FollowConcurrency bool
+	Concurrency       int64
+	TestModels        []string
+	Paused            bool
+	Excluded          bool
+	Operation         AccountOperation
 }
 
 func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor string, update AccountSettingsUpdate) error {
@@ -76,8 +77,12 @@ func (s *Store) CommitAccountSettings(ctx context.Context, accountID, actor stri
 	if update.Paused {
 		routingState, pausedReason = "paused", "人工暂停"
 	}
+	var loadFactor any = update.LoadFactor
+	if update.FollowConcurrency {
+		loadFactor = nil
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET priority=?,load_factor=?,concurrency=?,schedulable=?,
-		paused=?,paused_reason=?,routing_state=?,updated_at=? WHERE id=?`, update.Priority, update.LoadFactor,
+		paused=?,paused_reason=?,routing_state=?,updated_at=? WHERE id=?`, update.Priority, loadFactor,
 		update.Concurrency, !update.Paused, update.Paused, pausedReason, routingState, now, accountID); err != nil {
 		return err
 	}
@@ -422,6 +427,7 @@ func recordAccountControlEvent(ctx context.Context, tx *sql.Tx, accountID, name,
 		sourceID = minimum.Int64 - 1
 	}
 	labels := map[string]string{"pause": "暂停", "resume": "恢复调度", "exclude": "排除", "include": "恢复管控", "fuse": "人工熔断", "recover": "解除熔断"}
+	labels["ignore_cost_wall"], labels["respect_cost_wall"] = "开启无视成本墙", "关闭无视成本墙"
 	summary := fmt.Sprintf("账号 %s（%s）已执行%s", name, accountID, labels[action])
 	_, err = tx.ExecContext(ctx, `INSERT INTO runtime_events(source_id,event_type,created_at,status,summary,payload_json)
 		VALUES(?,?,?,?,?,?)`, sourceID, "account.control", now, "succeeded", summary, string(payload))

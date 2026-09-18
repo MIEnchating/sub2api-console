@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip";
+import type { CSSProperties } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -54,6 +55,9 @@ function TooltipContent({
   ...props
 }: TooltipPrimitive.Popup.Props &
   Pick<TooltipPrimitive.Positioner.Props, "align" | "alignOffset" | "side" | "sideOffset">) {
+  // Keep the visual gap, but let pointer movement through it belong to this
+  // popup instead of triggering neighbouring tooltips underneath.
+  const hoverGap = typeof sideOffset === "number" ? Math.max(0, sideOffset) : 0;
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Positioner
@@ -62,10 +66,17 @@ function TooltipContent({
         side={side}
         sideOffset={sideOffset}
         className="isolate z-50 max-w-[min(var(--available-width,100vw),calc(100vw-1rem))]"
+        style={{ "--tooltip-hover-gap": `${hoverGap}px` } as CSSProperties}
       >
         <TooltipPrimitive.Popup
           data-slot="tooltip-content"
-          className={cn(tooltipContentStyles, className)}
+          className={cn(
+            tooltipContentStyles,
+            "relative select-text",
+            hoverGap > 0 &&
+              "before:absolute before:content-[''] data-[side=top]:before:inset-x-0 data-[side=top]:before:top-full data-[side=top]:before:h-[calc(var(--tooltip-hover-gap)+1px)] data-[side=bottom]:before:inset-x-0 data-[side=bottom]:before:bottom-full data-[side=bottom]:before:h-[calc(var(--tooltip-hover-gap)+1px)] data-[side=left]:before:inset-y-0 data-[side=left]:before:left-full data-[side=left]:before:w-[calc(var(--tooltip-hover-gap)+1px)] data-[side=right]:before:inset-y-0 data-[side=right]:before:right-full data-[side=right]:before:w-[calc(var(--tooltip-hover-gap)+1px)]",
+            className,
+          )}
           {...props}
         >
           {children}

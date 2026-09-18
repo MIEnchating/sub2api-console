@@ -48,6 +48,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
+	"github.com/MIEnchating/sub2api-console/backend/internal/tasksettings"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamconfig"
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamdetect"
@@ -83,6 +84,7 @@ type Business interface {
 	PolicySnapshot(context.Context) (business.PolicySnapshot, error)
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
 	SetAccountTestModels(context.Context, string, []string, string) error
+	SetAccountIgnoreCostWall(context.Context, string, bool, string) error
 	UpdateGroupPolicy(context.Context, string, map[string]any, string) (business.GroupStatus, error)
 	ClearGroupPolicy(context.Context, string, string) (business.GroupStatus, error)
 	SetGroupExcluded(context.Context, string, bool, string) (business.GroupStatus, error)
@@ -130,6 +132,9 @@ type SystemLogReader interface {
 }
 
 type NewAPIManagementService interface {
+	Channels(context.Context, string, int, int) (newapimanagement.ChannelPage, error)
+	ChannelsByID(context.Context, string, []string, int, int) (newapimanagement.ChannelPage, error)
+	ChangeChannelModels(context.Context, string, string, newapimanagement.ChannelModelChange) (newapimanagement.Channel, error)
 	Workspace(context.Context, string) (newapimanagement.Workspace, error)
 	SavePlatform(context.Context, newapimanagement.PlatformInput) (configstore.NewAPIPlatformSummary, error)
 	DeletePlatform(context.Context, string) (bool, error)
@@ -302,6 +307,8 @@ type AuthRecoveryService interface {
 }
 
 type Dependencies struct {
+	TaskSettings       *tasksettings.Service
+	NewAPIChannelTasks *newapimanagement.ChannelTasks
 	UptimeKuma         *uptimekuma.TaskService
 	AccountResultsLive AccountResultsLive
 	Notification       NotificationTester
@@ -336,9 +343,12 @@ type Dependencies struct {
 }
 
 type Server struct {
+	taskSettings       *tasksettings.Service
+	newAPIChannelTasks *newapimanagement.ChannelTasks
 	kumaTasks          *uptimekuma.TaskService
 	uptimeKuma         *uptimekuma.Service
 	accountResultsLive AccountResultsLive
+	accountHealth      *routing.Service
 	config             config.Config
 	private            *configstore.Store
 	business           Business
@@ -458,12 +468,13 @@ type accountDefaultsRequest struct {
 }
 
 type accountSettingsRequest struct {
-	Priority    int64     `json:"priority" binding:"required,min=1,max=10000000"`
-	LoadFactor  string    `json:"load_factor" binding:"required,min=1,max=128"`
-	Concurrency int64     `json:"concurrency" binding:"required,min=1,max=10000000"`
-	TestModels  *[]string `json:"test_models"`
-	Paused      *bool     `json:"paused" binding:"required"`
-	Excluded    *bool     `json:"excluded" binding:"required"`
+	Priority          int64     `json:"priority" binding:"required,min=1,max=10000000"`
+	LoadFactor        string    `json:"load_factor" binding:"max=128"`
+	FollowConcurrency bool      `json:"follow_concurrency"`
+	Concurrency       int64     `json:"concurrency" binding:"required,min=1,max=10000000"`
+	TestModels        *[]string `json:"test_models"`
+	Paused            *bool     `json:"paused" binding:"required"`
+	Excluded          *bool     `json:"excluded" binding:"required"`
 }
 
 type newAPIPlatformRequest struct {
@@ -573,10 +584,16 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	if len(dependencies) > 0 {
 		services = dependencies[0]
 	}
+	var accountHealth *routing.Service
+	if repository, ok := business.(routing.Repository); ok {
+		accountHealth = routing.NewService(repository)
+	}
 	server := &Server{
+		taskSettings:       services.TaskSettings,
 		kumaTasks:          services.UptimeKuma,
 		uptimeKuma:         uptimekuma.New(private, nil),
 		accountResultsLive: services.AccountResultsLive,
+		accountHealth:      accountHealth,
 		config:             cfg,
 		private:            private,
 		business:           business,
@@ -608,6 +625,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 		systemLogReader:    services.SystemLogs,
 		pricing:            services.Pricing,
 		newAPIManagement:   services.NewAPIManagement,
+		newAPIChannelTasks: services.NewAPIChannelTasks,
 		systemMetrics:      services.SystemMetrics,
 		loginThrottle:      newLoginThrottle(cfg.TrustedProxyCIDRs),
 		sseSlots:           make(chan struct{}, maximumSSEConnections),
@@ -631,6 +649,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/health", server.health)
 	authorized.GET("/overview", server.overview)
 	authorized.GET("/config", server.runtimeConfig)
+	authorized.GET("/config/task-concurrency", server.taskConcurrency)
+	authorized.PUT("/config/task-concurrency", server.updateTaskConcurrency)
 	authorized.POST("/config/mode", server.updateRuntimeMode)
 	authorized.POST("/config/probes", server.updateProbeSettings)
 	authorized.POST("/config/account-defaults", server.updateAccountDefaults)
@@ -655,12 +675,14 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
 	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
 	authorized.GET("/traffic/ranking", server.trafficRanking)
+	authorized.GET("/accounts/traffic", server.accountTraffic)
 	authorized.GET("/accounts/results/events", server.accountResultsEvents)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
 	authorized.PUT("/accounts/:account_id/test-models", server.setAccountTestModels)
 	authorized.POST("/accounts/:account_id/sync", server.syncAccountFields)
 	authorized.PUT("/accounts/:account_id/settings", server.saveAccountSettings)
+	authorized.PUT("/accounts/:account_id/cost-wall", server.setAccountIgnoreCostWall)
 	authorized.PUT("/accounts/:account_id/manual-priority", server.setAccountManualPriority)
 	authorized.DELETE("/accounts/:account_id/manual-priority", server.clearAccountManualPriority)
 	authorized.POST("/management/sync", server.syncManagement)
@@ -678,6 +700,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/management/accounts/models/apply", server.applyAccountModels)
 	authorized.POST("/onboarding", server.createOnboarding)
 	authorized.POST("/onboarding/batch", server.createOnboardingBatch)
+	authorized.POST("/onboarding/concurrency-preview", server.previewOnboardingConcurrency)
 	authorized.POST("/onboarding/prepare", server.prepareOnboarding)
 	authorized.POST("/onboarding/keys/cleanup-preview", server.onboardingKeyCleanupPreview)
 	authorized.POST("/onboarding/keys/cleanup", server.onboardingKeyCleanup)
@@ -720,6 +743,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/uptime-kuma/resources/:kind/:resource_id", server.writeKumaResource)
 	authorized.POST("/uptime-kuma/monitors", server.writeKumaMonitor)
 	authorized.POST("/uptime-kuma/monitors/:monitor_id", server.writeKumaMonitor)
+	authorized.GET("/preferences/navigation", server.navigationPreferences)
+	authorized.PUT("/preferences/navigation", server.saveNavigationPreferences)
 	authorized.GET("/newapi", server.newAPIWorkspace)
 	authorized.POST("/newapi/platforms", server.saveNewAPIPlatform)
 	authorized.DELETE("/newapi/platforms/:platform_id", server.deleteNewAPIPlatform)
@@ -731,6 +756,11 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/newapi/platforms/:platform_id/channel-key", server.createNewAPIChannelKey)
 	authorized.POST("/newapi/platforms/:platform_id/channel-models", server.fetchNewAPIChannelModels)
 	authorized.POST("/newapi/platforms/:platform_id/channels", server.createNewAPIChannel)
+	authorized.GET("/newapi/platforms/:platform_id/channels", server.newAPIChannels)
+	authorized.GET("/newapi/platforms/:platform_id/channel-groups", server.newAPIChannelGroups)
+	authorized.PUT("/newapi/platforms/:platform_id/channel-groups", server.saveNewAPIChannelGroups)
+	authorized.POST("/newapi/platforms/:platform_id/channels/models/batch", server.batchNewAPIChannelModels)
+	authorized.PUT("/newapi/platforms/:platform_id/channels/:channel_id/models", server.changeNewAPIChannelModels)
 	authorized.PUT("/newapi/platforms/:platform_id/model-prices", server.saveNewAPIModelPrices)
 	authorized.GET("/upstreams", server.upstreams)
 	authorized.POST("/upstreams", server.createUpstream)
@@ -762,99 +792,21 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/inspection/run", server.runInspection)
 	authorized.POST("/inspection/probe", server.runActiveProbe)
 	authorized.GET("/model-checks/capabilities", server.modelCheckCapabilities)
-	authorized.GET("/account-workbench/templates", server.accountWorkbenchTemplates)
-	authorized.POST("/account-workbench/oauth", server.accountWorkbenchStartOAuth)
-	authorized.GET("/account-workbench/oauth-checkpoints", server.accountWorkbenchOAuthCheckpoints)
-	authorized.POST("/account-workbench/oauth/:id/checkpoint", server.accountWorkbenchSaveOAuthCheckpoint)
-	authorized.POST("/account-workbench/oauth-checkpoints/:id/restore", server.accountWorkbenchRestoreOAuthCheckpoint)
-	authorized.DELETE("/account-workbench/oauth-checkpoints/:id", server.accountWorkbenchDeleteOAuthCheckpoint)
-	authorized.POST("/account-workbench/sms/options", server.accountWorkbenchSMSOptions)
-	authorized.GET("/account-workbench/sms/receipts", server.accountWorkbenchSMSReceipts)
-	authorized.POST("/account-workbench/sms/receipts/:id/inspect", server.accountWorkbenchInspectSMSReceipt)
-	authorized.GET("/account-workbench/oauth/:id", server.accountWorkbenchReadOAuth)
-	authorized.GET("/account-workbench/oauth/:id/sms", server.accountWorkbenchReadOAuthSMS)
-	authorized.POST("/account-workbench/oauth/:id/sms", server.accountWorkbenchAttachOAuthSMS)
-	authorized.GET("/account-workbench/oauth/:id/security-source", server.accountWorkbenchSecuritySource)
-	authorized.POST("/account-workbench/oauth-checkpoints/:id/security", server.accountWorkbenchCheckpointSecurity)
-	authorized.POST("/account-workbench/security/:id/confirm-identity", server.accountWorkbenchConfirmSecurityIdentity)
-	authorized.POST("/account-workbench/security/:id/oauth", server.accountWorkbenchOAuthAfterSecurity)
-	authorized.POST("/account-workbench/oauth/:id/input", server.accountWorkbenchInputOAuth)
-	authorized.POST("/account-workbench/oauth/:id/finish", server.accountWorkbenchFinishOAuth)
-	authorized.DELETE("/account-workbench/oauth/:id", server.accountWorkbenchCancelOAuth)
-	authorized.POST("/account-workbench/oauth/:id/preview", server.accountWorkbenchOAuthPreview)
-	authorized.POST("/account-workbench/oauth-batches/preview", server.accountWorkbenchBatchPreview)
-	authorized.DELETE("/account-workbench/oauth-batches/preview/:id", server.accountWorkbenchDiscardBatchPreview)
-	authorized.POST("/account-workbench/oauth-batches", server.accountWorkbenchStartBatch)
-	authorized.GET("/account-workbench/queue-recoveries", server.accountWorkbenchQueueRecoveries)
-	authorized.POST("/account-workbench/queue-recoveries/:id/oauth", server.accountWorkbenchResumeOAuthQueue)
-	authorized.POST("/account-workbench/queue-recoveries/:id/mixed", server.accountWorkbenchResumeMixedQueue)
-	authorized.DELETE("/account-workbench/queue-recoveries/:id", server.accountWorkbenchDeleteQueueRecovery)
-	authorized.GET("/account-workbench/oauth-batches/:id", server.accountWorkbenchReadBatch)
-	authorized.DELETE("/account-workbench/oauth-batches/:id", server.accountWorkbenchCancelBatch)
-	authorized.POST("/account-workbench/oauth-batches/:id/preview", server.accountWorkbenchBatchImportPreview)
-	authorized.POST("/account-workbench/security", server.accountWorkbenchStartSecurity)
-	authorized.GET("/account-workbench/security/:id", server.accountWorkbenchReadSecurity)
-	authorized.POST("/account-workbench/security/:id/input", server.accountWorkbenchInputSecurity)
-	authorized.POST("/account-workbench/security/:id/continue", server.accountWorkbenchContinueSecurity)
-	authorized.DELETE("/account-workbench/security/:id", server.accountWorkbenchCancelSecurity)
-	authorized.POST("/account-workbench/security-batches/preview", server.accountWorkbenchSecurityBatchPreview)
-	authorized.DELETE("/account-workbench/security-batches/preview/:id", server.accountWorkbenchDiscardSecurityBatchPreview)
-	authorized.POST("/account-workbench/security-batches", server.accountWorkbenchStartSecurityBatch)
-	authorized.GET("/account-workbench/security-batches/:id", server.accountWorkbenchReadSecurityBatch)
-	authorized.DELETE("/account-workbench/security-batches/:id", server.accountWorkbenchCancelSecurityBatch)
-	authorized.POST("/account-workbench/templates", server.accountWorkbenchSaveTemplate)
-	authorized.PUT("/account-workbench/templates/:template_id", server.accountWorkbenchSaveTemplate)
-	authorized.PUT("/account-workbench/templates/:template_id/preference", server.accountWorkbenchPreferTemplate)
-	authorized.DELETE("/account-workbench/templates/:template_id", server.accountWorkbenchDeleteTemplate)
-	authorized.POST("/account-workbench/template-from-account", server.accountWorkbenchTemplateFromAccount)
-	authorized.POST("/account-workbench/preview", server.accountWorkbenchPreview)
-	authorized.DELETE("/account-workbench/preview/:preview_id", server.accountWorkbenchDeletePreview)
-	authorized.POST("/account-workbench/import", server.accountWorkbenchImport)
-	authorized.POST("/account-workbench/retry-preview", server.accountWorkbenchRetryPreview)
-	authorized.POST("/account-workbench/runs/preview", server.accountWorkbenchRunPreview)
-	authorized.DELETE("/account-workbench/runs/preview/:id", server.accountWorkbenchDiscardRunPreview)
-	authorized.POST("/account-workbench/runs", server.accountWorkbenchStartRun)
-	authorized.GET("/account-workbench/runs/:id", server.accountWorkbenchReadRun)
-	authorized.POST("/account-workbench/runs/:id/preview", server.accountWorkbenchRunResultPreview)
-	authorized.DELETE("/account-workbench/runs/:id", server.accountWorkbenchCancelRun)
-	authorized.POST("/account-workbench/exports/preview", server.accountWorkbenchExportPreview)
-	authorized.DELETE("/account-workbench/exports/preview/:id", server.accountWorkbenchDiscardExportPreview)
-	authorized.GET("/account-workbench/exports", server.accountWorkbenchExports)
-	authorized.GET("/account-workbench/local-exports", server.accountWorkbenchLocalExports)
-	authorized.DELETE("/account-workbench/local-exports/:id", server.accountWorkbenchDeleteLocalExport)
-	authorized.POST("/account-workbench/exports", server.accountWorkbenchExport)
-	authorized.POST("/account-workbench/exports/from-input", server.accountWorkbenchExportInput)
-	authorized.POST("/account-workbench/exports/profiles/preview", server.accountWorkbenchProfileExportPreview)
-	authorized.POST("/account-workbench/exports/profiles", server.accountWorkbenchExportProfiles)
-	authorized.POST("/account-workbench/exports/regenerate/preview", server.accountWorkbenchRegenerationPreview)
-	authorized.POST("/account-workbench/exports/regenerate", server.accountWorkbenchRegenerate)
-	authorized.DELETE("/account-workbench/exports/:id", server.accountWorkbenchDeleteExport)
-	authorized.GET("/account-workbench/history", server.accountWorkbenchHistory)
-	authorized.POST("/account-workbench/history/query", server.accountWorkbenchQueryHistory)
-	authorized.GET("/account-workbench/history/active", server.accountWorkbenchActiveHistory)
-	authorized.GET("/account-workbench/login-profiles", server.accountWorkbenchProfiles)
-	authorized.GET("/account-workbench/source-profiles", server.accountWorkbenchSourceProfiles)
-	authorized.POST("/account-workbench/source-profiles/source", server.accountWorkbenchSourceProfileIdentity)
-	authorized.POST("/account-workbench/source-profiles", server.accountWorkbenchSaveSourceProfile)
-	authorized.DELETE("/account-workbench/source-profiles/:id", server.accountWorkbenchDeleteSourceProfile)
-	authorized.POST("/account-workbench/source-profiles/:id/security", server.accountWorkbenchSourceProfileSecurity)
-	authorized.POST("/account-workbench/source-profiles/reauthorization/preview", server.accountWorkbenchSourceProfileAuthorization)
-	authorized.POST("/account-workbench/source-profiles/exports/preview", server.accountWorkbenchSourceProfileExportPreview)
-	authorized.POST("/account-workbench/source-profiles/exports", server.accountWorkbenchExportSourceProfiles)
-	authorized.POST("/account-workbench/login-profiles", server.accountWorkbenchSaveProfile)
-	authorized.POST("/account-workbench/login-profiles/security-result", server.accountWorkbenchProfileSecurity)
-	authorized.DELETE("/account-workbench/login-profiles/:profile_id", server.accountWorkbenchDeleteProfile)
-	authorized.POST("/account-workbench/reauthorization/preview", server.accountWorkbenchReauthorizationPreview)
-	authorized.POST("/account-workbench/history/delete", server.accountWorkbenchDeleteHistory)
-	authorized.POST("/account-workbench/history/cancel", server.accountWorkbenchCancelHistory)
-	authorized.POST("/account-workbench/cleanup/preview", server.accountWorkbenchCleanupPreview)
-	authorized.DELETE("/account-workbench/cleanup/preview/:id", server.accountWorkbenchDiscardCleanupPreview)
-	authorized.POST("/account-workbench/cleanup", server.accountWorkbenchCleanup)
+	authorized.GET("/account-workbench/accounts", server.accountWorkbenchAccounts)
 	authorized.GET("/account-workbench/maintenance", server.accountWorkbenchMaintenance)
-	authorized.PUT("/account-workbench/maintenance", server.accountWorkbenchSaveMaintenance)
-	authorized.POST("/account-workbench/maintenance/check", server.accountWorkbenchCheckMaintenance)
-	authorized.GET("/account-workbench/maintenance/authorization", server.accountWorkbenchMaintenanceAuthorization)
-	authorized.POST("/account-workbench/maintenance/authorization", server.accountWorkbenchAttachMaintenance)
+	authorized.POST("/account-workbench/maintenance/:action", server.accountWorkbenchMaintenance)
+	authorized.POST("/account-workbench/preview", server.accountWorkbenchPreview)
+	authorized.GET("/account-workbench/runs", server.accountWorkbenchRuns)
+	authorized.POST("/account-workbench/runs", server.accountWorkbenchStart)
+	authorized.GET("/account-workbench/runs/:id", server.accountWorkbenchRun)
+	authorized.POST("/account-workbench/runs/:id/:action", server.accountWorkbenchRunAction)
+	authorized.GET("/account-workbench/runs/:id/browser/:item", server.accountWorkbenchBrowser)
+	authorized.POST("/account-workbench/runs/:id/browser/:item", server.accountWorkbenchBrowser)
+	authorized.GET("/account-workbench/templates", server.accountWorkbenchTemplates)
+	authorized.GET("/account-workbench/template-source/:id", server.accountWorkbenchTemplateSource)
+	authorized.POST("/account-workbench/templates", server.accountWorkbenchSaveTemplate)
+	authorized.PUT("/account-workbench/templates/preference", server.accountWorkbenchChangeTemplate)
+	authorized.DELETE("/account-workbench/templates", server.accountWorkbenchChangeTemplate)
 	authorized.GET("/model-checks/account-statuses", server.modelCheckAccountStatuses)
 	authorized.GET("/model-checks/configuration", server.modelCheckConfiguration)
 	authorized.PUT("/model-checks/configuration/draft", server.saveModelCheckDraft)
@@ -1550,12 +1502,22 @@ func (s *Server) testNotification(c *gin.Context) {
 }
 
 func (s *Server) accounts(c *gin.Context) {
-	rows, err := s.business.Accounts(c.Request.Context())
+	var rows []business.AccountStatus
+	failureMessage := "账号列表读取失败"
+	err := s.withAccountReadSnapshot(c.Request.Context(), func(ctx context.Context) error {
+		var err error
+		rows, err = s.business.Accounts(ctx)
+		if err != nil {
+			return err
+		}
+		s.enrichRecentResults(ctx, rows)
+		failureMessage = "当前健康评分读取失败，请稍后重试"
+		return s.enrichAccountHealth(ctx, rows)
+	})
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "账号列表读取失败")
+		writeError(c, http.StatusInternalServerError, failureMessage)
 		return
 	}
-	s.enrichRecentResults(c.Request.Context(), rows)
 	c.JSON(http.StatusOK, rows)
 }
 
@@ -1565,19 +1527,30 @@ func (s *Server) account(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
 		return
 	}
-	row, err := s.business.Account(c.Request.Context(), accountID)
+	var row *business.AccountDetail
+	failureMessage := "账号详情读取失败"
+	err := s.withAccountReadSnapshot(c.Request.Context(), func(ctx context.Context) error {
+		var err error
+		row, err = s.business.Account(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		enriched := []business.AccountStatus{row.AccountStatus}
+		s.enrichRecentResults(ctx, enriched)
+		failureMessage = "当前健康评分读取失败，请稍后重试"
+		if err := s.enrichAccountHealth(ctx, enriched); err != nil {
+			return err
+		}
+		row.AccountStatus = enriched[0]
+		return nil
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "账号不存在")
 		return
 	}
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "账号详情读取失败")
+		writeError(c, http.StatusInternalServerError, failureMessage)
 		return
-	}
-	if len(row.RecentResults) > 0 {
-		enriched := []business.AccountStatus{row.AccountStatus}
-		s.enrichRecentResults(c.Request.Context(), enriched)
-		row.RecentResults = enriched[0].RecentResults
 	}
 	c.JSON(http.StatusOK, row)
 }
@@ -1809,8 +1782,13 @@ func (s *Server) enrichRecentResults(ctx context.Context, accounts []business.Ac
 				Source: result.Source, LatencyP95: result.ClassificationLatency, Payload: result.ClassificationPayload,
 			})
 			eventType := string(classification.Event)
+			result.EventType = &eventType
+			if classification.Neutral {
+				result.Score = nil
+				continue
+			}
 			score := classification.Score
-			result.EventType, result.Score = &eventType, &score
+			result.Score = &score
 		}
 	}
 }
@@ -1985,6 +1963,10 @@ func (s *Server) saveAccountSettings(c *gin.Context) {
 		writeError(c, http.StatusUnprocessableEntity, "账号设置参数无效")
 		return
 	}
+	if !request.FollowConcurrency && strings.TrimSpace(request.LoadFactor) == "" {
+		writeError(c, http.StatusUnprocessableEntity, "固定负载因子不能为空")
+		return
+	}
 	if len(*request.TestModels) > 20 {
 		writeError(c, http.StatusUnprocessableEntity, "账号探测模型不能超过 20 个")
 		return
@@ -2013,7 +1995,7 @@ func (s *Server) saveAccountSettings(c *gin.Context) {
 		return
 	}
 	task, err := s.accountTasks.EnqueueSettings(c.Request.Context(), accountID, accountops.SettingsInput{
-		Priority: request.Priority, LoadFactor: request.LoadFactor, Concurrency: request.Concurrency,
+		Priority: request.Priority, LoadFactor: request.LoadFactor, FollowConcurrency: request.FollowConcurrency, Concurrency: request.Concurrency,
 		TestModels: *request.TestModels, Paused: *request.Paused, Excluded: *request.Excluded,
 	}, actor)
 	if err != nil {
@@ -2830,7 +2812,7 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 	allowed := map[string]struct{}{
 		"host": {}, "upstream_type": {}, "base_url": {}, "platform": {}, "account_type": {}, "notes": {},
 		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
-		"priority": {}, "concurrency": {}, "schedulable": {}, "test_models": {},
+		"priority": {}, "concurrency": {}, "schedulable": {}, "test_models": {}, "waiting_for_capacity": {}, "model_mapping": {},
 	}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
@@ -2872,6 +2854,27 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 		Host: host, UpstreamType: strings.ToLower(upstreamType),
 		LocalGroupID: localGroupIDs[0], LocalGroupIDs: localGroupIDs, AccountIDs: accountIDs,
 		UpstreamGroupID: upstreamGroupID, Extra: map[string]any{},
+	}
+	if raw, present := payload["model_mapping"]; present {
+		values, ok := raw.(map[string]any)
+		if !ok {
+			return onboarding.Request{}, errors.New("model_mapping 必须是请求模型到上游模型的字符串映射")
+		}
+		requested := make(map[string]string, len(values))
+		for source, rawTarget := range values {
+			target, ok := rawTarget.(string)
+			if !ok {
+				return onboarding.Request{}, errors.New("模型映射的上游模型必须是字符串")
+			}
+			requested[source] = target
+		}
+		result.ModelMapping, err = onboarding.NormalizeModelMapping(requested)
+		if err != nil {
+			return onboarding.Request{}, err
+		}
+		if len(accountIDs) > 0 && len(result.ModelMapping) > 0 {
+			return onboarding.Request{}, errors.New("模型映射只能随新增账号保存")
+		}
 	}
 	if raw, present := payload["test_models"]; present {
 		values, ok := raw.([]any)
@@ -2948,6 +2951,16 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 			return onboarding.Request{}, errors.New("schedulable 必须是布尔值")
 		}
 		result.Schedulable = value
+	}
+	if raw, found := payload["waiting_for_capacity"]; found {
+		value, ok := raw.(bool)
+		if !ok {
+			return onboarding.Request{}, errors.New("waiting_for_capacity 必须是布尔值")
+		}
+		result.WaitingForCapacity = value
+	}
+	if result.WaitingForCapacity && (result.Schedulable || len(result.AccountIDs) > 0 || result.Concurrency == nil || *result.Concurrency != 1) {
+		return onboarding.Request{}, errors.New("等待并发额度仅适用于并发为 1 且保持停用的新账号")
 	}
 	return result, nil
 }
@@ -5380,15 +5393,7 @@ func (s *Server) cancelTask(c *gin.Context) {
 		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
 		return
 	}
-	oauthCancelled := false
-	if task.Skill == accountworkbench.Skill && s.accountWorkbench != nil {
-		oauthCancelled, err = s.accountWorkbench.CancelOAuthTask(taskID)
-		if err != nil {
-			writeError(c, http.StatusConflict, err.Error())
-			return
-		}
-	}
-	if s.taskCanceller.CancelTask(taskID) || oauthCancelled {
+	if s.taskCanceller.CancelTask(taskID) {
 		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
 		return
 	}

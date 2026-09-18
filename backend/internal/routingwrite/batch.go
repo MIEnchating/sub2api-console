@@ -59,6 +59,9 @@ func (a *limitedAdmin) Mutate(ctx context.Context, method, path string, body map
 		return nil, err
 	}
 	defer a.release()
+	if err := adminclient.AuthorizeMutation(ctx); err != nil {
+		return nil, err
+	}
 	return a.admin.Mutate(ctx, method, path, body)
 }
 
@@ -71,6 +74,9 @@ func (a *limitedAdmin) DeleteAccountWithVerification(ctx context.Context, accoun
 		return nil, err
 	}
 	defer a.release()
+	if err := adminclient.AuthorizeMutation(ctx); err != nil {
+		return nil, err
+	}
 	if configurable, ok := a.admin.(configurableAccountDeleter); ok {
 		return configurable.DeleteAccountWithVerification(ctx, accountID, verification)
 	}
@@ -272,7 +278,7 @@ func (c *batchWriteCoordinator) executeGroup(group []coordinatedWriteRequest) {
 	}
 	if err != nil {
 		for _, request := range validGroup {
-			c.setOutcome(request.accountID, coordinatedWriteOutcome{err: err})
+			c.setOutcome(request.accountID, coordinatedWriteOutcome{writePrevented: mutationPrevented(err), err: err})
 		}
 		return
 	}
@@ -323,11 +329,11 @@ func (c *batchWriteCoordinator) confirmAmbiguousBatchWrite(request coordinatedWr
 
 func (c *batchWriteCoordinator) executeSingle(request coordinatedWriteRequest) {
 	write := writeRoutingValues(request.ctx, c.admin, request.accountID, request.desired)
-	outcome := coordinatedWriteOutcome{remoteConfirmed: write.remoteConfirmed, err: write.err}
+	outcome := coordinatedWriteOutcome{remoteConfirmed: write.remoteConfirmed, writePrevented: write.writePrevented, err: write.err}
 	if write.err == nil && clearsLoadFactor(request.desired) {
 		// A reset cannot be inferred from the submitted zero or a success count.
-		// Require an explicit field in a fresh account read even when optional
-		// verification is disabled, before releasing the saved baseline.
+		// Require a fresh account read, accepting the full DTO's omitted nullable
+		// field even when optional verification is disabled, before release.
 		payload, err := c.admin.Account(request.ctx, request.accountID)
 		if err == nil {
 			outcome.after, err = remoteValues(payload)

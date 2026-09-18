@@ -20,6 +20,10 @@ export function ConfigRoute() {
       hiddenNavigationItemIDs={shell.hiddenNavigationItemIDs}
       onNavigationItemVisibilityChange={shell.setNavigationItemVisibility}
       onResetNavigation={shell.resetNavigation}
+      navigationPending={shell.navigationPending}
+      navigationLoading={shell.navigationLoading}
+      navigationReadFailed={shell.navigationReadFailed}
+      onRetryNavigation={shell.retryNavigation}
     />
   );
 }

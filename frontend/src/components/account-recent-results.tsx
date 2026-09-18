@@ -1,3 +1,7 @@
+import {
+  recentFailureReason,
+  recentLimitFailureLabel,
+} from "./account-recent-results/failure-display";
 import type { ReactElement } from "react";
 import type { AccountRecentResult } from "@/api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,6 +22,8 @@ function metric(value: number): string {
 
 function resultTone(result: AccountRecentResult): string {
   switch (result.event_type) {
+    case "client_error":
+      return "bg-muted-foreground/60";
     case "healthy":
       return "bg-success";
     case "slow":
@@ -56,7 +62,20 @@ function sourceLabel(source: string): string {
 }
 
 function eventLabel(result: AccountRecentResult): string {
+  if (
+    [
+      "rate_limited_or_exhausted",
+      "unknown_upstream_error",
+      "gateway_error",
+      "probe_failed",
+    ].includes(result.event_type ?? "")
+  ) {
+    const specificReason = recentLimitFailureLabel(result.failure_reason);
+    if (specificReason) return specificReason;
+  }
   switch (result.event_type) {
+    case "client_error":
+      return "客户端请求错误（不计入健康评分）";
     case "healthy":
       if (sourceLabel(result.source) === "探针") return "探测通过";
       return "完美健康";
@@ -69,7 +88,7 @@ function eventLabel(result: AccountRecentResult): string {
     case "gateway_error":
       return "网关错误";
     case "rate_limited_or_exhausted":
-      return "限流或额度不足";
+      return "上游请求失败";
     case "probe_failed":
       return "探测失败";
     case "credential_invalid":
@@ -91,6 +110,13 @@ function observedAtLabel(value: string | null): string {
   return timestamp.toLocaleString("zh-CN");
 }
 
+function scoreLabel(result: AccountRecentResult): string | null {
+  if (result.event_type === "client_error" || result.score === null || result.score === undefined) {
+    return null;
+  }
+  return `${formatHealthScore(result.score)} 分`;
+}
+
 function resultDetail(result: AccountRecentResult): string {
   const isTraffic = sourceLabel(result.source) === "真实流量";
   let latencyDetail: string | null = null;
@@ -102,26 +128,21 @@ function resultDetail(result: AccountRecentResult): string {
   return [
     observedAtLabel(result.observed_at),
     eventLabel(result),
-    result.score === null || result.score === undefined
-      ? null
-      : `${formatHealthScore(result.score)} 分`,
+    scoreLabel(result),
     latencyDetail,
     sourceLabel(result.source),
-    result.failure_reason,
+    recentFailureReason(result.failure_reason),
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
 function tooltipDetail(result: AccountRecentResult): ReactElement {
-  const reason = result.failure_reason?.trim();
-  const compactReason = reason && reason.length > 180 ? `${reason.slice(0, 180)}…` : reason;
+  const reason = recentFailureReason(result.failure_reason);
   const summary = [
     observedAtLabel(result.observed_at),
     eventLabel(result),
-    result.score === null || result.score === undefined
-      ? null
-      : `${formatHealthScore(result.score)} 分`,
+    scoreLabel(result),
     result.latency_ms === null ? null : `首字 ${metric(result.latency_ms)}ms`,
     sourceLabel(result.source),
   ]
@@ -130,8 +151,15 @@ function tooltipDetail(result: AccountRecentResult): ReactElement {
   return (
     <div className="grid w-fit min-w-0 max-w-full gap-1 text-xs leading-5">
       <span>{summary}</span>
-      {compactReason ? (
-        <span className="text-destructive/90 break-all">{compactReason}</span>
+      {reason ? (
+        <span
+          className={cn(
+            "max-h-48 overflow-y-auto break-all whitespace-pre-wrap",
+            result.event_type === "client_error" ? "text-muted-foreground" : "text-destructive/90",
+          )}
+        >
+          {reason}
+        </span>
       ) : null}
     </div>
   );

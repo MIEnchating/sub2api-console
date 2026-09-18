@@ -222,10 +222,7 @@ export function NewAPIGroupBindings(props: Props) {
           </Button>
         </div>
       </TableFilterToolbar>
-      <FieldError
-        message={hasInvalidRatio ? "Sub2API 管理平台倍率必须大于 0" : undefined}
-        reserveSpace
-      />
+      <FieldError message={hasInvalidRatio ? "Sub2API 管理平台倍率必须大于 0" : undefined} />
       <DataTablePanel className="flex-1">
         {content ?? (
           <>

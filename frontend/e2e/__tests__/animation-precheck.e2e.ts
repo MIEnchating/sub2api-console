@@ -100,6 +100,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   await page.getByRole("tab", { name: "动画检测", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "动画检测", exact: true });
   await panel.getByRole("combobox", { name: "检测模型" }).fill("gpt-6-astra");
+  await page.keyboard.press("Escape");
   await panel.getByRole("button", { name: "选择前置检测题目" }).click();
   const questions = page.getByRole("dialog", { name: "前置检测题目", exact: true });
   await questions.getByRole("checkbox", { name: "知识截止日期", exact: true }).uncheck();
@@ -123,14 +124,16 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   const passed = panel.getByRole("article", { name: "账号 前置通过账号", exact: true });
   const rejected = panel.getByRole("article", { name: "账号 前置不通过账号", exact: true });
   await expect(
-    passed.getByRole("listitem").filter({ hasText: "糖果题" }).getByText("通过", { exact: true }),
+    passed.getByRole("region", { name: "前置检测结果" }).getByText("通过", { exact: true }),
   ).toBeVisible();
   await expect(
-    rejected
-      .getByRole("listitem")
-      .filter({ hasText: "糖果题" })
-      .getByText("不通过", { exact: true }),
+    rejected.getByRole("region", { name: "前置检测结果" }).getByText("不通过", { exact: true }),
   ).toBeVisible();
+  await expect(passed.getByRole("listitem")).toHaveCount(0);
+  await passed.getByRole("button", { name: "查看前置检测详情" }).click();
+  const detail = page.getByRole("dialog", { name: "前置检测详情" });
+  await expect(detail.getByText("21", { exact: true })).toBeVisible();
+  await detail.getByRole("button", { name: "关闭", exact: true }).click();
   await panel.getByRole("button", { name: "选择不通过（1）" }).click();
   await expect(rejected.getByRole("checkbox")).toBeChecked();
   await expect(passed.getByRole("checkbox")).not.toBeChecked();

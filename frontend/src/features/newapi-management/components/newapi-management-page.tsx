@@ -1,3 +1,5 @@
+import { Link } from "@tanstack/react-router";
+import { SettingsSectionLayout } from "@/features/config/components/settings-section-layout";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CirclePlus, Pencil, ServerCog, Trash2 } from "lucide-react";
@@ -18,7 +20,8 @@ import { notifyOperationError } from "@/lib/operation-feedback";
 import type { NewAPIManagementView } from "../constants";
 import type { NewAPIPlatformValues } from "../lib/schemas";
 import { modelPriceCatalogQueryOptions } from "../lib/model-price-catalog-query";
-import { NewAPIChannelForm } from "./channel-form";
+import { ExistingChannels } from "./existing-channels";
+import { ChannelCreateDialog } from "./channel-create-dialog";
 import { NewAPIGroupBindings } from "./group-bindings";
 import {
   matchingRemoteModelPrice,
@@ -30,6 +33,7 @@ import { comparePlatformModelPrice, NewAPIPriceComparison } from "./price-compar
 import { RawPricingSourceDialog } from "./raw-pricing-source-dialog";
 
 type Props = {
+  embedded?: boolean;
   view: "platform" | NewAPIManagementView;
 };
 
@@ -46,8 +50,13 @@ const pageTitles: Record<Props["view"], string> = {
   differences: "价格比对",
 };
 
+const pageDescriptions: Partial<Record<Props["view"], string>> = {
+  platform: "选填接入：使用 New API 渠道、分组或价格管理时配置；首次接入需填写全部四项。",
+  channels: "维护渠道模型，支持多选批量上架与下架。",
+};
+
 export function newAPIViewNeedsRemoteSnapshot(view: Props["view"]): boolean {
-  return view === "groups" || view === "channels" || view === "prices" || view === "differences";
+  return view === "groups" || view === "prices" || view === "differences";
 }
 
 export function newAPIRemoteSnapshotQueryKey(
@@ -86,8 +95,8 @@ export function NewAPIHeadingAction(props: {
 }
 
 export function NewAPIRemoteLoading(props: { label: string; view?: Props["view"] }) {
-  if (props.view === "channels" || props.view === "platform") {
-    return <NewAPIFormSkeleton label={props.label} channel={props.view === "channels"} />;
+  if (props.view === "platform") {
+    return <NewAPIFormSkeleton label={props.label} channel={false} />;
   }
   return <PageLoadingSkeleton label={props.label} fill />;
 }
@@ -159,6 +168,7 @@ export function NewAPIManagementPage(props: Props) {
   const [platformId, setPlatformId] = useState("");
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [editingPlatform, setEditingPlatform] = useState<NewAPIPlatform | null>(null);
+  const [channelCreateOpen, setChannelCreateOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [managementPricesOpen, setManagementPricesOpen] = useState(false);
   const [rawPricingSourceOpen, setRawPricingSourceOpen] = useState(false);
@@ -178,13 +188,6 @@ export function NewAPIManagementPage(props: Props) {
   const selectedPlatform =
     workspace.data?.platforms.find((platform) => platform.id === platformId) ?? null;
   const needsRemoteSnapshot = newAPIViewNeedsRemoteSnapshot(props.view);
-  const vaultConfiguration = useQuery({
-    queryKey: ["auth-recovery-config"],
-    queryFn: api.authRecoveryConfig,
-    enabled: props.view === "channels" && selectedPlatform !== null,
-    staleTime: 15_000,
-  });
-
   const remoteSnapshot = useQuery({
     queryKey: newAPIRemoteSnapshotQueryKey(platformId),
     queryFn: () => api.refreshNewAPIPlatform(platformId),
@@ -323,38 +326,15 @@ export function NewAPIManagementPage(props: Props) {
     onError: (error) => notifyOperationError(error, "分组绑定保存失败"),
   });
 
-  const createChannel = useMutation({
-    mutationFn: (payload: Parameters<typeof api.createNewAPIChannel>[1]) =>
-      api.createNewAPIChannel(platformId, payload),
-    onSuccess: () => toast.success("New API 渠道已创建"),
-    onError: (error) => notifyOperationError(error, "New API 渠道创建失败"),
-  });
-
-  const createChannelKey = useMutation({
-    mutationFn: (payload: Parameters<typeof api.createNewAPIChannelKey>[1]) =>
-      api.createNewAPIChannelKey(platformId, payload),
-    onError: (error) => notifyOperationError(error, "Sub2API 密钥创建失败"),
-  });
-
-  const fetchChannelModels = useMutation({
-    mutationFn: async (payload: Parameters<typeof api.fetchNewAPIChannelModels>[1]) => {
-      const result = await api.fetchNewAPIChannelModels(platformId, payload);
-      return result.models;
-    },
-  });
-
+  const Layout = props.embedded ? SettingsSectionLayout : PageLayout;
   return (
-    <PageLayout fixedContent>
+    <Layout fixedContent>
       <PageHeading
         eyebrow="运营管理"
         title={pageTitles[props.view]}
-        description={
-          props.view === "channels"
-            ? "使用 Sub2API 分组密钥创建渠道，配置调用地址、可用模型与 New API 分组。"
-            : ""
-        }
+        description={pageDescriptions[props.view] ?? ""}
         action={
-          !workspace.data || (selectedPlatform && !needsRemoteSnapshot) ? undefined : (
+          !workspace.data || !selectedPlatform || !needsRemoteSnapshot ? undefined : (
             <NewAPIHeadingAction
               hasPlatform={selectedPlatform !== null}
               needsRemoteSnapshot={needsRemoteSnapshot}
@@ -374,9 +354,6 @@ export function NewAPIManagementPage(props: Props) {
       {workspace.error ? (
         <QueryErrorToast error={workspace.error} fallback="New API 管理数据读取失败" />
       ) : null}
-      {vaultConfiguration.error ? (
-        <QueryErrorToast error={vaultConfiguration.error} fallback="密码箱账号读取失败" />
-      ) : null}
       {remoteSnapshot.error ? (
         <QueryErrorToast error={remoteSnapshot.error} fallback="New API 数据读取失败" />
       ) : null}
@@ -390,13 +367,14 @@ export function NewAPIManagementPage(props: Props) {
         )}
         {!workspace.isLoading && selectedPlatform && (
           <>
-            <div
-              className={
-                props.view === "channels"
-                  ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-px"
-                  : "flex min-h-0 flex-1 flex-col overflow-hidden"
-              }
-            >
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+              {props.view === "channels" && (
+                <ExistingChannels
+                  key={platformId}
+                  platformId={platformId}
+                  onCreate={() => setChannelCreateOpen(true)}
+                />
+              )}
               {needsRemoteSnapshot && remoteSnapshot.isFetching && snapshot === null ? (
                 <NewAPIRemoteLoading
                   label={`正在加载${pageTitles[props.view]}`}
@@ -426,28 +404,6 @@ export function NewAPIManagementPage(props: Props) {
                   bindings={workspace.data?.bindings ?? []}
                   pending={saveBindings.isPending}
                   onSave={(bindings) => saveBindings.mutate(bindings)}
-                />
-              ) : null}
-              {props.view === "channels" && snapshot ? (
-                <NewAPIChannelForm
-                  groups={workspace.data?.local_groups ?? []}
-                  newAPIGroups={snapshot?.groups ?? []}
-                  sub2APIBaseURL={workspace.data?.sub2api_base_url ?? ""}
-                  vaultEntries={vaultConfiguration.data?.vault_entries ?? []}
-                  pending={createChannel.isPending}
-                  creatingKey={createChannelKey.isPending}
-                  fetchingModels={fetchChannelModels.isPending}
-                  onCreateKey={async (payload) => {
-                    try {
-                      return await createChannelKey.mutateAsync(payload);
-                    } finally {
-                      createChannelKey.reset();
-                    }
-                  }}
-                  onFetchModels={(payload) => fetchChannelModels.mutateAsync(payload)}
-                  onSubmit={async (payload) => {
-                    await createChannel.mutateAsync(payload);
-                  }}
                 />
               ) : null}
               {props.view === "prices" && snapshot ? (
@@ -501,19 +457,34 @@ export function NewAPIManagementPage(props: Props) {
           <div className="text-muted-foreground flex min-h-72 flex-1 flex-col items-center justify-center gap-3 rounded-md border border-dashed bg-background px-6 text-center text-sm">
             <ServerCog className="size-10 opacity-45" aria-hidden="true" />
             <span>尚未添加 New API 平台配置</span>
-            <Button
-              onClick={() => {
-                setEditingPlatform(null);
-                setPlatformDialogOpen(true);
-              }}
-            >
-              <CirclePlus aria-hidden="true" />
-              添加平台配置
-            </Button>
+            {props.view === "platform" ? (
+              <Button
+                onClick={() => {
+                  setEditingPlatform(null);
+                  setPlatformDialogOpen(true);
+                }}
+              >
+                <CirclePlus aria-hidden="true" />
+                添加平台配置
+              </Button>
+            ) : (
+              <Button render={<Link to="/config" search={{ tab: "newapi" }} />}>
+                前往系统设置配置平台
+              </Button>
+            )}
           </div>
         )}
       </div>
 
+      {channelCreateOpen && selectedPlatform && (
+        <ChannelCreateDialog
+          key={platformId}
+          platformId={platformId}
+          groups={workspace.data?.local_groups ?? []}
+          baseURL={workspace.data?.sub2api_base_url ?? ""}
+          onClose={() => setChannelCreateOpen(false)}
+        />
+      )}
       <NewAPIPlatformDialog
         open={platformDialogOpen}
         platform={editingPlatform}
@@ -538,6 +509,6 @@ export function NewAPIManagementPage(props: Props) {
         error={rawPricingSource.error instanceof Error ? rawPricingSource.error.message : ""}
         onOpenChange={setRawPricingSourceOpen}
       />
-    </PageLayout>
+    </Layout>
   );
 }

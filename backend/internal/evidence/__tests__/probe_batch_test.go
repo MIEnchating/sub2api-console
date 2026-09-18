@@ -116,6 +116,7 @@ func TestUnlimitedProbeCollectionPreservesFullRequestedScope(t *testing.T) {
 
 func TestFreshTrafficIsRemovedBeforeChoosingBoundedProbeBatch(t *testing.T) {
 	fixture := newProbeBatchFixture(t, []string{"1", "2", "3", "4", "5"}, []string{"1", "2"})
+	fixture.policy["probe"].(map[string]any)["performance_exploration_enabled"] = false
 	result, err := fixture.service.Collect(context.Background(), fixture.policy, fixture.admin, evidence.Options{
 		FetchTraffic: true, ProbesAllowed: true, ProbeBatchSize: 2, Now: fixture.now,
 	})

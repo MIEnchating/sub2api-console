@@ -54,6 +54,10 @@ func (store *recordingTasks) ListBySkill(_ context.Context, skill string, limit 
 	return result, nil
 }
 
+func (store *recordingTasks) ModelCheckHistory(ctx context.Context, _ time.Time) ([]taskstore.Task, error) {
+	return store.ListBySkill(ctx, "sub2api-model-check", 10000)
+}
+
 func TestAccountStatusesUseLatestModelCheckResultPerAccount(t *testing.T) {
 	store := &recordingTasks{tasks: []taskstore.Task{
 		{
@@ -95,9 +99,6 @@ func TestAccountStatusesUseLatestModelCheckResultPerAccount(t *testing.T) {
 	}
 	if byID["41"].TaskID != "completed" || byID["41"].CheckedAt != "2026-08-31T02:00:00Z" {
 		t.Fatalf("running task must not replace the latest completed verdict: %#v", byID["41"])
-	}
-	if store.listLimit != accountStatusTaskLimit {
-		t.Fatalf("history limit=%d want=%d", store.listLimit, accountStatusTaskLimit)
 	}
 }
 

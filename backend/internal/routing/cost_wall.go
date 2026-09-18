@@ -12,6 +12,11 @@ func costWallReached(tier string) bool {
 	return tier == "equal" || tier == "above"
 }
 
+func (config engineConfig) accountCostWallEnabled(accountID string) bool {
+	_, ignored := config.ignoreCostWallAccounts[accountID]
+	return config.costWallEnabled && !ignored
+}
+
 func applyCostWallFallbacks(groups map[string][]*candidate, byAccount map[string][]*candidate, inventory []business.RoutingAccount, config engineConfig, now time.Time) {
 	// Fuse minimum-pool protection cannot keep a costly account open while
 	// another usable account exists. Apply the cost boundary after fuse decisions.
@@ -95,6 +100,9 @@ func CostWallProbeBlocks(accounts []business.RoutingAccount, policy map[string]a
 	}
 	byAccount := map[string][]*candidate{}
 	for _, account := range accounts {
+		if !config.accountCostWallEnabled(account.ID) {
+			continue
+		}
 		groupConfig, enabled, err := config.forGroup(account.GroupID)
 		if err != nil {
 			return nil, err

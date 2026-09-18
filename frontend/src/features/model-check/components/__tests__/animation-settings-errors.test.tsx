@@ -40,6 +40,10 @@ it.each(["开始检测（1 个账号）", "前置检测（1）"])(
     expect(timeout).toHaveAccessibleDescription("超时不能小于 5 秒");
     const modelField = screen.getByRole("group", { name: "检测模型设置" });
     expect(within(modelField).getByRole("alert")).toHaveTextContent("请输入模型 ID");
+    expect(within(modelField).getByRole("alert")).toHaveClass("col-start-2");
+    expect(
+      within(screen.getByRole("group", { name: "请求超时设置" })).getByRole("alert"),
+    ).toHaveClass("col-start-2");
     expect(modelField).toHaveClass("min-w-0");
     expect(errorToast).not.toHaveBeenCalled();
   },

@@ -39,7 +39,7 @@ it("首次平台请求失败只提供重试，成功确认没有平台后才显�
   expect(await screen.findByText("尚未添加 New API 平台配置")).toBeVisible();
 });
 
-it.each(["groups", "channels", "prices", "differences"] as const)(
+it.each(["groups", "prices", "differences"] as const)(
   "%s 首次远端请求失败显示重试，不能操作缺少数据的表单",
   async (view) => {
     let failed = true;

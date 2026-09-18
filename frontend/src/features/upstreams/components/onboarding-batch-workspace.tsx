@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Eye, ExternalLink } from "lucide-react";
+import { Eye, ExternalLink, LoaderCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,9 +28,11 @@ export function onboardingSelectionLayout(
     fixedContent,
     cardClassName,
     contentClassName: fixedContent ? "grid min-h-0 flex-1 gap-3 overflow-hidden" : "grid gap-3",
-    preparedClassName: fixedContent ? "flex min-h-0 flex-col gap-3 overflow-hidden" : "grid gap-3",
+    preparedClassName: fixedContent
+      ? "flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain"
+      : "grid gap-3",
     tablePanelClassName: fixedContent
-      ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border"
+      ? "flex min-h-64 flex-1 flex-col overflow-hidden rounded-lg border"
       : "overflow-hidden rounded-lg border",
     tableContainerClassName: fixedContent
       ? "min-h-0 flex-1 overflow-auto"
@@ -130,7 +132,7 @@ export function OnboardingUpstreamSummary(props: {
   return (
     <section
       aria-label="当前上游概况"
-      className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-2 border-b pb-3"
+      className="flex min-w-0 shrink-0 flex-wrap items-center gap-x-5 gap-y-2 border-b pb-3"
     >
       <div className="flex min-w-0 items-center gap-2">
         <a
@@ -174,16 +176,23 @@ export function OnboardingBatchActionBar(props: {
   controls: ReactNode;
   selectedCount: number;
   pending: boolean;
+  previewPending?: boolean;
   disabled: boolean;
   onSubmit: () => void;
 }) {
+  let label = `预览 ${props.selectedCount} 项变更`;
+  if (props.previewPending) {
+    label = "正在预览";
+  } else if (props.pending) {
+    label = "正在提交";
+  }
   return (
     <div
       role="toolbar"
       aria-label="批量添加账号"
-      className="@container/onboarding-batch bg-card/95 sticky bottom-0 z-20 -mx-1 flex shrink-0 flex-wrap items-end gap-3 border-t px-1 pt-3 pb-1 backdrop-blur-sm"
+      className="@container/onboarding-batch bg-card/95 relative z-20 flex shrink-0 flex-wrap items-center gap-3 border-t pt-3 pb-1 backdrop-blur-sm"
     >
-      <div className="grid min-w-0 flex-1 basis-[26rem] grid-cols-2 gap-3 @min-[40rem]/onboarding-batch:grid-cols-[minmax(10rem,1fr)_7rem_7rem] [&>div:first-child]:col-span-2 @min-[40rem]/onboarding-batch:[&>div:first-child]:col-span-1">
+      <div className="grid min-w-0 flex-1 basis-[27rem] grid-cols-1 gap-3 @min-[36rem]/onboarding-batch:grid-cols-[14rem_12rem] [&>div]:grid-cols-[auto_minmax(0,1fr)] [&>div]:items-center [&_[data-slot=field-error]]:col-span-2">
         {props.controls}
       </div>
       <div className="flex flex-1 basis-52 items-center justify-between gap-3 @min-[40rem]/onboarding-batch:flex-none">
@@ -193,9 +202,18 @@ export function OnboardingBatchActionBar(props: {
         >
           {props.selectedCount} 项待提交
         </span>
-        <Button type="button" disabled={props.disabled || props.pending} onClick={props.onSubmit}>
-          <Eye aria-hidden="true" />
-          {props.pending ? "正在提交" : `预览 ${props.selectedCount} 项变更`}
+        <Button
+          type="button"
+          disabled={props.disabled || props.pending || props.previewPending}
+          aria-busy={props.pending || props.previewPending}
+          onClick={props.onSubmit}
+        >
+          {props.previewPending ? (
+            <LoaderCircle aria-hidden="true" className="motion-safe:animate-spin" />
+          ) : (
+            <Eye aria-hidden="true" />
+          )}
+          {label}
         </Button>
       </div>
     </div>

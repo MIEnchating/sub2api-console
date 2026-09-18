@@ -196,7 +196,7 @@ func TestExcludedGroupReleasesAccountControl(t *testing.T) {
 	schedulable, multiplier := true, "1"
 	groupID := "7"
 	repository := &routingRepositoryStub{policy: policy, accounts: []business.RoutingAccount{{
-		ID: "41", GroupName: "codex", GroupID: &groupID, Schedulable: &schedulable, Multiplier: &multiplier, Metadata: map[string]any{},
+		ID: "41", GroupName: "codex", GroupID: &groupID, Schedulable: &schedulable, Multiplier: &multiplier, Metadata: map[string]any{}, HasRoutingBaseline: true,
 	}}}
 	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
 	if err != nil {
@@ -267,7 +267,7 @@ func TestTypeMismatchIsUnmanagedAndReleasesControlWithoutDecision(t *testing.T) 
 	schedulable, multiplier := true, "1"
 	repository := &routingRepositoryStub{policy: policy, accounts: []business.RoutingAccount{{
 		ID: "41", GroupName: "codex", Schedulable: &schedulable, Multiplier: &multiplier,
-		Metadata: map[string]any{"account_type": "apikey", "platform": "openai"},
+		Metadata: map[string]any{"account_type": "apikey", "platform": "openai"}, HasRoutingBaseline: true,
 	}}}
 
 	result, err := NewService(repository).Calculate(context.Background(), Scope{}, true)
@@ -391,8 +391,8 @@ func TestStrategyQualityUsesNormalizedGroupTerms(t *testing.T) {
 	expensiveRate, _ := new(big.Rat).SetString("1")
 	slow, fast := 10_000.0, 500.0
 	config := engineConfig{priceExp: 1, speedExp: 1, balancedPriceRatio: .5, gateFloor: 40}
-	cheap := &candidate{rate: cheapRate, health: Health{HealthScore: 100, P95MS: &slow}, strategy: "balanced", state: "healthy"}
-	fastCandidate := &candidate{rate: expensiveRate, health: Health{HealthScore: 100, P95MS: &fast}, strategy: "balanced", state: "healthy"}
+	cheap := &candidate{rate: cheapRate, health: Health{HealthScore: 100, P95MS: &slow}, routingHealth: 100, strategy: "balanced", state: "healthy"}
+	fastCandidate := &candidate{rate: expensiveRate, health: Health{HealthScore: 100, P95MS: &fast}, routingHealth: 100, strategy: "balanced", state: "healthy"}
 	benchmark := strategyScoreBenchmark([]*candidate{cheap, fastCandidate})
 	cheapQuality := strategyQuality(cheap, config, benchmark)
 	fastQuality := strategyQuality(fastCandidate, config, benchmark)
@@ -406,7 +406,7 @@ func TestStrategyQualityFallsBackFromP95ToP50(t *testing.T) {
 	p50 := 250.0
 	config := engineConfig{priceExp: 1, speedExp: 1, balancedPriceRatio: 0, gateFloor: 40}
 	item := &candidate{
-		rate: rate, health: Health{HealthScore: 100, P50MS: &p50}, strategy: "speed_first", state: "healthy",
+		rate: rate, health: Health{HealthScore: 100, P50MS: &p50}, routingHealth: 100, strategy: "speed_first", state: "healthy",
 	}
 	benchmark := strategyScoreBenchmark([]*candidate{item})
 	if quality := strategyQuality(item, config, benchmark); math.Abs(quality-1) > 0.0001 {
@@ -507,11 +507,11 @@ func TestGroupWeightBudgetIsSharedAndConserved(t *testing.T) {
 	fastLatency, slowLatency := 500.0, 2_000.0
 	fast := &candidate{
 		account: business.RoutingAccount{ID: "41"}, rate: rate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &fastLatency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &fastLatency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	slow := &candidate{
 		account: business.RoutingAccount{ID: "42"}, rate: rate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &slowLatency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &slowLatency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
 
@@ -530,11 +530,11 @@ func TestSpeedFirstUsesPriceAsSecondaryFactor(t *testing.T) {
 	latency := 1_000.0
 	cheap := &candidate{
 		account: business.RoutingAccount{ID: "41"}, rate: cheapRate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &latency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	expensive := &candidate{
 		account: business.RoutingAccount{ID: "42"}, rate: expensiveRate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &latency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
 
@@ -550,11 +550,11 @@ func TestSpeedFirstStillPrefersMeaningfullyFasterAccount(t *testing.T) {
 	fastLatency, slowLatency := 1_000.0, 2_000.0
 	fast := &candidate{
 		account: business.RoutingAccount{ID: "41"}, rate: expensiveRate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &fastLatency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &fastLatency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	cheap := &candidate{
 		account: business.RoutingAccount{ID: "42"}, rate: cheapRate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &slowLatency}, state: "healthy", strategy: "speed_first",
+		health: Health{HealthScore: 100, P95MS: &slowLatency}, routingHealth: 100, state: "healthy", strategy: "speed_first",
 	}
 	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
 
@@ -570,11 +570,11 @@ func TestUnschedulableAccountDoesNotConsumeGroupWeightBudget(t *testing.T) {
 	latency := 1_000.0
 	available := &candidate{
 		account: business.RoutingAccount{ID: "41"}, rate: rate, schedulable: true,
-		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "balanced",
+		health: Health{HealthScore: 100, P95MS: &latency}, routingHealth: 100, state: "healthy", strategy: "balanced",
 	}
 	unavailable := &candidate{
 		account: business.RoutingAccount{ID: "42"}, rate: rate, schedulable: false,
-		health: Health{HealthScore: 100, P95MS: &latency}, state: "healthy", strategy: "balanced",
+		health: Health{HealthScore: 100, P95MS: &latency}, routingHealth: 100, state: "healthy", strategy: "balanced",
 	}
 	config := engineConfig{weightBudget: 400, gateFloor: 40, priceExp: 1, speedExp: 1, balancedPriceRatio: .5}
 
@@ -647,7 +647,7 @@ func TestScalingKeepsPositiveConcurrencyBelowConfiguredMinimumAsCurrent(t *testi
 	}
 }
 
-func TestPlacementPriorityUsesCapturedBaseline(t *testing.T) {
+func TestPlacementPriorityPreservesAppliedSlotsInsteadOfRenumberingFromBaseline(t *testing.T) {
 	currentA, currentB := int64(1000), int64(2000)
 	baselineA, baselineB := int64(10), int64(20)
 	concurrency := int64(10)
@@ -656,8 +656,8 @@ func TestPlacementPriorityUsesCapturedBaseline(t *testing.T) {
 	config := engineConfig{weightBudget: 400, weightsEnabled: true, minLoadFactor: 1, maxLoadFactor: 100}
 	groups := map[string][]*candidate{"codex": {first, second}}
 	assignAccountPlacements(groups, map[string]engineConfig{"codex": config}, map[string][]*candidate{"41": {first}, "42": {second}})
-	if first.desiredPriority == nil || second.desiredPriority == nil || *first.desiredPriority != 19 || *second.desiredPriority != 20 {
-		t.Fatalf("优先级基准没有使用接管前基线：first=%v second=%v", first.desiredPriority, second.desiredPriority)
+	if first.desiredPriority == nil || second.desiredPriority == nil || *first.desiredPriority != currentA || *second.desiredPriority != currentB {
+		t.Fatalf("已生效优先级被接管前基线重新编号：first=%v second=%v", first.desiredPriority, second.desiredPriority)
 	}
 }
 
@@ -1328,37 +1328,6 @@ func TestRepeatedRetryRecoveryBecomesConfirmedDegradation(t *testing.T) {
 	}
 }
 
-func TestPlacementKeepsCurrentOrderWhenWeightsAreWithinChangeThreshold(t *testing.T) {
-	firstPriority, secondPriority := int64(20), int64(21)
-	first := &candidate{account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &firstPriority}, state: "healthy", schedulable: true, weight: 100}
-	second := &candidate{account: business.RoutingAccount{ID: "42", GroupName: "codex", Priority: &secondPriority}, state: "healthy", schedulable: true, weight: 105}
-	config := engineConfig{manualPriorityMax: 10, changeThreshold: big.NewRat(1, 10)}
-	assignAccountPlacements(
-		map[string][]*candidate{"codex": {first, second}}, map[string]engineConfig{"codex": config},
-		map[string][]*candidate{"41": {first}, "42": {second}},
-	)
-	if first.rank == nil || second.rank == nil || *first.rank != 1 || *second.rank != 2 {
-		t.Fatalf("small weight noise reordered priorities: first=%#v second=%#v", first, second)
-	}
-}
-
-func TestPlacementHysteresisKeepsDeterministicOrderAcrossNonTransitiveWeightPairs(t *testing.T) {
-	firstPriority, secondPriority, thirdPriority := int64(20), int64(21), int64(22)
-	first := &candidate{account: business.RoutingAccount{ID: "41", GroupName: "codex", Priority: &firstPriority}, state: "healthy", schedulable: true, weight: 100}
-	second := &candidate{account: business.RoutingAccount{ID: "42", GroupName: "codex", Priority: &secondPriority}, state: "healthy", schedulable: true, weight: 109}
-	third := &candidate{account: business.RoutingAccount{ID: "43", GroupName: "codex", Priority: &thirdPriority}, state: "healthy", schedulable: true, weight: 119}
-	config := engineConfig{manualPriorityMax: 10, changeThreshold: big.NewRat(1, 10)}
-
-	assignAccountPlacements(
-		map[string][]*candidate{"codex": {third, first, second}}, map[string]engineConfig{"codex": config},
-		map[string][]*candidate{"41": {first}, "42": {second}, "43": {third}},
-	)
-
-	if first.rank == nil || second.rank == nil || third.rank == nil || *first.rank != 1 || *second.rank != 2 || *third.rank != 3 {
-		t.Fatalf("hysteresis produced an unstable order: first=%#v second=%#v third=%#v", first.rank, second.rank, third.rank)
-	}
-}
-
 func TestWriteCooldownProtectsPriorityUnlessRoutingStateChanges(t *testing.T) {
 	now := time.Now().UTC()
 	currentPriority, desiredPriority := int64(20), int64(11)
@@ -1394,8 +1363,8 @@ func healthyTestCandidate(accountID, groupName string, score float64) *candidate
 	schedulable := true
 	return &candidate{
 		account: business.RoutingAccount{ID: accountID, GroupName: groupName, Schedulable: &schedulable},
-		health:  Health{HealthScore: score, SampleCount: 1},
-		state:   "healthy", reason: "健康", schedulable: true,
+		health:  Health{HealthScore: score, SampleCount: 1}, routingHealth: score,
+		state: "healthy", reason: "健康", schedulable: true,
 	}
 }
 
@@ -1502,13 +1471,13 @@ func TestCleanupQueues401DeleteAfterAllGuardsPass(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := result.AccountTargets["41"]
-	second := result.AccountTargets["42"]
-	if first.CleanupAction == nil || *first.CleanupAction != "delete" {
-		t.Fatalf("第一个 401 账号没有进入删除队列：%#v", first)
+	fused := result.AccountTargets["42"]
+	survivor := result.AccountTargets["41"]
+	if fused.CleanupAction == nil || *fused.CleanupAction != "delete" {
+		t.Fatalf("已熔断的 401 账号没有进入删除队列：%#v", fused)
 	}
-	if second.CleanupAction != nil {
-		t.Fatalf("每轮上限为 1 时不应同时处置第二个账号：%#v", second)
+	if survivor.CleanupAction != nil {
+		t.Fatalf("保底账号不应同时进入自动处置：%#v", survivor)
 	}
 	if len(repository.runtimeEvents) == 0 {
 		t.Fatal("自动处置判定必须留下可诊断事件")

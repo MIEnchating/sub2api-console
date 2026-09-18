@@ -21,6 +21,8 @@ type Config struct {
 	TrustedProxyCIDRs  []netip.Prefix
 	TrustedProxySocket string
 	ListenAddress      string
+	TaskConcurrency    map[string]int
+	TaskQueueCapacity  int
 }
 
 func Load() (Config, error) {
@@ -75,6 +77,10 @@ func Load() (Config, error) {
 	if adminToken != "" && len(adminToken) < 32 {
 		return Config{}, errors.New("SUB2API_CONSOLE_CONSOLE_ADMIN_TOKEN 至少需要 32 个字符")
 	}
+	taskConcurrency, taskQueueCapacity, err := taskLimitsEnv()
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
 		DataDir:            dataDir,
 		TaskDB:             taskDB,
@@ -87,7 +93,44 @@ func Load() (Config, error) {
 		TrustedProxyCIDRs:  trustedProxyCIDRs,
 		TrustedProxySocket: trustedProxySocket,
 		ListenAddress:      listenAddress,
+		TaskConcurrency:    taskConcurrency,
+		TaskQueueCapacity:  taskQueueCapacity,
 	}, nil
+}
+
+func taskLimitsEnv() (map[string]int, int, error) {
+	defaults := map[string]int{
+		"housekeeping": 2, "notification_target": 2, "alert": 2, "account": 8,
+		"management": 2, "pricing": 2, "probe": 8, "model_check": 4,
+		"model_animation_scheduler": 1, "upstream_sync": 2, "upstream_delete": 2,
+		"account_delete": 2, "onboarding": 4, "auth_recovery": 2, "inspection": 2,
+		"logs": 1, "uptime_kuma": 2, "newapi_channel": 2, "live": 500, "workbench": 4,
+	}
+	result := make(map[string]int, len(defaults))
+	for key, fallback := range defaults {
+		value, err := positiveEnv("SUB2API_TASK_CONCURRENCY_"+strings.ToUpper(strings.ReplaceAll(key, "-", "_")), fallback)
+		if err != nil {
+			return nil, 0, err
+		}
+		result[key] = value
+	}
+	queue, err := positiveEnv("SUB2API_TASK_QUEUE_CAPACITY", 100)
+	if err != nil {
+		return nil, 0, err
+	}
+	return result, queue, nil
+}
+
+func positiveEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > 10000 {
+		return 0, errors.New(name + " 必须是 1 到 10000 之间的整数")
+	}
+	return value, nil
 }
 
 func prefixListEnv(name string) ([]netip.Prefix, error) {

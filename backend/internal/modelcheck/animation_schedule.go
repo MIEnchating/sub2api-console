@@ -168,10 +168,10 @@ func (s *Service) SaveAnimationSchedule(ctx context.Context, value AnimationSche
 }
 
 func (s *Service) StartAnimationScheduler() error {
-	if s.taskRunner == nil {
+	if s.animationRunner == nil {
 		return errors.New("自动检测任务执行器尚未就绪")
 	}
-	return s.taskRunner.Go(func(ctx context.Context) {
+	return s.animationRunner.Go(func(ctx context.Context) {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {

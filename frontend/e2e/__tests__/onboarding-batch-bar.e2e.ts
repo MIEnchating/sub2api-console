@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { pageFixtures } from "./fixtures/page-shell";
 
-for (const width of [1280, 980, 390]) {
+for (const width of [1280, 980, 760, 640, 390]) {
   test(`批量添加底栏在 ${width}px 视口按可用空间排列，输入和预览保持对齐`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const upstream = {
@@ -61,30 +61,36 @@ for (const width of [1280, 980, 390]) {
     });
     await page.goto("/onboarding?host=batch.example.test&upstream_type=sub2api");
     const bar = page.getByRole("toolbar", { name: "批量添加账号" });
-    const notes = bar.getByRole("textbox", { name: "批量备注（可选）" });
     const concurrency = bar.getByRole("spinbutton", { name: "并发", exact: true });
     const priority = bar.getByRole("spinbutton", { name: "优先级", exact: true });
     const preview = bar.getByRole("button", { name: "预览 0 项变更" });
-    await expect(notes).toBeVisible();
+    await expect(bar.getByRole("textbox", { name: /备注/ })).toHaveCount(0);
+    await expect(concurrency).toBeVisible();
     await expect(preview).toBeInViewport({ ratio: 1 });
-    const noteBox = await notes.boundingBox();
     const concurrencyBox = await concurrency.boundingBox();
     const priorityBox = await priority.boundingBox();
     const actionBox = await preview.boundingBox();
-    expect(noteBox && concurrencyBox && priorityBox && actionBox).toBeTruthy();
-    if (!noteBox || !concurrencyBox || !priorityBox || !actionBox) return;
+    expect(concurrencyBox && priorityBox && actionBox).toBeTruthy();
+    if (!concurrencyBox || !priorityBox || !actionBox) return;
+    for (const label of ["并发", "优先级"]) {
+      const input = bar.getByRole("spinbutton", { name: label, exact: true });
+      const labelBox = await bar
+        .locator("label")
+        .filter({ hasText: new RegExp(`^${label}$`) })
+        .boundingBox();
+      const inputBox = await input.boundingBox();
+      expect(labelBox && inputBox).toBeTruthy();
+      if (!labelBox || !inputBox) continue;
+      expect(labelBox.x + labelBox.width).toBeLessThanOrEqual(inputBox.x);
+      expect(labelBox.y).toBeGreaterThanOrEqual(inputBox.y);
+      expect(labelBox.y + labelBox.height).toBeLessThanOrEqual(inputBox.y + inputBox.height);
+    }
     if (width >= 980) {
-      expect(Math.abs(noteBox.y - concurrencyBox.y)).toBeLessThanOrEqual(2);
-      expect(
-        Math.abs(noteBox.y + noteBox.height - actionBox.y - actionBox.height),
-      ).toBeLessThanOrEqual(2);
-      expect(Math.abs(priorityBox.y - actionBox.y)).toBeLessThanOrEqual(2);
-      expect(noteBox.width).toBeGreaterThan(concurrencyBox.width);
-      expect(concurrencyBox.width).toBeLessThanOrEqual(120);
-    } else {
-      expect(concurrencyBox.y).toBeGreaterThan(noteBox.y + noteBox.height);
-      expect(actionBox.y).toBeGreaterThanOrEqual(concurrencyBox.y + concurrencyBox.height);
       expect(Math.abs(concurrencyBox.y - priorityBox.y)).toBeLessThanOrEqual(2);
+      expect(Math.abs(priorityBox.y - actionBox.y)).toBeLessThanOrEqual(2);
+    } else if (width === 390) {
+      expect(priorityBox.y).toBeGreaterThanOrEqual(concurrencyBox.y + concurrencyBox.height);
+      expect(actionBox.y).toBeGreaterThanOrEqual(priorityBox.y + priorityBox.height);
     }
     expect(await bar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`batch-bar-${width}.png`) });

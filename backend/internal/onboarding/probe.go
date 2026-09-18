@@ -568,6 +568,14 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 		}
 	}
 	raw, status, err := gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
+	// Retry only a confirmed rejection before generation, retaining the same
+	// endpoint, model and credential. Never replay network or generation failures.
+	if err == nil && !stream && body["stream"] == false && gatewayRequiresStream(status, raw) {
+		stream = true
+		body["stream"] = true
+		headers["Accept"] = "text/event-stream"
+		raw, status, err = gatewayRequest(ctx, baseURL, secret, http.MethodPost, path, body, headers)
+	}
 	result := ProbeResult{Status: "failed", Message: "探活请求失败", RequestModel: model, LatencyMS: time.Since(started).Milliseconds(), HTTPStatus: status}
 	if err != nil {
 		result.Message = err.Error()
@@ -608,6 +616,18 @@ func probeStreamMode(modes ...string) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(modes[0]), "stream")
+}
+
+func gatewayRequiresStream(status int, raw []byte) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	var response struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(raw, &response) == nil && response.Error.Code == "non_stream_not_allowed"
 }
 
 func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, error) {

@@ -2,8 +2,7 @@ import type { ReactElement } from "react";
 import type { AnimationResult, Task } from "@/api";
 import { TaskStartupState } from "@/components/task-startup-state";
 import { Badge } from "@/components/ui/badge";
-import { cn } from "@/lib/utils";
-import { precheckQuestionLabels, precheckVerdictLabels } from "../constants";
+import { precheckVerdictLabels } from "../constants";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { PrecheckResultDetails } from "./precheck-result-details";
 
@@ -38,27 +37,6 @@ export function PrecheckAccountResult(props: {
         {props.result && !running ? <PrecheckResultDetails result={props.result} /> : null}
       </div>
       {running ? <TaskStartupState message="正在执行前置检测" className="min-h-6 text-xs" /> : null}
-      {check && check.questions.length > 0 && !running ? (
-        <ul aria-label="前置检测题目结果" className="grid gap-1 pb-2">
-          {check.questions.map((question) => (
-            <li key={question.id} className="flex h-5 min-w-0 items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-muted-foreground">
-                {precheckQuestionLabels[question.id] ?? question.id}
-              </span>
-              <span
-                className={cn("shrink-0", {
-                  "text-destructive":
-                    question.verdict === "not_passed" || question.verdict === "error",
-                  "text-warning": question.verdict === "inconclusive",
-                  "font-medium": question.verdict === "passed",
-                })}
-              >
-                {precheckVerdictLabels[question.verdict]}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
     </section>
   );
 }

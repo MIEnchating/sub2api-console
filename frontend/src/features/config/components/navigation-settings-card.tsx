@@ -1,5 +1,7 @@
 import { Eye, EyeOff, RotateCcw } from "lucide-react";
 
+import { ContentLoading } from "@/components/content-loading";
+import { ContentRetry } from "@/components/content-retry";
 import { FieldLabel } from "@/components/field-help-tooltip";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +18,10 @@ export type NavigationSettingsCardProps<T extends string> = {
   lockedItemIDs: ReadonlySet<T>;
   onItemVisibilityChange: (itemID: T, visible: boolean) => void;
   onReset: () => void;
+  pending?: boolean;
+  loading?: boolean;
+  readFailed?: boolean;
+  onRetry?: () => void;
 };
 
 export function NavigationSettingsCard<T extends string>(props: NavigationSettingsCardProps<T>) {
@@ -28,13 +34,13 @@ export function NavigationSettingsCard<T extends string>(props: NavigationSettin
         <div className="min-w-0">
           <CardTitle>菜单设置</CardTitle>
           <CardDescription className="mt-1">
-            控制左侧菜单显示的路由入口，不影响通过地址直接访问页面
+            菜单显隐保存到后端，刷新或更换浏览器后保持一致；不影响通过地址直接访问页面
           </CardDescription>
         </div>
         <Button
           type="button"
           variant="outline"
-          disabled={props.hiddenItemIDs.size === 0}
+          disabled={props.pending || props.hiddenItemIDs.size === 0}
           onClick={props.onReset}
         >
           <RotateCcw aria-hidden="true" />
@@ -45,6 +51,8 @@ export function NavigationSettingsCard<T extends string>(props: NavigationSettin
         data-slot="settings-scroll"
         className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto overscroll-contain"
       >
+        {props.loading && <ContentLoading label="正在读取菜单设置" compact />}
+        {props.readFailed && props.onRetry && <ContentRetry onRetry={props.onRetry} />}
         <div className="text-muted-foreground flex items-center gap-2 text-xs" role="status">
           {props.hiddenItemIDs.size > 0 ? (
             <EyeOff aria-hidden="true" className="size-3.5" />
@@ -76,7 +84,7 @@ export function NavigationSettingsCard<T extends string>(props: NavigationSettin
                       id={controlID}
                       size="sm"
                       checked={visible}
-                      disabled={locked}
+                      disabled={locked || props.pending}
                       aria-label={`在菜单中显示${item.label}`}
                       onCheckedChange={(checked) => props.onItemVisibilityChange(item.id, checked)}
                     />

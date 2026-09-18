@@ -176,7 +176,7 @@ export function UptimeKumaPage() {
                 填写服务地址和 API 密钥即可查看监控状态；补充管理账号后可管理监控项。
               </CardDescription>
             </CardHeader>
-            <CardContent>请在侧栏「Uptime Kuma → 接入配置」中完成接入。</CardContent>
+            <CardContent>请在系统设置「监控平台」中完成接入。</CardContent>
           </Card>
         )}
         {config?.api_key_configured && (

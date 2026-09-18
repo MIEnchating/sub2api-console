@@ -23,7 +23,6 @@ const modelsField = z.string().superRefine((value, context) => {
 export const onboardingProbeModelsSchema = z.object({
   accounts: z.array(z.object({ id: z.string(), models: modelsField })),
 });
-export type OnboardingProbeModelsForm = z.infer<typeof onboardingProbeModelsSchema>;
 export type OnboardingAccountProbeModels = Record<string, string[]>;
 
 export function onboardingAccountPreviewID(request: OnboardingRequest): string {

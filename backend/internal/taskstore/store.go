@@ -59,18 +59,17 @@ type Task struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db *sqliteutil.Database
 }
 
 func Open(path string) (*Store, error) {
 	if err := sqliteutil.Prepare(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", sqliteutil.DSN(path, "_pragma=busy_timeout%285000%29&_pragma=journal_mode%28WAL%29"))
+	db, err := sqliteutil.OpenDatabase(path)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(4)
 	store := &Store{db: db}
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
 		id TEXT PRIMARY KEY,skill TEXT NOT NULL,operation TEXT NOT NULL,status TEXT NOT NULL,progress INTEGER NOT NULL,
@@ -93,14 +92,14 @@ func Open(path string) (*Store, error) {
 		`CREATE INDEX IF NOT EXISTS ix_tasks_status_updated_at ON tasks(status,updated_at,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_skill_updated_at ON tasks(skill,updated_at DESC,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_operation_status_updated_at ON tasks(operation,status,updated_at DESC,id DESC)`,
-		`CREATE INDEX IF NOT EXISTS ix_tasks_log_listing ON tasks(
-			updated_at DESC,id,skill,operation,status,progress,message,created_at,
-			` + taskRunKeySQL + `,` + taskObjectSQL + `
-		)`,
+		`CREATE INDEX IF NOT EXISTS ix_tasks_pending_compaction ON tasks(operation,updated_at,id)
+			WHERE operation='automatic-inspection' AND status NOT IN ('queued','running','waiting_input')
+			AND json_valid(result_json) AND COALESCE(json_extract(result_json,'$.compacted'),0)<>1`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_log_search ON tasks(
 			updated_at DESC,id,skill,operation,status,progress,message,created_at,
 			` + taskRunKeySQL + `,` + taskObjectSQL + `,` + taskRequestSQL + `,` + taskModelSQL + `,` + taskErrorSQL + `
 		)`,
+		`DROP INDEX IF EXISTS ix_tasks_log_listing`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			return nil, errors.Join(err, db.Close())

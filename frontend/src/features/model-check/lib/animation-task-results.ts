@@ -26,6 +26,7 @@ const animationResultSchema = z.object({
   status: z.enum(["succeeded", "failed"]),
   svg: z.string().optional(),
   error: z.string().optional(),
+  retry_count: z.number().int().nonnegative().optional(),
   duration_ms: z.number().nonnegative(),
   completed_at: z.string().refine((value) => Number.isFinite(Date.parse(value))),
 });

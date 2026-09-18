@@ -73,6 +73,7 @@ it("选择多个账号和统一模型后先展示影响范围，再按稳定 ID 
   await user.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
   await user.click(screen.getByRole("checkbox", { name: /检测 乙账号/ }));
   await user.type(screen.getByRole("combobox", { name: "检测模型" }), "shared-model");
+  await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "开始检测（2 个账号）" }));
   const confirm = await screen.findByRole("dialog", { name: "确认动画检测范围" });
   expect(

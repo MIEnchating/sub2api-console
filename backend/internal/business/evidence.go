@@ -217,6 +217,18 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 			return 0, err
 		}
 		inserted += int(count)
+		// Read back the merged usage: later enrichment revises this request's
+		// outcome without counting it a second time.
+		var qualityResult, qualityReason, qualityPayload string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(result,''),COALESCE(failure_reason,''),payload_json
+		 FROM health_samples WHERE account_id=? AND group_name=? AND source='traffic' AND evidence_key=?`,
+			sample.AccountID, sample.GroupName, sample.EvidenceKey).Scan(&qualityResult, &qualityReason, &qualityPayload); err != nil {
+			return 0, err
+		}
+		if err := persistStabilitySample(ctx, tx, sample.AccountID, "traffic", sample.EvidenceKey, sample.ObservedAt,
+			stabilityOutcome(qualityResult, qualityReason, "traffic", qualityPayload), stabilityUsageKnown(qualityPayload)); err != nil {
+			return 0, err
+		}
 		accountIDs[sample.AccountID] = struct{}{}
 		if latestTraffic[sample.AccountID].IsZero() || observedAt.After(latestTraffic[sample.AccountID]) {
 			latestTraffic[sample.AccountID] = observedAt.UTC()
@@ -248,7 +260,7 @@ func (s *Store) PersistTrafficSamples(ctx context.Context, samples []TrafficSamp
 	}
 	for accountID, latest := range latestTraffic {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_records WHERE account_id=?
-			AND LOWER(REPLACE(source,'_','-'))='traffic' AND observed_at<?`,
+			AND LOWER(REPLACE(source,'_','-'))='traffic' AND COALESCE(observed_at,'')<? AND observed_at IS NOT NULL`,
 			accountID, latest.Add(-30*24*time.Hour).Format(healthSampleTimeLayout)); err != nil {
 			return 0, err
 		}
@@ -270,6 +282,7 @@ func trafficResultFailed(result string, reason *string) bool {
 	return normalized == "error" || normalized == "failed" || normalized == "failure" || normalized == "unhealthy" || normalized == "失败" || normalized == "错误"
 }
 
+// Each source has its own bound so busy traffic cannot evict reference probes.
 const retainedHealthSamplesPerAccount = 200
 
 // Fixed precision UTC keeps indexed text ordering identical to instant ordering.
@@ -277,18 +290,25 @@ const healthSampleTimeLayout = "2006-01-02T15:04:05.000000000Z"
 
 func pruneHealthSamples(ctx context.Context, tx *sql.Tx, accountIDs map[string]struct{}) error {
 	for accountID := range accountIDs {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM account_stability_samples WHERE account_id=? AND observed_at<?`, accountID,
+			time.Now().UTC().Add(-30*24*time.Hour).Format(healthSampleTimeLayout)); err != nil {
+			return err
+		}
 		if err := mergeDuplicateTrafficLatencies(ctx, tx, accountID); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `WITH deduplicated AS (
-			SELECT id,observed_at,
+			SELECT id,observed_at,LOWER(REPLACE(source,'_','-')) normalized_source,
 				ROW_NUMBER() OVER(PARTITION BY LOWER(REPLACE(source,'_','-')),
 					COALESCE(NULLIF(evidence_key,''),'row:'||id)
 					ORDER BY COALESCE(observed_at,'') DESC,id DESC) duplicate_rank
 			FROM health_samples WHERE account_id=?
+		), ranked AS (
+			SELECT id,ROW_NUMBER() OVER(PARTITION BY normalized_source
+				ORDER BY COALESCE(observed_at,'') DESC,id DESC) source_rank
+			FROM deduplicated WHERE duplicate_rank=1
 		), retained AS (
-			SELECT id FROM deduplicated WHERE duplicate_rank=1
-			ORDER BY COALESCE(observed_at,'') DESC,id DESC LIMIT ?
+			SELECT id FROM ranked WHERE source_rank<=?
 		)
 		DELETE FROM health_samples WHERE account_id=? AND id NOT IN (SELECT id FROM retained)`,
 			accountID, retainedHealthSamplesPerAccount, accountID); err != nil {

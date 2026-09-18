@@ -245,6 +245,16 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	if err != nil {
 		return Result{}, err
 	}
+	policyFingerprint, err := business.RoutingPolicyFingerprint(policyDocument)
+	if err != nil {
+		return Result{}, err
+	}
+	for _, target := range targets {
+		if target.CalculatedPolicyFingerprint != "" && target.CalculatedPolicyFingerprint != policyFingerprint {
+			change := &writeAuthorizationChanged{reason: "计算完成后策略已变化"}
+			return s.skipUnauthorizedTargets(ctx, result, targets, sortedTargetIDs(targets), actor, change), nil
+		}
+	}
 	if manualRepository, ok := s.repository.(manualPriorityRepository); ok {
 		controls, controlErr := manualRepository.ManualPriorityControls(ctx, sortedTargetIDs(targets))
 		if controlErr != nil {
@@ -306,6 +316,10 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	ctx = guardedCtx
 	mode, err = s.recheckWriteAuthorization(ctx, policyDocument)
 	if err != nil {
+		var change *writeAuthorizationChanged
+		if errors.As(err, &change) {
+			return s.skipUnauthorizedTargets(ctx, result, targets, orderedIDs, actor, change), nil
+		}
 		return Result{}, err
 	}
 	capabilities, valid = runtimepolicy.For(mode)
@@ -314,9 +328,8 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	}
 	result.Mode, result.CalculationOnly = mode, !capabilities.AutomaticRemoteApply
 	if result.CalculationOnly {
-		reason := "当前运行模式只保存计算结果"
-		result.Reason = &reason
-		return result, nil
+		change := &writeAuthorizationChanged{reason: "运行模式已变为" + mode}
+		return s.skipUnauthorizedTargets(ctx, result, targets, orderedIDs, actor, change), nil
 	}
 	targetFingerprint, err := s.managementTargetFingerprint(ctx)
 	if err != nil {
@@ -338,10 +351,11 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		}
 		capabilities, _ := runtimepolicy.For(mode)
 		if !capabilities.AutomaticRemoteApply {
-			return fmt.Errorf("运行模式已变为%s，本批次自动写回已停止", mode)
+			return &writeAuthorizationChanged{reason: "运行模式已变为" + mode}
 		}
 		return nil
 	}
+	ctx = adminclient.WithMutationAuthorization(ctx, func(context.Context) error { return authorize() })
 	items := make([]AccountResult, len(orderedIDs))
 	regularCount := len(orderedIDs)
 	for index, accountID := range orderedIDs {
@@ -415,7 +429,7 @@ func (s *Service) recheckWriteAuthorization(ctx context.Context, expectedPolicy 
 		return mode, err
 	}
 	if !reflect.DeepEqual(expectedPolicy, latestPolicy) {
-		return mode, errors.New("等待写回期间策略已变化，请重新计算调度")
+		return mode, &writeAuthorizationChanged{reason: "等待写回期间策略已变化"}
 	}
 	return mode, nil
 }
@@ -563,6 +577,16 @@ func (s *Service) RestoreControl(ctx context.Context, actor string) (Result, err
 		return Result{}, err
 	}
 	admin = limitAdmin(admin, restoreControlConcurrency)
+	ctx = adminclient.WithMutationAuthorization(ctx, func(checkCtx context.Context) error {
+		mode, err := s.repository.Mode(checkCtx)
+		if err != nil {
+			return err
+		}
+		if mode != runtimepolicy.Full {
+			return &writeAuthorizationChanged{reason: "运行模式已变为" + mode}
+		}
+		return nil
+	})
 	coordinator := newBatchWriteCoordinator(ctx, admin, len(baselines), true)
 	items := make([]AccountResult, len(baselines))
 	var wait sync.WaitGroup
@@ -618,12 +642,12 @@ func (s *Service) applyAccountCoordinated(
 	}
 	if target.ConfigurationError != nil && strings.TrimSpace(*target.ConfigurationError) != "" {
 		err := errors.New(*target.ConfigurationError)
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
 	if len(target.GroupNames) == 0 {
 		err := errors.New("目标缺少守护分组，已阻止自动执行")
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
 	if reason, protected, err := s.accountMutationProtection(ctx, target.AccountID); err != nil {
@@ -632,16 +656,29 @@ func (s *Service) applyAccountCoordinated(
 		result.Skipped, result.Reason = true, &reason
 		return result
 	}
+	var releaseBaseline business.RoutingBaseline
+	if target.ReleaseControl {
+		var found bool
+		releaseBaseline, found, err = s.baseline(ctx, target.AccountID, targetFingerprint)
+		if err != nil {
+			return failedResult(result, err)
+		}
+		if !found {
+			reason := "账号没有托管基线，无需交还控制权，已跳过"
+			result.Skipped, result.Reason = true, &reason
+			return result
+		}
+	}
 	// The batch snapshot may predate a waiting human operation. Refresh only
 	// after the shared account reservation has been acquired.
 	currentPayload, err := admin.Account(ctx, target.AccountID)
 	if err != nil {
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
 	current, err := remoteValues(currentPayload)
 	if err != nil {
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, nil, nil, false, false, err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, nil, nil, false, false, err))
 		return failedResult(result, err)
 	}
 	if policy.respectExternalControl && !target.AbandonControl {
@@ -673,6 +710,10 @@ func (s *Service) applyAccountCoordinated(
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
 		if coordinator.authorize != nil {
 			if err := coordinator.authorize(); err != nil {
+				var change *writeAuthorizationChanged
+				if errors.As(err, &change) {
+					return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+				}
 				return failedResult(result, err)
 			}
 		}
@@ -694,24 +735,12 @@ func (s *Service) applyAccountCoordinated(
 	}
 	desired, err := desiredValues(target, policy, current)
 	if err != nil {
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), nil, false, false, err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), nil, false, false, err))
 		return failedResult(result, err)
 	}
 	if target.ReleaseControl {
-		baseline, found, loadErr := s.baseline(ctx, target.AccountID, targetFingerprint)
-		if loadErr != nil {
-			return failedResult(result, loadErr)
-		}
-		if !found {
-			if err := s.repository.DeleteRoutingBaseline(ctx, target.AccountID, targetFingerprint); err != nil {
-				return failedResult(result, err)
-			}
-			reason := "接管前没有可恢复字段，已交还控制权"
-			result.Restored, result.Reason = true, &reason
-			return result
-		}
 		var conflicts []string
-		desired, conflicts = restorableBaselineValues(baseline, current)
+		desired, conflicts = restorableBaselineValues(releaseBaseline, current)
 		if len(conflicts) > 0 {
 			reason := "以下字段已被外部修改，交还时保留当前值：" + strings.Join(conflicts, ",")
 			result.Reason = &reason
@@ -779,7 +808,7 @@ func (s *Service) applyAccountCoordinated(
 			reason = "调权或扩容仍在冷却期"
 		}
 		result.Skipped, result.Reason = true, &reason
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), desired, false, true, nil))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, true, nil))
 		return result
 	}
 	if err := coordinator.capacity.reserve(target.AccountID, current, desired); err != nil {
@@ -802,13 +831,17 @@ func (s *Service) applyAccountCoordinated(
 	if cause := contextCause(ctx); cause != nil {
 		return failedResult(result, cause)
 	}
+	var change *writeAuthorizationChanged
+	if write.writePrevented && errors.As(write.err, &change) {
+		return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+	}
 	if write.err != nil && !write.remoteConfirmed {
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), desired, false, false, write.err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), desired, false, false, write.err))
 		return failedResult(result, write.err)
 	}
 	after := write.after
 	if write.err != nil && !write.readbackConfirmed {
-		s.recordOperation(ctx, operation(operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, false, write.err))
+		s.recordOperation(ctx, operation(operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, false, write.err))
 		return failedResult(result, write.err)
 	}
 	state := confirmedRoutingState(target, after)
@@ -818,7 +851,8 @@ func (s *Service) applyAccountCoordinated(
 		op.Phase = "remote-partial"
 	}
 	intent := confirmedManagedIntent(target, policy, after)
-	if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, after.readback(state), intentPointer(intent), target.ReleaseControl, op); err != nil {
+	releaseComplete := target.ReleaseControl && write.err == nil
+	if err := s.repository.CommitRoutingReadback(ctx, target.AccountID, targetFingerprint, after.readback(state), intentPointer(intent), releaseComplete, op); err != nil {
 		s.recordLocalApplyFailure(ctx, operationID, operationType(target.ReleaseControl), target, actor, current.asMap(), after.asMap(), true, write.readbackConfirmed, "local-commit", err)
 		return failedResult(result, err)
 	}
@@ -977,15 +1011,29 @@ func (s *Service) deleteCleanupAccount(
 		return failedResult(result, err)
 	}
 	if current.schedulable != nil && *current.schedulable {
-		result.RemoteWrite = true
 		if predisableErr := writeSchedulable(ctx, admin, target.AccountID, false); predisableErr != nil {
+			if mutationPrevented(predisableErr) {
+				var change *writeAuthorizationChanged
+				if errors.As(predisableErr, &change) {
+					return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+				}
+				return failedResult(result, predisableErr)
+			}
 			warning := copyMap(payload)
 			warning["error"] = predisableErr.Error()
 			s.recordRuntimeEvent(ctx, "cleanup_predisable_failed", "failed", "删除前摘除流量失败，仍将继续删除账号 "+target.AccountID, warning)
 		}
+		result.RemoteWrite = true
 	}
-	result.RemoteWrite = true
 	if _, err := deleteAccount(ctx, admin, target.AccountID, true); err != nil {
+		if !result.RemoteWrite && mutationPrevented(err) {
+			var change *writeAuthorizationChanged
+			if errors.As(err, &change) {
+				return s.skipAuthorizationChange(ctx, result, target, operationID, actor, change)
+			}
+			return failedResult(result, err)
+		}
+		result.RemoteWrite = result.RemoteWrite || !mutationPrevented(err)
 		s.recordOperation(ctx, operation(operationID, "cleanup.delete", target, actor, current.asMap(), nil, false, false, err))
 		failed := copyMap(payload)
 		failed["error"] = err.Error()
@@ -1158,6 +1206,7 @@ func (s *Service) accountMutationProtection(ctx context.Context, accountID strin
 
 type routingWriteOutcome struct {
 	remoteConfirmed bool
+	writePrevented  bool
 	payload         map[string]any
 	err             error
 }
@@ -1166,12 +1215,14 @@ func writeRoutingValues(ctx context.Context, admin Admin, accountID string, desi
 	fields := copyMap(desired)
 	rawSchedulable, hasSchedulable := fields["schedulable"]
 	delete(fields, "schedulable")
-	result := routingWriteOutcome{}
+	result := routingWriteOutcome{writePrevented: true}
 	errorsByStep := []error{}
 	if len(fields) > 0 {
 		if payload, err := admin.Mutate(ctx, "PUT", "/admin/accounts/"+accountID, fields); err != nil {
+			result.writePrevented = mutationPrevented(err)
 			errorsByStep = append(errorsByStep, fmt.Errorf("写回账号参数失败：%w", err))
 		} else {
+			result.writePrevented = false
 			result.remoteConfirmed, result.payload = true, payload
 		}
 	}
@@ -1204,8 +1255,10 @@ func writeRoutingValues(ctx context.Context, admin Admin, accountID string, desi
 		}
 	}
 	if payload, err := writeSchedulablePayload(ctx, admin, accountID, schedulable); err != nil {
+		result.writePrevented = result.writePrevented && mutationPrevented(err)
 		errorsByStep = append(errorsByStep, fmt.Errorf("写回可调度状态失败：%w", err))
 	} else {
+		result.writePrevented = false
 		result.remoteConfirmed, result.payload = true, payload
 	}
 	result.err = errors.Join(errorsByStep...)
@@ -1293,6 +1346,13 @@ func remoteValues(raw map[string]any) (values, error) {
 			return values{}, errors.New("账号启用状态读回不可判定")
 		}
 		result.status = &status
+	}
+	// Sub2API's full Account DTO uses omitempty for a nil load_factor. Only
+	// accept that representation when the stable ID and other routing fields
+	// are present and valid; a partial response cannot confirm a reset.
+	if !result.loadFactorPresent && stableRoutingAccountID(fmt.Sprint(raw["id"])) &&
+		result.schedulable != nil && result.priority != nil && result.concurrency != nil && result.status != nil {
+		result.loadFactorPresent = true
 	}
 	return result, nil
 }

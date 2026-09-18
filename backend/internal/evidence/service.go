@@ -59,6 +59,7 @@ type Result struct {
 	MonitoredAccounts     int      `json:"monitored_accounts"`
 	FallbackReason        *string  `json:"fallback_reason"`
 	SourceErrors          []string `json:"source_errors"`
+	CollectionFailed      bool     `json:"collection_failed"`
 	TrafficDurationSecond float64  `json:"traffic_duration_seconds"`
 	ProbeDurationSecond   float64  `json:"probe_duration_seconds"`
 	MonitoringAvailable   *bool    `json:"monitoring_available"`
@@ -77,25 +78,27 @@ type Service struct {
 }
 
 type collectionPolicy struct {
-	costWallBlocked    map[string]bool
-	source             string
-	lookbackMinutes    int
-	maxSamples         int
-	trafficRefresh     time.Duration
-	trafficConcurrency int
-	probeEnabled       bool
-	probeInterval      time.Duration
-	recoveryEnabled    bool
-	recoveryInterval   time.Duration
-	skipFreshTraffic   bool
-	trafficFreshWindow time.Duration
-	groupOverrides     map[string]probeGroupOverride
-	managedGroupMode   string
-	managedGroups      map[string]struct{}
-	excludedGroups     map[string]struct{}
-	excludedAccounts   map[string]struct{}
-	accountTypes       map[string]struct{}
-	platforms          map[string]struct{}
+	costWallBlocked        map[string]bool
+	source                 string
+	lookbackMinutes        int
+	maxSamples             int
+	trafficRefresh         time.Duration
+	trafficConcurrency     int
+	probeEnabled           bool
+	performanceExploration bool
+	probeInterval          time.Duration
+	probeFreshness         time.Duration
+	recoveryEnabled        bool
+	recoveryInterval       time.Duration
+	skipFreshTraffic       bool
+	trafficFreshWindow     time.Duration
+	groupOverrides         map[string]probeGroupOverride
+	managedGroupMode       string
+	managedGroups          map[string]struct{}
+	excludedGroups         map[string]struct{}
+	excludedAccounts       map[string]struct{}
+	accountTypes           map[string]struct{}
+	platforms              map[string]struct{}
 }
 
 type probeGroupOverride struct {
@@ -116,6 +119,13 @@ func (s *Service) Plan(ctx context.Context, policy map[string]any, accountID, gr
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
+	}
+	pauseReason, err := business.ProbePauseReason(policy, now)
+	if err != nil {
+		return Plan{}, err
+	}
+	if pauseReason != "" {
+		return Plan{RequestedSource: configured.source, ProbeAccountIDs: []string{}}, nil
 	}
 	targets, err := s.repository.EvidenceTargets(ctx, accountID, groupName)
 	if err != nil {
@@ -227,9 +237,20 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		applyFreshTraffic(targets, trafficSamples)
 	}
 	dueAccounts := dueProbeAccounts(targets, configured, now, monitoringUnavailable, sourceErrorAccounts)
+	pauseReason, err := business.ProbePauseReason(policy, now)
+	if err != nil {
+		return Result{}, err
+	}
+	if pauseReason != "" {
+		result.FallbackReason = &pauseReason
+		dueAccounts = nil
+	}
 	fallbackRequired := len(dueAccounts) > 0
 	if fallbackRequired {
 		reason := "没有新鲜真实流量，按探测间隔补充主动探测"
+		if configured.performanceExploration {
+			reason = "按探测间隔采集健康与性能参考样本"
+		}
 		if monitoringUnavailable {
 			reason = "运维监控不可用，降级为主动探测"
 		}
@@ -246,7 +267,7 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 			}
 			started := time.Now()
 			request := probe.Request{AccountIDs: dueAccounts, GroupName: options.GroupName, Automatic: true}
-			if configured.source == "traffic" && configured.skipFreshTraffic && admin != nil && !monitoringUnavailable {
+			if configured.source == "traffic" && configured.skipFreshTraffic && !configured.performanceExploration && admin != nil && !monitoringUnavailable {
 				request.FreshTrafficCheck = s.freshTrafficCheck(
 					admin, byAccount, configured, &result, &trafficForScope, targets,
 				)
@@ -262,20 +283,30 @@ func (s *Service) Collect(ctx context.Context, policy map[string]any, admin Admi
 		}
 	}
 	freshTraffic := trafficForScope || hasFreshTraffic(targets, now, time.Duration(configured.lookbackMinutes)*time.Minute)
+	probeAvailable := result.ProbesPersisted > 0 || hasFreshProbe(targets, now, configured.probeFreshness)
 	switch {
 	case configured.source == "active_probe":
 		result.EffectiveSource = "active_probe"
 	case result.ProbesPersisted > 0 && freshTraffic:
 		result.EffectiveSource = "traffic+active_probe"
-	case result.ProbesPersisted > 0:
+	case probeAvailable && !freshTraffic:
 		result.EffectiveSource = "active_probe"
 	default:
 		result.EffectiveSource = "traffic"
 	}
 	result.SourceErrors = uniqueStrings(result.SourceErrors)
-	usable := trafficForScope || result.ProbesPersisted > 0 || freshTraffic || len(byAccount) == 0
-	if options.StrictFallback && len(result.SourceErrors) > 0 && ((fallbackRequired && result.ProbesPersisted == 0) || !usable) {
-		return Result{}, errors.New(strings.Join(result.SourceErrors, "；"))
+	usable := freshTraffic || probeAvailable || len(byAccount) == 0
+	result.CollectionFailed = len(result.SourceErrors) > 0 && !usable && len(successfulFetches) == 0
+	if options.StrictFallback && len(result.SourceErrors) > 0 {
+		requiredFallbackFailed := fallbackRequired && result.ProbesPersisted == 0
+		if requiredFallbackFailed && configured.performanceExploration && freshTraffic {
+			healthOnly := configured
+			healthOnly.performanceExploration = false
+			requiredFallbackFailed = len(dueProbeAccounts(targets, healthOnly, now, monitoringUnavailable, sourceErrorAccounts)) > 0
+		}
+		if requiredFallbackFailed || !usable {
+			return result, errors.New(strings.Join(result.SourceErrors, "；"))
+		}
 	}
 	return result, nil
 }
@@ -443,9 +474,17 @@ func parsePolicy(policy map[string]any) (collectionPolicy, error) {
 	if err != nil {
 		return collectionPolicy{}, err
 	}
+	performanceExploration, err := optionalBool(probePolicy, "performance_exploration_enabled", true)
+	if err != nil {
+		return collectionPolicy{}, err
+	}
 	probeInterval, err := positiveInteger(probePolicy, "interval_seconds", 300)
 	if err != nil || probeInterval < 30 || probeInterval > 86400 {
 		return collectionPolicy{}, errors.New("probe.interval_seconds 配置无效")
+	}
+	probeFreshness, err := positiveInteger(probePolicy, "freshness_seconds", 900)
+	if err != nil || probeFreshness > 86400 {
+		return collectionPolicy{}, errors.New("probe.freshness_seconds 配置无效")
 	}
 	skipFresh, err := optionalBool(probePolicy, "skip_when_traffic_fresh", true)
 	if err != nil {
@@ -513,7 +552,9 @@ func parsePolicy(policy map[string]any) (collectionPolicy, error) {
 	return collectionPolicy{
 		source: source, lookbackMinutes: lookback, maxSamples: maxSamples,
 		trafficRefresh: time.Duration(trafficRefresh) * time.Second, trafficConcurrency: trafficConcurrency, probeEnabled: probeEnabled,
-		probeInterval: time.Duration(probeInterval) * time.Second, skipFreshTraffic: skipFresh,
+		performanceExploration: performanceExploration,
+		probeInterval:          time.Duration(probeInterval) * time.Second, skipFreshTraffic: skipFresh,
+		probeFreshness:  time.Duration(probeFreshness) * time.Second,
 		recoveryEnabled: recoveryEnabled, recoveryInterval: time.Duration(recoveryInterval) * time.Second,
 		trafficFreshWindow: time.Duration(freshSeconds) * time.Second, groupOverrides: groupOverrides,
 		managedGroupMode: managedGroupMode, managedGroups: managedGroups, excludedGroups: excludedGroups,
@@ -588,11 +629,10 @@ func filterEvidenceTargets(targets []business.EvidenceTarget, policy collectionP
 				continue
 			}
 		}
-		keys := evidenceGroupKeys(target)
-		if evidenceSetsOverlap(keys, policy.excludedGroups) {
+		if evidenceGroupIDIn(target.GroupID, policy.excludedGroups) {
 			continue
 		}
-		if policy.managedGroupMode == "selected" && !evidenceSetsOverlap(keys, policy.managedGroups) {
+		if policy.managedGroupMode == "selected" && !evidenceGroupIDIn(target.GroupID, policy.managedGroups) {
 			continue
 		}
 		if target.GroupID != nil {
@@ -630,21 +670,12 @@ func normalizedEvidenceValue(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func evidenceGroupKeys(target business.EvidenceTarget) map[string]struct{} {
-	result := map[string]struct{}{normalizedEvidenceValue(target.GroupName): {}}
-	if target.GroupID != nil {
-		result[normalizedEvidenceValue(*target.GroupID)] = struct{}{}
+func evidenceGroupIDIn(groupID *string, values map[string]struct{}) bool {
+	if groupID == nil || strings.TrimSpace(*groupID) == "" {
+		return false
 	}
-	return result
-}
-
-func evidenceSetsOverlap(left, right map[string]struct{}) bool {
-	for value := range left {
-		if _, found := right[value]; found {
-			return true
-		}
-	}
-	return false
+	_, found := values[strings.TrimSpace(*groupID)]
+	return found
 }
 
 func parseProbeGroupOverrides(policy map[string]any) (map[string]probeGroupOverride, error) {
@@ -884,7 +915,7 @@ func membershipProbeDue(target business.EvidenceTarget, policy collectionPolicy,
 		return true
 	}
 	trafficFresh := target.TrafficAt != nil && !target.TrafficAt.After(now.Add(time.Minute)) && now.Sub(target.TrafficAt.UTC()) <= policy.trafficFreshWindow
-	return policy.source == "active_probe" || monitoringUnavailable || forced || (policy.source == "traffic" && (!policy.skipFreshTraffic || !trafficFresh))
+	return policy.performanceExploration || policy.source == "active_probe" || monitoringUnavailable || forced || (policy.source == "traffic" && (!policy.skipFreshTraffic || !trafficFresh))
 }
 
 func trafficFetchDue(targets []business.EvidenceTarget, now time.Time, interval time.Duration) bool {
@@ -992,6 +1023,15 @@ func applyFreshTraffic(targets []business.EvidenceTarget, samples []business.Tra
 func hasFreshTraffic(targets []business.EvidenceTarget, now time.Time, window time.Duration) bool {
 	for _, target := range targets {
 		if target.TrafficAt != nil && !target.TrafficAt.After(now.Add(time.Minute)) && now.Sub(*target.TrafficAt) <= window {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFreshProbe(targets []business.EvidenceTarget, now time.Time, window time.Duration) bool {
+	for _, target := range targets {
+		if target.ProbeAt != nil && !target.ProbeAt.After(now.Add(time.Minute)) && now.Sub(*target.ProbeAt) <= window {
 			return true
 		}
 	}

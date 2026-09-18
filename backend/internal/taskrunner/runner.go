@@ -52,31 +52,38 @@ type Group struct {
 	mu      sync.Mutex
 	stopped bool
 	active  int
-	slots   chan struct{}
+	running int
+	limit   int
+	waiting int
+	queue   int
+	changed chan struct{}
 	done    chan struct{}
 	tasks   map[string]context.CancelFunc
 }
 
 func New(parent context.Context) *Group {
-	return newGroup(parent, 0)
+	return newGroup(parent, 0, 0)
 }
 
 func NewBounded(parent context.Context, maxActive int) *Group {
+	return NewQueued(parent, maxActive, 0)
+}
+
+// NewQueued bounds active work and lets a finite number of callers wait for a
+// slot. A zero queue retains fail-fast behavior.
+func NewQueued(parent context.Context, maxActive, queueCapacity int) *Group {
 	if maxActive < 1 {
 		maxActive = 1
 	}
-	return newGroup(parent, maxActive)
+	return newGroup(parent, maxActive, queueCapacity)
 }
 
-func newGroup(parent context.Context, maxActive int) *Group {
+func newGroup(parent context.Context, maxActive, queueCapacity int) *Group {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	group := &Group{ctx: ctx, cancel: cancel, done: make(chan struct{}), tasks: map[string]context.CancelFunc{}}
-	if maxActive > 0 {
-		group.slots = make(chan struct{}, maxActive)
-	}
+	group := &Group{ctx: ctx, cancel: cancel, done: make(chan struct{}), tasks: map[string]context.CancelFunc{}, limit: maxActive, queue: queueCapacity, changed: make(chan struct{})}
 	return group
 }
 
@@ -107,15 +114,18 @@ func (g *Group) start(taskID string, run func(context.Context)) error {
 			return ErrDuplicateTask
 		}
 	}
-	if g.slots != nil {
-		select {
-		case g.slots <- struct{}{}:
-		default:
+	queued := g.limit > 0 && g.running >= g.limit
+	if queued {
+		if g.waiting >= g.queue {
 			g.mu.Unlock()
 			return ErrCapacity
 		}
+		g.waiting++
 	}
 	g.active++
+	if !queued {
+		g.running++
+	}
 	runContext := g.ctx
 	var cancel context.CancelFunc
 	if taskID != "" {
@@ -125,30 +135,87 @@ func (g *Group) start(taskID string, run func(context.Context)) error {
 	}
 	g.mu.Unlock()
 	go func() {
+		acquired := !queued
+		if queued {
+			acquired = g.wait(runContext)
+		}
 		defer func() {
 			if cancel != nil {
 				cancel()
 			}
-			if g.slots != nil {
-				<-g.slots
-			}
-			g.finish(taskID)
+			g.finish(taskID, acquired)
 		}()
+		// Even cancelled waiting tasks must finalize their persisted state.
 		run(runContext)
 	}()
 	return nil
 }
 
-func (g *Group) finish(taskID string) {
+func (g *Group) wait(ctx context.Context) bool {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	defer func() { g.waiting-- }()
+	for {
+		if ctx.Err() != nil {
+			return false
+		}
+		if g.limit == 0 || g.running < g.limit {
+			g.running++
+			return true
+		}
+		changed := g.changed
+		g.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+		}
+		g.mu.Lock()
+	}
+}
+
+func (g *Group) finish(taskID string, acquired bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	if taskID != "" {
 		delete(g.tasks, taskID)
 	}
 	g.active--
+	if acquired {
+		g.running--
+	}
+	g.notifyLocked()
 	if g.stopped && g.active == 0 {
 		close(g.done)
 	}
-	g.mu.Unlock()
+}
+
+func (g *Group) notifyLocked() {
+	close(g.changed)
+	g.changed = make(chan struct{})
+}
+
+// Configure changes future dispatch capacity without cancelling running work.
+func (g *Group) Configure(limit, queue int) {
+	if limit < 1 || queue < 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.limit, g.queue = limit, queue
+	g.notifyLocked()
+}
+
+type Snapshot struct {
+	Limit         int `json:"limit"`
+	QueueCapacity int `json:"queue_capacity"`
+	Running       int `json:"running"`
+	Waiting       int `json:"waiting"`
+}
+
+func (g *Group) Snapshot() Snapshot {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return Snapshot{Limit: g.limit, QueueCapacity: g.queue, Running: g.running, Waiting: g.waiting}
 }
 
 func (g *Group) CancelTask(taskID string) bool {

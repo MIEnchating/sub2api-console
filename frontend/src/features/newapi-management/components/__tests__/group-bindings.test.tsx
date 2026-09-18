@@ -21,6 +21,21 @@ const bindings = groups.map((group) => ({
 beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 
 describe("New API 分组绑定倍率", () => {
+  it("没有远端分组时展示空状态且不预留错误空行", () => {
+    const view = render(
+      <NewAPIGroupBindings
+        groups={[]}
+        localGroups={[]}
+        bindings={[]}
+        pending={false}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("尚未读取到 New API 分组")).toBeVisible();
+    expect(screen.getByRole("button", { name: "保存绑定与倍率" })).toBeDisabled();
+    expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
+  });
+
   it("编辑 Sub2API 管理平台倍率并开启同步后提交两端同步标记", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
@@ -92,7 +107,7 @@ describe("New API 分组绑定倍率", () => {
     expect(screen.getByRole("button", { name: "保存绑定与倍率" })).toBeDisabled();
   });
 
-  it("倍率错误出现与修正时保留同一个最小高度提示区", async () => {
+  it("倍率正常时没有空白提示行，校验失败后显示提示并在修正后收起", async () => {
     const user = userEvent.setup();
     const view = render(
       <NewAPIGroupBindings
@@ -103,16 +118,14 @@ describe("New API 分组绑定倍率", () => {
         onSave={vi.fn()}
       />,
     );
-    const slot = view.container.querySelector('[data-slot="field-error"]');
-    expect(slot).toHaveClass("min-h-8", "shrink-0");
+    expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
     const ratio = screen.getByRole("textbox", { name: "VIP 的 Sub2API 管理平台倍率" });
     await user.clear(ratio);
     await user.type(ratio, "0");
     expect(screen.getByRole("alert")).toHaveTextContent("倍率必须大于 0");
     await user.clear(ratio);
     await user.type(ratio, "1");
-    expect(view.container.querySelector('[data-slot="field-error"]')).toBe(slot);
-    expect(slot).toBeEmptyDOMElement();
+    expect(view.container.querySelector('[data-slot="field-error"]')).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存绑定与倍率" })).toBeEnabled();
   });
 });

@@ -109,6 +109,7 @@ type Configuration struct {
 	AccountBaseURL       string                   `json:"account_base_url"`
 	UpstreamType         string                   `json:"upstream_type"`
 	AuthMode             string                   `json:"auth_mode"`
+	Entry                *string                  `json:"entry"`
 	RechargeRate         string                   `json:"recharge_rate"`
 	RawBalance           *string                  `json:"raw_balance"`
 	Balance              *string                  `json:"balance"`
@@ -180,6 +181,15 @@ func (s *Service) Get(ctx context.Context, host string) (Configuration, error) {
 		result.HasAdminKey, result.HasUserID = nonblank(record.AdminKey), nonblank(record.UserID)
 		result.HeaderNames, result.CookieNames = sortedKeys(record.Headers), sortedKeys(record.Cookies)
 	}
+	if preferences, ok := s.private.(recoveryPreferenceStore); ok {
+		preference, err := preferences.AuthRecoveryPreference(ctx, host)
+		if err != nil {
+			return Configuration{}, err
+		}
+		if preference != nil {
+			result.Entry = preference.VaultEntry
+		}
+	}
 	return result, nil
 }
 
@@ -220,6 +230,9 @@ func (s *Service) Create(ctx context.Context, input Input, actor string) (Config
 		return Configuration{}, inputError(err)
 	}
 	if _, err := s.commitPrivateAndPublic(ctx, record, input, vaultChange, true); err != nil {
+		return Configuration{}, err
+	}
+	if err := s.saveVaultSelection(ctx, record, input); err != nil {
 		return Configuration{}, err
 	}
 	release()
@@ -318,6 +331,9 @@ func (s *Service) Update(ctx context.Context, host string, input Input, actor st
 				err = errors.Join(err, rollbackFailure("鉴权 Host", privateRenamer.RenameAuthRecord(rollbackCtx, targetHost, host)))
 			}
 		}
+		return Configuration{}, err
+	}
+	if err := s.saveVaultSelection(ctx, record, input); err != nil {
 		return Configuration{}, err
 	}
 	release()

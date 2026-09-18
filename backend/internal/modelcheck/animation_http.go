@@ -18,20 +18,20 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 		path = "/v1/messages"
 		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 8192, "stream": true}
 	}
-	text, responseModel, status, raw, err := animationHTTP(ctx, client, credential, path, body, requestID)
+	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, path, body, requestID)
 	if err != nil {
-		return "", "", err
+		return "", "", animationVisibleError(err, credential.Secret)
 	}
 	if credential.Platform != "anthropic" && responsesEndpointUnsupported(status, raw) {
 		path = "/v1/chat/completions"
 		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 8192, "stream": true}
-		text, responseModel, status, raw, err = animationHTTP(ctx, client, credential, path, body, requestID)
+		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, path, body, requestID)
 		if err != nil {
-			return "", "", err
+			return "", "", animationVisibleError(err, credential.Secret)
 		}
 	}
 	if status < 200 || status >= 300 {
-		return "", "", directStatusError(status, raw, credential.Secret)
+		return "", "", animationRetryableStatusError(status, retryAfter, raw, directStatusError(status, raw, credential.Secret))
 	}
 	if strings.TrimSpace(text) == "" {
 		return "", "", errors.New("上游没有返回动画文本，请检查模型能力后重试")
@@ -39,15 +39,15 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	return text, responseModel, nil
 }
 
-func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body map[string]any, requestID string) (string, string, int, []byte, error) {
+func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body map[string]any, requestID string) (string, string, int, []byte, http.Header, error) {
 	endpoint, err := directEndpoint(credential.BaseURL, path)
 	if err != nil {
-		return "", "", 0, nil, errors.New("账号 Base URL 无效")
+		return "", "", 0, nil, nil, errors.New("账号 Base URL 无效")
 	}
 	raw, _ := json.Marshal(body)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
 	if err != nil {
-		return "", "", 0, nil, errors.New("动画检测请求创建失败")
+		return "", "", 0, nil, nil, errors.New("动画检测请求创建失败")
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "text/event-stream, application/json")
@@ -60,23 +60,35 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return "", "", 0, nil, safeTransportError(err)
+		return "", "", 0, nil, nil, animationRetryableReadError(animationReadError(err))
 	}
 	defer response.Body.Close()
-	raw, err = io.ReadAll(io.LimitReader(response.Body, maximumDirectResponseBytes+1))
-	if err != nil {
-		return "", "", response.StatusCode, nil, safeTransportError(err)
-	}
-	if len(raw) > maximumDirectResponseBytes {
-		return "", "", response.StatusCode, nil, errors.New("动画检测响应过大，请更换模型后重试")
-	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", "", response.StatusCode, raw, nil
+		raw, err = io.ReadAll(io.LimitReader(response.Body, maximumDirectResponseBytes+1))
+		if err != nil {
+			return "", "", response.StatusCode, nil, response.Header, animationRetryableStatusError(response.StatusCode, response.Header, raw, animationReadError(err))
+		}
+		if len(raw) > maximumDirectResponseBytes {
+			return "", "", response.StatusCode, nil, response.Header, errors.New("动画检测响应过大，请更换模型后重试")
+		}
+		return "", "", response.StatusCode, raw, response.Header, nil
+	}
+	reader := bufio.NewReader(response.Body)
+	jsonResponse, err := generationResponseIsJSON(reader)
+	if err != nil {
+		return "", "", response.StatusCode, nil, response.Header, animationRetryableReadError(animationReadError(err))
 	}
 	var text, model string
-	if strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") || bytes.HasPrefix(bytes.TrimSpace(raw), []byte("data:")) || bytes.HasPrefix(bytes.TrimSpace(raw), []byte("event:")) {
-		text, model, err = animationStream(raw, path)
+	if !jsonResponse {
+		text, model, err = animationStream(reader, path)
 	} else {
+		raw, err = io.ReadAll(io.LimitReader(reader, maximumDirectResponseBytes+1))
+		if err != nil {
+			return "", "", response.StatusCode, nil, response.Header, animationRetryableReadError(animationReadError(err))
+		}
+		if len(raw) > maximumDirectResponseBytes {
+			return "", "", response.StatusCode, nil, response.Header, errors.New("动画检测响应过大，请更换模型后重试")
+		}
 		var payload map[string]any
 		if json.Unmarshal(raw, &payload) != nil {
 			err = errors.New("上游返回的不是有效 JSON 或事件流")
@@ -84,12 +96,12 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 			text, model, err = animationPayload(payload, path)
 		}
 	}
-	return text, model, response.StatusCode, nil, err
+	return text, model, response.StatusCode, nil, response.Header, animationRetryableReadError(err)
 }
 
 func animationPayload(payload map[string]any, path string) (string, string, error) {
 	if payload["error"] != nil || payload["success"] == false || stringField(payload, "type") == "error" || stringField(payload, "status") == "failed" {
-		return "", "", errors.New("上游报告生成失败，请检查模型权限、余额或稍后重试")
+		return "", "", animationPayloadError(payload, "上游报告生成失败")
 	}
 	if stringField(payload, "status") == "incomplete" || stringField(payload, "stop_reason") == "max_tokens" {
 		return "", "", errors.New("动画生成被截断，请更换模型后重试")
@@ -110,8 +122,9 @@ func animationPayload(payload map[string]any, path string) (string, string, erro
 	return openAIResponseText(payload), model, nil
 }
 
-func animationStream(raw []byte, path string) (string, string, error) {
-	scanner := bufio.NewScanner(bytes.NewReader(raw))
+func animationStream(reader io.Reader, path string) (string, string, error) {
+	limited := &io.LimitedReader{R: reader, N: maximumDirectResponseBytes + 1}
+	scanner := bufio.NewScanner(limited)
 	scanner.Buffer(make([]byte, 4096), maximumDirectResponseBytes)
 	var output strings.Builder
 	model := ""
@@ -124,6 +137,9 @@ func animationStream(raw []byte, path string) (string, string, error) {
 		value := strings.Join(data, "\n")
 		data = nil
 		if value == "[DONE]" {
+			if path != "/v1/chat/completions" {
+				return errors.New("动画事件流缺少完成事件，请重试")
+			}
 			completed = true
 			return nil
 		}
@@ -133,7 +149,7 @@ func animationStream(raw []byte, path string) (string, string, error) {
 		}
 		kind := stringField(event, "type")
 		if event["error"] != nil || kind == "error" || kind == "response.failed" || kind == "response.incomplete" {
-			return errors.New("上游报告生成失败或内容截断，请稍后重试")
+			return animationPayloadError(event, "上游报告生成失败或内容截断")
 		}
 		if m := stringField(event, "model"); m != "" {
 			model = m
@@ -193,23 +209,29 @@ func animationStream(raw []byte, path string) (string, string, error) {
 		return nil
 	}
 	for scanner.Scan() {
+		if limited.N <= 0 {
+			return "", "", errors.New("动画检测响应过大，请更换模型后重试")
+		}
 		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if line == "" {
 			if err := process(); err != nil {
 				return "", "", err
+			}
+			if completed {
+				return output.String(), model, nil
 			}
 		} else if strings.HasPrefix(line, "data:") {
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", "", errors.New("动画事件流读取失败")
+		return "", "", animationReadError(err)
 	}
 	if err := process(); err != nil {
 		return "", "", err
 	}
 	if !completed {
-		return "", "", errors.New("动画事件流提前中断，请重试")
+		return "", "", retryableAnimationError{err: errors.New("动画事件流提前中断，请重试")}
 	}
 	return output.String(), model, nil
 }

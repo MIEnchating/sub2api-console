@@ -47,12 +47,7 @@ export function FormField(props: FormFieldProps): ReactElement {
         )}
       </span>
       {props.children}
-      {((props.reserveErrorSpace ?? "error" in props) || props.error) && (
-        <FieldError
-          message={props.error}
-          reserveSpace={props.reserveErrorSpace ?? "error" in props}
-        />
-      )}
+      <FieldError message={props.error} reserveSpace={props.reserveErrorSpace} />
     </Root>
   );
 }

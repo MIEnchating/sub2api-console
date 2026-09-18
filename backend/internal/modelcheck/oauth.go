@@ -29,13 +29,16 @@ type oauthCredential struct {
 	accessToken string
 	workspaceID string
 	userAgent   string
+	secrets     []string
 }
 
 type oauthBundleSender struct {
-	client     *http.Client
-	credential oauthCredential
-	models     []string
-	slots      chan struct{}
+	client          *http.Client
+	credential      oauthCredential
+	models          []string
+	slots           chan struct{}
+	requestID       string
+	animationStream bool
 }
 
 // UseOAuthTransport injects a trusted transport for isolated integration tests.
@@ -108,13 +111,7 @@ func (s *Service) CheckOAuthWithProxy(ctx context.Context, accountID, accountNam
 		transport = proxied
 	}
 	if transport == nil {
-		direct := &http.Transport{
-			DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: time.Duration(timeoutSeconds) * time.Second,
-			MaxConnsPerHost: 2, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second,
-			ForceAttemptHTTP2: true,
-		}
+		direct := newOAuthDirectTransport(timeoutSeconds)
 		transport = direct
 		defer direct.CloseIdleConnections()
 	}
@@ -168,7 +165,22 @@ func parseOAuthCredential(credentials map[string]any) (oauthCredential, error) {
 	if !validOAuthHeader(credential.workspaceID, 256) || !validOAuthHeader(credential.userAgent, 512) {
 		return oauthCredential{}, errors.New("OAuth 工作区标识或客户端信息无效，请重新授权账号")
 	}
+	for _, field := range []string{"access_token", "refresh_token", "id_token", "chatgpt_account_id", "account_id"} {
+		if secret := stringField(credentials, field); secret != "" {
+			credential.secrets = append(credential.secrets, secret)
+		}
+	}
 	return credential, nil
+}
+
+func newOAuthDirectTransport(timeoutSeconds int) *http.Transport {
+	return &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: time.Duration(timeoutSeconds) * time.Second,
+		MaxConnsPerHost: 2, MaxIdleConnsPerHost: 2, IdleConnTimeout: 30 * time.Second,
+		ForceAttemptHTTP2: true,
+	}
 }
 
 func validOAuthHeader(value string, maxBytes int) bool {
@@ -205,30 +217,49 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 	request.Header.Set("Accept", "text/event-stream")
 	request.Header.Set("OpenAI-Beta", "responses=experimental")
 	request.Header.Set("Originator", "codex_cli_rs")
+	if sender.requestID != "" {
+		request.Header.Set("X-Request-ID", sender.requestID)
+	}
 	request.Header.Set("User-Agent", sender.credential.userAgent)
 	if sender.credential.workspaceID != "" {
 		request.Header.Set("ChatGPT-Account-Id", sender.credential.workspaceID)
 	}
 	response, err := sender.client.Do(request)
 	if err != nil {
+		if sender.animationStream {
+			return "", "", animationVisibleError(animationRetryableReadError(animationReadError(err)), sender.credential.secrets...)
+		}
 		return "", "", visibleRequestError{message: safeTransportError(err).Error()}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		if sender.animationStream {
+			raw, readErr := io.ReadAll(io.LimitReader(response.Body, maximumDirectResponseBytes+1))
+			if readErr != nil {
+				return "", "", animationVisibleError(animationRetryableStatusError(response.StatusCode, response.Header, raw, animationReadError(readErr)), sender.credential.secrets...)
+			}
+			if len(raw) > maximumDirectResponseBytes {
+				return "", "", visibleRequestError{message: fmt.Sprintf("OAuth 动画检测返回 HTTP %d，错误响应过大", response.StatusCode)}
+			}
+			detail := responseErrorDetail(raw)
+			statusError := fmt.Errorf("OAuth 动画检测返回 HTTP %d：%s", response.StatusCode, detail)
+			return "", "", animationVisibleError(animationRetryableStatusError(response.StatusCode, response.Header, raw, statusError), sender.credential.secrets...)
+		}
 		return "", "", visibleRequestError{message: fmt.Sprintf("OAuth 检测请求失败（HTTP %d），请检查账号授权或稍后重试", response.StatusCode)}
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maximumDirectResponseBytes+1))
+	payload, err := sender.readResponse(response.Body)
 	if err != nil {
-		return "", "", visibleRequestError{message: safeTransportError(err).Error()}
-	}
-	if len(raw) > maximumDirectResponseBytes {
-		return "", "", visibleRequestError{message: "OAuth 检测响应过大，请稍后重试"}
-	}
-	payload, err := decodeOAuthResponse(raw)
-	if err != nil {
-		return "", "", err
+		if sender.animationStream {
+			err = animationRetryableReadError(err)
+		}
+		return "", "", animationVisibleError(err, sender.credential.secrets...)
 	}
 	text := openAIResponseText(payload)
+	for _, secret := range sender.credential.secrets {
+		if strings.Contains(text, secret) {
+			return "", "", visibleRequestError{message: "OAuth 检测响应包含敏感信息，已拒绝展示"}
+		}
+	}
 	if text == "" {
 		return "", "", visibleRequestError{message: "OAuth 检测未返回有效文本，请稍后重试"}
 	}
@@ -237,4 +268,18 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 		responseModel = ""
 	}
 	return text, responseModel, nil
+}
+
+func (sender oauthBundleSender) readResponse(body io.Reader) (map[string]any, error) {
+	if sender.animationStream {
+		return readOAuthResponse(body, true)
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, maximumDirectResponseBytes+1))
+	if err != nil {
+		return nil, visibleRequestError{message: safeTransportError(err).Error()}
+	}
+	if len(raw) > maximumDirectResponseBytes {
+		return nil, visibleRequestError{message: "OAuth 检测响应过大，请稍后重试"}
+	}
+	return decodeOAuthResponse(raw)
 }

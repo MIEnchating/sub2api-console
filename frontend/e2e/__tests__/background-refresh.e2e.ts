@@ -15,6 +15,11 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     const fixtures: Record<string, unknown> = {
+      "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
+      "/api/dictionaries": { items: [] },
+      "/api/accounts/traffic": { enabled: false, accounts: [] },
+      "/api/newapi/platforms/primary/channels": { items: [], total: 0 },
+      "/api/newapi/platforms/primary/channel-groups": { version: "1", groups: [] },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "刷新回归测试" },
       "/api/inspection/automation": {
@@ -151,6 +156,7 @@ test("重新获取渠道模型保留已有选择和背景数量，失败后禁�
     await route.fulfill({ status: 503, json: { detail: "上游连接失败" } });
   });
   await page.goto("/newapi/channels");
+  await page.getByRole("button", { name: "新增渠道", exact: true }).click();
   await page.getByRole("combobox", { name: "Sub2API 分组" }).click();
   await page.getByRole("option", { name: "标准", exact: true }).click();
   await page.getByRole("button", { name: "创建密钥", exact: true }).click();
@@ -158,7 +164,9 @@ test("重新获取渠道模型保留已有选择和背景数量，失败后禁�
   const dialog = page.getByRole("dialog", { name: "选择上游模型" });
   await expect(dialog.getByRole("button", { name: "确认模型" })).toBeEnabled();
   await dialog.getByRole("button", { name: "确认模型" }).click();
-  await expect(page.locator("#root").getByText("已选择 1 个模型")).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "新增渠道", exact: true }).getByText("已选择 1 个模型"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "从上游获取" }).click();
   const selectedModel = dialog.getByRole("checkbox", { name: /model-a/ });
   await expect(selectedModel).toBeChecked();
@@ -166,7 +174,9 @@ test("重新获取渠道模型保留已有选择和背景数量，失败后禁�
   await expect(dialog.getByRole("status", { name: "正在从上游获取模型" })).toHaveCount(0);
   await expect(page.getByText("尚未选择模型")).toHaveCount(0);
   releaseRefresh();
-  await expect(page.locator("[data-sonner-toast]")).toContainText("上游连接失败");
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: "上游连接失败" }),
+  ).toBeVisible();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect(selectedModel).toBeChecked();
   await expect(dialog.getByRole("button", { name: "确认模型" })).toBeDisabled();
@@ -265,7 +275,9 @@ test("Key 清理重新扫描不清空已显示预览，扫描失败后禁止删�
   await expect(dialog.getByText("正在扫描上游 Key 与绑定关系")).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();
   releaseScan();
-  await expect(page.locator("[data-sonner-toast]")).toContainText("扫描连接失败");
+  await expect(
+    page.locator("[data-sonner-toast]").filter({ hasText: "扫描连接失败" }),
+  ).toBeVisible();
   await expect(dialog.getByRole("alert")).toHaveCount(0);
   await expect(dialog.getByText("unused-key", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "确认删除 1 个 Key" })).toBeDisabled();

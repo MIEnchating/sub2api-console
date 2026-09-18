@@ -472,7 +472,7 @@ func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
 			item.Platforms = []string{}
 		}
 		item.Strategy, item.StrategySource = groupStrategy(control, item.ID, nullString(strategy), nullString(strategySource))
-		item.ParticipationStatus, item.ParticipationReason = groupParticipation(control, item.ID, item.Name)
+		item.ParticipationStatus, item.ParticipationReason = groupParticipation(control, item.ID)
 		item.Override = groupOverride(control, item.ID)
 		item.ProbeInterval = effectiveGroupProbeInterval(control, item.Override)
 		item.WeightBudget = effectiveGroupWeightBudget(control, item.Override)
@@ -501,7 +501,7 @@ func (s *Store) Groups(ctx context.Context) ([]GroupStatus, error) {
 		item.AvailableAccounts = availableGroupAccounts(managedAccounts, item.Name, minPoolScore, now)
 		item.NeedsAttention = max(int64(0), item.DegradedAccounts-item.RateLimitedAccounts) + item.FusedAccounts + item.PausedAccounts + item.DisabledAccounts + item.ExcludedAccounts
 		item.AverageHealthScore = averageGroupScores(managedAccounts, item.Name, &item.ScoredAccounts)
-		item.Status = groupRuntimeStatus(item, groupExplicitlyExcluded(control, item.ID, item.Name), minPoolSize)
+		item.Status = groupRuntimeStatus(item, groupExplicitlyExcluded(control, item.ID), minPoolSize)
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -824,7 +824,7 @@ func visibleStrategy(value any) string {
 	return text
 }
 
-func groupParticipation(control map[string]any, groupID *string, groupName string) (string, *string) {
+func groupParticipation(control map[string]any, groupID *string) (string, *string) {
 	if control == nil {
 		return "configuration_error", stringPointer("控制面策略不可用，无法判断参与范围")
 	}
@@ -842,28 +842,27 @@ func groupParticipation(control map[string]any, groupID *string, groupName strin
 	if mode != "all" && mode != "selected" {
 		return "configuration_error", stringPointer("参与守护模式无效")
 	}
-	keys := map[string]struct{}{strings.ToLower(strings.TrimSpace(groupName)): {}}
-	if groupID != nil {
-		keys[strings.ToLower(strings.TrimSpace(*groupID))] = struct{}{}
-	}
 	excluded, valid := scopeStringSet(scope, "excluded_group_ids")
 	if !valid {
 		return "configuration_error", stringPointer("排除分组列表配置无效")
 	}
-	if setsIntersect(keys, excluded) {
+	if scopeContainsGroupID(excluded, groupID) {
 		return "out_of_scope", stringPointer("分组位于排除分组列表中")
 	}
 	managed, valid := scopeStringSet(scope, "managed_group_ids")
 	if !valid {
 		return "configuration_error", stringPointer("参与分组列表配置无效")
 	}
-	if mode == "selected" && !setsIntersect(keys, managed) {
+	if mode == "selected" && !scopeContainsGroupID(managed, groupID) {
 		return "out_of_scope", stringPointer("当前仅守护指定分组，该分组未加入参与分组列表")
+	}
+	if override := groupOverride(control, groupID); override != nil && override.Enabled != nil && !*override.Enabled {
+		return "out_of_scope", stringPointer("分组已关闭参与守护")
 	}
 	return "participating", nil
 }
 
-func groupExplicitlyExcluded(control map[string]any, groupID *string, groupName string) bool {
+func groupExplicitlyExcluded(control map[string]any, groupID *string) bool {
 	if control == nil {
 		return false
 	}
@@ -875,11 +874,7 @@ func groupExplicitlyExcluded(control map[string]any, groupID *string, groupName 
 	if !valid {
 		return false
 	}
-	keys := map[string]struct{}{strings.ToLower(strings.TrimSpace(groupName)): {}}
-	if groupID != nil {
-		keys[strings.ToLower(strings.TrimSpace(*groupID))] = struct{}{}
-	}
-	return setsIntersect(keys, excluded)
+	return scopeContainsGroupID(excluded, groupID)
 }
 
 func scopeStringSet(scope map[string]any, fields ...string) (map[string]struct{}, bool) {
@@ -904,13 +899,12 @@ func scopeStringSet(scope map[string]any, fields ...string) (map[string]struct{}
 	return result, true
 }
 
-func setsIntersect(left, right map[string]struct{}) bool {
-	for value := range left {
-		if _, found := right[value]; found {
-			return true
-		}
+func scopeContainsGroupID(values map[string]struct{}, groupID *string) bool {
+	if groupID == nil || strings.TrimSpace(*groupID) == "" {
+		return false
 	}
-	return false
+	_, found := values[strings.TrimSpace(*groupID)]
+	return found
 }
 
 func groupOverride(control map[string]any, groupID *string) *GroupPolicyOverride {

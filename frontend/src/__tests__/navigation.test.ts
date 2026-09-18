@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   Activity,
-  Cable,
   Files,
   PanelsTopLeft,
   BadgeDollarSign,
@@ -20,7 +19,6 @@ import {
   Network,
   RadioTower,
   Route,
-  ServerCog,
   ScrollText,
   Settings,
   ShieldAlert,
@@ -54,12 +52,10 @@ describe("侧边菜单", () => {
       "流量排行",
       "请求查询",
       "告警通知",
-      "平台配置",
       "分组绑定",
       "渠道管理",
       "模型价格",
       "价格比对",
-      "接入配置",
       "监控管理",
       "功能模板",
       "状态页管理",
@@ -87,12 +83,10 @@ describe("侧边菜单", () => {
       ChartNoAxesColumnIncreasing,
       FileSearch,
       Siren,
-      ServerCog,
       Link2,
       RadioTower,
       BadgeDollarSign,
       GitCompareArrows,
-      Cable,
       Activity,
       Files,
       PanelsTopLeft,
@@ -128,22 +122,11 @@ describe("侧边菜单", () => {
       },
       {
         label: "New API",
-        itemIDs: [
-          "newapi",
-          "newapi-groups",
-          "newapi-channels",
-          "newapi-prices",
-          "newapi-differences",
-        ],
+        itemIDs: ["newapi-groups", "newapi-channels", "newapi-prices", "newapi-differences"],
       },
       {
         label: "Uptime Kuma",
-        itemIDs: [
-          "uptime-kuma-config",
-          "uptime-kuma",
-          "uptime-kuma-templates",
-          "uptime-kuma-status-pages",
-        ],
+        itemIDs: ["uptime-kuma", "uptime-kuma-templates", "uptime-kuma-status-pages"],
       },
       { label: "策略配置", itemIDs: ["pricing-config", "policy", "alert-policy"] },
       { label: "系统管理", itemIDs: ["system-info", "vault", "logs", "config"] },
@@ -154,7 +137,7 @@ describe("侧边菜单", () => {
   });
 
   it("New API 各菜单使用独立路由", () => {
-    expect(viewForPath("/newapi")).toBe("newapi");
+    expect(viewForPath("/newapi")).toBe("config");
     expect(viewForPath("/newapi/groups")).toBe("newapi-groups");
     expect(viewForPath("/newapi/channels")).toBe("newapi-channels");
     expect(viewForPath("/newapi/prices")).toBe("newapi-prices");
@@ -163,7 +146,7 @@ describe("侧边菜单", () => {
 
   it("Uptime Kuma 入口使用独立路由", () => {
     expect(viewForPath("/uptime-kuma")).toBe("uptime-kuma");
-    expect(viewForPath("/uptime-kuma/config")).toBe("uptime-kuma-config");
+    expect(viewForPath("/uptime-kuma/config")).toBe("config");
     expect(viewForPath("/uptime-kuma/templates")).toBe("uptime-kuma-templates");
     expect(navItems.some((item) => ["通知渠道", "维护计划"].includes(item.label))).toBe(false);
   });
@@ -173,7 +156,7 @@ describe("侧边菜单", () => {
   });
 
   it.each([
-    ["/newapi/", "newapi"],
+    ["/newapi/", "config"],
     ["/accounts/", "accounts"],
     ["/newapi/groups/", "newapi-groups"],
   ])("直接访问带尾斜线的 %s 时保持对应导航 %s", (pathname, expected) => {

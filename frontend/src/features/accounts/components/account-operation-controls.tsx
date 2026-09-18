@@ -8,6 +8,7 @@ import {
   Pin,
   Play,
   RefreshCw,
+  ScanSearch,
   Trash2,
 } from "lucide-react";
 import type { ReactElement } from "react";
@@ -31,6 +32,7 @@ export type AccountOperationProps = {
   pending: boolean;
   probePending: boolean;
   onProbe: () => void;
+  onModelCheck?: () => void;
   onControl: (
     action: AccountControlAction,
     label: string,
@@ -112,6 +114,16 @@ function accountActions(props: AccountOperationProps): {
   return {
     controls,
     maintenance: [
+      ...(props.onModelCheck
+        ? [
+            {
+              label: "模型检测",
+              icon: <ScanSearch />,
+              disabled: props.pending,
+              onClick: props.onModelCheck,
+            },
+          ]
+        : []),
       {
         label: "同步账号倍率",
         icon: <RefreshCw />,

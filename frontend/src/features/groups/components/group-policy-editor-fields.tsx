@@ -79,6 +79,7 @@ const inheritedProbeModelValue = "\u0000inherited-probe-model";
 function ProbeModelControl(props: {
   value: string | null;
   options: string[];
+  inheritedLabel: string;
   disabled: boolean;
   onChange: (value: string | null) => void;
 }) {
@@ -122,14 +123,14 @@ function ProbeModelControl(props: {
           aria-label="手动输入探活模型"
           value={props.value ?? ""}
           disabled={props.disabled}
-          placeholder="留空使用全局默认"
+          placeholder={props.inheritedLabel}
           onChange={(event) => props.onChange(event.target.value || null)}
         />
       ) : (
         <Select
           value={selectedValue}
           itemToStringLabel={(value) =>
-            value === inheritedProbeModelValue ? "继承全局默认模型" : value
+            value === inheritedProbeModelValue ? props.inheritedLabel : value
           }
           disabled={props.disabled}
           onValueChange={(value) => {
@@ -141,7 +142,7 @@ function ProbeModelControl(props: {
             <SelectValue />
           </SelectTrigger>
           <SelectContent align="start">
-            <SelectItem value={inheritedProbeModelValue}>继承全局默认模型</SelectItem>
+            <SelectItem value={inheritedProbeModelValue}>{props.inheritedLabel}</SelectItem>
             {props.options.map((model) => (
               <SelectItem key={model} value={model}>
                 {model}
@@ -182,9 +183,7 @@ export function GroupPolicyEditorFields(props: {
   let probeModelsButtonLabel = props.probeModels ? "重新获取组内模型" : "获取组内模型";
   if (props.probeModelsLoading) probeModelsButtonLabel = "正在获取";
   let probeModelsStatus: string | null = null;
-  if (props.probeModelsLoading) {
-    probeModelsStatus = "正在获取组内模型，可先手动输入探活模型。";
-  } else if (props.probeModelsError) {
+  if (props.probeModelsError) {
     probeModelsStatus = "获取组内模型失败，请重新获取或手动输入探活模型。";
   } else if (props.probeModels?.models.length === 0) {
     probeModelsStatus = "暂无组内共同模型，可手动输入探活模型。";
@@ -243,12 +242,14 @@ export function GroupPolicyEditorFields(props: {
           {props.value.strategy === null && (
             <>
               继承全局默认，随全局策略变化（当前：
-              {schedulingStrategyLabel(props.globalStrategy ?? "balanced")}）。
+              {props.globalStrategy
+                ? schedulingStrategyLabel(props.globalStrategy)
+                : "未读取到全局策略"}
+              ）。
             </>
           )}
-          {schedulingStrategyDescription(
-            props.value.strategy ?? props.globalStrategy ?? "balanced",
-          )}
+          {(props.value.strategy || props.globalStrategy) &&
+            schedulingStrategyDescription((props.value.strategy ?? props.globalStrategy)!)}
           ；{schedulingWeightFormula}
         </p>
       </fieldset>
@@ -373,6 +374,11 @@ export function GroupPolicyEditorFields(props: {
           <div className="min-w-0 space-y-1.5 text-sm">
             <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
               <ProbeModelControl
+                inheritedLabel={
+                  props.globalProbeModel?.trim()
+                    ? `继承全局默认模型：${props.globalProbeModel}`
+                    : "继承全局默认模型：按各账号已同步模型选择"
+                }
                 options={probeModelOptions}
                 value={props.value.probe_model}
                 disabled={props.disabled || !props.value.probe_enabled}
@@ -389,17 +395,20 @@ export function GroupPolicyEditorFields(props: {
                   !props.onReloadProbeModels
                 }
                 onClick={props.onReloadProbeModels}
+                aria-busy={props.probeModelsLoading}
               >
                 <RefreshCw className={props.probeModelsLoading ? "animate-spin" : undefined} />
                 {probeModelsButtonLabel}
               </Button>
             </div>
-            {!props.value.probe_model && props.globalProbeModel && (
+            {!props.value.probe_model && (
               <p className="text-muted-foreground break-all text-xs">
-                当前继承全局模型：{props.globalProbeModel}
+                {props.globalProbeModel?.trim()
+                  ? `当前继承全局模型：${props.globalProbeModel}`
+                  : "全局未指定模型：使用各账号已同步的首个可用模型；无可用模型时跳过探活。"}
               </p>
             )}
-            {probeModelsStatus && (
+            {!props.probeModelsLoading && probeModelsStatus && (
               <p role="status" className="text-muted-foreground text-xs">
                 {probeModelsStatus}
               </p>

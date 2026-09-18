@@ -161,6 +161,10 @@ describe("账号创建设置卡片", () => {
 
     expect(screen.getByRole("switch", { name: "Claude 专用组 使用独立设置" })).not.toBeChecked();
     expect(screen.getByText("该分组将使用全局默认配置")).toBeVisible();
+    const inherited = screen.getByTestId("account-group-settings-6");
+    expect(within(inherited).getByText("模型：gpt-5.2")).toBeVisible();
+    expect(within(inherited).getByText("并发 24 · 负载 跟随并发 · 优先级 3")).toBeVisible();
+    expect(inherited).toHaveTextContent("429、503");
     expect(screen.queryByLabelText("Claude 专用组 账号模型")).not.toBeInTheDocument();
 
     screen.getByRole("switch", { name: "Claude 专用组 使用独立设置" }).focus();

@@ -10,7 +10,7 @@ export type PageHeadingProps = {
 export function PageHeading(props: PageHeadingProps) {
   return (
     <div data-slot="page-heading" className="shrink-0 px-3 pt-3 pb-2.5 sm:px-4 sm:pt-5 sm:pb-3">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:gap-x-4">
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:gap-x-4">
         <div className="min-w-32 flex-1">
           <h1 className="text-base font-semibold wrap-anywhere sm:text-lg">{props.title}</h1>
         </div>

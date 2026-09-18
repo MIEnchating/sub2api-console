@@ -8,6 +8,7 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
+	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 )
 
 type policyChangingLeaseStore struct {
@@ -26,13 +27,14 @@ func (store *policyChangingLeaseStore) AcquireMutationLease(ctx context.Context,
 	return store.Store.AcquireMutationLease(ctx, ownerID, resources, now, ttl)
 }
 
-func TestRegularWriteStopsWhenPolicyChangesWhileAcquiringLease(t *testing.T) {
+func TestRegularWriteSkipsWithoutFailureWhenPolicyChangesWhileAcquiringLease(t *testing.T) {
 	for _, scenario := range []struct {
 		name  string
 		patch map[string]any
 	}{
 		{name: "automatic concurrency disabled", patch: map[string]any{"auto_apply": map[string]any{"concurrency": false}}},
 		{name: "group excluded from scheduling", patch: map[string]any{"excluded_group_ids": []any{"7"}}},
+		{name: "monitoring selected", patch: map[string]any{"mode": runtimepolicy.Monitoring}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(10), 4, 4, true)
@@ -46,8 +48,16 @@ func TestRegularWriteStopsWhenPolicyChangesWhileAcquiringLease(t *testing.T) {
 			if fixture.states["41"]["concurrency"] != 4 || result.RemoteWrite {
 				t.Fatalf("old policy still authorized a write: state=%v result=%+v err=%v", fixture.states["41"], result, err)
 			}
-			if err == nil || !strings.Contains(err.Error(), "策略已变化") {
-				t.Fatalf("policy change must require a fresh calculation: result=%+v err=%v", result, err)
+			if err != nil || result.Failed != 0 || len(result.Results) != 1 {
+				t.Fatalf("policy change must defer the stale target without failing: result=%+v err=%v", result, err)
+			}
+			item := result.Results[0]
+			if !item.Skipped || item.Error != nil || item.Reason == nil || !strings.Contains(*item.Reason, "重新计算调度") {
+				t.Fatalf("policy change must explain why a fresh calculation is needed: %+v", item)
+			}
+			audit, err := fixture.store.AuditEvents(t.Context(), nil, false)
+			if err != nil || len(audit) != 1 || audit[0].State != "skipped" || audit[0].Writeback || audit[0].Error != nil {
+				t.Fatalf("policy deferral must be audited without claiming a write: %+v err=%v", audit, err)
 			}
 		})
 	}

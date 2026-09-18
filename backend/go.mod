@@ -7,8 +7,8 @@ require (
 	github.com/chromedp/chromedp v0.14.2
 	github.com/coder/websocket v1.8.14
 	github.com/gin-gonic/gin v1.11.0
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/uuid v1.6.0
-	github.com/pquerna/otp v1.5.0
 	github.com/prometheus/common v0.67.5
 	golang.org/x/crypto v0.51.0
 	golang.org/x/net v0.55.0
@@ -44,6 +44,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect

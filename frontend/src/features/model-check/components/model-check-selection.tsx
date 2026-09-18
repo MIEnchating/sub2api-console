@@ -1,11 +1,28 @@
+import {
+  AccountTrafficBadge,
+  SelectTrafficAccounts,
+} from "@/features/accounts/components/account-traffic";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { FieldError } from "@/components/field-error";
 import { ContentRetry } from "@/components/content-retry";
-import { CheckCheck, Cpu, Play, RefreshCw, Search, Timer, Users, X } from "lucide-react";
+import {
+  CheckCheck,
+  Cpu,
+  Eye,
+  History,
+  Play,
+  RefreshCw,
+  Search,
+  Timer,
+  Users,
+  X,
+} from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import type { AccountStatus } from "@/api";
+import { accountCheckStatus } from "../lib/account-link";
+import { AccountQualityCell } from "@/features/accounts/components/account-quality-cell";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { FilterMenu } from "@/components/data-table/filter-menu";
 import { RefreshButton } from "@/components/refresh-button";
@@ -29,6 +46,9 @@ import { cn } from "@/lib/utils";
 import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 export type ModelCheckSelectionProps = {
+  onTrafficAccountsSelect?: (ids: string[]) => void;
+  onViewResult?: () => void;
+  onViewPreviousResult?: () => void;
   accounts: AccountStatus[];
   accountsLoading: boolean;
   accountsError: string | null;
@@ -66,26 +86,6 @@ function modelProtocol(model: string): string {
   return model.startsWith("claude-") ? "Anthropic" : "Responses";
 }
 
-function accountCheckStatus(account: AccountStatus): {
-  label: string;
-  variant: "secondary" | "warning" | "destructive" | "outline";
-} {
-  switch (account.model_check_status) {
-    case "loading":
-      return { label: "读取中", variant: "outline" };
-    case "unavailable":
-      return { label: "结果读取失败", variant: "warning" };
-    case "consistent":
-      return { label: "符合特征", variant: "secondary" };
-    case "inconsistent":
-      return { label: "不符合特征", variant: "destructive" };
-    case "inconclusive":
-      return { label: "无法判定", variant: "warning" };
-    default:
-      return { label: "未检测", variant: "outline" };
-  }
-}
-
 function accountCheckTime(value: string | null | undefined): string {
   if (!value) return "-";
   const timestamp = new Date(value);
@@ -105,7 +105,18 @@ function AccountCheckBadge(props: { account: AccountStatus }) {
     return <Badge variant="outline">人工控制</Badge>;
   }
   const status = accountCheckStatus(props.account);
-  return <Badge variant={status.variant}>{status.label}</Badge>;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<button type="button" aria-label={`查看账号 ${props.account.id} 检测统计`} />}
+      >
+        <Badge variant={status.variant}>{status.label}</Badge>
+      </TooltipTrigger>
+      <TooltipContent>
+        <AccountQualityCell account={props.account} />
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function accountSelectionDisabled(
@@ -120,8 +131,9 @@ function AccountIdentity(props: { account: AccountStatus }) {
   return (
     <span className="block min-w-0">
       <span className="block truncate font-medium">{props.account.name}</span>
-      <span className="text-muted-foreground block truncate text-xs tabular-nums">
+      <span className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs tabular-nums">
         ID {props.account.id}
+        <AccountTrafficBadge accountID={props.account.id} />
       </span>
     </span>
   );
@@ -246,6 +258,13 @@ function AccountPanel(props: ModelCheckSelectionProps) {
           ) : null}
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          {props.onTrafficAccountsSelect ? (
+            <SelectTrafficAccounts
+              accountIDs={props.accounts.map((account) => account.id)}
+              disabled={props.disabled || props.accountsLoading || Boolean(props.accountsError)}
+              onSelect={props.onTrafficAccountsSelect}
+            />
+          ) : null}
           <FilterMenu
             label="分组"
             options={accountGroups}
@@ -446,6 +465,43 @@ function MatrixPanel(props: ModelCheckSelectionProps) {
           </p>
         </div>
         <div className="flex items-center gap-1">
+          {props.onViewResult ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="查看检测结果"
+                    onClick={props.onViewResult}
+                  />
+                }
+              >
+                <Eye aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent>查看检测结果</TooltipContent>
+            </Tooltip>
+          ) : null}
+          {props.onViewPreviousResult ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="查看上次检测结果"
+                    disabled={props.disabled}
+                    onClick={props.onViewPreviousResult}
+                  />
+                }
+              >
+                <History aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent>查看上次检测结果</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Button
             type="button"
             variant="ghost"

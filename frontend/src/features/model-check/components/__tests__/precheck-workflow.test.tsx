@@ -113,8 +113,8 @@ it("批量前置检测确认后展示两道题结果，并可分别选择通过�
   );
   const first = screen.getByRole("article", { name: "账号 账号1" });
   await waitFor(() =>
-    expect(within(first).getByRole("list", { name: "前置检测题目结果" })).toHaveTextContent(
-      "糖果题通过",
+    expect(within(first).getByRole("region", { name: "前置检测结果" })).toHaveTextContent(
+      "前置检测通过",
     ),
   );
   await user.click(within(first).getByRole("button", { name: "查看前置检测详情" }));

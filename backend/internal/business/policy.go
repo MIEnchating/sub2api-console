@@ -580,10 +580,13 @@ var advancedRules = map[string]map[string]advancedRule{
 		"managed_group_ids":   {kind: "strings"}, "excluded_group_ids": {kind: "strings"},
 		"account_types": {kind: "strings"}, "platforms": {kind: "strings"},
 		"paused_account_ids": {kind: "strings"}, "excluded_account_ids": {kind: "strings"}, "manual_fused_account_ids": {kind: "strings"},
+		"ignore_cost_wall_account_ids": {kind: "strings"},
 	},
 	"probe": {
-		"freshness_seconds": {kind: "int", minimum: 1, maximum: 86400},
-		"enabled":           {kind: "bool"}, "timeout_seconds": {kind: "int", minimum: 1, maximum: 86400},
+		"performance_exploration_enabled": {kind: "bool"},
+		"pause_window":                    {kind: "probe_pause_window"},
+		"freshness_seconds":               {kind: "int", minimum: 1, maximum: 86400},
+		"enabled":                         {kind: "bool"}, "timeout_seconds": {kind: "int", minimum: 1, maximum: 86400},
 		"concurrency": {kind: "int", minimum: 1, maximum: 32}, "prompt": {kind: "string", maxLength: 10000},
 		"skip_when_traffic_fresh": {kind: "bool"}, "traffic_fresh_seconds": {kind: "int", minimum: 1, maximum: 86400},
 		"retry_enabled": {kind: "bool"}, "retry_source": {kind: "enum", allowed: valueStringSet("fixed", "sub2api_pool")},
@@ -700,6 +703,11 @@ func validateAdvancedSection(section string, values map[string]any) (map[string]
 
 func validateAdvancedValue(path string, value any, rule advancedRule) (any, error) {
 	switch rule.kind {
+	case "probe_pause_window":
+		if _, _, err := parseProbePauseWindow(value); err != nil {
+			return nil, err
+		}
+		return value, nil
 	case "bool":
 		if _, ok := value.(bool); !ok {
 			return nil, fmt.Errorf("高级策略字段 %s 必须是布尔值", path)
@@ -1045,7 +1053,7 @@ func (s *Store) policyGroupStrategies(ctx context.Context, control map[string]an
 			item.Platforms = []string{platform.String}
 		}
 		item.Strategy, item.StrategySource = groupStrategy(control, item.ID, nullString(strategy), nullString(strategySource))
-		item.ParticipationStatus, item.ParticipationReason = groupParticipation(control, item.ID, item.Name)
+		item.ParticipationStatus, item.ParticipationReason = groupParticipation(control, item.ID)
 		result = append(result, item)
 	}
 	return result, rows.Err()

@@ -37,10 +37,10 @@ describe("账号添加批量工作区", () => {
     expect(markup).toContain("flex-wrap");
   });
 
-  it("让批量参数和预览操作保持在可见的粘性操作栏中", () => {
+  it("批量参数和预览操作保留独立空间，不悬浮遮挡窄屏分组列表", () => {
     const markup = renderToStaticMarkup(
       <OnboardingBatchActionBar
-        controls={<label htmlFor="batch-note">批量备注</label>}
+        controls={<label htmlFor="batch-concurrency">并发</label>}
         selectedCount={3}
         pending={false}
         disabled={false}
@@ -50,8 +50,8 @@ describe("账号添加批量工作区", () => {
 
     expect(markup).toContain('role="toolbar"');
     expect(markup).toContain('aria-label="批量添加账号"');
-    expect(markup).toContain("sticky");
-    expect(markup).toContain("bottom-0");
+    expect(markup).toContain("shrink-0");
+    expect(markup).not.toContain("sticky");
     expect(markup).toContain("3 项待提交");
     expect(markup).toContain("预览 3 项变更");
   });
@@ -80,12 +80,14 @@ describe("账号添加批量工作区", () => {
     expect(secondStep).toBe("");
   });
 
-  it("第二步只保留分组列表的内部纵向滚动", () => {
+  it("第二步保留分组列表的内部滚动，空间不足时整个选择区也可滚动", () => {
     const selection = onboardingSelectionLayout("full", true);
 
     expect(selection.fixedContent).toBe(true);
     expect(selection.cardClassName).toContain("h-full");
     expect(selection.tablePanelClassName).toContain("flex-col");
+    expect(selection.tablePanelClassName).toContain("min-h-64");
+    expect(selection.preparedClassName).toContain("overflow-y-auto");
     expect(selection.tablePanelClassName).toContain("overflow-hidden");
     expect(selection.tablePanelClassName).toContain("rounded-lg border");
     expect(selection.tableContainerClassName).toContain("overflow-auto");

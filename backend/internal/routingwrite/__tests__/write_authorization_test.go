@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -25,7 +26,11 @@ func TestAutomaticWriteRechecksAuthorizationAfterReadingRemoteAccount(t *testing
 		t.Run(scenario.name, func(t *testing.T) {
 			_, fixture := newUpstreamCapacityWriteFixture(t, writeCapacityPointer(20), 4, 4, true)
 			var once sync.Once
+			var mutations atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					mutations.Add(1)
+				}
 				var updateErr error
 				if request.Method == http.MethodGet && request.URL.Path == "/api/v1/admin/accounts/41" {
 					once.Do(func() {
@@ -59,11 +64,35 @@ func TestAutomaticWriteRechecksAuthorizationAfterReadingRemoteAccount(t *testing
 			result, err := routingwrite.New(routingTarget{url: server.URL}, fixture.store).Apply(t.Context(), targets, "scheduler")
 			fixture.mu.Lock()
 			defer fixture.mu.Unlock()
-			if result.RemoteWrite || result.Changed != 0 || fixture.states["41"]["concurrency"] != 4 || fixture.states["41"]["schedulable"] != true {
+			if mutations.Load() != 0 || result.RemoteWrite || result.Changed != 0 || fixture.states["41"]["concurrency"] != 4 || fixture.states["41"]["schedulable"] != true {
 				t.Fatalf("stale authorization still sent a remote mutation: state=%v result=%+v err=%v", fixture.states["41"], result, err)
 			}
 			if fixture.states["42"]["concurrency"] != 4 || fixture.states["42"]["schedulable"] != true {
 				t.Fatalf("the other pending account bypassed the batch authorization check: state=%v", fixture.states["42"])
+			}
+			if err != nil || result.Failed != 0 || len(result.Results) != len(targets) {
+				t.Fatalf("authorization changes must skip pending targets without failing: %+v err=%v", result, err)
+			}
+			for _, item := range result.Results {
+				if !item.Skipped || item.Error != nil || item.Reason == nil {
+					t.Fatalf("missing explicit authorization deferral: %+v", item)
+				}
+			}
+			audit, err := fixture.store.AuditEvents(t.Context(), nil, false)
+			if err != nil || len(audit) != len(targets) {
+				t.Fatalf("missing authorization deferral audits: %+v err=%v", audit, err)
+			}
+			for _, record := range audit {
+				if record.State != "skipped" || record.Writeback || record.Error != nil || record.ReadbackConfirmed == nil || *record.ReadbackConfirmed || record.RemoteConfirmed == nil || *record.RemoteConfirmed {
+					t.Fatalf("authorization deferral must not claim failure or confirmation: %+v", record)
+				}
+			}
+			if _, err := fixture.store.EvaluateAlertIncidents(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			queue, err := fixture.store.NotificationQueueDetails(t.Context(), "test-channel", true)
+			if err != nil || len(queue.ProducerFiring) != 0 || len(queue.ConsumerItems) != 0 {
+				t.Fatalf("authorization deferral generated notifications: %+v err=%v", queue, err)
 			}
 		})
 	}

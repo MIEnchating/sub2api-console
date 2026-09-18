@@ -178,7 +178,7 @@ func (s *Store) deleteAccountProjection(
 			return err
 		}
 	}
-	for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
+	for _, table := range []string{"account_groups", "health_samples", "account_stability_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
 			return err
 		}
@@ -293,7 +293,7 @@ func removeAccountPolicyReferences(document map[string]any, accountID string) {
 	if !ok {
 		return
 	}
-	for _, field := range []string{"paused_account_ids", "excluded_account_ids", "manual_fused_account_ids"} {
+	for _, field := range []string{"paused_account_ids", "excluded_account_ids", "manual_fused_account_ids", "ignore_cost_wall_account_ids"} {
 		switch values := scope[field].(type) {
 		case []any:
 			filtered := make([]any, 0, len(values))

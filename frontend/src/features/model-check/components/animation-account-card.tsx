@@ -1,3 +1,4 @@
+import { AccountTrafficBadge } from "@/features/accounts/components/account-traffic";
 import { memo, type ReactElement } from "react";
 import type {
   AccountStatus,
@@ -79,6 +80,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
         </label>
         <div className="flex h-4 min-w-0 items-center gap-1.5">
+          <AccountTrafficBadge accountID={props.account.id} />
           <Badge variant="outline">{props.account.platform ?? "未标注平台"}</Badge>
           {props.account.manual_priority != null ? (
             <Badge variant="secondary">人工优先</Badge>

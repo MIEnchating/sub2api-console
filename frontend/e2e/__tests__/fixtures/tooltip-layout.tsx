@@ -18,6 +18,23 @@ const probeResult: AccountRecentResult = {
 
 function TooltipLayout(): ReactElement {
   const surface = new URLSearchParams(window.location.search).get("surface");
+  if (surface?.startsWith("hover-")) {
+    const direction = surface.slice(6);
+    const side =
+      direction === "bottom" || direction === "left" || direction === "right" ? direction : "top";
+    return (
+      <div style={{ position: "fixed", left: "50%", top: direction === "flip" ? 0 : "50%" }}>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger render={<Button>查看地址</Button>} />
+            <TooltipContent role="tooltip" side={side} sideOffset={16}>
+              app.example.test
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+    );
+  }
   if (surface === "probe" || surface === "probe-failure") {
     const result =
       surface === "probe-failure"

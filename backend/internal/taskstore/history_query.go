@@ -2,6 +2,7 @@ package taskstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/mail"
 	"strings"
@@ -74,7 +75,7 @@ func (s *Store) QueryBySkill(ctx context.Context, skill string, input HistoryQue
 	if err != nil {
 		return HistoryPage{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return HistoryPage{}, err
 	}

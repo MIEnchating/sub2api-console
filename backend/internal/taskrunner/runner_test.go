@@ -132,6 +132,48 @@ func TestBoundedGroupRejectsTasksBeyondActiveLimit(t *testing.T) {
 	close(release)
 }
 
+func TestQueuedGroupStartsWaitingTaskAfterCapacityIsReleased(t *testing.T) {
+	runner := NewQueued(context.Background(), 1, 1)
+	t.Cleanup(runner.Cancel)
+	release := make(chan struct{})
+	started := make(chan struct{}, 2)
+	if err := runner.Go(func(context.Context) { started <- struct{}{}; <-release }); err != nil {
+		t.Fatal(err)
+	}
+	queuedDone := make(chan struct{})
+	if err := runner.Go(func(context.Context) { close(queuedDone) }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-queuedDone:
+		t.Fatal("queued task started before the slot was released")
+	default:
+	}
+	close(release)
+	select {
+	case <-queuedDone:
+	case <-time.After(time.Second):
+		t.Fatal("queued task did not start")
+	}
+}
+
+func TestQueuedGroupRejectsBeyondQueueCapacity(t *testing.T) {
+	runner := NewQueued(context.Background(), 1, 1)
+	t.Cleanup(runner.Cancel)
+	release := make(chan struct{})
+	if err := runner.Go(func(context.Context) { <-release }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Go(func(context.Context) {}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Go(func(context.Context) {}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("third task error = %v, want ErrCapacity", err)
+	}
+	close(release)
+
+}
+
 func TestShutdownCancelsAndWaitsForRunningTasks(t *testing.T) {
 	runner := New(context.Background())
 	started := make(chan struct{})

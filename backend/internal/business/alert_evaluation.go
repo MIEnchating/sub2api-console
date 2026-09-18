@@ -71,6 +71,9 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 		if err := closeLegacyCapacityWaitAlerts(ctx, tx, now); err != nil {
 			return AlertEvidenceResult{}, err
 		}
+		if err := closeLegacyPolicyChangeAlerts(ctx, tx, now); err != nil {
+			return AlertEvidenceResult{}, err
+		}
 	}
 	current := make(map[string]struct{}, len(findings))
 	currentScopes := make(map[string]struct{}, len(findings))
@@ -548,14 +551,7 @@ func (s *Store) invalidatedRoutingAlertIncidents(ctx context.Context, epoch *str
 func (s *Store) routingApplyFailureFindings(ctx context.Context) ([]alertFinding, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT a.id,COALESCE(latest.error,''),latest.operation_type,
 		COALESCE(latest.remote_confirmed,0),COALESCE(latest.readback_confirmed,0)
-		FROM accounts a JOIN operation_audit latest ON latest.source_id=(
-			SELECT recent.source_id FROM operation_audit recent INDEXED BY ix_operation_audit_apply_error_recent
-			WHERE recent.operation_type IN ('routing.writeback','cleanup.delete') AND recent.object_id=a.id
-			AND (recent.state='failed' OR recent.readback_confirmed=1)
-			ORDER BY recent.created_at DESC,
-			CASE WHEN recent.source_id < 0 THEN 0 ELSE 1 END,
-			CASE WHEN recent.source_id < 0 THEN recent.source_id END ASC,
-			CASE WHEN recent.source_id >= 0 THEN recent.source_id END DESC LIMIT 1
+		FROM accounts a JOIN operation_audit latest ON latest.source_id=(`+latestRoutingOutcomeSQL+`
 		) WHERE latest.state='failed' ORDER BY a.id`)
 	if err != nil {
 		return nil, err

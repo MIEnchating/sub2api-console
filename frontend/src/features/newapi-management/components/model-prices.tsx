@@ -33,6 +33,7 @@ import { DataTablePanel } from "@/components/data-table/table-panel";
 import { TableActionButton } from "@/components/data-table/table-action-button";
 import { StatusBadge } from "@/components/status-badge";
 import { modelPriceSourceLabels } from "../constants";
+import { billingExpressionsEqual } from "../lib/billing-expression-comparison";
 import { ModelPriceSelectionToolbar } from "./model-price-selection-toolbar";
 import { Button } from "@/components/ui/button";
 import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
@@ -1138,58 +1139,9 @@ export function newAPIPriceComparisonStatus(
 ): NewAPIPriceComparisonStatus {
   const remote = matchingRemoteModelPrice(remotePrices, configured.model);
   if (!remote) return "missing";
-  const expected = remotePriceToNewAPIModelPrice(remote);
-  if (remote.time_pricing || remote.billing_expr) {
-    return configured.billing_mode === "tiered_expr" &&
-      configured.billing_expr?.replace(/\s+/g, "") === expected.billing_expr?.replace(/\s+/g, "")
-      ? "matched"
-      : "mismatched";
-  }
-  if (expected.billing_mode === "tiered_expr") {
-    if (configured.billing_mode !== "tiered_expr" || !configured.billing_expr?.trim()) {
-      return "mismatched";
-    }
-    if (!tieredExpressionStructureMatches(configured.billing_expr, expected.billing_expr ?? "")) {
-      return "mismatched";
-    }
-    const configuredPrices = modelPriceColumnValues(configured);
-    const expectedPrices = comparisonColumnValues(configuredPrices, remote);
-    const fields: Array<keyof ModelPriceColumnValues> = [
-      "input",
-      "output",
-      "cacheCreate",
-      "cacheCreate1h",
-      "cacheRead",
-      "imageInput",
-    ];
-    return fields.every((field) =>
-      decimalValuesEqual(configuredPrices[field], expectedPrices[field]),
-    )
-      ? "matched"
-      : "mismatched";
-  }
-  if (
-    configured.model_price?.trim() ||
-    configured.billing_expr?.trim() ||
-    (configured.billing_mode && configured.billing_mode !== "per-token")
-  ) {
-    return "mismatched";
-  }
-
-  const configuredPrices = modelPriceColumnValues(configured);
-  const expectedPrices = comparisonColumnValues(configuredPrices, remote);
-  const fields: Array<keyof ModelPriceColumnValues> = [
-    "input",
-    "output",
-    "cacheCreate",
-    "cacheCreate1h",
-    "cacheRead",
-    "imageInput",
-  ];
-  const matched = fields.every((field) =>
-    decimalValuesEqual(configuredPrices[field], expectedPrices[field]),
-  );
-  return matched ? "matched" : "mismatched";
+  return modelPriceDifferenceRows(configured, remote).every((row) => row.matched)
+    ? "matched"
+    : "mismatched";
 }
 
 function decimalValuesEqual(left: string | undefined, right: string | undefined): boolean {
@@ -1246,14 +1198,26 @@ export function modelPriceDifferenceRows(
   const remotePrices = comparisonColumnValues(configuredPrices, remote);
   const configuredMode = billingModeLabel(configured);
   const remoteMode = billingModeLabel(expected);
+  const configuredExpression = configured.billing_expr?.trim() ?? "";
+  const remoteExpression = expected.billing_expr?.trim() ?? "";
+  const expressionsMatched = billingExpressionsEqual(configuredExpression, remoteExpression);
   const rows: Array<{
     label: string;
     configured: string;
     remote: string;
     kind: "text" | "decimal";
     optional?: boolean;
+    matched?: boolean;
   }> = [
-    { label: "计费方式", configured: configuredMode, remote: remoteMode, kind: "text" },
+    {
+      label: "计费方式",
+      configured: configuredMode,
+      remote: remoteMode,
+      kind: "text",
+      matched:
+        configuredMode === remoteMode &&
+        (configured.billing_mode || "per-token") === (expected.billing_mode || "per-token"),
+    },
     {
       label: "输入价格（$/百万 Token）",
       configured: configuredPrices.input,
@@ -1300,7 +1264,10 @@ export function modelPriceDifferenceRows(
     const description = timePricingDescription(remote.time_pricing);
     rows.splice(1, 0, {
       label: "峰谷时段",
-      configured: configuredCondition === remoteCondition ? description : "未配置或与官方时段不同",
+      configured:
+        expressionsMatched || configuredCondition === remoteCondition
+          ? description
+          : "未配置或与官方时段不同",
       remote: description,
       kind: "text",
     });
@@ -1311,10 +1278,7 @@ export function modelPriceDifferenceRows(
     const description = remote.price_tiers.map((tier) => tier.label).join(" / ");
     rows.splice(1, 0, {
       label: "官方阶梯",
-      configured:
-        configured.billing_expr?.replace(/\s+/g, "") === remote.billing_expr?.replace(/\s+/g, "")
-          ? description
-          : "未配置或与官方条件不同",
+      configured: expressionsMatched ? description : "未配置或与官方条件不同",
       remote: description,
       kind: "text",
     });
@@ -1326,6 +1290,15 @@ export function modelPriceDifferenceRows(
       kind: "text",
     });
   }
+  if (!expressionsMatched) {
+    rows.push({
+      label: "计费表达式",
+      configured: configuredExpression,
+      remote: remoteExpression,
+      kind: "text",
+      matched: false,
+    });
+  }
   return rows
     .filter((row) => !row.optional || row.configured !== "" || row.remote !== "")
     .map((row) => ({
@@ -1333,9 +1306,10 @@ export function modelPriceDifferenceRows(
       configured: row.configured || "-",
       remote: row.remote || "-",
       matched:
-        row.kind === "text"
+        row.matched ??
+        (row.kind === "text"
           ? row.configured === row.remote
-          : decimalValuesEqual(row.configured, row.remote),
+          : decimalValuesEqual(row.configured, row.remote)),
     }));
 }
 
@@ -1345,15 +1319,6 @@ function tierConditionSignature(expression: string): string {
   const match = /\blen\s*(<=|<|>=|>)\s*(\d+(?:\.\d+)?)/.exec(expression);
   if (!match?.[1] || !match[2]) return "";
   return `len ${match[1]} ${match[2]}`;
-}
-
-function tieredExpressionStructureMatches(configured: string, expected: string): boolean {
-  // Only price coefficients may vary; preserve all conditions, operators and extra terms.
-  const coefficients =
-    /\b(p|c|cr|cc|cc1h|img|img_o|ai|ao)\s*\*\s*(-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/g;
-  const structure = (expression: string): string =>
-    expression.replace(coefficients, "$1 * #").replace(/\s+/g, "");
-  return structure(configured) === structure(expected);
 }
 
 function ModelPriceDifferenceDialog(props: {
@@ -1371,7 +1336,7 @@ function ModelPriceDifferenceDialog(props: {
           <DialogDescription>当前平台配置与远程价卡的价格对照。</DialogDescription>
         </DialogHeader>
         <DialogBody>
-          <Table overflowTooltip={false}>
+          <Table overflowTooltip={false} className="min-w-[44rem]">
             <TableHeader>
               <TableRow>
                 <TableHead>价格项</TableHead>
@@ -1384,8 +1349,12 @@ function ModelPriceDifferenceDialog(props: {
               {rows.map((row) => (
                 <TableRow key={row.label}>
                   <TableCell>{row.label}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{row.configured}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">{row.remote}</TableCell>
+                  <TableCell className="max-w-sm text-right font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                    {row.configured}
+                  </TableCell>
+                  <TableCell className="max-w-sm text-right font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+                    {row.remote}
+                  </TableCell>
                   <TableCell className="text-right">
                     <StatusBadge
                       label={row.matched ? "一致" : "不一致"}

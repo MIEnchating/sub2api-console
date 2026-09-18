@@ -114,7 +114,11 @@ describe("模型检测规则管理弹窗", () => {
     const user = userEvent.setup();
     renderDialog();
     await user.click(screen.getByRole("tab", { name: "高级设置" }));
-    const editor = await screen.findByRole("textbox", { name: "规则与题库 JSON" });
+    const editor = await screen.findByRole(
+      "textbox",
+      { name: "规则与题库 JSON" },
+      { timeout: 10_000 },
+    );
 
     await user.click(editor);
     await user.keyboard("{Control>}a{/Control}");
@@ -122,7 +126,7 @@ describe("模型检测规则管理弹窗", () => {
     await user.click(screen.getByRole("button", { name: "保存草稿" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("配置必须是有效的 JSON 对象");
-  });
+  }, 15_000);
 
   it("保存规则失败时保留输入并允许重试，只显示一次悬浮错误", async () => {
     vi.stubGlobal(

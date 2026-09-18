@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 // JSDOM 26 的样式匹配不支持浏览器顶层选择器，会在菜单焦点计算时递归。
@@ -27,8 +27,8 @@ beforeEach(() => {
   });
 });
 
-import { AccountSelectionToolbar, AccountTaskCancelButton, AccountsPage } from "../../../../App";
-import { api, type AccountStatus } from "../../../../api";
+import { AccountSelectionToolbar, AccountsPage } from "../../../../App";
+import { api, type AccountStatus, type Task } from "../../../../api";
 import { AccountStatusFilter, accountStatusFilterOptions } from "../account-status-tabs";
 
 function account(id = "11"): AccountStatus {
@@ -146,7 +146,7 @@ describe("AccountStatusFilter", () => {
     expect(markup).toContain('aria-label="按调度参数升序排列"');
     expect(markup.match(/aria-sort="none"/g)).toHaveLength(6);
     expect(markup).not.toMatch(/<th[^>]*>Base URL 校验<\/th>/);
-    expect(markup).toContain("min-w-[1336px]");
+    expect(markup).toContain("min-w-[1560px]");
     expect(markup).toContain('data-table-panel=""');
     expect(markup).toContain('aria-label="选择当前页账号"');
     expect(markup).toContain('aria-disabled="true"');
@@ -289,38 +289,54 @@ describe("AccountStatusFilter", () => {
     expect(markup.match(/role="checkbox"/g)).toHaveLength(2);
   });
 
-  it("账号探活运行时不增加取消按钮", () => {
-    const queryClient = new QueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <AccountTaskCancelButton taskId="probe-task-11" pending activeAction="探活测试" />
-      </QueryClientProvider>,
-    );
-    expect(screen.queryByRole("button", { name: "取消任务" })).not.toBeInTheDocument();
-  });
-
-  it("同步账号倍率任务提供取消入口，删除任务不显示行内取消", async () => {
-    const cancel = vi.spyOn(api, "cancelTask").mockResolvedValue({ cancelled: true });
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-
-    const view = render(
-      <QueryClientProvider client={queryClient}>
-        <AccountTaskCancelButton taskId="rate-task-11" pending activeAction="同步账号倍率" />
-      </QueryClientProvider>,
-    );
-
-    const cancelButton = screen.getByRole("button", { name: "取消任务" });
-    fireEvent.click(cancelButton);
-
-    await waitFor(() => expect(cancel).toHaveBeenCalledWith("rate-task-11"));
-
-    view.rerender(
-      <QueryClientProvider client={queryClient}>
-        <AccountTaskCancelButton taskId="delete-task-11" pending activeAction="删除账号" />
-      </QueryClientProvider>,
-    );
-    expect(screen.queryByRole("button", { name: "取消任务" })).not.toBeInTheDocument();
-  });
+  it.each(["同步账号倍率", "探活测试"])(
+    "%s运行时账号行不增加取消按钮，完成后恢复操作",
+    async (action) => {
+      const running: Task = {
+        id: "account-task-11",
+        skill: "account-test",
+        operation: "test",
+        status: "running",
+        progress: 10,
+        message: "处理中",
+        result: {},
+        created_at: "2026-09-18T00:00:00Z",
+        updated_at: "2026-09-18T00:00:00Z",
+      };
+      vi.spyOn(api, "accounts").mockResolvedValue([account()]);
+      vi.spyOn(api, "syncAccountRates").mockResolvedValue(running);
+      vi.spyOn(api, "runActiveProbe").mockResolvedValue(running);
+      const readTask = vi.spyOn(api, "task").mockResolvedValue(running);
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false, staleTime: Infinity },
+          mutations: { retry: false },
+        },
+      });
+      queryClient.setQueryData(["accounts"], [account()]);
+      queryClient.setQueryData(["model-check-account-statuses"], []);
+      queryClient.setQueryData(["policy"], {});
+      queryClient.setQueryData(["dictionaries", "group"], { items: [] });
+      queryClient.setQueryData(["dictionaries", "platform"], { items: [] });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <AccountsPage />
+        </QueryClientProvider>,
+      );
+      const row = within(screen.getByRole("row", { name: /选择账号 示例账号 11/ }));
+      const buttonCount = row.getAllByRole("button").length;
+      fireEvent.click(row.getByRole("button", { name: action }));
+      await waitFor(() => expect(readTask).toHaveBeenCalledWith(running.id));
+      expect(row.getByRole("button", { name: "同步账号倍率" })).toBeDisabled();
+      expect(row.queryByRole("button", { name: /取消任务|取消操作/ })).not.toBeInTheDocument();
+      expect(row.getAllByRole("button")).toHaveLength(buttonCount);
+      queryClient.setQueryData(["account-scheduling", "11", running.id], {
+        ...running,
+        status: "succeeded",
+        progress: 100,
+      });
+      await waitFor(() => expect(row.getByRole("button", { name: action })).toBeEnabled());
+      queryClient.clear();
+    },
+  );
 });

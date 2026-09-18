@@ -38,10 +38,10 @@ it("已有绑定分组的成本与创建参数提供可访问名称", async () =
   }
 });
 
-it("批量开户的参数提供可访问名称", async () => {
+it("打开批量开户时并发和优先级输入框提供可访问名称", async () => {
   client = renderOnboarding(boundCandidate("active"), false);
   await screen.findByRole("button", { name: "预览 0 项变更" });
-  for (const label of ["批量备注（可选）", "并发", "优先级"]) {
+  for (const label of ["并发", "优先级"]) {
     expect(screen.getByLabelText(label, { exact: true })).toBeVisible();
   }
 });

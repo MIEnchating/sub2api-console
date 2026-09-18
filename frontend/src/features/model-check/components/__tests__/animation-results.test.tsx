@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type { AnimationResult } from "@/api";
 import { AnimationAccountResult } from "../animation-account-result";
 
@@ -52,6 +53,22 @@ it("失败账号展示原因并仅重试对应的账号和模型", () => {
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "重试 测试账号" }));
   expect(retry).toHaveBeenCalledWith({ account_id: "41", model: "test-model" });
+});
+
+it("自动恢复成功后详情展示重试次数，卡片不增加状态行", async () => {
+  const user = userEvent.setup();
+  render(
+    <AnimationAccountResult
+      layout="card"
+      result={{ ...result, retry_count: 2 }}
+      retryDisabled={false}
+      onRetry={vi.fn()}
+    />,
+  );
+  expect(screen.queryByText("自动重试 2 次")).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "查看动画检测详情" }));
+  expect(screen.getByText("自动重试 2 次")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /重试 测试账号/ })).not.toBeInTheDocument();
 });
 
 it("检测任务进行中时，失败结果的重试入口禁用", () => {

@@ -32,6 +32,7 @@ import (
 const onboardingAuditTimeout = 5 * time.Second
 
 type Repository interface {
+	OnboardingCapacity(context.Context, string) (business.OnboardingCapacity, error)
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProtectedUpstreamKeyIDs(context.Context, string) ([]string, error)
 	UpstreamKeyProtected(context.Context, string, string) (bool, error)
@@ -75,23 +76,25 @@ type TaskStore interface {
 }
 
 type Request struct {
-	Host            string
-	UpstreamType    string
-	BaseURL         *string
-	PlatformPresent bool
-	Platform        *string
-	AccountType     *string
-	Notes           *string
-	LocalGroupID    string
-	LocalGroupIDs   []string
-	UpstreamGroupID string
-	AccountIDs      []string
-	Extra           map[string]any
-	Priority        *int64
-	Concurrency     *int64
-	TestModels      []string
-	Schedulable     bool
-	Actor           string
+	Host               string
+	UpstreamType       string
+	BaseURL            *string
+	PlatformPresent    bool
+	Platform           *string
+	AccountType        *string
+	Notes              *string
+	LocalGroupID       string
+	LocalGroupIDs      []string
+	UpstreamGroupID    string
+	AccountIDs         []string
+	Extra              map[string]any
+	Priority           *int64
+	Concurrency        *int64
+	WaitingForCapacity bool
+	TestModels         []string
+	ModelMapping       map[string]string
+	Schedulable        bool
+	Actor              string
 }
 
 type Service struct {
@@ -140,6 +143,15 @@ func (s *Service) Candidates(ctx context.Context, host string) ([]business.Onboa
 }
 
 func (s *Service) Enqueue(ctx context.Context, request Request) (taskstore.Task, error) {
+	allocations, err := s.PreviewConcurrency(ctx, []Request{request})
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	if len(allocations) != 1 {
+		return taskstore.Task{}, errors.New("多个本地分组请通过批量添加提交")
+	}
+	request.Concurrency = allocations[0].Concurrency
+	request.WaitingForCapacity = allocations[0].WaitingForCapacity
 	if _, err := s.validate(ctx, request); err != nil {
 		return taskstore.Task{}, err
 	}
@@ -173,6 +185,14 @@ func (s *Service) EnqueueBatch(ctx context.Context, requests []Request) (tasksto
 	requests = expandBatchRequests(requests)
 	if len(requests) > 50 {
 		return taskstore.Task{}, errors.New("单次最多添加或更新 50 个账号")
+	}
+	allocations, err := s.PreviewConcurrency(ctx, requests)
+	if err != nil {
+		return taskstore.Task{}, err
+	}
+	for i := range requests {
+		requests[i].Concurrency = allocations[i].Concurrency
+		requests[i].WaitingForCapacity = allocations[i].WaitingForCapacity
 	}
 	items := make([]batchItem, 0, len(requests))
 	seen := map[string]struct{}{}
@@ -404,6 +424,15 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	priority, concurrency := accountCreationParameters(configstore.AccountDefaultsSettings{
 		Concurrency: creationPolicy.Concurrency, Priority: creationPolicy.Priority,
 	}, validated.request)
+	localGroupIDs := onboardingLocalIDs(validated.locals)
+	pending, err := s.repository.PendingOnboarding(ctx, validated.auth.Host, validated.candidateID(), localGroupIDs)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	concurrency, err = s.checkCreationConcurrency(ctx, &validated, concurrency, pending)
+	if err != nil {
+		return map[string]any{"remote_write": pending != nil && pendingRemoteWrite(*pending)}, err
+	}
 	creationPolicy.Priority = priority
 	creationPolicy.Concurrency = concurrency
 	target, err := targetguard.Settings(ctx, s.private)
@@ -415,11 +444,6 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		return map[string]any{"remote_write": false}, err
 	}
 	operationID, err := operationID()
-	if err != nil {
-		return map[string]any{"remote_write": false}, err
-	}
-	localGroupIDs := onboardingLocalIDs(validated.locals)
-	pending, err := s.repository.PendingOnboarding(ctx, validated.auth.Host, validated.candidateID(), localGroupIDs)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -549,9 +573,12 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("开户模型同步失败：%w", redactSecret(err, key.Secret)))
 		}
 	}
+	mapping, mappedModels := mergeOnboardingModelMapping(models, validated.request.ModelMapping)
 	credentials := onboardingAccountCredentials(
 		key.Secret, validated.accountBaseURL, models, creationPolicy, platform, accountType,
 	)
+	credentials["model_mapping"] = mapping
+	models = mappedModels
 	body := map[string]any{
 		"name": accountName, "notes": remark, "platform": platform, "type": accountType,
 		"credentials": credentials, "extra": validated.request.Extra,
@@ -573,6 +600,11 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			err = &adminclient.CommitUnknownError{Marker: accountMarker, Cause: errors.New("账号 marker 尚未在管理目录中可见")}
 		}
 	} else {
+		capacityRequest := validated
+		capacityRequest.request.Concurrency = &concurrency
+		if _, capacityErr := s.checkCreationConcurrency(ctx, &capacityRequest, concurrency, pending); capacityErr != nil {
+			return s.pendingFailure(ctx, validated, pending, result, capacityErr)
+		}
 		pending.AccountCommitUnknown = true
 		pending.Reason = "准备按不可变 marker 创建管理账号"
 		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
@@ -625,6 +657,20 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			}
 		}
 	}
+	if validated.request.WaitingForCapacity && !readbackConfirmed {
+		remote, readErr := client.Account(ctx, accountID)
+		if readErr != nil {
+			return s.pendingFailure(ctx, validated, pending, result, fmt.Errorf("等待额度账号的停用状态复核失败：%w", redactSecret(readErr, key.Secret)))
+		}
+		if verifyErr := verifyCreatedAccount(remote, accountID, accountName, platform, accountType, accountMarker, onboardingLocalIDs(validated.locals), validated.multiplier, priority, concurrency); verifyErr != nil {
+			return s.pendingFailure(ctx, validated, pending, result, verifyErr)
+		}
+		stopped, ok := remote["schedulable"].(bool)
+		if !ok || stopped {
+			return s.pendingFailure(ctx, validated, pending, result, errors.New("等待额度账号未确认停用，请同步核对后重试"))
+		}
+		readbackConfirmed = true
+	}
 	projection := business.OnboardingProjection{
 		OperationID: operationID, AccountID: accountID, AccountName: accountName,
 		Platform:     platform,
@@ -633,6 +679,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		UpstreamGroupName: validated.candidate.GroupName, LocalGroupID: primaryLocal.ID,
 		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: validated.request.Schedulable,
 		Priority: &priority, Concurrency: &concurrency, Models: models, TestModels: validated.request.TestModels, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
+		WaitingForCapacity: validated.request.WaitingForCapacity,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
@@ -648,6 +695,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	result["credentials"] = "已保存到 Console 私有配置库"
 	result["readback_confirmed"] = readbackConfirmed
 	result["concurrency"] = concurrency
+	result["waiting_for_capacity"] = validated.request.WaitingForCapacity
 	result["priority"] = priority
 	result["load_factor"] = creationPolicy.LoadFactor
 	result["pool_mode"] = creationPolicy.PoolMode
@@ -758,11 +806,13 @@ type frozenOnboardingIntent struct {
 	Concurrency          int64              `json:"concurrency"`
 	Models               []string           `json:"models"`
 	TestModels           []string           `json:"test_models,omitempty"`
+	ModelMapping         map[string]string  `json:"model_mapping,omitempty"`
 	LoadFactor           *string            `json:"load_factor"`
 	PoolMode             bool               `json:"pool_mode"`
 	PoolRetryCount       int                `json:"pool_retry_count"`
 	PoolRetryStatusCodes []int              `json:"pool_retry_status_codes"`
 	Schedulable          bool               `json:"schedulable"`
+	WaitingForCapacity   bool               `json:"waiting_for_capacity,omitempty"`
 }
 
 func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (string, error) {
@@ -795,8 +845,9 @@ func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName
 		LocalGroups: locals, Multiplier: validated.multiplier, Priority: priority, Concurrency: concurrency,
 		Models: append([]string{}, policy.Models...), LoadFactor: policy.LoadFactor, PoolMode: policy.PoolMode,
 		TestModels:     append([]string{}, validated.request.TestModels...),
+		ModelMapping:   validated.request.ModelMapping,
 		PoolRetryCount: policy.PoolModeRetryCount, PoolRetryStatusCodes: append([]int{}, policy.PoolModeRetryStatusCodes...),
-		Schedulable: validated.request.Schedulable,
+		Schedulable: validated.request.Schedulable, WaitingForCapacity: validated.request.WaitingForCapacity,
 	}
 	encoded, err := json.Marshal(intent)
 	if err != nil {
@@ -814,6 +865,14 @@ func createKey(ctx context.Context, client KeyClient, record configstore.AuthRec
 }
 
 func (s *Service) validate(ctx context.Context, request Request) (validatedRequest, error) {
+	mapping, err := NormalizeModelMapping(request.ModelMapping)
+	if err != nil {
+		return validatedRequest{}, err
+	}
+	request.ModelMapping = mapping
+	if len(request.AccountIDs) > 0 && len(mapping) > 0 {
+		return validatedRequest{}, errors.New("模型映射只能随新增账号保存")
+	}
 	models, err := NormalizeProbeModels(request.TestModels)
 	if err != nil {
 		return validatedRequest{}, err
@@ -827,6 +886,9 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	}
 	if request.Concurrency != nil && (*request.Concurrency < 1 || *request.Concurrency > 10_000_000) {
 		return validatedRequest{}, errors.New("并发必须是 1 到 10000000 之间的整数")
+	}
+	if request.WaitingForCapacity && (request.Schedulable || len(request.AccountIDs) > 0 || request.Concurrency == nil || *request.Concurrency != 1) {
+		return validatedRequest{}, errors.New("等待并发额度仅适用于并发为 1 且保持停用的新账号")
 	}
 	localGroupIDs := append([]string{}, request.LocalGroupIDs...)
 	if len(localGroupIDs) == 0 && strings.TrimSpace(request.LocalGroupID) != "" {

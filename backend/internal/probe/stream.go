@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
+	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamerror"
 )
 
 type attemptOutcome struct {
@@ -37,12 +39,16 @@ func probeAttempt(ctx context.Context, account *adminclient.AccountProbe, target
 	defer response.Body.Close()
 	status := response.StatusCode
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 500))
-		return attemptOutcome{status: &status, reason: failure(status, string(body))}
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+		return attemptOutcome{status: &status, reason: limitedText(account.Redact(failure(status, string(body))))}
 	}
 	result := readProbeResponse(response.Body, response.Header.Get("Content-Type"))
-	if upstreamStatus, found := upstreamStatusFromError(result.reason); found {
+	if result.status != nil {
+		status = *result.status
+	} else if upstreamStatus, found := upstreamStatusFromError(result.reason); found {
 		status = upstreamStatus
+	} else if result.reason != "" && upstreamerror.IsCapacity(result.reason) {
+		status = http.StatusServiceUnavailable
 	}
 	result.status = &status
 	if requestContext.Err() != nil && !result.content {
@@ -152,7 +158,30 @@ func finishProbeResponse(result attemptOutcome) attemptOutcome {
 
 func probeEventOutcome(value any) attemptOutcome {
 	reason := eventError(value)
-	return attemptOutcome{model: eventModel(value), reason: reason, content: reason == "" && eventHasContent(value)}
+	result := attemptOutcome{model: eventModel(value), reason: reason, content: reason == "" && eventHasContent(value)}
+	if reason != "" {
+		result.status = eventErrorStatus(value)
+	}
+	return result
+}
+
+func eventErrorStatus(value any) *int {
+	object, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"error", "response"} {
+		if status := eventErrorStatus(object[key]); status != nil {
+			return status
+		}
+	}
+	for _, key := range []string{"status_code", "status", "code"} {
+		status, err := strconv.Atoi(fmt.Sprint(object[key]))
+		if err == nil && status >= 400 && status <= 599 {
+			return &status
+		}
+	}
+	return nil
 }
 
 func eventModel(value any) string {
@@ -253,15 +282,23 @@ func eventError(value any) string {
 	}
 	if raw, present := object["error"]; present && raw != nil && raw != "" {
 		if detail, ok := raw.(map[string]any); ok {
-			if nonemptyText(detail["message"]) {
+			if nonemptyText(detail["message"]) && detail["code"] == nil && detail["type"] == nil {
 				return fmt.Sprint(detail["message"])
 			}
-			return "上游返回错误，请检查模型权限、余额或稍后重试"
+			if len(detail) > 0 {
+				encoded, _ := json.Marshal(detail)
+				return string(encoded)
+			}
+			return "上游返回错误（未提供错误详情）"
 		}
 		return fmt.Sprint(raw)
 	}
 	if object["success"] == false {
-		return "上游报告探活失败，请检查模型权限、余额或稍后重试"
+		if nonemptyText(object["message"]) {
+			return fmt.Sprint(object["message"])
+		}
+		encoded, _ := json.Marshal(object)
+		return string(encoded)
 	}
 	eventType, _ := object["type"].(string)
 	status, _ := object["status"].(string)

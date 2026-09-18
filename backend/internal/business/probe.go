@@ -22,21 +22,25 @@ type ProbeCandidate struct {
 }
 
 type ProbeSample struct {
-	AccountID          string
-	GroupName          string
-	Result             string
-	LatencyP50         *string
-	LatencyP95         *string
-	LatencyP99         *string
-	SampleCount        int
-	Attempts           int
-	FailureReason      *string
-	ObservedAt         string
-	StatusCode         *int
-	RequestModel       string
-	ActualModel        string
-	AttemptStatusCodes []int
-	RetryRecovered     bool
+	AccountID               string
+	GroupName               string
+	Result                  string
+	LatencyP50              *string
+	LatencyP95              *string
+	LatencyP99              *string
+	SampleCount             int
+	Attempts                int
+	FailureReason           *string
+	ObservedAt              string
+	StatusCode              *int
+	RequestModel            string
+	ActualModel             string
+	AttemptStatusCodes      []int
+	RetryRecovered          bool
+	ProbeProtocol           string
+	ProbePromptFingerprint  string
+	ProbeRequestFingerprint string
+	MeasuredFirstToken      bool
 }
 
 func (s *Store) ControlPolicy(ctx context.Context) (map[string]any, error) {
@@ -148,6 +152,9 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 		payloadValue := map[string]any{
 			"status_code": sample.StatusCode, "request_model": sample.RequestModel, "actual_model": sample.ActualModel,
 			"latency_metric": "first_token", "latency_source": "upstream_direct.first_content", "latency_unit": "ms",
+			"probe_protocol": sample.ProbeProtocol, "probe_prompt_fingerprint": sample.ProbePromptFingerprint,
+			"probe_request_fingerprint": sample.ProbeRequestFingerprint, "measured_first_token": sample.MeasuredFirstToken,
+			"performance_eligible": probePerformanceEligible(sample),
 		}
 		if sample.Attempts > 1 || len(sample.AttemptStatusCodes) > 1 {
 			payloadValue["attempt_status_codes"] = sample.AttemptStatusCodes
@@ -172,6 +179,10 @@ func (s *Store) PersistProbeSamples(ctx context.Context, samples []ProbeSample) 
 			sample.AccountID, sample.GroupName, sample.Result, sample.LatencyP50, sample.LatencyP95,
 			sample.LatencyP99, sample.SampleCount, sample.Attempts, sample.FailureReason, sample.ObservedAt,
 			"active-probe", evidenceKey, string(payload)); err != nil {
+			return 0, err
+		}
+		if err := persistStabilitySample(ctx, tx, sample.AccountID, "active-probe", evidenceKey, sample.ObservedAt,
+			stabilityOutcome(sample.Result, pointerValue(sample.FailureReason), "active-probe", "{}"), true); err != nil {
 			return 0, err
 		}
 		if sample.RequestModel != "" && sample.ActualModel != "" && sample.RequestModel != sample.ActualModel {

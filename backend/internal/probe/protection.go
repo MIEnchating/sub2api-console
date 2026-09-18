@@ -11,7 +11,7 @@ type protectionRepository interface {
 	AccountMutationProtections(context.Context, []string) (map[string]business.AccountMutationProtection, error)
 }
 
-func (s *Service) applyCurrentProtections(ctx context.Context, targets []Target) ([]Target, error) {
+func (s *Service) applyCurrentProtections(ctx context.Context, targets []Target, manualFusedDiagnostics map[string]struct{}) ([]Target, error) {
 	repository, ok := s.repository.(protectionRepository)
 	if !ok || len(targets) == 0 {
 		return targets, nil
@@ -31,9 +31,10 @@ func (s *Service) applyCurrentProtections(ctx context.Context, targets []Target)
 	result := append([]Target{}, targets...)
 	for index := range result {
 		protection := protections[result[index].AccountID]
+		_, diagnostic := manualFusedDiagnostics[result[index].AccountID]
 		if protection.ManualPriority {
 			result[index].SkipReason = textPointer("账号在探测执行前进入人工优先位，已跳过")
-		} else if protection.ManualFused {
+		} else if protection.ManualFused && !diagnostic {
 			result[index].SkipReason = textPointer("账号在探测执行前被人工熔断，已跳过")
 		}
 	}

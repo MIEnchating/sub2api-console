@@ -68,6 +68,14 @@ for (const batch of [false, true]) {
         ...pageFixtures,
         "/api/setup/status": { initialized: true, configuration_errors: [] },
         "/api/auth/session": { authenticated: true, username: "探活模型测试" },
+        "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
+        "/api/policy": {
+          probe: { model: "", platform_models: {} },
+          advanced_policy: { group_policies: {} },
+        },
+        "/api/onboarding/concurrency-preview": {
+          items: Array.from({ length: batch ? 2 : 1 }, () => ({ concurrency: 10 })),
+        },
         "/api/overview": {
           database_available: true,
           account_count: 0,

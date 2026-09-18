@@ -1,9 +1,5 @@
 import { NewAPIManagementPage } from "@/features/newapi-management/components/newapi-management-page";
 
-export function NewAPIPlatformRoute() {
-  return <NewAPIManagementPage view="platform" />;
-}
-
 export function NewAPIGroupsRoute() {
   return <NewAPIManagementPage view="groups" />;
 }

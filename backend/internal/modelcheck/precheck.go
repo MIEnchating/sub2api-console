@@ -69,6 +69,21 @@ func animationModeLabel(mode string) string {
 }
 
 func runPrecheckTarget(ctx context.Context, client *http.Client, credential directCredential, timeout int, questions []string, result *AnimationResult) error {
+	return runPrecheckQuestions(ctx, questions, result, func(question AstraQuestion, requestID string) (string, string, error) {
+		sender := directBundleSender{client: client, credential: credential, requestID: requestID}
+		effort := ""
+		if result.Model == astraModel {
+			effort = "low"
+		}
+		text, model, err := sender.SendWithReasoning(ctx, result.AccountID, result.Model, question.Question, timeout, effort)
+		if err == nil && credential.Secret != "" && strings.Contains(text, credential.Secret) {
+			err = errors.New("上游回答包含敏感信息，已拒绝展示")
+		}
+		return text, model, err
+	})
+}
+
+func runPrecheckQuestions(ctx context.Context, questions []string, result *AnimationResult, send func(AstraQuestion, string) (string, string, error)) error {
 	profile := builtinAstraProfile()
 	check := &PrecheckResult{Verdict: "error", ProfileVersion: profile.Version, Questions: make([]PrecheckQuestionResult, 0, 2)}
 	result.Precheck = check
@@ -80,15 +95,7 @@ func runPrecheckTarget(ctx context.Context, client *http.Client, credential dire
 			return err
 		}
 		row := PrecheckQuestionResult{ID: question.ID, Verdict: "error", RequestID: result.RequestID + "-" + question.ID}
-		sender := directBundleSender{client: client, credential: credential, requestID: row.RequestID}
-		effort := ""
-		if result.Model == astraModel {
-			effort = "low"
-		}
-		text, model, err := sender.SendWithReasoning(ctx, result.AccountID, result.Model, question.Question, timeout, effort)
-		if err == nil && credential.Secret != "" && strings.Contains(text, credential.Secret) {
-			err = errors.New("上游回答包含敏感信息，已拒绝展示")
-		}
+		text, model, err := send(question, row.RequestID)
 		if err != nil {
 			row.Error = safeCredentialError(err)
 		} else {
