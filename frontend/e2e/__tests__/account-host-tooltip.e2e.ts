@@ -8,6 +8,7 @@ test("从账号地址向上移入浮层时保留地址，可选中复制且不�
     const responses: Record<string, unknown> = {
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "浮层测试" },
+      "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
       "/api/accounts": [{ ...account, name: "地址复制测试账号", upstream_host: host }],
       "/api/groups": [],
       "/api/policy": { advanced_policy: { manual_priority: { reserved_max: 10 } } },
@@ -52,6 +53,7 @@ test("从账号地址向上移入浮层时保留地址，可选中复制且不�
   await page.keyboard.press("Control+c");
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(host);
   await page.keyboard.press("Escape");
+  await page.mouse.move(0, 0);
   await expect(tooltip).toHaveCount(0);
   await row.getByLabel("账号 41：未观测到请求").hover();
   await expect(page.getByRole("tooltip")).toContainText("当前没有观测到请求槽占用");

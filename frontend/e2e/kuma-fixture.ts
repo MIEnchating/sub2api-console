@@ -146,6 +146,7 @@ export async function setupKuma(
       return;
     }
     const fixtures: Record<string, unknown> = {
+      "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "隔离测试" },
       "/api/config": { probes_enabled: true },

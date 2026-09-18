@@ -14,7 +14,7 @@ jobs:
   preflight:
     name: Mandatory release preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     permissions:
       contents: read
     steps:

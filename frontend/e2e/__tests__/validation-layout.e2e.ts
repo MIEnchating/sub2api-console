@@ -148,6 +148,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("validation-error.png"), fullPage: true });
   await page.getByRole("combobox", { name: "检测模型" }).fill("fixture-model");
+  await page.keyboard.press("Escape");
   await timeoutInput.fill("120");
   await expect(page.locator("#animation-timeout-error")).toHaveCount(0);
   await expect(modelError).toHaveCount(0);

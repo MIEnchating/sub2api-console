@@ -43,6 +43,8 @@ async function setupDictionary(page: Page): Promise<string[][]> {
 }
 
 test("拖拽过程有位移动画，放下只保存一次，搜索中禁用排序", async ({ page }, testInfo) => {
+  // Keep this animation assertion away from the vertical autoscroll boundary.
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 900 });
   const writes = await setupDictionary(page);
   const source = page.getByRole("button", { name: "拖动openai", exact: true });
   const target = page.getByRole("button", { name: "拖动gemini", exact: true });
@@ -151,6 +153,7 @@ test("松手退出拖动的同一帧已采用新顺序，不先回原位再交�
 });
 
 test("第一行拖到第二行后不重播入场动画，拖拽透明度由排序组件控制", async ({ page }) => {
+  await page.setViewportSize({ width: page.viewportSize()!.width, height: 900 });
   await setupDictionary(page);
   const source = page.getByRole("button", { name: "拖动openai", exact: true });
   const target = page.getByRole("button", { name: "拖动gemini", exact: true });

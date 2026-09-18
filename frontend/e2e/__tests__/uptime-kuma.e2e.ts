@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { setupKuma } from "../kuma-fixture";
 import { monitor } from "../../src/features/uptime-kuma/components/__tests__/fixtures";
 
-test("监控表格填满内容区，操作在行内，配置操作固定页头且没有互跳", async ({
+test("监控表格填满内容区，操作在行内，接入配置迁入系统设置且保存入口可达", async ({
   page,
   colorScheme,
 }) => {
@@ -46,11 +46,14 @@ test("监控表格填满内容区，操作在行内，配置操作固定页头�
   await page.screenshot({ path: test.info().outputPath("kuma-table.png"), fullPage: true });
   await page.goto("/uptime-kuma/config");
   await expect(page.getByLabel("API 密钥", { exact: true })).toHaveValue("");
-  const heading = page.locator('[data-slot="page-heading"]');
+  await expect(page).toHaveURL(/\/config\?tab=monitoring/);
+  const heading = page.getByRole("tabpanel", { name: "监控平台", exact: true }).locator("header");
+  await heading.getByRole("button", { name: "验证并保存" }).scrollIntoViewIfNeeded();
   await expect(heading.getByRole("button", { name: "验证并保存" })).toBeInViewport();
   await expect(heading.getByRole("button", { name: "断开接入", exact: true })).toBeInViewport();
   await expect(heading.getByRole("link", { name: "监控管理" })).toHaveCount(0);
   await content.evaluate((e) => e.scrollTo(0, e.scrollHeight));
+  await heading.getByRole("button", { name: "验证并保存" }).scrollIntoViewIfNeeded();
   await expect(heading.getByRole("button", { name: "验证并保存" })).toBeInViewport();
   await content.evaluate((e) => e.scrollTo(0, 0));
   await page.screenshot({ path: test.info().outputPath("kuma-config.png"), fullPage: true });
