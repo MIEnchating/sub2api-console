@@ -125,8 +125,12 @@ for (const [path, title] of pages) {
       ).toBe(true);
     }
     await content.evaluate((element) => element.scrollTo(0, element.scrollHeight));
-    await expect(heading).toBeInViewport({ ratio: 1 });
-    if (path === "/config") {
+    const pageHeading =
+      path === "/newapi"
+        ? page.getByRole("heading", { name: "系统设置", exact: true, level: 1 })
+        : heading;
+    await expect(pageHeading).toBeInViewport({ ratio: 1 });
+    if (path === "/config" || path === "/newapi") {
       await expect(page.getByRole("navigation", { name: "系统设置分类导航" })).toBeInViewport({
         ratio: 1,
       });
