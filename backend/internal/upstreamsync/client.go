@@ -110,6 +110,10 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 	if len(rows) == 0 {
 		return business.UpstreamCatalogSnapshot{}, errors.New("上游分组目录返回为空或格式不可读")
 	}
+	userRates, err := r.sub2APIUserGroupRates(ctx, record)
+	if err != nil {
+		return business.UpstreamCatalogSnapshot{}, err
+	}
 	groups := make([]business.UpstreamCatalogGroup, 0, len(rows))
 	for _, row := range rows {
 		if isNewAPI(record.UpstreamType) && virtualAutoGroup(row) {
@@ -127,6 +131,9 @@ func (r *Reader) ReadCatalog(ctx context.Context, record configstore.AuthRecord)
 		rate, err := optionalDecimal(row, "effective_rate", "actual_rate", "custom_rate", "rate_multiplier", "group_ratio", "groupRatio", "ratio", "rate", "multiplier")
 		if err != nil {
 			return business.UpstreamCatalogSnapshot{}, fmt.Errorf("上游分组 %s 倍率不可读：%w", id, err)
+		}
+		if exclusive, present := userRates[id]; present {
+			rate = &exclusive
 		}
 		groups = append(groups, business.UpstreamCatalogGroup{
 			GroupID: id, Name: name, Description: optionalText(firstPresent(row, "description", "desc", "介绍", "group_description")),

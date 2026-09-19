@@ -2,11 +2,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ConfigPage } from "@/App";
 import type { ConfigTab } from "../../constants";
 
 let client: QueryClient;
+beforeAll(async () => {
+  // This test covers tab requests; load the real lazy modules before timing UI queries.
+  await Promise.all([
+    import("@/features/newapi-management/components/newapi-management-page"),
+    import("@/features/uptime-kuma/components/kuma-config-page"),
+  ]);
+});
 afterEach(() => {
   cleanup();
   client?.clear();

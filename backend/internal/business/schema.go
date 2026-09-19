@@ -98,6 +98,12 @@ CREATE INDEX IF NOT EXISTS ix_health_samples_probe_recent ON health_samples(
  LOWER(REPLACE(source,'_','-')),account_id,group_name,observed_at DESC,id DESC,result,failure_reason
 );
 CREATE INDEX IF NOT EXISTS ix_health_samples_account_recent ON health_samples(account_id,observed_at DESC,id DESC);
+CREATE INDEX IF NOT EXISTS ix_health_samples_account_window ON health_samples(
+ account_id,observed_at DESC,id DESC,source,evidence_key
+);
+CREATE INDEX IF NOT EXISTS ix_health_samples_source_window ON health_samples(
+ account_id,LOWER(REPLACE(source,'_','-')),observed_at DESC,id DESC,source,evidence_key
+);
 CREATE INDEX IF NOT EXISTS ix_health_samples_recent ON health_samples(COALESCE(observed_at,'') DESC,id DESC);
 CREATE TABLE IF NOT EXISTS account_stability_samples (
  account_id TEXT NOT NULL,source TEXT NOT NULL,evidence_key TEXT NOT NULL,
@@ -106,6 +112,7 @@ CREATE TABLE IF NOT EXISTS account_stability_samples (
  PRIMARY KEY(account_id,source,evidence_key)
 );
 CREATE INDEX IF NOT EXISTS ix_account_stability_window ON account_stability_samples(account_id,observed_at);
+CREATE INDEX IF NOT EXISTS ix_account_stability_covering ON account_stability_samples(account_id,observed_at,outcome);
 CREATE TABLE IF NOT EXISTS routing_decisions (
  account_id TEXT NOT NULL,group_name TEXT NOT NULL,priority INTEGER,schedulable INTEGER,role TEXT,routing_state TEXT,
  rank INTEGER,reason TEXT,updated_at TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(account_id)

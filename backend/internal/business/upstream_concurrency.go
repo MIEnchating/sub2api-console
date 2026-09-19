@@ -46,7 +46,7 @@ const upstreamCapacityAccountQuery = `WITH bound AS (
 	COUNT(DISTINCT COALESCE(bi.upstream_id,bh.upstream_id)) AS identity_count
 	FROM bindings b LEFT JOIN binding_identities bi ON bi.binding_id=b.id
 	LEFT JOIN upstream_identity_hosts bh ON bh.host=b.upstream_host
-	GROUP BY b.local_account_id
+	%s GROUP BY b.local_account_id
 )
 SELECT a.id,COALESCE(bound.upstream_id,h.upstream_id,''),COALESCE(bound.identity_count,0),
 	a.concurrency,a.schedulable,a.target_concurrency,a.target_schedulable,m.priority,
@@ -57,7 +57,7 @@ LEFT JOIN upstream_identity_hosts h ON h.host=a.upstream_host
 LEFT JOIN upstream_identity_hosts primary_host ON primary_host.upstream_id=COALESCE(bound.upstream_id,h.upstream_id) AND primary_host.is_primary=1
 LEFT JOIN upstreams u ON u.host=primary_host.host
 LEFT JOIN manual_priority_accounts m ON m.account_id=a.id
-ORDER BY a.id`
+%s ORDER BY a.id`
 
 type routingCapacityAccount struct {
 	RoutingAccount
@@ -66,7 +66,17 @@ type routingCapacityAccount struct {
 }
 
 func (s *Store) routingCapacityInventory(ctx context.Context) (map[string]routingCapacityAccount, error) {
-	rows, err := s.db.QueryContext(ctx, upstreamCapacityAccountQuery)
+	return s.routingCapacityInventoryForAccount(ctx, nil)
+}
+
+func (s *Store) routingCapacityInventoryForAccount(ctx context.Context, accountID *string) (map[string]routingCapacityAccount, error) {
+	bindingScope, accountScope := "", ""
+	arguments := []any{}
+	if accountID != nil {
+		bindingScope, accountScope = "WHERE b.local_account_id=?", "WHERE a.id=?"
+		arguments = append(arguments, strings.TrimSpace(*accountID), strings.TrimSpace(*accountID))
+	}
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(upstreamCapacityAccountQuery, bindingScope, accountScope), arguments...)
 	if err != nil {
 		return nil, err
 	}

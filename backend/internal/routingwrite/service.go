@@ -721,7 +721,7 @@ func (s *Service) applyAccountCoordinated(
 	}
 	if target.UpstreamReductionID != "" {
 		if !policy.upstreamReductionEnabled {
-			return failedResult(result, errors.New("上游共享并发自动下调已关闭，请重新计算调度"))
+			return failedResult(result, errors.New("上游共享并发自动分配已关闭，请重新计算调度"))
 		}
 		needed, checkErr := coordinator.capacity.checkReduction(target, current)
 		if checkErr != nil {

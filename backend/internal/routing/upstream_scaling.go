@@ -92,10 +92,18 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 			if item == nil || !item.schedulable || remoteSchedulable(item.account) || !placementLoadFactorEligible(item) {
 				continue
 			}
-			if pool.unknown || pool.stale || pool.limit == nil || (!configs[item.account.GroupName].scalingEnabled && (item.account.Concurrency == nil || *item.account.Concurrency <= 0)) {
+			config := configs[item.account.GroupName]
+			if previouslyConcurrencyLimited(item.account) && !config.scalingEnabled && !config.upstreamAllocationEnabledFor(item.account) {
+				limitConcurrency(item, "账号未启用共享并发分配或智能扩容，保持等待并发额度")
+				continue
+			}
+			if pool.unknown || pool.stale || pool.limit == nil || (!configs[item.account.GroupName].scalingEnabled && !configs[item.account.GroupName].upstreamAllocationEnabledFor(item.account) && (item.account.Concurrency == nil || *item.account.Concurrency <= 0)) {
 				item.schedulable = false
 				appendConcurrencyReason(item, "恢复前共享并发或账号并发尚未确认，保持暂停；请同步上游与账号")
 			}
+		}
+		if pool.allocateShared(primary, configs, global) {
+			continue
 		}
 		correcting := pool.reduceOverage(primary, configs)
 		items := []*candidate{}
@@ -117,8 +125,8 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 			if !config.scalingEnabled {
 				if previouslyConcurrencyLimited(item.account) && placementLoadFactorEligible(item) {
 					message := "并发伸缩已关闭，保持上游并发暂停；启用伸缩后重新评估"
-					if config.upstreamReductionEnabled {
-						message = "仅自动下调已开启，保持等待并发额度；恢复需启用智能扩容或人工核对"
+					if config.upstreamAllocationEnabledFor(item.account) {
+						message = "共享并发尚未确认或账号未满足恢复条件，保持等待；同步成功后自动重新分配"
 					}
 					limitConcurrency(item, message)
 				}
@@ -179,9 +187,20 @@ func (pool *upstreamScalingPool) apply(items []*candidate, configs map[string]en
 		}
 	}
 	available := max(int64(0), limit-reserved)
+	if configs[items[0].account.GroupName].globalScalingEnabled {
+		globalLimit := int64(math.MaxInt64)
+		for _, item := range items {
+			globalLimit = min(globalLimit, configs[item.account.GroupName].scalingGlobalMax)
+		}
+		available = min(available, max(int64(0), globalLimit-global.reservedOutside(selected)))
+	}
+	waitingReason := fmt.Sprintf("上游并发上限 %d，已分配及预留 %d，可分配 %d；按调度权重等待额度释放", limit, reserved, available)
+	if configs[items[0].account.GroupName].globalScalingEnabled && available < max(int64(0), limit-reserved) {
+		waitingReason = fmt.Sprintf("全局并发上限 %d，其他账号已分配及预留 %d，可分配 %d；等待全局额度释放", configs[items[0].account.GroupName].scalingGlobalMax, global.reservedOutside(selected), available)
+	}
 	eligible := items[:min(int64(len(items)), available)]
 	for _, item := range items[len(eligible):] {
-		limitConcurrency(item, "上游可用并发不足，按调度权重暂停；容量恢复后重新评估")
+		limitConcurrency(item, waitingReason)
 	}
 	if len(eligible) == 0 {
 		return
@@ -196,6 +215,9 @@ func (pool *upstreamScalingPool) apply(items []*candidate, configs map[string]en
 		current := pool.current[item.account.ID]
 		upstreamHeadroom := max(int64(0), limit-allocated)
 		globalHeadroom := max(int64(0), config.scalingGlobalMax-global.allocated)
+		if item.upstreamAllocation && !config.globalScalingEnabled {
+			globalHeadroom = math.MaxInt64
+		}
 		if pool.stale {
 			upstreamHeadroom = 0
 			appendConcurrencyReason(item, "上游并发信息待更新，本轮仅允许缩减并发")
@@ -208,6 +230,9 @@ func (pool *upstreamScalingPool) apply(items []*candidate, configs map[string]en
 			// A non-capacity pause is conservatively reserved in the inventory.
 			// Its own reservation can fund reopening, but no sibling reduction can.
 			globalRecoveryCapacity := max(int64(0), config.scalingGlobalMax-max(int64(0), global.allocated-current))
+			if item.upstreamAllocation && !config.globalScalingEnabled {
+				globalRecoveryCapacity = math.MaxInt64
+			}
 			if globalRecoveryCapacity == 0 {
 				limitConcurrency(item, "等待上游及全局并发容量释放并确认后恢复调度")
 				continue
@@ -219,7 +244,11 @@ func (pool *upstreamScalingPool) apply(items []*candidate, configs map[string]en
 		}
 		desired := quota
 		if desired > current {
-			desired = current + min(desired-current, config.scalingStepUp, upstreamHeadroom, globalHeadroom)
+			if item.upstreamAllocation && item.evidencePending {
+				desired = current
+			} else {
+				desired = current + min(desired-current, config.scalingStepUp, upstreamHeadroom, globalHeadroom)
+			}
 		} else if current != math.MaxInt64 {
 			desired = max(desired, current-config.scalingStepDown)
 		}

@@ -561,9 +561,14 @@ type advancedRule struct {
 }
 
 var advancedRules = map[string]map[string]advancedRule{
-	"selection":            {},
-	"upstream_concurrency": {"enabled": {kind: "bool"}},
-	"cost_wall":            {"enabled": {kind: "bool"}, "fallback_enabled": {kind: "bool"}, "stop_auto_probe": {kind: "bool"}},
+	"selection": {},
+	"upstream_concurrency": {
+		"enabled":      {kind: "bool"},
+		"account_mode": {kind: "enum", allowed: valueStringSet("all", "selected", "upstreams")},
+		"account_ids":  {kind: "account_ids"},
+		"upstream_ids": {kind: "strings"},
+	},
+	"cost_wall": {"enabled": {kind: "bool"}, "fallback_enabled": {kind: "bool"}, "stop_auto_probe": {kind: "bool"}},
 	"weights": {
 		"enabled": {kind: "bool"}, "budget": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"gate_floor": {kind: "number", minimum: 0, maximum: 100}, "price_exp": {kind: "positive_number", maximum: 100},
@@ -755,6 +760,18 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 			return nil, fmt.Errorf("高级策略字段 %s 的选项无效", path)
 		}
 		return text, nil
+	case "account_ids":
+		ids, err := normalizedStringArray(path, value)
+		if err != nil {
+			return nil, err
+		}
+		for _, raw := range ids {
+			id := raw.(string)
+			if !stableNumericID(id) {
+				return nil, fmt.Errorf("高级策略字段 %s 必须使用有效的账号 ID", path)
+			}
+		}
+		return ids, nil
 	case "strings":
 		return normalizedStringArray(path, value)
 	case "group_decimal_minimums":

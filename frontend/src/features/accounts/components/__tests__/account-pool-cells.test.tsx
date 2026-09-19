@@ -118,7 +118,7 @@ it("负载因子为空时展示跟随并发后的有效值", () => {
 
 describe("account pool cells", () => {
   it.each([false, true])(
-    "账号等待并发额度且 compact 为 %s 时展示等待原因和重新评估入口",
+    "账号等待并发额度且 compact 为 %s 时展示等待原因和后台自动评估说明",
     (compact) => {
       render(
         <AccountStateCell
@@ -137,7 +137,7 @@ describe("account pool cells", () => {
 
       expect(screen.getByText("等待并发额度")).toBeVisible();
       expect(screen.getByText(/等待原因：上游剩余额度不足以分配单账号并发下限/)).toBeVisible();
-      expect(screen.getByText(/请在上游管理同步并发额度后重新计算调度/)).toBeVisible();
+      expect(screen.getByText(/开启上游共享并发分配后/)).toBeVisible();
       expect(screen.queryByText("待探测")).not.toBeInTheDocument();
       expect(screen.queryByText(/停止原因未记录/)).not.toBeInTheDocument();
     },

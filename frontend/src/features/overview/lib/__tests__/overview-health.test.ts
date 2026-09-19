@@ -96,7 +96,7 @@ describe("overview health calculations", () => {
     const attention = buildAttentionAccounts([limited], [group()]);
     expect(attention).toHaveLength(1);
     expect(attention[0].state).toBe("concurrency_limited");
-    expect(attention[0].reason).toContain("同步并发额度后重新计算调度");
+    expect(attention[0].reason).toContain("开启上游共享并发分配后");
   });
   it("策略值与对象原型属性同名时按原始文本显示", () => {
     expect(strategyLabel("__proto__")).toBe("__proto__");

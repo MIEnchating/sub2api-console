@@ -84,14 +84,14 @@ func TestConfirmedConcurrencyPauseIsVisibleAndReleasesCapacityForOtherScopes(t *
 	}
 }
 
-func TestIndependentReductionUsesSyncedLimitWhileGlobalScalingAndConcurrencyWritesAreOff(t *testing.T) {
+func TestIndependentAllocationUsesSyncedLimitWhileGlobalScalingAndConcurrencyWritesAreOff(t *testing.T) {
 	store, db := concurrencyStore(t)
 	if _, err := store.UpdatePolicy(t.Context(), map[string]any{
 		"global_strategy": "price_first",
 		"auto_apply":      map[string]any{"concurrency": false, "schedulable": false},
 		"advanced_policy": map[string]any{
 			"upstream_concurrency": map[string]any{"enabled": true},
-			"scaling":              map[string]any{"enabled": false, "global_max_concurrency": 1, "step_down": 1},
+			"scaling":              map[string]any{"enabled": false, "global_max_concurrency": 100, "step_down": 1},
 		},
 	}, "test"); err != nil {
 		t.Fatal(err)

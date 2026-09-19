@@ -21,10 +21,13 @@ func independentReduction(target business.AccountRoutingTarget, policy writePoli
 }
 
 func independentPause(target business.AccountRoutingTarget, policy writePolicy) bool {
-	return independentReduction(target, policy) && target.DesiredHealth == "concurrency_limited" && target.Schedulable != nil && !*target.Schedulable
+	return independentReduction(target, policy) && (target.UpstreamAllocation || target.DesiredHealth == "concurrency_limited" && target.Schedulable != nil && !*target.Schedulable)
 }
 
 func (guard *upstreamCapacityGuard) checkReduction(target business.AccountRoutingTarget, current values) (bool, error) {
+	if target.UpstreamAllocation {
+		return guard.checkAllocation(target, current)
+	}
 	if guard == nil || guard.members[target.AccountID] != target.UpstreamReductionID || target.UpstreamReductionLimit == nil || *target.UpstreamReductionLimit <= 0 {
 		return false, errors.New("上游并发下调来源未确认，请重新同步并计算")
 	}

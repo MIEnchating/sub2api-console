@@ -32,7 +32,10 @@ import {
   policyCleanupActionLabel,
   policyCleanupActionOptions,
   policyScalingDescription,
+  policyScalingSummary,
+  upstreamConcurrencyMode,
 } from "./features/policy/constants";
+import { PolicyHelp } from "./features/policy/components/policy-help";
 import { PolicyConfigCard } from "./features/policy/components/policy-config-card";
 import { PolicySwitchRow } from "./features/policy/components/policy-switch-row";
 import { UpstreamConcurrencyPolicyCard } from "./features/policy/components/upstream-concurrency-policy-card";
@@ -1824,6 +1827,28 @@ export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
   const accountRateBatchPercent = policyAdvancedValue(value, "account_rate_sync", "batch_percent");
   const upstreamConcurrencyEnabled = policyAdvancedValue(value, "upstream_concurrency", "enabled");
   if (upstreamConcurrencyEnabled !== undefined && typeof upstreamConcurrencyEnabled !== "boolean")
+    return null;
+  const allocationMode = policyAdvancedValue(value, "upstream_concurrency", "account_mode");
+  if (
+    allocationMode !== undefined &&
+    allocationMode !== "all" &&
+    allocationMode !== "selected" &&
+    allocationMode !== "upstreams"
+  )
+    return null;
+  const allocationIDs = policyAdvancedValue(value, "upstream_concurrency", "account_ids");
+  if (
+    allocationIDs !== undefined &&
+    (!Array.isArray(allocationIDs) ||
+      allocationIDs.some((id: unknown) => typeof id !== "string" || !/^[1-9]\d*$/.test(id)))
+  )
+    return null;
+  const allocationUpstreamIDs = policyAdvancedValue(value, "upstream_concurrency", "upstream_ids");
+  if (
+    allocationUpstreamIDs !== undefined &&
+    (!Array.isArray(allocationUpstreamIDs) ||
+      allocationUpstreamIDs.some((id: unknown) => typeof id !== "string" || !id.trim()))
+  )
     return null;
   for (const field of ["enabled", "fallback_enabled", "stop_auto_probe"]) {
     const configured = policyAdvancedValue(value, "cost_wall", field);
@@ -12288,10 +12313,27 @@ export function PolicyPage() {
     setDraftValue(value);
   }
   const [category, setCategory] = useState<PolicyCategory>("routing");
+  const allocationScope = (draft?.advanced_policy ?? policy.data?.advanced_policy)
+    ?.upstream_concurrency;
+  const selectingAllocationAccounts =
+    allocationScope !== null &&
+    typeof allocationScope === "object" &&
+    !Array.isArray(allocationScope) &&
+    (allocationScope as Record<string, unknown>).account_mode === "selected";
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: api.accounts,
-    enabled: category === "scope",
+    enabled: category === "scope" || (category === "routing" && selectingAllocationAccounts),
+  });
+  const selectingAllocationUpstreams =
+    allocationScope !== null &&
+    typeof allocationScope === "object" &&
+    !Array.isArray(allocationScope) &&
+    (allocationScope as Record<string, unknown>).account_mode === "upstreams";
+  const allocationUpstreams = useQuery({
+    queryKey: ["upstreams"],
+    queryFn: api.upstreams,
+    enabled: category === "routing" && selectingAllocationUpstreams,
   });
   const [dangerousSaveOpen, setDangerousSaveOpen] = useState(false);
   const [pendingPolicySave, setPendingPolicySave] = useState<PolicyUpdatePayload | null>(null);
@@ -12433,14 +12475,9 @@ export function PolicyPage() {
                     description="分组没有单独设置时使用；分组级选择在分组管理中配置。"
                     columns={3}
                     help={
-                      <details className="group text-muted-foreground text-xs leading-6">
-                        <summary className="focus-visible:ring-ring w-fit cursor-pointer rounded-sm font-medium outline-none focus-visible:ring-2">
-                          查看权重计算说明
-                        </summary>
-                        <p className="bg-muted/40 mt-2 rounded-lg px-3 py-2">
-                          {schedulingWeightFormula}
-                        </p>
-                      </details>
+                      <PolicyHelp label="查看权重计算说明">
+                        <p>{schedulingWeightFormula}</p>
+                      </PolicyHelp>
                     }
                   >
                     <FormField
@@ -12576,6 +12613,14 @@ export function PolicyPage() {
               {current ? (
                 <PolicyOperationsEditor
                   section="routing"
+                  upstreams={allocationUpstreams.data?.hosts}
+                  upstreamsPending={allocationUpstreams.isLoading}
+                  upstreamsFailed={allocationUpstreams.isError && !allocationUpstreams.data}
+                  onRetryUpstreams={() => void allocationUpstreams.refetch()}
+                  accounts={accounts.data ?? []}
+                  accountsPending={accounts.isLoading}
+                  accountsFailed={accounts.isError && !accounts.data}
+                  onRetryAccounts={() => void accounts.refetch()}
                   value={current}
                   onChange={setDraft}
                   probesEnabled={config.data?.probes_enabled}
@@ -12688,6 +12733,14 @@ type PolicyEditorProps = {
 };
 
 type PolicyOperationsEditorProps = PolicyEditorProps & {
+  upstreams?: UpstreamSummary["hosts"];
+  upstreamsPending?: boolean;
+  upstreamsFailed?: boolean;
+  onRetryUpstreams?: () => void;
+  accounts?: AccountStatus[];
+  accountsPending?: boolean;
+  accountsFailed?: boolean;
+  onRetryAccounts?: () => void;
   section: "routing" | "health" | "sampling";
   probesEnabled?: boolean;
   probesPending: boolean;
@@ -13357,13 +13410,39 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
         <UpstreamConcurrencyPolicyCard
           enabled={policyAdvancedValue(props.value, "upstream_concurrency", "enabled") === true}
           onEnabledChange={(value) => set("upstream_concurrency", "enabled", value)}
+          accountMode={upstreamConcurrencyMode(
+            policyAdvancedValue(props.value, "upstream_concurrency", "account_mode"),
+          )}
+          upstreamIDs={policyStringArray(
+            policyAdvancedValue(props.value, "upstream_concurrency", "upstream_ids"),
+          )}
+          onUpstreamIDsChange={(value) => set("upstream_concurrency", "upstream_ids", value)}
+          upstreams={props.upstreams}
+          upstreamsPending={props.upstreamsPending}
+          upstreamsFailed={props.upstreamsFailed}
+          onRetryUpstreams={props.onRetryUpstreams}
+          accountIDs={policyStringArray(
+            policyAdvancedValue(props.value, "upstream_concurrency", "account_ids"),
+          )}
+          onAccountModeChange={(value) => set("upstream_concurrency", "account_mode", value)}
+          onAccountIDsChange={(value) => set("upstream_concurrency", "account_ids", value)}
+          accounts={props.accounts}
+          accountsPending={props.accountsPending}
+          accountsFailed={props.accountsFailed}
+          onRetryAccounts={props.onRetryAccounts}
         />
       ) : null}
       {props.section === "routing" ? (
         <PolicyConfigCard
           title="智能扩容"
-          description={policyScalingDescription}
+          description={policyScalingSummary}
           columns={3}
+          wide
+          help={
+            <PolicyHelp label="查看扩容与容量约束说明">
+              <p>{policyScalingDescription}</p>
+            </PolicyHelp>
+          }
           switchAction={{
             checked: policyAdvancedValue(props.value, "scaling", "enabled") === true,
             label: "启用智能扩容",

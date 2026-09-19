@@ -28,7 +28,7 @@ func reductionFixture(t *testing.T, accounts ...business.RoutingAccount) *upstre
 	policy["upstream_concurrency"] = map[string]any{"enabled": true}
 	policy["auto_apply"] = map[string]any{"concurrency": false, "schedulable": false, "priority": false, "load_factor": false}
 	scaling := policy["scaling"].(map[string]any)
-	scaling["enabled"], scaling["global_max_concurrency"] = false, 1
+	scaling["enabled"], scaling["global_max_concurrency"] = false, 1000
 	scaling["step_down"], scaling["cooldown_seconds"] = 1, 3600
 	for index := range base.accounts {
 		base.accounts[index].UpstreamConcurrencyStatus = business.UpstreamConcurrencyKnown
@@ -85,7 +85,11 @@ func TestIndependentUpstreamReductionDoesNotTouchCapacityWithoutConfirmedFiniteO
 			if err != nil {
 				t.Fatal(err)
 			}
-			if target := result.AccountTargets["41"]; target.Concurrency != nil || target.DesiredHealth == "concurrency_limited" {
+			if target := result.AccountTargets["41"]; name == "at limit with fused reservation" {
+				if target.Schedulable == nil || *target.Schedulable || target.DesiredHealth != "concurrency_limited" {
+					t.Fatalf("fused reservation must not fund active allocation: %+v", target)
+				}
+			} else if target.Concurrency != nil || target.DesiredHealth == "concurrency_limited" {
 				t.Fatalf("capacity without confirmed finite overage must remain unchanged: %+v", target)
 			}
 		})
@@ -112,7 +116,7 @@ func TestIndependentUpstreamReductionReservesProtectedAccountsAndPausesByStableP
 	}
 }
 
-func TestIndependentUpstreamReductionUsesExistingPriceWeightsWithoutGrowingSmallAccounts(t *testing.T) {
+func TestIndependentSharedAllocationUsesPriceWeightsAndDefersGrowthUntilReadback(t *testing.T) {
 	first, second, small := upstreamCapacityAccount("41", 100, 17), upstreamCapacityAccount("42", 100, 17), upstreamCapacityAccount("43", 1, 17)
 	expensive := "4"
 	second.Multiplier = &expensive
@@ -126,12 +130,12 @@ func TestIndependentUpstreamReductionUsesExistingPriceWeightsWithoutGrowingSmall
 		t.Fatal(err)
 	}
 	cheap, costly := result.AccountTargets["41"].Concurrency, result.AccountTargets["42"].Concurrency
-	if cheap == nil || costly == nil || *cheap <= *costly || *cheap+*costly != 16 || result.AccountTargets["43"].Concurrency != nil {
-		t.Fatalf("price weights must apportion exactly the excess while small accounts never grow: %+v", result.AccountTargets)
+	if cheap == nil || costly == nil || *cheap <= *costly || *cheap+*costly >= 17 || result.AccountTargets["43"].Concurrency != nil {
+		t.Fatalf("price weights must allocate more to cheaper accounts while growth waits for readback: %+v", result.AccountTargets)
 	}
 }
 
-func TestIndependentUpstreamReductionPreservesCapacityPauseAfterLimitIncreases(t *testing.T) {
+func TestIndependentSharedAllocationRecoversCapacityPauseAfterLimitIncreases(t *testing.T) {
 	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
 	inactive := false
 	waiting.Schedulable, waiting.EffectiveState = &inactive, "concurrency_limited"
@@ -140,8 +144,8 @@ func TestIndependentUpstreamReductionPreservesCapacityPauseAfterLimitIncreases(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := result.AccountTargets["42"]; target.Schedulable == nil || *target.Schedulable || target.Concurrency != nil || target.DesiredHealth != "concurrency_limited" {
-		t.Fatalf("reduction-only mode cannot expand or resume a capacity pause: %+v", target)
+	if target := result.AccountTargets["42"]; target.Schedulable == nil || !*target.Schedulable || target.DesiredHealth == "concurrency_limited" {
+		t.Fatalf("shared allocation must resume a confirmed capacity pause: %+v", target)
 	}
 }
 
@@ -164,7 +168,7 @@ func TestIndependentUpstreamReductionStillLowersOverageWhileHealthEvidenceIsPend
 	}
 }
 
-func TestIndependentUpstreamReductionDoesNotReallocateTheSamePoolThroughRegularScaling(t *testing.T) {
+func TestSharedAllocationWithScalingEnabledAppliesConfiguredStepOnlyOnce(t *testing.T) {
 	repository := reductionFixture(t, upstreamCapacityAccount("41", 100, 10), upstreamCapacityAccount("42", 1, 10))
 	repository.policy["scaling"].(map[string]any)["enabled"] = true
 	repository.policy["auto_apply"] = map[string]any{"concurrency": true, "schedulable": true}
@@ -172,10 +176,10 @@ func TestIndependentUpstreamReductionDoesNotReallocateTheSamePoolThroughRegularS
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := result.AccountTargets["41"]; target.Concurrency == nil || *target.Concurrency != 9 {
-		t.Fatalf("large account should use only the remaining nine slots: %+v", target)
+	if target := result.AccountTargets["41"]; target.Concurrency == nil || *target.Concurrency != 99 {
+		t.Fatalf("configured step_down=1 must lower 100 to 99 exactly once: %+v", target)
 	}
 	if target := result.AccountTargets["42"]; target.Concurrency != nil || target.Schedulable == nil || !*target.Schedulable {
-		t.Fatalf("regular scaling must not reallocate an already corrected upstream pool: %+v", target)
+		t.Fatalf("unconfirmed configured reduction must not fund sibling growth: %+v", target)
 	}
 }

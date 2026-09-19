@@ -463,7 +463,11 @@ func (s *Store) loadAccountKeyStatuses(ctx context.Context, accounts map[string]
 		status, reason := "unbound", "账号没有上游 Key 绑定记录"
 		account.KeyStatus, account.KeyStatusReason = &status, &reason
 	}
-	states, err := s.accountCatalogBindingStates(ctx)
+	var selectedAccountID *string
+	if id, single := soleProjectionAccountID(accounts); single {
+		selectedAccountID = &id
+	}
+	states, err := s.accountCatalogBindingStatesForAccount(ctx, selectedAccountID)
 	if err != nil {
 		return err
 	}

@@ -375,15 +375,21 @@ func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kin
 	return nil
 }
 
-func (s *Store) accountCatalogBindingStates(ctx context.Context) (map[string]accountCatalogBindingState, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT b.local_account_id,bi.upstream_key_id,bi.upstream_group_id,
+func (s *Store) accountCatalogBindingStatesForAccount(ctx context.Context, accountID *string) (map[string]accountCatalogBindingState, error) {
+	query := `SELECT b.local_account_id,bi.upstream_key_id,bi.upstream_group_id,
 		k.parent_entity_id,k.observed_status,k.lifecycle_state,k.missing_observations,
 		g.entity_id,g.observed_status,g.lifecycle_state,g.missing_observations
 		FROM binding_identities bi JOIN bindings b ON b.id=bi.binding_id
 		LEFT JOIN upstream_catalog_entities k ON k.upstream_id=bi.upstream_id AND k.entity_kind='key' AND k.entity_id=bi.upstream_key_id
 		LEFT JOIN upstream_catalog_entities g ON g.upstream_id=bi.upstream_id AND g.entity_kind='group'
-			AND g.entity_id=COALESCE(NULLIF(TRIM(k.parent_entity_id),''),bi.upstream_group_id)
-		ORDER BY b.local_account_id,bi.binding_id`)
+			AND g.entity_id=COALESCE(NULLIF(TRIM(k.parent_entity_id),''),bi.upstream_group_id)`
+	arguments := []any{}
+	if accountID != nil {
+		query += " WHERE b.local_account_id=?"
+		arguments = append(arguments, strings.TrimSpace(*accountID))
+	}
+	query += " ORDER BY b.local_account_id,bi.binding_id"
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}

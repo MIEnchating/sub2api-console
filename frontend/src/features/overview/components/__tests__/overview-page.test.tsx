@@ -14,7 +14,7 @@ it("运营动态收到等待并发额度账号时展示中文状态及后续操�
         {
           account: { ...account(), health: "concurrency_limited" },
           state: "concurrency_limited",
-          reason: "请同步并发额度后重新计算调度",
+          reason: "开启上游共享并发分配后",
         },
       ]}
       attentionLoading={false}
@@ -28,7 +28,7 @@ it("运营动态收到等待并发额度账号时展示中文状态及后续操�
   );
 
   expect(screen.getByText("等待并发额度")).toBeVisible();
-  expect(screen.getByText("请同步并发额度后重新计算调度")).toBeVisible();
+  expect(screen.getByText("开启上游共享并发分配后")).toBeVisible();
 });
 
 function account(): AccountStatus {

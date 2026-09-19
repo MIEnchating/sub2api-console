@@ -109,7 +109,7 @@ afterEach(() => {
 });
 
 describe("请求查询账号处置", () => {
-  it("账号等待并发额度时禁用恢复调度并提示同步额度后重新计算", async () => {
+  it("账号等待并发额度时禁用恢复调度并提示后台自动计算及恢复条件", async () => {
     const network = mockNetwork(
       account({
         health: "concurrency_limited",
@@ -120,7 +120,7 @@ describe("请求查询账号处置", () => {
     const user = userEvent.setup();
     renderActions();
 
-    expect(await screen.findByText(/请在上游管理同步并发额度后重新计算调度/)).toBeVisible();
+    expect(await screen.findByText(/开启上游共享并发分配后/)).toBeVisible();
     const resume = screen.getByRole("button", { name: "恢复调度" });
     expect(resume).toBeDisabled();
     await user.click(resume);
@@ -144,7 +144,7 @@ describe("请求查询账号处置", () => {
     await waitFor(() =>
       expect(dialog.getByRole("button", { name: "确认恢复调度" })).toBeDisabled(),
     );
-    expect(dialog.getByText(/同步并发额度后重新计算调度/)).toBeVisible();
+    expect(dialog.getByText(/开启上游共享并发分配后/)).toBeVisible();
     await user.click(dialog.getByRole("button", { name: "确认恢复调度" }));
     expect(network.writes).toEqual([]);
   });

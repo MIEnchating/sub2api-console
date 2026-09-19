@@ -144,7 +144,11 @@ type engineConfig struct {
 	minLoadFactor            int64
 	maxLoadFactor            int64
 	scalingEnabled           bool
+	globalScalingEnabled     bool
 	upstreamReductionEnabled bool
+	upstreamAccountMode      string
+	upstreamAccountIDs       map[string]struct{}
+	upstreamIDs              map[string]struct{}
 	costWallEnabled          bool
 	costWallFallbackEnabled  bool
 	costWallStopAutoProbe    bool
@@ -222,6 +226,7 @@ type candidate struct {
 	cleanupAction                 *string
 	concurrencyIssue              string
 	concurrencyConfigurationError *string
+	upstreamAllocation            bool
 	upstreamReductionID           string
 	upstreamReductionLimit        *int64
 }
@@ -814,9 +819,18 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 	if managedMode != "all" && managedMode != "selected" {
 		return engineConfig{}, errors.New("scope.managed_group_mode 配置无效")
 	}
+	upstreamAccountMode := "all"
+	if raw, present := upstreamConcurrency["account_mode"]; present {
+		mode, ok := raw.(string)
+		if !ok || mode != "all" && mode != "selected" && mode != "upstreams" {
+			return engineConfig{}, errors.New("upstream_concurrency.account_mode 配置无效")
+		}
+		upstreamAccountMode = mode
+	}
 	reader := &policyReader{}
 	config := engineConfig{
 		sampleClassification: classification,
+		globalScalingEnabled: GlobalScalingEnabled(policy),
 		strategy:             strategy, trafficEnabled: reader.boolean(traffic, "traffic.enabled", "enabled", true),
 		trafficMaxAge:           time.Duration(reader.integer(traffic, "traffic.lookback_minutes", "lookback_minutes", 120, 1, 10080)) * time.Minute,
 		probeMaxAge:             time.Duration(reader.integer(probe, "probe.freshness_seconds", "freshness_seconds", 900, 1, 86400)) * time.Second,
@@ -851,6 +865,9 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		minLoadFactor:         int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
 		scalingEnabled: reader.boolean(scaling, "scaling.enabled", "enabled", false), scalingGlobalMax: int64(reader.integer(scaling, "scaling.global_max_concurrency", "global_max_concurrency", 900, 1, 10_000_000)),
 		upstreamReductionEnabled: reader.boolean(upstreamConcurrency, "upstream_concurrency.enabled", "enabled", false),
+		upstreamAccountMode:      upstreamAccountMode,
+		upstreamIDs:              reader.readStringSet(upstreamConcurrency, "upstream_concurrency.upstream_ids", "upstream_ids", false),
+		upstreamAccountIDs:       reader.stringSet(upstreamConcurrency, "upstream_concurrency.account_ids", "account_ids"),
 		costWallEnabled:          reader.boolean(costWall, "cost_wall.enabled", "enabled", true),
 		costWallFallbackEnabled:  reader.boolean(costWall, "cost_wall.fallback_enabled", "fallback_enabled", true),
 		costWallStopAutoProbe:    reader.boolean(costWall, "cost_wall.stop_auto_probe", "stop_auto_probe", true),
@@ -1469,6 +1486,7 @@ func assignAccountPlacements(
 	sort.Strings(groupNames)
 	budget := newScalingBudget(capacityInventory, fallbackConcurrency)
 	upstreamPools := newUpstreamScalingPools(capacityInventory)
+	releaseConfirmedCostReservations(capacityInventory, primary, configs, &budget, upstreamPools)
 	minimumLimited := false
 	for _, groupName := range groupNames {
 		members := groups[groupName]
@@ -1630,6 +1648,7 @@ func cloneString(value *string) *string {
 }
 
 type scalingBudget struct {
+	reservations     map[string]int64
 	initialAllocated int64
 	allocated        int64
 }
@@ -1655,7 +1674,7 @@ func newScalingBudget(accounts []business.RoutingAccount, fallback int64) scalin
 		}
 		allocated += current
 	}
-	return scalingBudget{initialAllocated: allocated, allocated: allocated}
+	return scalingBudget{reservations: byID, initialAllocated: allocated, allocated: allocated}
 }
 
 func applyScaling(items []*candidate, config engineConfig) bool {
@@ -2055,6 +2074,7 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 			Concurrency: cloneInt64(primary.desiredConcurrency), WriteCooldown: primary.writeCooldown,
 			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction),
 			ConfigurationError:  cloneString(primary.concurrencyConfigurationError),
+			UpstreamAllocation:  primary.upstreamAllocation,
 			UpstreamReductionID: primary.upstreamReductionID, UpstreamReductionLimit: cloneInt64(primary.upstreamReductionLimit),
 		}
 		if primary.state != "excluded" {
@@ -2708,6 +2728,10 @@ func decimalField(source map[string]any, key, fallback string, positive bool) (*
 }
 
 func (r *policyReader) stringSet(source map[string]any, field, key string) map[string]struct{} {
+	return r.readStringSet(source, field, key, true)
+}
+
+func (r *policyReader) readStringSet(source map[string]any, field, key string, foldCase bool) map[string]struct{} {
 	if r.err != nil {
 		return map[string]struct{}{}
 	}
@@ -2723,7 +2747,10 @@ func (r *policyReader) stringSet(source map[string]any, field, key string) map[s
 	result := map[string]struct{}{}
 	for _, item := range list {
 		value, ok := item.(string)
-		value = strings.ToLower(strings.TrimSpace(value))
+		value = strings.TrimSpace(value)
+		if foldCase {
+			value = strings.ToLower(value)
+		}
 		if !ok || value == "" {
 			r.err = fmt.Errorf("策略字段 %s 只能包含非空字符串", field)
 			return map[string]struct{}{}

@@ -194,6 +194,7 @@ for (const batch of [false, true]) {
     await page.keyboard.press("Escape");
     await expect(dialog).toBeVisible();
     await expect(models).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
     if (batch) {
       const secondary = dialog.getByRole("region", {
         name: "待新增分组 → 备用 OpenAI",

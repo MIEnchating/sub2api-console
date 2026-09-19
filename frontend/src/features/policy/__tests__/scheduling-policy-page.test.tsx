@@ -305,7 +305,7 @@ describe("调度策略入口", () => {
     expect(markup).not.toContain('data-testid="policy-runtime-modes"');
     expect(markup).toContain('data-slot="segmented-control"');
     expect(markup).toContain("flex-wrap");
-    expect(markup.match(/data-slot="select-trigger"[^>]*class="[^"]*w-full/g)).toHaveLength(2);
+    expect(markup.match(/data-slot="select-trigger"[^>]*class="[^"]*w-full/g)).toHaveLength(3);
     expect(markup).toContain('data-testid="policy-operations-layout"');
     expect(markup).toContain('class="flex min-w-0 flex-col gap-4"');
     expect(markup).toContain('data-testid="policy-routing-overview"');
@@ -323,7 +323,7 @@ describe("调度策略入口", () => {
     expectSwitchLabelAssociation(health, "熔断");
     expectSwitchLabelAssociation(health, "健康回池");
     expectSwitchLabelAssociation(markup, "智能扩容");
-    expectSwitchLabelAssociation(markup, "上游超额自动下调");
+    expectSwitchLabelAssociation(markup, "上游共享并发分配");
     expect(markup).toContain('for="policy-auto-apply-schedulable"');
     expect(markup).toContain('id="policy-auto-apply-schedulable"');
   });

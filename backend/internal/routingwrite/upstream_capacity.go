@@ -60,7 +60,7 @@ func prepareUpstreamCapacity(ctx context.Context, repository Repository, targets
 		if target.ReleaseControl || target.UpstreamReductionID != "" || (policy.autoApply["concurrency"] && target.Concurrency != nil) ||
 			(policy.autoApply["schedulable"] && target.Schedulable != nil && *target.Schedulable) {
 			potential[id] = true
-			ordinary = ordinary || target.UpstreamReductionID == ""
+			ordinary = ordinary || target.UpstreamReductionID == "" || target.UpstreamAllocation
 		}
 	}
 	if len(potential) == 0 {
@@ -138,6 +138,7 @@ type upstreamCapacityGuard struct {
 	reductionAllowed map[string]bool
 	global           *globalCapacityBudget
 	released         map[string]bool
+	costReleased     map[string]bool
 }
 
 func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, document map[string]any) (*upstreamCapacityGuard, error) {
@@ -151,7 +152,7 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 	if err != nil {
 		return nil, fmt.Errorf("取得变更租约后共享并发库存读取失败，请重试：%w", err)
 	}
-	guard := &upstreamCapacityGuard{ctx: ctx, admin: admin, members: map[string]string{}, pools: map[string]*upstreamCapacityPool{}, remote: map[string]values{}, reductionAllowed: map[string]bool{}, released: map[string]bool{}}
+	guard := &upstreamCapacityGuard{costReleased: map[string]bool{}, ctx: ctx, admin: admin, members: map[string]string{}, pools: map[string]*upstreamCapacityPool{}, remote: map[string]values{}, reductionAllowed: map[string]bool{}, released: map[string]bool{}}
 	if plan.globalLimit != nil {
 		guard.global = newGlobalCapacityBudget(*plan.globalLimit, inventory)
 	}
@@ -182,7 +183,7 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 			pool.limit = &value
 		}
 		pool.stale = pool.stale || account.UpstreamConcurrencyStatus == business.UpstreamConcurrencyStale
-		if _, correcting := plan.reductions[account.ID]; correcting && account.UpstreamConcurrencyStatus != business.UpstreamConcurrencyKnown && account.UpstreamConcurrencyStatus != business.UpstreamConcurrencyStale {
+		if target, correcting := plan.reductions[account.ID]; correcting && account.UpstreamConcurrencyStatus != business.UpstreamConcurrencyKnown && account.UpstreamConcurrencyStatus != business.UpstreamConcurrencyStale && !(target.UpstreamAllocation && account.UpstreamConcurrencyStatus == business.UpstreamConcurrencyUnlimited && account.UpstreamConcurrencyLimit != nil && *account.UpstreamConcurrencyLimit == 0) {
 			pool.unknown = true
 		}
 	}
@@ -201,11 +202,26 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 			return nil, err
 		}
 		for _, account := range accounts {
+			if _, member := guard.members[account.ID]; member {
+				released, err := routing.UpstreamCostPauseReleasesCapacity(document, account)
+				if err != nil {
+					return nil, err
+				}
+				if released {
+					guard.costReleased[account.ID] = true
+					if guard.global != nil {
+						guard.global.released[account.ID] = true
+					}
+				}
+			}
 			target, correcting := plan.reductions[account.ID]
 			if !correcting {
 				continue
 			}
 			allowed, err := routing.UpstreamReductionAllowed(document, account)
+			if target.UpstreamAllocation {
+				allowed, err = routing.UpstreamAllocationAllowed(document, account)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -334,7 +350,7 @@ func (guard *upstreamCapacityGuard) loadRemoteCapacity() {
 	for _, id := range ids {
 		pool := guard.pools[guard.members[id]]
 		checkUpstream := pool != nil && !pool.unknown && pool.limit != nil && *pool.limit != 0
-		if !checkUpstream && guard.global == nil {
+		if !checkUpstream && guard.global == nil && !guard.reductionAllowed[id] {
 			continue
 		}
 		payload, err := rows[id], readErr
@@ -375,7 +391,7 @@ func (guard *upstreamCapacityGuard) loadRemoteCapacity() {
 		} else {
 			pool.reductionErr = err
 		}
-		capacity, known := capacityReservation(remote, guard.released[id])
+		capacity, known := capacityReservation(remote, guard.released[id] || guard.costReleased[id])
 		if err == nil && !known {
 			err = fmt.Errorf("远端账号 %s 未返回可核对的调度状态与并发", id)
 		}

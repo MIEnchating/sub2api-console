@@ -21,16 +21,43 @@ export function policyCleanupActionLabel(value: string): string {
   return policyCleanupActionOptions.find((option) => option.value === value)?.label ?? value;
 }
 
+export const policyScalingSummary =
+  "按配置的容量阈值和健康状态调整并发，遵守全局上限、单账号上下限、步长与冷却。";
+
 export const policyScalingDescription =
   "已知 Sub2API 用户并发上限时，同一上游的账号按调度策略权重共享可用并发；不足时低优先级账号等待并发额度，额度恢复后自动评估。分配仍受全局上限、单账号上下限、步长和冷却约束。其余账号在已配置并发占全局并发上限的比例达到阈值时小步扩容，健康状态变差时按步长缩容。该比例表示配置容量，不代表实时请求利用率。完全模式下同时开启「并发上限自动执行」与「调度状态自动执行」后才会自动调整并发、暂停或恢复账号。";
 
+export const upstreamConcurrencyAccountModes = [
+  { value: "all", label: "全部符合条件的账号" },
+  { value: "selected", label: "指定账号" },
+  { value: "upstreams", label: "指定上游" },
+] as const;
+
 export const upstreamConcurrencyPolicyLabels = {
-  title: "上游超额自动下调",
-  toggle: "启用上游超额自动下调",
+  help: "查看共享并发分配说明",
+  accountScope: "共享并发分配范围",
+  accounts: "参与共享并发分配的账号",
+  upstreams: "参与共享并发分配的上游",
+  upstreamScope:
+    "所选上游下现有及新添加的符合条件的 Sub2API 账号自动参与分配。未选上游不参与本功能；智能扩容仍按其设置执行。",
+  emptyUpstreamScope: "尚未选择上游，此功能不会自动调整任何账号。",
+  allScope: "现有及新添加的符合条件的 Sub2API 账号自动参与分配。",
+  selectedScope:
+    "仅所选账号参与本功能，新添加账号需手动勾选。未选账号保留现有并发占用；智能扩容仍按其设置执行。",
+  emptyScope: "尚未选择账号，此功能不会自动调整任何账号。",
+  title: "上游共享并发分配",
+  toggle: "启用上游共享并发分配",
   description:
-    "完全模式下，关联账号总并发超过已确认的 Sub2API 用户额度时，按调度策略下调并发，必要时暂停低优先级账号。监控模式仅预览。",
+    "完全模式下，先为每个健康账号分配至少 1 个并发，再按调度策略权重分配剩余额度。可用额度少于健康账号数时才暂停低优先级账号。监控模式仅预览。",
   scope:
-    "独立控制超额下调，不需要开启智能扩容或通用自动执行开关，不受全局并发预算、单账号扩容上下限、步长和冷却限制。手动及守护范围外的账号保留现有容量。",
+    "独立分配 Sub2API 共享额度，不需要开启智能扩容或通用自动执行开关。智能扩容关闭时不应用全局上限，按各上游额度分配；开启时遵守配置的全局上限、单账号上下限、步长、冷却和自动执行开关。手动及守护范围外的账号保留现有容量，New API 不受上游共享额度限制。",
   recovery:
-    "此开关不自动扩容或恢复账号。恢复「等待并发额度」账号仍需开启智能扩容、并发上限自动执行与调度状态自动执行，并通过额度及健康核对。",
+    "先下调占用过多的账号，读回确认容量释放后，自动恢复符合健康条件的等待账号。缓存额度仅允许下调，人工暂停和熔断账号不会因此恢复。",
 } as const;
+
+export type UpstreamConcurrencyMode = (typeof upstreamConcurrencyAccountModes)[number]["value"];
+
+export function upstreamConcurrencyMode(value: unknown): UpstreamConcurrencyMode {
+  if (value === "selected" || value === "upstreams") return value;
+  return "all";
+}

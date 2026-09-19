@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
+	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 )
 
 func globalCapacityLimit(document map[string]any) (*int64, error) {
@@ -17,19 +18,7 @@ func globalCapacityLimit(document map[string]any) (*int64, error) {
 		}
 		scaling = map[string]any{}
 	}
-	enabled, _ := scaling["enabled"].(bool)
-	if bindings, ok := document["group_policy_bindings"].(map[string]any); ok {
-		for _, raw := range bindings {
-			binding, ok := raw.(map[string]any)
-			if !ok || binding["enabled"] == false {
-				continue
-			}
-			if binding["scaling_enabled"] == true {
-				enabled = true
-			}
-		}
-	}
-	if !enabled {
+	if !routing.GlobalScalingEnabled(document) {
 		return nil, nil
 	}
 	limit := int64(900)

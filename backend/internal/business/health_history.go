@@ -59,9 +59,9 @@ func (s *Store) selectHealthSampleWindow(
 	normalizeSource bool,
 	stopAfterLimit bool,
 ) ([]healthSampleSelection, error) {
-	index := "ix_health_samples_account_recent"
+	index := "ix_health_samples_account_window"
 	if normalizeSource {
-		index = "ix_health_samples_normalized_source_latest"
+		index = "ix_health_samples_source_window"
 	}
 	query := `SELECT id,account_id,observed_at,source,evidence_key
 		FROM health_samples INDEXED BY ` + index + whereSQL(clauses) +

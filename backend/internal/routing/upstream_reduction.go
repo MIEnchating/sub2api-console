@@ -21,7 +21,7 @@ func UpstreamReductionAllowed(document map[string]any, account business.RoutingA
 	allowed, _ := eligibleScope(account, config)
 	_, policyPaused := config.pausedAccounts[account.ID]
 	_, manualFused := config.manualFusedAccounts[account.ID]
-	return enabled && config.upstreamReductionEnabled && allowed && accountMetadataManaged(account, config) &&
+	return enabled && config.upstreamAllocationEnabledFor(account) && allowed && accountMetadataManaged(account, config) &&
 		!account.Paused && !policyPaused && !manualFused && account.ManualPriority == nil && (config.manageAllAccounts || !account.ExternalControl && !accountExternallyModified(account)) &&
 		account.Schedulable != nil && *account.Schedulable, nil
 }
@@ -48,7 +48,7 @@ func (pool *upstreamScalingPool) reduceOverage(primary map[string]*candidate, co
 	selected := map[string]bool{}
 	for id := range pool.accounts {
 		item := primary[id]
-		if item == nil || !configs[item.account.GroupName].upstreamReductionEnabled || sub2APIUpstreamID(item.account) != pool.id ||
+		if item == nil || !configs[item.account.GroupName].upstreamAllocationEnabledFor(item.account) || sub2APIUpstreamID(item.account) != pool.id ||
 			!item.schedulable || !placementLoadFactorEligible(item) || item.account.Paused ||
 			item.account.ManualPriority != nil || item.account.Schedulable == nil || !*item.account.Schedulable || item.account.Concurrency == nil {
 			continue
@@ -69,7 +69,7 @@ func (pool *upstreamScalingPool) reduceOverage(primary map[string]*candidate, co
 	eligible := items[:min(int64(len(items)), available)]
 	for _, item := range items[len(eligible):] {
 		markUpstreamReduction(item, pool)
-		limitConcurrency(item, "上游共享并发超额，按调度权重暂停；仅自动下调已开启，恢复需启用智能扩容或人工核对")
+		limitConcurrency(item, "上游共享并发超额，按调度权重暂停；最新额度确认后自动重新分配")
 	}
 	quotas := boundedConcurrencyQuotas(eligible, available, func(item *candidate) (int64, int64) {
 		return 1, min(pool.current[item.account.ID], *pool.limit)
@@ -81,7 +81,7 @@ func (pool *upstreamScalingPool) reduceOverage(primary map[string]*candidate, co
 		}
 		markUpstreamReduction(item, pool)
 		item.desiredConcurrency = &quota
-		appendConcurrencyReason(item, fmt.Sprintf("上游共享并发超额，按调度权重将并发下调为 %d；不执行扩容", quota))
+		appendConcurrencyReason(item, fmt.Sprintf("上游共享并发超额，按调度权重将并发下调为 %d；本轮不执行扩容", quota))
 	}
 	return true
 }

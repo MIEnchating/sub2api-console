@@ -300,6 +300,11 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 		taskstore.PersistProgress(s.tasks, task)
 	})
 	applyBatchAccountCounts(&result, summary, scope)
+	if scope.Balance && result.Succeeded > 0 {
+		task.Progress, task.Message = 96, "上游同步已完成，正在重新计算调度"
+		taskstore.PersistProgress(s.tasks, task)
+	}
+	routingResult, routingErr := s.refreshRouting(ctx, scope, result)
 	accountRateTaskID, accountRateErr := s.enqueueAccountRateSync(ctx, hosts, scope, actor, result)
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
 	task.Result = map[string]any{
@@ -308,21 +313,33 @@ func (s *Service) execute(parent context.Context, task taskstore.Task, hosts []s
 		"account_rate_succeeded": result.AccountRateSucceeded, "account_rate_failed": result.AccountRateFailed,
 		"hosts": result.Hosts, "remote_write": false, "credentials_exposed": false,
 	}
+	if routingResult != nil {
+		task.Result["routing"] = *routingResult
+	}
+	if routingErr != nil {
+		task.Result["routing_error"] = safeReason(routingErr.Error())
+	}
 	if accountRateTaskID != "" {
 		task.Result["account_rate_sync_task_id"] = accountRateTaskID
 	}
 	if accountRateErr != nil {
 		task.Result["account_rate_sync_error"] = accountRateErr.Error()
 	}
-	if result.AuthFailed > 0 || result.Failed > 0 || accountRateErr != nil {
+	if result.AuthFailed > 0 || result.Failed > 0 || accountRateErr != nil || routingErr != nil {
 		task.Status = "failed"
 		task.Message = fmt.Sprintf("上游同步完成：成功 %d，鉴权失败 %d，其他失败 %d", result.Succeeded, result.AuthFailed, result.Failed)
 		if accountRateErr != nil {
 			task.Message += "；账号成本同步排队失败：" + accountRateErr.Error()
 		}
+		if routingErr != nil {
+			task.Message += "；调度重新计算失败：" + safeReason(routingErr.Error())
+		}
 	} else {
 		task.Status = "succeeded"
 		task.Message = fmt.Sprintf("上游同步完成：成功 %d", result.Succeeded)
+		if routingResult != nil {
+			task.Message += "；已重新计算调度，自动执行由巡检按策略复核"
+		}
 		if accountRateTaskID != "" {
 			task.Message += "；相关账号成本与名称同步已排队"
 		}

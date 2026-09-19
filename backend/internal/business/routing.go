@@ -123,6 +123,7 @@ type AccountRoutingTarget struct {
 	AbandonControl              bool     `json:"abandon_control,omitempty"`
 	CleanupAction               *string  `json:"cleanup_action,omitempty"`
 	ConfigurationError          *string  `json:"configuration_error,omitempty"`
+	UpstreamAllocation          bool     `json:"upstream_allocation,omitempty"`
 	UpstreamReductionID         string   `json:"upstream_reduction_id,omitempty"`
 	UpstreamReductionLimit      *int64   `json:"upstream_reduction_limit,omitempty"`
 }
@@ -199,11 +200,11 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	states, err := s.accountCatalogBindingStates(ctx)
+	states, err := s.accountCatalogBindingStatesForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	capacity, err := s.routingCapacityInventory(ctx)
+	capacity, err := s.routingCapacityInventoryForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}

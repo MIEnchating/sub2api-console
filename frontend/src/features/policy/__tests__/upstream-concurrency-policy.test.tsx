@@ -45,29 +45,33 @@ function Editor(props: {
   );
 }
 
-describe("上游超额自动下调", () => {
-  it("未配置时默认关闭，并说明完全模式执行、独立下调及恢复条件", () => {
+describe("上游共享并发分配", () => {
+  it("未配置时默认关闭，并说明完全模式执行、独立分配及恢复条件", () => {
     render(<Editor />);
 
-    const card = screen.getByRole("region", { name: "上游超额自动下调" });
-    expect(within(card).getByRole("switch", { name: "启用上游超额自动下调" })).not.toBeChecked();
+    const card = screen.getByRole("region", { name: "上游共享并发分配" });
+    expect(within(card).getByRole("switch", { name: "启用上游共享并发分配" })).not.toBeChecked();
     expect(card).toHaveTextContent("完全模式");
     expect(card).toHaveTextContent("按调度策略");
     expect(card).toHaveTextContent("暂停低优先级账号");
-    expect(card).toHaveTextContent("不受全局并发预算");
-    expect(card).toHaveTextContent("不自动扩容或恢复账号");
-    expect(card).toHaveTextContent("并发上限自动执行");
-    expect(card).toHaveTextContent("调度状态自动执行");
+    expect(card).toHaveTextContent("智能扩容关闭时不应用全局上限");
+    expect(card).toHaveTextContent(
+      "开启时遵守配置的全局上限、单账号上下限、步长、冷却和自动执行开关",
+    );
+    expect(card).toHaveTextContent("New API 不受上游共享额度限制");
+    expect(card).toHaveTextContent("自动恢复符合健康条件的等待账号");
+    expect(card).toHaveTextContent("至少 1 个并发");
+    expect(card).toHaveTextContent("不需要开启智能扩容或通用自动执行开关");
   });
 
-  it("智能扩容和通用自动写入关闭时启用独立下调，仅保存独立开关", async () => {
+  it("智能扩容和通用自动写入关闭时启用独立分配，仅保存独立开关", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     render(<Editor onChange={onChange} />);
 
-    await user.click(screen.getByRole("switch", { name: "启用上游超额自动下调" }));
+    await user.click(screen.getByRole("switch", { name: "启用上游共享并发分配" }));
 
-    expect(screen.getByRole("switch", { name: "启用上游超额自动下调" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "启用上游共享并发分配" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "启用智能扩容" })).not.toBeChecked();
     expect(screen.getByRole("spinbutton", { name: "全局并发上限" })).toHaveValue(900);
     const saved = policyPayload(onChange.mock.lastCall![0] as PolicyDraft);
@@ -84,7 +88,7 @@ describe("上游超额自动下调", () => {
     draft.advanced_policy.upstream_concurrency = { enabled: true };
     const onChange = vi.fn();
     render(<Editor draft={draft} onChange={onChange} />);
-    const toggle = screen.getByRole("switch", { name: "启用上游超额自动下调" });
+    const toggle = screen.getByRole("switch", { name: "启用上游共享并发分配" });
     expect(toggle).toBeChecked();
     toggle.focus();
 
@@ -106,9 +110,9 @@ describe("上游超额自动下调", () => {
     const onChange = vi.fn();
     render(<Editor draft={draft} onChange={onChange} />);
 
-    await user.click(screen.getByRole("switch", { name: "启用上游超额自动下调" }));
+    await user.click(screen.getByRole("switch", { name: "启用上游共享并发分配" }));
 
-    expect(screen.getByRole("region", { name: "上游超额自动下调" })).toHaveTextContent(
+    expect(screen.getByRole("region", { name: "上游共享并发分配" })).toHaveTextContent(
       "监控模式仅预览",
     );
     expect(policyPayload(onChange.mock.lastCall![0] as PolicyDraft)).toMatchObject({
@@ -124,3 +128,50 @@ describe("上游超额自动下调", () => {
     expect(policyPayload(draft)).toBeNull();
   });
 });
+
+describe("共享并发账号范围保存", () => {
+  it("指定范围保存稳定 ID，空选择不会改为全部账号", () => {
+    for (const ids of [["41", "42"], []]) {
+      const draft = initialDraft();
+      draft.advanced_policy.upstream_concurrency = {
+        enabled: true,
+        account_mode: "selected",
+        account_ids: ids,
+      };
+      expect(policyPayload(draft)?.advanced_policy?.upstream_concurrency).toEqual({
+        enabled: true,
+        account_mode: "selected",
+        account_ids: ids,
+      });
+    }
+  });
+  it.each([
+    { account_mode: "invalid" },
+    { upstream_ids: "upstream-a" },
+    { upstream_ids: [41] },
+    { upstream_ids: [" "] },
+    { account_ids: "41" },
+    { account_ids: [41] },
+    { account_ids: ["name"] },
+    { account_ids: ["0"] },
+  ])("非法账号范围 %j 拒绝保存", (scope) => {
+    const draft = initialDraft();
+    draft.advanced_policy.upstream_concurrency = { enabled: true, ...scope };
+    expect(policyPayload(draft)).toBeNull();
+  });
+});
+
+it.each([{ ids: ["Upstream-A", "upstream-b"] }, { ids: [] }])(
+  "指定上游保存稳定 ID 或空范围 %j",
+  ({ ids }) => {
+    const draft = initialDraft();
+    draft.advanced_policy.upstream_concurrency = {
+      enabled: true,
+      account_mode: "upstreams",
+      upstream_ids: ids,
+    };
+    expect(policyPayload(draft)?.advanced_policy?.upstream_concurrency).toEqual(
+      draft.advanced_policy.upstream_concurrency,
+    );
+  },
+);

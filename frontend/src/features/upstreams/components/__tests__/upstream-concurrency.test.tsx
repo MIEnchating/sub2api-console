@@ -110,12 +110,13 @@ describe("上游并发额度", () => {
     expect(tooltip).toHaveTextContent("同步余额");
     expect(tooltip).toHaveTextContent("同步上游");
     expect(tooltip).toHaveTextContent("智能扩容");
-    expect(tooltip).toHaveTextContent("上游超额自动下调");
-    expect(tooltip).toHaveTextContent("不自动扩容或恢复账号");
-    expect(tooltip).toHaveTextContent("并发上限自动执行");
-    expect(tooltip).toHaveTextContent("调度状态自动执行");
+    expect(tooltip).toHaveTextContent("上游共享并发分配");
+    expect(tooltip).toHaveTextContent("至少 1 个并发");
+    expect(tooltip).toHaveTextContent("上游额度");
+    expect(tooltip).toHaveTextContent("智能扩容关闭时不应用全局上限");
+    expect(tooltip).toHaveTextContent("开启时遵守已配置的扩容限制和自动执行开关");
     expect(tooltip).toHaveTextContent("完全模式");
-    expect(tooltip).toHaveTextContent("额度恢复后自动评估");
+    expect(tooltip).toHaveTextContent("容量释放确认后自动恢复");
     expect(tooltip).toHaveTextContent("配置容量");
   });
 });

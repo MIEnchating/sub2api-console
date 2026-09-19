@@ -124,3 +124,127 @@ test("中等宽度下四个分类与长字段仍完整显示", async ({ page }) 
     true,
   );
 });
+
+test("共享并发指定账号可保存稳定 ID，刷新后保留选择且窄屏不溢出", async ({ page }) => {
+  let saved = structuredClone(policy);
+  await page.route("**/api/policy", async (route) => {
+    if (route.request().method() === "PATCH" || route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON();
+      saved = { ...saved, ...payload };
+    }
+    await route.fulfill({ json: saved });
+  });
+  await page.route("**/api/accounts", (route) =>
+    route.fulfill({
+      json: [
+        { id: "41", name: "共享额度账号", upstream_type: "sub2api", groups: ["codex"] },
+        { id: "42", name: "独立额度账号", upstream_type: "newapi", groups: [] },
+      ],
+    }),
+  );
+  await page.goto("/policy");
+  const card = page.getByRole("region", { name: "上游共享并发分配", exact: true });
+  await card.getByRole("switch", { name: "启用上游共享并发分配" }).check();
+  await card.getByRole("combobox", { name: "共享并发分配范围" }).click();
+  await page.getByRole("option", { name: "指定账号", exact: true }).click();
+  await card.getByRole("combobox", { name: "参与共享并发分配的账号" }).click();
+  await expect(page.getByRole("option", { name: /独立额度账号/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /共享额度账号/ }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "保存策略", exact: true }).click();
+  await expect
+    .poll(() => saved.advanced_policy.upstream_concurrency)
+    .toEqual({ enabled: true, account_mode: "selected", account_ids: ["41"] });
+  await page.reload();
+  await expect(card.getByRole("combobox", { name: "共享并发分配范围" })).toContainText("指定账号");
+  await expect(card.getByRole("combobox", { name: "参与共享并发分配的账号" })).toContainText(
+    "共享额度账号",
+  );
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test("共享并发指定上游可保存稳定 ID，刷新后保留选择且窄屏不溢出", async ({ page }) => {
+  let saved = structuredClone(policy);
+  let accountRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/accounts") accountRequests++;
+  });
+  await page.route("**/api/policy", async (route) => {
+    if (route.request().method() === "PATCH" || route.request().method() === "PUT") {
+      const payload = route.request().postDataJSON();
+      saved = { ...saved, ...payload };
+    }
+    await route.fulfill({ json: saved });
+  });
+  await page.route("**/api/upstreams", (route) =>
+    route.fulfill({
+      json: {
+        hosts: [
+          {
+            upstream_id: "Upstream-A",
+            name: "共享额度上游",
+            upstream_type: "sub2api",
+            host: "a.example",
+          },
+          {
+            upstream_id: "upstream-b",
+            name: "独立额度上游",
+            upstream_type: "newapi",
+            host: "b.example",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/policy");
+  const card = page.getByRole("region", { name: "上游共享并发分配", exact: true });
+  await card.getByRole("switch", { name: "启用上游共享并发分配" }).check();
+  await card.getByRole("combobox", { name: "共享并发分配范围" }).click();
+  await page.getByRole("option", { name: "指定上游", exact: true }).click();
+  await card.getByRole("combobox", { name: "参与共享并发分配的上游" }).click();
+  await expect(page.getByRole("option", { name: /独立额度上游/ })).toHaveCount(0);
+  await page.getByRole("option", { name: /共享额度上游/ }).click();
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "保存策略", exact: true }).click();
+  await expect
+    .poll(() => saved.advanced_policy.upstream_concurrency)
+    .toEqual({ enabled: true, account_mode: "upstreams", upstream_ids: ["Upstream-A"] });
+  await page.reload();
+  await expect(card.getByRole("combobox", { name: "共享并发分配范围" })).toContainText("指定上游");
+  await expect(card.getByRole("combobox", { name: "参与共享并发分配的上游" })).toContainText(
+    "共享额度上游",
+  );
+  expect(accountRequests).toBe(0);
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
+test("并发策略与全局默认策略统一整行卡片及字段列数，详细规则按需展开", async ({ page }) => {
+  await page.goto("/policy");
+  const reference = page.getByRole("region", { name: "全局默认策略", exact: true });
+  const referenceFields = reference.locator('[data-slot="policy-fields"]');
+  await expect(reference).toBeVisible();
+  const columns = await referenceFields.evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+  );
+  const referenceBox = (await reference.boundingBox())!;
+  for (const name of ["上游共享并发分配", "智能扩容"]) {
+    const card = page.getByRole("region", { name, exact: true });
+    const box = (await card.boundingBox())!;
+    expect(Math.abs(box.width - referenceBox.width)).toBeLessThanOrEqual(1);
+    expect(
+      await card
+        .locator('[data-slot="policy-fields"]')
+        .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length),
+    ).toBe(columns);
+    const details = card.locator("details");
+    await expect(details).not.toHaveAttribute("open", "");
+    const summary = details.locator("summary");
+    await summary.focus();
+    await page.keyboard.press("Enter");
+    await expect(details).toHaveAttribute("open", "");
+    await page.keyboard.press("Enter");
+    await expect(details).not.toHaveAttribute("open", "");
+    expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await card.screenshot({ path: test.info().outputPath(`${name}.png`) });
+  }
+});
