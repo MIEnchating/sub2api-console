@@ -2,35 +2,55 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-for (const [filename, job] of [["ci.yml", "frontend"], ["release.yml", "preflight"]]) {
-  test(`${filename} requires browser regressions and dead code checks before publishing`, () => {
+const quality = readFileSync(new URL("../workflows/quality.yml", import.meta.url), "utf8");
+function job(workflow, name) {
+  const body = `${workflow}\n  __end__:\n`.match(
+    new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n)`, "m"),
+  )?.[1];
+  assert.ok(body, `missing ${name} job`);
+  return body;
+}
+for (const filename of ["ci.yml", "release.yml"]) {
+  test(`${filename} uses the complete shared quality workflow`, () => {
     const workflow = readFileSync(new URL(`../workflows/${filename}`, import.meta.url), "utf8");
-    const body = `${workflow}\n  __end__:\n`.match(new RegExp(`^  ${job}:\\n([\\s\\S]*?)(?=^  [a-zA-Z0-9_-]+:\\n)`, "m"))?.[1];
-    assert.ok(body, `missing mandatory ${job} job`);
-    assert.match(body, /bun x playwright install --with-deps chromium/);
-    assert.match(body, /bun run test:e2e/);
-    assert.match(body, /bun run deadcode/);
-    assert.doesNotMatch(body, /continue-on-error:\s*true/);
-    assert.ok(body.indexOf("playwright install") < body.indexOf("bun run test:e2e"));
-    assert.match(body, /failure\(\) && steps\.browser\.outcome == 'failure'/);
-    assert.match(body, /uses: actions\/upload-artifact@/);
-    assert.match(body, /path: frontend\/test-results\//);
+    assert.match(job(workflow, "checks"), /uses: \.\/\.github\/workflows\/quality.yml/);
+    assert.doesNotMatch(quality, /continue-on-error:\s*true/);
   });
 }
-
-test("release publishing waits for successful frontend and backend preflight checks", () => {
-  const workflow = readFileSync(new URL("../workflows/release.yml", import.meta.url), "utf8");
-  const preflight = workflow.match(/^  preflight:\n([\s\S]*?)(?=^  [a-zA-Z0-9_-]+:\n)/m)?.[1];
-  const publish = workflow.match(/^  build-and-push:\n([\s\S]*?)(?=^  [a-zA-Z0-9_-]+:\n)/m)?.[1];
-  assert.ok(preflight, "missing release preflight checks");
-  assert.ok(publish, "missing image publication job");
-  assert.match(publish, /needs: preflight/);
-  assert.doesNotMatch(publish, /if:.*always\(\)/);
-  for (const command of ["format:check", "typecheck", "lint", "test", "build"]) {
-    assert.ok(preflight.includes(`bun run ${command}`), `missing frontend ${command}`);
+test("all four browser shards run independently and preserve separate failure diagnostics", () => {
+  const browser = job(quality, "browser");
+  assert.match(browser, /shard: \[1, 2, 3, 4\]/);
+  assert.match(browser, /fail-fast: false/);
+  assert.match(browser, /bun run test:e2e --shard=\$\{\{ matrix.shard \}\}\/4/);
+  assert.ok(browser.indexOf("playwright install") < browser.indexOf("bun run test:e2e"));
+  assert.match(browser, /failure\(\) && steps\.browser\.outcome == 'failure'/);
+  assert.match(browser, /name: browser-failure-diagnostics-\$\{\{ matrix.shard \}\}/);
+  assert.match(browser, /path: frontend\/test-results\//);
+  for (const name of ["browser", "frontend", "backend"])
+    assert.doesNotMatch(job(quality, name), /needs:/);
+});
+test("shared quality checks retain all mandatory commands and discover new script tests", () => {
+  for (const command of ["format:check", "typecheck", "lint", "deadcode", "test", "build"]) {
+    assert.ok(job(quality, "frontend").includes(`bun run ${command}`));
   }
-  assert.match(preflight, /bash scripts\/check-go\.sh vet/);
-  assert.match(preflight, /bash scripts\/check-go\.sh test/);
-  assert.match(preflight, /go build /);
-  assert.match(preflight, /node --test \.github\/scripts\/\*\.test\.mjs/);
+  assert.match(job(quality, "backend"), /bash scripts\/check-go\.sh vet/);
+  assert.match(job(quality, "backend"), /bash scripts\/check-go\.sh test/);
+  assert.match(job(quality, "backend"), /go build /);
+  assert.match(
+    job(quality, "configuration"),
+    /node --test \.github\/scripts\/\*\.test\.mjs \.github\/scripts\/__tests__\/\*\.test\.mjs/,
+  );
+});
+test("publication and release creation explicitly require successful upstream gates", () => {
+  const workflow = readFileSync(new URL("../workflows/release.yml", import.meta.url), "utf8");
+  assert.match(job(workflow, "checks"), /if: needs.source.outputs.reuse != 'true'/);
+  assert.match(job(workflow, "preflight"), /needs: \[source, checks\]/);
+  assert.match(
+    job(workflow, "build-and-push"),
+    /!cancelled\(\) && needs.preflight.result == 'success'/,
+  );
+  assert.match(
+    job(workflow, "create-release"),
+    /!cancelled\(\) && needs.build-and-push.result == 'success'/,
+  );
 });

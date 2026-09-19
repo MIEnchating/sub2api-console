@@ -21,14 +21,26 @@ for (const mode of ["vet", "test"]) {
     }
     cpSync(script, join(root, "scripts/check-go.sh"));
     const capture = join(root, "arguments.json");
-    writeFileSync(join(root, "bin/go"), `#!${process.execPath}\n` +
-      'require("node:fs").writeFileSync(process.env.GO_CHECK_CAPTURE, JSON.stringify(process.argv.slice(2)));\n' +
-      'process.exit(Number(process.env.GO_CHECK_EXIT || 0));\n', { mode: 0o755 });
-    const env = { ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, GO_CHECK_CAPTURE: capture };
+    writeFileSync(
+      join(root, "bin/go"),
+      `#!${process.execPath}\n` +
+        'require("node:fs").writeFileSync(process.env.GO_CHECK_CAPTURE, JSON.stringify(process.argv.slice(2)));\n' +
+        "process.exit(Number(process.env.GO_CHECK_EXIT || 0));\n",
+      { mode: 0o755 },
+    );
+    const env = {
+      ...process.env,
+      PATH: `${join(root, "bin")}:${process.env.PATH}`,
+      GO_CHECK_CAPTURE: capture,
+    };
     // Invoke from outside the backend so local and CI entry points resolve the same packages.
     execFileSync("bash", [join(root, "scripts/check-go.sh"), mode], { cwd: dirname(root), env });
     const args = JSON.parse(readFileSync(capture, "utf8"));
-    assert.deepEqual(args, [...(mode === "test" ? ["test", "-race"] : ["vet"]), "./...", ...packages]);
+    assert.deepEqual(args, [
+      ...(mode === "test" ? ["test", "-race"] : ["vet"]),
+      "./...",
+      ...packages,
+    ]);
     const failed = spawnSync("bash", [join(root, "scripts/check-go.sh"), mode], {
       env: { ...env, GO_CHECK_EXIT: "7" },
     });
@@ -36,11 +48,14 @@ for (const mode of ["vet", "test"]) {
   });
 }
 
-for (const filename of ["ci.yml", "release.yml"]) {
+for (const filename of ["quality.yml"]) {
   test(`${filename} requires discovered regression packages for vet and race tests`, () => {
     const workflow = readFileSync(new URL(`../workflows/${filename}`, import.meta.url), "utf8");
     for (const mode of ["vet", "test"]) {
-      assert.ok(workflow.includes(`bash scripts/check-go.sh ${mode}`), `missing ${mode} package discovery`);
+      assert.ok(
+        workflow.includes(`bash scripts/check-go.sh ${mode}`),
+        `missing ${mode} package discovery`,
+      );
     }
   });
 }
