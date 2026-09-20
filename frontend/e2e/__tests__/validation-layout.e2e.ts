@@ -67,7 +67,8 @@ test("个人信息无错误时字段紧凑排列，错误在字段下方展开�
   await password.fill("layout-test-password");
   await expect(form.locator('[data-slot="field-error"]')).toHaveCount(0);
   await expect(username).toHaveAttribute("aria-invalid", "false");
-  expect((await form.boundingBox())!.height).toBe(initialHeight);
+  // 清除错误后恢复原高度，忽略 Chromium 的亚像素浮点误差。
+  expect((await form.boundingBox())!.height).toBeCloseTo(initialHeight, 2);
   await submit.scrollIntoViewIfNeeded();
   await expect(submit).toBeInViewport();
 });
@@ -88,6 +89,21 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "布局测试" },
+      "/api/overview": {
+        database_available: true,
+        account_count: 20,
+        group_count: 0,
+        open_alerts: 0,
+        recent_runs: 0,
+        last_activity: null,
+        mode: "完全模式",
+      },
+      "/api/inspection/automation": {
+        enabled: false,
+        running: false,
+        traffic_collection: { enabled: false },
+      },
+      "/api/dictionaries": [],
       "/api/accounts": Array.from({ length: 20 }, (_, index) => ({
         ...account,
         id: String(41 + index),

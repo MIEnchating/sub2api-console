@@ -39,6 +39,10 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await input.click();
   await expect(page.getByRole("option", { name: "gpt-6-astra", exact: true })).toBeVisible();
   const popup = page.locator('[data-slot="combobox-content"]');
+  // 等待展开缩放动画完成后再测量最终宽度，避免采到过渡帧。
+  await popup.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
   await expect(popup).toBeInViewport({ ratio: 1 });
   await expect(input).toHaveCSS("height", "32px");
   await expect(popup).toHaveCSS("border-radius", "8px");

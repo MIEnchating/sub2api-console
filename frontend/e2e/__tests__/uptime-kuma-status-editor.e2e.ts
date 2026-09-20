@@ -35,7 +35,8 @@ test("状态页编辑立即在弹窗内加载，列表位置不变且取消后�
   });
   await page.goto("/uptime-kuma/status-pages");
   const table = page.locator('table[aria-label="状态页管理"]');
-  const original = await table.boundingBox();
+  await expect(table).toBeVisible();
+  const original = (await table.boundingBox())!;
   await page.getByRole("button", { name: "编辑", exact: true }).click();
   await requestStarted;
   const dialog = page.getByRole("dialog", { name: "编辑状态页管理" });
@@ -45,7 +46,8 @@ test("状态页编辑立即在弹窗内加载，列表位置不变且取消后�
   expect(await dialog.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await expect(dialog.getByRole("button", { name: "取消" })).toBeInViewport();
   await expect(dialog.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
-  expect((await table.boundingBox())?.y).toBe(original?.y);
+  // Chromium 的视口坐标可能有浮点误差，仍要求位置变化小于 0.005 CSS px。
+  expect((await table.boundingBox())!.y).toBeCloseTo(original.y, 2);
   await page.screenshot({
     path: test.info().outputPath("status-editor-loading.png"),
     animations: "disabled",
