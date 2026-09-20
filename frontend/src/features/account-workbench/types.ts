@@ -77,7 +77,7 @@ export type WorkbenchRunItem = WorkbenchInputItem & {
   template_name: string;
   check?: Record<string, unknown>;
   manual_enabled?: boolean;
-  browser_ready?: boolean;
+  login_prompt?: WorkbenchLoginPrompt;
 };
 export type WorkbenchRun = {
   id: string;
@@ -135,3 +135,5 @@ export type MaintenancePreview = {
   settings: MaintenanceSettings;
   accounts: WorkbenchAccount[];
 };
+
+export type WorkbenchLoginPrompt = { id: string; kind: "password" | "email_code" | "totp_code" };

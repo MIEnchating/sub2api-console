@@ -2,7 +2,7 @@ import { useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Save } from "lucide-react";
+import { RefreshCw, Save } from "lucide-react";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogBody,
   DialogFooter,
 } from "@/components/ui/dialog";
@@ -81,12 +82,13 @@ export function TemplateEditor(props: {
         if (!open && !save.isPending) props.onClose();
       }}
     >
-      <DialogContent className="sm:max-w-2xl">
-        <form onSubmit={form.handleSubmit(submit)}>
-          <DialogHeader>
-            <DialogTitle>{props.template ? "重新同步模板" : "创建配置模板"}</DialogTitle>
-          </DialogHeader>
-          <DialogBody className="grid gap-4">
+      <DialogContent width="progress" render={<form onSubmit={form.handleSubmit(submit)} />}>
+        <DialogHeader>
+          <DialogTitle>{props.template ? "重新同步模板" : "创建配置模板"}</DialogTitle>
+          <DialogDescription>从来源账号读取配置，确认后保存为导入模板。</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="grid content-start gap-5">
+          <div className="grid gap-4 rounded-lg border bg-muted/20 p-3 sm:p-4">
             <div className="grid gap-2">
               <label htmlFor="workbench-template-source" className="text-sm">
                 来源账号
@@ -145,35 +147,37 @@ export function TemplateEditor(props: {
             <Button
               type="button"
               variant="outline"
+              className="justify-self-start"
               disabled={!sourceID || source.isFetching || save.isPending}
               onClick={() => {
                 if (readID === sourceID) void source.refetch();
                 else setReadID(sourceID);
               }}
             >
+              <RefreshCw aria-hidden="true" />
               读取配置
             </Button>
-            {readID && source.isFetching && <ContentLoading label="正在读取来源配置" />}
-            {readID && source.isError && (
-              <ContentRetry pending={source.isFetching} onRetry={() => void source.refetch()} />
-            )}
-            {ready && source.data && <TemplateDetails template={source.data} />}
-          </DialogBody>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={save.isPending}
-              onClick={props.onClose}
-            >
-              取消
-            </Button>
-            <Button type="submit" disabled={!ready || save.isPending}>
-              <Save aria-hidden="true" />
-              {save.isPending ? "正在保存" : "保存模板"}
-            </Button>
-          </DialogFooter>
-        </form>
+          </div>
+          {readID && source.isFetching && <ContentLoading label="正在读取来源配置" />}
+          {readID && source.isError && (
+            <ContentRetry pending={source.isFetching} onRetry={() => void source.refetch()} />
+          )}
+          {ready && source.data && (
+            <section aria-label="配置预览" className="min-w-0 space-y-3">
+              <h3 className="text-sm font-medium">配置预览</h3>
+              <TemplateDetails template={source.data} />
+            </section>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={save.isPending} onClick={props.onClose}>
+            取消
+          </Button>
+          <Button type="submit" disabled={!ready || save.isPending}>
+            <Save aria-hidden="true" />
+            {save.isPending ? "正在保存" : "保存模板"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

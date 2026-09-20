@@ -137,3 +137,55 @@ func TestCustomAnimationModelsRejectsInvalidConnectionBeforeRequest(t *testing.T
 		}
 	}
 }
+
+func TestCustomAnimationModelsOpenAIPaginationUsesAfterCursor(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("after") == "first-model" {
+			_, _ = w.Write([]byte(`{"data":[{"id":"second-model"}],"has_more":false}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"first-model"}],"has_more":true,"last_id":"first-model"}`))
+	}))
+	defer server.Close()
+	models, err := new(modelcheck.Service).CustomAnimationModels(t.Context(), modelcheck.AnimationCustomEndpoint{BaseURL: server.URL, APIKey: fixtureSecret, Platform: "openai"})
+	if err != nil || !reflect.DeepEqual(models, []string{"first-model", "second-model"}) {
+		t.Fatalf("OpenAI pagination failed: %v %v", models, err)
+	}
+}
+
+func TestCustomAnimationModelsRetriesInterruptedBodyOnce(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Content-Length", "1000")
+			_, _ = w.Write([]byte(`{"data":`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"recovered-model"}]}`))
+	}))
+	defer server.Close()
+	models, err := new(modelcheck.Service).CustomAnimationModels(t.Context(), modelcheck.AnimationCustomEndpoint{BaseURL: server.URL, APIKey: fixtureSecret, Platform: "openai"})
+	if err != nil || !reflect.DeepEqual(models, []string{"recovered-model"}) || calls.Load() != 2 {
+		t.Fatalf("interrupted read was not recovered: %v %v", models, err)
+	}
+}
+
+func TestCustomAnimationModelsLimitsRetriesAndDoesNotRetryAuthentication(t *testing.T) {
+	for _, scenario := range []struct{ status, attempts int }{
+		{http.StatusInternalServerError, 2},
+		{http.StatusUnauthorized, 1},
+	} {
+		t.Run(http.StatusText(scenario.status), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(scenario.status)
+			}))
+			defer server.Close()
+			models, err := new(modelcheck.Service).CustomAnimationModels(t.Context(), modelcheck.AnimationCustomEndpoint{BaseURL: server.URL, APIKey: fixtureSecret, Platform: "openai"})
+			if err == nil || len(models) != 0 || int(calls.Load()) != scenario.attempts {
+				t.Fatalf("unexpected retry outcome: %v %v calls=%d", models, err, calls.Load())
+			}
+		})
+	}
+}

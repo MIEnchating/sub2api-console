@@ -95,11 +95,11 @@ export function ImportSettings(props: {
         )}
       </div>
       {values.action === "import" && (
-        <div className="grid gap-3 border-t pt-3">
+        <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
           {(
             [
-              { name: "check", label: "导入后执行 Sol 检测" },
-              { name: "promote", label: "处理通过后启用账号" },
+              { name: "check", label: "导入前执行 Sol 检测" },
+              { name: "promote", label: "导入完成后启用账号" },
             ] as const
           ).map((option) => (
             <label key={option.name} className="flex items-center gap-2 text-sm">
@@ -117,9 +117,12 @@ export function ImportSettings(props: {
               {option.label}
             </label>
           ))}
+          <p className="text-xs text-muted-foreground">
+            检测出错时停止导入；检测完成后的不匹配或证据不足结论不影响导入。
+          </p>
         </div>
       )}
-      <div className="grid gap-2">
+      <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
         <label className="flex items-center gap-2 text-sm">
           <Controller
             name="proxy_enabled"

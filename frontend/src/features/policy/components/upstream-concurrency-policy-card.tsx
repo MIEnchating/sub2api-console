@@ -1,3 +1,4 @@
+import { UpstreamAllocationOverrides } from "./upstream-allocation-overrides";
 import type { ReactElement } from "react";
 import type { AccountStatus } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
@@ -24,6 +25,10 @@ type AllocationAccount = Pick<AccountStatus, "id" | "name" | "upstream_type" | "
 
 export function UpstreamConcurrencyPolicyCard(
   props: AllocationUpstreamProps & {
+    accountOverrides?: Record<string, boolean>;
+    upstreamOverrides?: Record<string, boolean>;
+    onAccountOverridesChange?: (value: Record<string, boolean>) => void;
+    onUpstreamOverridesChange?: (value: Record<string, boolean>) => void;
     enabled: boolean;
     onEnabledChange: (enabled: boolean) => void;
     accountMode: UpstreamConcurrencyMode;
@@ -130,6 +135,25 @@ export function UpstreamConcurrencyPolicyCard(
         </div>
       ) : null}
       {props.accountMode === "upstreams" ? <UpstreamConcurrencyUpstreams {...props} /> : null}
+      <p className="text-muted-foreground text-xs leading-5 @min-[56rem]/policy-card:col-span-3">
+        账号单独设置优先于上游单独设置，再跟随上述范围；总开关控制整个共享并发分配功能。
+      </p>
+      <UpstreamAllocationOverrides
+        label="账号单独设置"
+        values={props.accountOverrides ?? {}}
+        names={
+          new Map((props.accounts ?? []).map((item) => [item.id, `${item.name}（#${item.id}）`]))
+        }
+        onChange={(value) => props.onAccountOverridesChange?.(value)}
+      />
+      <UpstreamAllocationOverrides
+        label="上游单独设置"
+        values={props.upstreamOverrides ?? {}}
+        names={
+          new Map((props.upstreams ?? []).map((item) => [item.upstream_id, item.name || item.host]))
+        }
+        onChange={(value) => props.onUpstreamOverridesChange?.(value)}
+      />
     </PolicyConfigCard>
   );
 }

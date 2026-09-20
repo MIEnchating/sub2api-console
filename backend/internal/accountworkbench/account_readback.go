@@ -40,6 +40,11 @@ func verifyApplied(account, requested map[string]any) error {
 			}
 			continue
 		}
+		if key == "credentials" {
+			if err := verifyModelMappings(account, object(expected)); err != nil {
+				return err
+			}
+		}
 		if key == "expires_at" && expected != nil {
 			wanted, wantedErr := accountExpirySeconds(text(expected))
 			actual, actualErr := accountExpirySeconds(text(account[key]))
@@ -74,4 +79,23 @@ func appliedValue(actual, expected any) bool {
 		return leftOK && rightOK && left.Cmp(right) == 0
 	}
 	return reflect.DeepEqual(actual, expected)
+}
+
+// Model selections are exact sets; upstream-added wildcard entries must not widen them.
+func verifyModelMappings(account map[string]any, expected map[string]any) error {
+	actual := object(account["credentials"])
+	for _, key := range []string{"model_mapping", "compact_model_mapping"} {
+		wanted, exists := expected[key]
+		if !exists {
+			continue
+		}
+		got := actual[key]
+		if len(object(wanted)) == 0 && got == nil {
+			continue
+		}
+		if !reflect.DeepEqual(got, wanted) {
+			return fmt.Errorf("账号模型映射 %s 与所选配置不一致，已停止启用", key)
+		}
+	}
+	return nil
 }

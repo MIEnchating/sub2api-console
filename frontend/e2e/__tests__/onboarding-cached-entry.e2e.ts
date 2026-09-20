@@ -24,8 +24,34 @@ test("编辑上游缓存详情后直接进入添加账号，准备完成后显�
     cookie_names: [],
     groups: [],
   };
+  let allocation = {
+    revision: "v1",
+    target_id: configuration.upstream_id,
+    upstream_id: configuration.upstream_id,
+    override: null as boolean | null,
+    selected: false,
+    effective: false,
+    global_enabled: true,
+    source: "policy",
+  };
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === `/api/policy/upstream-concurrency/upstreams/${configuration.upstream_id}`) {
+      if (route.request().method() === "PUT") {
+        const payload = route.request().postDataJSON();
+        expect(payload.expected_revision).toBe(allocation.revision);
+        allocation = {
+          ...allocation,
+          revision: "v2",
+          override: payload.override,
+          selected: payload.override === true,
+          effective: payload.override === true,
+          source: "upstream",
+        };
+      }
+      await route.fulfill({ json: allocation });
+      return;
+    }
     const responses: Record<string, unknown> = {
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
@@ -99,6 +125,10 @@ test("编辑上游缓存详情后直接进入添加账号，准备完成后显�
   await expect(dialog.getByRole("textbox", { name: "名称", exact: true })).toHaveValue(
     configuration.name,
   );
+  const allocationSwitch = dialog.getByRole("switch", { name: "上游共享并发分配", exact: true });
+  await expect(allocationSwitch).not.toBeChecked();
+  await allocationSwitch.click();
+  await expect(allocationSwitch).toBeChecked();
   await dialog.getByRole("button", { name: "取消", exact: true }).click();
   const [preparation] = await Promise.all([
     page.waitForResponse(
@@ -111,4 +141,7 @@ test("编辑上游缓存详情后直接进入添加账号，准备完成后显�
   await expect(page.getByRole("region", { name: "当前上游概况" })).toBeVisible();
   await expect(page.getByText("准备完成的候选分组", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "正在获取", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("switch", { name: "上游共享并发分配", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "本次新账号共享并发分配" })).toHaveCount(0);
+  expect(allocation.override).toBeNull();
 });

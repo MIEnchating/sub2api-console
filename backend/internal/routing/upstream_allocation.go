@@ -2,23 +2,17 @@ package routing
 
 import (
 	"math"
+	"strings"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 )
 
 func (config engineConfig) upstreamAllocationEnabledFor(account business.RoutingAccount) bool {
-	if !config.upstreamReductionEnabled {
+	if account.UpstreamType == nil || !strings.EqualFold(strings.TrimSpace(*account.UpstreamType), "sub2api") {
 		return false
 	}
-	if config.upstreamAccountMode == "all" {
-		return true
-	}
-	if config.upstreamAccountMode == "upstreams" {
-		_, selected := config.upstreamIDs[sub2APIUpstreamID(account)]
-		return selected
-	}
-	_, selected := config.upstreamAccountIDs[account.ID]
-	return selected
+	selected, _ := config.upstreamAllocationScope.Selected(account.ID, sub2APIUpstreamID(account))
+	return config.upstreamReductionEnabled && selected
 }
 
 // UpstreamAllocationAllowed retains scope protection while permitting recovery

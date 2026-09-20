@@ -88,6 +88,7 @@ type OnboardingProjection struct {
 	Notes              string
 	Actor              string
 	ReadbackConfirmed  bool
+	AllocationOverride *bool
 	WaitingForCapacity bool
 }
 
@@ -321,6 +322,9 @@ func canonicalPendingLocalGroupIDs(values []string) ([]string, string, error) {
 }
 
 func (s *Store) CommitOnboardingProjection(ctx context.Context, value OnboardingProjection) error {
+	if value.AllocationOverride != nil && value.UpstreamType != "sub2api" {
+		return errors.New("共享并发单独设置仅支持 Sub2API 账号")
+	}
 	if value.WaitingForCapacity && (value.Schedulable || !value.ReadbackConfirmed || value.Concurrency == nil || *value.Concurrency != 1) {
 		return errors.New("等待并发额度账号必须确认停用且并发为 1")
 	}
@@ -400,6 +404,28 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 	if err != nil {
 		return err
 	}
+	if value.AllocationOverride != nil {
+		document, err := s.readPolicyDocument(ctx, tx, "control-plane")
+		if err != nil {
+			return err
+		}
+		if document == nil {
+			return errors.New("控制面策略记录不存在")
+		}
+		if _, err := allocationSetting(document, "accounts", value.AccountID, upstreamID); err != nil {
+			return err
+		}
+		section, _ := document["upstream_concurrency"].(map[string]any)
+		section = copyObject(section)
+		overrides, _ := section["account_overrides"].(map[string]any)
+		overrides = copyObject(overrides)
+		overrides[value.AccountID] = *value.AllocationOverride
+		section["account_overrides"] = overrides
+		document["upstream_concurrency"] = section
+		if err := s.writePolicyDocument(ctx, tx, "control-plane", document, now); err != nil {
+			return err
+		}
+	}
 	if err := ensureBindingIdentitiesTx(ctx, tx, upstreamID); err != nil {
 		return err
 	}
@@ -422,7 +448,7 @@ func (s *Store) CommitOnboardingProjection(ctx context.Context, value Onboarding
 		ObjectName: &name, GroupNames: onboardingLocalGroupNames(localGroups), FieldName: &field,
 		After: map[string]any{"name": value.AccountName, "group_ids": onboardingLocalGroupIDs(localGroups), "schedulable": value.Schedulable,
 			"rate_multiplier": value.Multiplier, "concurrency": value.Concurrency, "priority": value.Priority,
-			"waiting_for_capacity": value.WaitingForCapacity}, Writeback: true,
+			"waiting_for_capacity": value.WaitingForCapacity, "allocation_override": value.AllocationOverride}, Writeback: true,
 	}
 	if err := insertAccountOperation(ctx, tx, operation); err != nil {
 		return err

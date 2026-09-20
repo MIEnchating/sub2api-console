@@ -149,6 +149,9 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 	if _, err := tx.ExecContext(ctx, `DELETE FROM routing_decisions WHERE account_id=?`, accountID); err != nil {
 		return ManualPriorityAssignment{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM abnormal_cleanup_states WHERE account_id=?`, accountID); err != nil {
+		return ManualPriorityAssignment{}, err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM cleanup_states WHERE account_id=?`, accountID); err != nil {
 		return ManualPriorityAssignment{}, err
 	}

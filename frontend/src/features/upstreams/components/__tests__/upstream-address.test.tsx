@@ -38,6 +38,18 @@ function renderUpstream(): {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/policy/upstream-concurrency/")) {
+        return Response.json({
+          revision: "v1",
+          target_id: "up_example",
+          upstream_id: "up_example",
+          override: null,
+          selected: false,
+          effective: false,
+          global_enabled: false,
+          source: "policy",
+        });
+      }
       if (init?.method !== "PUT") throw new Error(`Unexpected request: ${String(input)}`);
       const payload = JSON.parse(String(init.body)) as UpstreamConfigurationUpdate;
       writes.push({ url: String(input), payload });

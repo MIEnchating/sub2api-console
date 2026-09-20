@@ -40,6 +40,7 @@ type storedInput struct {
 	Item             InputItem      `json:"item"`
 	Credentials      map[string]any `json:"credentials"`
 	LoginSource      string         `json:"login_source"`
+	LoginPassword    string         `json:"login_password,omitempty"`
 	MailRefreshToken string         `json:"mail_refresh_token,omitempty"`
 	ProxyURL         string         `json:"proxy_url,omitempty"`
 }

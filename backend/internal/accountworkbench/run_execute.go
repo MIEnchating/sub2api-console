@@ -69,7 +69,7 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 			itemErr = s.promoteItem(ctx, value, index)
 			if itemErr == nil {
 				row.Status = "completed"
-				row.Message = "已启用（检测证据不足）"
+				row.Message = "已启用（保留原检测结论）"
 				row.ManualEnabled = true
 			}
 		} else {
@@ -84,7 +84,7 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 				row.Message = "上次提交结果需要核对，请勿重复提交该项"
 			}
 		}
-		row.BrowserReady = false
+		row.LoginPrompt = nil
 		if err := s.persistRun(value); err != nil {
 			value.Public.Status = "interrupted"
 			break
@@ -109,7 +109,7 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 			terminal = "needs_attention"
 			taskStatus = "partial"
 		}
-		row.BrowserReady = false
+		row.LoginPrompt = nil
 	}
 	if ctx.Err() != nil {
 		terminal = "interrupted"
@@ -225,26 +225,14 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 		value.Phases[row.ID] = "exported"
 		return nil
 	}
-	if row.AccountID == "" {
-		if err = s.importItem(ctx, value, index, payload); err != nil {
+	if value.Settings.Check {
+		if err = s.checkImportItem(ctx, value, index); err != nil {
 			return err
 		}
 	}
-	if value.Settings.Check {
-		row.Status = "checking"
-		row.Message = "正在执行 Sol 快速检测"
-		if err = s.persistRun(value); err != nil {
-			return errors.New("检测阶段保存失败")
-		}
-		result, checkErr := s.checker.CheckOAuthWithProxy(ctx, row.AccountID, item.Name, stored.Credentials, value.Settings.Model, 30, proxyURL)
-		if checkErr != nil {
-			return errors.New("账号检测未完成，请核对检测配置后重试")
-		}
-		row.Check = publicCheck(result, stored.Credentials)
-		if text(row.Check["verdict"]) != "SOL_CONSISTENT" {
-			row.Status = "review"
-			row.Message = "检测未通过，账号保留隔离状态"
-			return nil
+	if row.AccountID == "" {
+		if err = s.importItem(ctx, value, index, payload); err != nil {
+			return err
 		}
 	}
 	if value.Settings.Promote {

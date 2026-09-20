@@ -433,6 +433,13 @@ func (f fakeBusiness) UpdatePolicy(_ context.Context, patch map[string]any, acto
 	}
 	return f.policySnapshot, nil
 }
+func (f fakeBusiness) UpstreamAllocationSetting(context.Context, string, string) (business.UpstreamAllocationSetting, error) {
+	return business.UpstreamAllocationSetting{}, errors.New("not configured")
+}
+func (f fakeBusiness) SetUpstreamAllocationSetting(context.Context, string, string, business.UpstreamAllocationUpdate, string) (business.UpstreamAllocationSetting, error) {
+	return business.UpstreamAllocationSetting{}, errors.New("not configured")
+}
+
 func (f fakeBusiness) SetAccountIgnoreCostWall(context.Context, string, bool, string) error {
 	return nil
 }

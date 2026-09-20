@@ -14,7 +14,7 @@ import (
 )
 
 func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T) {
-	for _, scope := range []string{"account", "batch", "platform", "upstream-failure", "automatic", "recovery"} {
+	for _, scope := range []string{"account", "batch", "platform", "upstream-failure", "retryable-failure", "pool-failure", "fused-during-request", "automatic", "recovery"} {
 		t.Run(scope, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "manual-fused-probe.db")
 			store, err := business.Open(path)
@@ -23,6 +23,15 @@ func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T)
 			}
 			t.Cleanup(func() { _ = store.Close() })
 			if err := store.Bootstrap(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			retrySource := "fixed"
+			if scope == "pool-failure" {
+				retrySource = "sub2api_pool"
+			}
+			if _, err := store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"probe": map[string]any{
+				"retry_enabled": true, "retry_count": 2, "retry_source": retrySource,
+			}}}, "test"); err != nil {
 				t.Fatal(err)
 			}
 			db, err := sql.Open("sqlite", path)
@@ -41,6 +50,14 @@ func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T)
 			}); err != nil {
 				t.Fatal(err)
 			}
+			if scope == "fused-during-request" {
+				if err := store.CommitAccountControlReadback(t.Context(), "41", "recover", "test", true, business.AccountOperation{
+					OperationID: "recover-before-test", OperationType: "account.control", State: "succeeded", Phase: "readback",
+					RemoteConfirmed: true, ReadbackConfirmed: true,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var generated atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/41" {
@@ -52,9 +69,23 @@ func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T)
 				}
 				if r.Method == http.MethodPost && r.URL.Path == "/v1/responses" {
 					generated.Add(1)
-					if scope == "upstream-failure" {
+					if scope == "fused-during-request" {
+						if err := store.CommitAccountControlReadback(r.Context(), "41", "fuse", "test", false, business.AccountOperation{
+							OperationID: "fuse-during-test", OperationType: "account.control", State: "succeeded", Phase: "readback",
+							RemoteConfirmed: true, ReadbackConfirmed: true,
+						}); err != nil {
+							t.Error(err)
+						}
+						http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					if scope == "upstream-failure" || scope == "retryable-failure" || scope == "pool-failure" {
 						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusBadRequest)
+						status := http.StatusBadRequest
+						if scope != "upstream-failure" {
+							status = http.StatusServiceUnavailable
+						}
+						w.WriteHeader(status)
 						_, _ = w.Write([]byte(`{"error":{"message":"test model unavailable"}}`))
 						return
 					}
@@ -93,7 +124,7 @@ func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T)
 			}
 			runner.run(t.Context())
 			outcome, result := "passed", "通过"
-			if scope == "upstream-failure" {
+			if scope == "upstream-failure" || scope == "retryable-failure" || scope == "pool-failure" || scope == "fused-during-request" {
 				outcome, result = "failed", "失败"
 			}
 			if generated.Load() != 1 || tasks.last.Result[outcome] != 1 {

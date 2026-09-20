@@ -14,6 +14,10 @@ import (
 // contributes; active probes and another membership cannot supply evidence.
 func (s *Store) costTrafficAlertFindings(ctx context.Context) ([]alertFinding, map[string]string, error) {
 	now := time.Now().UTC()
+	ignoredAccounts, err := s.costWallIgnoredAccounts(ctx, s.db)
+	if err != nil {
+		return nil, nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `WITH traffic AS (
  SELECT account_id,json_extract(payload_json,'$.request_group_id') AS group_id,COUNT(DISTINCT request_id) AS requests,MAX(observed_at) AS latest
  FROM usage_records WHERE LOWER(source)='traffic' AND observed_at>=? AND observed_at<=? AND TRIM(request_id)<>''
@@ -39,6 +43,9 @@ func (s *Store) costTrafficAlertFindings(ctx context.Context) ([]alertFinding, m
 		}
 		key := "console:cost-traffic:" + id + ":" + group
 		known[key] = true
+		if containsControlID(ignoredAccounts, id) {
+			continue
+		}
 		rate, rateOK := new(big.Rat).SetString(strings.TrimSpace(rateText.String))
 		groupRate, groupOK := new(big.Rat).SetString(strings.TrimSpace(groupRateText.String))
 		if !rateOK || !groupOK || rate.Sign() < 0 || groupRate.Sign() < 0 {
@@ -77,4 +84,19 @@ func (s *Store) costTrafficAlertFindings(ctx context.Context) ([]alertFinding, m
 		}
 	}
 	return findings, notEvaluated, active.Err()
+}
+
+func (s *Store) costWallIgnoredAccounts(ctx context.Context, queryer policyQueryer) (map[string]struct{}, error) {
+	control, err := s.readPolicyDocument(ctx, queryer, "control-plane")
+	if err != nil {
+		return nil, err
+	}
+	scope, _ := control["scope"].(map[string]any)
+	return controlAccountIDs(scope["ignore_cost_wall_account_ids"]), nil
+}
+
+func closeAccountCostTrafficAlerts(ctx context.Context, tx *sql.Tx, accountID, now string) error {
+	_, err := tx.ExecContext(ctx, `UPDATE alert_incidents SET status='closed',last_seen_at=?,delivery_status='账号已开启无视成本墙',last_error=NULL
+		WHERE event_type='account.cost_traffic' AND object_kind='account' AND object_id=? AND status IN ('firing','suppressed','recovered')`, now, accountID)
+	return err
 }

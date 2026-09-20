@@ -126,3 +126,33 @@ it("检测返回不匹配结论时显示中文标签，新增状态不会直接�
   expect(screen.queryByText("new_backend_status")).not.toBeInTheDocument();
   expect(screen.queryByText("new_item_status")).not.toBeInTheDocument();
 });
+
+it("检测请求出错时直接显示具体原因并且不提供启用入口", () => {
+  mount(vi.fn(), {
+    ...run,
+    items: [
+      { ...run.items[1], check: { verdict: "ERROR", error: "OAuth 检测请求失败（HTTP 429）" } },
+    ],
+  });
+  expect(screen.getByText(/OAuth 检测请求失败（HTTP 429）/)).toBeVisible();
+  expect(screen.getByText("检测出错")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+});
+
+it("部分请求失败时不能用证据不足结论绕过导入限制", () => {
+  mount(vi.fn(), {
+    ...run,
+    items: [{ ...run.items[0], check: { verdict: "INCONCLUSIVE", error: "请求超时" } }],
+  });
+  expect(screen.getByText(/请求超时/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+});
+
+it("检测正常完成且更接近 Luna 时显示具体结论，历史隔离项允许启用", () => {
+  mount(vi.fn(), {
+    ...run,
+    items: [{ ...run.items[0], check: { verdict: "LUNA_LIKE", error: null } }],
+  });
+  expect(screen.getByText("更接近 Luna")).toBeVisible();
+  expect(screen.getByRole("button", { name: "启用" })).toBeEnabled();
+});

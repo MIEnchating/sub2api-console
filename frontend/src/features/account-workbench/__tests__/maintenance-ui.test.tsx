@@ -26,7 +26,7 @@ const settings: WorkbenchMaintenance = {
   message: "",
   results: [],
 };
-function mount(value: WorkbenchMaintenance, fetcher: typeof fetch): void {
+function mount(value: WorkbenchMaintenance | undefined, fetcher: typeof fetch): void {
   vi.stubGlobal("fetch", fetcher);
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -111,4 +111,25 @@ it("检查间隔小于一分钟时阻止预览并显示字段错误", async () =
   await user.click(screen.getByRole("button", { name: "预览并保存" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("最少 1 分钟");
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("首次读取维护设置显示分栏骨架，读取完成后展示表单和结果", async () => {
+  let complete: (response: Response) => void = () => undefined;
+  mount(
+    undefined,
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        }),
+    ),
+  );
+  const loading = screen.getByLabelText("正在读取维护设置");
+  expect(loading).toHaveAttribute("aria-busy", "true");
+  expect(loading.lastElementChild).toHaveClass("grid", "lg:grid-cols-2");
+  expect(screen.queryByRole("form", { name: "维护设置" })).not.toBeInTheDocument();
+  complete(Response.json(settings));
+  expect(await screen.findByRole("form", { name: "维护设置" })).toBeVisible();
+  expect(screen.getByRole("region", { name: "维护结果" })).toBeVisible();
+  expect(screen.queryByLabelText("正在读取维护设置")).not.toBeInTheDocument();
 });

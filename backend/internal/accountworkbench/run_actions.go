@@ -60,7 +60,7 @@ func (s *Service) EnableReview(ctx context.Context, owner string, input RunConfi
 		return Run{}, errors.New("任务仍在运行，请等待结束")
 	}
 	if value.Public.Action != "import" || len(ids) == 0 || len(ids) > len(value.Items) {
-		return Run{}, errors.New("请选择证据不足且已隔离导入的账号")
+		return Run{}, errors.New("请选择检测已完成且已隔离导入的账号")
 	}
 	if err = s.executionAllowed(ctx, &value); err != nil {
 		return Run{}, err
@@ -75,8 +75,8 @@ func (s *Service) EnableReview(ctx context.Context, owner string, input RunConfi
 	found := 0
 	for _, row := range value.Public.Items {
 		if selected[row.ID] {
-			if row.Status != "review" || text(row.Check["verdict"]) != "INCONCLUSIVE" || row.AccountID == "" || value.Phases[row.ID] != "isolated" {
-				return Run{}, errors.New("仅允许手动启用证据不足且未被修改的隔离账号")
+			if row.Status != "review" || !completedImportCheck(row.Check) || row.AccountID == "" || value.Phases[row.ID] != "isolated" {
+				return Run{}, errors.New("仅允许手动启用检测无执行错误且未被修改的隔离账号")
 			}
 			found++
 		}

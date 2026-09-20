@@ -201,7 +201,7 @@ function ComboboxChip({ className, children, ...props }: ComboboxPrimitive.Chip.
       {children}
       <ComboboxPrimitive.ChipRemove
         data-slot="combobox-chip-remove"
-        className="hover:bg-foreground/10 -ml-1 flex size-5 items-center justify-center rounded-sm opacity-50 hover:opacity-100"
+        className="hover:bg-foreground/10 -ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm opacity-50 hover:opacity-100"
         aria-label="移除"
       >
         <X className="size-3" aria-hidden="true" />

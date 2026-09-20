@@ -145,7 +145,8 @@ func newUpstreamCapacityWriteFixture(t *testing.T, limit *int64, current, other 
 		t.Fatal(err)
 	}
 	if _, err := store.UpdatePolicy(t.Context(), map[string]any{
-		"auto_apply": map[string]any{"concurrency": true, "schedulable": true},
+		"auto_apply":      map[string]any{"concurrency": true, "schedulable": true},
+		"advanced_policy": map[string]any{"upstream_concurrency": map[string]any{"enabled": true}},
 	}, "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -179,4 +180,16 @@ func newUpstreamCapacityWriteFixture(t *testing.T, limit *int64, current, other 
 	t.Cleanup(server.Close)
 	fixture.serverURL = server.URL
 	return routingwrite.New(routingTarget{url: server.URL}, store), fixture
+}
+
+func disableCapacityFixtureGroupScaling(t *testing.T, fixture *upstreamCapacityFixture) {
+	t.Helper()
+	if _, err := fixture.store.UpdateGroupPolicy(t.Context(), "7", map[string]any{
+		"enabled": true, "strategy": "balanced", "min_pool_size": 1, "weight_budget": 400,
+		"balanced_price_ratio": 0.5, "breaker_enabled": true, "recovery_enabled": true,
+		"weights_enabled": true, "scaling_enabled": false, "probe_enabled": true,
+		"probe_interval_seconds": 300, "probe_model": "gpt-5.2",
+	}, "test"); err != nil {
+		t.Fatal(err)
+	}
 }

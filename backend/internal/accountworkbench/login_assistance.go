@@ -5,9 +5,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/workbenchprovider"
-	"github.com/pquerna/otp/totp"
 )
 
 type loginAssistance struct {
@@ -16,10 +14,7 @@ type loginAssistance struct {
 	http        *workbenchprovider.HTTP
 	baseline    workbenchprovider.MailBaseline
 	requestedAt time.Time
-	nextPoll    time.Time
-	used        map[string]bool
 	fatal       error
-	automatic   bool
 }
 
 func (s *Service) prepareLoginAssistance(ctx context.Context, value *privateRun, index int) (*loginAssistance, error) {
@@ -28,7 +23,10 @@ func (s *Service) prepareLoginAssistance(ctx context.Context, value *privateRun,
 	if err != nil {
 		return nil, err
 	}
-	state := &loginAssistance{details: details, used: map[string]bool{}, automatic: value.Automatic}
+	if input.LoginPassword != "" {
+		details.Password = input.LoginPassword
+	}
+	state := &loginAssistance{details: details}
 	if details.Mail.Kind == "" {
 		return state, nil
 	}
@@ -55,7 +53,7 @@ func (s *Service) prepareLoginAssistance(ctx context.Context, value *privateRun,
 		return nil, state.fatal
 	}
 	if err != nil {
-		// A mailbox outage leaves the official form available for manual input.
+		// A mailbox outage permits manual code input for interactive tasks.
 		mailbox.Close()
 		state.mailbox = nil
 	}
@@ -70,57 +68,4 @@ func (a *loginAssistance) close() {
 		a.http.Close()
 	}
 	a.details = LoginDetails{}
-}
-
-func (a *loginAssistance) apply(ctx context.Context, active *activeRun) error {
-	active.mu.Lock()
-	automation, ok := active.browser.(browserlogin.OAuthAutomation)
-	if !ok {
-		active.mu.Unlock()
-		return nil
-	}
-	page, err := automation.InspectAuth(ctx)
-	active.mu.Unlock()
-	if err != nil || a.used[page.Stage] {
-		return nil
-	}
-	value := ""
-	switch page.Stage {
-	case "email":
-		value = a.details.Email
-	case "password":
-		value = a.details.Password
-	case "totp_code":
-		if a.details.TOTP != "" {
-			value, _ = totp.GenerateCode(a.details.TOTP, time.Now().UTC())
-		}
-	case "email_code":
-		if a.mailbox == nil || a.requestedAt.IsZero() || time.Now().Before(a.nextPoll) {
-			return nil
-		}
-		a.nextPoll = time.Now().Add(3 * time.Second)
-		candidates, err := a.mailbox.Fetch(ctx, a.requestedAt, a.baseline)
-		if a.fatal != nil {
-			return a.fatal
-		}
-		if err == nil && len(candidates) == 1 {
-			value = candidates[0].Code
-		}
-	}
-	if value == "" {
-		if a.automatic && page.Stage != "email_code" {
-			return errors.New("登录需要人工验证，请重新导入该账号")
-		}
-		return nil
-	}
-	a.used[page.Stage] = true
-	if a.requestedAt.IsZero() {
-		a.requestedAt = time.Now().UTC()
-	}
-	active.mu.Lock()
-	defer active.mu.Unlock()
-	// Revision validation rejects any form changed by manual input while mail
-	// was being fetched. An uncertain submission is never automatically repeated.
-	_ = automation.ApplyAuth(ctx, browserlogin.AuthAction{Stage: page.Stage, Revision: page.Revision, Value: value})
-	return nil
 }

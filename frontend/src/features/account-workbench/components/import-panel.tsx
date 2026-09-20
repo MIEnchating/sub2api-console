@@ -72,12 +72,12 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
   const activePreview =
     validated.success && preview?.source === JSON.stringify(validated.data) ? preview.value : null;
   return (
-    <section aria-label="导入账号" className="flex h-full min-h-0 min-w-0 flex-col">
+    <section aria-label="导入账号" className="flex h-full min-h-0 min-w-0 flex-col gap-4">
       <form
         onSubmit={form.handleSubmit((input) => parse.mutate(input))}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >
-        <div className="grid min-h-0 min-w-0 flex-1 auto-rows-max content-start gap-4 overflow-y-auto overscroll-contain pb-4 lg:auto-rows-auto lg:grid-cols-[minmax(0,1fr)_20rem] lg:content-stretch">
+        <div className="grid min-h-0 min-w-0 flex-1 auto-rows-max content-start gap-4 overflow-y-auto overscroll-contain pb-4 lg:auto-rows-auto lg:grid-cols-[minmax(0,1fr)_22rem] lg:content-stretch">
           <section
             aria-labelledby="workbench-input-heading"
             className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 lg:flex lg:min-h-80 lg:flex-col"
@@ -130,7 +130,7 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
             busy={busy}
           />
         </div>
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t bg-background pt-3">
+        <div className="flex shrink-0 items-center justify-between gap-3 rounded-xl border bg-card p-3">
           <div className="min-w-0 text-xs text-muted-foreground">
             {parse.isPending ? (
               <ContentLoading compact label="正在解析账号资料" />

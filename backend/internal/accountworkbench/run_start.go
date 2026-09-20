@@ -7,17 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 )
 
 type activeRun struct {
-	done        chan struct{}
-	owner       string
-	taskID      string
-	mu          sync.Mutex
-	browser     browserlogin.OAuthBrowser
-	browserItem string
+	done   chan struct{}
+	owner  string
+	taskID string
+	mu     sync.Mutex
+	prompt *activeLoginPrompt
 }
 type RunConfirmation struct {
 	ID       string `json:"id"`
@@ -39,11 +37,6 @@ func (s *Service) Start(ctx context.Context, owner string, input RunConfirmation
 	}
 	if preview.Public.Check && s.checker == nil {
 		return Run{}, errors.New("账号检测服务尚未就绪")
-	}
-	for _, item := range preview.Items {
-		if item.Item.Kind == "login" && s.browser == nil {
-			return Run{}, errors.New("授权浏览器服务尚未配置")
-		}
 	}
 	preview.Claimed = true
 	raw, err := json.Marshal(preview)
@@ -73,11 +66,6 @@ func (s *Service) Start(ctx context.Context, owner string, input RunConfirmation
 func (s *Service) launch(ctx context.Context, value *privateRun) (Run, error) {
 	if s.tasks == nil || s.runner == nil || (value.Settings.Check && s.checker == nil) {
 		return Run{}, errors.New("工作台任务执行服务尚未就绪")
-	}
-	for _, item := range value.Items {
-		if item.Item.Kind == "login" && s.browser == nil {
-			return Run{}, errors.New("授权浏览器服务尚未配置")
-		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	task := taskstore.Task{ID: newID(), Skill: Skill, Operation: "workbench-run", Status: "queued", Message: "账号处理已排队", Result: map[string]any{"run_id": value.Public.ID, "total": len(value.Items)}, CreatedAt: now, UpdatedAt: now}

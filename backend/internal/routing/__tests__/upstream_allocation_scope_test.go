@@ -34,8 +34,8 @@ func TestSelectedSharedAllocationWithEmptySelectionDoesNotAllocate(t *testing.T)
 	}
 }
 
-func TestSelectedSharedAllocationDoesNotRecoverUnselectedWaitingAccount(t *testing.T) {
-	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10)
+func TestSelectedSharedAllocationRestoresOrdinarySchedulingForUnselectedWaitingAccount(t *testing.T) {
+	first, waiting := upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 4, 10)
 	stopped := false
 	waiting.Schedulable = &stopped
 	waiting.EffectiveState = "concurrency_limited"
@@ -45,8 +45,11 @@ func TestSelectedSharedAllocationDoesNotRecoverUnselectedWaitingAccount(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := result.AccountTargets["42"]; target.Schedulable == nil || *target.Schedulable || target.UpstreamAllocation {
-		t.Fatalf("removed account must stay paused: %+v", target)
+	if target := result.AccountTargets["42"]; target.Schedulable == nil || !*target.Schedulable || target.UpstreamAllocation || target.Concurrency != nil || target.DesiredHealth == "concurrency_limited" {
+		t.Fatalf("removed account must return to ordinary scheduling: %+v", target)
+	}
+	if target := result.AccountTargets["41"]; target.Concurrency == nil || *target.Concurrency != 6 {
+		t.Fatalf("selected peer must reserve recovering account's four slots: %+v", target)
 	}
 	allowed, err := routing.UpstreamAllocationAllowed(r.policy, waiting)
 	if err != nil || allowed {
@@ -120,5 +123,64 @@ func TestUpstreamSharedAllocationEmptySelectionDoesNotAllocate(t *testing.T) {
 		if target.Concurrency != nil || target.UpstreamAllocation {
 			t.Fatalf("empty upstream scope changed %s: %+v", id, target)
 		}
+	}
+}
+
+func TestSharedAllocationAccountOverrideIncludesAccountOutsideSelectedUpstreams(t *testing.T) {
+	r := allocationFixture(t, upstreamCapacityAccount("147", 1, 10), upstreamCapacityAccount("148", 4, 10))
+	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "upstreams", "upstream_ids": []any{"other"}, "account_overrides": map[string]any{"147": true}}
+	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := result.AccountTargets["147"]
+	if target.Concurrency == nil || *target.Concurrency != 6 || !target.UpstreamAllocation {
+		t.Fatalf("single account opt-in must preserve sibling reservation: %+v", target)
+	}
+}
+
+func TestSharedAllocationAccountOverrideWinsOverUpstreamAndGlobalScope(t *testing.T) {
+	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10), upstreamCapacityAccount("42", 1, 10))
+	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_mode": "selected", "account_ids": []any{}, "upstream_overrides": map[string]any{"upstream-1": true}, "account_overrides": map[string]any{"41": false}}
+	result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target := result.AccountTargets["41"]; target.UpstreamAllocation || target.Concurrency != nil {
+		t.Fatalf("explicitly disabled account changed: %+v", target)
+	}
+	if target := result.AccountTargets["42"]; target.Concurrency == nil || *target.Concurrency != 9 {
+		t.Fatalf("new sibling must inherit upstream opt-in: %+v", target)
+	}
+}
+
+func TestSharedAllocationOverridesRespectMasterOffAndWriterRechecks(t *testing.T) {
+	for _, master := range []bool{false, true} {
+		r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
+		r.policy["upstream_concurrency"] = map[string]any{"enabled": master, "account_mode": "all", "upstream_overrides": map[string]any{"upstream-1": false}, "account_overrides": map[string]any{"41": true}}
+		result, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.AccountTargets["41"].UpstreamAllocation != master {
+			t.Fatalf("master %t target %+v", master, result.AccountTargets["41"])
+		}
+		allowed, err := routing.UpstreamAllocationAllowed(r.policy, r.accounts[0])
+		if err != nil || allowed != master {
+			t.Fatalf("master %t writer %t %v", master, allowed, err)
+		}
+		r.policy["upstream_concurrency"].(map[string]any)["account_overrides"] = map[string]any{}
+		allowed, err = routing.UpstreamAllocationAllowed(r.policy, r.accounts[0])
+		if err != nil || allowed {
+			t.Fatalf("reset must respect upstream off: %t %v", allowed, err)
+		}
+	}
+}
+
+func TestSharedAllocationRejectsMalformedOverridesBeforeCalculating(t *testing.T) {
+	r := allocationFixture(t, upstreamCapacityAccount("41", 1, 10))
+	r.policy["upstream_concurrency"] = map[string]any{"enabled": true, "account_overrides": map[string]any{"41": "true"}}
+	if _, err := routing.NewService(r).Calculate(t.Context(), routing.Scope{}, true); err == nil {
+		t.Fatal("malformed override silently ignored")
 	}
 }

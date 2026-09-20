@@ -14,6 +14,6 @@ fi
 
 case "${1:-}" in
   vet) exec go vet "${packages[@]}" ;;
-  test) exec go test -race "${packages[@]}" ;;
+  test) exec go test -race -timeout=20m "${packages[@]}" ;;
   *) printf 'Usage: bash scripts/check-go.sh {vet|test}\n' >&2; exit 2 ;;
 esac

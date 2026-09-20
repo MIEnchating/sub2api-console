@@ -80,9 +80,14 @@ export function renderOnboarding(
   options?: {
     cacheEntryConfiguration?: boolean;
     strictMode?: boolean;
+    upstreamType?: string;
     candidates?: OnboardingCandidate[];
   },
 ): QueryClient {
+  const configuredUpstream = {
+    ...upstream,
+    upstream_type: options?.upstreamType ?? upstream.upstream_type,
+  };
   // JSDOM 26 recurses while matching top-layer selectors; these tests use ordinary popups.
   const matches = Element.prototype.matches;
   vi.spyOn(Element.prototype, "matches").mockImplementation(function (
@@ -141,9 +146,19 @@ export function renderOnboarding(
     source: "console",
   });
   vi.spyOn(api, "authRecoveryConfig").mockResolvedValue({ auth_records: [], vault_entries: [] });
-  vi.spyOn(api, "upstreamConfiguration").mockResolvedValue(upstream);
+  vi.spyOn(api, "upstreamConfiguration").mockResolvedValue(configuredUpstream);
+  vi.spyOn(api, "upstreamAllocationSetting").mockResolvedValue({
+    revision: "v1",
+    target_id: upstream.upstream_id,
+    upstream_id: upstream.upstream_id,
+    override: null,
+    selected: false,
+    effective: false,
+    global_enabled: true,
+    source: "policy",
+  });
   vi.spyOn(api, "prepareOnboarding").mockResolvedValue({
-    upstream,
+    upstream: configuredUpstream,
     candidates: options?.candidates ?? (candidate ? [candidate] : []),
   });
   const root = createRootRoute();
@@ -168,7 +183,7 @@ export function renderOnboarding(
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (options?.cacheEntryConfiguration) {
-    client.setQueryData(["upstream-configuration", upstream.host], upstream);
+    client.setQueryData(["upstream-configuration", upstream.host], configuredUpstream);
   }
   const page = (
     <QueryClientProvider client={client}>

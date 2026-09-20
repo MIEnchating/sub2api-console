@@ -36,9 +36,6 @@ func (s *Service) savedMaintenanceLogin(ctx context.Context, value *privateMaint
 	return storedInput{}, "", 0, time.Time{}, errors.New("没有当前会话授权使用的有效登录资料，请重新导入账号")
 }
 func (s *Service) reauthorizeMaintenance(ctx context.Context, value *privateMaintenance, account map[string]any, attempt *maintenanceAttempt) error {
-	if s.browser == nil {
-		return errors.New("授权浏览器服务不可用")
-	}
 	input, sourceID, sourceRevision, expires, err := s.savedMaintenanceLogin(ctx, value, account)
 	if err != nil {
 		return err

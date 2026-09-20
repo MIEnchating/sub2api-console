@@ -46,8 +46,8 @@ export function ImportPreview(props: {
           {isImport && (
             <p className="text-sm text-muted-foreground">
               模板：{props.preview.template?.name || "默认配置"} ·{" "}
-              {props.preview.check ? "执行检测" : "不检测"} ·{" "}
-              {props.preview.promote ? "通过后启用" : "保持停用"}
+              {props.preview.check ? "导入前检测，出错则停止" : "不检测"} ·{" "}
+              {props.preview.promote ? "导入完成后启用" : "保持停用"}
             </p>
           )}
           {props.preview.errors.length > 0 && (

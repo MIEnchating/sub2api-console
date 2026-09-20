@@ -97,8 +97,9 @@ type RoutingDecisionWrite struct {
 }
 
 type CleanupStateWrite struct {
-	AccountID     string
-	EligibleSince *time.Time
+	PersistentAbnormal bool
+	AccountID          string
+	EligibleSince      *time.Time
 }
 
 type RuntimeEventWrite struct {
@@ -122,6 +123,7 @@ type AccountRoutingTarget struct {
 	ReleaseControl              bool     `json:"release_control,omitempty"`
 	AbandonControl              bool     `json:"abandon_control,omitempty"`
 	CleanupAction               *string  `json:"cleanup_action,omitempty"`
+	CleanupReason               string   `json:"cleanup_reason,omitempty"`
 	ConfigurationError          *string  `json:"configuration_error,omitempty"`
 	UpstreamAllocation          bool     `json:"upstream_allocation,omitempty"`
 	UpstreamReductionID         string   `json:"upstream_reduction_id,omitempty"`
@@ -390,7 +392,15 @@ func (s *Store) readPreviousDecisions(ctx context.Context, query string, argumen
 }
 
 func (s *Store) CleanupStates(ctx context.Context, accountID *string) (map[string]time.Time, error) {
-	query := `SELECT account_id,eligible_since FROM cleanup_states`
+	return s.cleanupStates(ctx, accountID, "cleanup_states")
+}
+
+func (s *Store) AbnormalCleanupStates(ctx context.Context, accountID *string) (map[string]time.Time, error) {
+	return s.cleanupStates(ctx, accountID, "abnormal_cleanup_states")
+}
+
+func (s *Store) cleanupStates(ctx context.Context, accountID *string, table string) (map[string]time.Time, error) {
+	query := `SELECT account_id,eligible_since FROM ` + table
 	arguments := []any{}
 	if accountID != nil {
 		query += ` WHERE account_id=?`
@@ -485,13 +495,17 @@ func (s *Store) PersistRoutingRound(
 		}
 	}
 	for _, item := range cleanupStates {
+		table := "cleanup_states"
+		if item.PersistentAbnormal {
+			table = "abnormal_cleanup_states"
+		}
 		if item.EligibleSince == nil {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM cleanup_states WHERE account_id=?`, item.AccountID); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE account_id=?`, item.AccountID); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cleanup_states(account_id,eligible_since,updated_at) VALUES(?,?,?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`(account_id,eligible_since,updated_at) VALUES(?,?,?)
 			ON CONFLICT(account_id) DO UPDATE SET eligible_since=excluded.eligible_since,updated_at=excluded.updated_at`,
 			item.AccountID, item.EligibleSince.UTC().Format(time.RFC3339Nano), evaluatedAt); err != nil {
 			return err

@@ -44,7 +44,7 @@ func (s *Store) pruneManagementDeletedAccounts(
 		// Remove current state and bindings; retain health, usage and audit history.
 		for _, table := range []string{
 			"account_groups", "routing_decisions", "account_health_evaluations", "paused_accounts",
-			"manual_priority_accounts", "routing_baselines", "cleanup_states",
+			"manual_priority_accounts", "routing_baselines", "cleanup_states", "abnormal_cleanup_states",
 		} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", id); err != nil {
 				return nil, err

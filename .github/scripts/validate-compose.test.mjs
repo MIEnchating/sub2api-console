@@ -13,16 +13,13 @@ function composeConfig() {
   return JSON.parse(result.stdout);
 }
 
-test("Compose defines one Docker Hub application image and an isolated browser worker", () => {
+test("Compose runs protocol authorization without a browser service or socket dependency", () => {
   const config = composeConfig();
-  assert.deepEqual(Object.keys(config.services).sort(), ["api", "browser"]);
+  assert.deepEqual(Object.keys(config.services), ["api"]);
   assert.equal(config.services.api.image, "mienvirtuoso/sub2api-console:latest");
   assert.deepEqual(config.services.api.ports.map((port) => [port.published, port.target]), [["3004", 8080]]);
-  assert.equal(config.services.browser.image, "mienvirtuoso/sub2api-console:latest");
-  assert.deepEqual(config.services.browser.ports ?? [], []);
-  assert.equal(config.services.api.depends_on.browser.condition, "service_started");
-  assert.equal(config.services.browser.command[0], "sub2api-console");
-  assert.equal(config.services.browser.command[1], "browser-worker");
+  assert.deepEqual(config.services.api.depends_on ?? {}, {});
+  assert.equal(config.services.api.volumes.some((volume) => volume.target === "/run/browser"), false);
 });
 
 test("Compose keeps application data persistent and internal paths fixed", () => {

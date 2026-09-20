@@ -130,6 +130,7 @@ type Result struct {
 
 type preparedRun struct {
 	manualFusedDiagnostics map[string]struct{}
+	beforeTargetAttempt    func(context.Context, Target) (string, error)
 	keyResolver            adminclient.ProbeKeyResolver
 	request                Request
 	config                 Config
@@ -341,7 +342,13 @@ func (s *Service) prepare(ctx context.Context, request Request) (preparedRun, er
 		}
 		return preparedRun{}, errors.New(firstReason)
 	}
-	retryByAccount, err := loadAccountPoolRetries(ctx, targetSettings, targets, config)
+	retryTargets := make([]Target, 0, len(targets))
+	for _, target := range targets {
+		if _, diagnostic := manualFusedDiagnostics[target.AccountID]; !diagnostic {
+			retryTargets = append(retryTargets, target)
+		}
+	}
+	retryByAccount, err := loadAccountPoolRetries(ctx, targetSettings, retryTargets, config)
 	if err != nil {
 		return preparedRun{}, err
 	}
@@ -445,6 +452,16 @@ func (s *Service) runPrepared(ctx context.Context, prepared preparedRun) (RunSum
 		return RunSummary{}, err
 	}
 	prepared.keyResolver = s.resolveProbeKey
+	prepared.beforeTargetAttempt = func(ctx context.Context, target Target) (string, error) {
+		targets, err := s.applyCurrentProtections(ctx, []Target{target}, prepared.manualFusedDiagnostics)
+		if err != nil {
+			return "", err
+		}
+		if targets[0].SkipReason != nil {
+			return *targets[0].SkipReason, nil
+		}
+		return "", nil
+	}
 	if prepared.request.Automatic || len(prepared.request.AccountIDs) > 0 {
 		prepared.config.beforeAttempt = func(ctx context.Context) (string, error) {
 			policy, err := s.repository.ControlPolicy(ctx)
@@ -529,7 +546,23 @@ func run(ctx context.Context, prepared preparedRun) ([]Result, error) {
 				if prepared.config.RetrySource == "sub2api_pool" {
 					retry = prepared.retryByAccount[target.AccountID]
 				}
-				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, target, prepared.config, retry, prepared.keyResolver)}
+				if _, diagnostic := prepared.manualFusedDiagnostics[target.AccountID]; diagnostic {
+					// Explicit diagnosis does not opt a manually fused account into recovery retries.
+					retry.Count = 0
+				}
+				config := prepared.config
+				if prepared.beforeTargetAttempt != nil {
+					config.beforeAttempt = func(ctx context.Context) (string, error) {
+						if reason, err := prepared.beforeTargetAttempt(ctx, target); reason != "" || err != nil {
+							return reason, err
+						}
+						if prepared.config.beforeAttempt != nil {
+							return prepared.config.beforeAttempt(ctx)
+						}
+						return "", nil
+					}
+				}
+				outcomes <- indexedResult{index: index, result: probeTarget(ctx, client, target, config, retry, prepared.keyResolver)}
 			}
 		}()
 	}
@@ -627,6 +660,9 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 			break
 		}
 		if _, retryable := retry.StatusCodes[*lastStatus]; !retryable {
+			break
+		}
+		if scheduledProbeSkip(ctx, target, config) != nil {
 			break
 		}
 		if !waitForRetry(ctx, 500*time.Millisecond) {
@@ -804,7 +840,7 @@ func applyRetryPolicy(config *Config, policy map[string]any) error {
 
 func loadAccountPoolRetries(ctx context.Context, settings configstore.TargetSettings, targets []Target, config Config) (map[string]RetryConfig, error) {
 	result := map[string]RetryConfig{}
-	if !config.RetryEnabled || config.RetrySource != "sub2api_pool" {
+	if !config.RetryEnabled || config.RetrySource != "sub2api_pool" || len(targets) == 0 {
 		return result, nil
 	}
 	client, err := adminclient.New(adminclient.Config{

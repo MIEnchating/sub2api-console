@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -47,7 +48,11 @@ func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCust
 			query := pageURL.Query()
 			query.Set("limit", "100")
 			if cursor != "" {
-				query.Set("after_id", cursor)
+				cursorKey := "after"
+				if custom.Platform == "anthropic" {
+					cursorKey = "after_id"
+				}
+				query.Set(cursorKey, cursor)
 			}
 			pageURL.RawQuery = query.Encode()
 		}
@@ -80,6 +85,15 @@ func (s *Service) CustomAnimationModels(ctx context.Context, input AnimationCust
 
 func readAnimationModelsPage(ctx context.Context, client *http.Client, custom AnimationCustomEndpoint, endpoint string) (animationModelsPage, error) {
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			timer := time.NewTimer(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return animationModelsPage{}, safeTransportError(ctx.Err())
+			case <-timer.C:
+			}
+		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return animationModelsPage{}, errors.New("模型列表请求创建失败，请检查地址后重试")
@@ -93,24 +107,23 @@ func readAnimationModelsPage(ctx context.Context, client *http.Client, custom An
 		}
 		response, err := client.Do(request)
 		if err != nil {
+			if attempt == 0 && retryAnimationModelsRead(ctx, err) {
+				continue
+			}
 			return animationModelsPage{}, safeTransportError(err)
 		}
 		raw, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
 		_ = response.Body.Close()
 		if err != nil {
+			if attempt == 0 && retryAnimationModelsRead(ctx, err) {
+				continue
+			}
 			return animationModelsPage{}, safeTransportError(err)
 		}
 		if len(raw) > 2<<20 {
 			return animationModelsPage{}, errors.New("上游模型列表响应过大，请手动输入模型 ID")
 		}
-		if attempt == 0 && (response.StatusCode == 429 || response.StatusCode == 502 || response.StatusCode == 503 || response.StatusCode == 504) {
-			timer := time.NewTimer(200 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return animationModelsPage{}, safeTransportError(ctx.Err())
-			case <-timer.C:
-			}
+		if attempt == 0 && (response.StatusCode == 408 || response.StatusCode == 429 || response.StatusCode == 500 || response.StatusCode == 502 || response.StatusCode == 503 || response.StatusCode == 504) {
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -129,4 +142,13 @@ func readAnimationModelsPage(ctx context.Context, client *http.Client, custom An
 		return page, nil
 	}
 	return animationModelsPage{}, errors.New("模型列表暂不可用，请稍后重试")
+}
+
+func retryAnimationModelsRead(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var networkError net.Error
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		(errors.As(err, &networkError) && networkError.Timeout())
 }

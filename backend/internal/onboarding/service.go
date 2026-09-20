@@ -32,6 +32,9 @@ import (
 const onboardingAuditTimeout = 5 * time.Second
 
 type Repository interface {
+	ControlPolicy(context.Context) (map[string]any, error)
+	RoutingAccounts(context.Context, *string, *string) ([]business.RoutingAccount, error)
+	RoutingCapacityAccounts(context.Context) ([]business.RoutingAccount, error)
 	OnboardingCapacity(context.Context, string) (business.OnboardingCapacity, error)
 	OnboardingCandidates(context.Context, string) ([]business.OnboardingCandidate, error)
 	ProtectedUpstreamKeyIDs(context.Context, string) ([]string, error)
@@ -90,6 +93,7 @@ type Request struct {
 	Extra              map[string]any
 	Priority           *int64
 	Concurrency        *int64
+	AllocationOverride *bool
 	WaitingForCapacity bool
 	TestModels         []string
 	ModelMapping       map[string]string
@@ -680,6 +684,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		LocalGroupName: primaryLocal.Name, LocalGroups: validated.locals, Multiplier: validated.multiplier, Schedulable: validated.request.Schedulable,
 		Priority: &priority, Concurrency: &concurrency, Models: models, TestModels: validated.request.TestModels, Notes: remark, Actor: validated.request.Actor, ReadbackConfirmed: readbackConfirmed,
 		WaitingForCapacity: validated.request.WaitingForCapacity,
+		AllocationOverride: validated.request.AllocationOverride,
 	}
 	if err := s.repository.CommitOnboardingProjection(ctx, projection); err != nil {
 		return s.pendingFailure(ctx, validated, pending, result, err)
@@ -813,6 +818,7 @@ type frozenOnboardingIntent struct {
 	PoolRetryStatusCodes []int              `json:"pool_retry_status_codes"`
 	Schedulable          bool               `json:"schedulable"`
 	WaitingForCapacity   bool               `json:"waiting_for_capacity,omitempty"`
+	AllocationOverride   *bool              `json:"allocation_override,omitempty"`
 }
 
 func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (string, error) {
@@ -847,7 +853,7 @@ func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName
 		TestModels:     append([]string{}, validated.request.TestModels...),
 		ModelMapping:   validated.request.ModelMapping,
 		PoolRetryCount: policy.PoolModeRetryCount, PoolRetryStatusCodes: append([]int{}, policy.PoolModeRetryStatusCodes...),
-		Schedulable: validated.request.Schedulable, WaitingForCapacity: validated.request.WaitingForCapacity,
+		Schedulable: validated.request.Schedulable, WaitingForCapacity: validated.request.WaitingForCapacity, AllocationOverride: validated.request.AllocationOverride,
 	}
 	encoded, err := json.Marshal(intent)
 	if err != nil {
@@ -886,6 +892,9 @@ func (s *Service) validate(ctx context.Context, request Request) (validatedReque
 	}
 	if request.Concurrency != nil && (*request.Concurrency < 1 || *request.Concurrency > 10_000_000) {
 		return validatedRequest{}, errors.New("并发必须是 1 到 10000000 之间的整数")
+	}
+	if request.AllocationOverride != nil && (request.UpstreamType != "sub2api" || len(request.AccountIDs) > 0) {
+		return validatedRequest{}, errors.New("共享并发单独设置仅适用于新增 Sub2API 账号；已有账号请在账号设置中修改")
 	}
 	if request.WaitingForCapacity && (request.Schedulable || len(request.AccountIDs) > 0 || request.Concurrency == nil || *request.Concurrency != 1) {
 		return validatedRequest{}, errors.New("等待并发额度仅适用于并发为 1 且保持停用的新账号")

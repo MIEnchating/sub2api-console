@@ -752,7 +752,7 @@ func (s *Service) applyAccountCoordinated(
 		if target.CleanupAction != nil {
 			switch *target.CleanupAction {
 			case "pause":
-				if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, "认证持续失效，已自动暂停"); err != nil {
+				if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, cleanupReason(target)+"，已自动暂停"); err != nil {
 					s.recordCleanupOutcome(ctx, target, "pause", false, err)
 					s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), current.asMap(), false, true, "local-cleanup", err)
 					return failedResult(result, err)
@@ -866,7 +866,7 @@ func (s *Service) applyAccountCoordinated(
 	if target.CleanupAction != nil {
 		switch *target.CleanupAction {
 		case "pause":
-			if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, "认证持续失效，已自动暂停"); err != nil {
+			if err := s.repository.MarkCleanupPaused(ctx, target.AccountID, cleanupReason(target)+"，已自动暂停"); err != nil {
 				s.recordCleanupOutcome(ctx, target, "pause", true, err)
 				s.recordLocalApplyFailure(ctx, operationID, "routing.writeback", target, actor, current.asMap(), after.asMap(), true, true, "local-cleanup", err)
 				result.RemoteWrite = true
@@ -1007,7 +1007,7 @@ func (s *Service) deleteCleanupAccount(
 		"account_id": target.AccountID, "groups": target.GroupNames, "action": "delete",
 		"remote_write": true, "snapshot": current.asMap(), "snapshot_note": "快照不含凭据，删除后无法据此重建",
 	}
-	if _, err := s.repository.RecordRuntimeEvent(ctx, "cleanup_delete_pending", "succeeded", "认证持续失效，准备自动删除账号 "+target.AccountID, payload); err != nil {
+	if _, err := s.repository.RecordRuntimeEvent(ctx, "cleanup_delete_pending", "succeeded", cleanupReason(target)+"，准备自动删除账号 "+target.AccountID, payload); err != nil {
 		return failedResult(result, err)
 	}
 	if current.schedulable != nil && *current.schedulable {
@@ -1867,4 +1867,11 @@ func failedResult(result AccountResult, err error) AccountResult {
 	value := err.Error()
 	result.Error = &value
 	return result
+}
+
+func cleanupReason(target business.AccountRoutingTarget) string {
+	if target.CleanupReason == "长期异常" {
+		return target.CleanupReason
+	}
+	return "认证持续失效"
 }

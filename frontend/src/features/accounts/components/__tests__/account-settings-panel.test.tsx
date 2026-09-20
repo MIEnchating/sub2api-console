@@ -185,7 +185,7 @@ describe("账号设置面板", () => {
     ).toEqual(["custom-probe-model", "gpt-5.1-codex", "gpt-5.2"]);
   });
 
-  it("获取上游模型后显示选择框，不在下方显示已读取数量", async () => {
+  it("获取模型后显示选择框，按钮保持简短文案且不在下方显示已读取数量", async () => {
     vi.spyOn(api, "accountModels").mockResolvedValue({ models: ["gpt-5.1-codex", "gpt-5.2"] });
     const client = new QueryClient();
     const view = render(
@@ -198,11 +198,12 @@ describe("账号设置面板", () => {
         />
       </QueryClientProvider>,
     );
-    await userEvent.click(screen.getByRole("button", { name: "获取上游模型" }));
+    await userEvent.click(screen.getByRole("button", { name: "获取模型" }));
     expect(await screen.findByRole("combobox", { name: "选择探测模型" })).toHaveTextContent(
       "gpt-5.1-codex",
     );
     expect(screen.queryByText(/已读取.*个上游模型/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "获取模型" })).toBeEnabled();
     view.unmount();
     client.clear();
   });
@@ -391,4 +392,41 @@ it("账号留空显示绑定分组继承模型，保存不会固化继承值", a
   view.unmount();
   client.clear();
   vi.restoreAllMocks();
+});
+
+it("Sub2API 账号编辑显示独立共享并发设置，并按稳定账号 ID 读取", async () => {
+  const read = vi.spyOn(api, "upstreamAllocationSetting").mockResolvedValue({
+    revision: "v1",
+    target_id: "41",
+    upstream_id: "up_test",
+    override: true,
+    selected: true,
+    effective: true,
+    global_enabled: true,
+    source: "account",
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <AccountSettingsPanel
+        accountId="41"
+        query={{
+          data: { ...detail, upstream_type: "sub2api" },
+          isLoading: false,
+          isError: false,
+          error: null,
+        }}
+        onCancel={() => undefined}
+        onSaved={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  try {
+    expect(await screen.findByRole("switch", { name: "上游共享并发分配" })).toBeChecked();
+    expect(read).toHaveBeenCalledWith("accounts", "41");
+  } finally {
+    view.unmount();
+    read.mockRestore();
+    client.clear();
+  }
 });

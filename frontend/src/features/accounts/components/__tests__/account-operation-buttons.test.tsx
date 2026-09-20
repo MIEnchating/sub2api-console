@@ -103,7 +103,6 @@ describe("账号操作", () => {
     const actions = within(screen.getByRole("group", { name: "账号操作" }));
     for (const label of [
       "探活测试",
-      "暂停调度",
       "手动熔断（停止调度）",
       "同步账号倍率",
       "设置人工优先位",
@@ -152,16 +151,13 @@ describe("账号操作", () => {
     expect(more).toHaveAttribute("aria-expanded", "false");
   });
 
-  it.each([
-    { label: "查看并编辑账号", callback: "onEdit" as const },
-    { label: "删除账号及上游 Key", callback: "onDelete" as const },
-  ])("从更多菜单选择 $label 时进入对应操作并关闭菜单", async (fixture) => {
+  it("从更多菜单选择删除账号时进入对应操作并关闭菜单", async () => {
     const user = userEvent.setup();
     const props = operationProps();
     render(<AccountOperationButtons {...props} />);
     await user.click(screen.getByRole("button", { name: "更多账号操作" }));
-    await user.click(await screen.findByRole("menuitem", { name: fixture.label }));
-    expect(props[fixture.callback]).toHaveBeenCalledOnce();
+    await user.click(await screen.findByRole("menuitem", { name: "删除账号及上游 Key" }));
+    expect(props.onDelete).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
   });
 
@@ -169,6 +165,7 @@ describe("账号操作", () => {
     { label: "探活测试", callback: "onProbe" as const },
     { label: "同步账号倍率", callback: "onRateSync" as const },
     { label: "设置人工优先位", callback: "onManualPriority" as const },
+    { label: "查看并编辑账号", callback: "onEdit" as const },
   ])("直接点击 $label 时进入对应操作", async (fixture) => {
     const user = userEvent.setup();
     const props = operationProps();
@@ -192,13 +189,6 @@ describe("账号操作", () => {
       label: "解除熔断",
       description: "仍受调度策略约束",
       overrides: { health: "fused", schedulable: false },
-    },
-    {
-      name: "暂停调度",
-      action: "pause",
-      label: "暂停调度",
-      description: "停止接收流量",
-      overrides: {},
     },
   ])("直接点击 $name 时仍传递确认说明，不绕过既有确认流程", async (fixture) => {
     const user = userEvent.setup();
@@ -226,7 +216,7 @@ describe("账号操作", () => {
           {...operationProps({ manual_priority: 3, manual_sync_balance_multiplier: syncBalance })}
         />,
       );
-      for (const label of ["探活测试", "暂停调度", "手动熔断（停止调度）"]) {
+      for (const label of ["探活测试", "手动熔断（停止调度）"]) {
         expect(screen.getByRole("button", { name: label })).toBeDisabled();
       }
       expect(screen.getByRole("button", { name: "同步账号倍率" })).toBeEnabled();
@@ -239,6 +229,32 @@ describe("账号操作", () => {
     const props = operationProps({ health: "paused", routing_state: "paused", paused: true });
     render(<AccountOperationButtons {...props} />);
     expect(screen.getByRole("button", { name: "手动熔断（停止调度）" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "恢复调度" }));
+    expect(props.onControl).toHaveBeenCalledWith("resume", "恢复调度", undefined);
+  });
+
+  it("正常账号不再提供暂停入口，键盘仍可发起手动熔断确认", async () => {
+    const user = userEvent.setup();
+    const props = operationProps();
+    render(<AccountOperationButtons {...props} />);
+    expect(screen.queryByRole("button", { name: /暂停调度|恢复调度/ })).not.toBeInTheDocument();
+    const fuse = screen.getByRole("button", { name: "手动熔断（停止调度）" });
+    fuse.focus();
+    await user.keyboard("{Enter}");
+    expect(props.onControl).toHaveBeenCalledWith(
+      "fuse",
+      "手动熔断",
+      expect.stringContaining("直到手动解除"),
+    );
+    await user.click(screen.getByRole("button", { name: "更多账号操作" }));
+    expect(await screen.findByRole("menu")).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "暂停调度" })).not.toBeInTheDocument();
+  });
+
+  it("普通停止调度账号仍可恢复调度", async () => {
+    const user = userEvent.setup();
+    const props = operationProps({ schedulable: false });
+    render(<AccountOperationButtons {...props} />);
     await user.click(screen.getByRole("button", { name: "恢复调度" }));
     expect(props.onControl).toHaveBeenCalledWith("resume", "恢复调度", undefined);
   });

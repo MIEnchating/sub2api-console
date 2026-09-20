@@ -53,7 +53,7 @@ func completedExport(t *testing.T) (*accountworkbench.Service, *configstore.Stor
 	owner, token := previewOwner(t, store)
 	runner, tasks := runTasks(t, service)
 	directory := t.TempDir()
-	service.UseExecution(tasks, runner, nil, nil, directory)
+	service.UseExecution(tasks, runner, nil, directory)
 	input := signedRunInput(t, service)
 	preview, err := service.Preview(context.Background(), owner, accountworkbench.PreviewInput{Action: "export", Content: input})
 	if err != nil {

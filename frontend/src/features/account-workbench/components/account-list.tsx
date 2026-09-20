@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Search, Users } from "lucide-react";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { accountStatusLabels, subscriptionLabels, workbenchKeys } from "../constants";
 import { accountStatus, matchesAccount } from "../lib/accounts";
 import type { WorkbenchAccount } from "../types";
+import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { AccountDetails } from "./account-details";
 
 export function AccountList(): ReactElement {
@@ -43,29 +44,40 @@ export function AccountList(): ReactElement {
   );
   return (
     <section aria-label="线上账号列表" className="grid min-w-0 gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          账号列表{" "}
-          {query.data && (
+      <WorkbenchToolbar
+        meta={
+          query.data && (
             <Badge variant="secondary">
               {filtered.length} / {accounts.length}
             </Badge>
-          )}
-        </h2>
-        <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
-          <RefreshCw aria-hidden="true" />
-          刷新列表
-        </Button>
-      </div>
-      <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border bg-muted/20 p-3 md:grid-cols-[minmax(0,1fr)_10rem_12rem]">
-        <Input
-          type="search"
-          aria-label="搜索账号"
-          placeholder="搜索名称、邮箱、ID 或分组"
-          className="col-span-2 md:col-span-1"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+          )
+        }
+        actions={
+          <Button
+            variant="outline"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            刷新列表
+          </Button>
+        }
+      />
+      <div className="grid min-w-0 grid-cols-2 gap-2 rounded-xl border bg-card p-3 md:grid-cols-[minmax(0,1fr)_10rem_12rem]">
+        <div className="relative col-span-2 min-w-0 md:col-span-1">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground"
+          />
+          <Input
+            type="search"
+            aria-label="搜索账号"
+            placeholder="搜索名称、邮箱、ID 或分组"
+            className="pl-9"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </div>
         <Select value={status} onValueChange={(value) => setStatus(value ?? "all")}>
           <SelectTrigger aria-label="筛选账号状态">
             <SelectValue>
@@ -113,21 +125,32 @@ export function AccountList(): ReactElement {
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
       )}
       {query.data && filtered.length === 0 && (
-        <p className="rounded-lg border border-dashed bg-muted/10 px-4 py-12 text-center text-sm text-muted-foreground">
-          {accounts.length ? "没有匹配的账号" : "当前站点暂无 OpenAI OAuth 账号"}
-        </p>
+        <WorkbenchEmptyState
+          icon={Users}
+          title={accounts.length ? "没有匹配的账号" : "当前站点暂无 OpenAI OAuth 账号"}
+          description={
+            accounts.length
+              ? "调整搜索词或筛选条件后重试。"
+              : "从导入账号页添加账号后，可在这里查看配置。"
+          }
+        />
       )}
       {filtered.length > 0 && (
         <Table
           aria-label="账号列表"
-          className="min-w-[850px]"
-          containerClassName="overflow-auto rounded-lg border"
+          actionColumn
+          uniformTextSize={false}
+          className="min-w-[800px]"
+          containerClassName="overflow-auto rounded-xl border bg-card"
         >
           <TableHeader>
             <TableRow>
-              {["账号", "状态", "订阅", "分组", "连接", "操作"].map((label) => (
-                <TableHead key={label}>{label}</TableHead>
-              ))}
+              <TableHead className="w-56">账号</TableHead>
+              <TableHead className="w-24">状态</TableHead>
+              <TableHead className="w-32">订阅</TableHead>
+              <TableHead className="w-40">分组</TableHead>
+              <TableHead>连接</TableHead>
+              <TableHead className="w-20">操作</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -137,7 +160,9 @@ export function AccountList(): ReactElement {
                   className="max-w-72 whitespace-normal wrap-anywhere"
                   overflowTooltip={false}
                 >
-                  <strong>{account.name || account.email || `账号 ${account.id}`}</strong>
+                  <strong className="font-medium">
+                    {account.name || account.email || `账号 ${account.id}`}
+                  </strong>
                   {account.email !== account.name && (
                     <div className="text-xs text-muted-foreground">{account.email}</div>
                   )}
@@ -159,7 +184,7 @@ export function AccountList(): ReactElement {
                   {account.groups.map((item) => item.name || `分组 #${item.id}`).join("、") ||
                     "未分组"}
                 </TableCell>
-                <TableCell>
+                <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
                   {account.proxy_name || "直连"}
                   <div className="text-xs text-muted-foreground">
                     并发 {account.concurrency || "未提供"} · 倍率{" "}

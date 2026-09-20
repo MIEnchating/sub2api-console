@@ -16,13 +16,21 @@ func TestAccountSettingsNullableLoadFactor(t *testing.T) {
 		name           string
 		original       any
 		follow         bool
+		omitUnset      bool
 		rejectReadback bool
+		omitReadback   bool
 	}{
 		{name: "set fixed from null", original: nil},
 		{name: "keep following concurrency", original: nil, follow: true},
 		{name: "clear fixed load factor", original: "3", follow: true},
 		{name: "failed readback restores null", original: nil, rejectReadback: true},
 		{name: "failed clear restores fixed", original: "3", follow: true, rejectReadback: true},
+		{name: "set fixed from omitted", omitUnset: true},
+		{name: "keep following with omitted readback", follow: true, omitUnset: true},
+		{name: "clear fixed with omitted readback", original: "3", follow: true, omitUnset: true},
+		{name: "failed readback restores omitted", omitUnset: true, rejectReadback: true},
+		{name: "failed clear with omitted response restores fixed", original: "3", follow: true, omitUnset: true, rejectReadback: true},
+		{name: "fixed write with omitted readback fails and restores fixed", original: "3", omitUnset: true, rejectReadback: true, omitReadback: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			f := newSettingsFixture(t)
@@ -46,7 +54,13 @@ func TestAccountSettingsNullableLoadFactor(t *testing.T) {
 					}
 					if puts == 1 && scenario.rejectReadback {
 						state["load_factor"] = "99"
+						if scenario.omitReadback {
+							state["load_factor"] = nil
+						}
 					}
+				}
+				if scenario.omitUnset && state["load_factor"] == nil {
+					delete(state, "load_factor")
 				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"data": state})
 			}))
@@ -92,24 +106,28 @@ func TestAccountSettingsNullableLoadFactor(t *testing.T) {
 	}
 }
 
-func TestAccountSettingsMissingOriginalLoadFactorDoesNotWrite(t *testing.T) {
-	f := newSettingsFixture(t)
-	var puts int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPut {
-			puts++
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 41, "priority": 20, "concurrency": 3, "schedulable": true}})
-	}))
-	defer server.Close()
-	service := accountops.New(settingsTarget{endpoint: server.URL}, f.repository, f.tasks)
-	service.UseTaskRunner(f.runner)
-	if _, err := service.EnqueueSettings(context.Background(), "41", accountops.SettingsInput{Priority: 20, FollowConcurrency: true, Concurrency: 5}, "test"); err != nil {
-		t.Fatal(err)
-	}
-	f.runner.run(context.Background())
-	if puts != 0 || f.tasks.last.Status != "failed" {
-		t.Fatalf("missing field must not be treated as explicit null: puts=%d status=%s", puts, f.tasks.last.Status)
+func TestAccountSettingsInvalidOriginalLoadFactorDoesNotWrite(t *testing.T) {
+	for _, invalid := range []any{"", "invalid", true, map[string]any{"value": 3}} {
+		t.Run(fmt.Sprint(invalid), func(t *testing.T) {
+			f := newSettingsFixture(t)
+			var puts int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					puts++
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 41, "priority": 20, "load_factor": invalid, "concurrency": 3, "schedulable": true}})
+			}))
+			defer server.Close()
+			service := accountops.New(settingsTarget{endpoint: server.URL}, f.repository, f.tasks)
+			service.UseTaskRunner(f.runner)
+			if _, err := service.EnqueueSettings(context.Background(), "41", accountops.SettingsInput{Priority: 20, FollowConcurrency: true, Concurrency: 5}, "test"); err != nil {
+				t.Fatal(err)
+			}
+			f.runner.run(context.Background())
+			if puts != 0 || f.tasks.last.Status != "failed" {
+				t.Fatalf("invalid field must prevent writing: puts=%d status=%s", puts, f.tasks.last.Status)
+			}
+		})
 	}
 }

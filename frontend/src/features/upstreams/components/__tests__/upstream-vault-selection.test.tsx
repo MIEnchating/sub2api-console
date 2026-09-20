@@ -61,7 +61,19 @@ function renderVaultEditor(options?: {
   const writes: UpstreamConfigurationUpdate[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/policy/upstream-concurrency/")) {
+        return Response.json({
+          revision: "v1",
+          target_id: "up_example",
+          upstream_id: "up_example",
+          override: null,
+          selected: false,
+          effective: false,
+          global_enabled: false,
+          source: "policy",
+        });
+      }
       if (init?.method !== "PUT") {
         if (options?.indexResponse) return options.indexResponse;
         throw new Error("未配置的测试请求");

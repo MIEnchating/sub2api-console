@@ -56,6 +56,7 @@ func TestSharedAllocationRejectsUnsafeOrStaleWrites(t *testing.T) {
 				if _, err := fixture.store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"scaling": map[string]any{"enabled": true, "global_max_concurrency": 2}}}, "test"); err != nil {
 					t.Fatal(err)
 				}
+				disableCapacityFixtureGroupScaling(t, fixture)
 			case "upstream full":
 				fixture.states["42"]["concurrency"] = 9
 			case "unconfirmed sibling reduction":

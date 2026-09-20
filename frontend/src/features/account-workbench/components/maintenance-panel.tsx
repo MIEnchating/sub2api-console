@@ -11,7 +11,8 @@ import {
   maintenanceReasonLabels,
 } from "../constants";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, HeartPulse } from "lucide-react";
+import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { MaintenanceForm } from "./maintenance-form";
 
 export function MaintenancePanel(): ReactElement {
@@ -23,8 +24,11 @@ export function MaintenancePanel(): ReactElement {
   if (query.isPending)
     return (
       <div aria-busy="true" aria-label="正在读取维护设置" className="grid gap-4">
-        <Skeleton className="h-48" />
-        <Skeleton className="h-32" />
+        <Skeleton className="ml-auto h-8 w-20" />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Skeleton className="h-80" />
+          <Skeleton className="h-80" />
+        </div>
       </div>
     );
   if (!query.data)
@@ -32,17 +36,19 @@ export function MaintenancePanel(): ReactElement {
   const value = query.data;
   return (
     <section aria-label="自动维护" className="grid min-w-0 gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">自动维护</h2>
-        <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
-          <RefreshCw aria-hidden="true" />
-          刷新
-        </Button>
-      </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        定期检查授权，异常时先刷新；仍有认证错误时，用本次登录会话内有效的账号资料尝试一次重新授权。
-      </p>
-      <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[22rem_minmax(0,1fr)]">
+      <WorkbenchToolbar
+        actions={
+          <Button
+            variant="outline"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            刷新
+          </Button>
+        }
+      />
+      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.15fr)]">
         <MaintenanceForm value={value} />
         <section aria-label="维护结果" className="grid min-w-0 gap-4 rounded-xl border bg-card p-4">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
@@ -50,23 +56,38 @@ export function MaintenancePanel(): ReactElement {
             <Badge variant="secondary">{value.enabled ? "定时检查已启用" : "定时检查已关闭"}</Badge>
           </div>
           <div className="grid gap-2 rounded-lg bg-muted/30 p-3 text-sm">
-            <span role="status">
+            <span role="status" className="wrap-anywhere">
               {value.running ? "正在维护账号…" : value.message || "自动维护尚未配置"}
             </span>
-            <span className="text-muted-foreground">
-              {value.next_check_at
-                ? `下次检查：${new Date(value.next_check_at).toLocaleString("zh-CN")}`
-                : "定时检查未启动"}
-            </span>
           </div>
+          <dl className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="min-w-0 rounded-lg border p-3">
+              <dt className="text-xs text-muted-foreground">上次检查</dt>
+              <dd className="mt-1 text-sm tabular-nums wrap-anywhere">
+                {value.last_check_at
+                  ? new Date(value.last_check_at).toLocaleString("zh-CN")
+                  : "尚未检查"}
+              </dd>
+            </div>
+            <div className="min-w-0 rounded-lg border p-3">
+              <dt className="text-xs text-muted-foreground">下次检查</dt>
+              <dd className="mt-1 text-sm tabular-nums wrap-anywhere">
+                {value.next_check_at
+                  ? new Date(value.next_check_at).toLocaleString("zh-CN")
+                  : "定时检查未启动"}
+              </dd>
+            </div>
+          </dl>
           {value.results.length === 0 && (
-            <p className="rounded-lg border border-dashed px-3 py-10 text-center text-sm text-muted-foreground">
-              暂无检查结果
-            </p>
+            <WorkbenchEmptyState
+              icon={HeartPulse}
+              title="暂无检查结果"
+              description="保存维护设置并执行检查后，这里会展示每个账号的处理结果。"
+            />
           )}
           {value.results.length > 0 && (
             <div className="min-w-0 overflow-x-auto rounded-lg border">
-              <table className="w-full text-left text-sm">
+              <table className="w-full min-w-[560px] text-left text-sm">
                 <caption className="sr-only">本轮账号维护结果</caption>
                 <thead>
                   <tr className="border-b bg-muted/30">
@@ -79,7 +100,7 @@ export function MaintenancePanel(): ReactElement {
                 <tbody>
                   {value.results.map((row) => (
                     <tr key={row.account_id} className="border-b last:border-0">
-                      <td className="max-w-64 break-all p-3">
+                      <td className="max-w-64 p-3 wrap-anywhere">
                         {row.email || `账号 #${row.account_id}`}
                       </td>
                       <td className="whitespace-nowrap p-3">

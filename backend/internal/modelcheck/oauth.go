@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin/loginproxy"
 )
 
@@ -26,10 +27,11 @@ const (
 )
 
 type oauthCredential struct {
-	accessToken string
-	workspaceID string
-	userAgent   string
-	secrets     []string
+	previewClient *adminclient.Client
+	accessToken   string
+	workspaceID   string
+	userAgent     string
+	secrets       []string
 }
 
 type oauthBundleSender struct {

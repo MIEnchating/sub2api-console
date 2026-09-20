@@ -28,3 +28,22 @@ func manualTemplate(config TemplateConfig) Template {
 	_ = json.Unmarshal(config.Extra["codex_fingerprint_mode"], &summary.Fingerprint)
 	return Template{Config: config, Summary: summary}
 }
+
+// Editing a stored configuration keeps its source binding for explicit resync.
+// Display names are reused only while their stable IDs still match.
+func preserveTemplateSource(updated *Template, original Template) {
+	updated.SourceID = original.SourceID
+	updated.SourceName = original.SourceName
+	updated.SourceVersion = original.SourceVersion
+	if updated.Config.ProxyID != nil && original.Config.ProxyID != nil && *updated.Config.ProxyID == *original.Config.ProxyID {
+		updated.Summary.ProxyName = original.Summary.ProxyName
+	}
+	for i, group := range updated.Summary.Groups {
+		for _, previous := range original.Summary.Groups {
+			if group.ID == previous.ID {
+				updated.Summary.Groups[i].Name = previous.Name
+				break
+			}
+		}
+	}
+}

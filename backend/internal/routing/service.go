@@ -93,6 +93,7 @@ type Service struct {
 }
 
 type engineConfig struct {
+	abnormalCleanup          abnormalCleanupConfig
 	sampleClassification     scoringConfig
 	strategy                 string
 	trafficEnabled           bool
@@ -146,9 +147,7 @@ type engineConfig struct {
 	scalingEnabled           bool
 	globalScalingEnabled     bool
 	upstreamReductionEnabled bool
-	upstreamAccountMode      string
-	upstreamAccountIDs       map[string]struct{}
-	upstreamIDs              map[string]struct{}
+	upstreamAllocationScope  business.UpstreamAllocationScope
 	costWallEnabled          bool
 	costWallFallbackEnabled  bool
 	costWallStopAutoProbe    bool
@@ -223,6 +222,7 @@ type candidate struct {
 	scalingCooldown               bool
 	stateSince                    time.Time
 	fusedUntil                    time.Time
+	cleanupReason                 string
 	cleanupAction                 *string
 	concurrencyIssue              string
 	concurrencyConfigurationError *string
@@ -284,6 +284,17 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	cleanupState, err := s.repository.CleanupStates(ctx, scope.AccountID)
 	if err != nil {
 		return Result{}, err
+	}
+	abnormalStates := map[string]time.Time{}
+	if reader, ok := s.repository.(interface {
+		AbnormalCleanupStates(context.Context, *string) (map[string]time.Time, error)
+	}); ok {
+		abnormalStates, err = reader.AbnormalCleanupStates(ctx, scope.AccountID)
+		if err != nil {
+			return Result{}, err
+		}
+	} else if config.abnormalCleanup.enabled {
+		return Result{}, errors.New("长期异常处置状态存储不可用")
 	}
 	sampleMap := map[string][]business.RoutingSample{}
 	for _, sample := range samples {
@@ -455,6 +466,15 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		var cleanupEvents []business.RuntimeEventWrite
 		cleanupWrites, cleanupEvents = applyCleanupPolicy(byAccount, config, cleanupState, now)
 		runtimeEvents = append(runtimeEvents, cleanupEvents...)
+		abnormalWrites, abnormalEvents := applyAbnormalCleanup(byAccount, config, abnormalStates, now)
+		for _, account := range accounts {
+			if _, observed := abnormalStates[account.ID]; observed && len(byAccount[account.ID]) == 0 {
+				abnormalWrites = append(abnormalWrites, business.CleanupStateWrite{AccountID: account.ID, PersistentAbnormal: true})
+				delete(abnormalStates, account.ID)
+			}
+		}
+		cleanupWrites = append(cleanupWrites, abnormalWrites...)
+		runtimeEvents = append(runtimeEvents, abnormalEvents...)
 	}
 	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
 		primary := primaryMembership(byAccount[accountID])
@@ -819,13 +839,9 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 	if managedMode != "all" && managedMode != "selected" {
 		return engineConfig{}, errors.New("scope.managed_group_mode 配置无效")
 	}
-	upstreamAccountMode := "all"
-	if raw, present := upstreamConcurrency["account_mode"]; present {
-		mode, ok := raw.(string)
-		if !ok || mode != "all" && mode != "selected" && mode != "upstreams" {
-			return engineConfig{}, errors.New("upstream_concurrency.account_mode 配置无效")
-		}
-		upstreamAccountMode = mode
+	allocationScope, err := business.ParseUpstreamAllocationScope(upstreamConcurrency)
+	if err != nil {
+		return engineConfig{}, err
 	}
 	reader := &policyReader{}
 	config := engineConfig{
@@ -865,9 +881,7 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		minLoadFactor:         int64(reader.integer(weights, "weights.min_load_factor", "min_load_factor", 1, 1, 1_000_000)), maxLoadFactor: int64(reader.integer(weights, "weights.max_load_factor", "max_load_factor", 100, 1, 1_000_000)),
 		scalingEnabled: reader.boolean(scaling, "scaling.enabled", "enabled", false), scalingGlobalMax: int64(reader.integer(scaling, "scaling.global_max_concurrency", "global_max_concurrency", 900, 1, 10_000_000)),
 		upstreamReductionEnabled: reader.boolean(upstreamConcurrency, "upstream_concurrency.enabled", "enabled", false),
-		upstreamAccountMode:      upstreamAccountMode,
-		upstreamIDs:              reader.readStringSet(upstreamConcurrency, "upstream_concurrency.upstream_ids", "upstream_ids", false),
-		upstreamAccountIDs:       reader.stringSet(upstreamConcurrency, "upstream_concurrency.account_ids", "account_ids"),
+		upstreamAllocationScope:  allocationScope,
 		costWallEnabled:          reader.boolean(costWall, "cost_wall.enabled", "enabled", true),
 		costWallFallbackEnabled:  reader.boolean(costWall, "cost_wall.fallback_enabled", "fallback_enabled", true),
 		costWallStopAutoProbe:    reader.boolean(costWall, "cost_wall.stop_auto_probe", "stop_auto_probe", true),
@@ -890,6 +904,10 @@ func parseEngineConfig(policy map[string]any) (engineConfig, error) {
 		cleanupMaxPerRound: reader.integer(cleanup, "cleanup.max_per_round", "max_per_round", 1, 1, 10000),
 		cleanupKeepLast:    reader.boolean(cleanup, "cleanup.keep_last_in_group", "keep_last_in_group", true),
 		cleanupOnlyAuth:    reader.boolean(cleanup, "cleanup.only_auth_errors", "only_auth_errors", true), cleanupStatusCodes: cleanupCodes,
+	}
+	config.abnormalCleanup, err = parseAbnormalCleanup(policy)
+	if err != nil {
+		return engineConfig{}, err
 	}
 	if reader.err != nil {
 		return engineConfig{}, reader.err
@@ -1486,7 +1504,9 @@ func assignAccountPlacements(
 	sort.Strings(groupNames)
 	budget := newScalingBudget(capacityInventory, fallbackConcurrency)
 	upstreamPools := newUpstreamScalingPools(capacityInventory)
-	releaseConfirmedCostReservations(capacityInventory, primary, configs, &budget, upstreamPools)
+	releaseConfirmedStopReservations(capacityInventory, primary, configs, &budget, upstreamPools)
+	reserveOutsideAllocationScope(primary, configs, &budget, upstreamPools)
+	planGlobalUpstreamShares(primary, configs, upstreamPools, &budget)
 	minimumLimited := false
 	for _, groupName := range groupNames {
 		members := groups[groupName]
@@ -1648,6 +1668,7 @@ func cloneString(value *string) *string {
 }
 
 type scalingBudget struct {
+	upstreamShares   map[string]int64
 	reservations     map[string]int64
 	initialAllocated int64
 	allocated        int64
@@ -2072,7 +2093,7 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 			AccountID: accountID, GroupNames: uniqueSorted(groups), DesiredHealth: primary.state,
 			Priority: cloneInt64(primary.desiredPriority), LoadFactor: cloneString(primary.desiredLoad),
 			Concurrency: cloneInt64(primary.desiredConcurrency), WriteCooldown: primary.writeCooldown,
-			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction),
+			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction), CleanupReason: primary.cleanupReason,
 			ConfigurationError:  cloneString(primary.concurrencyConfigurationError),
 			UpstreamAllocation:  primary.upstreamAllocation,
 			UpstreamReductionID: primary.upstreamReductionID, UpstreamReductionLimit: cloneInt64(primary.upstreamReductionLimit),

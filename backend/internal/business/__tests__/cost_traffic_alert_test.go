@@ -158,6 +158,34 @@ func TestCostTrafficDisabledRuleSuppressesPendingNotifications(t *testing.T) {
 	}
 }
 
+func TestCostTrafficIgnoresAccountsThatIgnoreCostWall(t *testing.T) {
+	store, db := openAlertRuleStore(t)
+	seedCostTraffic(t, db, "0.3", "0.3", "traffic", time.Minute)
+	if count, _ := evaluateCostTraffic(t, store, db); count != 1 {
+		t.Fatal("expected initial alert")
+	}
+	if err := store.SetAccountIgnoreCostWall(t.Context(), "41", true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := evaluateCostTraffic(t, store, db); count != 0 {
+		t.Fatalf("ignored account still firing cost traffic alert: %d", count)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM alert_incidents WHERE incident_key='console:cost-traffic:41:平价'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "closed" {
+		t.Fatalf("ignored account alert status=%s want=closed", status)
+	}
+
+	if err := store.SetAccountIgnoreCostWall(t.Context(), "41", false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := evaluateCostTraffic(t, store, db); count != 1 {
+		t.Fatalf("restored account should be evaluated again: %d", count)
+	}
+}
+
 func TestCostTrafficRecoversOneGroupWhileAnotherRemainsFiring(t *testing.T) {
 	store, db := openAlertRuleStore(t)
 	seedCostTraffic(t, db, "0.7", "0.3", "traffic", time.Minute)
@@ -180,5 +208,88 @@ func TestCostTrafficRecoversOneGroupWhileAnotherRemainsFiring(t *testing.T) {
 	}
 	if status != "recovered" {
 		t.Fatalf("profitable group recovery suppressed by unrelated group: %s", status)
+	}
+}
+
+func TestCostTrafficExemptionFiltersPendingFiringAndRecoveryBeforeEvaluation(t *testing.T) {
+	for _, status := range []string{"firing", "recovered", "suppressed"} {
+		t.Run(status, func(t *testing.T) {
+			store, db := openAlertRuleStore(t)
+			seedCostTraffic(t, db, "0.7", "0.3", "traffic", time.Minute)
+			evaluateCostTraffic(t, store, db)
+			if _, err := db.Exec(`UPDATE alert_incidents SET status=? WHERE event_type='account.cost_traffic'`, status); err != nil {
+				t.Fatal(err)
+			}
+			policy := business.DefaultAlertPolicy()
+			policy.NotifyRecovery = true
+			policy.RecoveryNotificationTypes = []string{"cost_traffic"}
+			updateAlertRulePolicy(t, store, policy)
+			if err := store.SetAccountIgnoreCostWall(t.Context(), "41", true, "test"); err != nil {
+				t.Fatal(err)
+			}
+			queue, err := store.NotificationQueueDetails(t.Context(), "fixture-channel", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(queue.ConsumerItems) != 0 {
+				t.Fatalf("exempt account queued notifications: %+v", queue.ConsumerItems)
+			}
+			var actual string
+			if err := db.QueryRow(`SELECT status FROM alert_incidents WHERE event_type='account.cost_traffic'`).Scan(&actual); err != nil {
+				t.Fatal(err)
+			}
+			if actual != "closed" {
+				t.Fatalf("status=%s want=closed", actual)
+			}
+		})
+	}
+}
+
+func TestCostTrafficExemptionAppliesToAllGroupsOnlyForStableAccountID(t *testing.T) {
+	store, db := openAlertRuleStore(t)
+	seedCostTraffic(t, db, "0.7", "0.3", "traffic", time.Minute)
+	if _, err := db.Exec(`INSERT INTO accounts(id,name,multiplier,updated_at) VALUES('42','同名账号','0.7','now');
+ INSERT INTO account_groups(account_id,group_name,group_id) VALUES('42','平价','7');
+ INSERT INTO usage_records(request_id,account_id,group_name,observed_at,source,payload_json) VALUES
+ ('flagship','41','旗舰',?,'traffic','{"request_group_id":"8"}'),
+ ('peer','42','平价',?,'traffic','{"request_group_id":"7"}')`, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAccountIgnoreCostWall(t.Context(), "41", true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := evaluateCostTraffic(t, store, db); count != 1 {
+		t.Fatalf("firing=%d want=1", count)
+	}
+	var id string
+	if err := db.QueryRow(`SELECT object_id FROM alert_incidents WHERE event_type='account.cost_traffic' AND status='firing'`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	if id != "42" {
+		t.Fatalf("unexpected alerted account %s", id)
+	}
+}
+
+func TestCostTrafficPolicyExemptionClosesExistingAlertsWithoutRecovery(t *testing.T) {
+	store, db := openAlertRuleStore(t)
+	seedCostTraffic(t, db, "0.7", "0.3", "traffic", time.Minute)
+	evaluateCostTraffic(t, store, db)
+	if _, err := store.UpdatePolicy(t.Context(), map[string]any{"advanced_policy": map[string]any{"scope": map[string]any{"ignore_cost_wall_account_ids": []any{"41"}}}}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	queue, err := store.NotificationQueueDetails(t.Context(), "fixture-channel", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queue.ConsumerItems) != 0 {
+		t.Fatalf("policy-exempt account still queued: %+v", queue.ConsumerItems)
+	}
+	evaluateCostTraffic(t, store, db)
+	var status string
+	if err := db.QueryRow(`SELECT status FROM alert_incidents WHERE event_type='account.cost_traffic'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "closed" {
+		t.Fatalf("status=%s want=closed", status)
 	}
 }

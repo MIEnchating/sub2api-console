@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { TemplateList } from "../components/template-list";
 import { templateKeys, workbenchKeys } from "../constants";
-import type { TemplateLibrary, WorkbenchTemplate } from "../types";
+import type { TemplateLibrary } from "../types";
+import { template } from "./template-fixture";
 
 let client: QueryClient;
 afterEach(() => {
@@ -12,43 +13,7 @@ afterEach(() => {
   client?.clear();
   vi.unstubAllGlobals();
 });
-const template: WorkbenchTemplate = {
-  id: "template-one",
-  name: "团队模板",
-  source_id: "41",
-  source_name: "来源账号",
-  source_version: "source-v1",
-  synced_at: "2026-09-17T10:00:00Z",
-  revision: 1,
-  config: {
-    concurrency: 0,
-    priority: 50,
-    rate_multiplier: "0.1234567890123456789",
-    load_factor: null,
-    proxy_id: null,
-    group_ids: ["7"],
-    auto_pause_on_expired: true,
-    expires_at: null,
-    notes: "",
-    credential_extras: { plan_type: "prolite", model_mapping: { "gpt-5": "gpt-5.6" } },
-    extra: { codex_fingerprint_mode: "session" },
-  },
-  summary: {
-    id: "41",
-    name: "来源账号",
-    email: "owner@example.test",
-    status: "active",
-    schedulable: true,
-    plan: "prolite",
-    groups: [{ id: "7", name: "团队" }],
-    proxy_name: "",
-    concurrency: "0",
-    load_factor: "",
-    rate_multiplier: "0.1234567890123456789",
-    model_mapping: { "gpt-5": "gpt-5.6" },
-    fingerprint: "session",
-  },
-};
+
 function mount(
   fetcher: typeof fetch,
   library: TemplateLibrary = { revision: 1, preferred_id: template.id, items: [template] },
@@ -143,7 +108,7 @@ it("新建模板读取成功前禁止保存，空名称提交显示字段校验"
   expect(dialog.getByRole("button", { name: "保存模板" })).toBeDisabled();
   complete(Response.json(template));
   await waitFor(() => expect(dialog.getByRole("button", { name: "保存模板" })).toBeEnabled());
-  expect(dialog.getByText("gpt-5 → gpt-5.6")).toBeVisible();
+  expect(dialog.getByRole("row", { name: "gpt-5 gpt-5.6" })).toBeVisible();
   expect(dialog.getByText("0.1234567890123456789")).toBeVisible();
   await user.click(dialog.getByRole("button", { name: "保存模板" }));
   expect(await dialog.findByRole("alert")).toHaveTextContent("请输入模板名称");
@@ -169,4 +134,44 @@ it("来源读取失败保留取消与重试入口，重试成功后才允许保�
   expect(dialog.getByRole("button", { name: "取消" })).toBeEnabled();
   await user.click(dialog.getByRole("button", { name: "重新读取" }));
   await waitFor(() => expect(dialog.getByRole("button", { name: "保存模板" })).toBeEnabled());
+});
+
+it("来源模板可直接编辑配置，保存沿用模板 ID 和版本且不读取线上账号", async () => {
+  const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  mount(
+    vi.fn(async (url, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push({ url: String(url), body });
+      return Response.json({
+        revision: 2,
+        preferred_id: template.id,
+        items: [{ ...template, name: body.name, config: body.config }],
+      });
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "编辑配置" }));
+  const dialog = within(screen.getByRole("dialog", { name: "编辑配置模板" }));
+  expect(dialog.getByRole("textbox", { name: "模板名称" })).toHaveValue(template.name);
+  expect(dialog.getByRole("textbox", { name: "计费倍率" })).toHaveValue(
+    template.config.rate_multiplier,
+  );
+  await user.clear(dialog.getByRole("textbox", { name: "模板名称" }));
+  await user.type(dialog.getByRole("textbox", { name: "模板名称" }), "调整后模板");
+  await user.clear(dialog.getByRole("spinbutton", { name: "并发数" }));
+  await user.type(dialog.getByRole("spinbutton", { name: "并发数" }), "12");
+  await user.click(dialog.getByRole("button", { name: "保存模板" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  expect(requests).toHaveLength(1);
+  expect(requests[0]).toMatchObject({
+    url: "/api/account-workbench/templates",
+    body: {
+      id: template.id,
+      revision: 1,
+      name: "调整后模板",
+      config: { ...template.config, concurrency: 12 },
+    },
+  });
+  expect(requests[0].body).not.toHaveProperty("source_id");
+  expect(screen.getByRole("article", { name: "调整后模板" })).toBeVisible();
 });

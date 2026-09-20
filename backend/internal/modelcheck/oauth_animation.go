@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
@@ -23,9 +24,12 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 	if err != nil {
 		return errors.New("管理目标在检测排队后已变化或不可用，请重新提交")
 	}
-	credential, err := s.resolveOAuthAccountCredential(guarded, account)
+	credential, err := s.resolveOAuthCredential(guarded, account, true)
 	if err != nil {
 		return err
+	}
+	if credential.previewClient != nil {
+		return runManagedOAuthAnimation(guarded, credential.previewClient, account, timeout, questions, result)
 	}
 	s.profilesMu.RLock()
 	transport := s.oauthTransport
@@ -61,5 +65,36 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 		return err
 	}
 	result.SVG, result.ResponseModel = svg, safeCredentialText(model)
+	return nil
+}
+
+func runManagedOAuthAnimation(ctx context.Context, client *adminclient.Client, account selectedAccount, timeout int, questions []string, result *AnimationResult) error {
+	effort := "none"
+	if result.Model == astraModel {
+		effort = "low"
+	}
+	send := func(prompt, requestID string) (string, string, error) {
+		response, err := client.GenerateAccountPreview(ctx, account.ID, adminclient.AccountPreviewRequest{
+			ModelID: result.Model, Prompt: prompt, ReasoningEffort: effort, RequestID: requestID, TimeoutSeconds: timeout,
+		})
+		if err != nil {
+			return "", "", err
+		}
+		return response.Text, safeCredentialText(response.Model), nil
+	}
+	if result.Mode == precheckMode {
+		return runPrecheckQuestions(ctx, questions, result, func(question AstraQuestion, requestID string) (string, string, error) {
+			return send(question.Question, requestID)
+		})
+	}
+	text, model, err := send(animationPrompt, result.RequestID)
+	if err != nil {
+		return err
+	}
+	svg, err := sanitizeAnimationSVG(text)
+	if err != nil {
+		return err
+	}
+	result.SVG, result.ResponseModel = svg, model
 	return nil
 }

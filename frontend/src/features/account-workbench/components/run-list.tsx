@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, ChevronDown, Trash2, FileDown } from "lucide-react";
+import { RefreshCw, ChevronDown, Trash2, FileDown, History, Search } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/api";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { runKeys, runStatusLabels, workbenchKeys } from "../constants";
 import type { WorkbenchRun } from "../types";
+import { WorkbenchToolbar, WorkbenchEmptyState } from "./workbench-section";
 import { RunItems } from "./run-items";
 
 type RunAction = {
@@ -79,25 +80,36 @@ export function RunList(): ReactElement {
   const pending = update.isPending || exportFile.isPending;
   return (
     <section aria-label="处理记录" className="grid min-w-0 gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="grid gap-1">
-          <h2 className="text-sm font-semibold">处理记录</h2>
-          <p className="text-xs text-muted-foreground">查看批次进度、检测结果及待处理账号。</p>
+      <WorkbenchToolbar
+        actions={
+          <Button
+            variant="outline"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RefreshCw aria-hidden="true" />
+            刷新
+          </Button>
+        }
+      />
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-card p-3">
+        <div className="relative min-w-0 flex-1 sm:max-w-md">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground"
+          />
+          <Input
+            className="pl-9"
+            type="search"
+            aria-label="搜索处理记录"
+            placeholder="搜索邮箱、名称或站点账号 ID"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
         </div>
-        <Button variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
-          <RefreshCw aria-hidden="true" />
-          刷新
-        </Button>
-      </div>
-      <div className="rounded-lg border bg-muted/20 p-3">
-        <Input
-          className="sm:max-w-md"
-          type="search"
-          aria-label="搜索处理记录"
-          placeholder="搜索邮箱、名称或站点账号 ID"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+        {query.data && (
+          <span className="text-xs text-muted-foreground">共 {runs.length} 个批次</span>
+        )}
       </div>
       {query.isPending && (
         <div aria-busy="true" aria-label="正在读取处理记录" className="grid gap-3">
@@ -109,16 +121,20 @@ export function RunList(): ReactElement {
         <ContentRetry pending={query.isFetching} onRetry={() => void query.refetch()} />
       )}
       {query.data && runs.length === 0 && (
-        <p className="rounded-lg border border-dashed bg-muted/10 px-4 py-12 text-center text-sm text-muted-foreground">
-          {search ? "没有匹配的处理记录" : "暂无处理记录，请先导入账号资料"}
-        </p>
+        <WorkbenchEmptyState
+          icon={History}
+          title={search ? "没有匹配的处理记录" : "暂无处理记录，请先导入账号资料"}
+          description={
+            search ? "调整搜索词后重试。" : "开始处理后，可在这里查看进度与每个账号的结果。"
+          }
+        />
       )}
       {runs.map((run, index) => {
         const open = expanded === run.id || (expanded === null && index === 0);
         const expired = new Date(run.expires_at).getTime() <= Date.now();
         return (
           <article key={run.id} className="min-w-0 overflow-hidden rounded-xl border bg-card">
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 p-3 sm:p-4">
               <Button
                 variant="ghost"
                 aria-expanded={open}
@@ -132,12 +148,12 @@ export function RunList(): ReactElement {
                 {run.action === "import" ? "账号导入" : "JSON 输出"} · {run.items.length} 项
               </Button>
               <Badge variant="secondary">{runStatusLabels[run.status] || "状态待确认"}</Badge>
-              <span className="ml-auto text-xs text-muted-foreground">
+              <span className="w-full pl-2 text-xs text-muted-foreground sm:ml-auto sm:w-auto sm:pl-0">
                 {new Date(run.created_at).toLocaleString("zh-CN")}
               </span>
             </div>
             {open && (
-              <div id={`run-${run.id}`} className="grid min-w-0 gap-3 border-t p-3">
+              <div id={`run-${run.id}`} className="grid min-w-0 gap-4 border-t p-3 sm:p-4">
                 {run.status === "queued" && <TaskStartupState message="账号处理任务已排队" />}
                 {expired && (
                   <p className="text-sm text-muted-foreground">
@@ -149,7 +165,7 @@ export function RunList(): ReactElement {
                   pending={pending || active(run) || expired}
                   onEnable={(item) => setConfirmation({ run, action: "enable", ids: [item.id] })}
                 />
-                <div className="flex flex-wrap justify-end gap-2 border-t pt-3">
+                <div className="flex flex-wrap items-center gap-2 border-t pt-3">
                   {active(run) ? (
                     <Button
                       variant="outline"
@@ -186,6 +202,7 @@ export function RunList(): ReactElement {
                   <Button
                     variant="ghost"
                     disabled={pending}
+                    className="ml-auto text-muted-foreground hover:text-destructive"
                     onClick={() => setConfirmation({ run, action: "delete" })}
                   >
                     <Trash2 aria-hidden="true" />
@@ -211,7 +228,7 @@ export function RunList(): ReactElement {
             <DialogBody>
               <p className="text-sm">
                 {confirmation.action === "enable"
-                  ? "所选账号的检测证据不足。确认后将套用本批模板并恢复调度。"
+                  ? "所选账号已完成检测且无执行错误。确认后将保留检测结论，套用本批模板并恢复调度。"
                   : `${actionLabels[confirmation.action]}：${confirmation.run.items.length} 项账号，创建于 ${new Date(confirmation.run.created_at).toLocaleString("zh-CN")}。`}
               </p>
               {confirmation.action === "delete" && (

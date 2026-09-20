@@ -176,6 +176,9 @@ func updateRuntimeModeTx(ctx context.Context, tx *sql.Tx, mode string, now strin
 	if previous, _ := value["mode"].(string); previous == mode {
 		return nil
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM abnormal_cleanup_states`); err != nil {
+		return err
+	}
 	value["mode"] = mode
 	encoded, err := json.Marshal(value)
 	if err != nil {

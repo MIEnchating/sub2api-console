@@ -41,6 +41,16 @@ describe("upstream edit dialog", () => {
     });
     queryClient.setQueryData(["upstream-configuration", configuration.host], configuration);
     queryClient.setQueryData(["auth-recovery-config"], { vault_entries: [] });
+    queryClient.setQueryData(["upstream-allocation", "upstreams", configuration.upstream_id], {
+      revision: "v1",
+      target_id: configuration.upstream_id,
+      upstream_id: configuration.upstream_id,
+      override: null,
+      selected: false,
+      effective: false,
+      global_enabled: true,
+      source: "policy",
+    });
 
     render(
       <QueryClientProvider client={queryClient}>
@@ -244,7 +254,7 @@ describe("upstream edit dialog", () => {
   it("keeps vertical scrolling without exposing a horizontal scroll area", () => {
     const content = dialogContentClass("wide", "tall", upstreamEditDialogLayout.content);
     expect(content).toContain("overflow-hidden");
-    expect(content).toContain("w-[min(48rem,calc(100vw-2rem))]");
+    expect(content).toContain("w-[min(56rem,calc(100vw-2rem))]");
     expect(content).toContain("max-h-[min(44rem,calc(100svh-2rem))]");
     expect(dialogBodyLayout).toContain("min-w-0");
     expect(dialogBodyLayout).toContain("overflow-y-auto");

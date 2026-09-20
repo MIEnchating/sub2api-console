@@ -21,7 +21,6 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/alerting"
 	"github.com/MIEnchating/sub2api-console/backend/internal/api"
 	"github.com/MIEnchating/sub2api-console/backend/internal/authrecovery"
-	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/config"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
@@ -60,9 +59,7 @@ func main() {
 
 func run() error {
 	if len(os.Args) > 1 && os.Args[1] == "browser-worker" {
-		ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		defer cancel()
-		return browserlogin.RunWorker(ctx, "/run/browser/worker.sock", browserlogin.Chromium{CheckpointDirectory: os.Getenv("SUB2API_BROWSER_CHECKPOINT_DIR")})
+		return errors.New("browser-worker 已移除，账号授权由 Go 协议客户端执行")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -197,6 +194,7 @@ func run() error {
 	alertTasks := alerting.NewTaskService(alertService, taskStore)
 	upstreamReader := upstreamsync.NewReader(&http.Client{Timeout: 20 * time.Second})
 	accountTasks := accountops.New(privateStore, businessStore, taskStore)
+	accountTasks.UseControlAlerts(alertTasks.Enqueue)
 	managementTasks := management.New(privateStore, businessStore, taskStore, accountTasks)
 	pricingTasks := pricing.New(businessStore, privateStore, taskStore)
 	managementTasks.UseUpstreamCatalogReader(upstreamReader)
@@ -261,11 +259,7 @@ func run() error {
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
 	accountWorkbench := accountworkbench.New(privateStore)
-	workbenchSocket := strings.TrimSpace(os.Getenv("SUB2API_BROWSER_SOCKET"))
-	if workbenchSocket == "" {
-		workbenchSocket = "/run/browser/worker.sock"
-	}
-	accountWorkbench.UseExecution(taskStore, workbenchTasks, modelChecks, browserlogin.NewRemote(workbenchSocket), filepath.Join(cfg.DataDir, "account-workbench-private"))
+	accountWorkbench.UseExecution(taskStore, workbenchTasks, modelChecks, filepath.Join(cfg.DataDir, "account-workbench-private"))
 	if err := accountWorkbench.Recover(serviceContext); err != nil {
 		return err
 	}

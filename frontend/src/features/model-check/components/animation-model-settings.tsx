@@ -24,10 +24,12 @@ export function AnimationModelSettings(props: {
   const [requested, setRequested] = useState(false);
   const queries = useQueries({
     queries: selected.map((id) => ({
-      queryKey: ["model-check-account-models", id],
-      queryFn: () => api.accountModels(id),
+      queryKey: ["model-animation", "account-models", id],
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.accountAnimationModels(id, signal),
       enabled: requested,
-      staleTime: 300_000,
+      staleTime: 0,
+      gcTime: 0,
+      refetchOnWindowFocus: false,
       retry: false,
     })),
   });

@@ -66,6 +66,16 @@ for (const batch of [false, true]) {
       if (path.startsWith("/api/onboarding/probe/")) probeRequests.push(path);
       const fixtures: Record<string, unknown> = {
         ...pageFixtures,
+        "/api/policy/upstream-concurrency/upstreams/probe-models-upstream": {
+          revision: "v1",
+          target_id: upstream.upstream_id,
+          upstream_id: upstream.upstream_id,
+          override: null,
+          selected: false,
+          effective: false,
+          global_enabled: true,
+          source: "policy",
+        },
         "/api/setup/status": { initialized: true, configuration_errors: [] },
         "/api/auth/session": { authenticated: true, username: "探活模型测试" },
         "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
@@ -152,6 +162,7 @@ for (const batch of [false, true]) {
       }
     });
     await page.goto("/onboarding?host=models.example.test&upstream_type=sub2api&group_id=%227%22");
+    await expect(page.getByRole("combobox", { name: "本次新账号共享并发分配" })).toHaveCount(0);
     const groups = page.getByRole("combobox", { name: "待新增分组 本地分组" });
     await groups.click();
     await page.getByRole("option", { name: /本地 OpenAI/ }).click();
@@ -159,6 +170,7 @@ for (const batch of [false, true]) {
     await groups.press("Escape");
     await page.getByRole("button", { name: "预览添加账号" }).click();
     const dialog = page.getByRole("dialog", { name: "确认账号绑定变更" });
+    await expect(dialog.getByText("共享并发分配：单独开启", { exact: false })).toHaveCount(0);
     const primary = dialog.getByRole("region", { name: "待新增分组 → 本地 OpenAI", exact: true });
     const models = primary.getByRole("combobox", { name: "待新增分组 → 本地 OpenAI 探活模型" });
     await expect(models).toBeInViewport({ ratio: 1 });
@@ -236,6 +248,7 @@ for (const batch of [false, true]) {
       upstream_group_id: candidate.group_id,
       local_group_ids: [3],
     });
+    for (const item of requests) expect(item).not.toHaveProperty("allocation_override");
     if (batch)
       expect(
         requests.find((item: { local_group_ids: number[] }) => item.local_group_ids[0] === 4),

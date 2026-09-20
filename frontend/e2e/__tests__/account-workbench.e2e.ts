@@ -58,11 +58,13 @@ test.beforeEach(async ({ page }, info) => {
 
 test("工作台只有五个功能页，键盘切换同步选中状态且窄屏不撑宽页面", async ({ page }) => {
   await page.goto("/account-workbench");
+  await expect(page.getByRole("heading", { name: "账号工作台", exact: true })).toHaveCount(0);
   const tabs = page.getByRole("tablist", { name: "账号工作台功能" });
   await expect(tabs.getByRole("tab")).toHaveCount(5);
   const names = ["导入账号", "账号列表", "配置模板", "处理记录", "自动维护"];
   for (const name of names) {
     await tabs.getByRole("tab", { name, exact: true }).click();
+    await expect(page.getByRole("heading", { name, exact: true })).toHaveCount(0);
     await expect(tabs.getByRole("tab", { name, exact: true })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -341,4 +343,112 @@ test("没有线上账号时手动创建模板，保存后可编辑并在导入�
   await expect(page.getByRole("combobox", { name: "配置模板", exact: true })).toContainText(
     "更新手动模板",
   );
+});
+
+test("所有工作台标签在窄屏完整可见，键盘末项切换与面板选中状态一致", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.goto("/account-workbench");
+  const tabs = page.getByRole("tablist", { name: "账号工作台功能" });
+  for (const tab of await tabs.getByRole("tab").all()) {
+    const box = await tab.boundingBox();
+    const container = await tabs.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(container!.x);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(container!.x + container!.width);
+  }
+  await tabs.getByRole("tab", { name: "导入账号" }).focus();
+  await page.keyboard.press("End");
+  await expect(tabs.getByRole("tab", { name: "自动维护" })).toBeFocused();
+  await expect(page.getByRole("tabpanel", { name: "自动维护" })).toBeVisible();
+});
+
+test("账号表格横向滚动时查看入口保持可见，详情中的长映射独立显示", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  const model = "long-model-name-".repeat(20);
+  await page.route("**/api/account-workbench/accounts", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "41",
+          name: "测试账号",
+          email: "owner@example.test",
+          status: "active",
+          schedulable: true,
+          plan: "plus",
+          groups: [],
+          proxy_name: "",
+          concurrency: "1",
+          load_factor: "1",
+          rate_multiplier: "1",
+          model_mapping: { [model]: "gpt-target" },
+          fingerprint: "off",
+        },
+      ],
+    }),
+  );
+  await page.goto("/account-workbench");
+  await page.getByRole("tab", { name: "账号列表", exact: true }).click();
+  const action = page.getByRole("button", { name: "查看 测试账号 配置" });
+  await expect(action).toBeInViewport();
+  const table = page.getByRole("table", { name: "账号列表", exact: true });
+  await table.locator("..").evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+  });
+  await expect(action).toBeInViewport();
+  await action.click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("region", { name: "模型映射" })).toBeVisible();
+  await expect(dialog.getByRole("cell", { name: model, exact: true })).toBeVisible();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(dialog.getByRole("button", { name: "关闭", exact: true }).last()).toBeInViewport();
+});
+
+test("维护结果包含长邮箱时仅表格横向滚动，运行时间和停止入口清晰可见", async ({ page }) => {
+  const email = "long-account-name-".repeat(12) + "@example.test";
+  await page.route("**/api/account-workbench/maintenance", (route) =>
+    route.fulfill({
+      json: {
+        revision: 2,
+        enabled: true,
+        interval_minutes: 5,
+        cooldown_minutes: 10,
+        check_after_repair: true,
+        group_ids: [],
+        running: true,
+        task_id: "maintenance-layout",
+        last_check_at: "2026-09-20T10:00:00Z",
+        next_check_at: "2026-09-20T10:05:00Z",
+        message: "",
+        results: [
+          {
+            account_id: "41",
+            email,
+            action: "refresh",
+            status: "cooldown",
+            reason: "rate_limited",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/account-workbench");
+  await page.getByRole("tab", { name: "自动维护", exact: true }).click();
+  const results = page.getByRole("region", { name: "维护结果" });
+  await expect(results.getByRole("status")).toContainText("正在维护账号");
+  await expect(results.getByText("上次检查", { exact: true })).toBeVisible();
+  await expect(results.getByText("下次检查", { exact: true })).toBeVisible();
+  await expect(results.getByRole("cell", { name: email })).toBeVisible();
+  expect(await results.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
+  expect(
+    await page
+      .getByRole("tabpanel")
+      .evaluate((element) => element.scrollWidth <= element.clientWidth),
+  ).toBe(true);
+  const stop = page.getByRole("button", { name: "停止维护" });
+  await stop.scrollIntoViewIfNeeded();
+  await expect(stop).toBeInViewport();
+  await expect(stop).toBeEnabled();
+  await expect(page.getByRole("button", { name: "预览并保存" })).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath("维护运行结果.png"), fullPage: true });
 });

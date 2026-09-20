@@ -28,6 +28,9 @@ func ParseLoginDetails(source string) (LoginDetails, error) {
 	}
 	for i := range fields {
 		fields[i] = strings.TrimSpace(fields[i])
+		if address := loginEmail(fields[i]); address != "" {
+			fields[i] = address
+		}
 	}
 	if len(fields) == 4 && validEmail(fields[0]) && microsoftID.MatchString(fields[2]) && fields[3] != "" {
 		return LoginDetails{Email: fields[0], Password: fields[1], Mail: workbenchprovider.MailConfig{Kind: "microsoft", Email: fields[0], ClientID: fields[2], RefreshToken: fields[3]}}, nil
@@ -82,10 +85,26 @@ func splitLoginFields(source string) []string {
 		}
 		fields := strings.Split(source, delimiter)
 		for _, field := range fields {
-			if validEmail(strings.TrimSpace(field)) {
+			if loginEmail(strings.TrimSpace(field)) != "" {
 				return fields
 			}
 		}
 	}
 	return []string{source}
+}
+
+// Accept a copied Markdown escape only in a complete login email field.
+// Never unescape the entire input: passwords and mailbox URLs are opaque.
+func loginEmail(value string) string {
+	if validEmail(value) {
+		return value
+	}
+	if strings.Count(value, `\`) != 1 || !strings.Contains(value, `\@`) {
+		return ""
+	}
+	address := strings.Replace(value, `\@`, "@", 1)
+	if validEmail(address) {
+		return address
+	}
+	return ""
 }

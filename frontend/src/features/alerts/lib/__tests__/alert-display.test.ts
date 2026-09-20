@@ -27,6 +27,15 @@ const alert: AlertIncident = {
 };
 
 describe("alert display labels", () => {
+  it.each(["MANUAL_FUSE", "ROUTING_BREAKER:人工熔断"])(
+    "人工熔断原因 %s 显示人工控制文案",
+    (cause) => {
+      expect(alertCauseLabel(cause, "firing")).toBe("人工熔断，等待手动解除");
+    },
+  );
+  it("解除人工熔断后显示解除原因", () => {
+    expect(alertCauseLabel("MANUAL_FUSE", "recovered")).toBe("人工熔断已解除");
+  });
   it.each([
     ["类型", alertTypeLabel, "其他告警（__proto__）"],
     ["恢复类型", (value: string) => alertTypeLabel(value, "recovered"), "其他告警（__proto__）"],

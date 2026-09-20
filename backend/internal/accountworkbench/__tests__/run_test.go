@@ -43,7 +43,7 @@ func runTasks(t *testing.T, service *accountworkbench.Service) (*observedRunner,
 		_ = runner.Shutdown(ctx)
 		_ = tasks.Close()
 	})
-	service.UseExecution(tasks, runner, nil, nil, t.TempDir())
+	service.UseExecution(tasks, runner, nil, t.TempDir())
 	return runner, tasks
 }
 func awaitRun(t *testing.T, runner *observedRunner) {
@@ -55,6 +55,9 @@ func awaitRun(t *testing.T, runner *observedRunner) {
 	}
 }
 func signedRunInput(t *testing.T, service *accountworkbench.Service, exchange ...func(*http.Request) error) string {
+	return signedRunInputWithProtocol(t, service, nil, exchange...)
+}
+func signedRunInputWithProtocol(t *testing.T, service *accountworkbench.Service, protocol func(*http.Request) (*http.Response, error), exchange ...func(*http.Request) error) string {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -70,6 +73,9 @@ func signedRunInput(t *testing.T, service *accountworkbench.Service, exchange ..
 			return upstreamResponse(tokenResponse), nil
 		}
 		if request.URL.String() != "https://auth.openai.com/.well-known/jwks.json" {
+			if protocol != nil {
+				return protocol(request)
+			}
 			return nil, fmt.Errorf("unexpected official endpoint")
 		}
 		return upstreamResponse(jwks), nil
@@ -93,6 +99,8 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 	for _, tc := range []struct{ name, corruptStage string }{
 		{name: "applied configuration enables scheduling"},
 		{name: "ignored creation configuration prevents enabling", corruptStage: "create"},
+		{name: "extra upstream model mapping prevents enabling", corruptStage: "model-mapping"},
+		{name: "model mapping changed on promotion prevents scheduling", corruptStage: "promote-model-mapping"},
 		{name: "ignored final configuration prevents scheduling", corruptStage: "promote"},
 		{name: "lost creation response reconciles without a duplicate write", corruptStage: "create-response-lost"},
 	} {
@@ -101,6 +109,13 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 			owner, _ := previewOwner(t, store)
 			runner, tasks := runTasks(t, service)
 			input := signedRunInput(t, service)
+			if strings.Contains(tc.corruptStage, "model-mapping") {
+				var imported map[string]any
+				_ = json.Unmarshal([]byte(input), &imported)
+				imported["model_mapping"] = map[string]string{"selected": "selected"}
+				raw, _ := json.Marshal(imported)
+				input = string(raw)
+			}
 			var current map[string]any
 			var writes []string
 			var mu sync.Mutex
@@ -137,6 +152,9 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 					}
 					current = body
 					current["id"] = json.Number("41")
+					if tc.corruptStage == "model-mapping" {
+						current["credentials"].(map[string]any)["model_mapping"] = map[string]any{"selected": "selected", "*": "unselected"}
+					}
 					if tc.corruptStage == "create" {
 						current["concurrency"] = json.Number("7")
 					}
@@ -146,6 +164,10 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 				case "/admin/accounts/41":
 					for key, value := range body {
 						current[key] = value
+					}
+
+					if tc.corruptStage == "promote-model-mapping" {
+						current["credentials"].(map[string]any)["model_mapping"] = map[string]any{"selected": "selected", "*": "unselected"}
 					}
 					if tc.corruptStage == "promote" {
 						current["concurrency"] = json.Number("7")

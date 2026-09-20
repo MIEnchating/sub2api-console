@@ -44,7 +44,7 @@ func TestWorkbenchRoutesBindPreviewToSessionAndRemoveLegacyTools(t *testing.T) {
 	runner := taskrunner.NewBounded(ctx, 1)
 	defer runner.Shutdown(ctx)
 	service := accountworkbench.New(private)
-	service.UseExecution(tasks, runner, nil, nil, t.TempDir())
+	service.UseExecution(tasks, runner, nil, t.TempDir())
 	router := api.New(config.Config{}, private, nil, api.Dependencies{AccountWorkbench: service})
 	request := func(method, path, body, session string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, "http://console.test"+path, strings.NewReader(body))
@@ -72,7 +72,7 @@ func TestWorkbenchRoutesBindPreviewToSessionAndRemoveLegacyTools(t *testing.T) {
 	if response := request(http.MethodPost, "/api/account-workbench/runs", string(body), second); response.Code != http.StatusConflict {
 		t.Fatalf("foreign preview accepted: %d", response.Code)
 	}
-	for _, path := range []string{"/api/account-workbench/oauth", "/api/account-workbench/security", "/api/account-workbench/profiles", "/api/account-workbench/sms", "/api/account-workbench/checkpoints"} {
+	for _, path := range []string{"/api/account-workbench/runs/test/browser/item", "/api/account-workbench/oauth", "/api/account-workbench/security", "/api/account-workbench/profiles", "/api/account-workbench/sms", "/api/account-workbench/checkpoints"} {
 		if response := request(http.MethodPost, path, `{}`, first); response.Code != http.StatusNotFound {
 			t.Fatalf("legacy route %s returned %d", path, response.Code)
 		}

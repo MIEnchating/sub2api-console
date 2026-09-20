@@ -178,6 +178,9 @@ func (s *Service) SaveTemplate(ctx context.Context, input TemplateInput) (Templa
 		found := false
 		for i, item := range library.Items {
 			if item.ID == input.ID {
+				if input.Config != nil {
+					preserveTemplateSource(&source, item)
+				}
 				if item.SourceID != source.SourceID {
 					return library, errors.New("不能更改模板来源，请创建新模板")
 				}

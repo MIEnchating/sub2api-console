@@ -105,6 +105,7 @@ type Service struct {
 	taskRunner     taskrunner.Runner
 	timeout        time.Duration
 	modelSyncProbe modelSyncProbeRunner
+	controlAlerts  func(context.Context) (taskstore.Task, error)
 }
 
 func New(targets TargetStore, repository Repository, tasks TaskStore) *Service {
@@ -112,6 +113,10 @@ func New(targets TargetStore, repository Repository, tasks TaskStore) *Service {
 }
 
 func (s *Service) UseTaskRunner(runner taskrunner.Runner) { s.taskRunner = runner }
+
+func (s *Service) UseControlAlerts(enqueue func(context.Context) (taskstore.Task, error)) {
+	s.controlAlerts = enqueue
+}
 
 func (s *Service) SyncFields(ctx context.Context, accountID string, patch FieldPatch, actor string) (map[string]any, error) {
 	return s.syncFields(ctx, accountID, patch, actor, false, "", nil)
@@ -236,6 +241,13 @@ func (s *Service) controlLocked(ctx context.Context, accountID, action, actor st
 	warnings := []string{}
 	if schedulable && (action == "resume" || action == "recover") {
 		warnings = recoverAccountRuntime(ctx, client, accountID)
+	}
+	if (action == "fuse" || action == "recover") && s.controlAlerts != nil {
+		if _, err := s.controlAlerts(ctx); err != nil {
+			// The remote change is already confirmed. Do not turn notification
+			// enqueue failure into a control failure that invites a repeated write.
+			warnings = append(warnings, "账号控制已生效，但告警任务创建失败，请手动执行告警检测："+err.Error())
+		}
 	}
 	return map[string]any{
 		"operation_id": operationID, "account_id": accountID, "action": action,
@@ -771,10 +783,10 @@ func normalizeTestModels(models []string) ([]string, error) {
 }
 
 func accountSettingsLoadFactor(account map[string]any) (string, error) {
-	raw, present := account["load_factor"]
-	if !present {
-		return "", errors.New("账号原负载因子未返回")
-	}
+	// Sub2API's account DTO uses omitempty for the nullable load factor.
+	// Both omission and explicit null mean follow concurrency; writing zero
+	// restores that mode when an account settings update needs to roll back.
+	raw := account["load_factor"]
 	if raw == nil {
 		return "0", nil
 	}

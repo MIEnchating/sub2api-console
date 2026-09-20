@@ -370,7 +370,7 @@ func TestUpstreamConcurrencyRecoveryKeepsManualAndCostWallBlocks(t *testing.T) {
 	}
 }
 
-func TestUpstreamConcurrencyDisabledScalingKeepsCapacityPausedAccountClosed(t *testing.T) {
+func TestUpstreamConcurrencyDisabledCapacityControlsRestoreOrdinaryScheduling(t *testing.T) {
 	account := upstreamCapacityAccount("41", 1, 10)
 	disabled := false
 	account.Schedulable, account.EffectiveState = &disabled, "concurrency_limited"
@@ -382,8 +382,8 @@ func TestUpstreamConcurrencyDisabledScalingKeepsCapacityPausedAccountClosed(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target := result.AccountTargets["41"]; target.Concurrency != nil || target.Schedulable == nil || *target.Schedulable || target.DesiredHealth != "concurrency_limited" {
-		t.Fatalf("disabling scaling must not bypass an existing capacity pause: %+v", target)
+	if target := result.AccountTargets["41"]; target.Concurrency != nil || target.Schedulable == nil || !*target.Schedulable || target.DesiredHealth == "concurrency_limited" {
+		t.Fatalf("disabled capacity controls must permit ordinary recovery: %+v", target)
 	}
 }
 

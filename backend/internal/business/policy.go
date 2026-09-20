@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,6 +125,11 @@ func (s *Store) UpdatePolicy(ctx context.Context, rawPatch map[string]any, actor
 	}
 	if err := validateManualPriorityCapacity(ctx, tx, updated); err != nil {
 		return PolicySnapshot{}, err
+	}
+	if !reflect.DeepEqual(current["abnormal_cleanup"], updated["abnormal_cleanup"]) || !reflect.DeepEqual(current["scope"], updated["scope"]) {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM abnormal_cleanup_states`); err != nil {
+			return PolicySnapshot{}, err
+		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := s.writePolicyDocument(ctx, tx, "control-plane", updated, now); err != nil {
@@ -563,10 +569,12 @@ type advancedRule struct {
 var advancedRules = map[string]map[string]advancedRule{
 	"selection": {},
 	"upstream_concurrency": {
-		"enabled":      {kind: "bool"},
-		"account_mode": {kind: "enum", allowed: valueStringSet("all", "selected", "upstreams")},
-		"account_ids":  {kind: "account_ids"},
-		"upstream_ids": {kind: "strings"},
+		"enabled":            {kind: "bool"},
+		"account_mode":       {kind: "enum", allowed: valueStringSet("all", "selected", "upstreams")},
+		"account_ids":        {kind: "account_ids"},
+		"upstream_ids":       {kind: "strings"},
+		"account_overrides":  {kind: "account_bool_map"},
+		"upstream_overrides": {kind: "upstream_bool_map"},
 	},
 	"cost_wall": {"enabled": {kind: "bool"}, "fallback_enabled": {kind: "bool"}, "stop_auto_probe": {kind: "bool"}},
 	"weights": {
@@ -631,6 +639,11 @@ var advancedRules = map[string]map[string]advancedRule{
 		"min_per_account": {kind: "int", minimum: 1, maximum: 1_000_000}, "max_per_account": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"scale_up_ratio": {kind: "ratio"}, "step_up": {kind: "int", minimum: 1, maximum: 1_000_000},
 		"step_down": {kind: "int", minimum: 1, maximum: 1_000_000}, "cooldown_seconds": {kind: "int", minimum: 0, maximum: 86400},
+	},
+	"abnormal_cleanup": {
+		"enabled": {kind: "bool"}, "action": {kind: "enum", allowed: valueStringSet("pause", "disable", "delete")},
+		"duration_minutes": {kind: "int", minimum: 1, maximum: 525600},
+		"max_per_round":    {kind: "int", minimum: 1, maximum: 10000}, "keep_last_in_group": {kind: "bool"},
 	},
 	"cleanup": {
 		"enabled": {kind: "bool"}, "action": {kind: "enum", allowed: valueStringSet("none", "pause", "disable", "delete")},
@@ -760,6 +773,20 @@ func validateAdvancedValue(path string, value any, rule advancedRule) (any, erro
 			return nil, fmt.Errorf("高级策略字段 %s 的选项无效", path)
 		}
 		return text, nil
+	case "account_bool_map", "upstream_bool_map":
+		values, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("高级策略字段 %s 必须是对象", path)
+		}
+		for id, raw := range values {
+			if strings.TrimSpace(id) != id || id == "" || (rule.kind == "account_bool_map" && !positiveNumericID(id)) {
+				return nil, fmt.Errorf("高级策略字段 %s 的稳定 ID 无效", path)
+			}
+			if _, ok := raw.(bool); !ok {
+				return nil, fmt.Errorf("高级策略字段 %s.%s 必须是布尔值", path, id)
+			}
+		}
+		return copyObject(values), nil
 	case "account_ids":
 		ids, err := normalizedStringArray(path, value)
 		if err != nil {
@@ -926,6 +953,7 @@ var advancedPolicyCoreFields = map[string]map[string]struct{}{
 	"recovery":             {},
 	"scaling":              {},
 	"cleanup":              {},
+	"abnormal_cleanup":     {},
 	"upstream_multiplier":  {},
 	"upstream_concurrency": {},
 	"cost_wall":            {},

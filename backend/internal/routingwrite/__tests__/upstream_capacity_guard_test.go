@@ -34,7 +34,8 @@ func TestUpstreamCapacityWriteRechecksSiblingCapacityAfterTargetWasCalculated(t 
 				t.Fatal(err)
 			}
 			if _, err := store.UpdatePolicy(t.Context(), map[string]any{
-				"auto_apply": map[string]any{"concurrency": true, "schedulable": true},
+				"auto_apply":      map[string]any{"concurrency": true, "schedulable": true},
+				"advanced_policy": map[string]any{"upstream_concurrency": map[string]any{"enabled": true}},
 			}, "test"); err != nil {
 				t.Fatal(err)
 			}

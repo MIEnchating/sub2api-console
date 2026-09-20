@@ -37,6 +37,7 @@ export type OnboardingBindingPreview = {
   localGroupIds?: string[];
   concurrency: number;
   waitingForCapacity?: boolean;
+  allocationOverride?: boolean;
   priority: number;
   status: "待添加" | "待更新";
 };
@@ -140,6 +141,12 @@ function OnboardingConfirmContent(props: ContentProps): ReactElement {
                     </dd>
                   </div>
                 </dl>
+                {item.status === "待添加" && item.allocationOverride !== undefined ? (
+                  <p className="text-muted-foreground text-xs">
+                    共享并发分配：{item.allocationOverride ? "单独开启" : "单独关闭"}
+                    （总开关与容量保护继续生效）
+                  </p>
+                ) : null}
                 {item.waitingForCapacity ? (
                   <p className="text-muted-foreground text-xs">
                     <span className="font-medium">等待并发额度</span>：账号将以并发 1

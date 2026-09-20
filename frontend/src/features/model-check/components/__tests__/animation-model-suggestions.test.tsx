@@ -2,12 +2,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useForm } from "react-hook-form";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AnimationForm } from "../../lib/animation-schema";
 import { AnimationModelSettings } from "../animation-model-settings";
 
 const clients: QueryClient[] = [];
-afterEach(() => clients.splice(0).forEach((client) => client.clear()));
+afterEach(() => {
+  clients.splice(0).forEach((client) => client.clear());
+  vi.unstubAllGlobals();
+});
 
 function Settings() {
   const form = useForm<AnimationForm>({
@@ -20,10 +23,17 @@ it("获取共同模型后使用主题下拉展示交集，点击选项回填模�
   const user = userEvent.setup();
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   clients.push(client);
-  client.setQueryData(["model-check-account-models", "41"], {
-    models: ["gpt-5.5", "gpt-6-astra"],
-  });
-  client.setQueryData(["model-check-account-models", "42"], { models: ["gpt-6-astra"] });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>().mockImplementation(
+      async (input) =>
+        new Response(
+          JSON.stringify({
+            models: String(input).includes("/41/") ? ["gpt-5.5", "gpt-6-astra"] : ["gpt-6-astra"],
+          }),
+        ),
+    ),
+  );
   render(
     <QueryClientProvider client={client}>
       <Settings />

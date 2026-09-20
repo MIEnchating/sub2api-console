@@ -42,6 +42,9 @@ func (s *Store) SetAccountIgnoreCostWall(ctx context.Context, accountID string, 
 	action := "respect_cost_wall"
 	if enabled {
 		action = "ignore_cost_wall"
+		if err := closeAccountCostTrafficAlerts(ctx, tx, accountID, now); err != nil {
+			return err
+		}
 	}
 	if err := recordAccountControlEvent(ctx, tx, accountID, name, action, actor, now); err != nil {
 		return err

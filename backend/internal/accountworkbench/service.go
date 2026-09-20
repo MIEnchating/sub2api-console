@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
-	"github.com/MIEnchating/sub2api-console/backend/internal/browserlogin"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -34,7 +33,6 @@ type Service struct {
 	tasks             taskRepository
 	runner            taskrunner.TaskRunner
 	checker           OAuthChecker
-	browser           browserlogin.OAuthFactory
 	artifactDirectory string
 	opMu              sync.Mutex
 	activeMu          sync.Mutex
@@ -54,11 +52,10 @@ type OAuthChecker interface {
 	CheckOAuthWithProxy(context.Context, string, string, map[string]any, string, int, string) (map[string]any, error)
 }
 
-func (s *Service) UseExecution(tasks taskRepository, runner taskrunner.TaskRunner, checker OAuthChecker, browser browserlogin.OAuthFactory, artifactDirectory string) {
+func (s *Service) UseExecution(tasks taskRepository, runner taskrunner.TaskRunner, checker OAuthChecker, artifactDirectory string) {
 	s.tasks = tasks
 	s.runner = runner
 	s.checker = checker
-	s.browser = browser
 	s.artifactDirectory = artifactDirectory
 }
 

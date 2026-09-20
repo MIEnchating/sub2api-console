@@ -15,14 +15,14 @@ afterEach(() => {
   client?.clear();
   vi.unstubAllGlobals();
 });
-function mount(fetcher: typeof fetch): void {
+function mount(fetcher: typeof fetch, onClose: () => void = () => undefined): void {
   vi.stubGlobal("fetch", fetcher);
   client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <ManualTemplateEditor revision={3} onClose={() => undefined} />
+      <ManualTemplateEditor revision={3} onClose={onClose} />
     </QueryClientProvider>,
   );
 }
@@ -84,3 +84,29 @@ it.each(["[]", '{"gpt-5":12}', "not-json"])(
     ).toBe(false);
   },
 );
+
+it("保存期间禁用编辑和重复提交，保存失败保留输入并允许取消", async () => {
+  let complete: (response: Response) => void = () => undefined;
+  const onClose = vi.fn();
+  mount(
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        }),
+    ),
+    onClose,
+  );
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: "模板名称" }), "保留草稿");
+  await user.click(screen.getByRole("button", { name: "保存模板" }));
+  expect(screen.getByRole("button", { name: "正在保存" })).toBeDisabled();
+  expect(screen.getByRole("spinbutton", { name: "并发数" })).toBeDisabled();
+  expect(screen.getByRole("textbox", { name: "模板名称" })).toBeDisabled();
+  complete(Response.json({ detail: "模板版本已变化，请重新读取后保存" }, { status: 409 }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "保存模板" })).toBeEnabled());
+  expect(screen.getByRole("textbox", { name: "模板名称" })).toHaveValue("保留草稿");
+  expect(onClose).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(onClose).toHaveBeenCalledOnce();
+});

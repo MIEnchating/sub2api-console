@@ -37,7 +37,7 @@ for (const mode of ["vet", "test"]) {
     execFileSync("bash", [join(root, "scripts/check-go.sh"), mode], { cwd: dirname(root), env });
     const args = JSON.parse(readFileSync(capture, "utf8"));
     assert.deepEqual(args, [
-      ...(mode === "test" ? ["test", "-race"] : ["vet"]),
+      ...(mode === "test" ? ["test", "-race", "-timeout=20m"] : ["vet"]),
       "./...",
       ...packages,
     ]);

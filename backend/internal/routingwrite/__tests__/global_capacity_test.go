@@ -304,6 +304,7 @@ func TestGlobalCapacityDoesNotConstrainIndependentUpstreamReduction(t *testing.T
 	}}, "test"); err != nil {
 		t.Fatal(err)
 	}
+	disableCapacityFixtureGroupScaling(t, fixture)
 	fixture.states["43"] = map[string]any{"id": "43", "schedulable": true, "concurrency": 0}
 	target := reductionWriteTarget(t, fixture, "41", 2)
 	result, err := service.Apply(t.Context(), map[string]business.AccountRoutingTarget{"41": target}, "test")

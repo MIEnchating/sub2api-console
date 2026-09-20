@@ -16,7 +16,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/upstreamsync"
 )
 
-func TestMaintenanceReauthorizesOnceWhenRefreshedAccountStillReturns401(t *testing.T) {
+func TestMaintenanceReusesCorrectedPasswordWhenRefreshedAccountStillReturns401(t *testing.T) {
 	service, private := fixture(t, `{}`)
 	owner, _ := previewOwner(t, private)
 	runner, tasks := runTasks(t, service)
@@ -52,10 +52,21 @@ func TestMaintenanceReauthorizesOnceWhenRefreshedAccountStillReturns401(t *testi
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"[\\\"7\\\"]\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"model\":\"gpt-5.6-sol\"}}\n\n"))}, nil
 	}))
-	browser := &loginBrowser{stages: []string{"email", "password"}}
-	service.UseExecution(tasks, runner, checker, browser, t.TempDir())
+	protocol := &protocolFixture{t: t}
+	service.UseExecution(tasks, runner, checker, t.TempDir())
 	exchanges := 0
-	signedRunInput(t, service, func(*http.Request) error { exchanges++; return nil })
+	attempts := 0
+	signedRunInputWithProtocol(t, service, func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/api/accounts/password/verify" {
+			attempts++
+			if attempts == 1 {
+				rejected := upstreamResponse(map[string]any{"error": map[string]any{"code": "invalid_password"}})
+				rejected.StatusCode = http.StatusBadRequest
+				return rejected, nil
+			}
+		}
+		return protocol.response(req)
+	}, func(*http.Request) error { exchanges++; return nil })
 	var account map[string]any
 	refreshes := 0
 	service.UseTransport(transportFunc(func(request *http.Request) (*http.Response, error) {
@@ -101,12 +112,16 @@ func TestMaintenanceReauthorizesOnceWhenRefreshedAccountStillReturns401(t *testi
 		return upstreamResponse(map[string]any{"data": account}), nil
 	}))
 	ctx := context.Background()
-	preview, err := service.Preview(ctx, owner, accountworkbench.PreviewInput{Action: "import", Content: "run@example.test----test-password", Promote: true})
+	preview, err := service.Preview(ctx, owner, accountworkbench.PreviewInput{Action: "import", Content: "run@example.test----old-password", Promote: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	run, err := service.Start(ctx, owner, accountworkbench.RunConfirmation{ID: preview.ID, Revision: preview.Revision})
 	if err != nil {
+		t.Fatal(err)
+	}
+	run = waitProtocolPrompt(t, service, owner, run.ID, "")
+	if err := service.SubmitLoginInput(ctx, owner, run.ID, run.Items[0].ID, accountworkbench.LoginInput{PromptID: run.Items[0].LoginPrompt.ID, Value: "test-password"}); err != nil {
 		t.Fatal(err)
 	}
 	awaitRun(t, runner)
@@ -133,7 +148,7 @@ func TestMaintenanceReauthorizesOnceWhenRefreshedAccountStillReturns401(t *testi
 	if err != nil || len(result.Results) != 1 || result.Results[0].Status != "repaired" || result.Results[0].Action != "reauthorize" {
 		t.Fatalf("reauthorization did not recover: %v %+v", err, result)
 	}
-	if refreshes != 1 || exchanges != 2 || browser.opens != 2 {
-		t.Fatalf("unexpected refresh or login replay: refresh=%d exchanges=%d browsers=%d", refreshes, exchanges, browser.opens)
+	if refreshes != 1 || exchanges != 2 || protocol.bootstraps != 2 {
+		t.Fatalf("unexpected refresh or login replay: refresh=%d exchanges=%d logins=%d", refreshes, exchanges, protocol.bootstraps)
 	}
 }

@@ -3,7 +3,13 @@ import { expect, test } from "@playwright/test";
 import type { UpstreamConfiguration } from "../../src/api";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("编辑上游在桌面和手机上展示并发，长内容不会挤出页脚和账号操作", async ({ page }, testInfo) => {
+test("编辑上游在桌面和手机上展示并发，长内容不会挤出页脚和账号操作", async ({
+  page,
+  colorScheme,
+}, testInfo) => {
+  await page.addInitScript((theme) => {
+    localStorage.setItem("sub2api-console-theme", theme ?? "light");
+  }, colorScheme);
   const configuration: UpstreamConfiguration = {
     upstream_id: "up_editor",
     host: "editor.example.test",
@@ -68,6 +74,16 @@ test("编辑上游在桌面和手机上展示并发，长内容不会挤出页�
         running: false,
         traffic_collection: { enabled: false },
       },
+      "/api/policy/upstream-concurrency/upstreams/up_editor": {
+        revision: "v1",
+        target_id: "up_editor",
+        upstream_id: "up_editor",
+        override: null,
+        selected: true,
+        effective: true,
+        global_enabled: true,
+        source: "policy",
+      },
       "/api/upstreams/editor.example.test/configuration": configuration,
       "/api/upstreams": {
         hosts: [
@@ -105,8 +121,48 @@ test("编辑上游在桌面和手机上展示并发，长内容不会挤出页�
   await expect(dialog.getByLabel("目标并发", { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole("button", { name: "保存并重算" })).toBeInViewport();
   await expect(dialog.getByRole("heading", { name: "编辑上游", exact: true })).toBeFocused();
+  await expect(dialog.getByRole("switch", { name: "上游共享并发分配" })).toBeChecked();
+  await dialog.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
+  const alignment = await dialog.evaluate((element) => {
+    const summary = element.querySelector('[aria-labelledby="upstream-concurrency-title"]')!;
+    const allocation = element.querySelector('section[aria-label="上游共享并发分配"]')!;
+    const control = allocation.querySelector('[role="switch"]')!;
+    const left = summary.getBoundingClientRect();
+    const right = allocation.getBoundingClientRect();
+    const toggle = control.getBoundingClientRect();
+    return {
+      leftCenter: left.top + left.height / 2,
+      rightCenter: right.top + right.height / 2,
+      toggleCenter: toggle.top + toggle.height / 2,
+      leftBottom: left.bottom,
+      rightTop: right.top,
+    };
+  });
+  if (page.viewportSize()!.width >= 1024) {
+    expect(alignment.rightCenter).toBeCloseTo(alignment.leftCenter, 0);
+    expect(alignment.toggleCenter).toBeCloseTo(alignment.leftCenter, 0);
+  } else {
+    expect(alignment.rightTop).toBeGreaterThanOrEqual(alignment.leftBottom);
+  }
   const body = dialog.locator('[data-slot="dialog-body"]');
   expect(await body.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const connection = await dialog.getByRole("region", { name: "连接设置" }).boundingBox();
+  const authentication = await dialog.getByRole("region", { name: "鉴权配置" }).boundingBox();
+  expect(connection).not.toBeNull();
+  expect(authentication).not.toBeNull();
+  if (page.viewportSize()!.width >= 1024) {
+    expect(authentication!.x).toBeGreaterThanOrEqual(connection!.x + connection!.width);
+    expect(authentication!.y).toBe(connection!.y);
+  } else {
+    expect(authentication!.y).toBeGreaterThanOrEqual(connection!.y + connection!.height);
+  }
+  const saveBox = await dialog.getByRole("button", { name: "保存并重算" }).boundingBox();
+  const cancelBox = await dialog.getByRole("button", { name: "取消", exact: true }).boundingBox();
+  expect(saveBox!.height).toBe(32);
+  expect(cancelBox!.y).toBe(saveBox!.y);
+  await expect(dialog.getByRole("switch", { name: "上游共享并发分配" })).toBeChecked();
   await page.screenshot({ path: `/tmp/sub2api-upstream-editor-${testInfo.project.name}.png` });
   await dialog.getByRole("tab", { name: "关联账号", exact: true }).click();
   await dialog.getByRole("region", { name: "当前上游账号" }).scrollIntoViewIfNeeded();

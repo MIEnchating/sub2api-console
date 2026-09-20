@@ -50,6 +50,7 @@ const causeLabels: Record<string, string> = {
   BALANCE_HARD_CLOSED: "上游因余额不足停止服务",
   PROBE: "连续主动探测失败",
   ROUTING_BREAKER: "调度策略触发熔断判定",
+  MANUAL_FUSE: "人工熔断，等待手动解除",
   BINDING_INVALID: "绑定的上游或分组已不存在",
   ROUTING_DEGRADED: "调度策略判定为降级",
   ROUTING_DEGRADED_HEALTH_SCORE: "健康分低于降级线",
@@ -199,6 +200,7 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
       RATE_SYNC: "倍率同步已恢复",
       PROBE: "账号主动探测已恢复",
       ROUTING_BREAKER: "账号已恢复调度",
+      MANUAL_FUSE: "人工熔断已解除",
       BINDING_INVALID: "账号绑定已恢复",
       ROUTING_DEGRADED: "账号已恢复正常调度",
       ROUTING_DEGRADED_HEALTH_SCORE: "账号已恢复正常调度",
@@ -211,6 +213,9 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
       APPLY_FAILED: "自动处理已恢复",
     };
     return Object.hasOwn(recoveredCauses, code) ? recoveredCauses[code] : "相关问题已恢复";
+  }
+  if (causeCode === "ROUTING_BREAKER:人工熔断") {
+    return causeLabels.MANUAL_FUSE;
   }
   if (causeCode.startsWith("RATE_SYNC:")) {
     const reason = causeCode.slice("RATE_SYNC:".length).trim();

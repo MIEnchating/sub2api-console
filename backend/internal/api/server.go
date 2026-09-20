@@ -84,6 +84,8 @@ type Business interface {
 	PolicySnapshot(context.Context) (business.PolicySnapshot, error)
 	UpdatePolicy(context.Context, map[string]any, string) (business.PolicySnapshot, error)
 	SetAccountTestModels(context.Context, string, []string, string) error
+	UpstreamAllocationSetting(context.Context, string, string) (business.UpstreamAllocationSetting, error)
+	SetUpstreamAllocationSetting(context.Context, string, string, business.UpstreamAllocationUpdate, string) (business.UpstreamAllocationSetting, error)
 	SetAccountIgnoreCostWall(context.Context, string, bool, string) error
 	UpdateGroupPolicy(context.Context, string, map[string]any, string) (business.GroupStatus, error)
 	ClearGroupPolicy(context.Context, string, string) (business.GroupStatus, error)
@@ -716,6 +718,8 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/groups/:group_id/excluded", server.setGroupExcluded)
 	authorized.GET("/policy", server.policy)
 	authorized.PUT("/policy", server.updatePolicy)
+	authorized.GET("/policy/upstream-concurrency/:kind/:id", server.getUpstreamAllocationSetting)
+	authorized.PUT("/policy/upstream-concurrency/:kind/:id", server.setUpstreamAllocationSetting)
 	authorized.POST("/policy/restore-control", server.restoreRoutingControl)
 	authorized.GET("/pricing", server.pricingSnapshot)
 	authorized.GET("/pricing/changes", server.pricingChanges)
@@ -800,8 +804,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/account-workbench/runs", server.accountWorkbenchStart)
 	authorized.GET("/account-workbench/runs/:id", server.accountWorkbenchRun)
 	authorized.POST("/account-workbench/runs/:id/:action", server.accountWorkbenchRunAction)
-	authorized.GET("/account-workbench/runs/:id/browser/:item", server.accountWorkbenchBrowser)
-	authorized.POST("/account-workbench/runs/:id/browser/:item", server.accountWorkbenchBrowser)
+	authorized.POST("/account-workbench/runs/:id/login-input/:item", server.accountWorkbenchLoginInput)
 	authorized.GET("/account-workbench/templates", server.accountWorkbenchTemplates)
 	authorized.GET("/account-workbench/template-source/:id", server.accountWorkbenchTemplateSource)
 	authorized.POST("/account-workbench/templates", server.accountWorkbenchSaveTemplate)
@@ -817,6 +820,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/model-checks/animations", server.animationCheckHistory)
 	authorized.POST("/model-checks/animations", server.runAnimationCheck)
 	authorized.POST("/model-checks/animations/models", server.customAnimationModels)
+	authorized.GET("/model-checks/animations/accounts/:account_id/models", server.accountAnimationModels)
 	authorized.GET("/model-checks/animation-schedules", server.animationCheckSchedules)
 	authorized.PUT("/model-checks/animation-schedules/:id", server.saveAnimationCheckSchedule)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
@@ -2812,7 +2816,7 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 	allowed := map[string]struct{}{
 		"host": {}, "upstream_type": {}, "base_url": {}, "platform": {}, "account_type": {}, "notes": {},
 		"local_group_id": {}, "local_group_ids": {}, "account_ids": {}, "upstream_group_id": {}, "extra": {},
-		"priority": {}, "concurrency": {}, "schedulable": {}, "test_models": {}, "waiting_for_capacity": {}, "model_mapping": {},
+		"priority": {}, "concurrency": {}, "schedulable": {}, "test_models": {}, "waiting_for_capacity": {}, "model_mapping": {}, "allocation_override": {},
 	}
 	for key := range payload {
 		if _, found := allowed[key]; !found {
@@ -2958,6 +2962,16 @@ func parseOnboardingRequest(payload map[string]any) (onboarding.Request, error) 
 			return onboarding.Request{}, errors.New("waiting_for_capacity 必须是布尔值")
 		}
 		result.WaitingForCapacity = value
+	}
+	if raw, found := payload["allocation_override"]; found {
+		value, ok := raw.(bool)
+		if !ok {
+			return onboarding.Request{}, errors.New("allocation_override 必须是布尔值")
+		}
+		if result.UpstreamType != "sub2api" || len(result.AccountIDs) > 0 {
+			return onboarding.Request{}, errors.New("共享并发单独设置仅适用于新增 Sub2API 账号")
+		}
+		result.AllocationOverride = &value
 	}
 	if result.WaitingForCapacity && (result.Schedulable || len(result.AccountIDs) > 0 || result.Concurrency == nil || *result.Concurrency != 1) {
 		return onboarding.Request{}, errors.New("等待并发额度仅适用于并发为 1 且保持停用的新账号")

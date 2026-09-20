@@ -84,7 +84,16 @@ export const checkVerdictLabels: Record<string, string> = {
   SOL_CONSISTENT: "检测通过",
   MISMATCH: "检测不匹配",
   INCONCLUSIVE: "证据不足",
-  ERROR: "检测失败",
+  ERROR: "检测出错",
+  MATCH: "检测匹配",
+  LUNA_LIKE: "更接近 Luna",
+  TERRA_LIKE: "更接近 Terra",
   LUNA_CONSISTENT: "更接近 Luna",
   TERRA_CONSISTENT: "更接近 Terra",
 };
+
+export const loginInputLabels = {
+  password: "账号密码",
+  email_code: "邮箱验证码",
+  totp_code: "2FA 验证码",
+} as const;

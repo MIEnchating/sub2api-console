@@ -46,6 +46,10 @@ func (s *Service) officialTokenRequest(ctx context.Context, form url.Values, pro
 		defer private.CloseIdleConnections()
 		transport = private
 	}
+	return s.tokenRequestWithTransport(ctx, form, transport)
+}
+
+func (s *Service) tokenRequestWithTransport(ctx context.Context, form url.Values, transport http.RoundTripper) (map[string]any, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://auth.openai.com/oauth/token", strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, errors.New("官方授权请求创建失败")

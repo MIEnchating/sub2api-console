@@ -22,7 +22,7 @@ type RunItem struct {
 	TemplateName  string         `json:"template_name"`
 	Check         map[string]any `json:"check,omitempty"`
 	ManualEnabled bool           `json:"manual_enabled,omitempty"`
-	BrowserReady  bool           `json:"browser_ready,omitempty"`
+	LoginPrompt   *LoginPrompt   `json:"login_prompt,omitempty"`
 }
 type Run struct {
 	ID             string    `json:"id"`

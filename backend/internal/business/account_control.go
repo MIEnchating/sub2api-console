@@ -200,6 +200,9 @@ func (s *Store) commitAccountControl(
 		}
 		scope = copyObject(scope)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM abnormal_cleanup_states WHERE account_id=?`, accountID); err != nil {
+		return PolicySnapshot{}, err
+	}
 	values := controlAccountIDs(scope[field])
 	enabled := action == "pause" || action == "exclude" || action == "fuse"
 	if enabled {

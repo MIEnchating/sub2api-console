@@ -44,6 +44,9 @@ func newService(t *testing.T, adminURL, baseURL string, wrapRepository ...func(*
 	if err := repo.Bootstrap(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := repo.UpdatePolicy(ctx, map[string]any{"advanced_policy": map[string]any{"upstream_concurrency": map[string]any{"enabled": true}}}, "test"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := repo.CreateUpstreamConfiguration(ctx, business.UpstreamConfigurationWrite{Host: "upstream.test", BaseURL: baseURL, UpstreamType: "sub2api", AuthMode: "sub2api_user_token", RechargeRate: "1"}); err != nil {
 		t.Fatal(err)
 	}

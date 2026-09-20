@@ -70,13 +70,17 @@ func (s *Store) routingCapacityInventory(ctx context.Context) (map[string]routin
 }
 
 func (s *Store) routingCapacityInventoryForAccount(ctx context.Context, accountID *string) (map[string]routingCapacityAccount, error) {
+	return routingCapacityInventoryForAccount(ctx, s.db, accountID)
+}
+
+func routingCapacityInventoryForAccount(ctx context.Context, queryer policyQueryer, accountID *string) (map[string]routingCapacityAccount, error) {
 	bindingScope, accountScope := "", ""
 	arguments := []any{}
 	if accountID != nil {
 		bindingScope, accountScope = "WHERE b.local_account_id=?", "WHERE a.id=?"
 		arguments = append(arguments, strings.TrimSpace(*accountID), strings.TrimSpace(*accountID))
 	}
-	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(upstreamCapacityAccountQuery, bindingScope, accountScope), arguments...)
+	rows, err := queryer.QueryContext(ctx, fmt.Sprintf(upstreamCapacityAccountQuery, bindingScope, accountScope), arguments...)
 	if err != nil {
 		return nil, err
 	}

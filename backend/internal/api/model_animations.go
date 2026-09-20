@@ -16,6 +16,30 @@ type animationCheckService interface {
 	SaveAnimationSchedule(context.Context, modelcheck.AnimationSchedule, string) ([]modelcheck.AnimationScheduleView, error)
 }
 
+func (s *Server) accountAnimationModels(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	accountID := c.Param("account_id")
+	if !positiveNumericID(accountID) {
+		writeError(c, http.StatusUnprocessableEntity, "账号必须使用有效的稳定 ID")
+		return
+	}
+	service, ok := s.modelChecks.(interface {
+		AccountAnimationModels(context.Context, string) ([]string, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "模型列表服务尚未就绪")
+		return
+	}
+	models, err := service.AccountAnimationModels(c.Request.Context(), accountID)
+	if err != nil {
+		writeError(c, http.StatusBadGateway, "动画模型列表读取失败："+err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, struct {
+		Models []string `json:"models"`
+	}{Models: models})
+}
+
 func (s *Server) customAnimationModels(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	service, ok := s.modelChecks.(interface {

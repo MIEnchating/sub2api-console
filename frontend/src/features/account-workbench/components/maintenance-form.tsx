@@ -67,7 +67,12 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
         aria-label="维护设置"
         className="grid min-w-0 gap-4 rounded-xl border bg-card p-4"
       >
-        <h3 className="border-b pb-3 text-sm font-semibold">维护设置</h3>
+        <div className="grid gap-1 border-b pb-3">
+          <h3 className="text-sm font-semibold">维护设置</h3>
+          <p className="text-xs leading-5 text-muted-foreground">
+            设置检查范围与频率，保存前确认受影响账号。
+          </p>
+        </div>
         <fieldset disabled={busy || props.value.running} className="grid min-w-0 gap-4">
           <legend className="sr-only">维护设置</legend>
           <div className="grid gap-2">
@@ -120,7 +125,7 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
               </div>
             ))}
           </div>
-          <div className="grid gap-3">
+          <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
             {(
               [
                 { name: "enabled", label: "启用定时检查" },
@@ -144,7 +149,7 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
             ))}
           </div>
         </fieldset>
-        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
           {parse.isPending && <ContentLoading compact label="正在读取维护范围" />}
           <Button
             type="button"
@@ -164,7 +169,7 @@ export function MaintenanceForm(props: { value: WorkbenchMaintenance }): ReactEl
           >
             立即检查
           </Button>
-          <Button type="submit" disabled={busy || props.value.running}>
+          <Button className="ml-auto" type="submit" disabled={busy || props.value.running}>
             预览并保存
           </Button>
         </div>

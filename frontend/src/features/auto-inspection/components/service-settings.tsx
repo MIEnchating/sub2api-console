@@ -40,7 +40,7 @@ export function ServiceSettings(props: ServiceSettingsProps): ReactElement {
           <FieldLabel
             label="调度心跳"
             htmlFor={intervalId}
-            description="每次心跳只检查任务是否到期，不会立即检查全部账号。"
+            description="每次心跳先同步管理端账号与分组，再执行到期的巡检任务。"
           />
           <div className="flex shrink-0 items-center gap-2">
             <Input

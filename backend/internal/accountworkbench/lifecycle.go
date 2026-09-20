@@ -50,7 +50,7 @@ func (s *Service) Recover(ctx context.Context) error {
 		value.Public.Status = "interrupted"
 		for i := range value.Public.Items {
 			row := &value.Public.Items[i]
-			row.BrowserReady = false
+			row.LoginPrompt = nil
 			if row.Status != "completed" && row.Status != "exported" && row.Status != "review" {
 				row.Status = "interrupted"
 				row.Message = "服务重启，任务已停止；未提交项可继续处理"
@@ -132,7 +132,7 @@ func (s *Service) cleanup(ctx context.Context) error {
 		value.ManualIDs = nil
 		value.SecretsCleared = true
 		for i := range value.Public.Items {
-			value.Public.Items[i].BrowserReady = false
+			value.Public.Items[i].LoginPrompt = nil
 		}
 		return s.saveRun(ctx, &value)
 	})

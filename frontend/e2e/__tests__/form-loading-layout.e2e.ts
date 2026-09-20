@@ -105,12 +105,14 @@ for (const scenario of [
     endpoint: "/api/account-workbench/maintenance",
     loading: "正在读取维护设置",
     ready: "维护设置",
+    skeletons: 3,
   },
   {
     tab: "配置模板",
     endpoint: "/api/account-workbench/templates",
     loading: "正在读取模板",
     ready: "模板列表",
+    skeletons: 2,
   },
 ]) {
   test(`${scenario.tab}首次读取展示骨架，完成后恢复操作且窄屏不溢出`, async ({
@@ -122,7 +124,7 @@ for (const scenario of [
     await page.getByRole("tab", { name: scenario.tab, exact: true }).click();
     const loading = page.getByLabel(scenario.loading, { exact: true });
     await expect(loading).toHaveAttribute("aria-busy", "true");
-    await expect(loading.locator('[data-slot="skeleton"]')).toHaveCount(2);
+    await expect(loading.locator('[data-slot="skeleton"]')).toHaveCount(scenario.skeletons);
     await expectNoOverflow(page.getByRole("tabpanel"));
     await expect.poll(() => held.length).toBeGreaterThan(0);
     for (const route of held) await route.fulfill({ json: fixtures[scenario.endpoint] });

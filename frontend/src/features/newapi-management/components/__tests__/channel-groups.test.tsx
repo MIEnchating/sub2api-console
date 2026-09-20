@@ -35,43 +35,52 @@ function mount(): void {
   );
 }
 
-it("创建分组并把已选渠道加入后保存到后端", async () => {
-  const writes: unknown[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
-      if (String(url).endsWith("/channel-groups") && options?.method === "PUT") {
-        const payload = JSON.parse(String(options.body)) as unknown;
-        writes.push(payload);
-        return Response.json({
-          groups: [{ id: "group-prod", name: "生产渠道", channel_ids: ["41"] }],
-          version: "next",
-        });
-      }
-      if (String(url).endsWith("/channel-groups")) {
-        return Response.json({ groups: [], version: "" });
-      }
-      return Response.json({ items, total: 1 });
-    }),
-  );
-  mount();
-  const user = userEvent.setup();
-  await screen.findByRole("row", { name: "渠道 生产渠道（41）" });
-  await user.click(screen.getByRole("checkbox", { name: "选择渠道 生产渠道（41）" }));
-  await user.click(screen.getByRole("button", { name: "渠道分组" }));
-  await user.type(screen.getByRole("textbox", { name: "新建分组名称" }), "生产渠道");
-  await user.click(screen.getByRole("button", { name: "新建分组" }));
-  const groupName = screen.getByRole("textbox", { name: "分组名称 1" });
-  await user.clear(groupName);
-  await user.type(groupName, "生产主渠道");
-  await user.click(screen.getByRole("button", { name: "加入已选" }));
-  await user.click(screen.getByRole("button", { name: "保存分组" }));
-  await waitFor(() => expect(writes).toHaveLength(1));
-  expect(writes[0]).toMatchObject({
-    groups: [{ id: expect.stringMatching(/^group-/), name: "生产主渠道", channel_ids: ["41"] }],
-    version: "",
-  });
-});
+it.each([true, false])(
+  "randomUUID 可用性为 %s 时，创建分组并把已选渠道加入后保存到后端",
+  async (available) => {
+    if (!available) {
+      vi.stubGlobal("crypto", {
+        getRandomValues: crypto.getRandomValues.bind(crypto),
+        randomUUID: undefined,
+      });
+    }
+    const writes: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: RequestInfo | URL, options?: RequestInit) => {
+        if (String(url).endsWith("/channel-groups") && options?.method === "PUT") {
+          const payload = JSON.parse(String(options.body)) as unknown;
+          writes.push(payload);
+          return Response.json({
+            groups: [{ id: "group-prod", name: "生产渠道", channel_ids: ["41"] }],
+            version: "next",
+          });
+        }
+        if (String(url).endsWith("/channel-groups")) {
+          return Response.json({ groups: [], version: "" });
+        }
+        return Response.json({ items, total: 1 });
+      }),
+    );
+    mount();
+    const user = userEvent.setup();
+    await screen.findByRole("row", { name: "渠道 生产渠道（41）" });
+    await user.click(screen.getByRole("checkbox", { name: "选择渠道 生产渠道（41）" }));
+    await user.click(screen.getByRole("button", { name: "渠道分组" }));
+    await user.type(screen.getByRole("textbox", { name: "新建分组名称" }), "生产渠道");
+    await user.click(screen.getByRole("button", { name: "新建分组" }));
+    const groupName = screen.getByRole("textbox", { name: "分组名称 1" });
+    await user.clear(groupName);
+    await user.type(groupName, "生产主渠道");
+    await user.click(screen.getByRole("button", { name: "加入已选" }));
+    await user.click(screen.getByRole("button", { name: "保存分组" }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({
+      groups: [{ id: expect.stringMatching(/^group-/), name: "生产主渠道", channel_ids: ["41"] }],
+      version: "",
+    });
+  },
+);
 
 it("选择保存的分组后读取跨页成员，并一次选中整组的最新渠道", async () => {
   const member = { ...items[0], id: "101", name: "跨页渠道" };

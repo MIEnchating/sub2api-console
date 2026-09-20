@@ -203,6 +203,7 @@ CREATE TABLE IF NOT EXISTS routing_baselines (
  ownership_version INTEGER NOT NULL DEFAULT 1,managed_schedulable INTEGER,managed_priority INTEGER,
  managed_load_factor TEXT,managed_concurrency INTEGER,managed_status TEXT
 );
+CREATE TABLE IF NOT EXISTS abnormal_cleanup_states (account_id TEXT PRIMARY KEY,eligible_since TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS cleanup_states (account_id TEXT PRIMARY KEY,eligible_since TEXT NOT NULL,updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime_events (source_id INTEGER PRIMARY KEY,event_type TEXT NOT NULL,created_at TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL,payload_json TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS ix_runtime_events_recent ON runtime_events(created_at DESC,source_id);
@@ -519,7 +520,7 @@ func populatedBusinessTables(ctx context.Context, queryer connectionQueryer) ([]
 	tables := []string{
 		"upstream_identities", "upstream_identity_hosts", "upstream_catalog_entities", "upstreams", "upstream_keys", "upstream_groups", "accounts", "account_groups", "health_samples",
 		"routing_decisions", "account_health_evaluations", "account_stability_samples", "bindings", "local_groups", "recharge_rates", "billing_quota_unit_observations", "pricing_backups", "pricing_backup_accounts",
-		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "runtime_events",
+		"policy_nodes", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "abnormal_cleanup_states", "runtime_events",
 		"alert_incidents", "alert_deliveries", "operation_audit", "run_records", "usage_records",
 		"operational_snapshots", "onboarding_pending",
 	}
@@ -565,11 +566,12 @@ func initialControlPolicy() map[string]any {
 			"event_scores":           map[string]any{"perfect": int64(100), "slow_ttfb": int64(65), "empty_response": int64(40), "upstream_unknown": int64(40), "gateway_error": int64(25), "quota_exhausted": int64(15), "probe_fail": int64(10), "fatal": int64(0)},
 			"history_window_minutes": int64(1440), "short_window": int64(10), "long_window": int64(60), "latest_weight": 0.5, "short_ratio": 0.7, "slow_ttfb_ms": int64(5000),
 		},
-		"breaker":  map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "transient_consecutive_failures": int64(2), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
-		"degrade":  map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
-		"recovery": map[string]any{"enabled": true, "probe_interval_seconds": int64(180), "target_score": int64(75), "success_count": int64(2), "hold_seconds": int64(60)},
-		"scaling":  map[string]any{"enabled": false, "global_max_concurrency": int64(900), "min_per_account": int64(3), "max_per_account": int64(250), "scale_up_ratio": 0.8, "step_up": int64(5), "step_down": int64(5), "cooldown_seconds": int64(60)},
-		"cleanup":  map[string]any{"enabled": false, "action": "pause", "occurrences": int64(3), "window": int64(5), "min_fused_minutes": int64(30), "max_per_round": int64(1), "keep_last_in_group": true, "only_auth_errors": true, "trigger_status_codes": []any{int64(401), int64(403)}},
+		"breaker":          map[string]any{"enabled": true, "hard_fatal": true, "http_window": int64(5), "http_failures": int64(3), "http_score_below": int64(60), "transient_consecutive_failures": int64(2), "latency_window": int64(10), "latency_occurrences": int64(5), "latency_ttfb_ms": int64(15000), "max_switch_per_round": int64(1), "min_pool_size": int64(1), "min_pool_score": int64(3), "fused_cooldown_seconds": int64(180), "instant_status_codes": []any{}, "http_degrade_only": true, "latency_degrade_only": true},
+		"degrade":          map[string]any{"enabled": true, "score_threshold": int64(75), "priority_step": int64(10), "load_factor_ratio": 0.5, "min_load_factor": int64(1)},
+		"recovery":         map[string]any{"enabled": true, "probe_interval_seconds": int64(180), "target_score": int64(75), "success_count": int64(2), "hold_seconds": int64(60)},
+		"scaling":          map[string]any{"enabled": false, "global_max_concurrency": int64(900), "min_per_account": int64(3), "max_per_account": int64(250), "scale_up_ratio": 0.8, "step_up": int64(5), "step_down": int64(5), "cooldown_seconds": int64(60)},
+		"abnormal_cleanup": map[string]any{"enabled": false, "action": "pause", "duration_minutes": int64(1440), "max_per_round": int64(1), "keep_last_in_group": true},
+		"cleanup":          map[string]any{"enabled": false, "action": "pause", "occurrences": int64(3), "window": int64(5), "min_fused_minutes": int64(30), "max_per_round": int64(1), "keep_last_in_group": true, "only_auth_errors": true, "trigger_status_codes": []any{int64(401), int64(403)}},
 		"classify": map[string]any{"fatal_patterns": []any{
 			"invalid api key", "unauthorized", "forbidden", "authentication", "account not found", "no api key", "no access token",
 			"insufficient", "balance", "quota exceeded", "usage limit", "credit", "expired",

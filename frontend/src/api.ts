@@ -575,7 +575,20 @@ export type OnboardingRequest = {
   model_mapping?: Record<string, string>;
   schedulable?: boolean;
   waiting_for_capacity?: boolean;
+  allocation_override?: boolean;
 };
+
+export type UpstreamAllocationSetting = {
+  revision: string;
+  target_id: string;
+  upstream_id: string;
+  override: boolean | null;
+  selected: boolean;
+  effective: boolean;
+  global_enabled: boolean;
+  source: "account" | "upstream" | "policy";
+};
+export type UpstreamAllocationTarget = "accounts" | "upstreams";
 
 export type PolicySnapshot = {
   revision?: string;
@@ -1929,14 +1942,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ revision }),
     }),
-  workbenchBrowser: (id: string, item: string) =>
-    request<BrowserFrame>(
-      `/api/account-workbench/runs/${encodeURIComponent(id)}/browser/${encodeURIComponent(item)}`,
-      { cache: "no-store" },
-    ),
-  workbenchBrowserInput: (id: string, item: string, input: BrowserInput) =>
+  workbenchLoginInput: (
+    id: string,
+    item: string,
+    input: { prompt_id: string; value: string; action?: "resend_email" },
+  ) =>
     request<{ accepted: boolean }>(
-      `/api/account-workbench/runs/${encodeURIComponent(id)}/browser/${encodeURIComponent(item)}`,
+      `/api/account-workbench/runs/${encodeURIComponent(id)}/login-input/${encodeURIComponent(item)}`,
       { method: "POST", body: JSON.stringify(input) },
     ),
   workbenchTemplates: () => request<TemplateLibrary>("/api/account-workbench/templates"),
@@ -2259,6 +2271,26 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  upstreamAllocationSetting: (kind: UpstreamAllocationTarget, id: string) =>
+    request<UpstreamAllocationSetting>(
+      `/api/policy/upstream-concurrency/${kind}/${encodeURIComponent(id)}`,
+    ),
+  setUpstreamAllocationSetting: (
+    kind: UpstreamAllocationTarget,
+    id: string,
+    payload: {
+      override: boolean | null;
+      expected_revision: string;
+      expected_upstream_id: string;
+    },
+  ) =>
+    request<UpstreamAllocationSetting>(
+      `/api/policy/upstream-concurrency/${kind}/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      },
+    ),
   policy: () => request<PolicySnapshot>("/api/policy"),
   updatePolicy: (payload: PolicyUpdatePayload) =>
     request<PolicySnapshot>("/api/policy", {
@@ -2629,6 +2661,11 @@ export const api = {
       body: JSON.stringify(payload ?? {}),
     }),
   animationHistory: () => request<Task[]>("/api/model-checks/animations"),
+  accountAnimationModels: (accountId: string, signal?: AbortSignal) =>
+    request<{ models: string[] }>(
+      `/api/model-checks/animations/accounts/${encodeURIComponent(accountId)}/models`,
+      { signal },
+    ),
   customAnimationModels: (payload: Omit<AnimationCustomEndpoint, "model">, signal?: AbortSignal) =>
     request<{ models: string[] }>("/api/model-checks/animations/models", {
       method: "POST",

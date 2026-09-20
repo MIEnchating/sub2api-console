@@ -3,7 +3,6 @@ import {
   Ban,
   LoaderCircle,
   MoreHorizontal,
-  Pause,
   Pencil,
   Pin,
   Play,
@@ -79,20 +78,13 @@ function accountActions(props: AccountOperationProps): {
       disabled: props.pending || props.probePending || manualControlled,
       onClick: props.onProbe,
     });
-    if (!policyStopped) {
+    if (resumable) {
       controls.push({
-        label: resumable ? "恢复调度" : "暂停调度",
-        icon: resumable ? <Play /> : <Pause />,
-        tone: resumable ? "primary" : undefined,
+        label: "恢复调度",
+        icon: <Play />,
+        tone: "primary",
         disabled: props.pending || manualControlled,
-        onClick: () =>
-          props.onControl(
-            resumable ? "resume" : "pause",
-            resumable ? "恢复调度" : "暂停调度",
-            resumable
-              ? undefined
-              : `暂停“${props.account.name}”后，该账号将停止接收流量，但仍会继续监控和计分。`,
-          ),
+        onClick: () => props.onControl("resume", "恢复调度", undefined),
       });
     }
     controls.push({

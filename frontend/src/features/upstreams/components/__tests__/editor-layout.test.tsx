@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
-import type { UpstreamConfiguration } from "@/api";
+import { api, type UpstreamConfiguration } from "@/api";
 import { UpstreamEditDialog } from "../upstream-edit-dialog";
 
 let client: QueryClient;
@@ -12,6 +12,7 @@ afterEach(() => {
   cleanup();
   client?.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function configuration(): UpstreamConfiguration {
@@ -50,6 +51,24 @@ function renderEditor(data = configuration()): { onOpenChange: ReturnType<typeof
   );
   return { onOpenChange };
 }
+
+it("共享并发条左右内容高度不同时，分配开关在单元格内垂直居中", async () => {
+  vi.spyOn(api, "upstreamAllocationSetting").mockResolvedValue({
+    revision: "v1",
+    target_id: "up_example",
+    upstream_id: "up_example",
+    override: null,
+    selected: true,
+    effective: true,
+    global_enabled: true,
+    source: "policy",
+  });
+  renderEditor();
+  await screen.findByRole("switch", { name: "上游共享并发分配" });
+  const allocation = screen.getByRole("region", { name: "上游共享并发分配" });
+  expect(allocation.parentElement).toHaveClass("grid", "items-center");
+  expect(allocation.parentElement).toHaveClass("border-t", "lg:border-t-0", "lg:border-l");
+});
 
 it("默认配置页展示紧凑并发条和两列字段，账号关系使用独立页签", () => {
   renderEditor({
@@ -153,4 +172,17 @@ it("用键盘切换账号页签后返回配置，名称和凭据草稿保持且�
   expect(configTab).toHaveFocus();
   expect(screen.getByRole("textbox", { name: "名称" })).toHaveValue("编辑中的上游");
   expect(screen.getByLabelText("Token")).toHaveValue("private-draft");
+});
+
+it("打开缓存的 New API 配置时首帧也不请求共享额度，未保存的平台切换不触发读取", async () => {
+  const read = vi
+    .spyOn(api, "upstreamAllocationSetting")
+    .mockRejectedValue(new Error("仅 Sub2API 上游支持共享并发分配"));
+  renderEditor({ ...configuration(), upstream_type: "newapi", auth_mode: "newapi_admin_key" });
+  expect(screen.getByRole("combobox", { name: "平台" })).toHaveTextContent("New API");
+  expect(read).not.toHaveBeenCalled();
+  expect(screen.queryByRole("switch", { name: "上游共享并发分配" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("combobox", { name: "平台" }));
+  await userEvent.click(screen.getByRole("option", { name: "Sub2API" }));
+  expect(read).not.toHaveBeenCalled();
 });

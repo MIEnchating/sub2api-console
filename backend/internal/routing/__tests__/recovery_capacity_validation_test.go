@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRecoveryWithScalingDisabledAndUnconfirmedUpstreamKeepsAccountPaused(t *testing.T) {
+func TestRecoveryOutsideCapacityScopeIgnoresUnconfirmedUpstream(t *testing.T) {
 	for _, status := range []string{"unknown", "stale"} {
 		t.Run(status, func(t *testing.T) {
 			account := upstreamCapacityAccount("41", 3, 10)
@@ -28,8 +28,8 @@ func TestRecoveryWithScalingDisabledAndUnconfirmedUpstreamKeepsAccountPaused(t *
 				t.Fatal(err)
 			}
 			target := result.AccountTargets["41"]
-			if target.Schedulable == nil || *target.Schedulable || target.Concurrency != nil {
-				t.Fatalf("unconfirmed capacity generated a recovery write: %+v", target)
+			if target.Schedulable == nil || !*target.Schedulable || target.Concurrency != nil {
+				t.Fatalf("unused upstream quota blocked ordinary recovery: %+v", target)
 			}
 		})
 	}

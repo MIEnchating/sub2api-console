@@ -77,7 +77,7 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-action"
       className={cn(
-        "col-start-1 flex min-w-0 max-w-full flex-wrap items-center gap-2 self-start justify-self-start @sm/card-header:col-start-2 @sm/card-header:row-span-2 @sm/card-header:row-start-1 @sm/card-header:justify-self-end",
+        "col-start-1 flex min-w-0 max-w-full flex-wrap items-center gap-2 self-start justify-self-start @sm/card-header:col-start-2 @sm/card-header:row-span-2 @sm/card-header:row-start-1 @sm/card-header:max-w-[60cqw] @sm/card-header:justify-self-end",
         className,
       )}
       {...props}

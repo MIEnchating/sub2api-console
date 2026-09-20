@@ -27,6 +27,9 @@ func sortOwnedWithHysteresis(items []*candidate, config engineConfig) {
 
 func sortCapacityWithHysteresis(items []*candidate, configs map[string]engineConfig) {
 	sortPlacementCandidates(items, func(item *candidate) engineConfig { return configs[item.account.GroupName] }, true)
+	// A confirmed healthy account must not be starved by an incumbent whose
+	// health is unknown or degraded. Preserve policy ordering within each tier.
+	sort.SliceStable(items, func(i, j int) bool { return capacityHealthTier(items[i]) < capacityHealthTier(items[j]) })
 }
 
 func sortPlacementCandidates(items []*candidate, configuration func(*candidate) engineConfig, capacity bool) {
@@ -238,4 +241,14 @@ func assignStablePriorities(items []*candidate, config engineConfig) {
 		item.rank, item.desiredPriority, item.placementPlanned = &rank, &priority, true
 		last = priority
 	}
+}
+
+func capacityHealthTier(item *candidate) int {
+	if item.state == "healthy" && item.health.SampleCount > 0 && !item.evidencePending {
+		return 0
+	}
+	if item.state == "degraded" || item.state == "survivor" {
+		return 2
+	}
+	return 1
 }

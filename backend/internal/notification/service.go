@@ -399,6 +399,7 @@ var causeLabels = map[string]string{
 	"BALANCE_HARD_CLOSED":                 "上游因余额不足停止服务",
 	"PROBE":                               "连续连接探测失败",
 	"ROUTING_BREAKER":                     "连续失败，已停止调度",
+	"MANUAL_FUSE":                         "人工熔断，等待手动解除",
 	"BINDING_INVALID":                     "绑定的上游或分组已不存在",
 	"ROUTING_DEGRADED":                    "调度规则判定账号需要降级",
 	"ROUTING_DEGRADED_HEALTH_SCORE":       "健康分低于降级标准",
@@ -723,6 +724,7 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 			"BALANCE_HARD_CLOSED":                 "余额不足导致的停服已解除",
 			"PROBE":                               "账号连接探测已恢复",
 			"ROUTING_BREAKER":                     "账号已恢复调度",
+			"MANUAL_FUSE":                         "人工熔断已解除",
 			"BINDING_INVALID":                     "账号绑定已恢复",
 			"ROUTING_DEGRADED":                    "账号已恢复正常调度",
 			"ROUTING_DEGRADED_HEALTH_SCORE":       "账号已恢复正常调度",
@@ -746,6 +748,8 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 		} else if causeLabel == "" {
 			causeLabel = "相关问题已恢复"
 		}
+	} else if incident.CauseCode == "ROUTING_BREAKER:人工熔断" {
+		causeLabel = causeLabels["MANUAL_FUSE"]
 	} else if strings.HasPrefix(incident.CauseCode, "RATE_SYNC:") {
 		reason := strings.TrimSpace(strings.TrimPrefix(incident.CauseCode, "RATE_SYNC:"))
 		causeLabel = compactRateSyncReason(reason)

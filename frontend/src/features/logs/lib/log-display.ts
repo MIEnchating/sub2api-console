@@ -100,6 +100,7 @@ const titleLabels: Record<string, string> = {
   cleanup_delete_failed: "自动删除账号失败",
   cleanup_predisable_failed: "删除前停止调度失败",
   routing_recovery_cleanup_failed: "恢复调度后清理状态失败",
+  management_sync: "管理端账号与分组同步",
   upstream_sync: "上游数据同步",
   upstream_rate_sync: "上游数据同步",
   account_rate_sync: "账号倍率与名称同步",

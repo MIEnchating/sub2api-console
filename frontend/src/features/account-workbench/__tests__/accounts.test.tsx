@@ -66,7 +66,7 @@ it("邮箱搜索筛出对应账号并能打开完整只读配置", async () => {
   expect(screen.queryByText("个人账号")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "查看 团队账号 配置" }));
   const dialog = within(screen.getByRole("dialog"));
-  expect(dialog.getByText("gpt-5 → gpt-5.6")).toBeVisible();
+  expect(dialog.getByRole("row", { name: "gpt-5 gpt-5.6" })).toBeVisible();
   expect(dialog.getByText("设备+会话")).toBeVisible();
   expect(dialog.getByText("0.1234567890123456789")).toBeVisible();
   await user.keyboard("{Escape}");

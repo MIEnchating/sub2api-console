@@ -447,7 +447,7 @@ func (s *Store) CleanupMissingBindings(ctx context.Context, accountIDs []string,
 			name = "账号 " + accountID
 		}
 		names = append(names, name)
-		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states"} {
+		for _, table := range []string{"account_groups", "health_samples", "routing_decisions", "account_health_evaluations", "paused_accounts", "manual_priority_accounts", "routing_baselines", "cleanup_states", "abnormal_cleanup_states"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE account_id=?", accountID); err != nil {
 				return MissingBindingCleanupResult{}, err
 			}

@@ -304,6 +304,8 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
       )}
       {groupOpen && channelGroups.data && (
         <ChannelGroupDialog
+          platformId={props.platformId}
+          channels={items}
           groups={groups}
           selected={[...selected.values()]}
           version={channelGroups.data.version}

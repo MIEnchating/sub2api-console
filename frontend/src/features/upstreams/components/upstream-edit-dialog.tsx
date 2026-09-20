@@ -1,3 +1,5 @@
+import { useUpstreamAllocationDraft } from "@/features/policy/hooks/use-upstream-allocation-draft";
+import { UpstreamAllocationSetting } from "@/features/policy/components/upstream-allocation-setting";
 import { ContentRetry } from "@/components/content-retry";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { FieldError } from "@/components/field-error";
@@ -70,7 +72,7 @@ type Props = {
 
 export const upstreamEditDialogLayout = {
   content:
-    "grid w-[min(48rem,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
+    "grid w-[min(56rem,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
   scrollArea: "overflow-x-clip",
   form: "grid min-w-0 max-w-full gap-4 overflow-x-clip",
 } as const;
@@ -436,6 +438,14 @@ export function UpstreamEditDialog(props: Props) {
   const pendingSave = useRef<{ host: string; payload: UpstreamConfigurationUpdate } | null>(null);
   const isDirty = form.formState.isDirty;
   const platform = form.watch("upstream_type");
+  const allocation = useUpstreamAllocationDraft(
+    "upstreams",
+    configuration.data?.upstream_id ?? "",
+    props.host !== null &&
+      Boolean(configuration.data?.upstream_id) &&
+      configuration.data?.upstream_type.toLowerCase() === "sub2api" &&
+      platform === "sub2api",
+  );
   const authMode = form.watch("auth_mode");
   const authModes = useMemo(() => authModesForPlatform(platform), [platform]);
 
@@ -475,11 +485,12 @@ export function UpstreamEditDialog(props: Props) {
 
   const save = useMutation({
     gcTime: 0,
-    mutationFn: (host: string) => {
+    mutationFn: async (host: string) => {
       const submission = pendingSave.current;
       pendingSave.current = null;
       if (!submission || submission.host !== host)
         throw new Error("上游提交内容已清除，请重新填写");
+      await allocation.save();
       return api.updateUpstreamConfiguration(host, submission.payload);
     },
     onSuccess: (value, host) => {
@@ -581,6 +592,8 @@ export function UpstreamEditDialog(props: Props) {
 
   const data: UpstreamConfiguration | undefined = configuration.data;
   const presentation = data ? upstreamEditPresentation(data) : null;
+  const supportsSharedConcurrency =
+    data?.upstream_type.toLowerCase() === "sub2api" && platform === "sub2api";
   const showAccessToken = ["sub2api_user_token", "newapi_user_token", "bearer_token"].includes(
     authMode,
   );
@@ -677,16 +690,32 @@ export function UpstreamEditDialog(props: Props) {
                 hidden={tab !== "configuration"}
                 className={cn("min-w-0 gap-4", tab === "configuration" ? "grid" : "hidden")}
               >
-                {platform === "sub2api" ? (
-                  <UpstreamConcurrencyDetails
-                    limit={data?.concurrency_limit}
-                    status={data?.concurrency_status}
-                    allocated={data?.allocated_concurrency}
-                    target={data?.target_concurrency}
-                  />
+                {supportsSharedConcurrency ? (
+                  <div className="grid min-w-0 rounded-lg border bg-muted/10 lg:grid-cols-2">
+                    <div className="flex min-w-0 items-center px-3 py-3">
+                      <UpstreamConcurrencyDetails
+                        limit={data?.concurrency_limit}
+                        status={data?.concurrency_status}
+                        allocated={data?.allocated_concurrency}
+                        target={data?.target_concurrency}
+                      />
+                    </div>
+                    {data?.upstream_id ? (
+                      <div className="grid min-w-0 items-center border-t lg:border-t-0 lg:border-l">
+                        <UpstreamAllocationSetting
+                          key={data.upstream_id}
+                          draft={allocation}
+                          kind="upstreams"
+                          id={data.upstream_id}
+                          layout="row"
+                          disabled={save.isPending}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
                 <div
-                  className="grid min-w-0 grid-cols-1 gap-4"
+                  className="grid min-w-0 grid-cols-1 items-start gap-5 lg:grid-cols-2"
                   data-testid="upstream-editor-sections"
                 >
                   <section
@@ -767,7 +796,7 @@ export function UpstreamEditDialog(props: Props) {
                     </div>
                   </section>
                   <section
-                    className="grid min-w-0 gap-3 border-t pt-4"
+                    className="grid min-w-0 gap-3 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-5"
                     aria-labelledby="upstream-auth-title"
                   >
                     <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -1063,7 +1092,7 @@ export function UpstreamEditDialog(props: Props) {
             </form>
           )}
         </DialogBody>
-        <DialogFooter>
+        <DialogFooter className="flex-row flex-wrap items-center justify-end">
           <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
             取消
           </Button>
@@ -1071,7 +1100,12 @@ export function UpstreamEditDialog(props: Props) {
             <Button
               type="submit"
               form={upstreamEditFormID}
-              disabled={save.isPending || configuration.isLoading || Boolean(configuration.error)}
+              disabled={
+                save.isPending ||
+                !allocation.ready ||
+                configuration.isLoading ||
+                Boolean(configuration.error)
+              }
             >
               {save.isPending ? <RefreshCw className="animate-spin" /> : <Save />}
               {save.isPending ? "保存中…" : "保存并重算"}

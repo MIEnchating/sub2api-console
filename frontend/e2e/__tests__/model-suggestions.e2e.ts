@@ -17,7 +17,7 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
     "/api/accounts": [{ ...account, platform: "openai" }],
     "/api/model-checks/animation-schedules": [],
     "/api/model-checks/animations": [],
-    "/api/accounts/41/models": {
+    "/api/model-checks/animations/accounts/41/models": {
       models: ["codex-auto-review", "gpt-5.5", "gpt-5.6-sol", "gpt-6-astra", longModel],
     },
   };

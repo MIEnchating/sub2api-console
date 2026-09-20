@@ -74,7 +74,7 @@ func (pools upstreamScalingPools) manages(account business.RoutingAccount) bool 
 
 func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs map[string]engineConfig, global *scalingBudget) {
 	for _, item := range primary {
-		if previouslyConcurrencyLimited(item.account) && sub2APIUpstreamID(item.account) == "" && placementLoadFactorEligible(item) {
+		if previouslyConcurrencyLimited(item.account) && item.account.UpstreamType != nil && strings.EqualFold(*item.account.UpstreamType, "sub2api") && configs[item.account.GroupName].upstreamCapacityEnabledFor(item.account) && sub2APIUpstreamID(item.account) == "" && placementLoadFactorEligible(item) {
 			limitConcurrency(item, "上游并发来源缺失，保持暂停；请重新核对上游绑定后同步")
 		}
 	}
@@ -93,11 +93,10 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 				continue
 			}
 			config := configs[item.account.GroupName]
-			if previouslyConcurrencyLimited(item.account) && !config.scalingEnabled && !config.upstreamAllocationEnabledFor(item.account) {
-				limitConcurrency(item, "账号未启用共享并发分配或智能扩容，保持等待并发额度")
+			if !config.upstreamCapacityEnabledFor(item.account) {
 				continue
 			}
-			if pool.unknown || pool.stale || pool.limit == nil || (!configs[item.account.GroupName].scalingEnabled && !configs[item.account.GroupName].upstreamAllocationEnabledFor(item.account) && (item.account.Concurrency == nil || *item.account.Concurrency <= 0)) {
+			if pool.unknown || pool.stale || pool.limit == nil {
 				item.schedulable = false
 				appendConcurrencyReason(item, "恢复前共享并发或账号并发尚未确认，保持暂停；请同步上游与账号")
 			}
@@ -113,6 +112,9 @@ func (pools upstreamScalingPools) apply(primary map[string]*candidate, configs m
 				continue
 			}
 			config := configs[item.account.GroupName]
+			if !config.upstreamCapacityEnabledFor(item.account) {
+				continue
+			}
 			if item.upstreamReductionID != "" {
 				continue
 			}
@@ -192,7 +194,11 @@ func (pool *upstreamScalingPool) apply(items []*candidate, configs map[string]en
 		for _, item := range items {
 			globalLimit = min(globalLimit, configs[item.account.GroupName].scalingGlobalMax)
 		}
-		available = min(available, max(int64(0), globalLimit-global.reservedOutside(selected)))
+		if share, planned := global.upstreamShares[pool.id]; planned {
+			available = min(available, share)
+		} else {
+			available = min(available, max(int64(0), globalLimit-global.reservedOutside(selected)))
+		}
 	}
 	waitingReason := fmt.Sprintf("上游并发上限 %d，已分配及预留 %d，可分配 %d；按调度权重等待额度释放", limit, reserved, available)
 	if configs[items[0].account.GroupName].globalScalingEnabled && available < max(int64(0), limit-reserved) {

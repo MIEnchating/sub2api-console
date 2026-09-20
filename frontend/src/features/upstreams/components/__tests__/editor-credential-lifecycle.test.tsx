@@ -74,8 +74,27 @@ it.each([true, false])(
     let requestBody = "";
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        requestBody = String(init?.body);
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/policy/upstream-concurrency/")) {
+          return Response.json({
+            revision: "v1",
+            target_id: "up_example",
+            upstream_id: "up_example",
+            override: null,
+            selected: false,
+            effective: false,
+            global_enabled: false,
+            source: "policy",
+          });
+        }
+        if (init?.method !== "PUT") {
+          if (String(input).includes("/auth-recovery/config")) {
+            return Response.json({ vault_entries: [] });
+          }
+          if (String(input).includes("/dictionaries")) return Response.json({ items: [] });
+          return Response.json(config);
+        }
+        requestBody = String(init.body);
         return new Response(JSON.stringify(succeeded ? config : { error: "保存失败" }), {
           status: succeeded ? 200 : 503,
         });
@@ -94,6 +113,7 @@ it.each([true, false])(
       fireEvent.change(screen.getByPlaceholderText("已配置，留空则不修改"), {
         target: { value: "private-submitted-token" },
       });
+      await waitFor(() => expect(screen.getByRole("button", { name: "保存并重算" })).toBeEnabled());
       fireEvent.click(screen.getByRole("button", { name: "保存并重算" }));
       await waitFor(() => expect(requestBody).toContain("private-submitted-token"));
       await waitFor(() => expect(client.isMutating()).toBe(0));
@@ -127,7 +147,19 @@ it("切换上游后旧保存响应仅更新原上游且保留当前编辑器", a
   let finishRequest: ((value: Response) => void) | undefined;
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/policy/upstream-concurrency/")) {
+        return Response.json({
+          revision: "v1",
+          target_id: "up_example",
+          upstream_id: "up_example",
+          override: null,
+          selected: false,
+          effective: false,
+          global_enabled: false,
+          source: "policy",
+        });
+      }
       if (init?.method === "PUT")
         return new Promise<Response>((resolve) => {
           finishRequest = resolve;
@@ -143,6 +175,7 @@ it("切换上游后旧保存响应仅更新原上游且保留当前编辑器", a
   );
   const view = render(editor(first.host));
   try {
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存并重算" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "保存并重算" }));
     await waitFor(() => expect(finishRequest).toBeDefined());
     view.rerender(editor(second.host));

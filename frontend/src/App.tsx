@@ -1,3 +1,9 @@
+import { AbnormalCleanupCard } from "./features/policy/components/abnormal-cleanup-card";
+import { abnormalCleanupSchema } from "./features/policy/lib/abnormal-cleanup-schema";
+import {
+  allocationOverrides,
+  validAllocationOverrides,
+} from "./features/policy/components/upstream-allocation-overrides";
 import { AccountTrafficProvider } from "@/features/accounts/components/account-traffic";
 import { PlatformSettingsPage } from "@/features/config/components/platform-settings-page";
 import {
@@ -1804,6 +1810,8 @@ function policyAdvancedDraft(value: Record<string, unknown>): Record<string, unk
   return draft;
 }
 export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
+  if (!abnormalCleanupSchema.safeParse(value.advanced_policy.abnormal_cleanup ?? {}).success)
+    return null;
   const pauseWindow = policyAdvancedValue(value, "probe", "pause_window");
   if (pauseWindow !== undefined && !probePauseWindowSchema.safeParse(pauseWindow).success)
     return null;
@@ -1827,6 +1835,17 @@ export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
   const accountRateBatchPercent = policyAdvancedValue(value, "account_rate_sync", "batch_percent");
   const upstreamConcurrencyEnabled = policyAdvancedValue(value, "upstream_concurrency", "enabled");
   if (upstreamConcurrencyEnabled !== undefined && typeof upstreamConcurrencyEnabled !== "boolean")
+    return null;
+  if (
+    !validAllocationOverrides(
+      policyAdvancedValue(value, "upstream_concurrency", "account_overrides"),
+      true,
+    ) ||
+    !validAllocationOverrides(
+      policyAdvancedValue(value, "upstream_concurrency", "upstream_overrides"),
+      false,
+    )
+  )
     return null;
   const allocationMode = policyAdvancedValue(value, "upstream_concurrency", "account_mode");
   if (
@@ -6683,6 +6702,7 @@ export function OnboardingPage() {
           ).map(String),
           concurrency: allocation.items[index]!.concurrency ?? preview.concurrency,
           waitingForCapacity: allocation.items[index]!.waiting_for_capacity ?? false,
+          allocationOverride: confirmation.requests[index]!.allocation_override,
         })),
       });
     } catch (error) {
@@ -8148,7 +8168,11 @@ export function OnboardingPage() {
                         <Input
                           id={`${fieldID}-concurrency`}
                           {...form.register("concurrency")}
-                          placeholder="自动平分剩余额度"
+                          placeholder={
+                            preparedData?.upstream.upstream_type.toLowerCase() === "sub2api"
+                              ? "自动平分剩余额度"
+                              : "使用账号默认并发"
+                          }
                           disabled={!selectedGroupId || concurrencyPreview.isPending}
                           type="number"
                           min={1}
@@ -8219,7 +8243,11 @@ export function OnboardingPage() {
                           <Input
                             id={`${fieldID}-concurrency`}
                             {...form.register("concurrency")}
-                            placeholder="自动平分剩余额度"
+                            placeholder={
+                              preparedData?.upstream.upstream_type.toLowerCase() === "sub2api"
+                                ? "自动平分剩余额度"
+                                : "使用账号默认并发"
+                            }
                             disabled={onboardingPending}
                             type="number"
                             min={1}
@@ -10552,6 +10580,7 @@ export function mergeAutoInspectionDraft(
 }
 
 const autoInspectionOperationLabels: Record<string, string> = {
+  management_sync: "管理端账号与分组同步",
   upstream_sync: "上游数据同步",
   upstream_rate_sync: "上游数据同步",
   auth_recovery: "鉴权自动恢复",
@@ -10913,6 +10942,7 @@ function inspectionUpstreamSyncSummary(
 }
 
 const autoInspectionOperationDescriptions: Record<string, string> = {
+  management_sync: "每次心跳先同步管理端账号与分组；同步失败则停止本轮巡检。",
   upstream_sync: "同步上游分组目录和该上游全部账号共享的余额。",
   upstream_rate_sync: "同步上游分组目录和该上游全部账号共享的余额。",
   account_rate_sync: "将上游最新倍率同步到绑定账号，并按新倍率更新账号名称。",
@@ -11121,6 +11151,15 @@ function AutoInspectionLiveTaskQueue(props: { task?: Task; loading?: boolean }) 
 }
 
 function inspectionOperationDetail(operation: string, task?: Task): string {
+  if (operation === "management_sync") {
+    const sync = inspectionTaskResultObject(task, "management_sync");
+    if (sync) {
+      const accounts = inspectionResultCount(sync, "accounts");
+      const groups = inspectionResultCount(sync, "groups");
+      if (accounts !== null && groups !== null)
+        return `已同步 ${accounts} 个账号、${groups} 个分组`;
+    }
+  }
   if (operation === "account_rate_sync") {
     const accountRates = inspectionTaskResultObject(task, "account_rate_sync");
     if (accountRates) {
@@ -12319,7 +12358,10 @@ export function PolicyPage() {
     allocationScope !== null &&
     typeof allocationScope === "object" &&
     !Array.isArray(allocationScope) &&
-    (allocationScope as Record<string, unknown>).account_mode === "selected";
+    ((allocationScope as Record<string, unknown>).account_mode === "selected" ||
+      Object.keys(
+        allocationOverrides((allocationScope as Record<string, unknown>).account_overrides),
+      ).length > 0);
   const accounts = useQuery({
     queryKey: ["accounts"],
     queryFn: api.accounts,
@@ -12329,7 +12371,10 @@ export function PolicyPage() {
     allocationScope !== null &&
     typeof allocationScope === "object" &&
     !Array.isArray(allocationScope) &&
-    (allocationScope as Record<string, unknown>).account_mode === "upstreams";
+    ((allocationScope as Record<string, unknown>).account_mode === "upstreams" ||
+      Object.keys(
+        allocationOverrides((allocationScope as Record<string, unknown>).upstream_overrides),
+      ).length > 0);
   const allocationUpstreams = useQuery({
     queryKey: ["upstreams"],
     queryFn: api.upstreams,
@@ -12343,6 +12388,7 @@ export function PolicyPage() {
     mutationFn: (payload: PolicyUpdatePayload) => api.updatePolicy(payload),
     onSuccess: (value) => {
       queryClient.setQueryData(["policy"], value);
+      void queryClient.invalidateQueries({ queryKey: ["upstream-allocation"] });
       setDraft(null);
       setSaveAttempted(false);
       void Promise.all([
@@ -12402,13 +12448,19 @@ export function PolicyPage() {
       ...policySettingsPayload(update),
       expected_revision: draft === null ? latest?.revision : draftRevision,
     };
+    const abnormalCleanup = update.advanced_policy?.abnormal_cleanup;
+    const abnormalConfig = abnormalCleanupSchema.safeParse(abnormalCleanup ?? {});
+    const abnormalDelete =
+      abnormalConfig.success &&
+      abnormalConfig.data.enabled === true &&
+      abnormalConfig.data.action === "delete";
     const cleanup = update.advanced_policy?.cleanup;
     const cleanupConfig =
       cleanup !== null && typeof cleanup === "object" && !Array.isArray(cleanup)
         ? (cleanup as Record<string, unknown>)
         : null;
     const destructiveCleanup = cleanupConfig?.enabled === true && cleanupConfig.action === "delete";
-    if (destructiveCleanup) {
+    if (destructiveCleanup || abnormalDelete) {
       setPendingPolicySave(savePayload);
       setDangerousSaveOpen(true);
       return;
@@ -12679,7 +12731,8 @@ export function PolicyPage() {
           <DialogHeader>
             <DialogTitle>确认启用自动删除</DialogTitle>
             <DialogDescription>
-              认证失效达到条件后将先摘除流量，再从 Sub2API 删除账号。删除后无法由 Console 重建。
+              已启用的自动删除规则达到条件后，将先摘除流量，再从 Sub2API
+              删除受管账号。人工保护与分组保底仍生效；删除后无法由 Console 重建。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -13313,6 +13366,12 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
         </PolicyConfigCard>
       ) : null}
       {props.section === "health" ? (
+        <AbnormalCleanupCard
+          value={(key) => policyAdvancedValue(props.value, "abnormal_cleanup", key)}
+          onChange={(key, value) => set("abnormal_cleanup", key, value)}
+        />
+      ) : null}
+      {props.section === "health" ? (
         <PolicyConfigCard
           title="认证失效自动处置"
           description="账号反复出现认证失效时自动暂停、停用或删除；默认关闭。"
@@ -13408,6 +13467,18 @@ export function PolicyOperationsEditor(props: PolicyOperationsEditorProps) {
       ) : null}
       {props.section === "routing" ? (
         <UpstreamConcurrencyPolicyCard
+          accountOverrides={allocationOverrides(
+            policyAdvancedValue(props.value, "upstream_concurrency", "account_overrides"),
+          )}
+          upstreamOverrides={allocationOverrides(
+            policyAdvancedValue(props.value, "upstream_concurrency", "upstream_overrides"),
+          )}
+          onAccountOverridesChange={(value) =>
+            set("upstream_concurrency", "account_overrides", value)
+          }
+          onUpstreamOverridesChange={(value) =>
+            set("upstream_concurrency", "upstream_overrides", value)
+          }
           enabled={policyAdvancedValue(props.value, "upstream_concurrency", "enabled") === true}
           onEnabledChange={(value) => set("upstream_concurrency", "enabled", value)}
           accountMode={upstreamConcurrencyMode(

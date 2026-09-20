@@ -67,7 +67,17 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var ignoredAccounts map[string]struct{}
 	if balanceHost == "" {
+		ignoredAccounts, err = s.costWallIgnoredAccounts(ctx, tx)
+		if err != nil {
+			return AlertEvidenceResult{}, err
+		}
+		for accountID := range ignoredAccounts {
+			if err := closeAccountCostTrafficAlerts(ctx, tx, accountID, now); err != nil {
+				return AlertEvidenceResult{}, err
+			}
+		}
 		if err := closeLegacyCapacityWaitAlerts(ctx, tx, now); err != nil {
 			return AlertEvidenceResult{}, err
 		}
@@ -78,6 +88,9 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 	current := make(map[string]struct{}, len(findings))
 	currentScopes := make(map[string]struct{}, len(findings))
 	for _, finding := range findings {
+		if finding.eventType == "account.cost_traffic" && containsControlID(ignoredAccounts, finding.objectID) {
+			continue
+		}
 		current[finding.key] = struct{}{}
 		currentScopes[alertIncidentScope(finding.key, finding.eventType, finding.objectKind, finding.objectID)] = struct{}{}
 		var previous sql.NullString
@@ -173,7 +186,7 @@ func (s *Store) evaluateAlertIncidents(ctx context.Context, balanceHost string) 
 	if err := tx.Commit(); err != nil {
 		return AlertEvidenceResult{}, err
 	}
-	return AlertEvidenceResult{Findings: len(findings)}, nil
+	return AlertEvidenceResult{Findings: len(current)}, nil
 }
 
 func alertIncidentScope(incidentKey, eventType, objectKind, objectID string) string {
@@ -411,7 +424,10 @@ type routingAlertGroup struct {
 }
 
 func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([]alertFinding, map[string]string, error) {
-	findings := []alertFinding{}
+	findings, manualFused, err := s.manualFuseAlertFindings(ctx, policy.RoutingBreakerEnabled)
+	if err != nil {
+		return nil, nil, err
+	}
 	groups := map[string]*routingAlertGroup{}
 	epoch, err := s.routingDecisionEpoch(ctx)
 	if err != nil {
@@ -445,10 +461,14 @@ func (s *Store) routingAlertFindings(ctx context.Context, policy AlertPolicy) ([
 			groups[groupName] = group
 		}
 		group.total++
-		if schedulable.Valid && schedulable.Int64 == 1 {
+		_, manuallyFused := manualFused[accountID]
+		if schedulable.Valid && schedulable.Int64 == 1 && !manuallyFused {
 			group.schedulable++
 		}
-		group.hasSurvivor = group.hasSurvivor || state == "survivor"
+		group.hasSurvivor = group.hasSurvivor || (state == "survivor" && !manuallyFused)
+		if manuallyFused {
+			continue
+		}
 		if _, found := accountFindings[accountID]; found {
 			continue
 		}

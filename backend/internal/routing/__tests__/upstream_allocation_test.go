@@ -238,7 +238,7 @@ func TestSharedAllocationReleasesOnlyConfirmedManagedCostPause(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := result.AccountTargets["41"]
-			wantActive := scenario == "confirmed"
+			wantActive := scenario == "confirmed" || scenario == "fused"
 			if target.Schedulable == nil || *target.Schedulable != wantActive {
 				t.Fatalf("capacity release must require confirmed managed cost stop: %+v", target)
 			}

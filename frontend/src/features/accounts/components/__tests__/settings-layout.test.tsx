@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it } from "vitest";
 
@@ -60,11 +60,17 @@ it("内容超过弹窗高度时由内容区滚动，操作区保持在滚动区�
   expect(body).not.toContainElement(screen.getByRole("button", { name: "取消" }));
 });
 
-it("账号管控使用紧凑的48px开关行，分区之间保持16px留白", () => {
+it("账号管控与保存后生效的独立策略分区展示，并保留紧凑开关行", () => {
   renderSettings();
   const control = screen.getByRole("region", { name: "账号管控" });
-  expect(control).toHaveClass("gap-3", "pt-4");
-  expect(control.closest("form")).toHaveClass("gap-4");
+  expect(control).toHaveClass("gap-3");
+  const independent = screen.getByRole("region", { name: "独立策略" });
+  expect(independent).toHaveTextContent("修改后点击保存生效");
+  expect(
+    within(independent).getByRole("switch", { name: "无视成本墙" }),
+  ).toHaveAccessibleDescription(/停止无利润／亏损流量告警/);
+  expect(within(control).queryByRole("switch", { name: "无视成本墙" })).not.toBeInTheDocument();
+  expect(control.closest("form")).toHaveClass("gap-5", "md:grid-cols-2");
   expect(screen.getByRole("region", { name: "探测模型" })).toHaveClass("gap-3", "pt-4");
   for (const label of ["暂停调度", "排除该账号", "无视成本墙"]) {
     const row = screen

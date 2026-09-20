@@ -33,6 +33,11 @@ func AccountPayload(item InputItem, template *Template) (map[string]any, error) 
 		return nil, err
 	}
 	delete(body, "credential_extras")
+	if template != nil {
+		// Explicit empty maps also clear old settings on an existing managed account.
+		credentials["model_mapping"] = map[string]any{}
+		credentials["compact_model_mapping"] = map[string]any{}
+	}
 	maps.Copy(credentials, rawConfigMap(config.CredentialExtras))
 	body["credentials"] = credentials
 	body["platform"] = "openai"

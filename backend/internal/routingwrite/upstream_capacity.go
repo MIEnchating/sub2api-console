@@ -44,6 +44,7 @@ type upstreamCapacityPlan struct {
 	reductions  map[string]business.AccountRoutingTarget
 	repository  Repository
 	globalLimit *int64
+	constrained map[string]bool
 }
 
 func prepareUpstreamCapacity(ctx context.Context, repository Repository, targets map[string]business.AccountRoutingTarget, policy writePolicy, document map[string]any) (*upstreamCapacityPlan, []string, error) {
@@ -91,8 +92,21 @@ func prepareUpstreamCapacity(ctx context.Context, repository Repository, targets
 			plan.reductions[id] = target
 		}
 	}
+	constrained, err := upstreamConstrainedAccounts(ctx, repository, document, inventory)
+	if err != nil {
+		return nil, nil, err
+	}
+	hasConstrainedTarget := false
+	for id := range potential {
+		hasConstrainedTarget = hasConstrainedTarget || constrained[id]
+	}
+	if !hasConstrainedTarget {
+		globalLimit = nil
+		plan.globalLimit = nil
+	}
+	plan.constrained = constrained
 	for _, account := range inventory {
-		if potential[account.ID] && account.UpstreamType != nil && strings.EqualFold(*account.UpstreamType, "sub2api") && account.UpstreamID != "" {
+		if constrained[account.ID] && potential[account.ID] && account.UpstreamType != nil && strings.EqualFold(*account.UpstreamType, "sub2api") && account.UpstreamID != "" {
 			plan.pools[account.UpstreamID] = true
 		}
 	}
@@ -128,17 +142,18 @@ type upstreamCapacityPool struct {
 }
 
 type upstreamCapacityGuard struct {
-	ctx              context.Context
-	admin            Admin
-	members          map[string]string
-	pools            map[string]*upstreamCapacityPool
-	remote           map[string]values
-	once             sync.Once
-	mu               sync.Mutex
-	reductionAllowed map[string]bool
-	global           *globalCapacityBudget
-	released         map[string]bool
-	costReleased     map[string]bool
+	ctx                 context.Context
+	admin               Admin
+	members             map[string]string
+	pools               map[string]*upstreamCapacityPool
+	remote              map[string]values
+	once                sync.Once
+	mu                  sync.Mutex
+	reductionAllowed    map[string]bool
+	global              *globalCapacityBudget
+	released            map[string]bool
+	managedStopReleased map[string]bool
+	constrained         map[string]bool
 }
 
 func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, document map[string]any) (*upstreamCapacityGuard, error) {
@@ -152,7 +167,17 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 	if err != nil {
 		return nil, fmt.Errorf("取得变更租约后共享并发库存读取失败，请重试：%w", err)
 	}
-	guard := &upstreamCapacityGuard{costReleased: map[string]bool{}, ctx: ctx, admin: admin, members: map[string]string{}, pools: map[string]*upstreamCapacityPool{}, remote: map[string]values{}, reductionAllowed: map[string]bool{}, released: map[string]bool{}}
+	constrained, err := upstreamConstrainedAccounts(ctx, plan.repository, document, inventory)
+	if err != nil {
+		return nil, err
+	}
+	for id, enabled := range plan.constrained {
+		if constrained[id] != enabled {
+			return nil, errors.New("等待写回期间账号共享并发范围已变化，请重新计算调度")
+		}
+	}
+	guard := &upstreamCapacityGuard{managedStopReleased: map[string]bool{}, ctx: ctx, admin: admin, members: map[string]string{}, pools: map[string]*upstreamCapacityPool{}, remote: map[string]values{}, reductionAllowed: map[string]bool{}, released: map[string]bool{}}
+	guard.constrained = constrained
 	if plan.globalLimit != nil {
 		guard.global = newGlobalCapacityBudget(*plan.globalLimit, inventory)
 	}
@@ -164,7 +189,10 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 			return nil, errors.New("等待写回期间上游关联账号已变化，请重新计算调度")
 		}
 		guard.members[account.ID] = account.UpstreamID
-		guard.released[account.ID] = strings.EqualFold(strings.TrimSpace(account.EffectiveState), business.AccountStateConcurrencyLimited) && account.Schedulable != nil && !*account.Schedulable
+		if guard.global != nil && !constrained[account.ID] {
+			guard.global.released[account.ID] = false
+		}
+		guard.released[account.ID] = constrained[account.ID] && strings.EqualFold(strings.TrimSpace(account.EffectiveState), business.AccountStateConcurrencyLimited) && account.Schedulable != nil && !*account.Schedulable
 		if !plan.pools[account.UpstreamID] {
 			continue
 		}
@@ -190,25 +218,29 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 	if len(guard.members) != len(plan.members) {
 		return nil, errors.New("等待写回期间上游关联账号已变化，请重新计算调度")
 	}
-	if len(plan.reductions) > 0 {
+	if len(guard.members) > 0 {
 		reader, ok := plan.repository.(interface {
 			RoutingAccounts(context.Context, *string, *string) ([]business.RoutingAccount, error)
 		})
 		if !ok {
-			return nil, errors.New("账号托管范围不可复核，不能执行上游并发下调")
+			if len(plan.reductions) > 0 {
+				return nil, errors.New("账号托管范围不可复核，不能执行上游并发下调")
+			}
+			return guard, nil
 		}
 		accounts, err := reader.RoutingAccounts(ctx, nil, nil)
 		if err != nil {
 			return nil, err
 		}
+		stops, err := routing.UpstreamManagedStopScope(document, accounts)
+		if err != nil {
+			return nil, err
+		}
 		for _, account := range accounts {
-			if _, member := guard.members[account.ID]; member {
-				released, err := routing.UpstreamCostPauseReleasesCapacity(document, account)
-				if err != nil {
-					return nil, err
-				}
+			if _, member := guard.members[account.ID]; member && constrained[account.ID] {
+				released := stops[account.ID]
 				if released {
-					guard.costReleased[account.ID] = true
+					guard.managedStopReleased[account.ID] = true
 					if guard.global != nil {
 						guard.global.released[account.ID] = true
 					}
@@ -238,11 +270,11 @@ func (plan *upstreamCapacityPlan) recheck(ctx context.Context, admin Admin, docu
 }
 
 func (guard *upstreamCapacityGuard) reserve(accountID string, current values, desired map[string]any) error {
-	if guard == nil {
+	if guard == nil || !guard.constrained[accountID] {
 		return nil
 	}
 	pool := guard.pools[guard.members[accountID]]
-	checkUpstream := pool != nil && (pool.unknown || pool.stale || pool.limit == nil || *pool.limit != 0)
+	checkUpstream := guard.constrained[accountID] && pool != nil && (pool.unknown || pool.stale || pool.limit == nil || *pool.limit != 0)
 	if !checkUpstream && guard.global == nil {
 		return nil
 	}
@@ -391,7 +423,7 @@ func (guard *upstreamCapacityGuard) loadRemoteCapacity() {
 		} else {
 			pool.reductionErr = err
 		}
-		capacity, known := capacityReservation(remote, guard.released[id] || guard.costReleased[id])
+		capacity, known := capacityReservation(remote, guard.released[id] || guard.managedStopReleased[id])
 		if err == nil && !known {
 			err = fmt.Errorf("远端账号 %s 未返回可核对的调度状态与并发", id)
 		}
@@ -424,4 +456,32 @@ func capacityAccountID(value any) string {
 		return ""
 	}
 	return id
+}
+
+// Read memberships only when group scaling overrides can affect the budget.
+// Inventory still includes out-of-scope peers so their capacity is reserved.
+func upstreamConstrainedAccounts(ctx context.Context, repository Repository, document map[string]any, inventory []business.RoutingAccount) (map[string]bool, error) {
+	accounts := inventory
+	if routing.GlobalScalingEnabled(document) {
+		if reader, ok := repository.(interface {
+			RoutingAccounts(context.Context, *string, *string) ([]business.RoutingAccount, error)
+		}); ok {
+			members, err := reader.RoutingAccounts(ctx, nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			// Group memberships replace the group-less inventory rows.
+			grouped := map[string]bool{}
+			for _, account := range members {
+				grouped[account.ID] = true
+			}
+			accounts = append([]business.RoutingAccount{}, members...)
+			for _, account := range inventory {
+				if !grouped[account.ID] {
+					accounts = append(accounts, account)
+				}
+			}
+		}
+	}
+	return routing.UpstreamCapacityScope(document, accounts)
 }

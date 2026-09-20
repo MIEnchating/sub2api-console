@@ -31,6 +31,10 @@ func (s *Service) prepareOAuthTarget(ctx context.Context, accounts []selectedAcc
 }
 
 func (s *Service) resolveOAuthAccountCredential(ctx context.Context, account selectedAccount) (*oauthCredential, error) {
+	return s.resolveOAuthCredential(ctx, account, false)
+}
+
+func (s *Service) resolveOAuthCredential(ctx context.Context, account selectedAccount, allowPreview bool) (*oauthCredential, error) {
 	if !strings.EqualFold(account.Platform, "openai") {
 		return nil, errors.New("当前仅支持 OpenAI OAuth 账号的行为检测，请选择 OpenAI 账号")
 	}
@@ -56,10 +60,14 @@ func (s *Service) resolveOAuthAccountCredential(ctx context.Context, account sel
 	if stringField(remote, "type") != "oauth" || stringField(remote, "platform") != "openai" {
 		return nil, errors.New("账号类型或平台已变化，请刷新账号后重新检测")
 	}
+	credentials, _ := remote["credentials"].(map[string]any)
+	status, _ := remote["credentials_status"].(map[string]any)
+	if allowPreview && stringField(credentials, "access_token") == "" && status["has_access_token"] == true {
+		return &oauthCredential{previewClient: client}, nil
+	}
 	if proxyID := remote["proxy_id"]; proxyID != nil && proxyID != "" {
 		return nil, errors.New("OAuth 账号配置了出站代理，当前直连检测无法使用该代理，请在账号工作台使用显式检测代理")
 	}
-	credentials, _ := remote["credentials"].(map[string]any)
 	credential, err := parseOAuthCredential(credentials)
 	if err != nil {
 		return nil, err

@@ -46,6 +46,16 @@ test.beforeEach(async ({ page, colorScheme }) => {
     const path = new URL(route.request().url()).pathname;
     const fixtures: Record<string, unknown> = {
       ...pageFixtures,
+      "/api/policy/upstream-concurrency/upstreams/mobile-layout": {
+        revision: "v1",
+        target_id: upstream.upstream_id,
+        upstream_id: upstream.upstream_id,
+        override: null,
+        selected: true,
+        effective: true,
+        global_enabled: true,
+        source: "policy",
+      },
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "移动端布局回归" },
       "/api/dictionaries": { items: [] },
@@ -83,6 +93,9 @@ for (const viewport of [
     const container = page.locator('[data-slot="table-container"]');
     const first = page.getByText("移动分组 1", { exact: true });
     await expect(first).toBeVisible();
+    await expect(page.getByRole("region", { name: "并发分配设置", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("switch", { name: "上游共享并发分配" })).toHaveCount(0);
+    await expect(page.getByRole("combobox", { name: "本次新账号共享并发分配" })).toHaveCount(0);
     // 表头和至少一条完整分组行必须有可用高度，不能只剩分页栏。
     await expect
       .poll(() => container.evaluate((element) => element.clientHeight))

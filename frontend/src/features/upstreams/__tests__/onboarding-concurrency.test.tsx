@@ -112,3 +112,62 @@ it.each([true, false])(
     );
   },
 );
+
+it.each([
+  ["sub2api", true],
+  ["sub2api", false],
+  ["newapi", true],
+  ["newapi", false],
+] as const)(
+  "%s 直达分组=%s 时不显示或读取共享分配设置，新增账号默认继承策略",
+  async (upstreamType, directGroup) => {
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    const preview = vi
+      .spyOn(api, "previewOnboardingConcurrency")
+      .mockResolvedValue({ items: [{ concurrency: 10 }] });
+    const submit = vi.spyOn(api, "onboard").mockRejectedValue(new Error("isolated submission"));
+    const batch = vi.spyOn(api, "onboardBatch").mockRejectedValue(new Error("isolated submission"));
+    client = renderOnboarding(
+      { ...boundCandidate("active"), bound: false, bound_accounts: [], can_create_key: true },
+      directGroup,
+      undefined,
+      { upstreamType },
+    );
+    const concurrency = await screen.findByRole("spinbutton", { name: "并发" });
+    expect(concurrency).toHaveAttribute(
+      "placeholder",
+      upstreamType === "sub2api" ? "自动平分剩余额度" : "使用账号默认并发",
+    );
+    expect(screen.queryByRole("switch", { name: "上游共享并发分配" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "本次新账号共享并发分配" }),
+    ).not.toBeInTheDocument();
+    expect(api.upstreamAllocationSetting).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("combobox", { name: "已有绑定分组 本地分组" }));
+    fireEvent.click(await screen.findByRole("option", { name: /备用分组/ }));
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "已有绑定分组 本地分组" }), {
+      key: "Escape",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: directGroup ? "预览添加账号" : "预览 1 项变更" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "确认账号绑定变更" });
+    expect(preview.mock.calls[0]?.[0][0]).toMatchObject({
+      upstream_type: upstreamType,
+    });
+    expect(preview.mock.calls[0]?.[0][0]?.allocation_override).toBeUndefined();
+    expect(within(dialog).queryByText("等待并发额度")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认提交 1 项变更" }));
+    const expectedRequest = expect.objectContaining({
+      upstream_type: upstreamType,
+      concurrency: 10,
+      waiting_for_capacity: undefined,
+    });
+    await waitFor(() => {
+      if (directGroup) expect(submit).toHaveBeenCalledWith(expectedRequest);
+      else expect(batch).toHaveBeenCalledWith([expectedRequest]);
+    });
+    const submittedRequest = directGroup ? submit.mock.calls[0]?.[0] : batch.mock.calls[0]?.[0][0];
+    expect(submittedRequest?.allocation_override).toBeUndefined();
+  },
+);

@@ -21,7 +21,7 @@ func UpstreamReductionAllowed(document map[string]any, account business.RoutingA
 	allowed, _ := eligibleScope(account, config)
 	_, policyPaused := config.pausedAccounts[account.ID]
 	_, manualFused := config.manualFusedAccounts[account.ID]
-	return enabled && config.upstreamAllocationEnabledFor(account) && allowed && accountMetadataManaged(account, config) &&
+	return enabled && !config.scalingEnabled && config.upstreamAllocationEnabledFor(account) && allowed && accountMetadataManaged(account, config) &&
 		!account.Paused && !policyPaused && !manualFused && account.ManualPriority == nil && (config.manageAllAccounts || !account.ExternalControl && !accountExternallyModified(account)) &&
 		account.Schedulable != nil && *account.Schedulable, nil
 }
@@ -48,7 +48,7 @@ func (pool *upstreamScalingPool) reduceOverage(primary map[string]*candidate, co
 	selected := map[string]bool{}
 	for id := range pool.accounts {
 		item := primary[id]
-		if item == nil || !configs[item.account.GroupName].upstreamAllocationEnabledFor(item.account) || sub2APIUpstreamID(item.account) != pool.id ||
+		if item == nil || configs[item.account.GroupName].scalingEnabled || !configs[item.account.GroupName].upstreamAllocationEnabledFor(item.account) || sub2APIUpstreamID(item.account) != pool.id ||
 			!item.schedulable || !placementLoadFactorEligible(item) || item.account.Paused ||
 			item.account.ManualPriority != nil || item.account.Schedulable == nil || !*item.account.Schedulable || item.account.Concurrency == nil {
 			continue

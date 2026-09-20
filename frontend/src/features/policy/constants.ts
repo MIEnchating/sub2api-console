@@ -39,12 +39,12 @@ export const upstreamConcurrencyPolicyLabels = {
   accounts: "参与共享并发分配的账号",
   upstreams: "参与共享并发分配的上游",
   upstreamScope:
-    "所选上游下现有及新添加的符合条件的 Sub2API 账号自动参与分配。未选上游不参与本功能；智能扩容仍按其设置执行。",
-  emptyUpstreamScope: "尚未选择上游，此功能不会自动调整任何账号。",
-  allScope: "现有及新添加的符合条件的 Sub2API 账号自动参与分配。",
+    "基础范围包括所选上游下现有及新添加的符合条件的 Sub2API 账号；账号和上游的单独设置优先。智能扩容仍按其设置执行。",
+  emptyUpstreamScope: "尚未选择上游，基础范围为空；已有单独设置仍按其配置生效。",
+  allScope: "基础范围包括现有及新添加的符合条件的 Sub2API 账号；单独关闭的账号或上游除外。",
   selectedScope:
-    "仅所选账号参与本功能，新添加账号需手动勾选。未选账号保留现有并发占用；智能扩容仍按其设置执行。",
-  emptyScope: "尚未选择账号，此功能不会自动调整任何账号。",
+    "基础范围仅包括所选账号，新添加账号默认不在此列表内；账号和上游的单独设置优先。范围外账号保留容量，智能扩容仍按其设置执行。",
+  emptyScope: "尚未选择账号，基础范围为空；已有单独设置仍按其配置生效。",
   title: "上游共享并发分配",
   toggle: "启用上游共享并发分配",
   description:
@@ -61,3 +61,13 @@ export function upstreamConcurrencyMode(value: unknown): UpstreamConcurrencyMode
   if (value === "selected" || value === "upstreams") return value;
   return "all";
 }
+
+export const allocationSettingLabels = {
+  title: "上游共享并发分配",
+  loading: "正在读取共享并发设置",
+  refresh: "请读取共享并发设置后重试",
+  masterOff: "请先在调度策略中启用上游共享并发分配。",
+  accountHelp: "默认采用上游及调度策略设置，修改后点击保存生效。健康、手动控制和容量保护继续生效。",
+  upstreamHelp:
+    "修改后点击保存生效，影响此上游现有及新添加的账号；账号单独设置优先。开启后按上游共享额度分配，智能扩容开启时同时遵守其配置。",
+} as const;

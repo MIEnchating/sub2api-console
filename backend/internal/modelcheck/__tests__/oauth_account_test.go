@@ -28,7 +28,7 @@ func (s *oauthAccountStore) UpstreamKeySecret(context.Context, string, string, s
 	return nil, errors.New("OAuth tasks must not read API Key bindings")
 }
 
-func oauthAccountFixture(t *testing.T, accountJSON string) (*fixture, *oauthAccountStore) {
+func oauthAccountFixture(t *testing.T, accountJSON string, preview ...http.HandlerFunc) (*fixture, *oauthAccountStore) {
 	t.Helper()
 	f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) {
 		t.Error("OAuth account must not use its configured Base URL")
@@ -38,6 +38,10 @@ func oauthAccountFixture(t *testing.T, accountJSON string) (*fixture, *oauthAcco
 	f.catalog.details["1"].AccountType = &accountType
 	f.catalog.details["1"].Bindings = nil
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(preview) > 0 && r.Method == http.MethodPost && r.URL.Path == "/api/v1/admin/accounts/1/generate-preview" {
+			preview[0](w, r)
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/admin/accounts/1" {
 			t.Errorf("unexpected management request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)

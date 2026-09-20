@@ -416,6 +416,10 @@ func pointerTextValue(value *string) string {
 }
 
 func incidentUsesStateChangeCooldown(incident AlertIncident) bool {
+	if incident.EventType == "account.routing_breaker" &&
+		(incident.CauseCode == "MANUAL_FUSE" || incident.CauseCode == "ROUTING_BREAKER:人工熔断") {
+		return false
+	}
 	return incident.EventType == "account.routing_degraded" || incident.EventType == "account.routing_breaker"
 }
 
@@ -645,8 +649,13 @@ func (s *Store) deliveryIncidents(ctx context.Context) ([]AlertIncident, error) 
 
 func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string) ([]AlertIncident, error) {
 	var policyDeferrals map[string]struct{}
+	var ignoredAccounts map[string]struct{}
 	if balanceHost == "" {
 		var err error
+		ignoredAccounts, err = s.costWallIgnoredAccounts(ctx, s.db)
+		if err != nil {
+			return nil, err
+		}
 		policyDeferrals, err = legacyPolicyChangeAlertKeys(ctx, s.db)
 		if err != nil {
 			return nil, err
@@ -678,6 +687,9 @@ func (s *Store) scopedDeliveryIncidents(ctx context.Context, balanceHost string)
 			return nil, err
 		}
 		if legacyCapacityWaitAlert(item.EventType, item.CauseCode) {
+			continue
+		}
+		if item.EventType == "account.cost_traffic" && containsControlID(ignoredAccounts, item.ObjectID) {
 			continue
 		}
 		if _, deferred := policyDeferrals[item.IncidentKey]; deferred {

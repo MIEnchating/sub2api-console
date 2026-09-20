@@ -79,8 +79,8 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   });
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (/^\/api\/accounts\/\d+\/models$/.test(path)) {
-      if (path === "/api/accounts/41/models") await modelsReady;
+    if (/^\/api\/model-checks\/animations\/accounts\/\d+\/models$/.test(path)) {
+      if (path === "/api/model-checks/animations/accounts/41/models") await modelsReady;
       await route.fulfill({ json: { models: [] } });
       return;
     }

@@ -11,8 +11,14 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
+
+type creationCapacitySnapshot struct {
+	business.OnboardingCapacity
+	released map[string]bool
+}
 
 type ConcurrencyAllocation struct {
 	Concurrency        *int64 `json:"concurrency"`
@@ -28,7 +34,8 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 	}
 	result := make([]ConcurrencyAllocation, len(requests))
 	pools := map[string][]int{}
-	snapshots := map[string]business.OnboardingCapacity{}
+	snapshots := map[string]creationCapacitySnapshot{}
+	outsideReservations := map[string]int64{}
 	for i, request := range requests {
 		validated, err := s.validate(ctx, request)
 		if err != nil {
@@ -46,6 +53,19 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 				return nil, err
 			}
 			result[i].Concurrency = &value
+			continue
+		}
+		enabled, err := s.creationSharedCapacityEnabled(ctx, validated)
+		if err != nil {
+			return nil, err
+		}
+		if !enabled {
+			value, err := s.defaultCreationConcurrency(ctx, validated)
+			if err != nil {
+				return nil, err
+			}
+			result[i].Concurrency = &value
+			outsideReservations[validated.candidate.UpstreamID] += value
 			continue
 		}
 		id := validated.candidate.UpstreamID
@@ -83,6 +103,7 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 		if err != nil {
 			return nil, err
 		}
+		remaining = max(int64(0), remaining-outsideReservations[id])
 		automatic := []int{}
 		for _, i := range indices {
 			if requests[i].Concurrency == nil {
@@ -114,7 +135,7 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 			result[i].Concurrency = &value
 		}
 	}
-	return result, nil
+	return s.applyCreationGlobalPreview(ctx, requests, result)
 }
 
 func (s *Service) defaultCreationConcurrency(ctx context.Context, validated validatedRequest) (int64, error) {
@@ -135,18 +156,38 @@ func (s *Service) defaultCreationConcurrency(ctx context.Context, validated vali
 	return defaults.Concurrency, nil
 }
 
-func (s *Service) creationCapacity(ctx context.Context, id string) (business.OnboardingCapacity, error) {
-	snapshot, err := s.repository.OnboardingCapacity(ctx, id)
+func (s *Service) creationCapacity(ctx context.Context, id string) (creationCapacitySnapshot, error) {
+	raw, err := s.repository.OnboardingCapacity(ctx, id)
+	snapshot := creationCapacitySnapshot{OnboardingCapacity: raw, released: map[string]bool{}}
 	if err != nil {
 		return snapshot, err
 	}
 	if snapshot.Limit == nil || *snapshot.Limit < 0 || (snapshot.Status != business.UpstreamConcurrencyKnown && snapshot.Status != business.UpstreamConcurrencyUnlimited) {
 		return snapshot, errors.New("上游并发上限尚未确认，请先同步上游用户信息后再添加账号")
 	}
+	document, err := s.repository.ControlPolicy(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	accounts, err := s.repository.RoutingAccounts(ctx, nil, nil)
+	if err != nil {
+		return snapshot, err
+	}
+	scope, err := routing.UpstreamCapacityScope(document, accounts)
+	if err != nil {
+		return snapshot, err
+	}
+	stops, err := routing.UpstreamManagedStopScope(document, accounts)
+	if err != nil {
+		return snapshot, err
+	}
+	for _, account := range snapshot.Accounts {
+		snapshot.released[account.ID] = scope[account.ID] && (account.EffectiveState == business.AccountStateConcurrencyLimited || stops[account.ID])
+	}
 	return snapshot, nil
 }
 
-func creationRemaining(snapshot business.OnboardingCapacity, exclude string) (int64, error) {
+func creationRemaining(snapshot creationCapacitySnapshot, exclude string) (int64, error) {
 	remaining := *snapshot.Limit
 	for _, account := range snapshot.Accounts {
 		if account.ID == exclude {
@@ -157,7 +198,7 @@ func creationRemaining(snapshot business.OnboardingCapacity, exclude string) (in
 		}
 		// Paused accounts retain their reservation, including newly created ones.
 		// Only a confirmed capacity pause has deliberately released its slots.
-		if !*account.Schedulable && account.EffectiveState == business.AccountStateConcurrencyLimited {
+		if !*account.Schedulable && snapshot.released[account.ID] {
 			continue
 		}
 		remaining = max(int64(0), remaining-*account.Concurrency)
@@ -165,11 +206,19 @@ func creationRemaining(snapshot business.OnboardingCapacity, exclude string) (in
 	return remaining, nil
 }
 
-func (s *Service) checkCreationConcurrency(ctx context.Context, validated *validatedRequest, concurrency int64, pending *business.PendingOnboarding) (int64, error) {
+func (s *Service) checkCreationUpstreamConcurrency(ctx context.Context, validated *validatedRequest, concurrency int64, pending *business.PendingOnboarding) (int64, error) {
 	if !strings.EqualFold(validated.auth.UpstreamType, "sub2api") {
 		if validated.request.WaitingForCapacity {
 			return 0, errors.New("等待并发额度仅适用于 Sub2API 上游")
 		}
+		return concurrency, nil
+	}
+	enabled, err := s.creationSharedCapacityEnabled(ctx, *validated)
+	if err != nil {
+		return 0, err
+	}
+	if !enabled {
+		validated.request.WaitingForCapacity = false
 		return concurrency, nil
 	}
 	snapshot, err := s.creationCapacity(ctx, validated.candidate.UpstreamID)
@@ -188,41 +237,8 @@ func (s *Service) checkCreationConcurrency(ctx context.Context, validated *valid
 	if pending != nil {
 		exclude = pending.UpstreamAccountID
 	}
-	// Re-read existing accounts under the global capacity lease. A manual
-	// upstream edit must not let a stale local snapshot finance a new account.
-	target, err := targetguard.Settings(ctx, s.private)
-	if err != nil {
+	if err := s.refreshCreationCapacity(ctx, &snapshot, exclude); err != nil {
 		return 0, err
-	}
-	client, err := adminclient.New(adminclient.Config{BaseURL: target.BaseURL, AdminKey: target.AdminKey, Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 1}, nil)
-	if err != nil {
-		return 0, err
-	}
-	for i := range snapshot.Accounts {
-		account := &snapshot.Accounts[i]
-		if account.ID == exclude {
-			continue
-		}
-		remote, err := client.Account(ctx, account.ID)
-		if err != nil {
-			return 0, fmt.Errorf("账号 #%s 并发复核失败，请同步账号后重试：%w", account.ID, err)
-		}
-		if textValue(remote["id"]) != account.ID {
-			return 0, errors.New("账号并发复核返回了不匹配的稳定 ID")
-		}
-		concurrencyValue, ok := remote["concurrency"]
-		if !ok {
-			return 0, errors.New("远端账号未返回并发，请同步账号后重试")
-		}
-		value, parseErr := strconv.ParseInt(textValue(concurrencyValue), 10, 64)
-		if parseErr != nil {
-			return 0, errors.New("远端账号并发无效，请同步账号后重试")
-		}
-		schedulable, ok := remote["schedulable"].(bool)
-		if !ok {
-			return 0, errors.New("远端账号未返回调度状态，请同步账号后重试")
-		}
-		account.Concurrency, account.Schedulable = &value, &schedulable
 	}
 	remaining, err := creationRemaining(snapshot, exclude)
 	if err != nil {
@@ -239,4 +255,62 @@ func (s *Service) checkCreationConcurrency(ctx context.Context, validated *valid
 		return 0, fmt.Errorf("新增账号并发 %d 超过上游剩余额度 %d（用户上限 %d）；请降低并发或先调整已有账号", concurrency, remaining, *snapshot.Limit)
 	}
 	return concurrency, nil
+}
+
+func (s *Service) creationSharedCapacityEnabled(ctx context.Context, validated validatedRequest) (bool, error) {
+	document, err := s.repository.ControlPolicy(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, group := range validated.locals {
+		enabled, err := routing.NewAccountUpstreamCapacityEnabled(document, validated.candidate.UpstreamID, group.ID, validated.request.AllocationOverride)
+		if err != nil {
+			return false, err
+		}
+		if enabled {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) refreshCreationCapacity(ctx context.Context, snapshot *creationCapacitySnapshot, exclude string) error {
+	// Re-read existing accounts under the global capacity lease. A manual
+	// upstream edit must not let a stale local snapshot finance a new account.
+	target, err := targetguard.Settings(ctx, s.private)
+	if err != nil {
+		return err
+	}
+	client, err := adminclient.New(adminclient.Config{BaseURL: target.BaseURL, AdminKey: target.AdminKey, Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 1}, nil)
+	if err != nil {
+		return err
+	}
+	for i := range snapshot.Accounts {
+		account := &snapshot.Accounts[i]
+		if account.ID == exclude {
+			continue
+		}
+		remote, err := client.Account(ctx, account.ID)
+		if err != nil {
+			return fmt.Errorf("账号 #%s 并发复核失败，请同步账号后重试：%w", account.ID, err)
+		}
+		if textValue(remote["id"]) != account.ID {
+			return errors.New("账号并发复核返回了不匹配的稳定 ID")
+		}
+		concurrencyValue, ok := remote["concurrency"]
+		if !ok {
+			return errors.New("远端账号未返回并发，请同步账号后重试")
+		}
+		value, parseErr := strconv.ParseInt(textValue(concurrencyValue), 10, 64)
+		if parseErr != nil {
+			return errors.New("远端账号并发无效，请同步账号后重试")
+		}
+		schedulable, ok := remote["schedulable"].(bool)
+		if !ok {
+			return errors.New("远端账号未返回调度状态，请同步账号后重试")
+		}
+		account.Concurrency, account.Schedulable = &value, &schedulable
+	}
+
+	return nil
 }

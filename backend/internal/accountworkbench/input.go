@@ -112,8 +112,8 @@ func (p *inputParser) add(item InputItem) {
 }
 func (p *inputParser) line(line string) {
 	for _, part := range loginSeparator.Split(line, -1) {
-		address := strings.TrimSpace(part)
-		if validEmail(address) {
+		address := loginEmail(strings.TrimSpace(part))
+		if address != "" {
 			if _, err := ParseLoginDetails(line); err != nil {
 				p.fail(err.Error())
 				return

@@ -18,20 +18,28 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { JsonEditor } from "@/components/json-editor";
 import type { WorkbenchRun, WorkbenchRunItem } from "../types";
-import { checkVerdictLabels, runStatusLabels } from "../constants";
-import { RunBrowser } from "./run-browser";
+import { runStatusLabels } from "../constants";
+import { checkError, checkLabel, completedCheck } from "../lib/check-result";
+import { RunLoginInput } from "./run-login-input";
 
 export function RunItems(props: {
   run: WorkbenchRun;
   pending: boolean;
   onEnable: (item: WorkbenchRunItem) => void;
 }): ReactElement {
-  const [browser, setBrowser] = useState<WorkbenchRunItem | null>(null);
+  const [login, setLogin] = useState<WorkbenchRunItem | null>(null);
   const [check, setCheck] = useState<WorkbenchRunItem | null>(null);
-  const liveBrowser = props.run.items.find((item) => item.id === browser?.id && item.browser_ready);
+  const liveLogin = props.run.items.find(
+    (item) => item.id === login?.id && item.login_prompt?.id === login.login_prompt?.id,
+  );
   return (
     <>
-      <Table aria-label="账号处理结果" className="min-w-[640px]" containerClassName="overflow-auto">
+      <Table
+        aria-label="账号处理结果"
+        uniformTextSize={false}
+        className="min-w-[720px]"
+        containerClassName="overflow-auto rounded-lg border"
+      >
         <TableHeader>
           <TableRow>
             {["账号", "状态", "模板 / 检测", "操作"].map((label) => (
@@ -56,47 +64,57 @@ export function RunItems(props: {
                 overflowTooltip={false}
               >
                 <Badge variant="secondary">{runStatusLabels[item.status] || "状态待确认"}</Badge>
-                <p className="mt-1 text-xs text-muted-foreground">{item.message}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {checkError(item.check) ? `检测出错：${checkError(item.check)}` : item.message}
+                </p>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
                 {item.template_name}
                 {item.check && (
-                  <p className="text-xs text-muted-foreground">
-                    {checkVerdictLabels[String(item.check.verdict)] || "待复核结论"}
-                  </p>
+                  <p className="text-xs text-muted-foreground">{checkLabel(item.check)}</p>
                 )}
               </TableCell>
               <TableCell>
                 <div className="flex flex-wrap gap-2">
-                  {item.browser_ready && <Button onClick={() => setBrowser(item)}>完成验证</Button>}
+                  {item.login_prompt && (
+                    <Button
+                      disabled={
+                        props.run.status !== "running" ||
+                        new Date(props.run.expires_at).getTime() <= Date.now()
+                      }
+                      onClick={() => setLogin(item)}
+                    >
+                      {item.login_prompt.kind === "password" ? "输入密码" : "输入验证码"}
+                    </Button>
+                  )}
                   {item.check && (
                     <Button variant="outline" onClick={() => setCheck(item)}>
                       检测详情
                     </Button>
                   )}
-                  {item.status === "review" &&
-                    item.check?.verdict === "INCONCLUSIVE" &&
-                    item.account_id && (
-                      <Button
-                        variant="outline"
-                        disabled={props.pending}
-                        onClick={() => props.onEnable(item)}
-                      >
-                        启用
-                      </Button>
-                    )}
+                  {item.status === "review" && completedCheck(item.check) && item.account_id && (
+                    <Button
+                      variant="outline"
+                      disabled={props.pending}
+                      onClick={() => props.onEnable(item)}
+                    >
+                      启用
+                    </Button>
+                  )}
                 </div>
               </TableCell>
             </TableRow>
           ))}
         </TableBody>
       </Table>
-      {liveBrowser && (
-        <RunBrowser
+      {liveLogin?.login_prompt && (
+        <RunLoginInput
           runID={props.run.id}
-          itemID={liveBrowser.id}
-          email={liveBrowser.email}
-          onClose={() => setBrowser(null)}
+          key={liveLogin.login_prompt.id}
+          prompt={liveLogin.login_prompt}
+          itemID={liveLogin.id}
+          email={liveLogin.email}
+          onClose={() => setLogin(null)}
         />
       )}
       {check && (
@@ -111,9 +129,10 @@ export function RunItems(props: {
               <DialogTitle>检测详情 · {check.email || check.name}</DialogTitle>
             </DialogHeader>
             <DialogBody>
-              <p className="mb-3 text-sm">
-                {checkVerdictLabels[String(check.check?.verdict)] || "待复核结论"}
-              </p>
+              <p className="mb-3 text-sm">{checkLabel(check.check)}</p>
+              {checkError(check.check) && (
+                <p className="mb-3 text-sm text-destructive">{checkError(check.check)}</p>
+              )}
               <JsonEditor
                 aria-label="检测报告"
                 value={JSON.stringify(check.check, null, 2)}

@@ -1,6 +1,5 @@
 import { useState, type ReactElement } from "react";
 import { PageLayout } from "@/components/page-layout";
-import { PageHeading } from "@/components/page-heading";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { workbenchTabs } from "../constants";
 import { cn } from "@/lib/utils";
@@ -15,7 +14,11 @@ export function AccountWorkbenchPage(): ReactElement {
   return (
     <PageLayout
       navigation={
-        <SegmentedControl role="tablist" aria-label="账号工作台功能" className="w-full sm:w-fit">
+        <SegmentedControl
+          role="tablist"
+          aria-label="账号工作台功能"
+          className="grid w-full grid-cols-3 sm:inline-flex sm:w-fit"
+        >
           {workbenchTabs.map((item) => (
             <SegmentedControlItem
               key={item.id}
@@ -31,15 +34,11 @@ export function AccountWorkbenchPage(): ReactElement {
         </SegmentedControl>
       }
     >
-      <PageHeading eyebrow="" title="账号工作台" description="" />
       <section
         role="tabpanel"
         id={`workbench-panel-${tab}`}
         aria-labelledby={`workbench-${tab}`}
-        className={cn(
-          "min-w-0",
-          tab === "import" ? "h-full min-h-0" : "rounded-xl border bg-card p-3 sm:p-4",
-        )}
+        className={cn("min-w-0", tab === "import" && "h-full min-h-0")}
       >
         {tab === "accounts" && <AccountList />}
         {tab === "templates" && <TemplateList />}

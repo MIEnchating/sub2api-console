@@ -99,6 +99,9 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 	if row.ImportAction == "created" && len(publicAccount(current).Groups) > 0 {
 		return errors.New("新账号意外关联分组，已停止启用")
 	}
+	if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
+		return err
+	}
 	if err = verifyApplied(current, body); err != nil {
 		return err
 	}
@@ -167,6 +170,9 @@ func (s *Service) promoteItem(ctx context.Context, value *privateRun, index int)
 	if !sameAccountIdentity(current, value.Items[index].Credentials) {
 		return errors.New("最终账号身份核对失败，未恢复调度")
 	}
+	if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
+		return err
+	}
 	if err = verifyApplied(current, body); err != nil {
 		return err
 	}
@@ -181,6 +187,9 @@ func (s *Service) promoteItem(ctx context.Context, value *privateRun, index int)
 		return errors.New("启用后的账号状态核对失败")
 	}
 	body["schedulable"] = true
+	if err = verifyModelMappings(current, object(value.Exports[index]["credentials"])); err != nil {
+		return err
+	}
 	if err = verifyApplied(current, body); err != nil {
 		return err
 	}

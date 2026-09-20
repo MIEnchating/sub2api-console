@@ -56,6 +56,10 @@ type UpstreamSynchronizer interface {
 	SyncAllNow(context.Context, upstreamsync.Scope, string) (upstreamsync.BatchResult, error)
 }
 
+type ManagementSynchronizer interface {
+	Sync(context.Context, string) (business.ManagementSyncResult, error)
+}
+
 type AccountRateSynchronizer interface {
 	SyncAllAccountRates(context.Context, string) (map[string]any, error)
 }
@@ -97,6 +101,7 @@ type RunRequest struct {
 }
 
 type Runner struct {
+	management    ManagementSynchronizer
 	repository    RunnerRepository
 	targets       InspectionTargetStore
 	evidence      EvidenceCollector
@@ -113,6 +118,7 @@ type Runner struct {
 }
 
 type duePlan struct {
+	management              bool
 	traffic                 bool
 	probes                  bool
 	upstreams               bool
@@ -145,6 +151,7 @@ type evidenceCollectionOutcome struct {
 }
 
 const (
+	operationManagementSync     = "management_sync"
 	operationUpstreamSync       = "upstream_sync"
 	operationAuthRecovery       = "auth_recovery"
 	operationAccountRateSync    = "account_rate_sync"
@@ -174,6 +181,9 @@ func NewRunner(
 		writer: writer, alerts: alerts, upstreams: upstreams, tasks: tasks, now: time.Now,
 	}
 	for _, extension := range extensions {
+		if value, ok := extension.(ManagementSynchronizer); ok {
+			runner.management = value
+		}
 		if value, ok := extension.(AccountRateSynchronizer); ok {
 			runner.accountRates = value
 		}
@@ -237,6 +247,9 @@ func previewOperations(plan duePlan) ([]QueueOperation, error) {
 	capabilities, valid := runtimepolicy.For(plan.mode)
 	if !valid {
 		return nil, fmt.Errorf("运行模式无效：%s", plan.mode)
+	}
+	if plan.management {
+		operations = append(operations, QueueOperation{Operation: operationManagementSync, Label: "管理端账号与分组同步", Cycle: "每次自动巡检心跳", Due: true})
 	}
 	if capabilities.AutomaticUpstreamSync {
 		section, err := inspectionSection(plan.policy, "upstream_multiplier")
@@ -439,6 +452,13 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 	if strings.TrimSpace(request.Actor) == "" {
 		request.Actor = "控制台"
 	}
+	if request.Automatic && r.management != nil {
+		task, err := r.QueueTask(ctx, true)
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		return r.RunTask(ctx, task, request), nil
+	}
 	now := r.now().UTC()
 	plan, err := r.plan(ctx, request, now)
 	if err != nil {
@@ -471,6 +491,13 @@ func (r *Runner) QueueTask(ctx context.Context, automatic bool) (taskstore.Task,
 func (r *Runner) RunTask(ctx context.Context, task taskstore.Task, request RunRequest) ExecutionResult {
 	reportExecutionTask(ctx, task.ID)
 	ctx = taskcontext.WithID(ctx, task.ID)
+	if request.Automatic && r.management != nil {
+		var err error
+		ctx, err = r.syncManagement(ctx, &task, request.Actor)
+		if err != nil {
+			return r.failQueuedTask(ctx, task, err)
+		}
+	}
 	now := r.now().UTC()
 	plan, err := r.plan(ctx, request, now)
 	if err != nil {
@@ -484,13 +511,24 @@ func (r *Runner) failQueuedTask(ctx context.Context, task taskstore.Task, err er
 		err = cause
 	}
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "failed", 100, "巡检启动失败："+err.Error(), r.now().UTC().Format(time.RFC3339Nano)
-	task.Result = map[string]any{"error": err.Error(), "remote_write": false}
+	if task.Result == nil {
+		task.Result = map[string]any{}
+	}
+	task.Result["error"], task.Result["remote_write"] = err.Error(), false
+	operations := []string{}
+	timings := []business.OperationTiming{}
+	if timing, ok := task.Result["management_sync_timing"].(business.OperationTiming); ok {
+		operations = append(operations, operationManagementSync)
+		timings = append(timings, timing)
+		task.Result["operation_timings"] = timings
+	}
+	task.Result["active_operations"] = []string{}
 	cancelled := taskstore.MarkCancelled(ctx, &task, "巡检已取消")
 	taskstore.PersistFinal(r.tasks, task)
 	if cancelled {
-		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: []string{}, OperationTiming: []business.OperationTiming{}}
+		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
 	}
-	return failedExecution(&task.ID, nil, nil, err)
+	return failedExecution(&task.ID, operations, timings, err)
 }
 
 func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (duePlan, error) {
@@ -514,7 +552,7 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 	if err != nil {
 		return duePlan{}, err
 	}
-	result := duePlan{policy: policy, mode: mode, alert: alertPolicy.Enabled}
+	result := duePlan{policy: policy, mode: mode, alert: alertPolicy.Enabled, management: request.Automatic && r.management != nil}
 	scopedDiagnostic := request.AccountID != nil || request.GroupName != nil
 	if !request.Automatic && scopedDiagnostic {
 		result.probeIDs = evidencePlan.ProbeAccountIDs
@@ -571,6 +609,11 @@ func (r *Runner) plan(ctx context.Context, request RunRequest, now time.Time) (d
 		result.routing, err = r.repository.RoutingWritebackPending(ctx)
 		if err != nil {
 			return duePlan{}, err
+		}
+		if request.Automatic {
+			if cleanup, ok := policy["abnormal_cleanup"].(map[string]any); ok && cleanup["enabled"] == true {
+				result.routing = true
+			}
 		}
 		if r.accountRates != nil || r.rateScheduler != nil {
 			interval := 120
@@ -726,6 +769,13 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 	}
 	if request.Automatic {
 		resultPayload["origin"] = "automatic-inspection"
+	}
+	if plan.management && task.Result != nil {
+		resultPayload[operationManagementSync] = task.Result[operationManagementSync]
+		operations = append(operations, operationManagementSync)
+		if timing, ok := task.Result["management_sync_timing"].(business.OperationTiming); ok {
+			timings = append(timings, timing)
+		}
 	}
 	failures := []string{}
 	partialFailures := []string{}
