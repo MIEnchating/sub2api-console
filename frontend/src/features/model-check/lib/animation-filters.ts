@@ -3,7 +3,7 @@ import type { AccountStatus } from "@/api";
 export const priorityOptions = ["manual", "automatic"] as const;
 export type PriorityFilter = (typeof priorityOptions)[number];
 export const priorityLabels: Record<PriorityFilter, string> = {
-  manual: "人工优先",
+  manual: "手动控制",
   automatic: "自动调度",
 };
 export type AnimationFilters = {
@@ -18,6 +18,19 @@ export const defaultAnimationFilters: AnimationFilters = {
   platform: null,
   priority: null,
 };
+
+export function selectableDetectionAccountIDs(
+  accounts: AccountStatus[],
+  busyIDs: Set<string>,
+): string[] {
+  return accounts
+    .filter(
+      (account) =>
+        !busyIDs.has(account.id) &&
+        (account.platform == null || ["openai", "anthropic"].includes(account.platform)),
+    )
+    .map((account) => account.id);
+}
 
 export function filterAnimationAccounts(
   accounts: AccountStatus[],

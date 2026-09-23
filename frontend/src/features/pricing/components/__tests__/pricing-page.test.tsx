@@ -44,8 +44,8 @@ const snapshot: PricingSnapshot = {
       status: "active",
       rate_multiplier: "0.5",
       managed: true,
-      available: false,
-      reason: "复合分组由模型路由控制，不自动调整账号成员",
+      available: true,
+      reason: null,
     },
   ],
   decisions: [

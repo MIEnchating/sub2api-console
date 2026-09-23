@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AnimationRequest, Task } from "@/api";
 import { AnimationCheckPanel } from "../animation-check-panel";
@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 it.each(["animation", "precheck"] as const)(
-  "OAuth 账号执行 %s 时先确认范围并仅按稳定 ID 提交",
+  "OAuth 账号执行 %s 时直接开始并仅按稳定 ID 提交",
   async (mode) => {
     vi.stubGlobal("PointerEvent", MouseEvent);
     vi.stubGlobal("EventSource", undefined);
@@ -65,20 +65,14 @@ it.each(["animation", "precheck"] as const)(
       target: { value: "gpt-6-astra" },
     });
     const startLabel = mode === "precheck" ? "前置检测（1）" : "开始检测（1 个账号）";
+    if (mode === "precheck") fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
     fireEvent.click(screen.getByRole("button", { name: startLabel }));
-    const title = mode === "precheck" ? "确认前置检测范围" : "确认动画检测范围";
-    const confirm = await screen.findByRole("dialog", { name: title });
-    expect(within(confirm).getByText(/OAuth 账号（ID 41）/)).toBeVisible();
-    expect(submitted).toHaveLength(0);
-    fireEvent.click(within(confirm).getByRole("button", { name: "确认并开始检测" }));
     await waitFor(() =>
       expect(submitted).toEqual([
         {
           targets: [{ account_id: "41", model: "gpt-6-astra" }],
           timeout_seconds: 120,
-          ...(mode === "precheck"
-            ? { mode: "precheck", precheck_questions: ["candy", "knowledge-cutoff"] }
-            : {}),
+          ...(mode === "precheck" ? { mode: "precheck", precheck_questions: ["candy"] } : {}),
         },
       ]),
     );

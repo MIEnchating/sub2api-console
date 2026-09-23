@@ -1,4 +1,3 @@
-import { AccountTrafficBadge } from "./account-traffic";
 import type { AccountStatus } from "@/api";
 import type { ReactElement } from "react";
 import { AccountHealthScore } from "@/components/account-health-score";
@@ -177,7 +176,10 @@ export function AccountRoutingParametersCell(props: { account: AccountStatus }) 
     <div className="grid gap-1 tabular-nums">
       {account.manual_priority != null ? (
         <>
-          <span className="text-primary font-semibold">人工优先位 #{account.manual_priority}</span>
+          <span className="text-primary font-semibold">手动控制 #{account.manual_priority}</span>
+          <span className="text-muted-foreground text-xs">
+            当前优先级 {account.priority ?? "—"}
+          </span>
           <span className="text-muted-foreground text-xs">
             {account.schedulable ? "参与调度" : "停止调度"} ·{" "}
             {account.manual_sync_balance_multiplier ? "同步上游余额" : "不同步上游余额"}
@@ -235,7 +237,6 @@ export function AccountIdentityCell(props: { account: AccountStatus }) {
             {props.account.name}
           </TooltipContent>
         </Tooltip>
-        <AccountTrafficBadge accountID={props.account.id} compact />
       </div>
       <div
         data-slot="account-identity-meta"

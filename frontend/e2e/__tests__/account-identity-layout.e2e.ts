@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 
-test("账号长内容与流量状态切换不改变行高，详情可通过键盘查看", async ({ page }, testInfo) => {
-  let available = true;
+test("账号长内容不改变行高，详情可通过键盘查看", async ({ page }, testInfo) => {
+  let trafficRequests = 0;
   const name = "超长账号名称".repeat(12);
   const host = `${"long-host-".repeat(12)}example.test`;
   const groups = ["多分组内容".repeat(12), "备用分组"];
@@ -25,18 +25,9 @@ test("账号长内容与流量状态切换不改变行高，详情可通过键�
       "/api/policy": { advanced_policy: { manual_priority: { reserved_max: 10 } } },
       "/api/inspection/automation": { enabled: false, running: false },
       "/api/model-checks/account-statuses": [],
-      "/api/accounts/traffic": {
-        enabled: true,
-        observed_at: new Date().toISOString(),
-        accounts: [
-          { account_id: "41", current_requests: 12345, waiting_requests: 0, tracked: true },
-          { account_id: "42", current_requests: 0, waiting_requests: 0, tracked: true },
-        ],
-      },
     };
-    if (path === "/api/accounts/traffic" && !available)
-      await route.fulfill({ status: 503, json: { detail: "实时监控不可用" } });
-    else if (path.endsWith("/events"))
+    if (path === "/api/accounts/traffic") trafficRequests += 1;
+    if (path.endsWith("/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
     else if (path.startsWith("/api/dictionaries")) await route.fulfill({ json: { items: [] } });
     else if (path in responses) await route.fulfill({ json: responses[path] });
@@ -45,16 +36,10 @@ test("账号长内容与流量状态切换不改变行高，详情可通过键�
   await page.goto("/accounts");
   const row = page.locator("tbody tr").filter({ hasText: name });
   const identity = row.getByRole("cell").nth(1);
-  const status = row.getByLabel("账号 41：真实请求 · 12345");
-  await expect(status).toHaveText("999+ 请求");
   await expect(identity.locator("strong")).toHaveCSS("text-overflow", "ellipsis");
   const heading = identity.locator('[data-slot="account-identity-heading"]');
   await expect(heading).toHaveCSS("flex-wrap", "nowrap");
   const headingBox = await heading.boundingBox();
-  const statusBox = await status.boundingBox();
-  expect(statusBox!.y).toBeGreaterThanOrEqual(headingBox!.y);
-  expect(statusBox!.y + statusBox!.height).toBeLessThanOrEqual(headingBox!.y + headingBox!.height);
-  expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(headingBox!.x + headingBox!.width);
   const initialHeight = (await row.boundingBox())!.height;
   const normalIdentity = page
     .locator("tbody tr")
@@ -76,11 +61,8 @@ test("账号长内容与流量状态切换不改变行高，详情可通过键�
     await expect(page.getByRole("tooltip")).toHaveText(text);
     await page.keyboard.press("Escape");
   }
-  await status.focus();
-  await expect(page.getByRole("tooltip")).toContainText("真实请求 · 12345");
-  await page.keyboard.press("Escape");
   await page.screenshot({ path: testInfo.outputPath("account-layout.png") });
-  available = false;
-  await expect(row.getByLabel("账号 41：流量读取失败")).toBeVisible({ timeout: 12_000 });
   expect((await row.boundingBox())!.height).toBe(initialHeight);
+  expect(headingBox).not.toBeNull();
+  expect(trafficRequests).toBe(0);
 });

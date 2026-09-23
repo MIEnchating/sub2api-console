@@ -16,7 +16,7 @@ func manualBatchIDs(request Request) ([]string, error) {
 		return nil, errors.New("批量探活每次请选择 1 至 100 个账号")
 	}
 	if request.AccountID != nil || request.GroupName != nil || request.Platform != nil ||
-		request.Automatic || len(request.AccountIDs) > 0 || request.ProbeModel != "" || len(request.ProbeModels) > 0 {
+		request.Automatic || len(request.AccountIDs) > 0 || len(request.ProbeModels) > 0 {
 		return nil, errors.New("批量探活不能与其他探测范围或模型参数混用")
 	}
 	ids := make([]string, 0, len(request.SelectedAccountIDs))
@@ -46,7 +46,7 @@ func selectManualCandidates(candidates []business.ProbeCandidate, ids []string) 
 	}
 	for _, id := range ids {
 		if !selected[id] {
-			return nil, fmt.Errorf("账号 %s 不存在、没有分组或处于人工优先位，请刷新账号后重新选择", id)
+			return nil, fmt.Errorf("账号 %s 不存在、没有分组或处于手动控制，请刷新账号后重新选择", id)
 		}
 	}
 	return result, nil

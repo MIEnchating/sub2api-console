@@ -130,12 +130,12 @@ describe("账号批量探活", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "批量探活" })).toBeNull());
   });
 
-  it("多选确认后只提交非人工优先账号，任务完成刷新账号并登记后台任务", async () => {
+  it("多选确认后只提交非手动控制账号，任务完成刷新账号并登记后台任务", async () => {
     const run = vi.spyOn(api, "runActiveProbe").mockResolvedValue(task());
     vi.spyOn(api, "task").mockResolvedValue(task("succeeded"));
     const view = renderDialog([account("41"), account("42"), account("43", 1)]);
     view.queryClient.setQueryData(["accounts"], []);
-    expect(screen.getByText(/已跳过 1 个人工优先位账号/)).toBeVisible();
+    expect(screen.getByText(/已跳过 1 个手动控制账号/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "确认探活" }));
     await waitFor(() => expect(run).toHaveBeenCalledWith({ account_ids: ["41", "42"] }));
     await waitFor(() =>

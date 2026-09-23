@@ -61,8 +61,7 @@ test("320px 低高度视口中加载内容可纵向滚动，分页占位可到�
 
 test("自定义检测历史首次读取保持结果网格，完成后正常显示空状态", async ({ page, colorScheme }) => {
   const held = await setupLoading(page, "/api/model-checks/animations", colorScheme);
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   const loading = page.getByRole("status", { name: "正在读取自定义检测记录" });
   await expect(loading).toBeVisible();
@@ -136,8 +135,7 @@ test("动画账号首次读取按卡片网格占位，返回后卡片高度及�
   colorScheme,
 }) => {
   const held = await setupLoading(page, "/api/accounts", colorScheme);
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   const region = page.getByRole("region", { name: "动画账号卡片" });
   const loading = region.getByRole("status", { name: "正在读取账号" });
   await expect(loading).toBeVisible();

@@ -45,7 +45,7 @@ export function manualPriorityInitialValues(
       loadFactor: "100",
       concurrency: 100,
       schedulable: true,
-      syncBalanceMultiplier: false,
+      syncBalanceMultiplier: true,
     };
   }
   return {
@@ -149,20 +149,21 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent width="medium" className="sm:!w-[min(38rem,calc(100vw-2rem))]">
         <DialogHeader className="pr-8">
-          <DialogTitle>人工优先位</DialogTitle>
+          <DialogTitle>手动控制</DialogTitle>
           <DialogDescription className="text-foreground/80">
-            将“{props.account.name}”转为人工调度，系统不再自动调权、熔断或主动探测。
+            将“{props.account.name}
+            ”交给手动控制，保留调度状态、负载因子和并发设置。可在调度策略中开启按延迟调整优先级。
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <label className="grid gap-1.5 text-sm font-medium">
-            保留位置（1 至 {props.reservedMax}）
+            手动控制位置（1 至 {props.reservedMax}）
             <Select
               value={selected === null ? null : String(selected)}
               onValueChange={(value) => setSelected(value ? Number(value) : null)}
               disabled={props.pending}
             >
-              <SelectTrigger aria-label="选择人工优先位">
+              <SelectTrigger aria-label="选择手动控制位置">
                 <SelectValue>{selected === null ? "请选择位置" : `优先位 ${selected}`}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -197,7 +198,7 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
                 inputMode="decimal"
                 disabled={props.pending}
                 className="text-foreground font-normal"
-                aria-label="人工优先位负载因子"
+                aria-label="手动控制负载因子"
                 onChange={(event) => setLoadFactor(event.target.value)}
               />
             </label>
@@ -211,7 +212,7 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
                 value={concurrency}
                 disabled={props.pending}
                 className="text-foreground font-normal"
-                aria-label="人工优先位并发上限"
+                aria-label="手动控制并发上限"
                 onChange={(event) => setConcurrency(event.target.value)}
               />
             </label>
@@ -219,7 +220,7 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 rounded-md border px-3 py-2.5">
             <FieldLabel
               label="参与调度"
-              description="关闭后停止接收流量；人工优先位期间系统不会自动切换此开关。"
+              description="关闭后停止接收流量；手动控制期间系统不会自动切换此开关。"
               htmlFor={schedulableId}
               className="cursor-pointer text-sm"
             />
@@ -250,8 +251,8 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
           </div>
           <p className="text-foreground/70 text-xs leading-5">
             设置时会把 Sub2API
-            中的调度状态、优先级、负载因子和并发上限同步为以上值，随后不再由自动调度修改。
-            优先位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
+            中的调度状态、优先级、负载因子和并发上限同步为以上值。开启延迟调序后仅优先级自动变化，其余参数保持手动控制，不自动熔断或主动探测。
+            控制位只在账号所属分组内占用；取消时会先恢复设置前的参数，再从下一轮调度开始重新参与自动分配。
           </p>
         </div>
         <DialogFooter className="sm:justify-between">
@@ -263,7 +264,7 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
               onClick={props.onClear}
             >
               <Trash2 size={16} />
-              取消人工优先位
+              取消手动控制
             </Button>
           ) : (
             <span />
@@ -289,7 +290,7 @@ export function ManualPriorityDialog(props: ManualPriorityDialogProps) {
             }
           >
             <Pin size={16} />
-            {currentPriority === null ? "设置人工优先位" : "更新人工优先位"}
+            {currentPriority === null ? "设置手动控制" : "更新手动控制"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -3,6 +3,7 @@ import {
   Activity,
   BadgeCheck,
   ChevronDown,
+  ListChecks,
   RefreshCw,
   ScanSearch,
   SpellCheck2,
@@ -57,7 +58,7 @@ export function AccountsPageActions(props: {
             同步倍率
           </DropdownMenuItem>
           <DropdownMenuItem disabled={props.automaticDisabled} onClick={props.onModelSync}>
-            <RefreshCw aria-hidden="true" />
+            <ListChecks aria-hidden="true" />
             同步模型
           </DropdownMenuItem>
           <DropdownMenuItem disabled={props.automaticDisabled} onClick={props.onRevalidate}>

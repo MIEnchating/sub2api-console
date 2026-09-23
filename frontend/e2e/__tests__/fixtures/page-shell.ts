@@ -35,7 +35,6 @@ export const workspace: NewAPIWorkspace = {
 
 export const pageFixtures: Record<string, unknown> = {
   "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
-  "/api/accounts/traffic": { enabled: false, accounts: [] },
   "/api/newapi/platforms/layout/channels": { items: [], total: 0 },
   "/api/newapi/platforms/layout/channel-groups": { version: "1", groups: [] },
   "/api/config": config,

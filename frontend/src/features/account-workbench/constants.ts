@@ -5,6 +5,8 @@ export const workbenchTabs = [
   { id: "records", label: "处理记录" },
   { id: "maintenance", label: "自动维护" },
 ] as const;
+export type WorkbenchTab = (typeof workbenchTabs)[number]["id"];
+
 export const subscriptionLabels: Record<string, string> = {
   free: "Free",
   plus: "Plus",
@@ -78,7 +80,7 @@ export const runStatusLabels: Record<string, string> = {
   authorizing: "授权中",
   waiting_input: "等待验证",
   checking: "检测中",
-  review: "待复核",
+  review: "未开启调度",
 };
 export const checkVerdictLabels: Record<string, string> = {
   SOL_CONSISTENT: "检测通过",
@@ -86,6 +88,7 @@ export const checkVerdictLabels: Record<string, string> = {
   INCONCLUSIVE: "证据不足",
   ERROR: "检测出错",
   MATCH: "检测匹配",
+  GROUP_MATCH: "检测通过",
   LUNA_LIKE: "更接近 Luna",
   TERRA_LIKE: "更接近 Terra",
   LUNA_CONSISTENT: "更接近 Luna",

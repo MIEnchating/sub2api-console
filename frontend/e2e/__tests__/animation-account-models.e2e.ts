@@ -37,8 +37,7 @@ test("动画获取模型使用实际接口交集，失败保留手填值并支�
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("checkbox", { name: "检测 动画账号41" }).check();
   await page.getByRole("checkbox", { name: "检测 动画账号42" }).check();
   const button = page.getByRole("button", { name: "获取模型", exact: true });

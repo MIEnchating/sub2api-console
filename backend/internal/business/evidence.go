@@ -11,6 +11,7 @@ import (
 )
 
 type EvidenceTarget struct {
+	ManualPriority bool
 	AccountID      string
 	GroupName      string
 	GroupID        *string
@@ -65,8 +66,15 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 		clauses = append(clauses, "ag.group_name=?")
 		arguments = append(arguments, strings.TrimSpace(*groupName))
 	}
-	clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id)")
+	manual, err := s.ManualPriorityConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !manual.LatencyPriorityEnabled {
+		clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id)")
+	}
 	query := `SELECT a.id,ag.group_name,ag.group_id,a.upstream_type,a.metadata_json,COALESCE(a.routing_state,''),
+		EXISTS (SELECT 1 FROM manual_priority_accounts m WHERE m.account_id=a.id),
 		(SELECT COALESCE(NULLIF(TRIM(rd.routing_state),''),NULLIF(TRIM(rd.role),'')) FROM routing_decisions rd
 		 WHERE rd.account_id=a.id
 		 AND (decision_epoch.updated_at IS NULL OR julianday(rd.updated_at)>=julianday(decision_epoch.updated_at))),
@@ -93,7 +101,7 @@ func (s *Store) EvidenceTargets(ctx context.Context, accountID, groupName *strin
 		var item EvidenceTarget
 		var groupID, upstreamType, decisionState, trafficAt, trafficFetchAt, probeAt sql.NullString
 		var metadataRaw string
-		if err := rows.Scan(&item.AccountID, &item.GroupName, &groupID, &upstreamType, &metadataRaw, &item.EffectiveState, &decisionState, &trafficAt, &trafficFetchAt, &probeAt); err != nil {
+		if err := rows.Scan(&item.AccountID, &item.GroupName, &groupID, &upstreamType, &metadataRaw, &item.EffectiveState, &item.ManualPriority, &decisionState, &trafficAt, &trafficFetchAt, &probeAt); err != nil {
 			return nil, err
 		}
 		metadata := map[string]any{}

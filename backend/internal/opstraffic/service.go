@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
@@ -35,12 +34,8 @@ type AccountStore interface {
 }
 
 type Service struct {
-	targets         TargetStore
-	accounts        AccountStore
-	trafficMu       sync.Mutex
-	trafficTarget   configstore.TargetSettings
-	trafficCached   *adminclient.AccountTrafficSnapshot
-	trafficCachedAt time.Time
+	targets  TargetStore
+	accounts AccountStore
 }
 
 type SystemLogQuery struct {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 )
 
 func TestPrecheckSelectedQuestionsControlRequestsAndVerdict(t *testing.T) {
-	for _, questions := range [][]string{{"candy"}, {"knowledge-cutoff"}, {"knowledge-cutoff", "candy"}} {
+	for _, questions := range [][]string{{"candy"}} {
 		t.Run(fmt.Sprint(questions), func(t *testing.T) {
 			var mu sync.Mutex
 			var asked []string
@@ -24,9 +25,6 @@ func TestPrecheckSelectedQuestionsControlRequestsAndVerdict(t *testing.T) {
 				}
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				id, answer := "candy", "22"
-				if body.Input == "你的知识截至日期是什么时候" {
-					id, answer = "knowledge-cutoff", "无法提供日期"
-				}
 				mu.Lock()
 				asked = append(asked, id)
 				mu.Unlock()
@@ -61,7 +59,7 @@ func TestPrecheckSelectedQuestionsControlRequestsAndVerdict(t *testing.T) {
 
 func TestPrecheckRejectsEmptyUnknownAndDuplicateSelections(t *testing.T) {
 	f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) { t.Error("invalid selection reached upstream") })
-	for _, questions := range [][]string{{}, {"juice-low"}, {"candy", "candy"}} {
+	for _, questions := range [][]string{{}, {"knowledge-cutoff"}, {"candy", "candy"}} {
 		input := modelcheck.AnimationRequest{Mode: "precheck", PrecheckQuestions: questions, Targets: []modelcheck.AnimationTarget{{AccountID: "1", Model: "gpt-6-astra"}}, TimeoutSeconds: 5}
 		if _, err := f.service.EnqueueAnimation(context.Background(), input); err == nil {
 			t.Fatalf("selection accepted: %v", questions)
@@ -81,7 +79,7 @@ func TestPrecheckScheduleRestoresAndExecutesSelectedQuestion(t *testing.T) {
 			Input string `json:"input"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Input != "你的知识截至日期是什么时候" {
+		if !strings.Contains(body.Input, "圆形苹果") {
 			t.Errorf("unexpected question: %s", body.Input)
 		}
 		mu.Lock()
@@ -89,7 +87,7 @@ func TestPrecheckScheduleRestoresAndExecutesSelectedQuestion(t *testing.T) {
 		mu.Unlock()
 		_, _ = fmt.Fprint(w, `{"output_text":"无法提供日期"}`)
 	})
-	schedule := modelcheck.AnimationSchedule{Mode: "precheck", PrecheckQuestions: []string{"knowledge-cutoff"}, AccountID: "1", Enabled: true, Model: "gpt-6-astra", IntervalMinutes: 10, TimeoutSeconds: 5}
+	schedule := modelcheck.AnimationSchedule{Mode: "precheck", PrecheckQuestions: []string{"candy"}, AccountID: "1", Enabled: true, Model: "gpt-6-astra", IntervalMinutes: 10, TimeoutSeconds: 5}
 	if _, err := f.service.SaveAnimationSchedule(context.Background(), schedule, "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +97,7 @@ func TestPrecheckScheduleRestoresAndExecutesSelectedQuestion(t *testing.T) {
 	}
 	restarted.UseTaskRunner(f.runner)
 	views := restarted.AnimationSchedules()
-	if !slices.Equal(views[0].PrecheckQuestions, []string{"knowledge-cutoff"}) {
+	if !slices.Equal(views[0].PrecheckQuestions, []string{"candy"}) {
 		t.Fatalf("schedules = %#v", views)
 	}
 	views[0].PrecheckQuestions[0] = "candy"
@@ -112,5 +110,19 @@ func TestPrecheckScheduleRestoresAndExecutesSelectedQuestion(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 1 {
 		t.Fatalf("calls = %d", calls)
+	}
+}
+
+func TestPrecheckScheduleMigratesRemovedKnowledgeQuestionOnLoad(t *testing.T) {
+	f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) {})
+	f.catalog.raw = []byte(`[{"mode":"precheck","precheck_questions":["knowledge-cutoff"],"account_id":"1","enabled":true,"model":"gpt-6-astra","interval_minutes":10,"timeout_seconds":5,"version":1}]`)
+
+	restarted, err := modelcheck.New(f.tasks, credentials{}, f.catalog, credentials{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := restarted.AnimationSchedules()
+	if len(views) != 1 || !slices.Equal(views[0].PrecheckQuestions, []string{"candy"}) {
+		t.Fatalf("schedules = %#v", views)
 	}
 }

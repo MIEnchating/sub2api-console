@@ -34,8 +34,7 @@ test("首次打开动画检测等待代码下载时显示卡片骨架，加载�
     if (path in fixtures) return route.fulfill({ json: fixtures[path] });
     return route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check", { waitUntil: "domcontentloaded" });
   await expect.poll(() => held.length).toBeGreaterThan(0);
   const loading = page.getByRole("status", { name: "正在读取动画检测" });
   await expect(loading).toBeVisible();

@@ -702,8 +702,9 @@ func (service fakeAccountModelSync) EnqueueModelApply(_ context.Context, request
 		copy.Accounts = make([]accountops.AccountModelSelection, len(request.Accounts))
 		for index, selection := range request.Accounts {
 			copy.Accounts[index] = accountops.AccountModelSelection{
-				AccountID: selection.AccountID,
-				Models:    append([]string{}, selection.Models...),
+				AccountID:    selection.AccountID,
+				Models:       append([]string{}, selection.Models...),
+				ManualModels: append([]string(nil), selection.ManualModels...),
 			}
 		}
 		*service.applyCalls = append(*service.applyCalls, copy)
@@ -2186,11 +2187,12 @@ func TestAuthRecoveryRoutesUseTypedManualCredentialsAndSelectedVaultEntry(t *tes
 		t.Fatalf("retired auth recovery history route=%d %s", rows.Code, rows.Body.String())
 	}
 	manual := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/manual", map[string]any{
-		"host": "api.example", "auth_mode": "newapi_admin_key", "admin_key": "admin", "user_id": "7",
+		"host": "api.example", "auth_mode": "newapi_session", "user_id": "7",
 		"accept_login_agreement": true,
 		"headers":                map[string]any{"X-CF-Access": "signed-header"},
+		"cookies":                map[string]any{"session": "browser-session"},
 	})
-	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].AdminKey == nil || *manualCalls[0].AdminKey != "admin" || !manualCalls[0].AcceptLoginAgreement || !manualCalls[0].Present["admin_key"] || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
+	if manual.Code != http.StatusOK || len(manualCalls) != 1 || manualCalls[0].UserID == nil || *manualCalls[0].UserID != "7" || !manualCalls[0].AcceptLoginAgreement || !manualCalls[0].Present["cookies"] || manualCalls[0].Cookies["session"] != "browser-session" || !manualCalls[0].Present["headers"] || manualCalls[0].Headers["X-CF-Access"] != "signed-header" {
 		t.Fatalf("manual=%d %s calls=%#v", manual.Code, manual.Body.String(), manualCalls)
 	}
 	run := authenticatedRequest(t, router, http.MethodPost, "/api/auth-recovery/run", map[string]any{"host": "api.example", "entry": "Selected", "accept_login_agreement": true})
@@ -2391,7 +2393,7 @@ func TestAccountModelSyncRoutesPreservePreviewAndApplyContracts(t *testing.T) {
 		t.Fatalf("invalid apply=%d %s calls=%#v", invalid.Code, invalid.Body.String(), applyCalls)
 	}
 	invalidProbeModels := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
-		"accounts": []map[string]any{{"account_id": "41", "models": []string{"model-a"}}}, "probe_models": []string{}, "catalog_fingerprint": strings.Repeat("a", 64),
+		"accounts": []map[string]any{{"account_id": "41", "models": []string{"model-a"}}}, "probe_models": []string{" "}, "catalog_fingerprint": strings.Repeat("a", 64),
 	})
 	if invalidProbeModels.Code != http.StatusUnprocessableEntity || len(applyCalls) != 1 {
 		t.Fatalf("invalid probe models=%d %s calls=%#v", invalidProbeModels.Code, invalidProbeModels.Body.String(), applyCalls)
@@ -2411,6 +2413,13 @@ func TestAccountModelSyncRoutesPreservePreviewAndApplyContracts(t *testing.T) {
 	})
 	if updatedSettings.Code != http.StatusOK || !reflect.DeepEqual(settingsCalls, [][]string{{"claude-*", "gemini-*"}}) {
 		t.Fatalf("updated model sync settings=%d %s calls=%#v", updatedSettings.Code, updatedSettings.Body.String(), settingsCalls)
+	}
+	emptyProbe := authenticatedRequest(t, router, http.MethodPost, "/api/management/accounts/models/apply", map[string]any{
+		"accounts":     []map[string]any{{"account_id": "41", "models": []string{"custom"}, "manual_models": []string{"custom"}}},
+		"probe_models": []string{}, "catalog_fingerprint": strings.Repeat("a", 64),
+	})
+	if emptyProbe.Code != http.StatusOK || len(applyCalls) != 2 || len(applyCalls[1].ProbeModels) != 0 || !slices.Equal(applyCalls[1].Accounts[0].ManualModels, []string{"custom"}) {
+		t.Fatalf("empty probe/manual model contract: status=%d calls=%+v", emptyProbe.Code, applyCalls)
 	}
 }
 
@@ -4029,4 +4038,8 @@ func responseCookie(t *testing.T, response *httptest.ResponseRecorder, name stri
 
 func testNow() (result time.Time) {
 	return time.Now()
+}
+
+func (f fakeBusiness) CleanupUpstreamBinding(context.Context, string, int64, business.UpstreamBindingCleanup, string) error {
+	return errors.New("cleanup not configured")
 }

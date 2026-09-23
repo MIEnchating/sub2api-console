@@ -74,6 +74,9 @@ func (s *Store) saveModelCheckState(ctx context.Context, raw []byte, actor, acti
 		objectType, objectID, objectName = "model-animation-schedule", key, "自动动画检测配置"
 		operationType = "model-check." + action
 	}
+	if key == "model-detection-tasks" {
+		objectType, objectName = "model-detection-task", "检测任务配置"
+	}
 	operationID := fmt.Sprintf("model-check-profile-%d", time.Now().UnixNano())
 	if _, err := tx.ExecContext(ctx, `INSERT INTO operation_audit(
 		source_id,operation_id,operation_type,state,phase,actor,source,remote_confirmed,readback_confirmed,

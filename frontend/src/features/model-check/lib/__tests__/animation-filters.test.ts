@@ -30,7 +30,7 @@ const accounts = [
   },
 ];
 
-it("组合筛选使用交集，人工优先值为零的账号也能匹配", () => {
+it("组合筛选使用交集，手动控制值为零的账号也能匹配", () => {
   expect(
     filterAnimationAccounts(accounts, {
       query: "",
@@ -41,7 +41,7 @@ it("组合筛选使用交集，人工优先值为零的账号也能匹配", () =
   ).toEqual(["1"]);
 });
 
-it("自动调度筛选排除所有人工优先账号", () => {
+it("自动调度筛选排除所有手动控制账号", () => {
   expect(
     filterAnimationAccounts(accounts, { ...defaultAnimationFilters, priority: "automatic" }).map(
       (item) => item.id,

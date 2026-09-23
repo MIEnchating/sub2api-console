@@ -24,6 +24,7 @@ type PricingAccount struct {
 	GroupIDs       []string
 	GroupsValid    bool
 	ManualPriority bool
+	IgnoreCostWall bool
 }
 
 type PricingGroup struct {
@@ -61,6 +62,10 @@ type PricingChangeRecord struct {
 }
 
 func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
+	ignored, err := s.costWallIgnoredAccounts(ctx, s.db)
+	if err != nil {
+		return PricingCatalog{}, err
+	}
 	catalog := PricingCatalog{Accounts: []PricingAccount{}, Groups: []PricingGroup{}}
 	groupRows, err := s.db.QueryContext(ctx, `SELECT name,remote_id,platform,rate_multiplier
 		FROM local_groups ORDER BY CASE WHEN remote_id GLOB '[0-9]*' THEN CAST(remote_id AS INTEGER) ELSE 0 END,remote_id,name`)
@@ -109,6 +114,7 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 		if !positiveNumericID(item.ID) {
 			continue
 		}
+		item.IgnoreCostWall = containsControlID(ignored, item.ID)
 		item.Multiplier = nullString(multiplier)
 		if platform := accountMetadataText(metadata, "platform"); platform != nil {
 			item.Platform = strings.ToLower(strings.TrimSpace(*platform))

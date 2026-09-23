@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
@@ -47,8 +48,9 @@ type ModelApplyRequest struct {
 }
 
 type AccountModelSelection struct {
-	AccountID string   `json:"account_id"`
-	Models    []string `json:"models"`
+	AccountID    string   `json:"account_id"`
+	Models       []string `json:"models"`
+	ManualModels []string `json:"manual_models,omitempty"`
 }
 
 type modelSyncItem struct {
@@ -128,7 +130,7 @@ func (s *Service) EnqueueModelApply(ctx context.Context, request ModelApplyReque
 	if mode != runtimepolicy.Full {
 		return taskstore.Task{}, errors.New("应用账号模型需要完全模式")
 	}
-	if s.modelSyncProbe == nil {
+	if len(request.ProbeModels) > 0 && s.modelSyncProbe == nil {
 		return taskstore.Task{}, errors.New("账号模型探测服务尚未就绪")
 	}
 	repository, ok := s.repository.(modelSyncRepository)
@@ -154,7 +156,7 @@ func (s *Service) EnqueueModelApply(ctx context.Context, request ModelApplyReque
 	if err != nil {
 		return taskstore.Task{}, err
 	}
-	return s.enqueueModelSyncTask(ctx, "account-model-apply", "账号模型应用与探测已排队", ids, func(run context.Context, task taskstore.Task) {
+	return s.enqueueModelSyncTask(ctx, "account-model-apply", "账号模型同步已排队", ids, func(run context.Context, task taskstore.Task) {
 		s.executeModelApply(targetguard.Expect(run, expectedTarget), task, request)
 	})
 }
@@ -189,6 +191,18 @@ func validateAccountModelSelections(
 		for _, model := range account.Models {
 			available[strings.ToLower(model)] = model
 		}
+		if len(selection.ManualModels) > 500 {
+			return nil, errors.New("手动模型不能超过 500 个")
+		}
+		for _, raw := range selection.ManualModels {
+			model := strings.TrimSpace(raw)
+			if model == "" || utf8.RuneCountInString(model) > 256 || strings.ContainsAny(model, "*?") || strings.IndexFunc(model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+				return nil, errors.New("手动模型必须是不含空白和通配符的具体模型名称，且不能超过 256 个字符")
+			}
+			if _, exists := available[strings.ToLower(model)]; !exists {
+				available[strings.ToLower(model)] = model
+			}
+		}
 		models := make([]string, 0, len(selection.Models))
 		seenModels := map[string]struct{}{}
 		for _, rawModel := range selection.Models {
@@ -213,14 +227,14 @@ func validateAccountModelSelections(
 		sort.Slice(models, func(left, right int) bool {
 			return strings.ToLower(models[left]) < strings.ToLower(models[right])
 		})
-		result = append(result, AccountModelSelection{AccountID: selection.AccountID, Models: models})
+		result = append(result, AccountModelSelection{AccountID: selection.AccountID, Models: models, ManualModels: selection.ManualModels})
 	}
 	return result, nil
 }
 
 func validateUnifiedProbeModels(accounts []AccountModelSelection, requested []string) ([]string, error) {
-	if len(requested) == 0 || len(requested) > maximumUnifiedProbeModels {
-		return nil, fmt.Errorf("请选择 1 到 %d 个统一探活模型", maximumUnifiedProbeModels)
+	if len(requested) > maximumUnifiedProbeModels {
+		return nil, fmt.Errorf("统一探活模型最多选择 %d 个", maximumUnifiedProbeModels)
 	}
 	availableModels := map[string]string{}
 	for _, account := range accounts {
@@ -272,7 +286,7 @@ func (s *Service) prepareModelSyncAccounts(ctx context.Context, accountIDs []str
 			return nil, err
 		}
 		if account.ManualPriority != nil {
-			return nil, fmt.Errorf("账号 %s 处于人工优先位，模型同步已禁用", accountID)
+			return nil, fmt.Errorf("账号 %s 处于手动控制，模型同步已禁用", accountID)
 		}
 		ids = append(ids, accountID)
 	}
@@ -382,7 +396,7 @@ func (s *Service) discoverAccountModels(ctx context.Context, accountID string) m
 	}
 	item.AccountName = local.Name
 	if local.ManualPriority != nil {
-		item.Error = "账号在任务执行前进入人工优先位，模型同步已禁用"
+		item.Error = "账号在任务执行前进入手动控制，模型同步已禁用"
 		return item
 	}
 	guarded, err = targetguard.Bind(guarded, s.targets)
@@ -395,6 +409,21 @@ func (s *Service) discoverAccountModels(ctx context.Context, accountID string) m
 		item.Error = err.Error()
 		return item
 	}
+	remote, err := client.Account(guarded, accountID)
+	if err != nil {
+		item.Error = "读取已配置模型失败：" + err.Error()
+		return item
+	}
+	credentials, err := accountCredentials(remote)
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
+	mapping, err := accountModelMapping(credentials["model_mapping"])
+	if err != nil {
+		item.Error = err.Error()
+		return item
+	}
 	models, err := client.SyncAccountModels(guarded, accountID)
 	if err != nil {
 		item.Error = err.Error()
@@ -402,6 +431,19 @@ func (s *Service) discoverAccountModels(ctx context.Context, accountID string) m
 	}
 	if len(models) == 0 {
 		item.Error = "上游未返回可用模型"
+		return item
+	}
+	enabled := make([]string, 0)
+	for _, model := range models {
+		for source, target := range mapping {
+			if strings.EqualFold(source, model) || strings.EqualFold(target, model) {
+				enabled = append(enabled, model)
+				break
+			}
+		}
+	}
+	if err := s.repository.(modelSyncRepository).SaveAccountEnabledModels(guarded, accountID, enabled); err != nil {
+		item.Error = err.Error()
 		return item
 	}
 	if err := s.repository.SaveAccountModels(guarded, accountID, models); err != nil {
@@ -485,7 +527,7 @@ func (s *Service) executeModelApply(ctx context.Context, task taskstore.Task, re
 	probeSummary := probe.RunSummary{}
 	probeError := ""
 	appliedIDs := appliedModelSyncAccountIDs(items)
-	if len(appliedIDs) > 0 && s.modelSyncProbe != nil {
+	if len(request.ProbeModels) > 0 && len(appliedIDs) > 0 && s.modelSyncProbe != nil {
 		probeSummary, err = s.runUnifiedProbeModels(ctx, appliedIDs, request.ProbeModels, func(index, total int) {
 			task.Progress = 78 + index*18/total
 			task.Message = fmt.Sprintf("正在使用统一探活模型验证连接（%d/%d）", index+1, total)
@@ -496,7 +538,7 @@ func (s *Service) executeModelApply(ctx context.Context, task taskstore.Task, re
 			probeError = err.Error()
 		}
 	}
-	s.finishModelApplyTask(ctx, &task, accountIDs, items, probeSummary, probeError)
+	s.finishModelApplyTask(ctx, &task, accountIDs, items, probeSummary, probeError, len(request.ProbeModels) == 0)
 }
 
 func modelApplyAccountIDs(selections []AccountModelSelection) []string {
@@ -518,12 +560,18 @@ func (s *Service) runUnifiedProbeModels(
 		if onStart != nil {
 			onStart(index, len(models))
 		}
-		summary, err := s.modelSyncProbe.RunNow(ctx, probe.Request{
-			AccountIDs: accountIDs, Automatic: true, OnePerAccount: true, ProbeModel: model,
-		})
-		mergeProbeSummary(&result, summary)
-		if err != nil {
-			probeErrors = append(probeErrors, fmt.Errorf("%s: %w", model, err))
+		for start := 0; start < len(accountIDs); start += 100 {
+			ids := accountIDs[start:min(start+100, len(accountIDs))]
+			summary, err := s.modelSyncProbe.RunNow(ctx, probe.Request{
+				SelectedAccountIDs: ids, OnePerAccount: true, ProbeModel: model,
+			})
+			mergeProbeSummary(&result, summary)
+			if err != nil {
+				probeErrors = append(probeErrors, fmt.Errorf("%s: %w", model, err))
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
 		if ctx.Err() != nil {
 			break
@@ -561,7 +609,7 @@ func (s *Service) applyAccountModels(ctx context.Context, catalog business.Accou
 		item.Error = "任务执行前已退出完全模式"
 		return item
 	} else if account.ManualPriority != nil {
-		item.Error = "账号在任务执行前进入人工优先位"
+		item.Error = "账号在任务执行前进入手动控制"
 		return item
 	}
 	guarded, err = targetguard.Bind(guarded, s.targets)
@@ -783,7 +831,7 @@ func (s *Service) finishModelSyncTask(ctx context.Context, task *taskstore.Task,
 	taskstore.PersistFinal(s.tasks, *task)
 }
 
-func (s *Service) finishModelApplyTask(ctx context.Context, task *taskstore.Task, accountIDs []string, items []modelSyncItem, summary probe.RunSummary, probeError string) {
+func (s *Service) finishModelApplyTask(ctx context.Context, task *taskstore.Task, accountIDs []string, items []modelSyncItem, summary probe.RunSummary, probeError string, probeDisabled ...bool) {
 	applied, skipped, failed := 0, 0, 0
 	for _, item := range items {
 		switch item.Status {
@@ -804,6 +852,10 @@ func (s *Service) finishModelApplyTask(ctx context.Context, task *taskstore.Task
 	task.Result = modelSyncTaskResult(accountIDs, len(items), items)
 	task.Result["applied"], task.Result["skipped"], task.Result["failed"] = applied, skipped, failed
 	task.Result["probe"] = summary
+	if len(probeDisabled) > 0 && probeDisabled[0] {
+		task.Result["probe_disabled"] = true
+		task.Message = fmt.Sprintf("账号模型应用完成：写入 %d，跳过 %d，失败 %d；未选择探活模型，未执行探活", applied, skipped, failed)
+	}
 	if probeError != "" {
 		task.Result["probe_error"] = probeError
 	}

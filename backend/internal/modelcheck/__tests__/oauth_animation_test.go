@@ -80,13 +80,13 @@ func TestOAuthPrecheckRunsOnlySelectedQuestionWithLowReasoning(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return nil, err
 		}
-		if body.Reasoning.Effort != "low" || len(body.Input) != 1 || body.Input[0].Content != "你的知识截至日期是什么时候" || !strings.HasSuffix(r.Header.Get("X-Request-ID"), "-knowledge-cutoff") {
+		if body.Reasoning.Effort != "low" || len(body.Input) != 1 || !strings.Contains(body.Input[0].Content, "圆形苹果") || !strings.HasSuffix(r.Header.Get("X-Request-ID"), "-candy") {
 			t.Errorf("unexpected selected precheck request: %#v", body)
 		}
-		return oauthResponse(200, "application/json", `{"status":"completed","output_text":"我无法提供知识截止日期。"}`), nil
+		return oauthResponse(200, "application/json", `{"status":"completed","output_text":"21"}`), nil
 	}))
 	input := request("1")
-	input.Mode, input.PrecheckQuestions, input.Targets[0].Model = "precheck", []string{"knowledge-cutoff"}, "gpt-6-astra"
+	input.Mode, input.PrecheckQuestions, input.Targets[0].Model = "precheck", []string{"candy"}, "gpt-6-astra"
 	if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}

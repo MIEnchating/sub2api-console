@@ -30,7 +30,7 @@ export const accountPoolFilters: Array<{
   label: string;
 }> = [
   { value: "all", label: "全部" },
-  { value: "manual_priority", label: "人工优先位" },
+  { value: "manual_priority", label: "手动控制" },
   { value: "healthy", label: "健康" },
   { value: "degraded", label: "降级" },
   { value: "cost_blocked", label: "成本墙拦截" },
@@ -44,7 +44,7 @@ export const accountPoolFilters: Array<{
 ];
 
 const stateMeta: Record<AccountPoolState, AccountPoolStateMeta> = {
-  manual_priority: { value: "manual_priority", label: "人工优先位", tone: "neutral" },
+  manual_priority: { value: "manual_priority", label: "手动控制", tone: "neutral" },
   healthy: { value: "healthy", label: "健康", tone: "success" },
   degraded: { value: "degraded", label: "降级", tone: "warning" },
   cost_blocked: { value: "cost_blocked", label: "成本墙拦截", tone: "warning" },

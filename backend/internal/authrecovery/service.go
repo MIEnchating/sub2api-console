@@ -124,6 +124,7 @@ type ManualInput struct {
 	AcceptLoginAgreement bool
 	Entry                *string
 	Headers              map[string]string
+	Cookies              map[string]string
 	Present              map[string]bool
 }
 
@@ -208,6 +209,10 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 	if explicitHeaders {
 		headers = cloneMap(input.Headers)
 	}
+	cookies := cloneMap(current.Cookies)
+	if input.Present["cookies"] {
+		cookies = cloneMap(input.Cookies)
+	}
 	replaceAuthorizationHeader := directAuthorizationWasProvided(mode, input) && !explicitHeaders
 	if replaceAuthorizationHeader {
 		headers = withoutBearerAuthorization(headers)
@@ -217,7 +222,7 @@ func (s *Service) VerifyManual(ctx context.Context, input ManualInput, actor str
 		AccessToken: input.AccessToken, RefreshToken: input.RefreshToken, AdminKey: input.AdminKey, UserID: input.UserID,
 		Username: input.Username, Password: input.Password, SaveToVault: input.SaveToVault, Entry: input.Entry,
 		AcceptLoginAgreement: input.AcceptLoginAgreement,
-		Headers:              headers, Cookies: cloneMap(current.Cookies), Present: map[string]bool{},
+		Headers:              headers, Cookies: cookies, Present: map[string]bool{},
 	}
 	for key, present := range input.Present {
 		configuration.Present[key] = present
@@ -1071,6 +1076,9 @@ func setCredentialClears(input *upstreamconfig.Input, mode string) {
 	case "newapi_admin_key":
 		input.AccessToken, input.RefreshToken = nil, nil
 		input.Present["access_token"], input.Present["refresh_token"] = true, true
+	case "newapi_session":
+		input.AccessToken, input.RefreshToken, input.AdminKey = nil, nil, nil
+		input.Present["access_token"], input.Present["refresh_token"], input.Present["admin_key"] = true, true, true
 	case "newapi_user_token", "sub2api_user_token", "bearer_token":
 		input.AdminKey, input.UserID = nil, nil
 		input.Present["admin_key"], input.Present["user_id"] = true, true

@@ -30,6 +30,7 @@ type RoutingAccount struct {
 	Priority                  *int64
 	ManualPriority            *int64
 	BaselinePriority          *int64
+	BaselineConcurrency       *int64
 	HasRoutingBaseline        bool
 	ManagedSchedulable        *bool
 	ManagedPriority           *int64
@@ -116,6 +117,7 @@ type AccountRoutingTarget struct {
 	LoadFactor                  *string  `json:"target_load_factor"`
 	Schedulable                 *bool    `json:"target_schedulable"`
 	Concurrency                 *int64   `json:"target_concurrency"`
+	RestoreConcurrency          bool     `json:"restore_concurrency,omitempty"`
 	GroupNames                  []string `json:"group_names"`
 	DesiredHealth               string   `json:"desired_health"`
 	WriteCooldown               bool     `json:"write_cooldown_active"`
@@ -146,7 +148,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		a.upstream_host,a.upstream_type,u.auth_status,a.schedulable,a.priority,m.priority,rb.priority,
 		rb.managed_schedulable,rb.managed_priority,rb.managed_load_factor,rb.managed_concurrency,
 		CASE WHEN rb.ownership_version=2 THEN 1 ELSE 0 END,rb.account_id IS NOT NULL,a.load_factor,
-		a.concurrency,a.multiplier,a.paused,a.paused_reason,COALESCE(a.routing_state,''),a.metadata_json
+		a.concurrency,a.multiplier,a.paused,a.paused_reason,COALESCE(a.routing_state,''),a.metadata_json,rb.concurrency
 		FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
 		LEFT JOIN local_groups lg ON lg.name=ag.group_name
 		LEFT JOIN upstreams u ON u.host=a.upstream_host
@@ -170,13 +172,14 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		var priority, manualPriority, baselinePriority, managedPriority, managedConcurrency, concurrency sql.NullInt64
 		var managedSchedulable, externalControl sql.NullInt64
 		var managedLoadFactor sql.NullString
+		var baselineConcurrency sql.NullInt64
 		var metadataRaw string
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.GroupName, &groupID,
 			&costWall, &profitEnabled, &profitMargin, &profitBuffer,
 			&upstreamHost, &upstreamType, &authStatus, &schedulable, &priority, &manualPriority, &baselinePriority,
 			&managedSchedulable, &managedPriority, &managedLoadFactor, &managedConcurrency, &externalControl, &item.HasRoutingBaseline, &loadFactor,
-			&concurrency, &multiplier, &paused, &pausedReason, &item.EffectiveState, &metadataRaw,
+			&concurrency, &multiplier, &paused, &pausedReason, &item.EffectiveState, &metadataRaw, &baselineConcurrency,
 		); err != nil {
 			return nil, err
 		}
@@ -187,6 +190,7 @@ func (s *Store) RoutingAccounts(ctx context.Context, accountID, groupName *strin
 		item.Schedulable, item.Priority, item.ManualPriority, item.BaselinePriority, item.LoadFactor = strictNullBool(schedulable), nullInt(priority), nullInt(manualPriority), nullInt(baselinePriority), nullString(loadFactor)
 		item.ManagedSchedulable, item.ManagedPriority = strictNullBool(managedSchedulable), nullInt(managedPriority)
 		item.ManagedLoadFactor, item.ManagedConcurrency = nullString(managedLoadFactor), nullInt(managedConcurrency)
+		item.BaselineConcurrency = nullInt(baselineConcurrency)
 		item.ExternalControl = externalControl.Valid && externalControl.Int64 == 1
 		item.Concurrency, item.Multiplier = nullInt(concurrency), nullString(multiplier)
 		item.Paused, item.PausedReason = paused.Valid && paused.Int64 == 1, nullString(pausedReason)

@@ -186,7 +186,7 @@ describe("upstream edit dialog", () => {
     expect(accounts).toContain("3 个账号");
     expect(accounts).toContain(">账号</span>");
     expect(accounts).toContain(">上游分组</span>");
-    expect(accounts).toContain(">状态</span>");
+    expect(accounts).toContain(">上游分组状态</span>");
     expect(accounts).toContain(">操作</span>");
     expect(accounts).toContain("Codex 主账号");
     expect(accounts.match(/稳定账号 ID 41/g)).toHaveLength(2);

@@ -477,11 +477,11 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 		if policy, ok := s.repository.(balanceSyncPolicy); ok {
 			allowed, policyErr := policy.HostBalanceSyncAllowed(ctx, host)
 			if policyErr != nil {
-				return s.failed(ctx, host, Scope{Balance: true}, false, "人工优先位余额同步策略读取失败："+policyErr.Error())
+				return s.failed(ctx, host, Scope{Balance: true}, false, "手动控制余额同步策略读取失败："+policyErr.Error())
 			}
 			if !allowed {
 				if !scope.Catalog {
-					reason := "该 Host 下的人工优先位账号均关闭了上游余额同步"
+					reason := "该 Host 下的手动控制账号均关闭了上游余额同步"
 					return HostResult{Host: host, Status: "succeeded", AuthStatus: "未变更", BalanceStatus: reason, Reason: &reason}
 				}
 				scope.Balance = false

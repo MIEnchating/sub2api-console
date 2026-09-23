@@ -33,7 +33,7 @@ function batchTask(status: Task["status"]): Task {
           upstream_key_deleted: false,
           management_account_deleted: false,
           local_projection_deleted: false,
-          error: "账号处于人工优先位，删除前请先解除人工管控",
+          error: "账号处于手动控制，删除前请先解除人工管控",
         },
       ],
     },
@@ -53,7 +53,7 @@ describe("AccountBatchDeleteTaskStatus", () => {
     expect(markup).toContain("删除失败");
     expect(markup).toContain("重复账号 A");
     expect(markup).toContain("重复账号 B");
-    expect(markup).toContain("账号处于人工优先位");
+    expect(markup).toContain("账号处于手动控制");
     expect(markup).toContain("上游 Key 已删除");
     expect(markup).toContain("本地记录未清理");
   });

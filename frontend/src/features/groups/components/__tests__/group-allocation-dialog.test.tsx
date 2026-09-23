@@ -11,7 +11,7 @@ import {
 
 afterEach(cleanup);
 
-it("分组分配中人工优先位显示中文状态", () => {
+it("分组分配中手动控制显示中文状态", () => {
   render(
     <GroupAllocationContent
       allocation={{
@@ -21,7 +21,7 @@ it("分组分配中人工优先位显示中文状态", () => {
     />,
   );
 
-  expect(screen.getByText("人工优先位")).toBeVisible();
+  expect(screen.getByText("手动控制")).toBeVisible();
   expect(screen.queryByText("manual_priority")).not.toBeInTheDocument();
 });
 

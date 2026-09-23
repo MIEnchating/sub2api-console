@@ -112,3 +112,29 @@ it("长探活响应使用可键盘访问的独立滚动区并保留真实模型�
   expect(screen.getByText(/actual-model/)).toBeVisible();
   expect(screen.queryByText(/发送测试消息："hi"/)).not.toBeInTheDocument();
 });
+
+it("上游返回完整 JSON 时显示只读原文并保留响应摘要", async () => {
+  render(
+    <ProbeResultSlot
+      pending={false}
+      error={null}
+      result={{
+        status: "passed",
+        message: "完成",
+        request_model: "gpt-5.2",
+        actual_model: "gpt-5.2-2026-08-01",
+        response_text: "ok",
+        response_json:
+          '{"id":"response-1","model":"gpt-5.2-2026-08-01","usage":{"input_tokens":1,"output_tokens":2}}',
+        http_status: 200,
+        latency_ms: 250,
+      }}
+    />,
+  );
+
+  expect(screen.getByText("响应摘要：ok")).toBeVisible();
+  expect(await screen.findByRole("textbox", { name: "模型完整响应 JSON" })).toHaveAttribute(
+    "aria-readonly",
+    "true",
+  );
+});

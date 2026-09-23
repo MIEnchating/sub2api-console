@@ -1,51 +1,25 @@
-import { useState, type ReactElement } from "react";
-import { PageLayout } from "@/components/page-layout";
-import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
-import { workbenchTabs } from "../constants";
-import { cn } from "@/lib/utils";
+import type { ReactElement } from "react";
+import type { WorkbenchTab } from "../constants";
 import { AccountList } from "./account-list";
 import { TemplateList } from "./template-list";
 import { ImportPanel } from "./import-panel";
 import { RunList } from "./run-list";
 import { MaintenancePanel } from "./maintenance-panel";
 
-export function AccountWorkbenchPage(): ReactElement {
-  const [tab, setTab] = useState<(typeof workbenchTabs)[number]["id"]>("import");
-  return (
-    <PageLayout
-      navigation={
-        <SegmentedControl
-          role="tablist"
-          aria-label="账号工作台功能"
-          className="grid w-full grid-cols-3 sm:inline-flex sm:w-fit"
-        >
-          {workbenchTabs.map((item) => (
-            <SegmentedControlItem
-              key={item.id}
-              id={`workbench-${item.id}`}
-              role="tab"
-              selected={tab === item.id}
-              aria-controls={`workbench-panel-${item.id}`}
-              onClick={() => setTab(item.id)}
-            >
-              {item.label}
-            </SegmentedControlItem>
-          ))}
-        </SegmentedControl>
-      }
-    >
-      <section
-        role="tabpanel"
-        id={`workbench-panel-${tab}`}
-        aria-labelledby={`workbench-${tab}`}
-        className={cn("min-w-0", tab === "import" && "h-full min-h-0")}
-      >
-        {tab === "accounts" && <AccountList />}
-        {tab === "templates" && <TemplateList />}
-        {tab === "import" && <ImportPanel onStarted={() => setTab("records")} />}
-        {tab === "records" && <RunList />}
-        {tab === "maintenance" && <MaintenancePanel />}
-      </section>
-    </PageLayout>
-  );
+export function AccountWorkbenchPage(props: {
+  tab: WorkbenchTab;
+  onStarted: () => void;
+}): ReactElement {
+  switch (props.tab) {
+    case "accounts":
+      return <AccountList />;
+    case "templates":
+      return <TemplateList />;
+    case "records":
+      return <RunList />;
+    case "maintenance":
+      return <MaintenancePanel />;
+    default:
+      return <ImportPanel onStarted={props.onStarted} />;
+  }
 }

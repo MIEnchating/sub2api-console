@@ -23,11 +23,13 @@ const fixtureSecret = "sk-isolated-animation-test-secret"
 const fixtureSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 400"><circle cx="100" cy="200" r="40"><animateTransform attributeName="transform" type="rotate" from="0 100 200" to="360 100 200" dur="2s" repeatCount="indefinite"/></circle></svg>`
 
 type catalog struct {
-	mu       sync.Mutex
-	rows     []business.AccountStatus
-	details  map[string]*business.AccountDetail
-	raw      []byte
-	failSave bool
+	mu           sync.Mutex
+	rows         []business.AccountStatus
+	details      map[string]*business.AccountDetail
+	raw          []byte
+	failSave     bool
+	plans        []byte
+	groupMembers map[string][]string
 }
 
 func (c *catalog) Accounts(context.Context) ([]business.AccountStatus, error) { return c.rows, nil }

@@ -96,8 +96,17 @@ func upstreamResponse(value any) *http.Response {
 }
 
 func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
-	for _, tc := range []struct{ name, corruptStage string }{
+	for _, tc := range []struct {
+		name, corruptStage  string
+		runtimeStatusActive bool
+		runtimeAutoPromoted bool
+		defaultGroupBound   bool
+	}{
 		{name: "applied configuration enables scheduling"},
+		{name: "active runtime status still permits isolated import", runtimeStatusActive: true},
+		{name: "creation ignoring scheduling flag is paused before promotion", runtimeAutoPromoted: true},
+		{name: "default group is removed while paused before promotion", defaultGroupBound: true},
+		{name: "unexpected created identity prevents all follow-up writes", corruptStage: "identity", runtimeAutoPromoted: true},
 		{name: "ignored creation configuration prevents enabling", corruptStage: "create"},
 		{name: "extra upstream model mapping prevents enabling", corruptStage: "model-mapping"},
 		{name: "model mapping changed on promotion prevents scheduling", corruptStage: "promote-model-mapping"},
@@ -152,6 +161,20 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 					}
 					current = body
 					current["id"] = json.Number("41")
+					current["notes"] = nil
+					if tc.runtimeStatusActive {
+						current["status"] = "active"
+					}
+					if tc.runtimeAutoPromoted {
+						current["status"] = "active"
+						current["schedulable"] = true
+					}
+					if tc.defaultGroupBound {
+						current["group_ids"] = []any{json.Number("99")}
+					}
+					if tc.corruptStage == "identity" {
+						current["credentials"].(map[string]any)["chatgpt_user_id"] = "different-user"
+					}
 					if tc.corruptStage == "model-mapping" {
 						current["credentials"].(map[string]any)["model_mapping"] = map[string]any{"selected": "selected", "*": "unselected"}
 					}
@@ -213,6 +236,12 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 					t.Fatalf("reconciliation failed: %v %+v", err, result)
 				}
 			} else if tc.corruptStage != "" {
+				if tc.corruptStage == "identity" {
+					if result.Status == "completed" || len(writes) != 1 {
+						t.Fatalf("changed identity received follow-up writes: %v", writes)
+					}
+					return
+				}
 				if result.Status == "completed" || current["schedulable"] != false {
 					t.Fatal("unapplied configuration was enabled")
 				}
@@ -223,10 +252,26 @@ func TestRunVerifiesAppliedConfigurationBeforeEnabling(t *testing.T) {
 				}
 				return
 			}
+			if tc.runtimeAutoPromoted {
+				if len(writes) < 2 || writes[1] != "POST /admin/accounts/41/schedulable" {
+					t.Fatalf("creation was not paused before applying final configuration: %v", writes)
+				}
+				if result.Status != "completed" || result.Items[0].AccountID != "41" || current["schedulable"] != true {
+					t.Fatalf("creation did not finish after isolation: status=%s item=%+v", result.Status, result.Items[0])
+				}
+				task, err := tasks.Get(context.Background(), result.TaskID)
+				if err != nil || task.Status != "succeeded" {
+					t.Fatalf("creation task did not finish: %v %+v", err, task)
+				}
+				return
+			}
 			if result.Status != "completed" || result.Items[0].AccountID != "41" {
 				t.Fatalf("import not completed: %+v", result.Items)
 			}
 			expected := []string{"POST /admin/accounts", "PUT /admin/accounts/41", "POST /admin/accounts/41/clear-error", "POST /admin/accounts/41/schedulable"}
+			if tc.defaultGroupBound {
+				expected = []string{"POST /admin/accounts", "PUT /admin/accounts/41", "PUT /admin/accounts/41", "POST /admin/accounts/41/clear-error", "POST /admin/accounts/41/schedulable"}
+			}
 			raw, _ := json.Marshal(writes)
 			want, _ := json.Marshal(expected)
 			if string(raw) != string(want) {

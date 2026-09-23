@@ -90,7 +90,7 @@ describe("manual upstream authentication form", () => {
   });
 
   it("allows omitted mode credentials only when custom headers are configured", () => {
-    const empty = { accessToken: "", refreshToken: "", adminKey: "", userId: "" };
+    const empty = { accessToken: "", refreshToken: "", adminKey: "", userId: "", cookies: "" };
 
     expect(manualAuthIncomplete("sub2api_user_token", empty, true)).toBe(false);
     expect(manualAuthIncomplete("newapi_admin_key", empty, true)).toBe(false);
@@ -98,6 +98,16 @@ describe("manual upstream authentication form", () => {
     expect(manualAuthIncomplete("bearer_token", empty, true)).toBe(false);
     expect(manualAuthIncomplete("custom_headers", empty, true)).toBe(false);
     expect(manualAuthIncomplete("sub2api_user_token", empty, false)).toBe(true);
+    expect(
+      manualAuthIncomplete(
+        "newapi_session",
+        { ...empty, userId: "24", cookies: "browser-session" },
+        false,
+      ),
+    ).toBe(false);
+    expect(
+      manualAuthIncomplete("newapi_session", { ...empty, cookies: "browser-session" }, true),
+    ).toBe(true);
     expect(
       manualAuthIncomplete("newapi_admin_key", { ...empty, adminKey: "partial-admin-key" }, true),
     ).toBe(true);

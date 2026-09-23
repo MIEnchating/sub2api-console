@@ -116,7 +116,7 @@ it("关闭代理保留表单地址但预览请求不携带代理凭据", async (
   expect(body?.proxy_url).toBe("");
 });
 
-it("修改检测模型后预览请求严格使用输入值且说明检测错误会停止导入", async () => {
+it("修改检测模型后预览请求严格使用输入值且说明检测未通过时保留账号且不开启调度", async () => {
   let body: Record<string, unknown> | undefined;
   mount(
     vi.fn(async (_input, init) => {
@@ -125,8 +125,8 @@ it("修改检测模型后预览请求严格使用输入值且说明检测错误�
     }),
   );
   const user = userEvent.setup();
-  expect(screen.getByRole("checkbox", { name: "导入前执行 Sol 检测" })).toBeChecked();
-  expect(screen.getByText(/检测出错时停止导入/)).toBeVisible();
+  expect(screen.getByRole("checkbox", { name: "导入后执行智商检测" })).toBeChecked();
+  expect(screen.getByText(/检测未通过.*不开启调度/)).toBeVisible();
   await user.click(screen.getByText("检测设置", { exact: true }));
   const model = screen.getByRole("textbox", { name: "检测模型" });
   await user.clear(model);
@@ -135,4 +135,22 @@ it("修改检测模型后预览请求严格使用输入值且说明检测错误�
   await user.click(screen.getByRole("button", { name: "解析并预览" }));
   await screen.findByRole("dialog");
   expect(body?.model).toBe("gpt-5.6-luna");
+  expect(screen.queryByRole("checkbox", { name: "导入完成后启用账号" })).not.toBeInTheDocument();
+});
+
+it("关闭智商检测后预览说明直接开启调度并提交对应设置", async () => {
+  let body: Record<string, unknown> | undefined;
+  mount(
+    vi.fn(async (_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({ ...preview, check: false });
+    }),
+  );
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("checkbox", { name: "导入后执行智商检测" }));
+  await user.type(screen.getByRole("textbox", { name: "账号资料" }), "rt_input");
+  await user.click(screen.getByRole("button", { name: "解析并预览" }));
+  const dialog = within(await screen.findByRole("dialog"));
+  expect(dialog.getByText(/不执行智商检测，导入后直接开启调度/)).toBeVisible();
+  expect(body).toMatchObject({ check: false, promote: true });
 });

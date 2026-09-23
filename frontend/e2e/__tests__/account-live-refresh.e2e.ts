@@ -105,8 +105,8 @@ test("其他账号占用优先位后打开弹窗读取最新占用情况", async
   const row = page.getByRole("row").filter({
     has: page.getByRole("checkbox", { name: `选择账号 ${account.name}（#41）`, exact: true }),
   });
-  await row.getByRole("button", { name: "设置人工优先位", exact: true }).click();
-  await page.getByRole("combobox", { name: "选择人工优先位" }).click();
+  await row.getByRole("button", { name: "设置手动控制", exact: true }).click();
+  await page.getByRole("combobox", { name: "选择手动控制" }).click();
   await expect(
     page.getByRole("option", { name: "2 · 已被 占位隔离账号（42）占用", exact: true }),
   ).toBeDisabled();

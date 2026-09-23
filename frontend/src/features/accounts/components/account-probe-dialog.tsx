@@ -1,4 +1,5 @@
 import { QueryErrorToast } from "@/components/query-error-toast";
+import { JsonEditor } from "@/components/json-editor";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { useOnboardingProbeTask, probeTaskResultSchema } from "../hooks/use-onboarding-probe-task";
 import { ProbeProgressSummary } from "./probe-task-timeline";
@@ -449,14 +450,32 @@ export function ProbeResultSlot(props: {
         role="region"
         aria-label="探活响应内容"
         tabIndex={0}
-        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain whitespace-pre-wrap break-words outline-offset-2 [overflow-wrap:anywhere] [scrollbar-gutter:stable]"
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain break-words outline-offset-2 [overflow-wrap:anywhere] [scrollbar-gutter:stable]"
       >
         {result ? (
           <>
-            <p className="mb-2 text-zinc-500">响应</p>
-            <p className={passed ? "text-emerald-300" : "text-red-300"}>
-              {result.response_text || result.message}
-            </p>
+            {result.response_json ? (
+              <div className="grid gap-2">
+                <p className={passed ? "text-emerald-300" : "text-red-300"}>
+                  响应摘要：{result.response_text || result.message}
+                </p>
+                <JsonEditor
+                  aria-label="模型完整响应 JSON"
+                  value={result.response_json}
+                  readOnly
+                  className="h-36 min-h-36 border-zinc-800 bg-zinc-950"
+                />
+              </div>
+            ) : (
+              <>
+                <p className="mb-2 text-zinc-500">响应</p>
+                <p
+                  className={`whitespace-pre-wrap ${passed ? "text-emerald-300" : "text-red-300"}`}
+                >
+                  {result.response_text || result.message}
+                </p>
+              </>
+            )}
             {!passed && result.response_text ? (
               <p className="mt-2 text-red-300">{result.message}</p>
             ) : null}

@@ -96,11 +96,15 @@ func animationRetryDelay(err error, retryCount int) (time.Duration, bool) {
 // persisted or replayed.
 func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) error {
 	if result.Mode == precheckMode {
-		return s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		started, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		result.DurationMS = started.Milliseconds()
+		return err
 	}
 	requestID := result.RequestID
+	var elapsed time.Duration
 	for attempt := 0; attempt < animationMaximumAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
+			result.DurationMS = elapsed.Milliseconds()
 			return err
 		}
 		result.RetryCount = attempt
@@ -108,8 +112,10 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 		if attempt > 0 {
 			result.RequestID = fmt.Sprintf("%s-retry-%d", requestID, attempt)
 		}
-		err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		attemptDuration, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		elapsed += attemptDuration
 		if err == nil {
+			result.DurationMS = elapsed.Milliseconds()
 			return nil
 		}
 		delay, retry := animationRetryDelay(err, attempt)
@@ -117,12 +123,17 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 			return err
 		}
 		timer := time.NewTimer(delay)
+		waitStarted := time.Now()
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			elapsed += time.Since(waitStarted)
+			result.DurationMS = elapsed.Milliseconds()
 			return ctx.Err()
 		case <-timer.C:
+			elapsed += time.Since(waitStarted)
 		}
 	}
+	result.DurationMS = elapsed.Milliseconds()
 	return errors.New("动画检测重试次数已耗尽")
 }

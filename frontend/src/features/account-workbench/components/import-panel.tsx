@@ -32,6 +32,7 @@ export function ImportPanel(props: { onStarted: () => void }): ReactElement {
     mutationFn: (input: ImportValues) =>
       api.workbenchPreview({
         ...input,
+        promote: input.action === "import",
         template_id: input.action === "export" ? "" : input.template_id,
         proxy_url: input.proxy_enabled ? input.proxy_url : "",
       }),

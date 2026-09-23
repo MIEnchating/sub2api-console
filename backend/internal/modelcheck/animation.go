@@ -22,6 +22,8 @@ const animationPrompt = `生成一幅鹈鹕骑自行车的 SVG 动画。画面�
 type AnimationTarget struct {
 	AccountID string `json:"account_id"`
 	Model     string `json:"model"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	Platform  string `json:"platform,omitempty"`
 }
 
 type AnimationRequest struct {
@@ -37,6 +39,8 @@ type AnimationResult struct {
 	Precheck      *PrecheckResult `json:"precheck,omitempty"`
 	AccountID     string          `json:"account_id"`
 	AccountName   string          `json:"account_name"`
+	Endpoint      string          `json:"endpoint,omitempty"`
+	Platform      string          `json:"platform,omitempty"`
 	Model         string          `json:"model"`
 	ResponseModel string          `json:"response_model,omitempty"`
 	RequestID     string          `json:"request_id"`
@@ -69,14 +73,16 @@ func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest
 		}
 		return prepareCustomAnimation(request)
 	}
-	if len(request.Targets) < 1 || len(request.Targets) > 20 {
-		return request, nil, errors.New("动画检测请选择 1 到 20 个账号")
+	if len(request.Targets) < 1 {
+		return request, nil, errors.New("动画检测请选择至少一个账号")
 	}
 	request.Targets = append([]AnimationTarget(nil), request.Targets...)
 	ids := make([]string, len(request.Targets))
 	seen := map[string]bool{}
 	for i := range request.Targets {
 		target := &request.Targets[i]
+		// Endpoint metadata is produced only from validated custom configuration.
+		target.Endpoint, target.Platform = "", ""
 		target.Model = strings.TrimSpace(target.Model)
 		if !stablePositiveID(target.AccountID) || seen[target.AccountID] {
 			return request, nil, errors.New("账号必须使用不重复的有效稳定 ID")
@@ -136,8 +142,11 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 		s.animation.activeMu.Unlock()
 		s.animation.scheduleMu.Lock()
 		for _, target := range request.Targets {
-			if schedule, ok := s.animation.schedules[target.AccountID]; ok {
-				s.animation.next[target.AccountID] = time.Now().Add(time.Duration(schedule.IntervalMinutes) * time.Minute)
+			for _, item := range splitAnimationSchedule(AnimationSchedule{AccountID: target.AccountID, Mode: request.Mode}) {
+				key := animationScheduleKey(item.AccountID, item.Mode)
+				if schedule, ok := s.animation.schedules[key]; ok && schedule.ScheduleType != "daily" {
+					s.animation.next[key] = nextAnimationTime(schedule, time.Now())
+				}
 			}
 		}
 		s.animation.scheduleMu.Unlock()
@@ -194,6 +203,16 @@ func (s *Service) AnimationHistory(ctx context.Context) ([]taskstore.Task, error
 func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, request AnimationRequest, accounts []selectedAccount) {
 	ctx, cancel := context.WithTimeout(parent, s.taskTimeout)
 	defer cancel()
+	runStarted := time.Now()
+	runStartedAt := runStarted.UTC().Format(time.RFC3339Nano)
+	setRunTiming := func(completedAt time.Time) {
+		if task.Result == nil {
+			task.Result = map[string]any{}
+		}
+		task.Result["started_at"] = runStartedAt
+		task.Result["completed_at"] = completedAt.UTC().Format(time.RFC3339Nano)
+		task.Result["duration_ms"] = completedAt.Sub(runStarted).Milliseconds()
+	}
 	task.Status, task.Message = "running", "正在生成鹈鹕骑自行车动画"
 	if request.Mode == precheckMode {
 		task.Message = "正在执行前置检测"
@@ -223,13 +242,16 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 					return
 				}
 				result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
+				if request.Custom != nil {
+					// Retain validated endpoint metadata, never the execution credential.
+					result.Endpoint = request.Custom.BaseURL
+					result.Platform = request.Custom.Platform
+				}
 				result.Mode = mode
 				if request.Mode == combinedMode {
 					result.RequestID += "-" + mode
 				}
-				started := time.Now()
 				err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result)
-				result.DurationMS = time.Since(started).Milliseconds()
 				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				if err != nil {
 					if request.Custom != nil {
@@ -268,43 +290,45 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		task.Status = "partial"
 	}
 	task.Message = fmt.Sprintf("%s完成：成功 %d，失败 %d", animationModeLabel(request.Mode), succeeded, total-succeeded)
+	setRunTiming(time.Now())
 	taskstore.MarkCancelled(ctx, &task, animationModeLabel(request.Mode)+"已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) error {
+func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) (time.Duration, error) {
 	select {
 	case s.animation.slots <- struct{}{}:
 	case <-ctx.Done():
-		return errors.New("动画检测已取消或任务超时")
+		return 0, errors.New("动画检测已取消或任务超时")
 	}
+	started := time.Now()
 	defer func() { <-s.animation.slots }()
 	if custom == nil && account.AccountType == "oauth" {
-		return s.runOAuthAnimationTarget(ctx, account, timeout, questions, result)
+		return time.Since(started), s.runOAuthAnimationTarget(ctx, account, timeout, questions, result)
 	}
 	guarded, release, credential, err := s.animationCredential(ctx, account, custom)
 	if err != nil {
-		return err
+		return time.Since(started), err
 	}
 	defer release()
 	if result.Mode == precheckMode {
 		client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		return runPrecheckTarget(guarded, client, credential, timeout, questions, result)
+		return time.Since(started), runPrecheckTarget(guarded, client, credential, timeout, questions, result)
 	}
 	requestCtx, cancel := context.WithTimeout(guarded, time.Duration(timeout)*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.RequestID)
 	if err != nil {
-		return err
+		return time.Since(started), err
 	}
 	if strings.Contains(text, credential.Secret) {
-		return errors.New("上游生成内容包含敏感信息，已拒绝展示")
+		return time.Since(started), errors.New("上游生成内容包含敏感信息，已拒绝展示")
 	}
 	svg, err := sanitizeAnimationSVG(text)
 	if err != nil {
-		return err
+		return time.Since(started), err
 	}
 	result.SVG, result.ResponseModel = svg, safeCredentialText(strings.ReplaceAll(model, credential.Secret, "[已隐藏]"))
-	return nil
+	return time.Since(started), nil
 }

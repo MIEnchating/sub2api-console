@@ -132,6 +132,7 @@ type ToolPrice struct {
 // Sub2APIModelPrice is one entry from Sub2API's loaded billing catalog and its
 // corresponding New API ratios. Prices retain source numbers per token, without currency conversion.
 type Sub2APIModelPrice struct {
+	SyncError                     string                       `json:"sync_error,omitempty"`
 	SourceScope                   string                       `json:"source_scope,omitempty"`
 	PriceTiers                    []officialpricing.Tier       `json:"price_tiers,omitempty"`
 	BillingExpr                   string                       `json:"billing_expr,omitempty"`
@@ -143,6 +144,7 @@ type Sub2APIModelPrice struct {
 	OutputPrice                   string                       `json:"output_price"`
 	ImageInputPrice               string                       `json:"image_input_price,omitempty"`
 	ImageOutputPrice              string                       `json:"image_output_price,omitempty"`
+	ImageOutputUnit               string                       `json:"image_output_unit,omitempty"`
 	Provider                      string                       `json:"provider,omitempty"`
 	Mode                          string                       `json:"mode,omitempty"`
 	CacheWritePrice               string                       `json:"cache_write_price,omitempty"`

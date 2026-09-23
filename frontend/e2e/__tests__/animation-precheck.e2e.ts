@@ -14,7 +14,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   const accounts = [1, 2].map((id) => ({
     ...account,
     id: String(id),
-    name: id === 1 ? "前置通过账号" : "前置不通过账号",
+    name: id === 1 ? "前置通过账号" : "前置降智账号",
     platform: "openai",
   }));
   const animations: AnimationResult[] = accounts.map((item, i) => ({
@@ -36,12 +36,6 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
           answer: i === 0 ? "21" : "22",
           request_id: `candy-${item.id}`,
         },
-        {
-          id: "knowledge-cutoff",
-          verdict: "passed",
-          answer: "我无法提供知识截止日期。".repeat(12),
-          request_id: `cutoff-${item.id}`,
-        },
       ],
     },
   }));
@@ -57,20 +51,23 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
     updated_at: "2026-09-15T00:01:00Z",
   };
   let created = false;
+  const starts: unknown[] = [];
   const writes: unknown[] = [];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
       const body = route.request().postDataJSON();
-      expect(body).toEqual({
-        mode: "precheck",
-        targets: [
-          { account_id: "1", model: "gpt-6-astra" },
-          { account_id: "2", model: "gpt-6-astra" },
-        ],
-        precheck_questions: ["candy", "knowledge-cutoff"],
-        timeout_seconds: 120,
-      });
+      starts.push(body);
+      if (body.mode === "precheck")
+        expect(body).toEqual({
+          mode: "precheck",
+          targets: [
+            { account_id: "1", model: "gpt-6-astra" },
+            { account_id: "2", model: "gpt-6-astra" },
+          ],
+          precheck_questions: ["candy"],
+          timeout_seconds: 120,
+        });
       created = true;
       await route.fulfill({ json: task });
       return;
@@ -96,17 +93,17 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
-  const panel = page.getByRole("tabpanel", { name: "动画检测", exact: true });
+  await page.goto("/animation-check");
+  await page.getByRole("tab", { name: "前置检测", exact: true }).click();
+  const panel = page.getByRole("tabpanel", { name: "前置检测", exact: true });
   await panel.getByRole("combobox", { name: "检测模型" }).fill("gpt-6-astra");
   await page.keyboard.press("Escape");
   await panel.getByRole("button", { name: "选择前置检测题目" }).click();
   const questions = page.getByRole("dialog", { name: "前置检测题目", exact: true });
-  await questions.getByRole("checkbox", { name: "知识截止日期", exact: true }).uncheck();
+  await questions.getByRole("checkbox", { name: "糖果题", exact: true }).uncheck();
   await expect(questions.getByRole("checkbox", { name: "全选", exact: true })).toHaveAttribute(
     "aria-checked",
-    "mixed",
+    "false",
   );
   await questions.getByRole("checkbox", { name: "全选", exact: true }).check();
   await page.screenshot({ path: testInfo.outputPath("precheck-questions.png") });
@@ -117,24 +114,21 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
       .getByRole("checkbox")
       .check();
   await panel.getByRole("button", { name: "前置检测（2）" }).click();
-  await page
-    .getByRole("dialog", { name: "确认前置检测范围" })
-    .getByRole("button", { name: "确认并开始检测" })
-    .click();
+  await expect(page.getByRole("dialog", { name: "确认前置检测范围" })).toHaveCount(0);
   const passed = panel.getByRole("article", { name: "账号 前置通过账号", exact: true });
-  const rejected = panel.getByRole("article", { name: "账号 前置不通过账号", exact: true });
+  const rejected = panel.getByRole("article", { name: "账号 前置降智账号", exact: true });
   await expect(
     passed.getByRole("region", { name: "前置检测结果" }).getByText("通过", { exact: true }),
   ).toBeVisible();
   await expect(
-    rejected.getByRole("region", { name: "前置检测结果" }).getByText("不通过", { exact: true }),
+    rejected.getByRole("region", { name: "前置检测结果" }).getByText("降智", { exact: true }),
   ).toBeVisible();
   await expect(passed.getByRole("listitem")).toHaveCount(0);
   await passed.getByRole("button", { name: "查看前置检测详情" }).click();
   const detail = page.getByRole("dialog", { name: "前置检测详情" });
   await expect(detail.getByText("21", { exact: true })).toBeVisible();
   await detail.getByRole("button", { name: "关闭", exact: true }).click();
-  await panel.getByRole("button", { name: "选择不通过（1）" }).click();
+  await panel.getByRole("button", { name: "选择降智（1）" }).click();
   await expect(rejected.getByRole("checkbox")).toBeChecked();
   await expect(passed.getByRole("checkbox")).not.toBeChecked();
   await panel.getByRole("button", { name: "选择通过（1）" }).click();
@@ -145,36 +139,43 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("precheck-results.png") });
   await panel.getByRole("group", { name: "前置检测操作", exact: true }).scrollIntoViewIfNeeded();
-  for (const name of ["前置检测（1）", "选择通过（1）", "选择不通过（1）"]) {
+  for (const name of ["前置检测（1）", "选择通过（1）", "选择降智（1）"]) {
     await expect(panel.getByRole("button", { name })).toBeInViewport({ ratio: 1 });
   }
-  await panel.getByRole("button", { name: "开始检测（1 个账号）" }).click();
-  const next = page.getByRole("dialog", { name: "确认动画检测范围" });
-  await expect(next).toContainText("前置通过账号（ID 1）");
-  await expect(next).not.toContainText("前置不通过账号（ID 2）");
-  await next.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(panel.getByRole("group", { name: "动画预览区域" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "账号检测", exact: true }).click();
+  const animationPanel = page.getByRole("tabpanel", { name: "账号检测", exact: true });
+  await expect(animationPanel.getByRole("combobox", { name: "检测模型" })).toHaveValue(
+    "gpt-6-astra",
+  );
+  await expect(animationPanel.getByRole("region", { name: "前置检测结果" })).toHaveCount(0);
+  await animationPanel.getByRole("button", { name: "开始检测（1 个账号）" }).click();
+  await expect.poll(() => starts.length).toBe(2);
+  expect(starts[1]).toMatchObject({ targets: [{ account_id: "1", model: "gpt-6-astra" }] });
+  await page.getByRole("tab", { name: "前置检测", exact: true }).click();
   await passed.getByRole("button", { name: "自动检测设置" }).click();
-  const schedule = page.getByRole("dialog", { name: "自动检测设置 · 前置通过账号", exact: true });
-  await schedule.getByRole("checkbox", { name: "前置检测", exact: true }).check();
-  await schedule.getByRole("checkbox", { name: "动画检测", exact: true }).uncheck();
+  const schedule = page.getByRole("dialog", {
+    name: "自动前置检测设置 · 前置通过账号",
+    exact: true,
+  });
   await schedule.getByRole("checkbox", { name: "开启自动检测" }).check();
   await schedule.getByRole("button", { name: "选择前置检测题目" }).click();
   await page
     .getByRole("dialog", { name: "前置检测题目", exact: true })
     .getByRole("checkbox", { name: "糖果题", exact: true })
-    .uncheck();
+    .check();
   await page.keyboard.press("Escape");
   await page.screenshot({ path: testInfo.outputPath("precheck-schedule.png") });
   await schedule.getByRole("button", { name: "保存设置", exact: true }).click();
   const confirm = page.getByRole("dialog", { name: "确认开启自动检测", exact: true });
-  await expect(confirm).toContainText("知识截止日期题");
-  await expect(confirm).not.toContainText("糖果题");
+  await expect(confirm).toContainText("糖果题");
+  await expect(confirm).not.toContainText("知识截止日期题");
   await confirm.getByRole("button", { name: "确认保存并开启", exact: true }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(writes[0]).toMatchObject({
     account_id: "1",
     mode: "precheck",
-    precheck_questions: ["knowledge-cutoff"],
+    precheck_questions: ["candy"],
     enabled: true,
     model: "gpt-6-astra",
   });

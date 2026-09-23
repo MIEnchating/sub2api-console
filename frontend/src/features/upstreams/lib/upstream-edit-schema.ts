@@ -73,6 +73,7 @@ export function authModesForPlatform(platform: string): AuthModeOption[] {
   if (platform === "newapi" || platform === "oneapi") {
     return [
       { value: "newapi_admin_key", label: "Admin Key + 用户 ID" },
+      { value: "newapi_session", label: "Session Cookie + 用户 ID" },
       { value: "newapi_user_token", label: "Token" },
       { value: "newapi_user_login", label: "密码箱登录" },
       { value: "newapi_manual_login", label: "自定义账号密码" },

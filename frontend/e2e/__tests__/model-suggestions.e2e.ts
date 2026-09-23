@@ -31,8 +31,7 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
       await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
     }
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("checkbox", { name: /检测 待校验账号/ }).check();
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   const input = page.getByRole("combobox", { name: "检测模型", exact: true });

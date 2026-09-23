@@ -18,9 +18,10 @@ const (
 )
 
 type ManualPriorityConfig struct {
-	ReservedMax        int64  `json:"reserved_max"`
-	DefaultLoadFactor  string `json:"default_load_factor"`
-	DefaultConcurrency int64  `json:"default_concurrency"`
+	LatencyPriorityEnabled bool   `json:"latency_priority_enabled"`
+	ReservedMax            int64  `json:"reserved_max"`
+	DefaultLoadFactor      string `json:"default_load_factor"`
+	DefaultConcurrency     int64  `json:"default_concurrency"`
 }
 
 type ManualPriorityAssignment struct {
@@ -79,6 +80,13 @@ func manualPriorityConfig(document map[string]any) (ManualPriorityConfig, error)
 		}
 		result.ReservedMax = int64(parsed)
 	}
+	if value, present := section["latency_priority_enabled"]; present {
+		var valid bool
+		result.LatencyPriorityEnabled, valid = value.(bool)
+		if !valid {
+			return ManualPriorityConfig{}, errors.New("manual_priority.latency_priority_enabled 必须是布尔值")
+		}
+	}
 	return result, nil
 }
 
@@ -100,7 +108,7 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		return ManualPriorityAssignment{}, err
 	}
 	if priority < 1 || priority > config.ReservedMax {
-		return ManualPriorityAssignment{}, fmt.Errorf("人工优先位必须在 1 到 %d 之间", config.ReservedMax)
+		return ManualPriorityAssignment{}, fmt.Errorf("手动控制必须在 1 到 %d 之间", config.ReservedMax)
 	}
 	loadFactor = strings.TrimSpace(loadFactor)
 	parsedLoadFactor, ok := new(big.Rat).SetString(loadFactor)
@@ -130,7 +138,7 @@ func (s *Store) AssignManualPriority(ctx context.Context, accountID string, prio
 		WHERE m.priority=? AND m.account_id<>?
 		ORDER BY shared.group_name,m.account_id LIMIT 1`, accountID, priority, accountID).Scan(&occupiedBy, &occupiedGroup)
 	if err == nil {
-		return ManualPriorityAssignment{}, fmt.Errorf("分组 %s 的人工优先位 %d 已被账号 %s 占用", occupiedGroup, priority, occupiedBy)
+		return ManualPriorityAssignment{}, fmt.Errorf("分组 %s 的手动控制 %d 已被账号 %s 占用", occupiedGroup, priority, occupiedBy)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return ManualPriorityAssignment{}, err
@@ -190,7 +198,7 @@ func (s *Store) RevertManualPriorityReservation(ctx context.Context, accountID, 
 		FROM manual_priority_accounts m JOIN accounts a ON a.id=m.account_id WHERE m.account_id=?`, accountID).
 		Scan(&name, &schedulable, &previousPriority, &previousLoadFactor, &previousConcurrency); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("账号当前不在人工优先位")
+			return errors.New("账号当前不在手动控制")
 		}
 		return err
 	}
@@ -234,15 +242,15 @@ func (s *Store) ManualPriorityRelease(ctx context.Context, accountID string) (Ma
 		&previousConcurrency, &schedulable, &paused, &pausedReason,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return ManualPriorityRelease{}, errors.New("账号当前不在人工优先位")
+			return ManualPriorityRelease{}, errors.New("账号当前不在手动控制")
 		}
 		return ManualPriorityRelease{}, err
 	}
 	if !previousPriority.Valid || previousPriority.Int64 < 1 {
-		return ManualPriorityRelease{}, errors.New("缺少设置人工优先位前的优先级，无法安全恢复；请先重新同步管理平台账号")
+		return ManualPriorityRelease{}, errors.New("缺少设置手动控制前的优先级，无法安全恢复；请先重新同步管理平台账号")
 	}
 	if !previousConcurrency.Valid || previousConcurrency.Int64 < 1 {
-		return ManualPriorityRelease{}, errors.New("缺少设置人工优先位前的并发上限，无法安全恢复；请先重新同步管理平台账号")
+		return ManualPriorityRelease{}, errors.New("缺少设置手动控制前的并发上限，无法安全恢复；请先重新同步管理平台账号")
 	}
 	result.Priority = previousPriority.Int64
 	result.LoadFactor = nullString(previousLoadFactor)
@@ -267,12 +275,12 @@ func (s *Store) CommitManualPriorityRelease(
 	var currentPriority int64
 	if err := tx.QueryRowContext(ctx, `SELECT priority FROM manual_priority_accounts WHERE account_id=?`, release.AccountID).Scan(&currentPriority); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("人工优先位在远端确认期间已被取消")
+			return errors.New("手动控制在远端确认期间已被取消")
 		}
 		return err
 	}
 	if currentPriority != release.AssignedPriority {
-		return errors.New("人工优先位在远端确认期间已发生变化，请重新操作")
+		return errors.New("手动控制在远端确认期间已发生变化，请重新操作")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO routing_baselines(
@@ -287,7 +295,7 @@ func (s *Store) CommitManualPriorityRelease(
 		return err
 	}
 	if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected != 1 {
-		return errors.New("人工优先位在远端确认期间已发生变化，请重新操作")
+		return errors.New("手动控制在远端确认期间已发生变化，请重新操作")
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET schedulable=COALESCE(?,schedulable),priority=?,load_factor=?,concurrency=?,
 		paused=COALESCE(?,paused),paused_reason=?,routing_state=NULL,
@@ -322,7 +330,7 @@ func validateManualPriorityCapacity(ctx context.Context, tx *sql.Tx, document ma
 		return err
 	}
 	if highest.Valid && highest.Int64 > config.ReservedMax {
-		return fmt.Errorf("人工优先位上限不能低于当前已占用的 %d 号位", highest.Int64)
+		return fmt.Errorf("手动控制上限不能低于当前已占用的 %d 号位", highest.Int64)
 	}
 	return nil
 }
@@ -376,10 +384,10 @@ func recordManualPriorityEvent(
 	syncBalanceMultiplier *bool,
 	actor, now string,
 ) error {
-	action, summary := "remove", fmt.Sprintf("账号 %s（%s）已取消人工优先位", name, accountID)
+	action, summary := "remove", fmt.Sprintf("账号 %s（%s）已取消手动控制", name, accountID)
 	if priority != nil {
 		action = "assign"
-		summary = fmt.Sprintf("账号 %s（%s）已设置到人工优先位 %d", name, accountID, *priority)
+		summary = fmt.Sprintf("账号 %s（%s）已设置到手动控制 %d", name, accountID, *priority)
 	}
 	payload, err := json.Marshal(map[string]any{
 		"account_id": accountID, "account_name": name, "action": action, "priority": priority,

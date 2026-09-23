@@ -20,10 +20,11 @@ const (
 )
 
 type AccountModelCatalog struct {
-	AccountID   string   `json:"account_id"`
-	AccountName string   `json:"account_name"`
-	Platform    string   `json:"platform"`
-	Models      []string `json:"models"`
+	EnabledModels []string `json:"enabled_models"`
+	AccountID     string   `json:"account_id"`
+	AccountName   string   `json:"account_name"`
+	Platform      string   `json:"platform"`
+	Models        []string `json:"models"`
 }
 
 type AccountModelCoverage struct {
@@ -32,11 +33,12 @@ type AccountModelCoverage struct {
 }
 
 type AccountModelSyncAccount struct {
-	AccountID   string   `json:"account_id"`
-	AccountName string   `json:"account_name"`
-	Platform    string   `json:"platform"`
-	Models      []string `json:"models"`
-	ProbeModel  string   `json:"probe_model"`
+	EnabledModels []string `json:"enabled_models"`
+	AccountID     string   `json:"account_id"`
+	AccountName   string   `json:"account_name"`
+	Platform      string   `json:"platform"`
+	Models        []string `json:"models"`
+	ProbeModel    string   `json:"probe_model"`
 }
 
 type AccountModelSyncPreview struct {
@@ -57,7 +59,7 @@ func (s *Store) SaveAccountEnabledModels(ctx context.Context, accountID string, 
 	if !positiveNumericID(strings.TrimSpace(accountID)) {
 		return errors.New("账号必须使用有效的稳定 ID")
 	}
-	normalized, err := validatedAccountModels(models, false)
+	normalized, err := validatedAccountModels(models, true)
 	if err != nil {
 		return err
 	}
@@ -113,7 +115,8 @@ func (s *Store) AccountModelCatalogs(ctx context.Context, accountIDs []string) (
 		models := normalizeAccountModels(metadataStringList(metadata["known_models"]))
 		result = append(result, AccountModelCatalog{
 			AccountID: accountID, AccountName: name,
-			Platform: strings.ToLower(strings.TrimSpace(metadataText(metadata, "platform"))), Models: models,
+			EnabledModels: normalizeAccountModels(metadataStringList(metadata["enabled_models"])),
+			Platform:      strings.ToLower(strings.TrimSpace(metadataText(metadata, "platform"))), Models: models,
 		})
 	}
 	return result, nil
@@ -158,7 +161,8 @@ func (s *Store) AccountModelSyncPreview(ctx context.Context, accountIDs []string
 		}
 		accounts = append(accounts, AccountModelSyncAccount{
 			AccountID: catalog.AccountID, AccountName: catalog.AccountName,
-			Platform: catalog.Platform, Models: append([]string{}, catalog.Models...), ProbeModel: probeModel,
+			EnabledModels: append([]string{}, catalog.EnabledModels...),
+			Platform:      catalog.Platform, Models: append([]string{}, catalog.Models...), ProbeModel: probeModel,
 		})
 	}
 	models := make([]AccountModelCoverage, 0, len(coverage))

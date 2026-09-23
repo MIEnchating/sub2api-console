@@ -283,6 +283,7 @@ export function ExistingChannels(props: { platformId: string; onCreate?: () => v
       )}
       {maintenance.editing && (
         <ChannelMaintenanceDialog
+          platformId={props.platformId}
           channels={maintenance.editing.channels}
           action={maintenance.editing.action}
           pending={maintenance.change.isPending}

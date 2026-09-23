@@ -123,7 +123,7 @@ function accountActions(props: AccountOperationProps): {
         onClick: props.onRateSync,
       },
       {
-        label: manualControlled ? "调整人工优先位" : "设置人工优先位",
+        label: manualControlled ? "调整手动控制" : "设置手动控制",
         icon: <Pin />,
         disabled: props.pending,
         onClick: props.onManualPriority,

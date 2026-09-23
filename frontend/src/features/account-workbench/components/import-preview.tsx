@@ -41,13 +41,16 @@ export function ImportPreview(props: {
         <DialogBody className="grid gap-4">
           <p className="text-sm">
             共 {props.preview.items.length} 项，已合并 {props.preview.duplicate_count} 项重复资料。
-            {isImport ? "账号先以停用状态导入。" : "本批将生成服务器私有 JSON。"}
+            {isImport
+              ? "先套用模板并校验账号，有错误则停止；校验通过后以暂停调度状态导入。"
+              : "本批将生成服务器私有 JSON。"}
           </p>
           {isImport && (
             <p className="text-sm text-muted-foreground">
               模板：{props.preview.template?.name || "默认配置"} ·{" "}
-              {props.preview.check ? "导入前检测，出错则停止" : "不检测"} ·{" "}
-              {props.preview.promote ? "导入完成后启用" : "保持停用"}
+              {props.preview.check
+                ? "导入后检测，通过才开启调度；未通过保留分组并提供手动启用入口"
+                : "不执行智商检测，导入后直接开启调度"}
             </p>
           )}
           {props.preview.errors.length > 0 && (

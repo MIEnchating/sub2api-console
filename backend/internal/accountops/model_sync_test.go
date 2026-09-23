@@ -65,8 +65,8 @@ func TestValidateUnifiedProbeModelsAcceptsModelsSupportedByPartOfBatch(t *testin
 	if _, err := validateUnifiedProbeModels(accounts, []string{"missing"}); err == nil {
 		t.Fatal("unknown unified probe model was accepted")
 	}
-	if _, err := validateUnifiedProbeModels(accounts, nil); err == nil {
-		t.Fatal("empty unified probe model selection was accepted")
+	if models, err := validateUnifiedProbeModels(accounts, nil); err != nil || len(models) != 0 {
+		t.Fatalf("empty probe selection must be accepted: models=%v err=%v", models, err)
 	}
 	tooMany := make([]string, maximumUnifiedProbeModels+1)
 	for index := range tooMany {
@@ -131,7 +131,7 @@ func TestRunUnifiedProbeModelsContinuesAndAggregatesAfterOneModelFails(t *testin
 		t.Fatalf("probe requests=%#v", recorder.requests)
 	}
 	for _, request := range recorder.requests {
-		if !slices.Equal(request.AccountIDs, []string{"41", "42"}) || !request.Automatic || !request.OnePerAccount {
+		if !slices.Equal(request.SelectedAccountIDs, []string{"41", "42"}) || request.Automatic || len(request.AccountIDs) > 0 || !request.OnePerAccount {
 			t.Fatalf("probe request=%#v", request)
 		}
 	}

@@ -76,8 +76,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
       await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "自定义接口", exact: true });
   await panel.getByRole("combobox", { name: "接口类型" }).click();
@@ -113,11 +112,11 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
   await expect(page.getByRole("dialog", { name: "动画预览" })).toBeVisible();
   await page.keyboard.press("Escape");
   await panel.getByLabel("API Key").fill("temporary-key");
-  await page.getByRole("tab", { name: "常规检测", exact: true }).click();
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
+  await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   await expect(panel.getByLabel("API Key")).toHaveValue("");
   await page.reload();
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   await expect(panel.getByRole("img", { name: /生成的/ })).toHaveCount(1);
   await test.step("桌面表单与结果适应面板，窄屏可滚动到达操作与完整结果", async () => {

@@ -20,6 +20,8 @@ const animationResultSchema = z.object({
     .optional(),
   account_id: z.string(),
   account_name: z.string(),
+  endpoint: z.string().optional(),
+  platform: z.enum(["openai", "anthropic"]).optional(),
   model: z.string(),
   response_model: z.string().optional(),
   request_id: z.string(),
@@ -31,18 +33,26 @@ const animationResultSchema = z.object({
   completed_at: z.string().refine((value) => Number.isFinite(Date.parse(value))),
 });
 
+const animationTargetSchema = animationResultSchema.pick({
+  account_id: true,
+  model: true,
+  endpoint: true,
+  platform: true,
+});
+
 function animationTaskResults(task: Task, precheck: boolean): Map<string, AnimationResult> {
   const results = new Map<string, AnimationResult>();
   if (!Array.isArray(task?.result.animations)) return results;
   for (const item of task.result.animations) {
     const parsed = animationResultSchema.safeParse(item);
     if (!parsed.success) continue;
-    const result = parsed.data;
+    const result: AnimationResult = { ...parsed.data };
     const isPrecheck =
       result.mode === "precheck" ||
       (!result.mode &&
         (task.operation === "account-model-precheck" || task.result.mode === "precheck"));
     if (isPrecheck !== precheck) continue;
+    if (!isPrecheck) result.source_task_id = task.id;
     const existing = results.get(result.account_id);
     if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))
       results.set(result.account_id, result);
@@ -81,12 +91,19 @@ export function collectAnimationTasks(
   const precheckStatuses = new Map<string, Task["status"]>();
   const statuses = new Map<string, Task["status"]>();
   const activities = new Map<string, AnimationActivity>();
+  const targets = new Map<string, z.infer<typeof animationTargetSchema>>();
   const busyIDs = new Set(submitting);
   const activeTaskIDs = new Set<string>();
   const sorted = tasks
     .filter((task): task is Task => task !== undefined)
     .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
   for (const task of sorted) {
+    if (Array.isArray(task.result.targets)) {
+      for (const target of task.result.targets) {
+        const parsed = animationTargetSchema.safeParse(target);
+        if (parsed.success) targets.set(parsed.data.account_id, parsed.data);
+      }
+    }
     const precheck = task.operation === "account-model-precheck" || task.result.mode === "precheck";
     const combined = task.operation === "account-model-combined" || task.result.mode === "both";
     const taskPrechecks = animationTaskResults(task, true);
@@ -106,8 +123,7 @@ export function collectAnimationTasks(
         if (!existing || Date.parse(result.completed_at) >= Date.parse(existing.completed_at))
           resultMap.set(id, result);
       }
-      for (const id of ids)
-        statusMap.set(id, combined ? (phaseResults.get(id)?.status ?? task.status) : task.status);
+      for (const id of ids) statusMap.set(id, phaseResults.get(id)?.status ?? task.status);
     }
     if (task.status !== "queued" && task.status !== "running" && task.status !== "waiting_input")
       continue;
@@ -133,6 +149,7 @@ export function collectAnimationTasks(
       ...(precheckSubmitting?.has(id) ? { mode: "precheck" as const } : {}),
     });
   return {
+    targets,
     results,
     statuses,
     activities,

@@ -145,7 +145,7 @@ function queueItemMatches(item: QueueDisplayItem, search: string) {
   const notification = notificationPresentation(item);
   return [
     alertSubjectLabel(alert.event_type),
-    alertTypeLabel(alert.event_type, alert.status),
+    alertTypeLabel(alert.event_type, alert.status, alert.cause_code),
     alertObjectLabel(alert),
     alertCauseLabel(alert.cause_code),
     notification.label,

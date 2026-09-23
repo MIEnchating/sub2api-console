@@ -35,6 +35,7 @@ const selectLabels: Record<string, string> = {
   existing: "已有账号",
   sub2api_user_token: "Token + 刷新 Token",
   newapi_admin_key: "Admin Key + 用户 ID",
+  newapi_session: "Session Cookie + 用户 ID",
   newapi_user_token: "Token",
   bearer_token: "Bearer Token",
   custom_headers: "自定义 Header / Cookie",

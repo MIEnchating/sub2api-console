@@ -1461,16 +1461,18 @@ describe("upstream operator action contracts", () => {
 
     await api.verifyManualAuth({
       host: "api.example.test",
-      admin_key: "secret",
+      auth_mode: "newapi_session",
       user_id: "9",
+      cookies: { session: "browser-session" },
       headers: { "X-CF-Access": "signed" },
     });
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({
       host: "api.example.test",
-      admin_key: "secret",
+      auth_mode: "newapi_session",
       user_id: "9",
+      cookies: { session: "browser-session" },
       headers: { "X-CF-Access": "signed" },
     });
   });

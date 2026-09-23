@@ -4,7 +4,15 @@ import { ContentLoading } from "@/components/content-loading";
 import { ContentRetry } from "@/components/content-retry";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCheck, CheckCircle2, CircleAlert, CircleSlash2, Search, XCircle } from "lucide-react";
+import {
+  CheckCheck,
+  CheckCircle2,
+  CircleAlert,
+  CircleSlash2,
+  Ban,
+  Search,
+  XCircle,
+} from "lucide-react";
 
 import {
   api,
@@ -16,6 +24,12 @@ import {
   type Task,
 } from "@/api";
 import { FieldLabel } from "@/components/field-help-tooltip";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { MultiSelect } from "@/components/multi-select";
 import {
   TaskCancelButton,
@@ -36,11 +50,21 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SegmentedControl, SegmentedControlItem } from "@/components/ui/segmented-control";
 import { accountPlatformLabel } from "@/features/accounts/lib/account-labels";
 import { orderedDictionaryOptions } from "@/lib/domain-dictionaries";
 import { taskPollInterval, taskStopsPolling } from "@/lib/task-state";
 import { cn } from "@/lib/utils";
+import { ManualSyncModelForm } from "./manual-sync-model-form";
+import { ModelSyncScopeDialog } from "./model-sync-scope-dialog";
+import { useModelSyncBlocking } from "../hooks/use-model-sync-blocking";
+import { modelMatchesBlockPatterns } from "../lib/model-block-patterns";
+import {
+  type ModelSyncModel,
+  type ModelSyncPlatformGroup,
+  type ModelSyncSupportingAccount,
+} from "../lib/model-sync-groups";
 
 type ModelSyncTaskItem = {
   accountId: string;
@@ -122,6 +146,7 @@ export function selectedAccountModels(
   accountPlatforms: ReadonlyMap<string, string | null>,
   accountGroups: ReadonlyMap<string, string[]>,
   exclusions: ScopeModelExclusions,
+  inclusions: ScopeModelExclusions = new Map(),
 ): AccountModelSelection[] {
   const blocked = new Set(preview.blocked_models.map((model) => model.toLocaleLowerCase()));
   return preview.accounts.map((account) => {
@@ -129,10 +154,18 @@ export function selectedAccountModels(
     const scopes = uniqueAccountGroups(accountGroups.get(account.account_id)).map((group) =>
       modelSyncScopeKey(platform, group),
     );
+    const enabled = new Set(
+      (account.enabled_models ?? []).map((model) => model.toLocaleLowerCase()),
+    );
     const models = account.models.filter((model) => {
       const modelKey = model.toLocaleLowerCase();
-      if (blocked.has(modelKey)) return false;
-      return scopes.some((scope) => !exclusions.get(scope)?.has(modelKey));
+      if (blocked.has(modelKey) || modelMatchesBlockPatterns(model, preview.blocked_patterns))
+        return false;
+      return scopes.some(
+        (scope) =>
+          !exclusions.get(scope)?.has(modelKey) &&
+          (inclusions.get(scope)?.has(modelKey) || enabled.has(modelKey)),
+      );
     });
     return { account_id: account.account_id, models };
   });
@@ -174,14 +207,53 @@ export function modelSyncProbeItems(task: Task | undefined): ModelSyncProbeItem[
   });
 }
 
-export function AccountModelSyncDialog(props: {
+type AccountModelSyncDialogProps = {
   open: boolean;
   accountIds: string[];
   accountPlatforms: ReadonlyMap<string, string | null>;
   accountGroups: ReadonlyMap<string, string[]>;
   onOpenChange: (open: boolean) => void;
   onCompleted: () => void;
-}) {
+};
+
+export function AccountModelSyncDialog(props: AccountModelSyncDialogProps) {
+  if (!props.open) return null;
+  return <AccountModelSyncSession key={props.accountIds.join("\u0000")} {...props} />;
+}
+
+function AccountModelSyncSession(props: AccountModelSyncDialogProps) {
+  const [accountIds, setAccountIds] = useState<string[] | null>(null);
+  const discovery = useMutation({ mutationFn: api.discoverAccountModels });
+  if (accountIds === null)
+    return (
+      <ModelSyncScopeDialog
+        accountIds={props.accountIds}
+        accountGroups={props.accountGroups}
+        onOpenChange={props.onOpenChange}
+        onStart={(ids) => {
+          discovery.mutate(ids);
+          setAccountIds(ids);
+        }}
+      />
+    );
+  return (
+    <AccountModelSyncRunDialog
+      {...props}
+      accountIds={accountIds}
+      discoveryTaskId={discovery.data?.id ?? null}
+      discoveryPending={discovery.isPending}
+      discoveryError={discovery.error}
+    />
+  );
+}
+
+function AccountModelSyncRunDialog(
+  props: AccountModelSyncDialogProps & {
+    discoveryTaskId: string | null;
+    discoveryPending: boolean;
+    discoveryError: unknown;
+  },
+) {
   const queryClient = useQueryClient();
   const platformDictionary = useQuery({
     queryKey: ["dictionaries", "platform"],
@@ -195,19 +267,15 @@ export function AccountModelSyncDialog(props: {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
-  const [discoveryTaskId, setDiscoveryTaskId] = useState<string | null>(null);
+  const discoveryTaskId = props.discoveryTaskId;
   const [applyTaskId, setApplyTaskId] = useState<string | null>(null);
   const [scopeExclusions, setScopeExclusions] = useState<Map<string, Set<string>>>(() => new Map());
+  const [scopeInclusions, setScopeInclusions] = useState<Map<string, Set<string>>>(() => new Map());
   const [probeModels, setProbeModels] = useState<string[]>([]);
+  const [manualModels, setManualModels] = useState<Map<string, string[]>>(() => new Map());
   const [catalogRefreshMessage, setCatalogRefreshMessage] = useState<string | null>(null);
-  const startedTarget = useRef<string | null>(null);
   const initializedFingerprint = useRef<string | null>(null);
   const completedTask = useRef<string | null>(null);
-  const targetKey = props.accountIds.join("\u0000");
-  const discovery = useMutation({
-    mutationFn: () => api.discoverAccountModels(props.accountIds),
-    onSuccess: (task) => setDiscoveryTaskId(task.id),
-  });
   const discoveryTask = useQuery({
     queryKey: ["account-model-discovery", discoveryTaskId],
     queryFn: () => api.task(discoveryTaskId!),
@@ -219,16 +287,39 @@ export function AccountModelSyncDialog(props: {
     [discoveryTask.data],
   );
   const discoveryStopped = taskStopsPolling(discoveryTask.data);
+  const blocking = useModelSyncBlocking({
+    accountIds: discoveredAccountIDs,
+    onPreviewUpdated: (updated) => {
+      // A global block changes the fingerprint without discarding the user's draft.
+      initializedFingerprint.current = updated.fingerprint;
+      setProbeModels((current) =>
+        current.filter((model) => !modelMatchesBlockPatterns(model, updated.blocked_patterns)),
+      );
+    },
+  });
   const preview = useQuery({
     queryKey: ["account-model-sync-preview", discoveredAccountIDs],
     queryFn: () => api.previewAccountModels(discoveredAccountIDs),
-    enabled: discoveryStopped && discoveredAccountIDs.length > 0 && applyTaskId === null,
+    enabled:
+      discoveryStopped &&
+      discoveredAccountIDs.length > 0 &&
+      applyTaskId === null &&
+      !blocking.pending &&
+      blocking.savedSettings === null,
     retry: false,
+    refetchOnWindowFocus: false,
   });
   const apply = useMutation({
     mutationFn: () => {
       return api.applyAccountModels(
-        accountSelections,
+        accountSelections.map((selection) => {
+          const manual = manualModels.get(selection.account_id);
+          if (!manual?.length) return selection;
+          return {
+            ...selection,
+            manual_models: manual.filter((model) => selection.models.includes(model)),
+          };
+        }),
         preview.data?.fingerprint ?? "",
         probeModels,
       );
@@ -253,7 +344,8 @@ export function AccountModelSyncDialog(props: {
     refetchInterval: taskPollInterval,
   });
   const pending =
-    discovery.isPending ||
+    blocking.pending ||
+    props.discoveryPending ||
     (discoveryTaskId !== null && !discoveryStopped && !discoveryTask.isError) ||
     apply.isPending ||
     (applyTaskId !== null && !taskStopsPolling(applyTask.data) && !applyTask.isError);
@@ -265,37 +357,13 @@ export function AccountModelSyncDialog(props: {
   }
 
   useEffect(() => {
-    if (!props.open) {
-      startedTarget.current = null;
-      initializedFingerprint.current = null;
-      completedTask.current = null;
-      setDiscoveryTaskId(null);
-      setApplyTaskId(null);
-      setScopeExclusions(new Map());
-      setProbeModels([]);
-      setCatalogRefreshMessage(null);
-      discovery.reset();
-      apply.reset();
-      return;
-    }
-    if (props.accountIds.length === 0 || startedTarget.current === targetKey) return;
-    startedTarget.current = targetKey;
-    discovery.mutate();
-  }, [props.open, targetKey]);
-
-  useEffect(() => {
     if (!preview.data || initializedFingerprint.current === preview.data.fingerprint) return;
     initializedFingerprint.current = preview.data.fingerprint;
     const initial = new Map<string, Set<string>>();
     setScopeExclusions(initial);
-    const selections = selectedAccountModels(
-      preview.data,
-      props.accountPlatforms,
-      props.accountGroups,
-      initial,
-    );
-    const firstProbeModel = availableUnifiedProbeModels(selections)[0];
-    setProbeModels(firstProbeModel ? [firstProbeModel] : []);
+    setScopeInclusions(new Map());
+    setProbeModels([]);
+    setManualModels(new Map());
   }, [preview.data, props.accountPlatforms, props.accountGroups]);
 
   useEffect(() => {
@@ -310,40 +378,60 @@ export function AccountModelSyncDialog(props: {
     props.onCompleted();
   }, [applyTask.data?.id, applyTask.data?.status, queryClient]);
 
-  function setModelExcluded(scope: string, model: string, excluded: boolean): void {
+  function setModelExcluded(scopes: string[], model: string, excluded: boolean): void {
     const next = new Map(scopeExclusions);
-    const scopeModels = new Set(next.get(scope) ?? []);
+    const nextInclusions = new Map(scopeInclusions);
     const modelKey = model.toLocaleLowerCase();
-    if (excluded) scopeModels.add(modelKey);
-    else scopeModels.delete(modelKey);
-    if (scopeModels.size > 0) next.set(scope, scopeModels);
-    else next.delete(scope);
+    for (const scope of scopes) {
+      const scopeModels = new Set(next.get(scope) ?? []);
+      const included = new Set(nextInclusions.get(scope) ?? []);
+      if (excluded) {
+        scopeModels.add(modelKey);
+        included.delete(modelKey);
+      } else {
+        scopeModels.delete(modelKey);
+        included.add(modelKey);
+      }
+      next.set(scope, scopeModels);
+      nextInclusions.set(scope, included);
+    }
     setScopeExclusions(next);
-    if (!preview.data) return;
+    setScopeInclusions(nextInclusions);
+    if (!editorPreview) return;
     const selections = selectedAccountModels(
-      preview.data,
+      editorPreview,
       props.accountPlatforms,
       props.accountGroups,
       next,
+      nextInclusions,
     );
     const available = availableUnifiedProbeModels(selections);
     const availableKeys = new Set(available.map((candidate) => candidate.toLocaleLowerCase()));
     const nextProbeModels = probeModels.filter((model) =>
       availableKeys.has(model.toLocaleLowerCase()),
     );
-    if (nextProbeModels.length > 0) {
-      setProbeModels(nextProbeModels);
-      return;
-    }
-    setProbeModels(available[0] ? [available[0]] : []);
+    setProbeModels(nextProbeModels);
   }
 
-  const accountSelections = preview.data
+  const editorPreview = preview.data
+    ? {
+        ...preview.data,
+        blocked_patterns: blocking.savedSettings?.blocked_patterns ?? preview.data.blocked_patterns,
+        accounts: preview.data.accounts.map((account) => ({
+          ...account,
+          models: [
+            ...new Set([...account.models, ...(manualModels.get(account.account_id) ?? [])]),
+          ],
+        })),
+      }
+    : undefined;
+  const accountSelections = editorPreview
     ? selectedAccountModels(
-        preview.data,
+        editorPreview,
         props.accountPlatforms,
         props.accountGroups,
         scopeExclusions,
+        scopeInclusions,
       )
     : [];
   const probeModelOptions = availableUnifiedProbeModels(accountSelections);
@@ -354,9 +442,10 @@ export function AccountModelSyncDialog(props: {
   const probeModelOptionKeys = new Set(
     probeModelOptions.map((candidate) => candidate.toLocaleLowerCase()),
   );
-  const missingProbeModel =
-    probeModels.length === 0 ||
-    probeModels.some((model) => !probeModelOptionKeys.has(model.toLocaleLowerCase()));
+  const missingProbeModel = probeModels.some(
+    (model) => !probeModelOptionKeys.has(model.toLocaleLowerCase()),
+  );
+  const editorDisabled = apply.isPending || blocking.pending || blocking.savedSettings !== null;
   const hasCompletedApply = Boolean(applyTask.data && taskStopsPolling(applyTask.data));
   let dialogStage: ModelSyncDialogStage = "pending";
   if (hasCompletedApply) dialogStage = "result";
@@ -381,14 +470,14 @@ export function AccountModelSyncDialog(props: {
           <DialogDescription>
             {hasCompletedApply
               ? "查看本次模型写入和探活验证结果。"
-              : "选择统一探活模型，再按平台和分组选择要同步的模型。"}
+              : "按平台和分组确认同步模型；探活模型留空时不执行探活。"}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid min-h-0 gap-4 overflow-y-auto">
           <ModelSyncDiscoveryState
             requestedCount={props.accountIds.length}
-            mutationPending={discovery.isPending}
-            mutationError={discovery.error}
+            mutationPending={props.discoveryPending}
+            mutationError={props.discoveryError}
             queryError={discoveryTask.error}
             task={discoveryTask.data}
           />
@@ -402,20 +491,46 @@ export function AccountModelSyncDialog(props: {
           {preview.error ? (
             <ModelSyncError error={preview.error} fallback="模型预览读取失败" />
           ) : null}
-          {preview.data && !applyTaskId ? (
+          {editorPreview && !applyTaskId ? (
             <SyncModelEditor
-              preview={preview.data}
+              preview={editorPreview}
               accountPlatforms={props.accountPlatforms}
               accountGroups={props.accountGroups}
               dictionaryEntries={platformDictionary.data?.items}
               groupDictionaryEntries={groupDictionary.data?.items}
               scopeExclusions={scopeExclusions}
+              scopeInclusions={scopeInclusions}
               probeModels={probeModels}
               probeModelOptions={probeModelOptions}
-              disabled={apply.isPending}
+              disabled={editorDisabled}
               onProbeModelsChange={setProbeModels}
               onModelExcluded={setModelExcluded}
+              onModelBlocked={blocking.block}
+              onAddModel={(ids, model) => {
+                setManualModels((current) => {
+                  const next = new Map(current);
+                  for (const id of ids) {
+                    const models = next.get(id) ?? [];
+                    if (
+                      ![
+                        ...models,
+                        ...(preview.data?.accounts.find((account) => account.account_id === id)
+                          ?.models ?? []),
+                      ].some((value) => value.toLocaleLowerCase() === model.toLocaleLowerCase())
+                    ) {
+                      next.set(id, [...models, model]);
+                    }
+                  }
+                  return next;
+                });
+              }}
             />
+          ) : null}
+          {blocking.pending ? (
+            <ContentLoading compact label="正在保存全局屏蔽并更新模型列表" />
+          ) : null}
+          {blocking.refreshFailed ? (
+            <ContentRetry onRetry={() => blocking.refresh()} pending={blocking.pending} />
           ) : null}
           {catalogRefreshMessage ? (
             <p
@@ -425,7 +540,7 @@ export function AccountModelSyncDialog(props: {
               {catalogRefreshMessage}
             </p>
           ) : null}
-          {apply.isPending ? <TaskStartupState message="正在创建模型应用与探测任务" /> : null}
+          {apply.isPending ? <TaskStartupState message="正在创建模型同步任务" /> : null}
           {apply.error && !isModelCatalogChangedError(apply.error) ? (
             <ModelSyncError error={apply.error} fallback="模型应用任务启动失败" />
           ) : null}
@@ -447,7 +562,7 @@ export function AccountModelSyncDialog(props: {
           </Button>
           {preview.data && !applyTaskId ? (
             <Button
-              disabled={includedModelCount === 0 || missingProbeModel || apply.isPending}
+              disabled={includedModelCount === 0 || missingProbeModel || editorDisabled}
               onClick={() => apply.mutate()}
               aria-label={`同步 ${discoveredAccountIDs.length} 个账号`}
             >
@@ -514,11 +629,14 @@ function SyncModelEditor(props: {
   dictionaryEntries?: readonly DictionaryEntry[];
   groupDictionaryEntries?: readonly DictionaryEntry[];
   scopeExclusions: ScopeModelExclusions;
+  scopeInclusions: ScopeModelExclusions;
   probeModels: string[];
   probeModelOptions: string[];
   disabled: boolean;
   onProbeModelsChange: (models: string[]) => void;
-  onModelExcluded: (scope: string, model: string, excluded: boolean) => void;
+  onModelExcluded: (scopes: string[], model: string, excluded: boolean) => void;
+  onModelBlocked: (model: string) => void;
+  onAddModel: (ids: string[], model: string) => void;
 }) {
   const platforms = useMemo(
     () =>
@@ -540,26 +658,35 @@ function SyncModelEditor(props: {
   const [activePlatform, setActivePlatform] = useState(platforms[0]?.key ?? "");
   const [activeGroup, setActiveGroup] = useState(platforms[0]?.groups[0]?.key ?? "");
   const [modelSearch, setModelSearch] = useState("");
-  const [hoveredModel, setHoveredModel] = useState<string | null>(null);
   const currentPlatform =
     platforms.find((platform) => platform.key === activePlatform) ?? platforms[0];
   const currentGroup =
     currentPlatform?.groups.find((group) => group.key === activeGroup) ??
     currentPlatform?.groups[0];
+  const scopeKeys = currentGroup ? [currentGroup.scopeKey] : [];
   const blockedModels = new Set(
     props.preview.blocked_models.map((model) => model.toLocaleLowerCase()),
   );
   const selectableModels =
-    currentGroup?.models.filter((item) => !blockedModels.has(item.model.toLocaleLowerCase())) ?? [];
+    currentGroup?.models.filter(
+      (item) =>
+        !blockedModels.has(item.model.toLocaleLowerCase()) &&
+        !modelMatchesBlockPatterns(item.model, props.preview.blocked_patterns),
+    ) ?? [];
   const visibleModels = selectableModels.filter((item) =>
     item.model.toLocaleLowerCase().includes(modelSearch.trim().toLocaleLowerCase()),
   );
-  const currentScopeExclusions = currentGroup
-    ? props.scopeExclusions.get(currentGroup.scopeKey)
-    : undefined;
-  const selectedInGroup = selectableModels.filter(
-    (item) => !currentScopeExclusions?.has(item.model.toLocaleLowerCase()),
-  ).length;
+  function isIncluded(model: string): boolean {
+    const key = model.toLocaleLowerCase();
+    if (!currentGroup || props.scopeExclusions.get(currentGroup.scopeKey)?.has(key)) return false;
+    if (props.scopeInclusions.get(currentGroup.scopeKey)?.has(key)) return true;
+    return props.preview.accounts.some(
+      (account) =>
+        currentGroup.accountIds.includes(account.account_id) &&
+        account.enabled_models?.some((enabled) => enabled.toLocaleLowerCase() === key),
+    );
+  }
+  const selectedInGroup = selectableModels.filter((item) => isIncluded(item.model)).length;
 
   useEffect(() => {
     if (platforms.some((platform) => platform.key === activePlatform)) return;
@@ -573,19 +700,16 @@ function SyncModelEditor(props: {
   }, [activeGroup, currentPlatform]);
 
   return (
-    <section
-      className="grid min-h-0 content-start gap-3"
-      aria-labelledby="account-sync-models-title"
-    >
+    <section className="grid content-start gap-3" aria-labelledby="account-sync-models-title">
       <div
         className="grid self-start gap-3 rounded-lg border p-4"
         data-testid="unified-probe-models"
       >
         <FieldLabel
           label="统一探活模型"
-          description="最多选择 20 个；同步完成后依次验证，不支持的账号自动跳过。"
+          description="最多选择 20 个；留空时同步完成后不执行探活。"
         />
-        {props.probeModelOptions.length > 0 ? (
+        <div className="grid gap-2 sm:max-w-2xl">
           <MultiSelect
             options={props.probeModelOptions.map((model) => ({ value: model, label: model }))}
             selected={props.probeModels}
@@ -599,14 +723,10 @@ function SyncModelEditor(props: {
             disabled={props.disabled}
             className="w-full sm:max-w-2xl"
           />
-        ) : (
-          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            请至少勾选一个要同步的模型。
-          </p>
-        )}
+        </div>
       </div>
 
-      <div className="grid min-h-0 content-start gap-3 rounded-lg border p-4">
+      <div className="grid content-start gap-3 rounded-lg border p-4">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h3 className="font-semibold" id="account-sync-models-title">
@@ -642,11 +762,7 @@ function SyncModelEditor(props: {
         ) : null}
 
         {currentPlatform ? (
-          <div
-            className="grid min-h-0 gap-3"
-            id="account-model-sync-platform-panel"
-            role="tabpanel"
-          >
+          <div className="grid gap-3" id="account-model-sync-platform-panel" role="tabpanel">
             <SegmentedControl role="tablist" aria-label="账号分组" className="overflow-x-auto">
               {currentPlatform.groups.map((group) => (
                 <SegmentedControlItem
@@ -664,23 +780,29 @@ function SyncModelEditor(props: {
               ))}
             </SegmentedControl>
             {currentGroup ? (
-              <div
-                className="grid min-h-0 gap-3"
-                id="account-model-sync-group-panel"
-                role="tabpanel"
-              >
+              <div className="grid gap-3" id="account-model-sync-group-panel" role="tabpanel">
                 <div className="flex items-center justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">
                     已选 {selectedInGroup}/{selectableModels.length} 个模型
                   </span>
                   <span>{currentGroup.accountCount} 个账号</span>
                 </div>
+                <ManualSyncModelForm
+                  key={currentGroup.scopeKey}
+                  disabled={props.disabled}
+                  blockedPatterns={props.preview.blocked_patterns}
+                  onAdd={(model) => {
+                    const ids = currentGroup.accountIds;
+                    props.onAddModel(ids, model);
+                    props.onModelExcluded(scopeKeys, model, false);
+                  }}
+                />
                 <div
-                  className="grid max-h-[30rem] auto-rows-[3.5rem] content-start grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  className="grid min-h-32 max-h-[30rem] auto-rows-[3.5rem] content-start grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
                   data-testid="account-sync-models"
                 >
                   {visibleModels.map((item) => {
-                    const included = !currentScopeExclusions?.has(item.model.toLocaleLowerCase());
+                    const included = isIncluded(item.model);
                     const showsSupportingAccounts = shouldShowModelSupportingAccounts(
                       item.supportingAccounts.length,
                     );
@@ -692,7 +814,6 @@ function SyncModelEditor(props: {
                             ? "cursor-not-allowed"
                             : "cursor-pointer hover:border-primary/50 hover:bg-muted/40",
                           included && "border-primary/40",
-                          hoveredModel === item.model && "z-10",
                         )}
                         key={item.model}
                         role="group"
@@ -701,27 +822,17 @@ function SyncModelEditor(props: {
                         data-model-support-tooltip-trigger={
                           showsSupportingAccounts ? "" : undefined
                         }
-                        onMouseEnter={() => {
-                          if (showsSupportingAccounts) setHoveredModel(item.model);
-                        }}
-                        onMouseLeave={() => {
-                          if (hoveredModel === item.model) setHoveredModel(null);
-                        }}
                         onClick={() => {
                           if (props.disabled) return;
-                          props.onModelExcluded(currentGroup.scopeKey, item.model, included);
+                          props.onModelExcluded(scopeKeys, item.model, included === true);
                         }}
                       >
                         <Checkbox
                           className="mt-0.5"
-                          checked={included}
+                          checked={included === true}
                           disabled={props.disabled}
                           onCheckedChange={(checked) =>
-                            props.onModelExcluded(
-                              currentGroup.scopeKey,
-                              item.model,
-                              checked !== true,
-                            )
+                            props.onModelExcluded(scopeKeys, item.model, checked !== true)
                           }
                           onClick={(event) => event.stopPropagation()}
                           aria-label={`同步模型 ${item.model}`}
@@ -729,29 +840,46 @@ function SyncModelEditor(props: {
                         <span className="min-w-0 flex-1">
                           <span className="block truncate font-mono text-xs">{item.model}</span>
                           <span className="text-muted-foreground mt-1 block text-xs">
-                            {item.accountCount}/{currentGroup.accountCount} 个账号支持
+                            {item.accountCount}/{currentGroup.accountCount} 个账号
                           </span>
                         </span>
-                        {showsSupportingAccounts && hoveredModel === item.model ? (
-                          <div
-                            className="bg-popover text-popover-foreground border-border pointer-events-none absolute bottom-full left-0 z-20 mb-1 grid max-w-sm gap-1 rounded-md border px-3 py-1.5 text-xs shadow-md"
-                            role="tooltip"
-                          >
-                            <span className="font-medium">支持账号</span>
-                            {item.supportingAccounts.map((account) => (
-                              <span className="text-xs" key={account.accountId}>
-                                {account.accountName}
-                                {account.platform ? ` · ${account.platform}` : ""}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
                       </div>
                     );
-                    if (!showsSupportingAccounts) {
-                      return card;
-                    }
-                    return card;
+                    const contextTrigger = <ContextMenuTrigger render={card} />;
+                    const trigger = showsSupportingAccounts ? (
+                      <Tooltip>
+                        <TooltipTrigger render={contextTrigger} />
+                        <TooltipContent
+                          role="tooltip"
+                          align="start"
+                          className="grid max-w-sm gap-1"
+                        >
+                          <span className="font-medium">支持账号</span>
+                          {item.supportingAccounts.map((account) => (
+                            <span key={account.accountId}>
+                              {account.accountName}
+                              {account.platform ? ` · ${account.platform}` : ""}
+                            </span>
+                          ))}
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      contextTrigger
+                    );
+                    return (
+                      <ContextMenu key={item.model}>
+                        {trigger}
+                        <ContextMenuContent>
+                          <ContextMenuItem
+                            disabled={props.disabled}
+                            onClick={() => props.onModelBlocked(item.model)}
+                          >
+                            <Ban aria-hidden="true" />
+                            排除此模型（全局屏蔽）
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
+                    );
                   })}
                   {visibleModels.length === 0 ? (
                     <p className="text-muted-foreground col-span-full flex h-14 items-center justify-center px-3 text-center text-sm">
@@ -767,33 +895,6 @@ function SyncModelEditor(props: {
     </section>
   );
 }
-
-type ModelSyncPlatformGroup = {
-  key: string;
-  label: string;
-  accountCount: number;
-  groups: ModelSyncGroup[];
-};
-
-type ModelSyncGroup = {
-  key: string;
-  scopeKey: string;
-  label: string;
-  accountCount: number;
-  models: ModelSyncModel[];
-};
-
-type ModelSyncSupportingAccount = {
-  accountId: string;
-  accountName: string;
-  platform: string | null;
-};
-
-type ModelSyncModel = {
-  model: string;
-  accountCount: number;
-  supportingAccounts: ModelSyncSupportingAccount[];
-};
 
 export function shouldShowModelSupportingAccounts(accountCount: number): boolean {
   return accountCount > 0 && accountCount < 5;
@@ -816,6 +917,7 @@ export function modelSyncPlatformGroups(
         {
           label: string;
           accountCount: number;
+          accountIds: string[];
           models: Map<string, ModelSyncModel>;
         }
       >;
@@ -845,10 +947,11 @@ export function modelSyncPlatformGroups(
       const groupKey = membership.toLocaleLowerCase();
       let membershipGroup = group.groups.get(groupKey);
       if (!membershipGroup) {
-        membershipGroup = { label: membership, accountCount: 0, models: new Map() };
+        membershipGroup = { label: membership, accountCount: 0, accountIds: [], models: new Map() };
         group.groups.set(groupKey, membershipGroup);
       }
       membershipGroup.accountCount++;
+      membershipGroup.accountIds.push(account.account_id);
       for (const model of account.models) {
         const modelKey = model.toLocaleLowerCase();
         const coverage = membershipGroup.models.get(modelKey);
@@ -874,6 +977,7 @@ export function modelSyncPlatformGroups(
       scopeKey: modelSyncScopeKey(key, membership.label),
       label: membership.label,
       accountCount: membership.accountCount,
+      accountIds: membership.accountIds,
       models: Array.from(membership.models.values()).sort((left, right) =>
         left.model.localeCompare(right.model),
       ),
@@ -975,6 +1079,7 @@ function ModelSyncCompletedState(props: { task: Task }) {
     probeGroups.failed.length > 0 ||
     probeError !== "";
   let resultMessage = "模型写入和探活验证均已完成";
+  if (props.task.result.probe_disabled === true) resultMessage = "模型写入已完成，未执行探活";
   if (partial) resultMessage = "操作已完成，部分结果需要关注";
   if (props.task.status === "failed" || props.task.status === "cancelled") {
     resultMessage = props.task.message || "模型同步未完成，请查看任务详情";
@@ -1013,7 +1118,7 @@ function ModelSyncCompletedState(props: { task: Task }) {
           ]}
         />
         <ResultSummary
-          title="探活验证"
+          title={props.task.result.probe_disabled === true ? "探活验证（未执行）" : "探活验证"}
           values={[
             { label: "通过", value: probeGroups.passed.length, tone: "success" },
             { label: "跳过", value: probeGroups.skipped.length, tone: "neutral" },

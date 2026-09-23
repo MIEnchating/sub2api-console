@@ -117,7 +117,6 @@ async function mockAccountAPI(page: Page): Promise<{
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "隔离测试" },
       "/api/accounts": [initialAccount],
-      "/api/accounts/traffic": { enabled: false, accounts: [] },
       "/api/model-checks/account-statuses": [],
       "/api/groups": [],
       "/api/dictionaries": { items: [] },

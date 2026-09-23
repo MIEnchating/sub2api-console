@@ -102,7 +102,7 @@ it("检测结果顺序与账号不同，仍在对应账号卡片中展示动画�
   )!;
   expect(within(first).getByRole("img", { name: /甲账号生成/ })).toBeVisible();
   expect(within(second).getByText("余额不足")).toBeVisible();
-  expect(within(second).getByRole("button", { name: "重试 乙账号" })).toBeEnabled();
+  expect(within(second).getByRole("button", { name: "重测 乙账号" })).toBeEnabled();
   expect(cards).toHaveLength(3);
   dispose();
 });
@@ -273,5 +273,38 @@ it("检测记录读取失败时在操作行提供重试，恢复后保留卡片�
     ).not.toBeInTheDocument(),
   );
   expect(screen.getByRole("img", { name: /甲账号生成/ })).toBe(preview);
+  dispose();
+});
+
+it("同批部分账号已完成时展示动画及等待批次提示，不误报重新检测", () => {
+  const { dispose } = setup({
+    ...task,
+    status: "running",
+    result: { ...task.result, animations: [(task.result.animations as unknown[])[1]] },
+  });
+  const completed = within(screen.getByRole("article", { name: "账号 甲账号" }));
+  expect(completed.getByRole("img", { name: /甲账号生成/ })).toBeVisible();
+  expect(completed.queryByText("正在重新检测")).not.toBeInTheDocument();
+  expect(completed.getByText("本项检测已结束，等待任务结束")).toBeVisible();
+  expect(completed.getByRole("button", { name: "重测 甲账号" })).toBeDisabled();
+  const pending = within(screen.getByRole("article", { name: "账号 乙账号" }));
+  expect(pending.getByText("生成中，等待动画结果")).toBeVisible();
+  dispose();
+});
+
+it("旧动画仍在显示而新任务尚未返回时，继续提示正在重新检测", () => {
+  const { dispose } = setup(
+    {
+      ...task,
+      id: "new-task",
+      status: "running",
+      created_at: "2026-09-13T00:02:00Z",
+      result: { account_ids: ["41"], animations: [] },
+    },
+    task,
+  );
+  const pending = within(screen.getByRole("article", { name: "账号 甲账号" }));
+  expect(pending.getByText("正在重新检测")).toBeVisible();
+  expect(pending.queryByText("本项检测已结束，等待任务结束")).not.toBeInTheDocument();
   dispose();
 });

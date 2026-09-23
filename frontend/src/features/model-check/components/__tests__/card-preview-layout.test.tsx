@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { AnimationAccountCard } from "../animation-account-card";
 import { account } from "@/features/accounts/__tests__/fixtures";
 
-it("卡片同时展示两道前置结果与动画时预览保持高度，卡片随摘要内容收紧", () => {
+it("动画与前置模式分别只展示对应结果", () => {
   const result = {
     account_id: "41",
     account_name: "测试账号",
@@ -15,7 +15,7 @@ it("卡片同时展示两道前置结果与动画时预览保持高度，卡片�
     duration_ms: 10,
     completed_at: "2026-09-15T00:00:00Z",
   };
-  render(
+  const view = render(
     <AnimationAccountCard
       account={{ ...account, id: "41", name: "测试账号" }}
       result={result}
@@ -48,9 +48,42 @@ it("卡片同时展示两道前置结果与动画时预览保持高度，卡片�
   expect(screen.getByRole("article")).toHaveClass("h-auto", "overflow-hidden");
   const preview = screen.getByRole("group", { name: "动画预览区域" });
   expect(preview).toHaveClass("h-[180px]", "shrink-0");
+  expect(screen.queryByRole("region", { name: "前置检测结果" })).not.toBeInTheDocument();
+
+  view.rerender(
+    <AnimationAccountCard
+      mode="precheck"
+      account={{ ...account, id: "41", name: "测试账号" }}
+      result={result}
+      precheckResult={{
+        ...result,
+        mode: "precheck",
+        precheck: {
+          verdict: "passed",
+          profile_version: "astra-v1",
+          questions: [
+            { id: "candy", answer: "21", verdict: "passed", request_id: "candy" },
+            {
+              id: "knowledge-cutoff",
+              answer: "无法提供日期",
+              verdict: "passed",
+              request_id: "knowledge",
+            },
+          ],
+        },
+      }}
+      checked={false}
+      disabled={false}
+      retryDisabled={false}
+      schedulesReady
+      onRetry={vi.fn()}
+      onToggle={vi.fn()}
+      onSchedule={vi.fn()}
+    />,
+  );
   const precheck = screen.getByRole("region", { name: "前置检测结果" });
-  expect(precheck.parentElement).toHaveClass("h-auto");
-  expect(preview.compareDocumentPosition(precheck) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(precheck.parentElement).toHaveClass("min-h-14");
+  expect(screen.queryByRole("group", { name: "动画预览区域" })).not.toBeInTheDocument();
   expect(screen.queryByText("无法提供日期")).not.toBeInTheDocument();
 });
 
@@ -94,4 +127,25 @@ it("失败卡片限制长错误摘要，键盘可查看完整错误和请求信�
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(trigger).toHaveFocus();
   expect(trigger).toHaveAttribute("aria-expanded", "false");
+});
+
+it("账号卡片提供手动控制入口并回传当前账号", async () => {
+  const user = userEvent.setup();
+  const onManualPriority = vi.fn();
+  render(
+    <AnimationAccountCard
+      account={{ ...account, id: "41", name: "优先账号" }}
+      checked={false}
+      disabled={false}
+      retryDisabled={false}
+      schedulesReady
+      onRetry={vi.fn()}
+      onToggle={vi.fn()}
+      onSchedule={vi.fn()}
+      onManualPriority={onManualPriority}
+    />,
+  );
+
+  await user.click(screen.getByRole("button", { name: "设置手动控制" }));
+  expect(onManualPriority).toHaveBeenCalledWith(expect.objectContaining({ id: "41" }));
 });

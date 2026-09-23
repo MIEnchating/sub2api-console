@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { AccountList } from "../components/account-list";
 import { AccountWorkbenchPage } from "../components/account-workbench-page";
-import { workbenchKeys } from "../constants";
+import { WorkbenchNavigation } from "../components/workbench-navigation";
+import { workbenchKeys, type WorkbenchTab } from "../constants";
 import type { WorkbenchAccount } from "../types";
 
 let client: QueryClient;
@@ -28,6 +30,15 @@ const account: WorkbenchAccount = {
   model_mapping: { "gpt-5": "gpt-5.6" },
   fingerprint: "session",
 };
+function WorkbenchHarness() {
+  const [tab, setTab] = useState<WorkbenchTab>("import");
+  return (
+    <>
+      <WorkbenchNavigation tab={tab} onChange={setTab} />
+      <AccountWorkbenchPage tab={tab} onStarted={() => setTab("records")} />
+    </>
+  );
+}
 function mount(page = false): void {
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -44,7 +55,7 @@ function mount(page = false): void {
   ]);
   render(
     <QueryClientProvider client={client}>
-      {page ? <AccountWorkbenchPage /> : <AccountList />}
+      {page ? <WorkbenchHarness /> : <AccountList />}
     </QueryClientProvider>,
   );
 }
@@ -94,6 +105,6 @@ it("筛选框初始与选择后均显示中文状态和分组名称，不显示�
   await user.click(screen.getByRole("option", { name: "正常" }));
   expect(status).toHaveTextContent("正常");
   await user.click(group);
-  await user.click(screen.getByRole("option", { name: "团队组" }));
+  await user.click(await screen.findByRole("option", { name: "团队组" }));
   expect(group).toHaveTextContent("团队组");
 });

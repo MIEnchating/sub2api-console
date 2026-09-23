@@ -76,13 +76,14 @@ func TestOAuthPreviewPrecheckUsesOnlySelectedQuestion(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if input["prompt"] != "你的知识截至日期是什么时候" {
+		prompt, _ := input["prompt"].(string)
+		if !strings.Contains(prompt, "圆形苹果") {
 			t.Error("preview changed the selected precheck prompt")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"account_id": 1, "request_id": input["request_id"], "model": "gpt-6-astra", "text": "我无法提供知识截止日期。"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"account_id": 1, "request_id": input["request_id"], "model": "gpt-6-astra", "text": "21"}})
 	})
 	input := request("1")
-	input.Mode, input.PrecheckQuestions, input.Targets[0].Model = "precheck", []string{"knowledge-cutoff"}, "gpt-6-astra"
+	input.Mode, input.PrecheckQuestions, input.Targets[0].Model = "precheck", []string{"candy"}, "gpt-6-astra"
 	if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
 		t.Fatal(err)
 	}

@@ -69,11 +69,11 @@ describe("accountPoolState", () => {
     expect(accountPoolState(account({ health })).value).toBe("unknown");
   });
 
-  it("人工优先位单独统计和筛选，不计入成本墙拦截或待探测", () => {
+  it("手动控制单独统计和筛选，不计入成本墙拦截或待探测", () => {
     const manual = account({ manual_priority: 1, health: "manual_priority" });
     const accounts = [manual, account({ health: "cost_blocked" })];
 
-    expect(accountPoolState(manual).label).toBe("人工优先位");
+    expect(accountPoolState(manual).label).toBe("手动控制");
     expect(accountPoolCounts(accounts)).toMatchObject({
       all: 2,
       manual_priority: 1,

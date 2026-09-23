@@ -1,10 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import type { UpstreamConfiguration } from "@/api";
+import { api, type UpstreamConfiguration } from "@/api";
 import { UpstreamEditDialog } from "../upstream-edit-dialog";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function fixture(): UpstreamConfiguration {
   return {
@@ -131,6 +134,51 @@ it.each([true, false])(
     }
   },
 );
+
+it("New API Session 保存时把单一 Cookie 值封装为私密 Cookie 映射", async () => {
+  const config: UpstreamConfiguration = {
+    ...fixture(),
+    upstream_type: "newapi",
+    auth_mode: "newapi_session",
+    has_access_token: false,
+    has_user_id: false,
+    cookie_names: [],
+  };
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  client.setQueryData(["upstream-configuration", config.host], config);
+  client.setQueryData(["auth-recovery-config"], { vault_entries: [] });
+  const update = vi.spyOn(api, "updateUpstreamConfiguration").mockResolvedValue({
+    ...config,
+    has_user_id: true,
+    cookie_names: ["session"],
+  });
+  const view = render(
+    <QueryClientProvider client={client}>
+      <UpstreamEditDialog
+        host={config.host}
+        onOpenChange={() => undefined}
+        onSaved={() => undefined}
+      />
+    </QueryClientProvider>,
+  );
+  try {
+    fireEvent.change(screen.getByLabelText("Session Cookie"), {
+      target: { value: "browser-session" },
+    });
+    fireEvent.change(screen.getByLabelText("User ID"), { target: { value: "24" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并重算" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0]?.[1]).toMatchObject({
+      auth_mode: "newapi_session",
+      user_id: "24",
+      cookies: { session: "browser-session" },
+    });
+  } finally {
+    view.unmount();
+    client.clear();
+  }
+});
 
 it("切换上游后旧保存响应仅更新原上游且保留当前编辑器", async () => {
   const first = fixture();

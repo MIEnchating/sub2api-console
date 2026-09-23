@@ -96,29 +96,18 @@ export function ImportSettings(props: {
       </div>
       {values.action === "import" && (
         <div className="grid gap-3 rounded-lg border bg-muted/20 p-3">
-          {(
-            [
-              { name: "check", label: "导入前执行 Sol 检测" },
-              { name: "promote", label: "导入完成后启用账号" },
-            ] as const
-          ).map((option) => (
-            <label key={option.name} className="flex items-center gap-2 text-sm">
-              <Controller
-                name={option.name}
-                control={form.control}
-                render={({ field }) => (
-                  <Checkbox
-                    checked={field.value}
-                    disabled={busy}
-                    onCheckedChange={field.onChange}
-                  />
-                )}
-              />
-              {option.label}
-            </label>
-          ))}
+          <label className="flex items-center gap-2 text-sm">
+            <Controller
+              name="check"
+              control={form.control}
+              render={({ field }) => (
+                <Checkbox checked={field.value} disabled={busy} onCheckedChange={field.onChange} />
+              )}
+            />
+            导入后执行智商检测
+          </label>
           <p className="text-xs text-muted-foreground">
-            检测出错时停止导入；检测完成后的不匹配或证据不足结论不影响导入。
+            先套用模板并校验账号，再导入管理平台。检测通过后开启调度；检测未通过时保留账号和分组，不开启调度，可在处理记录中手动启用。关闭检测则导入后直接开启调度。
           </p>
         </div>
       )}

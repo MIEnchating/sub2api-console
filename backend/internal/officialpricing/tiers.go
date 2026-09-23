@@ -11,8 +11,9 @@ import (
 )
 
 type Tier struct {
-	Label     string `json:"label"`
-	Condition string `json:"condition"`
+	Label             string `json:"label"`
+	Condition         string `json:"condition"`
+	CacheWrite1hPrice string `json:"cache_write_1h_price,omitempty"`
 	Rates
 }
 

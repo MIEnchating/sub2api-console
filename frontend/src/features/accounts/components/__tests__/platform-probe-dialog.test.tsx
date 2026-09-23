@@ -63,7 +63,7 @@ describe("平台模型探活", () => {
     vi.restoreAllMocks();
   });
 
-  it("按平台精确聚合可探活账号并排除人工优先账号", () => {
+  it("按平台精确聚合可探活账号并排除手动控制账号", () => {
     expect(
       platformProbeOptions([
         account("41", "OpenAI"),

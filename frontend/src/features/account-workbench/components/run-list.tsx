@@ -228,7 +228,7 @@ export function RunList(): ReactElement {
             <DialogBody>
               <p className="text-sm">
                 {confirmation.action === "enable"
-                  ? "所选账号已完成检测且无执行错误。确认后将保留检测结论，套用本批模板并恢复调度。"
+                  ? "所选账号的智商检测未通过，当前未开启调度。确认后将保留检测结果及模板分组，并手动开启调度。"
                   : `${actionLabels[confirmation.action]}：${confirmation.run.items.length} 项账号，创建于 ${new Date(confirmation.run.created_at).toLocaleString("zh-CN")}。`}
               </p>
               {confirmation.action === "delete" && (

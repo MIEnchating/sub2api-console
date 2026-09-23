@@ -876,6 +876,9 @@ func dueProbeAccounts(targets []business.EvidenceTarget, policy collectionPolicy
 }
 
 func membershipProbeDue(target business.EvidenceTarget, policy collectionPolicy, now time.Time, monitoringUnavailable, forced bool) bool {
+	if target.ManualPriority {
+		return false
+	}
 	probeEnabled := policy.probeEnabled
 	probeInterval := policy.probeInterval
 	recoveryEnabled := policy.recoveryEnabled

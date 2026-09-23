@@ -69,8 +69,32 @@ func TestCustomAnimationUsesProvidedEndpointAndKeyWithoutBoundAccount(t *testing
 				t.Fatal(err)
 			}
 			raw, _ := json.Marshal([]any{queued, stored})
-			if strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), server.URL) || strings.Contains(string(raw), "api_key") {
-				t.Fatal("custom credentials or URL were persisted")
+			if strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), "api_key") {
+				t.Fatal("custom credentials were persisted")
+			}
+			var snapshots []struct {
+				Result struct {
+					Targets []struct {
+						Endpoint string `json:"endpoint"`
+						Platform string `json:"platform"`
+						Model    string `json:"model"`
+					} `json:"targets"`
+					Animations []struct {
+						Endpoint string `json:"endpoint"`
+						Platform string `json:"platform"`
+					} `json:"animations"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &snapshots); err != nil {
+				t.Fatal(err)
+			}
+			for _, snapshot := range snapshots {
+				if len(snapshot.Result.Targets) != 1 || snapshot.Result.Targets[0].Endpoint != server.URL+"/proxy/v1" || snapshot.Result.Targets[0].Platform != platform || snapshot.Result.Targets[0].Model != "custom-model" {
+					t.Fatalf("custom task must retain endpoint and requested model: %s", raw)
+				}
+			}
+			if len(snapshots[1].Result.Animations) != 1 || snapshots[1].Result.Animations[0].Endpoint != server.URL+"/proxy/v1" || snapshots[1].Result.Animations[0].Platform != platform {
+				t.Fatalf("completed record lost custom endpoint: %s", raw)
 			}
 			statuses, err := f.service.AccountStatuses(context.Background())
 			if err != nil || len(statuses) != 0 {
@@ -90,6 +114,8 @@ func TestCustomAnimationRejectsInvalidCredentialsAndMixedTargets(t *testing.T) {
 		{"unsupported platform", "https://example.invalid", "gemini", "key", "model"},
 		{"empty key", "https://example.invalid", "openai", "  ", "model"},
 		{"header injection", "https://example.invalid", "openai", "key\r\nx-injected: true", "model"},
+		{"key in URL path", "https://example.invalid/" + fixtureSecret, "openai", fixtureSecret, "model"},
+		{"encoded key in URL path", "https://example.invalid/%73ecret", "openai", "secret", "model"},
 		{"empty model", "https://example.invalid", "openai", "key", " "},
 		{"key in model", "https://example.invalid", "openai", fixtureSecret, fixtureSecret},
 	} {
@@ -120,5 +146,28 @@ func TestCustomAnimationRedactsKeyInUpstreamFailure(t *testing.T) {
 	raw, _ := json.Marshal(final)
 	if final.Status != "failed" || strings.Contains(string(raw), fixtureSecret) {
 		t.Fatal("upstream failure must be reported without credentials")
+	}
+}
+
+func TestCustomFailedChecksRetainEndpointMetadata(t *testing.T) {
+	for _, mode := range []string{"animation", "precheck"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprint(w, `{"error":{"message":"invalid credential"}}`)
+			}))
+			defer server.Close()
+			f := setup(t, 0, "openai", func(http.ResponseWriter, *http.Request) { t.Error("unexpected bound request") })
+			input := customRequest(t, server.URL+"/v1", "openai", fixtureSecret, "requested-model")
+			input.Mode = mode
+			if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
+				t.Fatal(err)
+			}
+			final := finished(t, f)
+			rows := final.Result["animations"].([]modelcheck.AnimationResult)
+			if len(rows) != 1 || rows[0].Status != "failed" || rows[0].Endpoint != server.URL+"/v1" || rows[0].Platform != "openai" || rows[0].Model != "requested-model" {
+				t.Fatalf("failed check lost its source: %#v", final)
+			}
+		})
 	}
 }

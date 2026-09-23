@@ -55,7 +55,7 @@ func TestAccountAnimationModelsPreservesUpstreamFailureWithoutDefaultModels(t *t
 	}
 }
 
-func TestOAuthAnimationModelsUsesLiveManagedCatalogWithoutDefaultFallback(t *testing.T) {
+func TestOAuthAnimationModelsUsesManagedCatalog(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "live catalog", true: "discovery failure"}[failed], func(t *testing.T) {
 			f := setup(t, 1, "openai", func(http.ResponseWriter, *http.Request) { t.Error("OAuth must not use API Key endpoint") })
@@ -66,15 +66,15 @@ func TestOAuthAnimationModelsUsesLiveManagedCatalogWithoutDefaultFallback(t *tes
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/1":
 					_, _ = w.Write([]byte(`{"data":{"id":1,"type":"oauth","platform":"openai"}}`))
-				case r.Method == http.MethodPost && r.URL.Path == "/api/v1/admin/accounts/1/models/sync-upstream":
+				case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/accounts/1/models":
 					if failed {
-						w.WriteHeader(http.StatusBadRequest)
+						w.WriteHeader(http.StatusBadGateway)
 						_, _ = w.Write([]byte(`{"message":"OAuth catalog unavailable"}`))
 						return
 					}
-					_, _ = w.Write([]byte(`{"data":{"models":["oauth-live-model"]}}`))
+					_, _ = w.Write([]byte(`{"data":[{"id":"oauth-live-model"}]}`))
 				default:
-					t.Error("must not fall back to configured/default models")
+					t.Error("OAuth model selection must only read the account and its picker catalog")
 					w.WriteHeader(http.StatusNotFound)
 				}
 			}))

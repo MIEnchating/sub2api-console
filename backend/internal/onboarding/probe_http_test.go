@@ -94,4 +94,56 @@ func TestRunGatewayProbeUsesStreamingAndConsumesSSE(t *testing.T) {
 	if err != nil || result.Status != "passed" || result.ActualModel != "gpt-5.2" || result.ResponseText != "ok" {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
+	var events []map[string]any
+	if err := json.Unmarshal([]byte(result.ResponseJSON), &events); err != nil {
+		t.Fatalf("response_json=%q err=%v", result.ResponseJSON, err)
+	}
+	if len(events) != 2 || events[0]["type"] != "response.created" || events[1]["delta"] != "ok" {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
+func TestRunGatewayProbeReturnsCompleteRedactedJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"id":"response-1","model":"gpt-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":2},"api_key":"must-not-leak"}`))
+	}))
+	defer server.Close()
+
+	result, err := runGatewayProbe(context.Background(), server.URL, "probe-secret", "gpt-5.2", nil)
+	if err != nil || result.Status != "passed" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal([]byte(result.ResponseJSON), &response); err != nil {
+		t.Fatalf("response_json=%q err=%v", result.ResponseJSON, err)
+	}
+	if response["id"] != "response-1" || response["api_key"] != "[已隐藏]" {
+		t.Fatalf("response=%#v", response)
+	}
+	usage, ok := response["usage"].(map[string]any)
+	if !ok || usage["input_tokens"] != float64(1) || usage["output_tokens"] != float64(2) {
+		t.Fatalf("usage=%#v", response["usage"])
+	}
+}
+
+func TestRunGatewayProbeReturnsErrorResponseJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"message":"invalid request","type":"invalid_request_error"},"request_id":"request-1"}`))
+	}))
+	defer server.Close()
+
+	result, err := runGatewayProbe(context.Background(), server.URL, "probe-secret", "gpt-5.2", nil)
+	if err == nil || result.Status != "failed" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal([]byte(result.ResponseJSON), &response); err != nil {
+		t.Fatalf("response_json=%q err=%v", result.ResponseJSON, err)
+	}
+	if response["request_id"] != "request-1" {
+		t.Fatalf("response=%#v", response)
+	}
 }

@@ -585,7 +585,7 @@ var advancedRules = map[string]map[string]advancedRule{
 		"min_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000}, "max_load_factor": {kind: "int", minimum: 1, maximum: 1_000_000},
 	},
 	"manual_priority": {
-		"reserved_max": {kind: "int", minimum: 1, maximum: 1000},
+		"latency_priority_enabled": {kind: "bool"}, "reserved_max": {kind: "int", minimum: 1, maximum: 1000},
 	},
 	"scope": {
 		"manage_all_accounts": {kind: "bool"},

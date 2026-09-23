@@ -25,7 +25,7 @@ func TestEvaluateSelectsLowestProfitableCompatibleManagedGroup(t *testing.T) {
 			{ID: "6", Name: "标准", Platform: "openai", RateMultiplier: testString("1")},
 			{ID: "7", Name: "低价", Platform: "openai", RateMultiplier: testString("0.5")},
 			{ID: "8", Name: "Claude", Platform: "anthropic", RateMultiplier: testString("1")},
-			{ID: "10", Name: "复合", Platform: "composite", RateMultiplier: testString("1")},
+			{ID: "10", Name: "Gemini", Platform: "gemini", RateMultiplier: testString("1")},
 		},
 		Accounts: []business.PricingAccount{
 			{ID: "41", Name: "高成本", Platform: "openai", Multiplier: testString("0.6"), GroupIDs: []string{"7", "9", "10"}, GroupsValid: true},
@@ -49,9 +49,6 @@ func TestEvaluateSelectsLowestProfitableCompatibleManagedGroup(t *testing.T) {
 	}
 	if !snapshot.Decisions[2].Skipped || !reflect.DeepEqual(snapshot.Decisions[2].DesiredGroupIDs, []string{"7"}) {
 		t.Fatalf("unknown-cost account was not preserved: %#v", snapshot.Decisions[2])
-	}
-	if snapshot.Groups[3].Available || snapshot.Groups[3].Reason == nil {
-		t.Fatalf("composite group should remain unmanaged by allocation: %#v", snapshot.Groups[3])
 	}
 }
 
@@ -213,7 +210,7 @@ func TestEvaluateNeverChangesManualPriorityAccountGroups(t *testing.T) {
 		},
 		Accounts: []business.PricingAccount{{
 			ID: "41", Name: "人工账号", Platform: "openai", Multiplier: testString("0.2"),
-			GroupIDs: []string{"6"}, GroupsValid: true, ManualPriority: true,
+			GroupIDs: []string{"6"}, GroupsValid: true, ManualPriority: true, IgnoreCostWall: true,
 		}},
 	}
 
@@ -223,7 +220,7 @@ func TestEvaluateNeverChangesManualPriorityAccountGroups(t *testing.T) {
 	}
 	decision := snapshot.Decisions[0]
 	if !decision.Skipped || decision.Changed || !reflect.DeepEqual(decision.DesiredGroupIDs, []string{"6"}) ||
-		decision.Reason == nil || !strings.Contains(*decision.Reason, "人工优先") {
+		decision.Reason == nil || !strings.Contains(*decision.Reason, "手动控制") {
 		t.Fatalf("manual priority account was not protected: %#v", decision)
 	}
 }
@@ -1069,7 +1066,7 @@ func TestEvaluateFallsBackToHighestNonLossGroupWhenProfitTargetIsUnreachable(t *
 		{name: "already in fallback group stays there", cost: "0.21", current: []string{"25"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}},
 		{name: "outside membership is preserved", cost: "0.21", current: []string{"8", "99"}, want: []string{"25", "99"}, eligible: []string{"codex-pro-旗舰"}},
 		{name: "unjoined exchange set is not entered", cost: "0.21", current: []string{"99"}, want: []string{"99"}, eligible: []string{}},
-		{name: "manual priority is preserved", cost: "0.21", current: []string{"8"}, want: []string{"8"}, eligible: []string{}, manual: true},
+		{name: "manual priority obeys cost migration", cost: "0.21", current: []string{"8"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}, manual: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			catalog := business.PricingCatalog{

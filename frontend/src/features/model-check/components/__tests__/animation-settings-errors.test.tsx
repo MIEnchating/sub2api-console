@@ -29,7 +29,9 @@ it.each(["开始检测（1 个账号）", "前置检测（1）"])(
         <AnimationCheckPanel />
       </QueryClientProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: "选择前 20 个账号" }));
+    fireEvent.click(screen.getByRole("button", { name: "全选账号" }));
+    if (action.startsWith("前置检测"))
+      fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
     fireEvent.change(screen.getByRole("spinbutton", { name: "请求超时（秒）" }), {
       target: { value: "1" },
     });

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { RefreshCw } from "lucide-react";
 import type { NewAPIChannel } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,8 +26,10 @@ import {
 } from "../lib/channel-model-change";
 import { ChannelModelSelection as ChannelModelSelector } from "./channel-model-selection";
 import { ChannelImpactPreview } from "./channel-impact-preview";
+import { ChannelModelDiscovery } from "./channel-model-discovery";
 
 export function ChannelMaintenanceDialog(props: {
+  platformId: string;
   channels: NewAPIChannel[];
   action: ChannelModelAction;
   pending: boolean;
@@ -35,6 +38,7 @@ export function ChannelMaintenanceDialog(props: {
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [preview, setPreview] = useState<string[] | null>(null);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const form = useForm<ChannelMaintenanceValues>({
     resolver: zodResolver(channelMaintenanceSchema),
     defaultValues: { modelText: "" },
@@ -101,9 +105,20 @@ export function ChannelMaintenanceDialog(props: {
               onSubmit={form.handleSubmit(prepare)}
               className="grid gap-2"
             >
-              <label htmlFor="channel-model-names" className="text-sm font-medium">
-                上架模型名称
-              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label htmlFor="channel-model-names" className="text-sm font-medium">
+                  上架模型名称
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={props.pending}
+                  onClick={() => setDiscoveryOpen(true)}
+                >
+                  <RefreshCw aria-hidden="true" />
+                  获取模型
+                </Button>
+              </div>
               <Textarea
                 id="channel-model-names"
                 aria-invalid={Boolean(form.formState.errors.modelText)}
@@ -151,7 +166,11 @@ export function ChannelMaintenanceDialog(props: {
             </>
           )}
           {!preview && props.action === "add" && (
-            <Button type="submit" form="channel-model-maintenance">
+            <Button
+              type="submit"
+              form="channel-model-maintenance"
+              disabled={props.pending || discoveryOpen}
+            >
               预览变更
             </Button>
           )}
@@ -164,6 +183,23 @@ export function ChannelMaintenanceDialog(props: {
             </Button>
           )}
         </DialogFooter>
+        {discoveryOpen && (
+          <ChannelModelDiscovery
+            platformId={props.platformId}
+            channels={props.channels}
+            onClose={() => setDiscoveryOpen(false)}
+            onConfirm={(models) => {
+              form.setValue(
+                "modelText",
+                [
+                  ...new Set([...parseChannelModelText(form.getValues("modelText")), ...models]),
+                ].join("\n"),
+                { shouldDirty: true, shouldValidate: true },
+              );
+              setDiscoveryOpen(false);
+            }}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -13,6 +13,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import type { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { customAnimationSchema, type CustomAnimationForm } from "../lib/animation-schema";
 import { AnimationAccountResult } from "./animation-account-result";
+import { AnimationEndpointDetails } from "./animation-endpoint-details";
 import { CustomAnimationFields } from "./custom-animation-fields";
 import { PrecheckAccountResult } from "./precheck-account-result";
 import type { PrecheckQuestionID } from "@/api";
@@ -186,12 +187,22 @@ export function CustomAnimationPanel(props: {
             const result = props.tasks.results.get(id);
             const precheckResult = props.tasks.precheckResults.get(id);
             const isPrecheck = props.tasks.precheckStatuses.has(id);
+            const source = result ?? precheckResult ?? props.tasks.targets.get(id);
             return (
               <article
                 key={id}
-                aria-label={`自定义检测 ${result?.model ?? precheckResult?.model ?? id}`}
+                aria-label={`自定义检测 ${source?.model ?? id}`}
                 className="flex min-h-0 min-w-0 flex-col gap-2 rounded-lg border p-2"
               >
+                <dl className="grid shrink-0 grid-cols-[4rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                  <AnimationEndpointDetails source={source ?? { account_id: id }} />
+                  {!result && source?.model ? (
+                    <>
+                      <dt className="text-muted-foreground">检测模型</dt>
+                      <dd className="min-w-0 wrap-anywhere">{source.model}</dd>
+                    </>
+                  ) : null}
+                </dl>
                 {activity ? (
                   <>
                     <TaskStartupState

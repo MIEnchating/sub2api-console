@@ -111,7 +111,7 @@ func TestReadSiteNameUsesOnlyPublicConfiguration(t *testing.T) {
 func TestReaderUsesLegacyNewAPISessionCookieAndRequiredUserHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		cookie, cookieErr := request.Cookie("session")
-		if cookieErr != nil || cookie.Value != "legacy-session" || request.Header.Get("New-Api-User") != "24" || request.Header.Get("Authorization") != "" {
+		if cookieErr != nil || cookie.Value != "legacy-session" || request.Header.Get("New-Api-User") != "24" || request.Header.Get("Authorization") != "" || request.Header.Get("Origin") != "http://"+request.Host {
 			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -128,7 +128,7 @@ func TestReaderUsesLegacyNewAPISessionCookieAndRequiredUserHeader(t *testing.T) 
 	defer server.Close()
 	userID := "24"
 	record := configstore.AuthRecord{
-		BaseURL: server.URL, UpstreamType: "newapi", AuthMode: "newapi_manual_login", UserID: &userID,
+		BaseURL: server.URL, UpstreamType: "newapi", AuthMode: "newapi_session", UserID: &userID,
 		Headers: map[string]string{}, Cookies: map[string]string{"session": "legacy-session"},
 	}
 	catalog, err := NewReader(server.Client()).ReadCatalog(context.Background(), record)
@@ -137,6 +137,40 @@ func TestReaderUsesLegacyNewAPISessionCookieAndRequiredUserHeader(t *testing.T) 
 	}
 	if len(catalog.Groups) != 1 || catalog.Groups[0].GroupID != "pro" {
 		t.Fatalf("catalog=%#v", catalog)
+	}
+}
+
+func TestReaderCreatesNewAPIKeyWithBrowserOriginForSessionAuth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		cookie, cookieErr := request.Cookie("session")
+		if request.Method != http.MethodPost || cookieErr != nil || cookie.Value != "browser-session" ||
+			request.Header.Get("New-Api-User") != "24" || request.Header.Get("Authorization") != "" || request.Header.Get("Origin") != "http://"+request.Host {
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`{"message":"browser origin required"}`))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/api/token/" {
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"id":91,"name":"probe","group":"pro"}}`))
+			return
+		}
+		if request.URL.Path == "/api/token/91/key" {
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"key":"sk-probe"}}`))
+			return
+		}
+		writer.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	userID := "24"
+	key, err := NewReader(server.Client()).CreateKey(context.Background(), configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "newapi", AuthMode: "newapi_session", UserID: &userID,
+		Headers: map[string]string{}, Cookies: map[string]string{"session": "browser-session"},
+	}, "probe", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.KeyID != "91" || key.Secret != "sk-probe" {
+		t.Fatalf("key=%#v", key)
 	}
 }
 
@@ -286,6 +320,40 @@ func TestCreateNewAPIKeyVerifiesInventoryAndRevealsSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	if key.KeyID != "91" || key.GroupID != "pro" || key.Name != "pro-key" || key.Secret != "sk-once" {
+		t.Fatalf("key=%#v", key)
+	}
+}
+
+func TestCreateNewAPIKeyUsesBrowserSessionWithoutBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		cookie, cookieErr := request.Cookie("session")
+		if cookieErr != nil || cookie.Value != "browser-session" || request.Header.Get("New-Api-User") != "24" || request.Header.Get("Authorization") != "" {
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(`{"message":"Browser session login is required"}`))
+			return
+		}
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/token/":
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"id":91}}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/api/token/91/key":
+			_, _ = writer.Write([]byte(`{"success":true,"data":{"key":"sk-session"}}`))
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	staleToken, userID := "must-not-be-sent", "24"
+	record := configstore.AuthRecord{
+		BaseURL: server.URL, UpstreamType: "newapi", AuthMode: "newapi_session",
+		AccessToken: &staleToken, UserID: &userID, Headers: map[string]string{"Authorization": "Bearer stale-header"},
+		Cookies: map[string]string{"session": "browser-session"},
+	}
+	key, err := NewReader(server.Client()).CreateKey(context.Background(), record, "pro-key", "pro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.KeyID != "91" || key.Secret != "sk-session" {
 		t.Fatalf("key=%#v", key)
 	}
 }

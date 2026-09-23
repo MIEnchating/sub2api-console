@@ -38,6 +38,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/probe"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
+	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/tasksettings"
@@ -300,6 +301,32 @@ func run() error {
 	opsTrafficService := opstraffic.New(privateStore, businessStore)
 	routingService := routing.NewService(businessStore)
 	routingWriteService := routingwrite.New(privateStore, businessStore)
+	managementTasks.UseRateReconciliation(func(ctx context.Context, ids []string, actor string) error {
+		mode, err := businessStore.Mode(ctx)
+		if err != nil || mode != runtimepolicy.Full {
+			return err
+		}
+		priceErr := pricingTasks.ReconcileAccountRates(ctx, ids, actor)
+		// A failed migration must still enforce the current cost boundary.
+		manualResult, manualErr := routingWriteService.EnforceManualCostWall(ctx, ids, actor)
+		if manualResult.Failed > 0 {
+			manualErr = errors.Join(manualErr, fmt.Errorf("手动账号成本墙写回失败 %d 项", manualResult.Failed))
+		}
+		var routingErr error
+		for _, id := range ids {
+			calculated, err := routingService.Calculate(ctx, routing.Scope{AccountID: &id}, true)
+			if err != nil {
+				routingErr = errors.Join(routingErr, err)
+				continue
+			}
+			applied, err := routingWriteService.Apply(ctx, calculated.AccountTargets, actor)
+			if applied.Failed > 0 {
+				err = errors.Join(err, fmt.Errorf("账号 %s 成本复核写回失败", id))
+			}
+			routingErr = errors.Join(routingErr, err)
+		}
+		return errors.Join(priceErr, manualErr, routingErr)
+	})
 	inspectionRunner := inspection.NewRunner(
 		businessStore,
 		privateStore,

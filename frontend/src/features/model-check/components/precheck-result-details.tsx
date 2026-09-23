@@ -11,7 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Badge } from "@/components/ui/badge";
 import { precheckQuestionLabels, precheckVerdictLabels } from "../constants";
+import { AnimationEndpointDetails } from "./animation-endpoint-details";
 
 export function PrecheckResultDetails(props: { result: AnimationResult }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -52,8 +54,23 @@ export function PrecheckResultDetails(props: { result: AnimationResult }): React
           </DialogHeader>
           <DialogBody role="region" aria-label="前置检测详细结果" className="space-y-5">
             <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
+              <AnimationEndpointDetails source={props.result} />
               <dt className="text-muted-foreground">检测模型</dt>
               <dd className="wrap-anywhere">{props.result.model}</dd>
+              {props.result.response_model ? (
+                <>
+                  <dt className="text-muted-foreground">返回模型</dt>
+                  <dd className="wrap-anywhere">{props.result.response_model}</dd>
+                  {props.result.response_model !== props.result.model ? (
+                    <>
+                      <dt className="text-muted-foreground">模型状态</dt>
+                      <dd>
+                        <Badge variant="destructive">重点：模型不一致</Badge>
+                      </dd>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
               <dt className="text-muted-foreground">检测结果</dt>
               <dd>{check ? precheckVerdictLabels[check.verdict] : "检测失败"}</dd>
               <dt className="text-muted-foreground">完成时间</dt>

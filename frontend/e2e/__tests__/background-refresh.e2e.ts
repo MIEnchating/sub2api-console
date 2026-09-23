@@ -17,7 +17,6 @@ test.beforeEach(async ({ page }) => {
     const fixtures: Record<string, unknown> = {
       "/api/preferences/navigation": { hidden_item_ids: [], version: "test" },
       "/api/dictionaries": { items: [] },
-      "/api/accounts/traffic": { enabled: false, accounts: [] },
       "/api/newapi/platforms/primary/channels": { items: [], total: 0 },
       "/api/newapi/platforms/primary/channel-groups": { version: "1", groups: [] },
       "/api/setup/status": { initialized: true, configuration_errors: [] },

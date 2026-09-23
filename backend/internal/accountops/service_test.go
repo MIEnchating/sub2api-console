@@ -466,7 +466,7 @@ func TestManualPriorityMultiplierSyncPreservesAccountName(t *testing.T) {
 	if name != "alpha" || multiplier != "0.15" || groupRate != "0.15" {
 		t.Fatalf("name=%s multiplier=%s group_rate=%s", name, multiplier, groupRate)
 	}
-	if _, err := service.SyncAccountRate(context.Background(), "41", "alpha-0.15", "0.15", "operator"); err == nil || !strings.Contains(err.Error(), "人工优先位") {
+	if _, err := service.SyncFields(context.Background(), "41", FieldPatch{NamePresent: true, Name: &name, MultiplierPresent: true, Multiplier: &multiplier}, "operator"); err == nil || !strings.Contains(err.Error(), "手动控制") {
 		t.Fatalf("manual account name rewrite was accepted: %v", err)
 	}
 }
@@ -499,7 +499,7 @@ func TestManualPriorityWithoutSyncPermissionRejectsPlatformWrites(t *testing.T) 
 			return err
 		}(),
 	} {
-		if err == nil || !strings.Contains(err.Error(), "人工优先位") {
+		if err == nil || !strings.Contains(err.Error(), "手动控制") {
 			t.Fatalf("%s operation bypassed manual control: %v", operation, err)
 		}
 	}
@@ -739,7 +739,7 @@ func TestManualPriorityTaskWritesSub2APIDefaultsAndCommitsAssignment(t *testing.
 			decoder.UseNumber()
 			if err := decoder.Decode(&body); err != nil || body["priority"] != json.Number("3") ||
 				body["load_factor"] != json.Number("100") || body["concurrency"] != json.Number("100") ||
-				body["schedulable"] != true {
+				body["schedulable"] != nil {
 				t.Fatalf("manual priority write body=%#v err=%v", body, err)
 			}
 			written.Store(true)
@@ -868,7 +868,7 @@ func TestClearManualPriorityTaskRestoresRemoteBaselineBeforeLocalRelease(t *test
 	}
 }
 
-func TestClearManualPriorityTaskKeepsLocalAssignmentWhenReadbackMismatches(t *testing.T) {
+func TestClearManualPriorityTaskUsesRemoteSchedulingStateWhenOnlySchedulableDiffers(t *testing.T) {
 	repository, db, _ := accountRepository(t)
 	if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, false, "operator"); err != nil {
 		t.Fatal(err)
@@ -882,7 +882,7 @@ func TestClearManualPriorityTaskKeepsLocalAssignmentWhenReadbackMismatches(t *te
 			_, _ = io.WriteString(w, `{"success":true}`)
 			return
 		}
-		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","schedulable":true,"priority":3,"load_factor":100,"concurrency":100}}`)
+		_, _ = io.WriteString(w, `{"data":{"id":41,"name":"alpha","schedulable":false,"priority":10,"load_factor":2,"concurrency":3}}`)
 	}))
 	defer server.Close()
 	tasks := &accountTaskObserver{updates: make(chan taskstore.Task, 1)}
@@ -892,15 +892,25 @@ func TestClearManualPriorityTaskKeepsLocalAssignmentWhenReadbackMismatches(t *te
 		t.Fatal(err)
 	}
 	finished := waitAccountTask(t, tasks.updates)
-	if finished.Status != "failed" || finished.Result["remote_write"] != true {
+	if finished.Status != "succeeded" || finished.Result["remote_write"] != true || finished.Result["readback_confirmed"] != true {
 		t.Fatalf("clear task=%#v", finished)
 	}
-	var manualPriority int64
-	if err := db.QueryRow(`SELECT priority FROM manual_priority_accounts WHERE account_id='41'`).Scan(&manualPriority); err != nil {
+	if finished.Result["warning"] == nil {
+		t.Fatalf("expected scheduling-state warning: %#v", finished.Result)
+	}
+	var assignments int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM manual_priority_accounts WHERE account_id='41'`).Scan(&assignments); err != nil {
 		t.Fatal(err)
 	}
-	if manualPriority != 3 {
-		t.Fatalf("unconfirmed clear released local assignment: %d", manualPriority)
+	if assignments != 0 {
+		t.Fatalf("manual assignment still present: %d", assignments)
+	}
+	var schedulable bool
+	if err := db.QueryRow(`SELECT schedulable FROM accounts WHERE id='41'`).Scan(&schedulable); err != nil {
+		t.Fatal(err)
+	}
+	if schedulable {
+		t.Fatal("local scheduling state did not follow management readback")
 	}
 }
 

@@ -17,6 +17,10 @@ type animationRepository interface {
 }
 
 type AnimationSchedule struct {
+	ScheduleType      string   `json:"schedule_type,omitempty"`
+	DailyTime         string   `json:"daily_time,omitempty"`
+	DailyTimes        []string `json:"daily_times,omitempty"`
+	Timezone          string   `json:"timezone,omitempty"`
 	PrecheckQuestions []string `json:"precheck_questions,omitempty"`
 	Mode              string   `json:"mode,omitempty"`
 	AccountID         string   `json:"account_id"`
@@ -71,12 +75,19 @@ func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 		return errors.New("自动动画检测配置无效")
 	}
 	for _, schedule := range schedules {
+		schedule.PrecheckQuestions = migrateLegacyPrecheckQuestions(schedule.Mode, schedule.PrecheckQuestions)
 		if err := validateAnimationSchedule(schedule); err != nil {
 			return err
 		}
 		schedule.PrecheckQuestions, _ = normalizePrecheckQuestions(schedule.Mode, schedule.PrecheckQuestions)
-		s.animation.schedules[schedule.AccountID] = schedule
-		s.animation.next[schedule.AccountID] = time.Now().Add(time.Duration(schedule.IntervalMinutes) * time.Minute)
+		for _, item := range splitAnimationSchedule(schedule) {
+			key := animationScheduleKey(item.AccountID, item.Mode)
+			if _, exists := s.animation.schedules[key]; exists {
+				return errors.New("自动检测配置包含重复账号及检测类型")
+			}
+			s.animation.schedules[key] = item
+			s.animation.next[key] = nextAnimationTime(item, time.Now())
+		}
 	}
 	return nil
 }
@@ -91,7 +102,10 @@ func validateAnimationSchedule(value AnimationSchedule) error {
 	if !stablePositiveID(value.AccountID) || value.Version < 0 {
 		return errors.New("自动检测账号 ID 或版本无效")
 	}
-	if value.IntervalMinutes < 1 || value.IntervalMinutes > 1440 {
+	if err := validateAnimationTiming(value); err != nil {
+		return err
+	}
+	if value.ScheduleType != "daily" && (value.IntervalMinutes < 1 || value.IntervalMinutes > 1440) {
 		return errors.New("自动检测间隔必须在 1 到 1440 分钟之间")
 	}
 	if value.TimeoutSeconds < 5 || value.TimeoutSeconds > 120 {
@@ -105,6 +119,7 @@ func (s *Service) AnimationSchedules() []AnimationScheduleView {
 	defer s.animation.scheduleMu.Unlock()
 	result := make([]AnimationScheduleView, 0, len(s.animation.schedules))
 	for id, schedule := range s.animation.schedules {
+		schedule.DailyTimes = slices.Clone(schedule.DailyTimes)
 		schedule.PrecheckQuestions = slices.Clone(schedule.PrecheckQuestions)
 		view := AnimationScheduleView{AnimationSchedule: schedule, LastTaskID: s.animation.lastTask[id], LastError: s.animation.lastError[id]}
 		if next := s.animation.next[id]; schedule.Enabled && !next.IsZero() {
@@ -112,59 +127,14 @@ func (s *Service) AnimationSchedules() []AnimationScheduleView {
 		}
 		result = append(result, view)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].AccountID < result[j].AccountID })
+	sort.Slice(result, func(i, j int) bool {
+		return animationScheduleKey(result[i].AccountID, result[i].Mode) < animationScheduleKey(result[j].AccountID, result[j].Mode)
+	})
 	return result
 }
 
 func (s *Service) SaveAnimationSchedule(ctx context.Context, value AnimationSchedule, actor string) ([]AnimationScheduleView, error) {
-	if s.animation.repository == nil {
-		return nil, errors.New("自动检测配置存储尚未就绪")
-	}
-	if err := validateAnimationSchedule(value); err != nil {
-		return nil, err
-	}
-	value.PrecheckQuestions, _ = normalizePrecheckQuestions(value.Mode, value.PrecheckQuestions)
-	if value.Enabled {
-		request, _, err := s.prepareAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: value.AccountID, Model: value.Model}}, TimeoutSeconds: value.TimeoutSeconds, Mode: value.Mode, PrecheckQuestions: value.PrecheckQuestions})
-		if err != nil {
-			return nil, err
-		}
-		value.Model = request.Targets[0].Model
-	}
-	// Serialize schedule writes with launches so disabling returns after all prior launches.
-	s.animation.launchMu.Lock()
-	defer s.animation.launchMu.Unlock()
-	s.animation.scheduleMu.Lock()
-	previous := s.animation.schedules[value.AccountID]
-	if previous.Version != value.Version {
-		s.animation.scheduleMu.Unlock()
-		return nil, errors.New("自动检测配置已变化，请刷新后重试")
-	}
-	if !value.Enabled && previous.Version == 0 {
-		s.animation.scheduleMu.Unlock()
-		return nil, errors.New("该账号尚未配置自动检测")
-	}
-	value.Version++
-	next := make([]AnimationSchedule, 0, len(s.animation.schedules)+1)
-	for id, item := range s.animation.schedules {
-		if id != value.AccountID {
-			next = append(next, item)
-		}
-	}
-	next = append(next, value)
-	raw, err := json.Marshal(next)
-	if err == nil {
-		err = s.animation.repository.SaveAnimationConfiguration(ctx, raw, actor)
-	}
-	if err != nil {
-		s.animation.scheduleMu.Unlock()
-		return nil, err
-	}
-	s.animation.schedules[value.AccountID] = value
-	s.animation.next[value.AccountID] = time.Now().Add(time.Duration(value.IntervalMinutes) * time.Minute)
-	delete(s.animation.lastError, value.AccountID)
-	s.animation.scheduleMu.Unlock()
-	return s.AnimationSchedules(), nil
+	return s.SaveAnimationSchedules(ctx, []AnimationSchedule{value}, actor)
 }
 
 func (s *Service) StartAnimationScheduler() error {
@@ -180,13 +150,14 @@ func (s *Service) StartAnimationScheduler() error {
 				return
 			case now := <-ticker.C:
 				s.RunDueAnimations(ctx, now)
+				s.RunDueDetectionTasks(ctx, now)
 			}
 		}
 	})
 }
 
-// RunDueAnimations executes one scheduler tick. Deadlines are reset after completion,
-// including failed runs; a restart starts a fresh interval without replaying missed runs.
+// RunDueAnimations executes one scheduler tick. Interval deadlines reset on completion;
+// daily deadlines advance on dispatch. A restart never replays missed runs.
 func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 	s.animation.launchMu.Lock()
 	defer s.animation.launchMu.Unlock()
@@ -195,21 +166,36 @@ func (s *Service) RunDueAnimations(ctx context.Context, now time.Time) {
 	for id, schedule := range s.animation.schedules {
 		if schedule.Enabled && !s.animation.next[id].After(now) {
 			due = append(due, schedule)
-			s.animation.next[id] = now.Add(time.Duration(schedule.IntervalMinutes) * time.Minute)
 		}
 	}
 	s.animation.scheduleMu.Unlock()
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].AccountID == due[j].AccountID {
+			return due[i].Mode == precheckMode && due[j].Mode != precheckMode
+		}
+		return animationScheduleKey(due[i].AccountID, due[i].Mode) < animationScheduleKey(due[j].AccountID, due[j].Mode)
+	})
 	for _, schedule := range due {
 		if ctx.Err() != nil {
 			return
 		}
+		s.animation.activeMu.Lock()
+		busy := s.animation.active[schedule.AccountID]
+		s.animation.activeMu.Unlock()
+		if busy {
+			continue
+		}
+		key := animationScheduleKey(schedule.AccountID, schedule.Mode)
+		s.animation.scheduleMu.Lock()
+		s.animation.next[key] = nextAnimationTime(schedule, now)
+		s.animation.scheduleMu.Unlock()
 		task, err := s.EnqueueAnimation(ctx, AnimationRequest{Targets: []AnimationTarget{{AccountID: schedule.AccountID, Model: schedule.Model}}, TimeoutSeconds: schedule.TimeoutSeconds, Mode: schedule.Mode, PrecheckQuestions: schedule.PrecheckQuestions})
 		s.animation.scheduleMu.Lock()
 		if err != nil {
-			s.animation.lastError[schedule.AccountID] = safeCredentialError(err)
+			s.animation.lastError[key] = safeCredentialError(err)
 		} else {
-			s.animation.lastTask[schedule.AccountID] = task.ID
-			delete(s.animation.lastError, schedule.AccountID)
+			s.animation.lastTask[key] = task.ID
+			delete(s.animation.lastError, key)
 		}
 		s.animation.scheduleMu.Unlock()
 	}

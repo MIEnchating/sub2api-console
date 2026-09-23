@@ -19,8 +19,7 @@ test.beforeEach(async ({ page }) => {
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   await page.getByRole("textbox", { name: "Base URL" }).fill("https://models.example.invalid/v1");
   await page.getByLabel("API Key").fill("isolated-list-key");

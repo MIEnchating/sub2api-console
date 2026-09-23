@@ -213,6 +213,7 @@ type candidate struct {
 	desiredPriority               *int64
 	desiredLoad                   *string
 	desiredConcurrency            *int64
+	restoreConcurrency            bool
 	writeCooldown                 bool
 	placementCooldown             bool
 	placementPlanned              bool
@@ -475,6 +476,13 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		}
 		cleanupWrites = append(cleanupWrites, abnormalWrites...)
 		runtimeEvents = append(runtimeEvents, abnormalEvents...)
+	}
+	for _, memberships := range byAccount {
+		for _, item := range memberships {
+			if item.cleanupAction != nil && item.restoreConcurrency {
+				item.restoreConcurrency, item.desiredConcurrency = false, nil
+			}
+		}
 	}
 	for _, accountID := range sortedTargetIDsFromCandidates(byAccount) {
 		primary := primaryMembership(byAccount[accountID])
@@ -1506,6 +1514,7 @@ func assignAccountPlacements(
 	upstreamPools := newUpstreamScalingPools(capacityInventory)
 	releaseConfirmedStopReservations(capacityInventory, primary, configs, &budget, upstreamPools)
 	reserveOutsideAllocationScope(primary, configs, &budget, upstreamPools)
+	restoreUnconstrainedConcurrency(primary, configs, &budget, upstreamPools)
 	planGlobalUpstreamShares(primary, configs, upstreamPools, &budget)
 	minimumLimited := false
 	for _, groupName := range groupNames {
@@ -1753,7 +1762,11 @@ func applyScalingWithBudget(items []*candidate, config engineConfig, budget *sca
 
 func applyDeadband(items []*candidate, previous map[string]business.PreviousRoutingDecision, config engineConfig, now time.Time) {
 	for _, item := range items {
-		if item.desiredLoad != nil && loadFactorWithinThreshold(item.account, *item.desiredLoad, config.changeThreshold) {
+		loadReference := item.account
+		if item.restoreConcurrency {
+			loadReference.Concurrency = item.desiredConcurrency
+		}
+		if item.desiredLoad != nil && loadFactorWithinThreshold(loadReference, *item.desiredLoad, config.changeThreshold) {
 			item.desiredLoad = cloneString(item.account.LoadFactor)
 		}
 		prior, found := previousDecision(previous, item.account.ID, item.account.GroupName)
@@ -1767,7 +1780,7 @@ func applyDeadband(items []*candidate, previous map[string]business.PreviousRout
 				item.desiredPriority = cloneInt64(item.account.Priority)
 			}
 		}
-		if item.upstreamReductionID == "" && !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.scalingCooldown {
+		if !item.restoreConcurrency && item.upstreamReductionID == "" && !prior.LastApplyAt.IsZero() && now.Sub(prior.LastApplyAt) < config.scalingCooldown {
 			item.scalingCooldown = true
 			item.desiredConcurrency = nil
 		}
@@ -2093,7 +2106,8 @@ func aggregateTargets(values map[string][]*candidate) map[string]business.Accoun
 			AccountID: accountID, GroupNames: uniqueSorted(groups), DesiredHealth: primary.state,
 			Priority: cloneInt64(primary.desiredPriority), LoadFactor: cloneString(primary.desiredLoad),
 			Concurrency: cloneInt64(primary.desiredConcurrency), WriteCooldown: primary.writeCooldown,
-			ScalingCooldown: primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction), CleanupReason: primary.cleanupReason,
+			RestoreConcurrency: primary.restoreConcurrency,
+			ScalingCooldown:    primary.scalingCooldown, CleanupAction: cloneString(primary.cleanupAction), CleanupReason: primary.cleanupReason,
 			ConfigurationError:  cloneString(primary.concurrencyConfigurationError),
 			UpstreamAllocation:  primary.upstreamAllocation,
 			UpstreamReductionID: primary.upstreamReductionID, UpstreamReductionLimit: cloneInt64(primary.upstreamReductionLimit),

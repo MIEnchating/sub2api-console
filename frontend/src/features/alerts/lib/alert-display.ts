@@ -38,6 +38,8 @@ const alertSubjectLabels: Record<string, string> = {
 };
 
 const causeLabels: Record<string, string> = {
+  COST_TRAFFIC_LOSS: "账号倍率高于分组倍率且有实际调用",
+  COST_TRAFFIC_BREAK_EVEN: "账号倍率等于分组倍率且有实际调用",
   COST_TRAFFIC: "账号倍率大于等于分组倍率且有实际调用",
   CONFIG: "上游配置有问题",
   CONFIG_METADATA_INVALID: "上游返回信息无法识别",
@@ -138,7 +140,18 @@ function compactRateSyncReason(value: string): string {
   return characters.length > 120 ? `${characters.slice(0, 119).join("")}…` : reason;
 }
 
-export function alertTypeLabel(eventType: string, status?: string): string {
+export function alertTypeLabel(eventType: string, status?: string, causeCode?: string): string {
+  if (eventType === "account.cost_traffic") {
+    const costLabels: Record<string, string> = {
+      COST_TRAFFIC_LOSS: "亏损流量",
+      COST_TRAFFIC_BREAK_EVEN: "无利润流量",
+    };
+    const code = causeCode?.split(":", 1)[0] ?? "";
+    if (Object.hasOwn(costLabels, code)) {
+      const label = costLabels[code];
+      return status === "recovered" ? `${label}告警已解除` : label;
+    }
+  }
   if (status === "recovered") {
     const recoveredLabels: Record<string, string> = {
       "account.cost_traffic": "无利润／亏损流量告警已解除",
@@ -194,6 +207,8 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
   if (status === "recovered") {
     const code = causeCode.split(":", 1)[0];
     const recoveredCauses: Record<string, string> = {
+      COST_TRAFFIC_LOSS: "近期未再检测到亏损流量",
+      COST_TRAFFIC_BREAK_EVEN: "近期未再检测到无利润流量",
       COST_TRAFFIC: "近期未再检测到账号倍率大于等于分组倍率的流量",
       CONFIG: "上游配置已恢复正常",
       AUTH: "上游鉴权已恢复",
@@ -222,6 +237,8 @@ export function alertCauseLabel(causeCode: string, status?: string): string {
     return compactRateSyncReason(reason);
   }
   for (const code of [
+    "COST_TRAFFIC_LOSS",
+    "COST_TRAFFIC_BREAK_EVEN",
     "COST_TRAFFIC",
     "AUTH",
     "PROBE",

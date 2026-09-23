@@ -1,9 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { AccountWorkbenchPage } from "../components/account-workbench-page";
-import { maintenanceKey, runKeys, templateKeys, workbenchKeys } from "../constants";
+import { maintenanceKey, runKeys, templateKeys, workbenchKeys, workbenchTabs } from "../constants";
 
 let client: QueryClient;
 afterEach(() => {
@@ -12,7 +11,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("切换工作台标签时不显示重复顶部标题，并保留导航、分区和操作入口", async () => {
+it("切换工作台页面内容时不显示重复顶部标题，并保留分区和操作入口", async () => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(templateKeys.library, { revision: 1, preferred_id: "", items: [] });
@@ -32,30 +31,27 @@ it("切换工作台标签时不显示重复顶部标题，并保留导航、分�
     message: "",
     results: [],
   });
-  render(
+  const page = (tab: "import" | "accounts" | "templates" | "records" | "maintenance") => (
     <QueryClientProvider client={client}>
-      <AccountWorkbenchPage />
-    </QueryClientProvider>,
+      <AccountWorkbenchPage tab={tab} onStarted={() => undefined} />
+    </QueryClientProvider>
   );
-  const user = userEvent.setup();
+  const view = render(page("import"));
   expect(screen.queryByRole("heading", { name: "账号工作台" })).not.toBeInTheDocument();
-  expect(screen.getByRole("tablist", { name: "账号工作台功能" })).toBeVisible();
-  for (const label of ["导入账号", "账号列表", "配置模板", "处理记录", "自动维护"]) {
-    const tab = screen.getByRole("tab", { name: label });
-    await user.click(tab);
-    expect(tab).toHaveAttribute("aria-selected", "true");
-    const panel = within(screen.getByRole("tabpanel", { name: label }));
-    expect(panel.queryByRole("heading", { name: label })).not.toBeInTheDocument();
+  for (const item of workbenchTabs) {
+    view.rerender(page(item.id));
+    const label = item.label;
+    expect(screen.queryByRole("heading", { name: label })).not.toBeInTheDocument();
     if (label === "导入账号") {
-      expect(panel.getByRole("textbox", { name: "账号资料" })).toBeVisible();
-      expect(panel.getByRole("heading", { name: "处理设置" })).toBeVisible();
-      expect(panel.getByRole("button", { name: "解析并预览" })).toBeVisible();
+      expect(screen.getByRole("textbox", { name: "账号资料" })).toBeVisible();
+      expect(screen.getByRole("heading", { name: "处理设置" })).toBeVisible();
+      expect(screen.getByRole("button", { name: "解析并预览" })).toBeVisible();
     } else if (label === "账号列表") {
-      expect(panel.getByRole("button", { name: "刷新列表" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "刷新列表" })).toBeEnabled();
     } else {
-      expect(panel.getByRole("button", { name: "刷新" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "刷新" })).toBeEnabled();
       if (label === "配置模板")
-        expect(panel.getByRole("button", { name: "创建模板" })).toBeEnabled();
+        expect(screen.getByRole("button", { name: "创建模板" })).toBeEnabled();
     }
   }
 });

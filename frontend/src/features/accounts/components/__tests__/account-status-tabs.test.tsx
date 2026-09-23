@@ -237,11 +237,11 @@ describe("AccountStatusFilter", () => {
     );
 
     expect(markup).not.toContain("人工账号");
-    expect(markup).toContain('aria-label="显示人工优先账号"');
+    expect(markup).toContain('aria-label="显示手动控制账号"');
     expect(markup).toContain('aria-checked="false"');
   });
 
-  it("只有人工优先账号时维护菜单禁用批量倍率同步", async () => {
+  it("只有手动控制账号时维护菜单禁用批量倍率同步", async () => {
     const rows = [{ ...account(), manual_priority: 3 }];
     vi.spyOn(api, "accounts").mockResolvedValue(rows);
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });

@@ -97,7 +97,6 @@ export function detectionRules(
           stage: "固定规则",
           values: [
             { label: "糖果题", value: "21" },
-            { label: "知识截止日期", value: "无法提供日期，且不回答任何日期" },
             { label: "订阅特征", value: "low = 2，mid = 4" },
             { label: "官 Key 特征", value: "low = 4，mid = 10" },
             { label: "来源判定", value: "每轮两档均匹配同一来源，否则无法判定" },

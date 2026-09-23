@@ -60,8 +60,12 @@ func (s *Store) costTrafficAlertFindings(ctx context.Context) ([]alertFinding, m
 			notEvaluated[key] = "调用时间无法核对，未判定成本流量恢复"
 			continue
 		}
-		reason := fmt.Sprintf("当前账号倍率 %s ≥ 分组倍率 %s；最近 5 分钟已采集 %d 次实际请求；最近调用 %s（北京时间）；请核对账号成本及分组定价", rateText.String, groupRateText.String, count, observed.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05"))
-		findings = append(findings, alertFinding{key, "account.cost_traffic", "account", id, alertCause("COST_TRAFFIC", reason)})
+		code, comparison := "COST_TRAFFIC_BREAK_EVEN", "="
+		if rate.Cmp(groupRate) > 0 {
+			code, comparison = "COST_TRAFFIC_LOSS", ">"
+		}
+		reason := fmt.Sprintf("当前账号倍率 %s %s 分组倍率 %s；最近 5 分钟已采集 %d 次实际请求；最近调用 %s（北京时间）；请核对账号成本及分组定价", rateText.String, comparison, groupRateText.String, count, observed.In(time.FixedZone("CST", 8*60*60)).Format("2006-01-02 15:04:05"))
+		findings = append(findings, alertFinding{key, "account.cost_traffic", "account", id, alertCause(code, reason)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err

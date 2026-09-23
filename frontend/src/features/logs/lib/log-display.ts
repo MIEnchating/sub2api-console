@@ -229,6 +229,7 @@ const contextualValueLabels: Record<string, Record<string, string>> = {
   },
   auth_method: {
     newapi_admin_key: "New API 管理密钥",
+    newapi_session: "New API Session",
     newapi_manual_login: "New API 手动登录",
     newapi_user_login: "New API 用户登录",
     newapi_user_token: "New API 用户令牌",

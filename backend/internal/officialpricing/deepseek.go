@@ -36,11 +36,17 @@ type TimePricing struct {
 }
 
 type Price struct {
-	Model       string `json:"model"`
-	SourceURL   string `json:"source_url,omitempty"`
-	Scope       string `json:"scope,omitempty"`
-	Tiers       []Tier `json:"tiers,omitempty"`
-	BillingExpr string `json:"billing_expr,omitempty"`
+	Mode              string `json:"mode,omitempty"`
+	SyncError         string `json:"sync_error,omitempty"`
+	CacheWrite1hPrice string `json:"cache_write_1h_price,omitempty"`
+	ImageInputPrice   string `json:"image_input_price,omitempty"`
+	ImageOutputPrice  string `json:"image_output_price,omitempty"`
+	ImageOutputUnit   string `json:"image_output_unit,omitempty"`
+	Model             string `json:"model"`
+	SourceURL         string `json:"source_url,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	Tiers             []Tier `json:"tiers,omitempty"`
+	BillingExpr       string `json:"billing_expr,omitempty"`
 	Rates
 	TimePricing TimePricing `json:"time_pricing"`
 }
@@ -72,6 +78,7 @@ func FetchDeepSeek(ctx context.Context, client *http.Client) ([]Price, error) {
 }
 
 var peakHours = regexp.MustCompile(`高峰时段为北京时间周一至周五\s*([0-9: 、,，–—\-]+)（其余为空闲时段）`)
+var peakHoursCurrent = regexp.MustCompile(`北京时间周一至周五[^0-9]*([0-9: 、,，–—\-]+)\s*为高峰时段`)
 var clockRange = regexp.MustCompile(`(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})`)
 var amount = regexp.MustCompile(`^([0-9]+(?:\.[0-9]+)?)元$`)
 var modelName = regexp.MustCompile(`^deepseek-[a-z0-9-]+$`)
@@ -88,7 +95,11 @@ func ParseDeepSeek(raw []byte) ([]Price, error) {
 		return nil, errors.New("DeepSeek 官方价格正文缺失")
 	}
 	article := articles[0]
-	match := peakHours.FindStringSubmatch(nodeText(article))
+	text := nodeText(article)
+	match := peakHours.FindStringSubmatch(text)
+	if match == nil {
+		match = peakHoursCurrent.FindStringSubmatch(text)
+	}
 	if match == nil {
 		return nil, errors.New("DeepSeek 官方峰谷时段格式已变更")
 	}

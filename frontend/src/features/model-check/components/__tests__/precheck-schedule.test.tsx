@@ -24,6 +24,7 @@ it("自动检测选择前置检测后经确认保存检测类型和间隔", asyn
     render(
       <QueryClientProvider client={client}>
         <AnimationScheduleDialog
+          mode="precheck"
           accountID="41"
           accountName="测试账号"
           model="gpt-6-astra"
@@ -32,24 +33,11 @@ it("自动检测选择前置检测后经确认保存检测类型和间隔", asyn
       </QueryClientProvider>,
     );
     const user = userEvent.setup();
-    const precheck = within(screen.getByRole("group", { name: "自动检测内容" })).getByRole(
-      "checkbox",
-      { name: "前置检测" },
-    );
-    expect(precheck).not.toBeChecked();
-    await user.click(
-      within(screen.getByRole("group", { name: "自动检测内容" })).getByRole("checkbox", {
-        name: "动画检测",
-      }),
-    );
-    precheck.focus();
-    expect(precheck).toHaveFocus();
-    await user.keyboard(" ");
-    expect(precheck).toBeChecked();
+    expect(screen.queryByRole("group", { name: "自动检测内容" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "开启自动检测" }));
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     const dialog = screen.getByRole("dialog", { name: "确认开启自动检测" });
-    expect(dialog).toHaveTextContent("每 60 分钟执行糖果题和知识截止日期题");
+    expect(dialog).toHaveTextContent("每 60 分钟执行糖果题");
     expect(bodies).toHaveLength(0);
     await user.click(within(dialog).getByRole("button", { name: "确认保存并开启" }));
     await waitFor(() =>
@@ -62,7 +50,7 @@ it("自动检测选择前置检测后经确认保存检测类型和间隔", asyn
           timeout_seconds: 120,
           version: 0,
           mode: "precheck",
-          precheck_questions: ["candy", "knowledge-cutoff"],
+          precheck_questions: ["candy"],
         },
       ]),
     );

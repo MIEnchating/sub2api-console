@@ -5,6 +5,9 @@ package business
 // but do not present automatic decisions as current manual-account controls.
 func applyManualPriorityProjection(item *accountProjection) {
 	item.Health = AccountStateManualPriority
+	if item.RoutingState != nil && *item.RoutingState == "cost_blocked" && item.Schedulable != nil && !*item.Schedulable {
+		item.Health = "cost_blocked"
+	}
 	if item.Paused != nil && *item.Paused {
 		item.Health = AccountStatePaused
 	} else if accountMetadataState(item.metadataRaw) == AccountStateDisabled {

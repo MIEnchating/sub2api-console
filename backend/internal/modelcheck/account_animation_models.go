@@ -3,15 +3,15 @@ package modelcheck
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
-// AccountAnimationModels follows the generation credential path. Management
-// model aliases and platform defaults are not evidence of upstream support.
+// AccountAnimationModels reads upstream models for bound API keys and the
+// management picker catalog for OAuth accounts. Catalog entries are suggestions,
+// not evidence of successful generation.
 func (s *Service) AccountAnimationModels(ctx context.Context, accountID string) ([]string, error) {
 	if !stablePositiveID(accountID) {
 		return nil, errors.New("账号必须使用有效的稳定 ID")
@@ -69,15 +69,12 @@ func (s *Service) oauthAnimationModels(ctx context.Context, account selectedAcco
 	if stringField(remote, "type") != "oauth" || stringField(remote, "platform") != "openai" {
 		return nil, errors.New("账号类型或平台已变化，请刷新账号后重试")
 	}
-	// The managed live catalog supports hidden credentials and the account proxy.
-	// Do not use GET /models: it can silently substitute a default/alias catalog.
-	models, err := client.SyncAccountModels(ctx, account.ID)
+	// Read the same catalog as the management account picker without triggering
+	// capability synchronization or persistence. Sub2API can supply configured
+	// or default suggestions when live discovery is unavailable.
+	models, err := client.AccountModels(ctx, account.ID)
 	if err != nil {
-		var status *adminclient.HTTPError
-		if errors.As(err, &status) && (status.StatusCode == http.StatusNotFound || status.StatusCode == http.StatusMethodNotAllowed) {
-			return nil, errors.New("管理端不支持实时模型读取，请升级 Sub2API 或手动输入模型 ID")
-		}
-		return nil, errors.New("OAuth 实时模型读取失败，请检查授权、账号代理或管理连接后重试；也可手动输入模型 ID")
+		return nil, errors.New("OAuth 模型目录读取失败，请检查授权、账号代理或管理连接后重试；也可手动输入模型 ID")
 	}
 	if _, err := targetguard.Pin(targetguard.Expect(ctx, target), store); err != nil {
 		return nil, errors.New("管理目标在模型读取期间已变化，请重新获取模型")

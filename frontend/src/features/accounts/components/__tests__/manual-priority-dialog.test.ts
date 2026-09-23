@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { AccountStatus } from "@/api";
 import { manualPriorityInitialValues, manualPrioritySlots } from "../manual-priority-dialog";
 
-describe("人工优先位选择", () => {
+describe("手动控制选择", () => {
   it("只禁用共同分组账号占用的位置并保留当前账号自己的选择", () => {
     const accounts = [
       {
@@ -43,7 +43,7 @@ describe("人工优先位选择", () => {
       loadFactor: "100",
       concurrency: 100,
       schedulable: true,
-      syncBalanceMultiplier: false,
+      syncBalanceMultiplier: true,
     });
     expect(
       manualPriorityInitialValues({

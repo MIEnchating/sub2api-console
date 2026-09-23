@@ -23,6 +23,7 @@ describe("upstream edit schema", () => {
     ]);
     expect(authModesForPlatform("newapi").map((item) => item.value)).toEqual([
       "newapi_admin_key",
+      "newapi_session",
       "newapi_user_token",
       "newapi_user_login",
       "newapi_manual_login",

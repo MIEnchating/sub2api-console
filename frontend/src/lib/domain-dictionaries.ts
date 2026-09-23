@@ -64,7 +64,7 @@ export const taskStatusDictionary: Readonly<Record<string, string>> = {
 export const concurrencyLimitedLabel = "等待并发额度";
 
 export const runtimeStatusDictionary: Readonly<Record<string, string>> = {
-  manual_priority: "人工优先位",
+  manual_priority: "手动控制",
   ok: "正常",
   partial: "部分完成",
   warning: "警告",
@@ -160,7 +160,7 @@ export const trafficRankingSortOptions = [
 ] as const;
 
 export const accountStateDictionary: Readonly<Record<string, string>> = {
-  manual_priority: "人工优先位",
+  manual_priority: "手动控制",
   healthy: "健康",
   active: "健康",
   available: "可用",

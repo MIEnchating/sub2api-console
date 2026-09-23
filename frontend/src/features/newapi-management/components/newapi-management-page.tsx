@@ -216,7 +216,7 @@ export function NewAPIManagementPage(props: Props) {
       await queryClient.invalidateQueries({
         queryKey: ["newapi-remote-model-pricing-source", platformId],
       });
-      if (catalog.stale) return;
+      if (catalog.stale || catalog.warning) return;
       toast.success("参考价格已刷新并缓存");
     },
     onError: (error) => notifyOperationError(error, "参考价格刷新失败，已保留上次缓存"),
@@ -274,6 +274,10 @@ export function NewAPIManagementPage(props: Props) {
     const remotePrice = matchingRemoteModelPrice(catalog.models, model);
     if (!remotePrice) {
       toast.error(`远程价卡和 Sub2API 默认价格中都没有 ${model}`);
+      return false;
+    }
+    if (remotePrice.sync_error) {
+      toast.error(`${model}：${remotePrice.sync_error}`);
       return false;
     }
     return writeModelPrice(remotePriceToNewAPIModelPrice(remotePrice), "同步远程价格");

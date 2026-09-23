@@ -58,7 +58,7 @@ func prepareUpstreamCapacity(ctx context.Context, repository Repository, targets
 		if target.AbandonControl || target.CleanupAction != nil {
 			continue
 		}
-		if target.ReleaseControl || target.UpstreamReductionID != "" || (policy.autoApply["concurrency"] && target.Concurrency != nil) ||
+		if target.ReleaseControl || target.RestoreConcurrency || target.UpstreamReductionID != "" || (policy.autoApply["concurrency"] && target.Concurrency != nil) ||
 			(policy.autoApply["schedulable"] && target.Schedulable != nil && *target.Schedulable) {
 			potential[id] = true
 			ordinary = ordinary || target.UpstreamReductionID == "" || target.UpstreamAllocation

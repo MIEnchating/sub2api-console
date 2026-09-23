@@ -76,15 +76,14 @@ type UpstreamAuthResolver interface {
 }
 
 type accountRateProbe struct {
-	account              business.BoundAccountMaintenance
-	observedMultiplier   string
-	multiplier           string
-	manualMultiplierOnly bool
-	skippedReason        string
-	fallbackEligible     bool
-	fallback             bool
-	fallbackSource       string
-	err                  error
+	account            business.BoundAccountMaintenance
+	observedMultiplier string
+	multiplier         string
+	skippedReason      string
+	fallbackEligible   bool
+	fallback           bool
+	fallbackSource     string
+	err                error
 }
 
 var errAccountRateBindingMissing = errors.New("未找到该账号的有效上游绑定")
@@ -96,16 +95,17 @@ type accountRateWriteSkippedError struct {
 func (err *accountRateWriteSkippedError) Error() string { return err.reason }
 
 type Service struct {
-	targets         TargetStore
-	repository      Repository
-	tasks           TaskStore
-	taskRunner      taskrunner.Runner
-	rateWriter      AccountRateWriter
-	upstreams       UpstreamCatalogReader
-	resolver        UpstreamAuthResolver
-	timeout         time.Duration
-	rateBatchMu     sync.Mutex
-	rateBatchCursor int
+	rateReconciliation func(context.Context, []string, string) error
+	targets            TargetStore
+	repository         Repository
+	tasks              TaskStore
+	taskRunner         taskrunner.Runner
+	rateWriter         AccountRateWriter
+	upstreams          UpstreamCatalogReader
+	resolver           UpstreamAuthResolver
+	timeout            time.Duration
+	rateBatchMu        sync.Mutex
+	rateBatchCursor    int
 }
 
 func (s *Service) UseUpstreamCatalogReader(reader UpstreamCatalogReader) {
@@ -267,6 +267,12 @@ func (s *Service) EnqueueAccountBaseURLRepair(ctx context.Context, accountIDs []
 
 func (s *Service) EnqueueAccountUpstreamHostRepair(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
 	return s.enqueueMaintenance(ctx, "account-upstream-host-repair", "账号归属 Host 修复已排队", accountIDs, actor)
+}
+
+// UseRateReconciliation attaches cost migration and protection after confirmed
+// writes have released their per-account leases.
+func (s *Service) UseRateReconciliation(reconcile func(context.Context, []string, string) error) {
+	s.rateReconciliation = reconcile
 }
 
 func (s *Service) EnqueueAccountRateSync(ctx context.Context, accountIDs []string, actor string) (taskstore.Task, error) {
@@ -643,7 +649,7 @@ func (s *Service) runMaintenance(ctx context.Context, operation string, accountI
 func (s *Service) excludeManualPriorityAccounts(ctx context.Context, accountIDs []string) ([]string, []map[string]any, error) {
 	controls, err := s.repository.ManualPriorityControls(ctx, accountIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("人工优先位保护状态读取失败：%w", err)
+		return nil, nil, fmt.Errorf("手动控制保护状态读取失败：%w", err)
 	}
 	eligible := make([]string, 0, len(accountIDs))
 	protected := make([]map[string]any, 0, len(controls))
@@ -654,7 +660,7 @@ func (s *Service) excludeManualPriorityAccounts(ctx context.Context, accountIDs 
 		}
 		protected = append(protected, map[string]any{
 			"account_id":   accountID,
-			"status":       "人工优先位，已跳过",
+			"status":       "手动控制，已跳过",
 			"reason":       "人工控制账号仅允许按设置同步余额与倍率",
 			"remote_write": false,
 		})
@@ -1495,7 +1501,6 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 				upstreamRates[index].skippedReason = "人工控制账号未开启余额与倍率同步"
 				continue
 			}
-			upstreamRates[index].manualMultiplierOnly = bindings[0].ManualPriority
 			if isNewAPIType(bindings[0].UpstreamType) {
 				newAPIIndexes = append(newAPIIndexes, index)
 			} else {
@@ -1675,7 +1680,6 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 					continue
 				}
 				probe.account = current
-				probe.manualMultiplierOnly = current.ManualPriority
 				if current.ManualPriority && !current.SyncBalanceMultiplier {
 					probe.skippedReason = "人工控制账号未开启余额与倍率同步"
 					continue
@@ -1819,13 +1823,11 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 				expectedName := account.NameForMultiplier(probe.multiplier)
 				item["account_name"], item["before"], item["after"] = remoteName, remoteMultiplier, probe.multiplier
 				item["name_before"] = remoteName
-				if !probe.manualMultiplierOnly {
-					item["name_after"] = expectedName
-				}
+				item["name_after"] = expectedName
 				item["upstream_raw_multiplier"] = probe.observedMultiplier
 				item["recharge_rate"] = account.RechargeRate
 				item["account_multiplier"] = probe.multiplier
-				nameMatches := probe.manualMultiplierOnly || (remoteName == expectedName && account.AccountName == expectedName)
+				nameMatches := remoteName == expectedName && account.AccountName == expectedName
 				if remoteMultiplier == probe.multiplier && sameRate(account.CurrentMultiplier, probe.multiplier) && nameMatches {
 					item["status"] = "已确认一致"
 					results[index] = rateResult{item: item, unchanged: true}
@@ -1836,17 +1838,13 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 						guarded,
 						account,
 						probe.observedMultiplier,
-						probe.manualMultiplierOnly,
+						false,
 					)
 				}
 				var writeResult map[string]any
 				var writeErr error
 				rateSourceHost := account.RateSourceHost()
-				if probe.manualMultiplierOnly {
-					writeResult, writeErr = s.rateWriter.SyncAccountMultiplierIfCurrent(writeCtx, accountID, probe.multiplier, actor, rateSourceHost, checkCurrent)
-				} else {
-					writeResult, writeErr = s.rateWriter.SyncAccountRateIfCurrent(writeCtx, accountID, expectedName, probe.multiplier, actor, rateSourceHost, checkCurrent)
-				}
+				writeResult, writeErr = s.rateWriter.SyncAccountRateIfCurrent(writeCtx, accountID, expectedName, probe.multiplier, actor, rateSourceHost, checkCurrent)
 				if writeErr != nil {
 					var skipped *accountRateWriteSkippedError
 					if errors.As(writeErr, &skipped) {
@@ -1910,6 +1908,20 @@ func (s *Service) syncAccountRatesWithCatalog(ctx context.Context, accountIDs []
 			written++
 		}
 	}
+	if s.rateReconciliation != nil && cancelErr == nil {
+		confirmed := []string{}
+		for index, result := range results {
+			if result.updated || result.unchanged {
+				confirmed = append(confirmed, accountIDs[index])
+			}
+		}
+		if len(confirmed) > 0 {
+			if err := s.rateReconciliation(writeCtx, confirmed, actor); err != nil {
+				cancelErr = fmt.Errorf("倍率已同步，但成本分组与调度复核失败：%w", err)
+			}
+		}
+	}
+
 	return map[string]any{
 		"operation": "account.rate.sync", "source": "upstream_live", "requested": len(accountIDs),
 		"updated": updated, "unchanged": unchanged, "skipped": skipped, "missing": missing, "failed": failed,

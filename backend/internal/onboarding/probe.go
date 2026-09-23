@@ -38,6 +38,7 @@ type ProbeResult struct {
 	RequestModel string `json:"request_model"`
 	ActualModel  string `json:"actual_model"`
 	ResponseText string `json:"response_text,omitempty"`
+	ResponseJSON string `json:"response_json,omitempty"`
 	LatencyMS    int64  `json:"latency_ms"`
 	HTTPStatus   int    `json:"http_status"`
 	TemporaryKey bool   `json:"temporary_key"`
@@ -582,12 +583,19 @@ func runGatewayProbe(ctx context.Context, baseURL, secret, model string, platfor
 		return result, err
 	}
 	if status < 200 || status >= 300 {
-		result.ActualModel = responseModel(raw)
+		payload, decodeErr := decodeGatewayJSON(raw, "上游探活接口")
+		if decodeErr == nil {
+			result.ResponseJSON = probeResponseJSON(payload)
+			result.ActualModel = responseModelFromPayload(payload)
+		} else {
+			result.ActualModel = responseModel(raw)
+		}
 		err := gatewayStatusError(status, raw)
 		result.Message = err.Error()
 		return result, err
 	}
-	payload, actualModel, responseText, err := decodeGatewayProbeResponse(raw, stream)
+	payload, actualModel, responseText, responseJSON, err := decodeGatewayProbeResponse(raw, stream)
+	result.ResponseJSON = responseJSON
 	if err != nil {
 		result.Message = err.Error()
 		return result, err
@@ -630,19 +638,20 @@ func gatewayRequiresStream(status int, raw []byte) bool {
 	return json.Unmarshal(raw, &response) == nil && response.Error.Code == "non_stream_not_allowed"
 }
 
-func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, error) {
+func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, string, error) {
 	if !stream {
 		payload, err := decodeGatewayJSON(raw, "上游探活接口")
-		return payload, "", probeResponseText(payload), err
+		return payload, "", probeResponseText(payload), probeResponseJSON(payload), err
 	}
 	trimmed := strings.TrimSpace(string(raw))
 	if !strings.HasPrefix(trimmed, "data:") && !strings.Contains(trimmed, "\ndata:") && !strings.Contains(trimmed, "\nevent:") {
 		payload, err := decodeGatewayJSON(raw, "上游探活接口")
-		return payload, responseModelFromPayload(payload), probeResponseText(payload), err
+		return payload, responseModelFromPayload(payload), probeResponseText(payload), probeResponseJSON(payload), err
 	}
 
 	var lastPayload any
 	var contentPayload any
+	events := make([]any, 0)
 	actualModel := ""
 	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
@@ -657,31 +666,78 @@ func decodeGatewayProbeResponse(raw []byte, stream bool) (any, string, string, e
 		}
 		event, err := decodeGatewayJSON([]byte(data), "上游探活流")
 		if err != nil {
-			return nil, actualModel, "", err
+			return nil, actualModel, "", probeResponseJSON(events), err
 		}
+		events = append(events, event)
 		lastPayload = event
 		if actualModel == "" {
 			actualModel = responseModelFromPayload(event)
 		}
 		if err := gatewayBusinessError(event); err != nil {
-			return event, actualModel, probeResponseText(event), err
+			return event, actualModel, probeResponseText(event), probeResponseJSON(events), err
 		}
 		if contentPayload == nil && eventHasProbeContent(event) {
 			contentPayload = event
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, actualModel, "", errors.New("上游探活流读取失败")
+		return nil, actualModel, "", probeResponseJSON(events), errors.New("上游探活流读取失败")
 	}
 	if contentPayload != nil {
-		return contentPayload, actualModel, probeResponseText(contentPayload), nil
+		return contentPayload, actualModel, probeResponseText(contentPayload), probeResponseJSON(events), nil
 	}
 	if lastPayload != nil {
-		return lastPayload, actualModel, probeResponseText(lastPayload), errors.New("上游探活流未返回有效文本")
+		return lastPayload, actualModel, probeResponseText(lastPayload), probeResponseJSON(events), errors.New("上游探活流未返回有效文本")
 	}
 	// A few compatible gateways ignore stream=true and still return one JSON object.
 	payload, err := decodeGatewayJSON(raw, "上游探活接口")
-	return payload, responseModelFromPayload(payload), probeResponseText(payload), err
+	return payload, responseModelFromPayload(payload), probeResponseText(payload), probeResponseJSON(payload), err
+}
+
+func probeResponseJSON(value any) string {
+	if value == nil {
+		return ""
+	}
+	encoded, err := json.MarshalIndent(redactProbeResponse(value), "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+func redactProbeResponse(value any) any {
+	switch item := value.(type) {
+	case map[string]any:
+		redacted := make(map[string]any, len(item))
+		for key, child := range item {
+			if probeSecretField(key) {
+				redacted[key] = "[已隐藏]"
+				continue
+			}
+			redacted[key] = redactProbeResponse(child)
+		}
+		return redacted
+	case []any:
+		redacted := make([]any, len(item))
+		for index, child := range item {
+			redacted[index] = redactProbeResponse(child)
+		}
+		return redacted
+	case string:
+		return redact.Secrets(item)
+	default:
+		return value
+	}
+}
+
+func probeSecretField(key string) bool {
+	normalized := strings.NewReplacer("-", "", "_", "", " ", "").Replace(strings.ToLower(strings.TrimSpace(key)))
+	for _, secret := range []string{"authorization", "accesstoken", "refreshtoken", "clientsecret", "adminkey", "apikey", "token", "password", "passwd", "secret", "cookie", "setcookie"} {
+		if normalized == secret || strings.HasSuffix(normalized, secret) {
+			return true
+		}
+	}
+	return false
 }
 
 func probeResponseText(value any) string {

@@ -219,8 +219,8 @@ func TestOAuthAccountWithoutKeyBindingRunsRequestedRoundsAndKeepsCredentialsPriv
 		if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || r.Header.Get("Authorization") != "Bearer "+oauthFixtureToken || r.Header.Get("ChatGPT-Account-Id") != "isolated-workspace" {
 			t.Error("OAuth request lost the official endpoint or bound credential")
 		}
-		answers := []string{"21", "我无法提供知识截止日期。", "2", "4"}
-		answer := answers[(calls.Add(1)-1)%4]
+		answers := []string{"21", "2", "4"}
+		answer := answers[(calls.Add(1)-1)%3]
 		return oauthResponse(200, "application/json", fmt.Sprintf(`{"status":"completed","output_text":%q}`, answer)), nil
 	}))
 	_, err := f.service.Enqueue(context.Background(), modelcheck.Request{AccountIDs: []string{"1"}, Models: []string{"gpt-6-astra"}, Rounds: 2, TimeoutSeconds: 5})
@@ -229,7 +229,7 @@ func TestOAuthAccountWithoutKeyBindingRunsRequestedRoundsAndKeepsCredentialsPriv
 	}
 	task := finished(t, f)
 	rows, _ := task.Result["tests"].([]map[string]any)
-	if len(rows) != 1 || rows[0]["verdict"] != "MATCH" || calls.Load() != 8 {
+	if len(rows) != 1 || rows[0]["verdict"] != "MATCH" || calls.Load() != 6 {
 		t.Fatalf("OAuth account did not complete two rounds: result=%#v requests=%d", task.Result, calls.Load())
 	}
 	if rows[0]["transport"] != "oauth-direct" || rows[0]["production_path_equivalent"] != false || rows[0]["credentials_persisted"] != false || task.Result["credentials_persisted"] != false {

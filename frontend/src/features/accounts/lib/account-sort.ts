@@ -73,7 +73,7 @@ function compareAccountNames(left: AccountStatus, right: AccountStatus, directio
 
 function accountNumericSortValue(account: AccountStatus, sort: AccountSort): number | null {
   if (sort.startsWith("priority_")) {
-    return numericValue(account.manual_priority ?? account.priority);
+    return numericValue(account.priority);
   }
   if (sort.startsWith("health_")) return numericValue(account.health_score);
   if (sort.startsWith("cost_")) return numericValue(account.multiplier);

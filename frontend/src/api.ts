@@ -199,9 +199,11 @@ export type OfficialPriceTier = {
   output_price: string;
   cache_read_price?: string;
   cache_write_price?: string;
+  cache_write_1h_price?: string;
 };
 
 export type Sub2APIModelPrice = {
+  sync_error?: string;
   source_scope?: string;
   price_tiers?: OfficialPriceTier[];
   billing_expr?: string;
@@ -213,6 +215,7 @@ export type Sub2APIModelPrice = {
   output_price: string;
   image_input_price?: string;
   image_output_price?: string;
+  image_output_unit?: "token" | "image";
   provider?: string;
   mode?: string;
   input_ratio?: string;
@@ -348,6 +351,13 @@ type UnboundUpstreamKey = {
 export type KeyCleanupPreview = {
   host: string;
   keys: UnboundUpstreamKey[];
+};
+
+export type UpstreamBindingCleanup = {
+  upstream_id: string;
+  account_id: string;
+  upstream_key_id: string;
+  upstream_group_id: string;
 };
 
 export type UpstreamBoundAccount = {
@@ -550,6 +560,7 @@ export type ProbeResult = {
   request_model: string;
   actual_model: string;
   response_text?: string;
+  response_json?: string;
   latency_ms: number;
   http_status: number;
   temporary_key?: boolean;
@@ -995,17 +1006,6 @@ export type AccountRecovery = {
   conditions: Array<{ code: string; met: boolean; detail: string }>;
 };
 
-export type AccountTrafficSnapshot = {
-  enabled: boolean;
-  observed_at: string;
-  accounts: Array<{
-    account_id: string;
-    current_requests: number;
-    waiting_requests: number;
-    tracked: boolean;
-  }>;
-};
-
 export type AccountStatus = {
   ignore_cost_wall?: boolean;
   id: string;
@@ -1147,6 +1147,7 @@ type AccountModelCoverage = {
 };
 
 export type AccountModelSyncAccount = {
+  enabled_models?: string[];
   account_id: string;
   account_name: string;
   platform?: string;
@@ -1167,6 +1168,7 @@ export type AccountModelSyncPreview = {
 export type AccountModelSelection = {
   account_id: string;
   models: string[];
+  manual_models?: string[];
 };
 
 export type AccountModelSyncSettings = {
@@ -1421,7 +1423,57 @@ export type SystemMetrics = {
 };
 
 export type AnimationTarget = { account_id: string; model: string };
-export type PrecheckQuestionID = "candy" | "knowledge-cutoff";
+type TerminalContinuityVerdict = "normal" | "suspected" | "inconclusive" | "error";
+export type TerminalContinuityResult = {
+  round_results?: TerminalContinuityRound[];
+  account_id: string;
+  account_name: string;
+  model: string;
+  response_model?: string;
+  request_id: string;
+  verdict: TerminalContinuityVerdict;
+  response?: string;
+  error?: string;
+  duration_ms: number;
+  completed_at: string;
+};
+export type TerminalContinuityRequest = {
+  rounds?: number;
+  targets: AnimationTarget[];
+  timeout_seconds: number;
+};
+export type TerminalContinuityRound = {
+  round: number;
+  verdict: TerminalContinuityVerdict;
+  request_id: string;
+  response?: string;
+  response_model?: string;
+  error?: string;
+  duration_ms: number;
+  completed_at: string;
+};
+export type DetectionTask = {
+  id: string;
+  version: number;
+  name: string;
+  group_ids: string[];
+  model: string;
+  precheck: boolean;
+  precheck_questions?: PrecheckQuestionID[];
+  terminal: boolean;
+  terminal_rounds: number;
+  automatic: boolean;
+  schedule_type: "interval" | "daily";
+  interval_minutes: number;
+  daily_times?: string[];
+  timezone?: string;
+  timeout_seconds: number;
+  running?: boolean;
+  next_at?: string;
+  last_task_id?: string;
+  last_error?: string;
+};
+export type PrecheckQuestionID = "candy";
 export type AnimationCustomEndpoint = {
   base_url: string;
   api_key: string;
@@ -1436,6 +1488,7 @@ export type AnimationRequest = {
   custom?: AnimationCustomEndpoint;
 };
 export type AnimationResult = {
+  source_task_id?: string;
   mode?: "animation" | "precheck";
   precheck?: {
     verdict: "passed" | "not_passed" | "inconclusive" | "error";
@@ -1450,6 +1503,8 @@ export type AnimationResult = {
   };
   account_id: string;
   account_name: string;
+  endpoint?: string;
+  platform?: "openai" | "anthropic";
   model: string;
   response_model?: string;
   request_id: string;
@@ -1461,6 +1516,10 @@ export type AnimationResult = {
   completed_at: string;
 };
 export type AnimationSchedule = {
+  schedule_type?: "interval" | "daily";
+  daily_time?: string;
+  daily_times?: string[];
+  timezone?: string;
   precheck_questions?: PrecheckQuestionID[];
   mode?: "animation" | "precheck" | "both";
   account_id: string;
@@ -2171,6 +2230,15 @@ export const api = {
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/channel-models`,
       { method: "POST", body: JSON.stringify(payload) },
     ),
+  availableNewAPIChannelModels: (
+    platformId: string,
+    channel: NewAPIChannel,
+    signal?: AbortSignal,
+  ) =>
+    request<{ models: string[] }>(
+      `/api/newapi/platforms/${encodeURIComponent(platformId)}/channels/${encodeURIComponent(channel.id)}/models/available?${new URLSearchParams({ version: channel.version })}`,
+      { signal },
+    ),
   saveNewAPIModelPrices: (platformId: string, prices: NewAPIModelPrice[]) =>
     request<NewAPIRemoteSnapshot>(
       `/api/newapi/platforms/${encodeURIComponent(platformId)}/model-prices`,
@@ -2361,6 +2429,14 @@ export const api = {
       body: JSON.stringify({ excluded }),
     }),
   upstreams: () => request<UpstreamSummary>("/api/upstreams"),
+  cleanupUpstreamBinding: (host: string, bindingId: number, payload: UpstreamBindingCleanup) =>
+    request<{ binding_id: number }>(
+      `/api/upstreams/${encodeURIComponent(host)}/bindings/${bindingId}/cleanup`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
   upstreamConfiguration: (host: string) =>
     request<UpstreamConfiguration>(`/api/upstreams/${encodeURIComponent(host)}/configuration`),
   detectUpstream: (baseUrl: string) =>
@@ -2403,7 +2479,6 @@ export const api = {
       }),
     }),
   accounts: () => request<AccountStatus[]>("/api/accounts"),
-  accountTraffic: () => request<AccountTrafficSnapshot>("/api/accounts/traffic"),
   groupAllocation: (groupId: string) =>
     request<GroupAllocation>(`/api/groups/${encodeURIComponent(groupId)}/allocation`),
   groupProbeModels: (groupId: string) =>
@@ -2677,7 +2752,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  terminalContinuityHistory: () => request<Task[]>("/api/model-checks/terminal-continuity"),
+  detectionTasks: () => request<DetectionTask[]>("/api/model-checks/detection-tasks"),
+  saveDetectionTask: (value: DetectionTask) =>
+    request<DetectionTask[]>("/api/model-checks/detection-tasks", {
+      method: "PUT",
+      body: JSON.stringify(value),
+    }),
+  deleteDetectionTask: (id: string, version: number) =>
+    request<DetectionTask[]>(`/api/model-checks/detection-tasks/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      body: JSON.stringify({ version }),
+    }),
+  runDetectionTask: (id: string, version: number) =>
+    request<Task>(`/api/model-checks/detection-tasks/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      body: JSON.stringify({ version }),
+    }),
+  runTerminalContinuity: (payload: TerminalContinuityRequest) =>
+    request<Task>("/api/model-checks/terminal-continuity", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   animationSchedules: () => request<AnimationSchedule[]>("/api/model-checks/animation-schedules"),
+  saveAnimationSchedules: (schedules: AnimationSchedule[]) =>
+    request<AnimationSchedule[]>("/api/model-checks/animation-schedules", {
+      method: "PUT",
+      body: JSON.stringify({ schedules }),
+    }),
   saveAnimationSchedule: (payload: AnimationSchedule) =>
     request<AnimationSchedule[]>(
       `/api/model-checks/animation-schedules/${encodeURIComponent(payload.account_id)}`,
@@ -2738,6 +2840,7 @@ export const api = {
     accept_login_agreement?: boolean;
     entry?: string;
     headers?: Record<string, string>;
+    cookies?: Record<string, string>;
   }) =>
     request<ManualAuthVerifyResult>("/api/auth-recovery/manual", {
       method: "POST",

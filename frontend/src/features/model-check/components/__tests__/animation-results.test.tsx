@@ -29,6 +29,7 @@ it("成功结果以图片隔离展示 SVG，并提供模型、耗时和完成时
   expect(image).toHaveClass("w-full", "object-contain");
   expect(view.container.querySelector("circle")).not.toBeInTheDocument();
   expect(screen.getByText(/返回模型 returned-model/)).toBeVisible();
+  expect(screen.getByText("模型不一致")).toBeVisible();
   expect(screen.getByText(/耗时 1.2 秒/)).toBeVisible();
 });
 
@@ -92,6 +93,7 @@ it("请求与返回模型相同时仅显示一次模型名", () => {
   );
   expect(screen.getByText(result.model, { exact: true })).toBeVisible();
   expect(screen.queryByText(/返回模型/)).not.toBeInTheDocument();
+  expect(screen.queryByText("模型不一致")).not.toBeInTheDocument();
 });
 
 it("动画在模型和时间之前展示，紧凑时间保留完整时间提示", () => {

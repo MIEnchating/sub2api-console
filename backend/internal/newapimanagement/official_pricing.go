@@ -66,6 +66,13 @@ func (s *Service) mergeOfficialPricing(ctx context.Context, store pricingCacheSt
 		}
 		for _, p := range r.prices {
 			item := Sub2APIModelPrice{Source: "official", SourceURL: p.SourceURL, SourceScope: p.Scope, Provider: r.provider.ID, Mode: "chat", Model: p.Model, InputPrice: p.InputPrice, OutputPrice: p.OutputPrice, CacheReadPrice: p.CacheReadPrice, CacheWritePrice: p.CacheWritePrice, PriceTiers: p.Tiers, BillingExpr: p.BillingExpr}
+			item.SyncError = p.SyncError
+			item.CacheWrite1hPrice = p.CacheWrite1hPrice
+			item.ImageInputPrice, item.ImageOutputPrice = p.ImageInputPrice, p.ImageOutputPrice
+			item.ImageOutputUnit = p.ImageOutputUnit
+			if p.Mode != "" {
+				item.Mode = p.Mode
+			}
 			if p.TimePricing.Timezone != "" {
 				schedule := p.TimePricing
 				item.TimePricing = &schedule
@@ -73,6 +80,8 @@ func (s *Service) mergeOfficialPricing(ctx context.Context, store pricingCacheSt
 			item.ModelRatio, item.CompletionRatio, _ = sub2APIRatios(item.InputPrice, item.OutputPrice)
 			item.CacheRatio = priceRatio(item.InputPrice, item.CacheReadPrice)
 			item.CreateCacheRatio = priceRatio(item.InputPrice, item.CacheWritePrice)
+			item.CreateCache1hRatio = priceRatio(item.InputPrice, item.CacheWrite1hPrice)
+			item.ImageRatio = priceRatio(item.InputPrice, item.ImageInputPrice)
 			byModel[item.Model] = item
 			// Case variants of the exact published ID are allowed; no dated aliases or
 			// reseller prefixes are inferred from family names.

@@ -104,7 +104,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
         traffic_collection: { enabled: false },
       },
       "/api/dictionaries": [],
-      "/api/accounts": Array.from({ length: 20 }, (_, index) => ({
+      "/api/accounts": Array.from({ length: 25 }, (_, index) => ({
         ...account,
         id: String(41 + index),
         name: `布局账号 ${index + 1}`,
@@ -120,8 +120,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   const region = page.getByRole("region", { name: "动画账号卡片", exact: true });
   const first = page.getByRole("checkbox", { name: /^检测 布局账号 1\b/ });
   await expect(first).toBeVisible();
@@ -129,7 +128,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   const operations = page.getByRole("group", { name: "动画检测操作", exact: true });
   const settings = page.getByRole("group", { name: "动画筛选与模型", exact: true });
   await expect(operations.getByRole("button", { name: "清空选择" })).toBeInViewport();
-  await expect(operations.getByRole("button", { name: "选择前 20 个账号" })).toBeInViewport();
+  await expect(operations.getByRole("button", { name: "全选账号" })).toBeInViewport();
   await expect(page.locator('[data-slot="animation-settings-feedback"]')).toHaveCount(0);
   const regionBox = await region.boundingBox();
   const startBox = await start.boundingBox();
@@ -176,8 +175,8 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("fixture-model");
   await expect(page.locator("#animation-common-models option")).toHaveCount(0);
   expect(await region.boundingBox()).toEqual(regionBox);
-  await page.getByRole("button", { name: "选择前 20 个账号" }).click();
-  await expect(start).toHaveText("开始检测（20 个账号）");
+  await page.getByRole("button", { name: "全选账号" }).click();
+  await expect(start).toHaveText("开始检测（25 个账号）");
   expect(await start.boundingBox()).toEqual(startBox);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -203,8 +202,7 @@ async function openAnimationLayoutFixture(page: Page): Promise<void> {
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
 }
 
 test("动画工具栏在桌面合并筛选与模型，窄屏换行并保留卡片可滚动区域", async ({ page }) => {

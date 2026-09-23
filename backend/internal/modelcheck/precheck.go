@@ -37,25 +37,37 @@ func normalizePrecheckQuestions(mode string, questions []string) ([]string, erro
 		return nil, nil
 	}
 	if questions == nil {
-		return []string{"candy", "knowledge-cutoff"}, nil
+		return []string{"candy"}, nil
 	}
-	if len(questions) < 1 || len(questions) > 2 {
+	if len(questions) != 1 {
 		return nil, errors.New("请选择至少一道前置检测题目")
 	}
 	seen := map[string]bool{}
 	for _, id := range questions {
-		if (id != "candy" && id != "knowledge-cutoff") || seen[id] {
+		if id != "candy" || seen[id] {
 			return nil, errors.New("前置检测题目无效或重复")
 		}
 		seen[id] = true
 	}
 	result := make([]string, 0, len(questions))
-	for _, id := range []string{"candy", "knowledge-cutoff"} {
+	for _, id := range []string{"candy"} {
 		if seen[id] {
 			result = append(result, id)
 		}
 	}
 	return result, nil
+}
+
+func migrateLegacyPrecheckQuestions(mode string, questions []string) []string {
+	if mode != precheckMode && mode != combinedMode || !slices.Contains(questions, "knowledge-cutoff") {
+		return questions
+	}
+	for _, id := range questions {
+		if id != "candy" && id != "knowledge-cutoff" {
+			return questions
+		}
+	}
+	return []string{"candy"}
 }
 
 func animationModeLabel(mode string) string {
@@ -101,6 +113,10 @@ func runPrecheckQuestions(ctx context.Context, questions []string, result *Anima
 		} else {
 			row.Answer = safeCredentialText(text)
 			verdict, _ := classifyAstraAnswer(question.ID, text)
+			if question.ID == "candy" && verdict != "MATCH" {
+				// 糖果题只有严格回答 21 才通过；任何成功返回的其他内容都表示降智。
+				verdict = "MISMATCH"
+			}
 			switch verdict {
 			case "MATCH":
 				row.Verdict = "passed"

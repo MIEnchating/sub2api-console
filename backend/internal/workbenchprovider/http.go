@@ -37,17 +37,21 @@ type Error struct {
 	HTTPStatus int
 }
 
+// PublicTransport pins each connection to validated public DNS results. Callers
+// must also disable redirects and validate the original HTTPS URL.
+func PublicTransport() *http.Transport {
+	return &http.Transport{DialContext: publicDial, TLSHandshakeTimeout: 10 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 30 * time.Second,
+		MaxIdleConns: 8, MaxConnsPerHost: 4, ForceAttemptHTTP2: true}
+}
+
 func (e *Error) Error() string { return e.Message }
 
 // NewHTTP keeps credentials on public HTTPS endpoints without proxy inheritance
 // or redirects. An explicit transport is the isolated-test network boundary.
 func NewHTTP(transport http.RoundTripper) *HTTP {
 	if transport == nil {
-		transport = &http.Transport{
-			DialContext: publicDial, TLSHandshakeTimeout: 10 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 30 * time.Second,
-			MaxIdleConns: 8, MaxConnsPerHost: 4, ForceAttemptHTTP2: true,
-		}
+		transport = PublicTransport()
 	}
 	singleTransport := transport
 	if reusable, ok := transport.(*http.Transport); ok {

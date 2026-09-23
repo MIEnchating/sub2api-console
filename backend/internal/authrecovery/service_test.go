@@ -726,6 +726,31 @@ func TestManualVerificationBuildsPlatformCredentialPatchAndReturnsBalance(t *tes
 	}
 }
 
+func TestManualVerificationReplacesNewAPISessionAndClearsBearerCredentials(t *testing.T) {
+	accessToken, adminKey := "old-token", "old-admin"
+	private := &recoveryPrivate{record: &configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi", AuthMode: "newapi_admin_key",
+		AccessToken: &accessToken, AdminKey: &adminKey, Headers: map[string]string{}, Cookies: map[string]string{"session": "old-session"},
+	}}
+	configurator := &recoveryConfigurator{host: "api.example"}
+	service := New(&recoveryRepository{}, private, &recoveryAuthenticator{}, configurator, &recoveryBalance{}, &recoveryTasks{done: make(chan taskstore.Task, 1)})
+	mode, userID := "newapi_session", "24"
+	result, err := service.VerifyManual(context.Background(), ManualInput{
+		Host: "api.example", AuthMode: &mode, UserID: &userID,
+		Cookies: map[string]string{"session": "browser-session"},
+		Present: map[string]bool{"auth_mode": true, "user_id": true, "cookies": true},
+	}, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Verified || configurator.input.Cookies["session"] != "browser-session" || !configurator.input.Present["cookies"] {
+		t.Fatalf("result=%#v input=%#v", result, configurator.input)
+	}
+	if configurator.input.AccessToken != nil || configurator.input.AdminKey != nil || !configurator.input.Present["access_token"] || !configurator.input.Present["admin_key"] {
+		t.Fatalf("bearer credentials were not cleared: %#v", configurator.input)
+	}
+}
+
 func TestManualVerificationPreservesStoredAuthorizationHeaderWhenCredentialsAreOmitted(t *testing.T) {
 	private := &recoveryPrivate{record: &configstore.AuthRecord{
 		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "sub2api", AuthMode: "sub2api_user_token",

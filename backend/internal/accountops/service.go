@@ -59,6 +59,7 @@ type TaskStore interface {
 }
 
 type FieldPatch struct {
+	rateDerivedName     bool
 	NamePresent         bool
 	Name                *string
 	PriorityPresent     bool
@@ -157,6 +158,7 @@ func (s *Service) SyncAccountRateIfCurrent(
 	check func(context.Context) error,
 ) (map[string]any, error) {
 	return s.syncFields(ctx, accountID, FieldPatch{
+		rateDerivedName:   true,
 		NamePresent:       true,
 		Name:              &name,
 		MultiplierPresent: true,
@@ -186,7 +188,7 @@ func (s *Service) controlLocked(ctx context.Context, accountID, action, actor st
 		return nil, err
 	}
 	if local.ManualPriority != nil {
-		return nil, errors.New("账号处于人工优先位，平台控制操作已禁用；请先取消人工优先位")
+		return nil, errors.New("账号处于手动控制，平台控制操作已禁用；请先取消手动控制")
 	}
 	if mode != runtimepolicy.Full {
 		return nil, errors.New("暂停、恢复和熔断操作需要完全模式")
@@ -303,7 +305,7 @@ func (s *Service) scopeControl(ctx context.Context, accountID, action, actor str
 		return nil, err
 	}
 	if local.ManualPriority != nil {
-		return nil, errors.New("账号处于人工优先位，平台控制操作已禁用；请先取消人工优先位")
+		return nil, errors.New("账号处于手动控制，平台控制操作已禁用；请先取消手动控制")
 	}
 	if _, err := s.repository.SetAccountScopeControl(ctx, accountID, action, actor); err != nil {
 		return nil, err
@@ -371,11 +373,11 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 		return nil, err
 	}
 	if local.ManualPriority != nil && !allowReservedPriority {
-		multiplierOnly := patch.MultiplierPresent && !patch.NamePresent && !patch.PriorityPresent &&
+		multiplierOnly := patch.MultiplierPresent && (!patch.NamePresent || patch.rateDerivedName) && !patch.PriorityPresent &&
 			!patch.LoadFactorPresent && !patch.ConcurrencyPresent && !patch.SchedulablePresent && !patch.NotesPresent &&
 			!patch.BaseURLPresent && !patch.UpstreamHostPresent
 		if !multiplierOnly || !local.ManualSyncBalanceMultiplier {
-			return nil, errors.New("账号处于人工优先位，仅允许按人工控制设置同步余额与倍率")
+			return nil, errors.New("账号处于手动控制，仅允许按人工控制设置同步余额与倍率")
 		}
 	}
 	if mode == runtimepolicy.Monitoring && (!patch.MultiplierPresent || patch.NamePresent || patch.PriorityPresent || patch.LoadFactorPresent || patch.ConcurrencyPresent || patch.SchedulablePresent || patch.NotesPresent || patch.BaseURLPresent || patch.UpstreamHostPresent) {
@@ -434,7 +436,6 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 		}
 		value := *patch.Schedulable
 		normalizedSchedulable = &value
-		body["schedulable"] = value
 	}
 	if patch.MultiplierPresent {
 		if patch.Multiplier == nil {
@@ -515,6 +516,19 @@ func (s *Service) syncFieldsLocked(ctx context.Context, accountID string, patch 
 		operation := fieldOperation(operationID, actor, accountID, accountName, fieldName, beforeValues, requested, true, false)
 		s.recordFailure(ctx, operation, "readback", err, true)
 		return nil, &OperationError{Message: "管理平台写入成功，但账号字段读回失败：" + err.Error(), RemoteWritten: true}
+	}
+	// Sub2API's ordinary account update ignores schedulable. Confirm the
+	// parameters before enabling scheduling through its dedicated endpoint.
+	if err := verifyFieldReadback(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, nil, normalizedMultiplier, normalizedBaseURL, patch); err != nil {
+		operation := fieldOperation(operationID, actor, accountID, remoteName(after, accountName), fieldName, beforeValues, requested, true, false)
+		s.recordFailure(ctx, operation, "readback", err, true)
+		return nil, &OperationError{Message: "管理平台写入成功，但" + err.Error(), RemoteWritten: true}
+	}
+	after, err = syncAccountScheduling(ctx, client, accountID, after, normalizedSchedulable)
+	if err != nil {
+		operation := fieldOperation(operationID, actor, accountID, accountName, fieldName, beforeValues, requested, true, false)
+		s.recordFailure(ctx, operation, "remote-write", err, true)
+		return nil, &OperationError{Message: "管理平台账号参数已写入，但调度开关设置未确认：" + err.Error(), RemoteWritten: true}
 	}
 	if err := verifyFieldReadback(after, normalizedName, normalizedPriority, normalizedLoadFactor, normalizedConcurrency, normalizedSchedulable, normalizedMultiplier, normalizedBaseURL, patch); err != nil {
 		operation := fieldOperation(operationID, actor, accountID, remoteName(after, accountName), fieldName, beforeValues, requested, true, false)
@@ -619,7 +633,7 @@ func (s *Service) EnqueueSettings(ctx context.Context, accountID string, input S
 		return taskstore.Task{}, errors.New("账号设置需要完全模式")
 	}
 	if local.ManualPriority != nil {
-		return taskstore.Task{}, errors.New("账号处于人工优先位，平台设置已禁用；请先取消人工优先位")
+		return taskstore.Task{}, errors.New("账号处于手动控制，平台设置已禁用；请先取消手动控制")
 	}
 	expectedTarget, err := s.targets.TargetSettings(ctx)
 	if err != nil {
@@ -753,7 +767,7 @@ func (s *Service) validateOrdinaryPriority(ctx context.Context, priority int64) 
 		return err
 	}
 	if priority <= config.ReservedMax {
-		return fmt.Errorf("优先级 1 到 %d 为人工优先位，请使用账号操作中的人工优先位设置", config.ReservedMax)
+		return fmt.Errorf("优先级 1 到 %d 为手动控制，请使用账号操作中的手动控制设置", config.ReservedMax)
 	}
 	return nil
 }
@@ -822,14 +836,14 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 	}
 	manualRepository, ok := s.repository.(manualPriorityRepository)
 	if !ok {
-		return taskstore.Task{}, errors.New("人工优先位服务尚未就绪")
+		return taskstore.Task{}, errors.New("手动控制服务尚未就绪")
 	}
 	config, err := manualRepository.ManualPriorityConfig(ctx)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
 	if priority < 1 || priority > config.ReservedMax {
-		return taskstore.Task{}, fmt.Errorf("人工优先位必须在 1 到 %d 之间", config.ReservedMax)
+		return taskstore.Task{}, fmt.Errorf("手动控制必须在 1 到 %d 之间", config.ReservedMax)
 	}
 	loadFactor, err = decimalAtLeastOne(loadFactor)
 	if err != nil {
@@ -843,13 +857,13 @@ func (s *Service) EnqueueManualPriority(ctx context.Context, accountID string, p
 		return taskstore.Task{}, err
 	}
 	if mode != runtimepolicy.Full {
-		return taskstore.Task{}, errors.New("设置人工优先位需要完全模式")
+		return taskstore.Task{}, errors.New("设置手动控制需要完全模式")
 	}
 	expectedTarget, err := s.targets.TargetSettings(ctx)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
-	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority", "人工优先位设置已排队", func(run context.Context) (map[string]any, error) {
+	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority", "手动控制设置已排队", func(run context.Context) (map[string]any, error) {
 		return s.setManualPriority(targetguard.Expect(run, expectedTarget), manualRepository, config, accountID, priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier, actor)
 	})
 }
@@ -911,7 +925,7 @@ func (s *Service) setManualPriority(
 			rollbackErr := rollbackManualPriority(rollbackCtx, repository, accountID, previousManualPriority, rollbackLoadFactor, rollbackConcurrency, previousSyncBalanceMultiplier, actor)
 			cancelRollback()
 			if rollbackErr != nil {
-				return nil, fmt.Errorf("%w；人工优先位回滚失败：%v", err, rollbackErr)
+				return nil, fmt.Errorf("%w；手动控制回滚失败：%v", err, rollbackErr)
 			}
 		}
 		return nil, err
@@ -927,20 +941,20 @@ func (s *Service) EnqueueClearManualPriority(ctx context.Context, accountID, act
 		return taskstore.Task{}, errors.New("账号必须使用有效的稳定 ID")
 	}
 	if _, ok := s.repository.(manualPriorityRepository); !ok {
-		return taskstore.Task{}, errors.New("人工优先位服务尚未就绪")
+		return taskstore.Task{}, errors.New("手动控制服务尚未就绪")
 	}
 	mode, err := s.repository.Mode(ctx)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
 	if mode != runtimepolicy.Full {
-		return taskstore.Task{}, errors.New("取消人工优先位需要完全模式")
+		return taskstore.Task{}, errors.New("取消手动控制需要完全模式")
 	}
 	expectedTarget, err := s.targets.TargetSettings(ctx)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
-	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority-clear", "人工优先位取消已排队", func(run context.Context) (map[string]any, error) {
+	return s.enqueue(ctx, "sub2api-account-manual-priority", "account-manual-priority-clear", "手动控制取消已排队", func(run context.Context) (map[string]any, error) {
 		return s.clearManualPriority(targetguard.Expect(run, expectedTarget), accountID, actor)
 	})
 }
@@ -963,11 +977,11 @@ func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, acto
 		return nil, err
 	}
 	if mode != runtimepolicy.Full {
-		return nil, errors.New("取消人工优先位需要完全模式")
+		return nil, errors.New("取消手动控制需要完全模式")
 	}
 	repository, ok := s.repository.(manualPriorityRepository)
 	if !ok {
-		return nil, errors.New("人工优先位服务尚未就绪")
+		return nil, errors.New("手动控制服务尚未就绪")
 	}
 	release, err := repository.ManualPriorityRelease(ctx, accountID)
 	if err != nil {
@@ -1018,22 +1032,45 @@ func (s *Service) clearManualPriorityLocked(ctx context.Context, accountID, acto
 	if err != nil {
 		operation := manualPriorityClearOperation(operationID, actor, accountID, release.AccountName, beforeValues, expected, true, false)
 		s.recordFailure(ctx, operation, "readback", err, true)
-		return nil, &OperationError{Message: "管理平台写入成功，但人工优先位恢复结果读回失败：" + err.Error(), RemoteWritten: true}
+		return nil, &OperationError{Message: "管理平台写入成功，但手动控制恢复结果读回失败：" + err.Error(), RemoteWritten: true}
 	}
 	if err := verifyManualPriorityRelease(after, release); err != nil {
 		operation := manualPriorityClearOperation(operationID, actor, accountID, remoteName(after, release.AccountName), beforeValues, expected, true, false)
 		s.recordFailure(ctx, operation, "readback", err, true)
 		return nil, &OperationError{Message: "管理平台写入成功，但" + err.Error(), RemoteWritten: true}
 	}
+	// The management platform may normalize the scheduling switch while
+	// restoring the account (for example, an account disabled by a policy
+	// controller can remain disabled even though its manual-priority slot was
+	// removed).  Priority, load factor and concurrency prove that the manual
+	// slot is gone; in that case persist the platform's actual scheduling state
+	// instead of keeping a stale local manual-priority reservation forever.
+	var readbackWarning string
+	if release.Schedulable != nil {
+		actualSchedulable, schedulableErr := accountSchedulable(after)
+		if schedulableErr != nil {
+			operation := manualPriorityClearOperation(operationID, actor, accountID, remoteName(after, release.AccountName), beforeValues, expected, true, false)
+			s.recordFailure(ctx, operation, "readback", schedulableErr, true)
+			return nil, &OperationError{Message: "管理平台写入成功，但" + schedulableErr.Error(), RemoteWritten: true}
+		}
+		if actualSchedulable != *release.Schedulable {
+			readbackWarning = "管理平台已取消手动控制，但调度开关按平台实际状态保存"
+			release.Schedulable = &actualSchedulable
+		}
+	}
 	effective := manualPriorityValues(after)
 	operation := manualPriorityClearOperation(operationID, actor, accountID, remoteName(after, release.AccountName), beforeValues, effective, true, true)
 	if err := repository.CommitManualPriorityRelease(ctx, release, actor, operation); err != nil {
-		return nil, &OperationError{Message: "管理平台已恢复原参数，但本地人工优先位提交失败：" + err.Error(), RemoteWritten: true}
+		return nil, &OperationError{Message: "管理平台已恢复原参数，但本地手动控制提交失败：" + err.Error(), RemoteWritten: true}
 	}
-	return map[string]any{
+	result := map[string]any{
 		"operation_id": operationID, "account_id": accountID, "manual_priority": nil,
 		"before": beforeValues, "after": effective, "remote_write": true, "readback_confirmed": true,
-	}, nil
+	}
+	if readbackWarning != "" {
+		result["warning"] = readbackWarning
+	}
+	return result, nil
 }
 
 func rollbackManualPriority(ctx context.Context, repository manualPriorityRepository, accountID string, previous *int64, loadFactor string, concurrency int64, syncBalanceMultiplier bool, actor string) error {
@@ -1195,12 +1232,6 @@ func verifyManualPriorityRelease(after map[string]any, release business.ManualPr
 	loadFactor, err := optionalLoadFactor(after)
 	if err != nil || !sameOptionalText(loadFactor, release.LoadFactor) {
 		return errors.New("账号原负载因子读回不一致")
-	}
-	if release.Schedulable != nil {
-		schedulable, err := accountSchedulable(after)
-		if err != nil || schedulable != *release.Schedulable {
-			return errors.New("账号原调度状态读回不一致")
-		}
 	}
 	return nil
 }

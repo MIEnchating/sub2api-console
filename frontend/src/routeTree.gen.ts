@@ -14,6 +14,7 @@ import { Route as AccountWorkbenchRouteImport } from './app-routes/account-workb
 import { Route as AccountsRouteImport } from './app-routes/accounts'
 import { Route as AlertPolicyRouteImport } from './app-routes/alert-policy'
 import { Route as AlertsRouteImport } from './app-routes/alerts'
+import { Route as AnimationCheckRouteImport } from './app-routes/animation-check'
 import { Route as AutoInspectionRouteImport } from './app-routes/auto-inspection'
 import { Route as ConfigRouteImport } from './app-routes/config'
 import { Route as GroupsRouteImport } from './app-routes/groups'
@@ -32,6 +33,7 @@ import { Route as TrafficRouteImport } from './app-routes/traffic'
 import { Route as UpstreamsRouteImport } from './app-routes/upstreams'
 import { Route as UptimeKumaRouteRouteImport } from './app-routes/uptime-kuma/route'
 import { Route as VaultRouteImport } from './app-routes/vault'
+import { Route as AccountWorkbenchIndexRouteImport } from './app-routes/account-workbench.index'
 import { Route as NewapiIndexRouteImport } from './app-routes/newapi/index'
 import { Route as NewapiChannelsRouteImport } from './app-routes/newapi/channels'
 import { Route as NewapiDifferencesRouteImport } from './app-routes/newapi/differences'
@@ -65,6 +67,11 @@ const AlertPolicyRoute = AlertPolicyRouteImport.update({
 const AlertsRoute = AlertsRouteImport.update({
   id: '/alerts',
   path: '/alerts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AnimationCheckRoute = AnimationCheckRouteImport.update({
+  id: '/animation-check',
+  path: '/animation-check',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AutoInspectionRoute = AutoInspectionRouteImport.update({
@@ -157,6 +164,11 @@ const VaultRoute = VaultRouteImport.update({
   path: '/vault',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AccountWorkbenchIndexRoute = AccountWorkbenchIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AccountWorkbenchRoute,
+} as any)
 const NewapiIndexRoute = NewapiIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -207,10 +219,11 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
   '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
-  '/account-workbench': typeof AccountWorkbenchRoute
+  '/account-workbench': typeof AccountWorkbenchRouteWithChildren
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
+  '/animation-check': typeof AnimationCheckRoute
   '/auto-inspection': typeof AutoInspectionRoute
   '/config': typeof ConfigRoute
   '/groups': typeof GroupsRoute
@@ -234,15 +247,16 @@ export interface FileRoutesByFullPath {
   '/uptime-kuma/config': typeof UptimeKumaConfigRoute
   '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
   '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
+  '/account-workbench/': typeof AccountWorkbenchIndexRoute
   '/newapi/': typeof NewapiIndexRoute
   '/uptime-kuma/': typeof UptimeKumaIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/account-workbench': typeof AccountWorkbenchRoute
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
+  '/animation-check': typeof AnimationCheckRoute
   '/auto-inspection': typeof AutoInspectionRoute
   '/config': typeof ConfigRoute
   '/groups': typeof GroupsRoute
@@ -266,6 +280,7 @@ export interface FileRoutesByTo {
   '/uptime-kuma/config': typeof UptimeKumaConfigRoute
   '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
   '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
+  '/account-workbench': typeof AccountWorkbenchIndexRoute
   '/newapi': typeof NewapiIndexRoute
   '/uptime-kuma': typeof UptimeKumaIndexRoute
 }
@@ -274,10 +289,11 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/newapi': typeof NewapiRouteRouteWithChildren
   '/uptime-kuma': typeof UptimeKumaRouteRouteWithChildren
-  '/account-workbench': typeof AccountWorkbenchRoute
+  '/account-workbench': typeof AccountWorkbenchRouteWithChildren
   '/accounts': typeof AccountsRoute
   '/alert-policy': typeof AlertPolicyRoute
   '/alerts': typeof AlertsRoute
+  '/animation-check': typeof AnimationCheckRoute
   '/auto-inspection': typeof AutoInspectionRoute
   '/config': typeof ConfigRoute
   '/groups': typeof GroupsRoute
@@ -301,6 +317,7 @@ export interface FileRoutesById {
   '/uptime-kuma/config': typeof UptimeKumaConfigRoute
   '/uptime-kuma/status-pages': typeof UptimeKumaStatusPagesRoute
   '/uptime-kuma/templates': typeof UptimeKumaTemplatesRoute
+  '/account-workbench/': typeof AccountWorkbenchIndexRoute
   '/newapi/': typeof NewapiIndexRoute
   '/uptime-kuma/': typeof UptimeKumaIndexRoute
 }
@@ -314,6 +331,7 @@ export interface FileRouteTypes {
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
+    | '/animation-check'
     | '/auto-inspection'
     | '/config'
     | '/groups'
@@ -337,15 +355,16 @@ export interface FileRouteTypes {
     | '/uptime-kuma/config'
     | '/uptime-kuma/status-pages'
     | '/uptime-kuma/templates'
+    | '/account-workbench/'
     | '/newapi/'
     | '/uptime-kuma/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/account-workbench'
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
+    | '/animation-check'
     | '/auto-inspection'
     | '/config'
     | '/groups'
@@ -369,6 +388,7 @@ export interface FileRouteTypes {
     | '/uptime-kuma/config'
     | '/uptime-kuma/status-pages'
     | '/uptime-kuma/templates'
+    | '/account-workbench'
     | '/newapi'
     | '/uptime-kuma'
   id:
@@ -380,6 +400,7 @@ export interface FileRouteTypes {
     | '/accounts'
     | '/alert-policy'
     | '/alerts'
+    | '/animation-check'
     | '/auto-inspection'
     | '/config'
     | '/groups'
@@ -403,6 +424,7 @@ export interface FileRouteTypes {
     | '/uptime-kuma/config'
     | '/uptime-kuma/status-pages'
     | '/uptime-kuma/templates'
+    | '/account-workbench/'
     | '/newapi/'
     | '/uptime-kuma/'
   fileRoutesById: FileRoutesById
@@ -411,10 +433,11 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   NewapiRouteRoute: typeof NewapiRouteRouteWithChildren
   UptimeKumaRouteRoute: typeof UptimeKumaRouteRouteWithChildren
-  AccountWorkbenchRoute: typeof AccountWorkbenchRoute
+  AccountWorkbenchRoute: typeof AccountWorkbenchRouteWithChildren
   AccountsRoute: typeof AccountsRoute
   AlertPolicyRoute: typeof AlertPolicyRoute
   AlertsRoute: typeof AlertsRoute
+  AnimationCheckRoute: typeof AnimationCheckRoute
   AutoInspectionRoute: typeof AutoInspectionRoute
   ConfigRoute: typeof ConfigRoute
   GroupsRoute: typeof GroupsRoute
@@ -468,6 +491,13 @@ declare module '@tanstack/react-router' {
       path: '/alerts'
       fullPath: '/alerts'
       preLoaderRoute: typeof AlertsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/animation-check': {
+      id: '/animation-check'
+      path: '/animation-check'
+      fullPath: '/animation-check'
+      preLoaderRoute: typeof AnimationCheckRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auto-inspection': {
@@ -596,6 +626,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof VaultRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/account-workbench/': {
+      id: '/account-workbench/'
+      path: '/'
+      fullPath: '/account-workbench/'
+      preLoaderRoute: typeof AccountWorkbenchIndexRouteImport
+      parentRoute: typeof AccountWorkbenchRoute
+    }
     '/newapi/': {
       id: '/newapi/'
       path: '/'
@@ -700,14 +737,26 @@ const UptimeKumaRouteRouteWithChildren = UptimeKumaRouteRoute._addFileChildren(
   UptimeKumaRouteRouteChildren,
 )
 
+interface AccountWorkbenchRouteChildren {
+  AccountWorkbenchIndexRoute: typeof AccountWorkbenchIndexRoute
+}
+
+const AccountWorkbenchRouteChildren: AccountWorkbenchRouteChildren = {
+  AccountWorkbenchIndexRoute: AccountWorkbenchIndexRoute,
+}
+
+const AccountWorkbenchRouteWithChildren =
+  AccountWorkbenchRoute._addFileChildren(AccountWorkbenchRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   NewapiRouteRoute: NewapiRouteRouteWithChildren,
   UptimeKumaRouteRoute: UptimeKumaRouteRouteWithChildren,
-  AccountWorkbenchRoute: AccountWorkbenchRoute,
+  AccountWorkbenchRoute: AccountWorkbenchRouteWithChildren,
   AccountsRoute: AccountsRoute,
   AlertPolicyRoute: AlertPolicyRoute,
   AlertsRoute: AlertsRoute,
+  AnimationCheckRoute: AnimationCheckRoute,
   AutoInspectionRoute: AutoInspectionRoute,
   ConfigRoute: ConfigRoute,
   GroupsRoute: GroupsRoute,

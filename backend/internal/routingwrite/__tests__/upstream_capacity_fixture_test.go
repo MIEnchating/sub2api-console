@@ -59,7 +59,9 @@ func (fixture *upstreamCapacityFixture) ServeHTTP(w http.ResponseWriter, request
 	} else if request.Method == http.MethodPost && path == "/bulk-update" {
 		var body struct {
 			AccountIDs  []int64 `json:"account_ids"`
-			Concurrency int     `json:"concurrency"`
+			Concurrency *int    `json:"concurrency"`
+			LoadFactor  *int    `json:"load_factor"`
+			Priority    *int    `json:"priority"`
 			Schedulable *bool   `json:"schedulable"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -70,7 +72,15 @@ func (fixture *upstreamCapacityFixture) ServeHTTP(w http.ResponseWriter, request
 		for _, id := range body.AccountIDs {
 			accountID := strconv.FormatInt(id, 10)
 			if !fixture.ignoreParameters {
-				fixture.states[accountID]["concurrency"] = body.Concurrency
+				if body.Concurrency != nil {
+					fixture.states[accountID]["concurrency"] = *body.Concurrency
+				}
+				if body.LoadFactor != nil {
+					fixture.states[accountID]["load_factor"] = *body.LoadFactor
+				}
+				if body.Priority != nil {
+					fixture.states[accountID]["priority"] = *body.Priority
+				}
 			}
 			if body.Schedulable != nil {
 				fixture.states[accountID]["schedulable"] = *body.Schedulable
@@ -118,6 +128,16 @@ func (fixture *upstreamCapacityFixture) ServeHTTP(w http.ResponseWriter, request
 				state["schedulable"] = schedulable
 				if schedulable && fixture.confirmedParameters != nil && !fixture.confirmedParameters[id] {
 					fixture.enableBeforeConfirm = true
+				}
+			}
+			for _, field := range []string{"load_factor", "priority"} {
+				if raw, present := fields[field]; present && !fixture.ignoreParameters {
+					var value int
+					if err := json.Unmarshal(raw, &value); err != nil {
+						http.Error(w, "invalid "+field, http.StatusBadRequest)
+						return
+					}
+					state[field] = value
 				}
 			}
 		}

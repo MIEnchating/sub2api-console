@@ -58,6 +58,57 @@ func TestValidateRecordStillRejectsMissingCredentialsAndHeaders(t *testing.T) {
 	}
 }
 
+func TestValidateRecordRequiresCompleteNewAPISessionIdentity(t *testing.T) {
+	userID := "24"
+	tests := []struct {
+		name   string
+		record configstore.AuthRecord
+	}{
+		{
+			name: "missing session cookie",
+			record: configstore.AuthRecord{
+				UpstreamType: "newapi", AuthMode: "newapi_session", UserID: &userID,
+				Cookies: map[string]string{},
+			},
+		},
+		{
+			name: "missing user id",
+			record: configstore.AuthRecord{
+				UpstreamType: "newapi", AuthMode: "newapi_session",
+				Cookies: map[string]string{"session": "browser-session"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateRecord(test.record); err == nil || !strings.Contains(err.Error(), "Session Cookie 和 User ID") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestVerifyNewAPISessionUsesCookieAndUserHeaderWithoutBearer(t *testing.T) {
+	transport := &recordingTransport{responses: []string{`{"success":true,"data":{"id":24}}`}}
+	client := New(&http.Client{Transport: transport})
+	staleToken, userID := "must-not-be-sent", "24"
+	err := client.Verify(context.Background(), configstore.AuthRecord{
+		Host: "api.example", BaseURL: "https://api.example", UpstreamType: "newapi", AuthMode: "newapi_session",
+		AccessToken: &staleToken, UserID: &userID, Headers: map[string]string{"Authorization": "Bearer stale-header"},
+		Cookies: map[string]string{"session": "browser-session"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := transport.requests[0]
+	if request.Header.Get("Authorization") != "" || request.Header.Get("New-Api-User") != "24" {
+		t.Fatalf("unexpected request headers: %#v", request.Header)
+	}
+	if cookie, err := request.Cookie("session"); err != nil || cookie.Value != "browser-session" {
+		t.Fatalf("session cookie=%#v err=%v", cookie, err)
+	}
+}
+
 func TestVerifyUsesHeaderAuthenticationWithoutSynthesizingCredentials(t *testing.T) {
 	transport := &recordingTransport{responses: []string{`{"success":true,"data":{"id":7}}`}}
 	client := New(&http.Client{Transport: transport})

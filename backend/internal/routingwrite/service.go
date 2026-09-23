@@ -258,14 +258,14 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 	if manualRepository, ok := s.repository.(manualPriorityRepository); ok {
 		controls, controlErr := manualRepository.ManualPriorityControls(ctx, sortedTargetIDs(targets))
 		if controlErr != nil {
-			return Result{}, fmt.Errorf("人工优先位保护状态读取失败：%w", controlErr)
+			return Result{}, fmt.Errorf("手动控制保护状态读取失败：%w", controlErr)
 		}
 		if len(controls) > 0 {
 			filtered := make(map[string]business.AccountRoutingTarget, len(targets)-len(controls))
 			for _, accountID := range sortedTargetIDs(targets) {
 				target := targets[accountID]
 				if _, protected := controls[accountID]; protected {
-					reason := "账号处于人工优先位，自动调度写回已跳过"
+					reason := "账号处于手动控制，自动调度写回已跳过"
 					result.Results = append(result.Results, AccountResult{AccountID: accountID, Skipped: true, Reason: &reason})
 					continue
 				}
@@ -275,7 +275,7 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		}
 	}
 	if len(targets) == 0 {
-		reason := "本轮账号均处于人工优先位，没有需要自动执行的目标"
+		reason := "本轮账号均处于手动控制，没有需要自动执行的目标"
 		result.Reason = &reason
 		return result, nil
 	}
@@ -368,7 +368,7 @@ func (s *Service) Apply(ctx context.Context, targets map[string]business.Account
 		if start >= end {
 			return nil
 		}
-		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite || hasUpstreamReduction(targets))
+		coordinator := newBatchWriteCoordinator(ctx, admin, end-start, policy.verifyAfterWrite || hasUpstreamReduction(targets) || hasConcurrencyRestoration(targets))
 		coordinator.capacity = capacityGuard
 		coordinator.authorize = authorize
 		var wait sync.WaitGroup
@@ -707,6 +707,17 @@ func (s *Service) applyAccountCoordinated(
 		result.Reason = &reason
 		return result
 	}
+	if target.RestoreConcurrency {
+		if reason, err := s.checkConcurrencyRestoration(ctx, target, current, targetFingerprint); err != nil {
+			return failedResult(result, err)
+		} else if reason != "" {
+			result.Skipped, result.Reason, result.Effective = true, &reason, current.asMap()
+			op := operation(operationID, "routing.writeback", target, actor, current.asMap(), map[string]any{"reason": reason}, false, false, nil)
+			op.State, op.FieldName = "skipped", nil
+			s.recordOperation(ctx, op)
+			return result
+		}
+	}
 	if target.CleanupAction != nil && *target.CleanupAction == "delete" {
 		if coordinator.authorize != nil {
 			if err := coordinator.authorize(); err != nil {
@@ -912,7 +923,7 @@ func managedIntentForTarget(target business.AccountRoutingTarget, policy writePo
 	if policy.autoApply["load_factor"] {
 		result.LoadFactor = cloneString(target.LoadFactor)
 	}
-	if policy.autoApply["concurrency"] || independentReduction(target, policy) {
+	if policy.autoApply["concurrency"] || independentReduction(target, policy) || target.RestoreConcurrency {
 		result.Concurrency = cloneInt(target.Concurrency)
 	}
 	return result
@@ -934,7 +945,7 @@ func confirmedManagedIntent(target business.AccountRoutingTarget, policy writePo
 			}
 		}
 	}
-	if (policy.autoApply["concurrency"] || independentReduction(target, policy)) && sameInt64(target.Concurrency, actual.concurrency) {
+	if (policy.autoApply["concurrency"] || independentReduction(target, policy) || target.RestoreConcurrency) && sameInt64(target.Concurrency, actual.concurrency) {
 		result.Concurrency = cloneInt(actual.concurrency)
 	}
 	return result
@@ -1368,7 +1379,7 @@ func desiredValues(target business.AccountRoutingTarget, policy writePolicy, cur
 		}
 		result["priority"] = *target.Priority
 	}
-	if ((!target.ScalingCooldown && policy.autoApply["concurrency"]) || independentReduction(target, policy)) && target.Concurrency != nil {
+	if ((!target.ScalingCooldown && policy.autoApply["concurrency"]) || independentReduction(target, policy) || target.RestoreConcurrency) && target.Concurrency != nil {
 		if *target.Concurrency < 0 {
 			return nil, errors.New("目标并发不能为负数")
 		}

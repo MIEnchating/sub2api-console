@@ -64,6 +64,7 @@ const (
 )
 
 type Business interface {
+	CleanupUpstreamBinding(context.Context, string, int64, business.UpstreamBindingCleanup, string) error
 	DictionaryValues(context.Context, string) ([]configstore.DictionaryEntry, error)
 	Bootstrap(context.Context) error
 	Mode(context.Context) (string, error)
@@ -136,6 +137,7 @@ type SystemLogReader interface {
 type NewAPIManagementService interface {
 	Channels(context.Context, string, int, int) (newapimanagement.ChannelPage, error)
 	ChannelsByID(context.Context, string, []string, int, int) (newapimanagement.ChannelPage, error)
+	AvailableChannelModels(context.Context, string, string, string) ([]string, error)
 	ChangeChannelModels(context.Context, string, string, newapimanagement.ChannelModelChange) (newapimanagement.Channel, error)
 	Workspace(context.Context, string) (newapimanagement.Workspace, error)
 	SavePlatform(context.Context, newapimanagement.PlatformInput) (configstore.NewAPIPlatformSummary, error)
@@ -677,7 +679,6 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/accounts/:account_id/delete-preview", server.accountDeletePreview)
 	authorized.POST("/accounts/:account_id/delete", server.deleteAccount)
 	authorized.GET("/traffic/ranking", server.trafficRanking)
-	authorized.GET("/accounts/traffic", server.accountTraffic)
 	authorized.GET("/accounts/results/events", server.accountResultsEvents)
 	authorized.POST("/accounts/:account_id/control", server.setAccountControl)
 	authorized.GET("/accounts/:account_id/models", server.accountModels)
@@ -761,6 +762,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/newapi/platforms/:platform_id/channel-models", server.fetchNewAPIChannelModels)
 	authorized.POST("/newapi/platforms/:platform_id/channels", server.createNewAPIChannel)
 	authorized.GET("/newapi/platforms/:platform_id/channels", server.newAPIChannels)
+	authorized.GET("/newapi/platforms/:platform_id/channels/:channel_id/models/available", server.availableNewAPIChannelModels)
 	authorized.GET("/newapi/platforms/:platform_id/channel-groups", server.newAPIChannelGroups)
 	authorized.PUT("/newapi/platforms/:platform_id/channel-groups", server.saveNewAPIChannelGroups)
 	authorized.POST("/newapi/platforms/:platform_id/channels/models/batch", server.batchNewAPIChannelModels)
@@ -780,6 +782,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/upstreams/:host/balance-sync", server.syncUpstreamBalance)
 	authorized.GET("/upstreams/:host/configuration", server.upstreamConfiguration)
 	authorized.PUT("/upstreams/:host/configuration", server.updateUpstreamConfiguration)
+	authorized.POST("/upstreams/:host/bindings/:binding_id/cleanup", server.cleanupUpstreamBinding)
 	authorized.GET("/upstreams/:host/groups", server.upstreamGroups)
 	authorized.GET("/upstreams/:host/group-history", server.upstreamGroupHistory)
 	authorized.GET("/upstreams/:host/delete-preview", server.upstreamDeletePreview)
@@ -819,9 +822,16 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.POST("/model-checks", server.runModelCheck)
 	authorized.GET("/model-checks/animations", server.animationCheckHistory)
 	authorized.POST("/model-checks/animations", server.runAnimationCheck)
+	authorized.GET("/model-checks/terminal-continuity", server.terminalContinuityHistory)
+	authorized.GET("/model-checks/detection-tasks", server.detectionTaskEndpoint)
+	authorized.PUT("/model-checks/detection-tasks", server.detectionTaskEndpoint)
+	authorized.DELETE("/model-checks/detection-tasks/:id", server.detectionTaskEndpoint)
+	authorized.POST("/model-checks/detection-tasks/:id/run", server.detectionTaskEndpoint)
+	authorized.POST("/model-checks/terminal-continuity", server.runTerminalContinuity)
 	authorized.POST("/model-checks/animations/models", server.customAnimationModels)
 	authorized.GET("/model-checks/animations/accounts/:account_id/models", server.accountAnimationModels)
 	authorized.GET("/model-checks/animation-schedules", server.animationCheckSchedules)
+	authorized.PUT("/model-checks/animation-schedules", server.saveAnimationCheckSchedules)
 	authorized.PUT("/model-checks/animation-schedules/:id", server.saveAnimationCheckSchedule)
 	authorized.GET("/inspection/automation", server.autoInspectionStatus)
 	authorized.PUT("/inspection/automation", server.updateAutoInspection)
@@ -2017,7 +2027,7 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 	}
 	payload, err := decodeRequestObject(c)
 	if err != nil || len(payload) != 5 {
-		writeError(c, http.StatusUnprocessableEntity, "人工优先位参数必须包含 priority、load_factor、concurrency、schedulable 和 sync_balance_multiplier")
+		writeError(c, http.StatusUnprocessableEntity, "手动控制参数必须包含 priority、load_factor、concurrency、schedulable 和 sync_balance_multiplier")
 		return
 	}
 	priority, err := positiveJSONInteger(payload["priority"], "priority", 1, 1000)
@@ -2054,7 +2064,7 @@ func (s *Server) setAccountManualPriority(c *gin.Context) {
 		return
 	}
 	if mode != runtimepolicy.Full {
-		writeError(c, http.StatusConflict, "设置人工优先位需要完全模式")
+		writeError(c, http.StatusConflict, "设置手动控制需要完全模式")
 		return
 	}
 	actor, err := s.requestActor(c)
@@ -2081,7 +2091,7 @@ func (s *Server) clearAccountManualPriority(c *gin.Context) {
 		return
 	}
 	if mode != runtimepolicy.Full {
-		writeError(c, http.StatusConflict, "取消人工优先位需要完全模式")
+		writeError(c, http.StatusConflict, "取消手动控制需要完全模式")
 		return
 	}
 	actor, err := s.requestActor(c)
@@ -2378,8 +2388,13 @@ func modelSyncAccountSelections(raw any) ([]accountops.AccountModelSelection, er
 	seen := map[string]struct{}{}
 	for _, rawSelection := range values {
 		selection, ok := rawSelection.(map[string]any)
-		if !ok || len(selection) != 2 {
-			return nil, errors.New("每项账号模型选择必须只包含 account_id 和 models")
+		if !ok || len(selection) < 2 || len(selection) > 3 {
+			return nil, errors.New("每项账号模型选择必须包含 account_id 和 models，可选 manual_models")
+		}
+		for key := range selection {
+			if key != "account_id" && key != "models" && key != "manual_models" {
+				return nil, errors.New("账号模型选择包含未知字段")
+			}
 		}
 		accountID, ok := selection["account_id"].(string)
 		accountID = strings.TrimSpace(accountID)
@@ -2394,7 +2409,14 @@ func modelSyncAccountSelections(raw any) ([]accountops.AccountModelSelection, er
 			return nil, fmt.Errorf("账号 %s：%w", accountID, err)
 		}
 		seen[accountID] = struct{}{}
-		result = append(result, accountops.AccountModelSelection{AccountID: accountID, Models: models})
+		var manual []string
+		if raw, exists := selection["manual_models"]; exists {
+			manual, err = modelSyncSelectedModels(raw)
+			if err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, accountops.AccountModelSelection{AccountID: accountID, Models: models, ManualModels: manual})
 	}
 	return result, nil
 }
@@ -2424,8 +2446,8 @@ func modelSyncSelectedModels(raw any) ([]string, error) {
 
 func modelSyncProbeModels(raw any) ([]string, error) {
 	values, ok := raw.([]any)
-	if !ok || len(values) == 0 || len(values) > 20 {
-		return nil, errors.New("统一探活模型必须是包含 1 到 20 项的数组")
+	if !ok || len(values) > 20 {
+		return nil, errors.New("统一探活模型必须是最多包含 20 项的数组")
 	}
 	result := make([]string, 0, len(values))
 	seen := map[string]struct{}{}
@@ -4294,7 +4316,7 @@ func (s *Server) cancelAuthCaptcha(c *gin.Context) {
 func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, error) {
 	allowed := map[string]struct{}{
 		"host": {}, "auth_mode": {}, "access_token": {}, "refresh_token": {}, "admin_key": {}, "user_id": {},
-		"username": {}, "password": {}, "save_to_vault": {}, "accept_login_agreement": {}, "entry": {}, "headers": {},
+		"username": {}, "password": {}, "save_to_vault": {}, "accept_login_agreement": {}, "entry": {}, "headers": {}, "cookies": {},
 	}
 	for key := range payload {
 		if _, present := allowed[key]; !present {
@@ -4361,6 +4383,13 @@ func parseManualAuthInput(payload map[string]any) (authrecovery.ManualInput, err
 			return authrecovery.ManualInput{}, fieldErr
 		}
 		result.Headers, result.Present["headers"] = value, true
+	}
+	if raw, present := payload["cookies"]; present {
+		value, fieldErr := nullableStringMap(raw, "cookies")
+		if fieldErr != nil {
+			return authrecovery.ManualInput{}, fieldErr
+		}
+		result.Cookies, result.Present["cookies"] = value, true
 	}
 	return result, nil
 }
@@ -5332,6 +5361,10 @@ func (s *Server) taskDetail(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "任务状态读取失败")
 		return
 	}
+	if task.Operation == "managed-model-detection" {
+		c.Header("Cache-Control", "no-store")
+	}
+	task = s.detectionTaskDisplayGroups(c.Request.Context(), task)
 	c.JSON(http.StatusOK, task)
 }
 
@@ -6006,15 +6039,17 @@ func writeError(c *gin.Context, status int, detail string) {
 	detail = redact.Secrets(detail)
 	if status >= http.StatusInternalServerError {
 		slog.Error("API 请求处理失败", "method", c.Request.Method, "path", c.FullPath(), "status", status, "error", detail)
-		switch status {
-		case http.StatusBadGateway:
-			detail = "上游服务请求失败，请检查连接配置后重试"
-		case http.StatusServiceUnavailable:
-			detail = "服务暂不可用，请稍后重试"
-		case http.StatusGatewayTimeout:
-			detail = "上游服务请求超时，请稍后重试"
-		default:
-			detail = "服务处理失败，请稍后重试"
+		if !preserveModelListError(c, status, detail) {
+			switch status {
+			case http.StatusBadGateway:
+				detail = "上游服务请求失败，请检查连接配置后重试"
+			case http.StatusServiceUnavailable:
+				detail = "服务暂不可用，请稍后重试"
+			case http.StatusGatewayTimeout:
+				detail = "上游服务请求超时，请稍后重试"
+			default:
+				detail = "服务处理失败，请稍后重试"
+			}
 		}
 	}
 	code := "internal_error"
@@ -6043,6 +6078,27 @@ func writeError(c *gin.Context, status int, detail string) {
 		code = "internal_error"
 	}
 	c.JSON(status, gin.H{"code": code, "detail": detail})
+}
+
+// Only fixed OAuth diagnostics may bypass generic 5xx masking; other discovery
+// failures can contain storage or upstream details and must remain hidden.
+func preserveModelListError(c *gin.Context, status int, detail string) bool {
+	if status != http.StatusBadGateway || c.FullPath() != "/api/model-checks/animations/accounts/:account_id/models" {
+		return false
+	}
+	switch detail {
+	case "动画模型列表读取失败：当前仅支持 OpenAI OAuth 账号的动画模型读取",
+		"动画模型列表读取失败：OAuth 账号的管理目标尚未配置",
+		"动画模型列表读取失败：OAuth 账号的管理目标读取失败，请检查管理配置",
+		"动画模型列表读取失败：OAuth 账号的管理配置无效，请检查管理地址和密钥",
+		"动画模型列表读取失败：OAuth 账号读取失败，请检查管理连接后重试",
+		"动画模型列表读取失败：账号类型或平台已变化，请刷新账号后重试",
+		"动画模型列表读取失败：OAuth 模型目录读取失败，请检查授权、账号代理或管理连接后重试；也可手动输入模型 ID",
+		"动画模型列表读取失败：管理目标在模型读取期间已变化，请重新获取模型":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) listDictionaries(c *gin.Context) {

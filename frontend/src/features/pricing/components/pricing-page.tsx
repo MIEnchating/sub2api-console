@@ -394,7 +394,8 @@ function plainPricingIssue(reason?: string | null) {
     return "账号成本必须大于 0，当前数值无法用于价格分组。";
   if (value.includes("平台缺失")) return "账号平台未记录，暂时无法匹配同平台的价格分组。";
   if (value.includes("分组数据无效")) return "当前分组资料不完整，本次不会修改。";
-  if (value.includes("人工优先")) return "账号处于人工优先位，本次不会自动调整分组。";
+  if (value.includes("手动控制") || value.includes("人工优先"))
+    return "账号处于手动控制，本次不会自动调整分组。";
   return value.replaceAll("成本倍率", "账号成本");
 }
 
@@ -426,7 +427,7 @@ function pricingDecisionBasis(
         rows.push(`${name}：不可分配${group?.reason ? `，${group.reason}` : ""}`);
         continue;
       }
-      if (group.platform !== decision.platform) {
+      if (group.platform !== "composite" && group.platform !== decision.platform) {
         rows.push(
           `${name}：分组平台 ${group.platform || "未记录"} 与账号平台 ${decision.platform || "未记录"} 不一致`,
         );
@@ -570,7 +571,7 @@ export function pricingPreviewDecisions(
         const rate = parsePricingDecimal(group?.rate_multiplier ?? null);
         if (
           !group?.available ||
-          group.platform !== decision.platform ||
+          (group.platform !== "composite" && group.platform !== decision.platform) ||
           !rate ||
           rate.coefficient <= 0n
         )
@@ -1654,7 +1655,7 @@ function PricingWorkspace(props: { page: "catalog" | "config" }) {
             <DialogDescription>
               {deleteBackupTarget
                 ? "只删除这份本地备份，不会修改当前账号分组；删除后无法恢复。"
-                : "将批量改写管理平台账号分组。已不存在的账号或分组会跳过，人工优先账号不会被修改。"}
+                : "将批量改写管理平台账号分组。已不存在的账号或分组会跳过，手动控制账号不会被修改。"}
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="grid content-start gap-2 pr-1">

@@ -36,7 +36,7 @@ const task: Task = {
   },
 };
 
-test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动画", async ({ page, colorScheme }) => {
+test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔离动画", async ({ page, colorScheme }) => {
   await page.addInitScript(
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
     colorScheme,
@@ -77,10 +77,8 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
       await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  const entry = page.getByRole("tab", { name: "动画检测", exact: true });
-  await entry.click();
-  const dialog = page.getByRole("tabpanel", { name: "动画检测", exact: true });
+  await page.goto("/animation-check");
+  const dialog = page.getByRole("tabpanel", { name: "账号检测", exact: true });
   await expect(dialog).toBeVisible();
   const start = dialog.getByRole("button", { name: /开始检测/ });
   await expect(start).toBeInViewport({ ratio: 1 });
@@ -94,10 +92,8 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   const regionTop = (await region.boundingBox())!.y;
   const regionOffset = regionTop - (await settings.boundingBox())!.y;
   await start.click();
-  const confirmation = page.getByRole("dialog", { name: "确认动画检测范围" });
-  await expect(confirmation).toContainText("API 用量");
-  expect(created).toBe(false);
-  await confirmation.getByRole("button", { name: "确认并开始检测" }).click();
+  await expect.poll(() => created).toBe(true);
+  await expect(page.getByRole("dialog", { name: "确认动画检测范围" })).toHaveCount(0);
   const accountCard = dialog.getByRole("article", {
     name: "账号 " + animationAccount.name,
     exact: true,
@@ -155,12 +151,9 @@ test("动画检测 Tab 在窄屏可滚动选择、确认费用并展示隔离动
   await expect(preview).not.toBeVisible();
   await expect(accountCard.getByRole("button", { name: /放大查看/ })).toBeFocused();
   await page.screenshot({ path: test.info().outputPath("model-animation.png") });
-  await page.getByRole("tab", { name: "常规检测" }).click();
+  await page.goto("/model-check");
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("tab", { name: "常规检测" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await expect(page.getByRole("heading", { name: "模型检测", exact: true })).toBeVisible();
 });
 
 test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测范围", async ({ page }) => {
@@ -201,8 +194,14 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
       ],
     },
   };
+  const submitted: { targets: unknown[] }[] = [];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
+      submitted.push(route.request().postDataJSON());
+      await route.fulfill({ json: historyTask });
+      return;
+    }
     const fixtures: Record<string, unknown> = {
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
@@ -220,10 +219,8 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
       await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  const entry = page.getByRole("tab", { name: "动画检测", exact: true });
-  await entry.click();
-  const dialog = page.getByRole("tabpanel", { name: "动画检测", exact: true });
+  await page.goto("/animation-check");
+  const dialog = page.getByRole("tabpanel", { name: "账号检测", exact: true });
   const cards = dialog.getByRole("checkbox", { name: /检测 批量账号/ });
   await expect(cards).toHaveCount(12);
   const accountCards = dialog.getByRole("article");
@@ -295,7 +292,7 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await expect(
     dialog
       .getByRole("article", { name: "账号 批量账号 2", exact: true })
-      .getByRole("button", { name: "重试 批量账号 2" }),
+      .getByRole("button", { name: "重测 批量账号 2" }),
   ).toBeEnabled();
 
   await expect(dialog.getByRole("combobox", { name: "最近检测任务" })).toHaveCount(0);
@@ -317,18 +314,19 @@ test("大量账号时仅渲染当前页，跨页编辑和搜索后保留检测�
   await expect(start).toBeInViewport({ ratio: 1 });
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await start.click();
-  const confirmation = page.getByRole("dialog", { name: "确认动画检测范围" });
-  await expect(confirmation).toContainText("ID 1）→ shared-model");
-  await expect(confirmation).toContainText("ID 13）→ shared-model");
-  await confirmation.getByRole("button", { name: "取消", exact: true }).click();
-  await page.getByRole("tab", { name: "常规检测" }).click();
-  await entry.click();
+  await expect.poll(() => submitted.length).toBe(1);
+  expect(submitted[0].targets).toEqual([
+    { account_id: "1", model: "shared-model" },
+    { account_id: "13", model: "shared-model" },
+  ]);
+  await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
+  await page.getByRole("tab", { name: "账号检测", exact: true }).click();
   await expect(dialog.getByRole("combobox", { name: "检测模型" })).toHaveValue("shared-model");
   await expect(dialog.getByRole("button", { name: "开始检测（2 个账号）" })).toBeEnabled();
   for (const [label, option] of [
     ["分组", "主组"],
     ["平台", "openai"],
-    ["优先状态", "人工优先"],
+    ["优先状态", "手动控制"],
   ]) {
     await dialog.getByRole("button", { name: label + "筛选" }).click();
     await page.getByRole("option", { name: option }).click();

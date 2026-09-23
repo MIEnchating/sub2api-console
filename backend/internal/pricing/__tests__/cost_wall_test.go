@@ -25,6 +25,15 @@ func (target testTarget) TargetSettings(context.Context) (configstore.TargetSett
 }
 
 func TestCostFallbackAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t *testing.T) {
+	testCostMigration(t, false)
+}
+
+func TestManualRateReconciliationMigratesWithinConfiguredExchangeSet(t *testing.T) {
+	testCostMigration(t, true)
+}
+
+func testCostMigration(t *testing.T, manual bool) {
+	t.Helper()
 	ctx := context.Background()
 	store, err := business.Open(filepath.Join(t.TempDir(), "pricing.sqlite3"))
 	if err != nil {
@@ -93,18 +102,27 @@ func TestCostFallbackAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t
 		}
 	}))
 	defer server.Close()
+	if manual {
+		if _, err := store.AssignManualPriority(ctx, "104", 1, "10", 10, true, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	service := pricing.New(store, testTarget{configstore.TargetSettings{BaseURL: server.URL, AdminKey: "isolated-test-key", TimeoutSeconds: 5}}, nil)
 	_, err = service.UpdateConfig(ctx, pricing.Config{Enabled: true, ProfitMargin: 0.25, ExchangeGroupSets: [][]string{{"8", "24", "25"}}, ExchangeGroupSetNames: []string{"pro 交换"}, IntervalSeconds: 3600, WriteConcurrency: 1}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.ApplyNow(ctx, "test")
-	if err != nil {
-		t.Fatal(err)
+	if manual {
+		if err := service.ReconcileAccountRates(ctx, []string{"104"}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		result, err := service.ApplyNow(ctx, "test")
+		if err != nil || result.Changed != 1 || result.Failed != 0 {
+			t.Fatalf("apply=%+v err=%v", result, err)
+		}
 	}
-	if result.Changed != 1 || result.Failed != 0 {
-		t.Fatalf("apply=%#v", result)
-	}
+
 	mu.Lock()
 	remoteGroups := append([]int64{}, groups...)
 	mu.Unlock()
@@ -117,6 +135,9 @@ func TestCostFallbackAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t
 	}
 	if !reflect.DeepEqual(catalog.Accounts[0].GroupIDs, []string{"25"}) {
 		t.Fatalf("local groups=%v", catalog.Accounts[0].GroupIDs)
+	}
+	if manual {
+		return
 	}
 	after, err := engine.Calculate(ctx, routing.Scope{}, true)
 	if err != nil {

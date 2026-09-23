@@ -186,3 +186,26 @@ it("打开缓存的 New API 配置时首帧也不请求共享额度，未保存�
   await userEvent.click(screen.getByRole("option", { name: "Sub2API" }));
   expect(read).not.toHaveBeenCalled();
 });
+
+it("New API Session 模式只展示 Session Cookie 和用户 ID 凭据", () => {
+  renderEditor({
+    ...configuration(),
+    upstream_type: "newapi",
+    auth_mode: "newapi_session",
+    has_access_token: false,
+    has_user_id: true,
+    cookie_names: ["session"],
+  });
+
+  expect(screen.getByRole("combobox", { name: "鉴权方式" })).toHaveTextContent(
+    "Session Cookie + 用户 ID",
+  );
+  expect(screen.getByLabelText("Session Cookie")).toHaveAttribute("type", "password");
+  expect(screen.getByLabelText("Session Cookie")).toHaveAttribute(
+    "placeholder",
+    "已配置，留空则不修改",
+  );
+  expect(screen.getByLabelText("User ID")).toBeVisible();
+  expect(screen.queryByLabelText("Admin Key")).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Token")).not.toBeInTheDocument();
+});

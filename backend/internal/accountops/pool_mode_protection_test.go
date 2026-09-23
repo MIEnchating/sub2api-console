@@ -24,7 +24,7 @@ func TestPoolModeSyncSkipsManuallyProtectedAccountBeforeRemoteAccess(t *testing.
 	defer server.Close()
 	service := New(&testTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "test", TimeoutSeconds: 2}}, repository, nil)
 	item := service.syncPoolModeAccount(context.Background(), "41", configstore.AccountCreationSettings{}, "operator")
-	if item.Status != "skipped" || !strings.Contains(item.Error, "人工优先位") || requests.Load() != 0 {
+	if item.Status != "skipped" || !strings.Contains(item.Error, "手动控制") || requests.Load() != 0 {
 		t.Fatalf("protected pool-mode sync=%#v requests=%d", item, requests.Load())
 	}
 }

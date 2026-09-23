@@ -48,8 +48,7 @@ test("多条自定义动画记录分页展示且无横向溢出，较矮窗口�
     else if (path in fixtures) await route.fulfill({ json: fixtures[path] });
     else await route.fulfill({ status: 503, json: { detail: "隔离测试未配置此接口" } });
   });
-  await page.goto("/model-check");
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check");
   await page.getByRole("tab", { name: "自定义接口", exact: true }).click();
   const content = page.getByRole("region", { name: "自定义动画检测内容", exact: true });
   const mobile = page.viewportSize()!.width < 768;

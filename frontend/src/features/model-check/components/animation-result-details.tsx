@@ -11,6 +11,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Badge } from "@/components/ui/badge";
+
+import { AnimationEndpointDetails } from "./animation-endpoint-details";
 
 export function AnimationResultDetails(props: { result: AnimationResult }): ReactElement {
   const [open, setOpen] = useState(false);
@@ -45,12 +48,21 @@ export function AnimationResultDetails(props: { result: AnimationResult }): Reac
           </DialogHeader>
           <DialogBody className="space-y-4">
             <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+              <AnimationEndpointDetails source={result} />
               <dt className="text-muted-foreground">检测模型</dt>
               <dd className="wrap-anywhere">{result.model}</dd>
               {result.response_model ? (
                 <>
                   <dt className="text-muted-foreground">返回模型</dt>
                   <dd className="wrap-anywhere">{result.response_model}</dd>
+                  {result.response_model !== result.model ? (
+                    <>
+                      <dt className="text-muted-foreground">模型状态</dt>
+                      <dd>
+                        <Badge variant="destructive">重点：模型不一致</Badge>
+                      </dd>
+                    </>
+                  ) : null}
                 </>
               ) : null}
               <dt className="text-muted-foreground">完成时间</dt>

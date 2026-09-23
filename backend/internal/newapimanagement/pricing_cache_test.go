@@ -59,6 +59,8 @@ func TestPricingCatalogPersistsRemotePriorityAndDefaultFallback(t *testing.T) {
 			body = `{"success":true,"data":[{"key":"ModelRatio","value":"{\"remote\":1,\"fallback-model\":1}"}]}`
 		case "newapi.example/api/channel/models_enabled":
 			body = `{"success":true,"data":["missing","fallback-model"]}`
+		case "sub2api.example/api/v1/model-plaza":
+			body = `{"code":0,"data":{"groups":[{"models":[{"name":"fallback-model","official_pricing":{"input_price":0.00000123,"output_price":0.00000492,"cache_read_price":0,"cache_write_price":0.00000246}}]}]}}`
 		case "sub2api.example/api/v1/admin/channels/model-pricing":
 			if r.Header.Get("X-API-Key") != "sub2-secret" {
 				t.Fatal("wrong admin credential")

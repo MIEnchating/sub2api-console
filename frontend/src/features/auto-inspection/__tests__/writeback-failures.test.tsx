@@ -46,7 +46,7 @@ describe("自动执行失败明细", () => {
           results: [
             { account_id: "1", changed: true },
             ...failures,
-            { account_id: "2", skipped: true, reason: "人工优先位保护" },
+            { account_id: "2", skipped: true, reason: "手动控制保护" },
           ],
         })}
       />,
@@ -172,7 +172,7 @@ describe("自动执行失败明细", () => {
             "invalid",
             [],
             { account_id: "41", error: null },
-            { account_id: "52", reason: "人工优先位保护", skipped: true },
+            { account_id: "52", reason: "手动控制保护", skipped: true },
           ],
         })}
       />,

@@ -75,8 +75,8 @@ func (s *Service) EnableReview(ctx context.Context, owner string, input RunConfi
 	found := 0
 	for _, row := range value.Public.Items {
 		if selected[row.ID] {
-			if row.Status != "review" || !completedImportCheck(row.Check) || row.AccountID == "" || value.Phases[row.ID] != "isolated" {
-				return Run{}, errors.New("仅允许手动启用检测无执行错误且未被修改的隔离账号")
+			if row.Status != "review" || len(row.Check) == 0 || row.AccountID == "" || (value.Phases[row.ID] != "configured" && value.Phases[row.ID] != "isolated") {
+				return Run{}, errors.New("仅允许手动启用已导入、检测未通过且仍保持隔离的账号")
 			}
 			found++
 		}

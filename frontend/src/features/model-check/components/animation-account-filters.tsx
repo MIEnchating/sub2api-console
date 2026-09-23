@@ -19,6 +19,7 @@ export function AnimationAccountFilters(props: {
   accounts: AccountStatus[];
   value: AnimationFilters;
   onChange: (value: AnimationFilters) => void;
+  searchLabel?: string;
 }): ReactElement {
   const groups = useMemo(
     () => [...new Set(props.accounts.flatMap((account) => account.groups))],
@@ -42,7 +43,7 @@ export function AnimationAccountFilters(props: {
         className="w-full min-w-0 sm:w-52"
         value={props.value.query}
         onChange={(event) => props.onChange({ ...props.value, query: event.target.value })}
-        aria-label="搜索动画检测账号"
+        aria-label={props.searchLabel ?? "搜索动画检测账号"}
         placeholder="搜索账号、ID、分组或 Host"
       />
       <FilterMenu

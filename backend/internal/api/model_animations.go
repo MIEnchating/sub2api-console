@@ -134,3 +134,32 @@ func (s *Server) saveAnimationCheckSchedule(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, result)
 }
+
+func (s *Server) saveAnimationCheckSchedules(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	service, ok := s.modelChecks.(interface {
+		SaveAnimationSchedules(context.Context, []modelcheck.AnimationSchedule, string) ([]modelcheck.AnimationScheduleView, error)
+	})
+	if !ok {
+		writeError(c, http.StatusServiceUnavailable, "自动检测服务尚未就绪")
+		return
+	}
+	var payload struct {
+		Schedules []modelcheck.AnimationSchedule `json:"schedules"`
+	}
+	if err := bindRequestJSON(c, &payload); err != nil {
+		writeError(c, http.StatusUnprocessableEntity, "批量自动检测参数无效")
+		return
+	}
+	actor, err := s.requestActor(c)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "控制台会话读取失败")
+		return
+	}
+	result, err := service.SaveAnimationSchedules(c.Request.Context(), payload.Schedules, actor)
+	if err != nil {
+		writeError(c, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}

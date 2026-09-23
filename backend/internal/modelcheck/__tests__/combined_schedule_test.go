@@ -50,14 +50,7 @@ func TestCombinedScheduleRestoresAndKeepsBothResultsWhenPrecheckDoesNotPass(t *t
 				t.Fatal(err)
 			}
 			restarted.UseTaskRunner(f.runner)
-			view := restarted.AnimationSchedules()[0]
-			if view.Mode != "both" || len(view.PrecheckQuestions) != 1 {
-				t.Fatalf("schedule = %#v", view)
-			}
-			next, _ := time.Parse(time.RFC3339Nano, view.NextAt)
-			restarted.RunDueAnimations(context.Background(), next)
-			task := finished(t, f)
-			rows := task.Result["animations"].([]modelcheck.AnimationResult)
+			rows := runSplitSchedules(t, f, restarted)
 			if len(rows) != 2 || rows[0].Mode != "precheck" || rows[1].Mode != "animation" || rows[1].SVG == "" {
 				t.Fatalf("results = %#v", rows)
 			}
@@ -69,10 +62,10 @@ func TestCombinedScheduleRestoresAndKeepsBothResultsWhenPrecheckDoesNotPass(t *t
 				wantVerdict = "not_passed"
 			}
 			if reply == "http-error" {
-				wantVerdict, wantStatus = "error", "partial"
+				wantVerdict, wantStatus = "error", "failed"
 			}
-			if rows[0].Precheck.Verdict != wantVerdict || task.Status != wantStatus {
-				t.Fatalf("verdict=%s status=%s", rows[0].Precheck.Verdict, task.Status)
+			if rows[0].Precheck.Verdict != wantVerdict || rows[0].Status != wantStatus {
+				t.Fatalf("verdict=%s status=%s", rows[0].Precheck.Verdict, rows[0].Status)
 			}
 			mu.Lock()
 			defer mu.Unlock()

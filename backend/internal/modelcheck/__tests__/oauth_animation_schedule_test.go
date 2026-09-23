@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 )
@@ -47,18 +46,8 @@ func TestOAuthCombinedScheduleRestoresAndKeepsPrecheckAndAnimationResults(t *tes
 		}
 		return oauthResponse(200, "application/json", fmt.Sprintf(`{"status":"completed","output_text":%q}`, answer)), nil
 	}))
-	view := restarted.AnimationSchedules()[0]
-	if view.Mode != "both" || len(view.PrecheckQuestions) != 1 {
-		t.Fatalf("restored schedule: %#v", view)
-	}
-	next, err := time.Parse(time.RFC3339Nano, view.NextAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	restarted.RunDueAnimations(context.Background(), next)
-	task := finished(t, f)
-	rows := task.Result["animations"].([]modelcheck.AnimationResult)
-	if task.Status != "succeeded" || len(rows) != 2 || rows[0].Precheck.Verdict != "not_passed" || rows[1].SVG == "" || strings.Join(requests, ",") != "precheck,animation" {
+	rows := runSplitSchedules(t, f, restarted)
+	if rows[1].Status != "succeeded" || len(rows) != 2 || rows[0].Precheck.Verdict != "not_passed" || rows[1].SVG == "" || strings.Join(requests, ",") != "precheck,animation" {
 		t.Fatalf("combined OAuth schedule result: %#v", rows)
 	}
 	if rows[0].RequestID == rows[1].RequestID {

@@ -56,7 +56,7 @@ test.beforeEach(async ({ page }, info) => {
   });
 });
 
-test("工作台只有五个功能页，键盘切换同步选中状态且窄屏不撑宽页面", async ({ page }) => {
+test("工作台五个功能页键盘切换同步选中状态且窄屏不撑宽页面", async ({ page }) => {
   await page.goto("/account-workbench");
   await expect(page.getByRole("heading", { name: "账号工作台", exact: true })).toHaveCount(0);
   const tabs = page.getByRole("tablist", { name: "账号工作台功能" });

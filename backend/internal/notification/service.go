@@ -387,6 +387,8 @@ var eventLabels = map[string]string{
 }
 
 var causeLabels = map[string]string{
+	"COST_TRAFFIC_LOSS":                   "账号倍率高于分组倍率且有实际调用",
+	"COST_TRAFFIC_BREAK_EVEN":             "账号倍率等于分组倍率且有实际调用",
 	"COST_TRAFFIC":                        "账号倍率大于等于分组倍率且有实际调用",
 	"CONFIG":                              "上游配置有问题",
 	"CONFIG_METADATA_INVALID":             "上游返回信息无法识别",
@@ -717,6 +719,8 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 		}
 	} else if incident.Status == "recovered" {
 		recoveredCauses := map[string]string{
+			"COST_TRAFFIC_LOSS":                   "近期未再检测到亏损流量",
+			"COST_TRAFFIC_BREAK_EVEN":             "近期未再检测到无利润流量",
 			"COST_TRAFFIC":                        "近期未再检测到账号倍率大于等于分组倍率的流量",
 			"CONFIG":                              "上游配置已恢复正常",
 			"AUTH":                                "上游鉴权已恢复",
@@ -764,6 +768,17 @@ func notificationIncidentFields(incident business.AlertIncident) notificationInc
 	statusLabel := "告警中"
 	if incident.Status == "recovered" {
 		statusLabel = "已恢复"
+	}
+	if incident.EventType == "account.cost_traffic" {
+		switch {
+		case strings.HasPrefix(incident.CauseCode, "COST_TRAFFIC_LOSS:"):
+			eventLabel = "亏损流量"
+		case strings.HasPrefix(incident.CauseCode, "COST_TRAFFIC_BREAK_EVEN:"):
+			eventLabel = "无利润流量"
+		}
+		if incident.Status == "recovered" && !strings.Contains(eventLabel, "已解除") {
+			eventLabel += "告警已解除"
+		}
 	}
 	objectValue := objectLabel + "：" + incident.ObjectID
 	if incident.ObjectName != nil && strings.TrimSpace(*incident.ObjectName) != "" {
@@ -886,7 +901,7 @@ func incidentTableRow(incident business.AlertIncident) string {
 
 func dynamicAlertCause(cause string) (string, string, bool) {
 	for _, code := range []string{
-		"COST_TRAFFIC", "AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
+		"COST_TRAFFIC_LOSS", "COST_TRAFFIC_BREAK_EVEN", "COST_TRAFFIC", "AUTH", "PROBE", "CONFIG_AUTH_STATUS_UNKNOWN", "CONFIG_BALANCE_INVALID",
 		"ROUTING_BREAKER", "ROUTING_DEGRADED_HEALTH_SCORE", "ROUTING_DEGRADED_GATEWAY_ERROR_RATE",
 		"ROUTING_DEGRADED_LATENCY", "ROUTING_DEGRADED_OTHER", "ROUTING_DEGRADED",
 		"ROUTING_SURVIVOR", "BINDING_INVALID", "APPLY_FAILED",

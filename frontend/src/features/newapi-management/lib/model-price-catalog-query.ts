@@ -5,7 +5,7 @@ import { api, type ModelPriceCatalog } from "@/api";
 const cacheLifetime = 24 * 60 * 60 * 1000;
 
 function catalogStaleTime(catalog: ModelPriceCatalog | undefined, updatedAt: number): number {
-  if (!catalog || catalog.stale) return 0;
+  if (!catalog || catalog.stale || catalog.warning) return 0;
   let expiresAt = updatedAt + cacheLifetime;
   if (catalog.fetched_at) {
     const fetchedAt = Date.parse(catalog.fetched_at);

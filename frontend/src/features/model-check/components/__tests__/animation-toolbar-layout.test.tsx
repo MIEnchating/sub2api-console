@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { AnimationCheckPanel } from "../animation-check-panel";
 
@@ -46,14 +46,26 @@ it("模型与超时标签和输入框同行，窄屏时两组字段纵向排列"
   }
 });
 
-it("前置检测和动画启动共享操作行，筛选控件保持独立", () => {
+it("动画与前置检测使用独立操作区且保留公共账号选择", () => {
   setup();
   const operations = screen.getByRole("group", { name: "动画检测操作" });
-  expect(within(operations).getByRole("group", { name: "前置检测操作" })).toBeVisible();
-  expect(within(operations).getByRole("button", { name: "选择前 20 个账号" })).toBeVisible();
+  expect(within(operations).queryByRole("button", { name: /前置检测/ })).not.toBeInTheDocument();
+  expect(
+    within(operations).queryByRole("button", { name: /选择实时流量/ }),
+  ).not.toBeInTheDocument();
+  expect(within(operations).getByRole("button", { name: "全选账号" })).toBeVisible();
   expect(within(operations).getByRole("button", { name: "清空选择" })).toBeVisible();
   expect(within(operations).getByRole("button", { name: /开始检测/ })).toBeVisible();
   expect(within(operations).queryByRole("combobox", { name: "检测模型" })).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
+  const precheckOperations = screen.getByRole("group", { name: "前置检测操作" });
+  expect(within(precheckOperations).getByRole("button", { name: "全选账号" })).toBeVisible();
+  expect(within(precheckOperations).getByRole("button", { name: "清空选择" })).toBeVisible();
+  expect(within(precheckOperations).getByRole("button", { name: /^前置检测（/ })).toBeVisible();
+  expect(
+    within(precheckOperations).queryByRole("button", { name: /开始检测/ }),
+  ).not.toBeInTheDocument();
 });
 
 it("窄屏卡片列表完整展开并由表单统一滚动，桌面保留列表内部滚动", () => {

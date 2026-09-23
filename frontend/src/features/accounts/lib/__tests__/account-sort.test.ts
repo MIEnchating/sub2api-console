@@ -59,7 +59,7 @@ describe("sortAccounts", () => {
     expect(accountSortDirection("health_desc", "cost")).toBeNull();
   });
 
-  it("uses the visible manual priority and places missing priorities last in either direction", () => {
+  it("手动控制实际优先级变化后按实际值排序，缺失值保持末尾", () => {
     const accounts = [
       account("missing", { priority: null }),
       account("automatic", { priority: 4 }),
@@ -67,13 +67,13 @@ describe("sortAccounts", () => {
     ];
 
     expect(sortAccounts(accounts, "priority_asc").map((item) => item.id)).toEqual([
-      "manual",
       "automatic",
+      "manual",
       "missing",
     ]);
     expect(sortAccounts(accounts, "priority_desc").map((item) => item.id)).toEqual([
-      "automatic",
       "manual",
+      "automatic",
       "missing",
     ]);
   });

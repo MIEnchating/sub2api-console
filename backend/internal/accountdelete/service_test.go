@@ -688,7 +688,7 @@ func TestPreviewRejectsMutationProtectedAccount(t *testing.T) {
 	repository := &deleteRepository{account: boundAccount(), protection: business.AccountMutationProtection{ManualPriority: true}}
 	service := configuredService(repository, &deleteKeys{}, &deleteAdmin{})
 	_, err := service.Preview(context.Background(), "37")
-	if err == nil || !strings.Contains(err.Error(), "人工优先位") || !strings.Contains(err.Error(), "先解除人工管控") {
+	if err == nil || !strings.Contains(err.Error(), "手动控制") || !strings.Contains(err.Error(), "先解除人工管控") {
 		t.Fatalf("unexpected protection error: %v", err)
 	}
 	if repository.accountReads != 0 {

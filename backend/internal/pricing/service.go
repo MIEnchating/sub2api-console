@@ -91,16 +91,17 @@ type Group struct {
 }
 
 type Decision struct {
-	AccountID       string   `json:"account_id"`
-	AccountName     string   `json:"account_name"`
-	Platform        string   `json:"platform"`
-	CostMultiplier  *string  `json:"cost_multiplier"`
-	CurrentGroupIDs []string `json:"current_group_ids"`
-	DesiredGroupIDs []string `json:"desired_group_ids"`
-	EligibleGroups  []string `json:"eligible_groups"`
-	Changed         bool     `json:"changed"`
-	Skipped         bool     `json:"skipped"`
-	Reason          *string  `json:"reason"`
+	manualCostProtection bool
+	AccountID            string   `json:"account_id"`
+	AccountName          string   `json:"account_name"`
+	Platform             string   `json:"platform"`
+	CostMultiplier       *string  `json:"cost_multiplier"`
+	CurrentGroupIDs      []string `json:"current_group_ids"`
+	DesiredGroupIDs      []string `json:"desired_group_ids"`
+	EligibleGroups       []string `json:"eligible_groups"`
+	Changed              bool     `json:"changed"`
+	Skipped              bool     `json:"skipped"`
+	Reason               *string  `json:"reason"`
 }
 
 type Snapshot struct {
@@ -211,7 +212,7 @@ func (s *Service) RestoreBackupNow(ctx context.Context, backupID, actor string) 
 			reason := "备份中的账号已不存在"
 			decision.Skipped, decision.Reason = true, &reason
 		case account.ManualPriority:
-			reason := "账号处于人工优先位，备份还原不调整分组"
+			reason := "账号处于手动控制，备份还原不调整分组"
 			decision.Skipped, decision.Reason = true, &reason
 		default:
 			for _, groupID := range saved.GroupIDs {
@@ -646,12 +647,10 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 			item.RateMultiplier = &rateText
 			groupPrice[id] = rate
 		}
-		item.Available = item.Status == "active" && item.Platform != "" && item.Platform != "composite" && groupPrice[id] != nil
+		item.Available = item.Status == "active" && item.Platform != "" && groupPrice[id] != nil
 		if !item.Available {
 			reason := "分组不可用于自动价格分配"
 			switch {
-			case item.Platform == "composite":
-				reason = "复合分组由模型路由控制，不自动调整账号成员"
 			case item.Status != "active":
 				reason = "分组未启用"
 			case groupPrice[id] == nil:
@@ -691,8 +690,9 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 		if strings.TrimSpace(costText) != "" {
 			decision.CostMultiplier = &costText
 		}
-		if account.ManualPriority {
-			reason := "账号处于人工优先位，价格管理不调整分组"
+		decision.manualCostProtection = account.ManualPriority && !account.IgnoreCostWall
+		if account.ManualPriority && account.IgnoreCostWall {
+			reason := "手动控制账号已开启无视成本墙，价格管理不调整分组"
 			decision.Skipped, decision.Reason = true, &reason
 			skipped++
 			decisions = append(decisions, decision)
@@ -743,7 +743,7 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 			belowMinimum := 0
 			for _, groupID := range config.ExchangeGroupSets[setIndex] {
 				group := groupByID[groupID]
-				if !group.Available || group.Platform != decision.Platform {
+				if !group.Available || (group.Platform != "composite" && group.Platform != decision.Platform) {
 					continue
 				}
 				compatible++
@@ -890,7 +890,7 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 				if ctx.Err() != nil {
 					return
 				}
-				reason, protectionErr := s.pricingMutationProtection(ctx, decision.AccountID)
+				reason, protectionErr := s.pricingMutationProtection(ctx, decision)
 				if protectionErr != nil {
 					message := protectionErr.Error()
 					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.DesiredGroupIDs, Error: &message}
@@ -900,7 +900,7 @@ func (s *Service) applyPlan(ctx context.Context, value plan, config Config, acto
 					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.CurrentGroupIDs, Skipped: true, Reason: reason}
 					continue
 				}
-				currentGroupIDs, baselineErr := pricingAccountGroupIDs(ctx, client, decision.AccountID)
+				currentGroupIDs, baselineErr := pricingAccountGroupIDs(ctx, client, decision)
 				if baselineErr != nil {
 					message := baselineErr.Error()
 					items <- ItemResult{AccountID: decision.AccountID, Before: decision.CurrentGroupIDs, After: decision.DesiredGroupIDs, Error: &message}
@@ -1068,11 +1068,23 @@ func (s *Service) acquirePlanMutation(ctx context.Context, decisions []Decision)
 	return guarded, cleanup, nil
 }
 
-func (s *Service) pricingMutationProtection(ctx context.Context, accountID string) (*string, error) {
+func (s *Service) pricingMutationProtection(ctx context.Context, decision Decision) (*string, error) {
 	if repository, ok := s.repository.(mutationProtectionRepository); ok {
-		protection, err := repository.AccountMutationProtection(ctx, accountID)
+		protection, err := repository.AccountMutationProtection(ctx, decision.AccountID)
 		if err != nil {
 			return nil, fmt.Errorf("人工保护状态复核失败：%w", err)
+		}
+		if protection.ManualPriority && decision.manualCostProtection {
+			catalog, err := s.repository.PricingCatalog(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for _, account := range catalog.Accounts {
+				if account.ID == decision.AccountID && account.ManualPriority && !account.IgnoreCostWall && account.Multiplier != nil && decision.CostMultiplier != nil && *account.Multiplier == *decision.CostMultiplier && sameGroupIDs(account.GroupIDs, decision.CurrentGroupIDs) {
+					protection.ManualPriority = false
+					break
+				}
+			}
 		}
 		if protection.Protected() {
 			reason := "账号已启用" + strings.Join(protection.Reasons(), "、") + "，价格管理未调整分组"
@@ -1082,10 +1094,20 @@ func (s *Service) pricingMutationProtection(ctx context.Context, accountID strin
 	return nil, nil
 }
 
-func pricingAccountGroupIDs(ctx context.Context, client *adminclient.Client, accountID string) ([]string, error) {
-	account, err := client.Account(ctx, accountID)
+func pricingAccountGroupIDs(ctx context.Context, client *adminclient.Client, decision Decision) ([]string, error) {
+	account, err := client.Account(ctx, decision.AccountID)
 	if err != nil {
 		return nil, fmt.Errorf("账号分组基线复核失败：%w", err)
+	}
+	if fmt.Sprint(account["id"]) != decision.AccountID {
+		return nil, errors.New("账号分组基线复核失败：账号稳定 ID 不一致")
+	}
+	if decision.CostMultiplier != nil {
+		expected, expectedOK := positiveRat(*decision.CostMultiplier)
+		actual, actualOK := positiveRat(fmt.Sprint(account["rate_multiplier"]))
+		if !expectedOK || !actualOK || expected.Cmp(actual) != 0 {
+			return nil, errors.New("账号成本倍率已变化，请重新计算价格分组")
+		}
 	}
 	values, ok := account["group_ids"].([]any)
 	if !ok {

@@ -61,10 +61,10 @@ func ValidateRecord(record configstore.AuthRecord) error {
 			"sub2api_user_token": {}, "sub2api_user_login": {}, "sub2api_manual_login": {},
 		},
 		"newapi": {
-			"newapi_admin_key": {}, "newapi_user_token": {}, "newapi_user_login": {}, "newapi_manual_login": {},
+			"newapi_admin_key": {}, "newapi_session": {}, "newapi_user_token": {}, "newapi_user_login": {}, "newapi_manual_login": {},
 		},
 		"oneapi": {
-			"newapi_admin_key": {}, "newapi_user_token": {}, "newapi_user_login": {}, "newapi_manual_login": {},
+			"newapi_admin_key": {}, "newapi_session": {}, "newapi_user_token": {}, "newapi_user_login": {}, "newapi_manual_login": {},
 		},
 		"custom": {"bearer_token": {}, "custom_headers": {}, "cookie": {}},
 	}
@@ -83,6 +83,10 @@ func ValidateRecord(record configstore.AuthRecord) error {
 	case "newapi_admin_key":
 		if (blank(record.AdminKey) || blank(record.UserID)) && !hasCustomAuthentication(record.Headers) {
 			return errors.New("New API Admin Key 鉴权必须配置 Admin Key 和 User ID，或提供包含鉴权信息的自定义 Header")
+		}
+	case "newapi_session":
+		if blank(record.UserID) || blankCookie(record.Cookies, "session") {
+			return errors.New("New API Session 鉴权必须配置 Session Cookie 和 User ID")
 		}
 	case "newapi_user_token", "bearer_token":
 		if blank(record.AccessToken) && !hasCustomAuthentication(record.Headers) {
@@ -388,6 +392,9 @@ func (c *Client) request(ctx context.Context, record configstore.AuthRecord, met
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "Sub2API-Console/0.1")
 	for key, value := range record.Headers {
+		if record.AuthMode == "newapi_session" && strings.EqualFold(key, "authorization") {
+			continue
+		}
 		request.Header.Set(key, value)
 	}
 	if isNewAPI(record.UpstreamType) && path == "/api/user/auth/refresh" && request.Header.Get("Origin") == "" {
@@ -398,6 +405,7 @@ func (c *Client) request(ctx context.Context, record configstore.AuthRecord, met
 		switch record.AuthMode {
 		case "newapi_admin_key":
 			token = record.AdminKey
+		case "newapi_session":
 		case "sub2api_user_token", "newapi_user_token", "bearer_token", "sub2api_user_login", "newapi_user_login", "sub2api_manual_login", "newapi_manual_login":
 			token = record.AccessToken
 		}

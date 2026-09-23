@@ -25,6 +25,5 @@ export function selectPrecheckAccounts(
         result.precheck?.verdict === verdict
       );
     })
-    .slice(0, 20)
     .map((account) => account.id);
 }

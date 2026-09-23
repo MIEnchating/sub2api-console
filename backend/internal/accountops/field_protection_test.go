@@ -26,7 +26,7 @@ func TestFieldSyncRejectsEndpointChangesAlongsideMultiplierUnderProtection(t *te
 						t.Fatal(err)
 					}
 				} else {
-					reason = "人工优先位"
+					reason = "手动控制"
 					if _, err := repository.AssignManualPriority(context.Background(), "41", 3, "100", 100, true, "operator"); err != nil {
 						t.Fatal(err)
 					}

@@ -1,34 +1,66 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Tabs } from "@base-ui/react/tabs";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { useCallback, useState, type ReactElement } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { lazy, Suspense, useCallback, useEffect, useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
-import {
-  api,
-  type AccountStatus,
-  type AnimationRequest,
-  type AnimationTarget,
-  type PrecheckQuestionID,
-} from "@/api";
-import { allPrecheckQuestions, precheckQuestionSummary } from "../constants";
-import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
+import { api, type AccountStatus, type AnimationTarget, type PrecheckQuestionID } from "@/api";
+import { allPrecheckQuestions } from "../constants";
 import { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { animationSchema, type AnimationForm } from "../lib/animation-schema";
 import { AnimationSelection } from "./animation-selection";
 import { RefreshCw, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AnimationScheduleDialog } from "./animation-schedule-dialog";
+import { AnimationScheduleDialog, type ScheduleTarget } from "./animation-schedule-dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CustomAnimationPanel } from "./custom-animation-panel";
+import {
+  AccountManualPriorityDialog,
+  type ManualPriorityValues,
+} from "@/features/accounts/components/manual-priority-dialog";
+import { notifyOperationError } from "@/lib/operation-feedback";
+import { taskPollInterval } from "@/lib/task-state";
+import { toast } from "sonner";
+import { ContentLoading } from "@/components/content-loading";
+import { defaultAnimationFilters } from "../lib/animation-filters";
+import { DetectionAccountControlProvider } from "./detection-account-control-provider";
+
+const TerminalContinuityPanel = lazy(() =>
+  import("./terminal-continuity-panel").then((module) => ({
+    default: module.TerminalContinuityPanel,
+  })),
+);
+const DetectionTaskPanel = lazy(() =>
+  import("./detection-task-panel").then((module) => ({ default: module.DetectionTaskPanel })),
+);
 
 export function AnimationCheckPanel(props: {
   active?: boolean;
   accountID?: string;
   showAllAccounts?: boolean;
 }): ReactElement {
+  return (
+    <DetectionAccountControlProvider>
+      <AnimationCheckContent {...props} />
+    </DetectionAccountControlProvider>
+  );
+}
+
+function AnimationCheckContent(props: {
+  active?: boolean;
+  accountID?: string;
+  showAllAccounts?: boolean;
+}): ReactElement {
+  const [tab, setTab] = useState("accounts");
+  const [filters, setFilters] = useState(defaultAnimationFilters);
   const tasks = useAnimationTasks(props.active);
-  const [scheduleAccount, setScheduleAccount] = useState<AccountStatus | null>(null);
-  const [confirmation, setConfirmation] = useState<AnimationRequest | null>(null);
+  const [scheduleEdit, setScheduleEdit] = useState<{
+    mode: "animation" | "precheck";
+    targets: ScheduleTarget[];
+    batch: boolean;
+  } | null>(null);
+  const [manualPriorityAccount, setManualPriorityAccount] = useState<AccountStatus | null>(null);
+  const [manualPriorityTaskID, setManualPriorityTaskID] = useState<string | null>(null);
+  const client = useQueryClient();
   const [precheckQuestions, setPrecheckQuestions] =
     useState<PrecheckQuestionID[]>(allPrecheckQuestions);
   const form = useForm<AnimationForm>({
@@ -40,6 +72,50 @@ export function AnimationCheckPanel(props: {
     },
   });
   const accounts = useQuery({ queryKey: ["accounts"], queryFn: api.accounts });
+  const policy = useQuery({ queryKey: ["policy"], queryFn: api.policy });
+  const manualPriorityTask = useQuery({
+    queryKey: ["model-animation", "manual-priority-task", manualPriorityTaskID],
+    queryFn: () => api.task(manualPriorityTaskID!),
+    enabled: Boolean(manualPriorityTaskID),
+    refetchInterval: taskPollInterval,
+  });
+  const manualPriorityMutation = useMutation({
+    mutationFn: (input: ManualPriorityValues | null) => {
+      if (input === null) return api.clearAccountManualPriority(manualPriorityAccount!.id);
+      return api.setAccountManualPriority(
+        manualPriorityAccount!.id,
+        input.priority,
+        input.loadFactor,
+        input.concurrency,
+        input.schedulable,
+        input.syncBalanceMultiplier,
+      );
+    },
+    onSuccess: (task) => setManualPriorityTaskID(task.id),
+    onError: (error) => notifyOperationError(error, "手动控制操作失败"),
+  });
+  useEffect(() => {
+    const task = manualPriorityTask.data;
+    if (!task || ["queued", "running", "waiting_input"].includes(task.status)) return;
+    setManualPriorityTaskID(null);
+    setManualPriorityAccount(null);
+    void client.invalidateQueries({ queryKey: ["accounts"] });
+    if (task.status === "succeeded") toast.success("手动控制已更新");
+    else toast.error(task.message || "手动控制操作失败");
+  }, [client, manualPriorityTask.data]);
+  const manualPrioritySection = policy.data?.advanced_policy?.manual_priority;
+  const configuredReservedMax =
+    manualPrioritySection !== null &&
+    typeof manualPrioritySection === "object" &&
+    !Array.isArray(manualPrioritySection)
+      ? (manualPrioritySection as Record<string, unknown>).reserved_max
+      : null;
+  const reservedMax =
+    typeof configuredReservedMax === "number" &&
+    Number.isInteger(configuredReservedMax) &&
+    configuredReservedMax >= 1
+      ? configuredReservedMax
+      : 10;
   const schedules = useQuery({
     queryKey: ["model-animation", "schedules"],
     queryFn: api.animationSchedules,
@@ -47,10 +123,9 @@ export function AnimationCheckPanel(props: {
   });
   const run = useMutation({
     mutationFn: tasks.start,
-    onSuccess: () => setConfirmation(null),
   });
   const submit = (value: AnimationForm, mode?: "precheck"): void => {
-    setConfirmation({
+    run.mutate({
       ...(mode ? { mode, precheck_questions: precheckQuestions } : {}),
       targets: value.account_ids
         .filter((id) => !tasks.busyIDs.has(id))
@@ -59,6 +134,20 @@ export function AnimationCheckPanel(props: {
           model: value.unified_model.trim(),
         })),
       timeout_seconds: value.timeout_seconds,
+    });
+  };
+  const editSchedules = (selected: AccountStatus[], batch: boolean): void => {
+    const mode = tab === "precheck" ? "precheck" : "animation";
+    setScheduleEdit({
+      mode,
+      batch,
+      targets: selected.map((account) => ({
+        accountID: account.id,
+        accountName: account.name,
+        schedule: schedules.data?.find(
+          (item) => item.account_id === account.id && (item.mode ?? "animation") === mode,
+        ),
+      })),
     });
   };
   const start = tasks.start;
@@ -75,8 +164,15 @@ export function AnimationCheckPanel(props: {
   return (
     <>
       <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
-        <Tabs.Root defaultValue="accounts" className="flex min-h-0 flex-1 flex-col">
-          <Tabs.List aria-label="动画检测来源" className="flex shrink-0 gap-1 border-b px-3">
+        <Tabs.Root
+          value={tab}
+          onValueChange={(value) => setTab(String(value))}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <Tabs.List
+            aria-label="动画检测来源"
+            className="flex shrink-0 flex-wrap gap-1 border-b px-3"
+          >
             <Tabs.Tab
               value="accounts"
               className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
@@ -84,14 +180,39 @@ export function AnimationCheckPanel(props: {
               账号检测
             </Tabs.Tab>
             <Tabs.Tab
+              value="precheck"
+              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              前置检测
+            </Tabs.Tab>
+            <Tabs.Tab
               value="custom"
               className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
             >
               自定义接口
             </Tabs.Tab>
+            <Tabs.Tab
+              value="terminal-continuity"
+              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              终端续接检测
+            </Tabs.Tab>
+            <Tabs.Tab
+              value="task-management"
+              className="border-b-2 border-transparent px-3 py-2 text-sm data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              任务管理
+            </Tabs.Tab>
           </Tabs.List>
-          <Tabs.Panel value="accounts" keepMounted className="min-h-0 flex-1 data-[hidden]:hidden">
+          <Tabs.Panel
+            value={tab === "precheck" ? "precheck" : "accounts"}
+            keepMounted
+            className="min-h-0 flex-1 data-[hidden]:hidden"
+          >
             <AnimationSelection
+              filters={filters}
+              onFiltersChange={setFilters}
+              mode={tab === "precheck" ? "precheck" : "animation"}
               accountID={props.showAllAccounts ? undefined : props.accountID}
               precheckQuestions={precheckQuestions}
               onPrecheckQuestionsChange={setPrecheckQuestions}
@@ -150,35 +271,61 @@ export function AnimationCheckPanel(props: {
               schedules={schedules}
               pending={run.isPending}
               onSubmit={(value) => submit(value)}
-              onSchedule={setScheduleAccount}
+              onSchedule={(account) => editSchedules([account], false)}
+              onBatchSchedule={(accounts) => editSchedules(accounts, true)}
+              onManualPriority={setManualPriorityAccount}
             />
           </Tabs.Panel>
           <Tabs.Panel value="custom" className="min-h-0 flex-1">
             <CustomAnimationPanel tasks={tasks} active={props.active} />
           </Tabs.Panel>
+          <Tabs.Panel value="task-management" className="min-h-0 flex-1">
+            <Suspense fallback={<ContentLoading label="正在读取任务管理" />}>
+              <DetectionTaskPanel />
+            </Suspense>
+          </Tabs.Panel>
+          <Tabs.Panel value="terminal-continuity" className="min-h-0 flex-1">
+            <Suspense
+              fallback={
+                <ContentLoading label="正在读取终端续接检测" className="h-full justify-center" />
+              }
+            >
+              <TerminalContinuityPanel
+                accountID={props.showAllAccounts ? undefined : props.accountID}
+                filters={filters}
+                onFiltersChange={setFilters}
+              />
+            </Suspense>
+          </Tabs.Panel>
         </Tabs.Root>
       </div>
-      <ConfirmActionDialog
-        open={confirmation !== null}
-        title={confirmation?.mode === "precheck" ? "确认前置检测范围" : "确认动画检测范围"}
-        description={`将${confirmation?.mode === "precheck" ? `对每个账号执行${precheckQuestionSummary(confirmation.precheck_questions)}，` : ""}检测 ${confirmation?.targets.length ?? 0} 个账号并产生 API 用量：${confirmation?.targets.map((target) => `${accounts.data?.find((account) => account.id === target.account_id)?.name ?? target.account_id}（ID ${target.account_id}）→ ${target.model}`).join("；") ?? ""}。`}
-        confirmLabel="确认并开始检测"
-        pending={run.isPending}
-        onOpenChange={(open) => {
-          if (!open) setConfirmation(null);
-        }}
-        onConfirm={() => {
-          if (confirmation) run.mutate(confirmation);
-        }}
-      />
-      {scheduleAccount ? (
+      {scheduleEdit ? (
         <AnimationScheduleDialog
-          key={scheduleAccount.id}
-          accountID={scheduleAccount.id}
-          accountName={scheduleAccount.name}
+          accountID={scheduleEdit.targets[0].accountID}
+          accountName={
+            scheduleEdit.batch
+              ? `${scheduleEdit.targets.length} 个账号`
+              : scheduleEdit.targets[0].accountName
+          }
+          mode={scheduleEdit.mode}
+          targets={scheduleEdit.batch ? scheduleEdit.targets : undefined}
           model={form.getValues("unified_model").trim()}
-          schedule={schedules.data?.find((item) => item.account_id === scheduleAccount.id)}
-          onClose={() => setScheduleAccount(null)}
+          schedule={scheduleEdit.batch ? undefined : scheduleEdit.targets[0].schedule}
+          onClose={() => setScheduleEdit(null)}
+        />
+      ) : null}
+      {manualPriorityAccount ? (
+        <AccountManualPriorityDialog
+          open
+          account={manualPriorityAccount}
+          reservedMax={reservedMax}
+          pending={manualPriorityMutation.isPending || Boolean(manualPriorityTaskID)}
+          onOpenChange={(open) => {
+            if (!open && !manualPriorityMutation.isPending && !manualPriorityTaskID)
+              setManualPriorityAccount(null);
+          }}
+          onAssign={(values) => manualPriorityMutation.mutate(values)}
+          onClear={() => manualPriorityMutation.mutate(null)}
         />
       ) : null}
     </>

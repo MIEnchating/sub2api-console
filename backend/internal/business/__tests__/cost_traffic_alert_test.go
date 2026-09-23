@@ -293,3 +293,19 @@ func TestCostTrafficPolicyExemptionClosesExistingAlertsWithoutRecovery(t *testin
 		t.Fatalf("status=%s want=closed", status)
 	}
 }
+
+func TestCostTrafficDistinguishesLossFromExactBreakEven(t *testing.T) {
+	for _, tc := range []struct{ rate, prefix, comparison string }{
+		{"0.30", "COST_TRAFFIC_BREAK_EVEN:", " = "},
+		{"0.300000000000000001", "COST_TRAFFIC_LOSS:", " > "},
+	} {
+		t.Run(tc.rate, func(t *testing.T) {
+			store, db := openAlertRuleStore(t)
+			seedCostTraffic(t, db, tc.rate, "0.3", "traffic", time.Minute)
+			count, cause := evaluateCostTraffic(t, store, db)
+			if count != 1 || !strings.HasPrefix(cause, tc.prefix) || !strings.Contains(cause, tc.comparison) {
+				t.Fatalf("incorrect cost classification: %d %s", count, cause)
+			}
+		})
+	}
+}

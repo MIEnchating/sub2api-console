@@ -85,6 +85,9 @@ func (s *Service) Preview(ctx context.Context, owner string, input PreviewInput)
 	if input.ProxyEnabled && strings.TrimSpace(input.ProxyURL) == "" {
 		return Preview{}, errors.New("已启用代理，请填写代理地址")
 	}
+	if input.Action == "import" {
+		input.Promote = true
+	}
 	parsed := ParseInput(input.Content, input.Action == "export")
 	result := Preview{Action: input.Action, Check: input.Check, Promote: input.Promote, ParsedInput: parsed}
 	if len(parsed.Errors) > 0 {

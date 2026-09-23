@@ -318,9 +318,6 @@ export function RegularCheckPanel(props: {
       ) : null}
       <div className="flex min-h-0 flex-1 flex-col">
         <ModelCheckSelection
-          onTrafficAccountsSelect={(ids) =>
-            form.setValue("account_ids", ids, { shouldValidate: true })
-          }
           onViewResult={task.data ? () => setResultOpen(true) : undefined}
           onViewPreviousResult={
             hasPreviousResult

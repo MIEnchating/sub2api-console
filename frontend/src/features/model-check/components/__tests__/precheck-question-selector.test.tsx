@@ -9,11 +9,11 @@ beforeEach(() => vi.stubGlobal("PointerEvent", MouseEvent));
 afterEach(() => vi.unstubAllGlobals());
 
 function Selector(): ReactElement {
-  const [value, setValue] = useState<PrecheckQuestionID[]>(["candy", "knowledge-cutoff"]);
+  const [value, setValue] = useState<PrecheckQuestionID[]>(["candy"]);
   return <PrecheckQuestionSelector value={value} onChange={setValue} />;
 }
 
-it("键盘可以取消全选并选择单题，关闭题目菜单后焦点返回入口", async () => {
+it("键盘可以取消并重新选择唯一检测题，关闭题目菜单后焦点返回入口", async () => {
   render(<Selector />);
   const user = userEvent.setup();
   await user.tab();
@@ -25,7 +25,7 @@ it("键盘可以取消全选并选择单题，关闭题目菜单后焦点返回�
   await user.tab();
   expect(screen.getByRole("checkbox", { name: "糖果题" })).toHaveFocus();
   await user.keyboard(" ");
-  expect(all).toBePartiallyChecked();
+  expect(all).toBeChecked();
   await user.keyboard("{Escape}");
   expect(screen.getByRole("button", { name: "选择前置检测题目" })).toHaveFocus();
   expect(screen.getByRole("button", { name: "选择前置检测题目" })).toHaveTextContent(

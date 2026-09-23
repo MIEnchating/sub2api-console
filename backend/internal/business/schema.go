@@ -553,7 +553,7 @@ func initialControlPolicy() map[string]any {
 			"performance_min_samples": int64(5), "speed_advantage_cap": 4.0,
 			"change_threshold": "0.1", "cooldown_seconds": int64(60), "min_load_factor": int64(1), "max_load_factor": int64(100),
 		},
-		"manual_priority":      map[string]any{"reserved_max": int64(10)},
+		"manual_priority":      map[string]any{"reserved_max": int64(10), "latency_priority_enabled": false},
 		"probe":                map[string]any{"enabled": true, "interval_seconds": int64(300), "freshness_seconds": int64(900), "timeout_seconds": int64(60), "concurrency": int64(4), "model": "", "prompt": "hi", "performance_exploration_enabled": true, "skip_when_traffic_fresh": true, "traffic_fresh_seconds": int64(180), "retry_enabled": true, "retry_source": "fixed", "retry_count": int64(1), "retry_status_codes": []any{int64(500), int64(502), int64(503), int64(504)}},
 		"traffic":              map[string]any{"enabled": true, "refresh_seconds": int64(60), "lookback_minutes": int64(120), "max_samples_per_account": int64(60)},
 		"upstream_multiplier":  map[string]any{"interval_seconds": int64(120)},

@@ -103,7 +103,7 @@ export function AccountBatchProbeDialog(props: {
           <DialogTitle>批量探活</DialogTitle>
           <DialogDescription>
             本次探活 {eligible.length} 个账号，使用各账号已配置的探活模型。
-            {skipped > 0 ? `已跳过 ${skipped} 个人工优先位账号。` : ""}
+            {skipped > 0 ? `已跳过 ${skipped} 个手动控制账号。` : ""}
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid min-w-0 gap-3">
@@ -127,7 +127,7 @@ export function AccountBatchProbeDialog(props: {
           </p>
           {eligible.length === 0 ? (
             <p role="alert" className="text-muted-foreground text-sm">
-              没有可探活账号，请选择非人工优先位账号。
+              没有可探活账号，请选择非手动控制账号。
             </p>
           ) : null}
           {eligible.length > 100 ? (

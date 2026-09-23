@@ -1809,7 +1809,7 @@ func TestAccountRateSyncHonorsManualControlSyncChoice(t *testing.T) {
 	defer server.Close()
 	repository := &captureRepository{maintenance: []business.BoundAccountMaintenance{
 		{AccountID: "11", AccountName: "manual-off", UpstreamHost: "upstream.example", ManualPriority: true},
-		{AccountID: "12", AccountName: "manual-on", UpstreamHost: "upstream.example", ManualPriority: true, SyncBalanceMultiplier: true},
+		{AccountID: "12", AccountName: "manual-on", NamingBaseURL: "https://upstream.example", UpstreamHost: "upstream.example", ManualPriority: true, SyncBalanceMultiplier: true},
 	}}
 	writer := &captureRateWriter{}
 	service := New(staticTarget{value: configstore.TargetSettings{BaseURL: server.URL, AdminKey: "secret", TimeoutSeconds: 1}}, repository, &memoryTasks{}, writer)
@@ -1818,8 +1818,8 @@ func TestAccountRateSyncHonorsManualControlSyncChoice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result["skipped"] != 1 || result["updated"] != 1 || writer.multiplierOnlyCalls != 1 ||
-		writer.values["12"] != "0.3" || writer.names["12"] != "" {
+	if result["skipped"] != 1 || result["updated"] != 1 || writer.multiplierOnlyCalls != 0 ||
+		writer.values["12"] != "0.3" || writer.names["12"] != "upstream-0.3" {
 		t.Fatalf("result=%#v calls=%d multiplierOnly=%d values=%#v names=%#v", result, writer.calls, writer.multiplierOnlyCalls, writer.values, writer.names)
 	}
 }

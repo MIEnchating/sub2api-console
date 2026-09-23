@@ -110,6 +110,9 @@ type Service struct {
 	animationRunner   taskrunner.Runner
 	taskTimeout       time.Duration
 	animation         animationState
+	terminalMu        sync.Mutex
+	terminalActive    map[string]bool
+	detectionTasks    *detectionTaskState
 }
 
 func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, keys KeyRevealer) (*Service, error) {
@@ -127,6 +130,7 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 	service := &Service{
 		tasks: tasks, credentials: credentials, accounts: accounts, keys: keys,
 		claudeProfiles: claudeProfiles, solProfile: sol, taskTimeout: 30 * time.Minute,
+		terminalActive: map[string]bool{},
 	}
 	service.configuration = newBuiltinConfiguration(claudeProfiles, sol)
 	if repository, ok := accounts.(configurationRepository); ok {
@@ -149,6 +153,9 @@ func New(tasks TaskStore, credentials CredentialStore, accounts AccountCatalog, 
 		}
 	}
 	if err := service.loadAnimationConfiguration(context.Background()); err != nil {
+		return nil, err
+	}
+	if err := service.loadDetectionTasks(context.Background()); err != nil {
 		return nil, err
 	}
 	return service, nil

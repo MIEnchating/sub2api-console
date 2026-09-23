@@ -39,7 +39,7 @@ function setup(): {
   return { client, close };
 }
 
-it("选择多个账号和统一模型后先展示影响范围，再按稳定 ID 创建批量任务", async () => {
+it("选择多个账号和统一模型后直接按稳定 ID 创建批量任务且不弹窗", async () => {
   const user = userEvent.setup();
   const calls: unknown[] = [];
   const queued = {
@@ -75,12 +75,7 @@ it("选择多个账号和统一模型后先展示影响范围，再按稳定 ID 
   await user.type(screen.getByRole("combobox", { name: "检测模型" }), "shared-model");
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "开始检测（2 个账号）" }));
-  const confirm = await screen.findByRole("dialog", { name: "确认动画检测范围" });
-  expect(
-    within(confirm).getByText(/甲账号（ID 41）→ shared-model；乙账号（ID 42）→ shared-model/),
-  ).toBeVisible();
-  expect(calls).toHaveLength(0);
-  await user.click(within(confirm).getByRole("button", { name: "确认并开始检测" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   await waitFor(() =>
     expect(calls).toEqual([
       {
@@ -133,6 +128,16 @@ it("模型列表刷新失败时保留手动输入，且反馈不占用主体布�
 });
 
 it("仅选择账号而未填写模型时阻止提交，并允许使用统一模型", async () => {
+  const posts: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") posts.push(JSON.parse(String(init.body)));
+      if (init?.method !== "POST" && !String(_input).includes("/api/tasks/"))
+        return Response.json([]);
+      return Response.json({ id: "validation-task", status: "succeeded", result: {} });
+    }),
+  );
   const view = setup();
   fireEvent.click(screen.getByRole("checkbox", { name: /检测 甲账号/ }));
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
@@ -146,8 +151,10 @@ it("仅选择账号而未填写模型时阻止提交，并允许使用统一模�
     target: { value: "shared-model" },
   });
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
-  expect(await screen.findByRole("dialog", { name: "确认动画检测范围" })).toHaveTextContent(
-    "shared-model",
+  await waitFor(() =>
+    expect(posts).toEqual([
+      { targets: [{ account_id: "41", model: "shared-model" }], timeout_seconds: 120 },
+    ]),
   );
   view.client.clear();
 });

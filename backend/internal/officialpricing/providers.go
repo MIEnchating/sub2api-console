@@ -10,13 +10,18 @@ import (
 
 type Provider struct{ ID, Name, URL string }
 
-var Providers = []Provider{{"deepseek", "DeepSeek", DeepSeekURL}, {"kimi", "Kimi", KimiURL}, {"minimax", "MiniMax", MiniMaxURL}, {"glm", "GLM", GLMURL}, {"qwen", "Qwen", QwenURL}}
+var Providers = []Provider{{"deepseek", "DeepSeek", DeepSeekURL}, {"kimi", "Kimi", KimiURL}, {"minimax", "MiniMax", MiniMaxURL}, {"glm", "GLM", GLMURL}, {"qwen", "Qwen", QwenURL}, {"grok", "Grok", GrokURL}, {"claude", "Claude", ClaudeURL}, {"openai", "OpenAI", OpenAIURL}}
 
 func ProviderID(model string) string {
 	model = strings.ToLower(model)
-	for _, p := range []struct{ prefix, id string }{{"deepseek-", "deepseek"}, {"kimi-", "kimi"}, {"moonshot-", "kimi"}, {"minimax-", "minimax"}, {"glm-", "glm"}, {"qwen", "qwen"}, {"qwq-", "qwen"}, {"qvq-", "qwen"}} {
+	for _, p := range []struct{ prefix, id string }{{"deepseek-", "deepseek"}, {"kimi-", "kimi"}, {"moonshot-", "kimi"}, {"minimax-", "minimax"}, {"glm-", "glm"}, {"qwen", "qwen"}, {"qwq-", "qwen"}, {"qvq-", "qwen"}, {"grok-", "grok"}, {"claude-", "claude"}, {"gpt-", "openai"}, {"chatgpt-", "openai"}} {
 		if strings.HasPrefix(model, p.prefix) {
 			return p.id
+		}
+	}
+	for _, prefix := range []string{"o1", "o3", "o4", "chat-latest", "davinci-002", "babbage-002"} {
+		if model == prefix || strings.HasPrefix(model, prefix+"-") {
+			return "openai"
 		}
 	}
 	return ""
@@ -29,6 +34,10 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 	switch provider.ID {
 	case "deepseek":
 		ps, err = FetchDeepSeek(ctx, client)
+	case "claude":
+		ps, err = fetchClaude(ctx, client)
+	case "openai":
+		ps, err = fetchOpenAI(ctx, client)
 	default:
 		var raw []byte
 		raw, err = fetchRetry(ctx, client, provider.URL+markdownSuffix(provider.ID))
@@ -42,6 +51,8 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 				ps, err = ParseGLM(raw)
 			case "qwen":
 				ps, err = ParseQwen(raw)
+			case "grok":
+				ps, err = ParseGrok(raw)
 			default:
 				err = errors.New("不支持的官方价格来源")
 			}
@@ -57,7 +68,7 @@ func Fetch(ctx context.Context, client *http.Client, provider Provider) ([]Price
 	return ps, err
 }
 func markdownSuffix(id string) string {
-	if id == "kimi" || id == "minimax" || id == "glm" {
+	if id == "kimi" || id == "minimax" || id == "glm" || id == "grok" {
 		return ".md"
 	}
 	return ""

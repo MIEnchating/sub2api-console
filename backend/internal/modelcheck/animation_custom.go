@@ -3,6 +3,7 @@ package modelcheck
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -39,7 +40,7 @@ func prepareCustomAnimation(request AnimationRequest) (AnimationRequest, []selec
 	}
 	id = "custom-" + id
 	request.Custom = &custom
-	request.Targets = []AnimationTarget{{AccountID: id, Model: custom.Model}}
+	request.Targets = []AnimationTarget{{AccountID: id, Model: custom.Model, Endpoint: custom.BaseURL, Platform: custom.Platform}}
 	return request, []selectedAccount{{ID: id, Name: "自定义接口", Platform: custom.Platform}}, nil
 }
 
@@ -52,6 +53,10 @@ func validateAnimationEndpoint(custom AnimationCustomEndpoint) (AnimationCustomE
 	custom.APIKey = strings.TrimSpace(custom.APIKey)
 	if custom.APIKey == "" || len(custom.APIKey) > 4096 || strings.ContainsFunc(custom.APIKey, func(r rune) bool { return r < 33 || r > 126 }) {
 		return custom, errors.New("请输入有效的 API Key，不能包含空白或非 ASCII 字符，长度不能超过 4096 字节")
+	}
+	decodedURL, err := url.PathUnescape(custom.BaseURL)
+	if err != nil || strings.Contains(custom.BaseURL, custom.APIKey) || strings.Contains(decodedURL, custom.APIKey) {
+		return custom, errors.New("Base URL 不能包含 API Key，请检查填写内容")
 	}
 	if custom.Platform != "openai" && custom.Platform != "anthropic" {
 		return custom, errors.New("自定义接口类型必须是 OpenAI 或 Anthropic")

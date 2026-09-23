@@ -23,7 +23,7 @@ func (protection AccountMutationProtection) Protected() bool {
 func (protection AccountMutationProtection) Reasons() []string {
 	reasons := []string{}
 	if protection.ManualPriority {
-		reasons = append(reasons, "人工优先位")
+		reasons = append(reasons, "手动控制")
 	}
 	if protection.Paused {
 		reasons = append(reasons, "人工暂停")

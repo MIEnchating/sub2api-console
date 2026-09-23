@@ -1,7 +1,3 @@
-import {
-  AccountTrafficBadge,
-  SelectTrafficAccounts,
-} from "@/features/accounts/components/account-traffic";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
 import { PageLoadingSkeleton } from "@/components/page-loading-skeleton";
 import { FieldError } from "@/components/field-error";
@@ -46,7 +42,6 @@ import { cn } from "@/lib/utils";
 import { focusWithoutScroll } from "@/components/ui/dropdown-search-focus";
 
 export type ModelCheckSelectionProps = {
-  onTrafficAccountsSelect?: (ids: string[]) => void;
   onViewResult?: () => void;
   onViewPreviousResult?: () => void;
   accounts: AccountStatus[];
@@ -133,7 +128,6 @@ function AccountIdentity(props: { account: AccountStatus }) {
       <span className="block truncate font-medium">{props.account.name}</span>
       <span className="text-muted-foreground flex flex-wrap items-center gap-1.5 text-xs tabular-nums">
         ID {props.account.id}
-        <AccountTrafficBadge accountID={props.account.id} />
       </span>
     </span>
   );
@@ -258,13 +252,6 @@ function AccountPanel(props: ModelCheckSelectionProps) {
           ) : null}
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          {props.onTrafficAccountsSelect ? (
-            <SelectTrafficAccounts
-              accountIDs={props.accounts.map((account) => account.id)}
-              disabled={props.disabled || props.accountsLoading || Boolean(props.accountsError)}
-              onSelect={props.onTrafficAccountsSelect}
-            />
-          ) : null}
           <FilterMenu
             label="分组"
             options={accountGroups}

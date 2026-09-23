@@ -1,9 +1,15 @@
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("检测出错显示原因且不能启用，正常不匹配仍显示已导入", async ({ page }) => {
+test("检测未通过时保留站点账号并提供二次确认的手动启用入口", async ({ page }) => {
+  const writes: unknown[] = [];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/api/account-workbench/runs/batch-one/enable") {
+      writes.push(route.request().postDataJSON());
+      await route.fulfill({ json: {} });
+      return;
+    }
     const fixtures: Record<string, unknown> = {
       ...pageFixtures,
       "/api/setup/status": { initialized: true, configuration_errors: [] },
@@ -27,8 +33,9 @@ test("检测出错显示原因且不能启用，正常不匹配仍显示已导�
               index: 0,
               kind: "codex_json",
               email: "error@example.test",
-              status: "failed",
-              message: "检测出错，已停止导入：请求超时",
+              status: "review",
+              account_id: "42",
+              message: "请求超时；账号已导入，未开启调度，可手动启用",
               template_name: "所选配置",
               check: { verdict: "ERROR", error: "请求超时" },
             },
@@ -37,8 +44,8 @@ test("检测出错显示原因且不能启用，正常不匹配仍显示已导�
               index: 1,
               kind: "codex_json",
               email: "luna@example.test",
-              status: "completed",
-              message: "账号已导入并应用设置",
+              status: "review",
+              message: "账号已导入，检测未通过，未开启调度",
               account_id: "41",
               template_name: "所选配置",
               check: { verdict: "LUNA_LIKE", error: null },
@@ -62,9 +69,16 @@ test("检测出错显示原因且不能启用，正常不匹配仍显示已导�
   const failure = page.getByRole("row").filter({ hasText: "error@example.test" });
   await expect(failure.getByText("检测出错", { exact: true })).toBeVisible();
   await expect(failure.getByText(/请求超时/)).toBeVisible();
-  await expect(failure.getByRole("button", { name: "启用", exact: true })).toHaveCount(0);
-  await expect(failure.getByText(/站点账号/)).toHaveCount(0);
+  await expect(failure.getByRole("button", { name: "启用", exact: true })).toBeEnabled();
+  await expect(failure.getByText(/站点账号 #42/)).toBeVisible();
   const completed = page.getByRole("row").filter({ hasText: "luna@example.test" });
   await expect(completed.getByText("更接近 Luna", { exact: true })).toBeVisible();
-  await expect(completed.getByText("账号已导入并应用设置")).toBeVisible();
+  await expect(completed.getByText("账号已导入，检测未通过，未开启调度")).toBeVisible();
+  await expect(completed.getByRole("button", { name: "启用", exact: true })).toBeEnabled();
+  await failure.getByRole("button", { name: "启用", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/智商检测未通过/)).toBeVisible();
+  expect(writes).toEqual([]);
+  await dialog.getByRole("button", { name: "启用所选账号" }).click();
+  await expect.poll(() => writes).toEqual([{ revision: 1, ids: ["error-one"] }]);
 });

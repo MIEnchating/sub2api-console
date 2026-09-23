@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { JsonEditor } from "@/components/json-editor";
 import type { WorkbenchRun, WorkbenchRunItem } from "../types";
 import { runStatusLabels } from "../constants";
-import { checkError, checkLabel, completedCheck } from "../lib/check-result";
+import { checkError, checkLabel, runItemMessage } from "../lib/check-result";
 import { RunLoginInput } from "./run-login-input";
 
 export function RunItems(props: {
@@ -64,9 +64,7 @@ export function RunItems(props: {
                 overflowTooltip={false}
               >
                 <Badge variant="secondary">{runStatusLabels[item.status] || "状态待确认"}</Badge>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {checkError(item.check) ? `检测出错：${checkError(item.check)}` : item.message}
-                </p>
+                <p className="mt-1 text-xs text-muted-foreground">{runItemMessage(item)}</p>
               </TableCell>
               <TableCell className="whitespace-normal wrap-anywhere" overflowTooltip={false}>
                 {item.template_name}
@@ -92,7 +90,7 @@ export function RunItems(props: {
                       检测详情
                     </Button>
                   )}
-                  {item.status === "review" && completedCheck(item.check) && item.account_id && (
+                  {item.status === "review" && item.check && item.account_id && (
                     <Button
                       variant="outline"
                       disabled={props.pending}

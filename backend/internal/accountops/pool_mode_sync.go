@@ -179,7 +179,7 @@ func (s *Service) syncPoolModeAccount(ctx context.Context, accountID string, set
 		item.Error = "任务执行前已退出完全模式"
 		return item
 	} else if local.ManualPriority != nil {
-		item.AccountName, item.Status, item.Error = local.Name, "skipped", "账号处于人工优先位，已跳过池模式同步"
+		item.AccountName, item.Status, item.Error = local.Name, "skipped", "账号处于手动控制，已跳过池模式同步"
 		return item
 	} else {
 		item.AccountName = local.Name

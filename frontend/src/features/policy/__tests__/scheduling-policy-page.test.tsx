@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 
 import {
@@ -389,8 +389,8 @@ describe("调度策略入口", () => {
 
     expect(global).toContain("倍率缺失回退");
     expect(global).toContain("每组总权重预算");
-    expect(global).toContain("人工优先位范围");
-    expect(global).toContain('aria-label="人工优先位范围说明"');
+    expect(global).toContain("手动控制范围");
+    expect(global).toContain('aria-label="手动控制范围说明"');
     expect(global).toContain("权重健康闸门");
     expect(global).toContain("均衡中价格占比");
     expect(global).toContain("性能最小样本数");
@@ -695,7 +695,7 @@ describe("调度策略入口", () => {
     });
   });
 
-  it("账号托管默认开启并说明人工优先级例外", () => {
+  it("账号托管默认开启并说明手动控制例外", () => {
     const markup = renderPolicyStatic(
       <PolicyScopeEditor
         value={policyDraft(policy)}
@@ -710,7 +710,7 @@ describe("调度策略入口", () => {
     expect(markup).toContain("账号托管");
     expect(markup).toContain('aria-label="托管所有账号"');
     expect(markup).toContain('aria-checked="true"');
-    expect(markup).toContain("人工优先级账号始终由人工控制");
+    expect(markup).toContain("手动控制账号始终由人工控制");
     expect(policyDraft(policy).advanced_policy.scope).toMatchObject({
       manage_all_accounts: true,
     });
@@ -733,4 +733,34 @@ describe("调度策略入口", () => {
     expect(markup).toContain('data-policy-section="暂停与排除的账号"');
     expect(markup.match(/xl:col-span-2/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
+});
+
+afterEach(() => vi.unstubAllGlobals());
+
+it("延迟调序默认关闭，开启时仅增加手动控制策略字段", () => {
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { staleTime: Infinity, retry: false } },
+  });
+  queryClient.setQueryData(["policy"], policy);
+  queryClient.setQueryData(["config"], config);
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <PolicyPage />
+    </QueryClientProvider>,
+  );
+  const toggle = screen.getByRole("switch", { name: "按延迟调整手动控制优先级" });
+  expect(toggle).not.toBeChecked();
+  fireEvent.click(toggle);
+  expect(toggle).toBeChecked();
+  view.unmount();
+  queryClient.clear();
+  const draft = policyDraft(policy);
+  draft.advanced_policy.manual_priority = { reserved_max: 10, latency_priority_enabled: true };
+  expect(policyPayload(draft)?.advanced_policy?.manual_priority).toEqual({
+    reserved_max: 10,
+    latency_priority_enabled: true,
+  });
+  draft.advanced_policy.manual_priority = { latency_priority_enabled: "true" };
+  expect(policyPayload(draft)).toBeNull();
 });

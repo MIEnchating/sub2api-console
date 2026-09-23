@@ -26,6 +26,8 @@ type Props = {
   onSelectedChange: (models: string[]) => void;
   onConfirm: () => void;
   onRetry?: () => void;
+  description?: string;
+  emptyText?: string;
 };
 
 export function filterChannelModels(models: string[], search: string): string[] {
@@ -58,7 +60,9 @@ export function NewAPIChannelModelDialog(props: Props) {
       <DialogContent height="large" className="grid grid-rows-[auto_minmax(0,1fr)_auto]">
         <DialogHeader>
           <DialogTitle>选择上游模型</DialogTitle>
-          <DialogDescription>选择要添加到 New API 渠道的模型。</DialogDescription>
+          <DialogDescription>
+            {props.description ?? "选择要添加到 New API 渠道的模型。"}
+          </DialogDescription>
         </DialogHeader>
         <DialogBody className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
           <TableFilterToolbar>
@@ -95,7 +99,7 @@ export function NewAPIChannelModelDialog(props: Props) {
             )}
             {!props.pending && !props.error && visibleModels.length === 0 && (
               <div className="text-muted-foreground grid min-h-44 place-items-center p-6 text-center text-sm">
-                {search ? "没有匹配的模型" : "上游未返回模型"}
+                {search ? "没有匹配的模型" : (props.emptyText ?? "上游未返回模型")}
               </div>
             )}
             {visibleModels.length > 0 &&

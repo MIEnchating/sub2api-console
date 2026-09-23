@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -44,7 +45,18 @@ func (s *Service) VerifyCredential(ctx context.Context, credentials map[string]a
 		return keys[kid], nil
 	}, jwt.WithValidMethods([]string{"RS256"}), jwt.WithIssuer("https://auth.openai.com"), jwt.WithAudience("https://api.openai.com/v1"), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithLeeway(30*time.Second), jwt.WithJSONNumber())
 	if err != nil || !parsed.Valid {
-		return VerifiedIdentity{}, ErrIdentity
+		reason := "令牌签名或授权声明无效"
+		switch {
+		case errors.Is(err, jwt.ErrTokenExpired):
+			reason = "访问令牌已过期"
+		case errors.Is(err, jwt.ErrTokenMalformed):
+			reason = "访问令牌格式无效"
+		case errors.Is(err, jwt.ErrTokenNotValidYet), errors.Is(err, jwt.ErrTokenUsedBeforeIssued):
+			reason = "访问令牌尚未生效，请核对服务器时间"
+		case errors.Is(err, jwt.ErrTokenSignatureInvalid):
+			reason = "访问令牌签名无效"
+		}
+		return VerifiedIdentity{}, fmt.Errorf("%w：%s", ErrIdentity, reason)
 	}
 	claims, ok := parsed.Claims.(jwt.MapClaims)
 	if !ok {
@@ -59,11 +71,11 @@ func (s *Service) VerifyCredential(ctx context.Context, credentials map[string]a
 		result.Email = text(claims["email"])
 	}
 	if result.UserID == "" || result.WorkspaceID == "" || !validEmail(result.Email) || len(result.UserID) > 256 || len(result.WorkspaceID) > 256 || strings.ContainsAny(result.UserID+result.WorkspaceID, "\r\n\x00") {
-		return VerifiedIdentity{}, ErrIdentity
+		return VerifiedIdentity{}, fmt.Errorf("%w：官方用户、邮箱或工作区信息缺失或格式无效", ErrIdentity)
 	}
 	workspace, user := credentialIdentity(credentials)
 	if (workspace != "" && workspace != result.WorkspaceID) || (user != "" && user != result.UserID) || (text(credentials["email"]) != "" && !strings.EqualFold(text(credentials["email"]), result.Email)) {
-		return VerifiedIdentity{}, ErrIdentity
+		return VerifiedIdentity{}, fmt.Errorf("%w：输入资料与官方令牌的用户、邮箱或工作区不一致", ErrIdentity)
 	}
 	return result, nil
 }

@@ -49,6 +49,7 @@ import {
   type UpstreamEditValues,
 } from "../lib/upstream-edit-schema";
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
+import { StaleBindingCleanup } from "./stale-binding-cleanup";
 import { UpstreamConcurrencyDetails } from "./upstream-concurrency";
 import { notifyOperationError, operationErrorMessage } from "@/lib/operation-feedback";
 import { notifyTaskResult } from "@/lib/task-result-feedback";
@@ -165,6 +166,10 @@ export function upstreamEditPresentation(data: UpstreamConfiguration) {
 
 type CurrentUpstreamBinding = {
   key: string;
+  bindingId: number;
+  upstreamId: string;
+  upstreamKeyId: string;
+  groupId: string;
   accountId: string;
   name: string | null;
   exists: boolean;
@@ -190,6 +195,10 @@ function currentUpstreamBindings(groups: UpstreamConfiguration["groups"]): {
     for (const account of group.bound_accounts) {
       bindings.push({
         key: `${group.group_id}:${account.binding_id}:${account.account_id}`,
+        bindingId: account.binding_id,
+        upstreamId: group.upstream_id,
+        upstreamKeyId: account.upstream_key_id,
+        groupId: group.group_id ?? "",
         accountId: account.account_id,
         name: account.account_name,
         exists: account.account_exists,
@@ -292,14 +301,28 @@ function UpstreamAccountRowActions(props: {
         {activeAction === "探活测试" && pending && taskID ? (
           <TaskCancelButton taskId={taskID} compact />
         ) : null}
-        <TableActionButton
-          label="删除账号及上游 Key"
-          tone="danger"
-          disabled={actionPending || !props.binding.exists}
-          onClick={() => setDeleteOpen(true)}
-        >
-          <Trash2 />
-        </TableActionButton>
+        {props.binding.exists ? (
+          <TableActionButton
+            label="删除账号及上游 Key"
+            tone="danger"
+            disabled={actionPending}
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 />
+          </TableActionButton>
+        ) : (
+          <StaleBindingCleanup
+            host={props.binding.host}
+            bindingId={props.binding.bindingId}
+            upstreamId={props.binding.upstreamId}
+            accountId={props.binding.accountId}
+            upstreamKeyId={props.binding.upstreamKeyId}
+            groupId={props.binding.groupId}
+            groupName={props.binding.group}
+            disabled={actionPending}
+            onChanged={props.onChanged}
+          />
+        )}
       </div>
       <AccountDeleteDialog
         accountId={props.binding.accountId}
@@ -354,7 +377,7 @@ export function UpstreamAccounts(props: {
           <div className="bg-muted/40 text-muted-foreground hidden min-w-0 px-3 py-2 text-xs font-medium sm:grid sm:grid-cols-[minmax(0,1.2fr)_minmax(8rem,1fr)_8rem_auto] sm:items-center sm:gap-3">
             <span>账号</span>
             <span>上游分组</span>
-            <span>状态</span>
+            <span>上游分组状态</span>
             <span className="text-right">操作</span>
           </div>
           {summary.bindings.map((binding) => {
@@ -385,7 +408,9 @@ export function UpstreamAccounts(props: {
                   </span>
                 </div>
                 <div>
-                  <span className="text-muted-foreground block text-xs sm:hidden">状态</span>
+                  <span className="text-muted-foreground block text-xs sm:hidden">
+                    上游分组状态
+                  </span>
                   <Badge variant={groupStatus.badgeVariant}>{groupStatus.label}</Badge>
                 </div>
                 {props.interactive ? (
@@ -562,7 +587,9 @@ export function UpstreamEditDialog(props: Props) {
         return;
       }
     }
-    if (values.cookies.trim()) {
+    if (values.auth_mode === "newapi_session" && values.cookies.trim()) {
+      payload.cookies = { session: values.cookies.trim() };
+    } else if (values.cookies.trim()) {
       try {
         payload.cookies = parseStringMap(values.cookies, "Cookies");
       } catch (error) {
@@ -599,7 +626,8 @@ export function UpstreamEditDialog(props: Props) {
   );
   const showRefreshToken = authMode === "sub2api_user_token";
   const showAdminKey = authMode === "newapi_admin_key";
-  const showUserId = authMode === "newapi_admin_key";
+  const showNewApiSession = authMode === "newapi_session";
+  const showUserId = showAdminKey || showNewApiSession;
   const showManualLogin = ["sub2api_manual_login", "newapi_manual_login"].includes(authMode);
   const showVaultLogin = ["sub2api_user_login", "newapi_user_login"].includes(authMode);
   const headersAvailable =
@@ -956,6 +984,20 @@ export function UpstreamEditDialog(props: Props) {
                             </Field>
                           ) : null}
                         </>
+                      ) : null}
+                      {showNewApiSession ? (
+                        <Field label="Session Cookie" htmlFor="upstream-edit-session-cookie">
+                          <Input
+                            id="upstream-edit-session-cookie"
+                            type="password"
+                            autoComplete="off"
+                            placeholder={sensitiveFieldPlaceholder(
+                              data?.cookie_names.includes("session") === true,
+                              "输入 Session Cookie",
+                            )}
+                            {...form.register("cookies")}
+                          />
+                        </Field>
                       ) : null}
                       {headersAvailable ? (
                         <div className="grid min-w-0 gap-2 sm:col-span-2">

@@ -16,16 +16,15 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 )
 
-func TestAnimationPrecheckAsksOnlyTwoQuestionsAndSeparatesVerdicts(t *testing.T) {
+func TestAnimationPrecheckAsksOnlyCandyQuestionAndSeparatesVerdicts(t *testing.T) {
 	for _, tc := range []struct {
-		name, candy, cutoff, verdict string
-		fail                         bool
+		name, candy, verdict string
+		fail                 bool
 	}{
-		{"passed", "21", "我无法提供知识截止日期。", "passed", false},
-		{"wrong candy", "22", "我无法提供知识截止日期。", "not_passed", false},
-		{"date returned", "21", "知识截至2025年8月。", "not_passed", false},
-		{"unrecognized", "答案无法确定", "你好", "inconclusive", false},
-		{"request failed", "21", "", "error", true},
+		{"passed", "21", "passed", false},
+		{"wrong candy", "22", "not_passed", false},
+		{"other answer is degraded", "答案无法确定", "not_passed", false},
+		{"request failed", "", "error", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var prompts []string
@@ -48,16 +47,12 @@ func TestAnimationPrecheckAsksOnlyTwoQuestionsAndSeparatesVerdicts(t *testing.T)
 				if r.Header.Get("Authorization") != "Bearer "+fixtureSecret || r.Header.Get("X-Request-ID") == "" {
 					t.Error("missing bound credential or request ID")
 				}
-				if len(prompts) == 1 {
-					_, _ = fmt.Fprintf(w, `{"output_text":%q}`, tc.candy)
-					return
-				}
 				if tc.fail {
 					w.WriteHeader(403)
 					_, _ = fmt.Fprintf(w, `{"error":{"message":%q}}`, fixtureSecret)
 					return
 				}
-				_, _ = fmt.Fprintf(w, `{"output_text":%q}`, tc.cutoff)
+				_, _ = fmt.Fprintf(w, `{"output_text":%q}`, tc.candy)
 			})
 			var input modelcheck.AnimationRequest
 			if err := json.Unmarshal([]byte(`{"mode":"precheck","targets":[{"account_id":"1","model":"gpt-6-astra"}],"timeout_seconds":5}`), &input); err != nil {
@@ -85,10 +80,10 @@ func TestAnimationPrecheckAsksOnlyTwoQuestionsAndSeparatesVerdicts(t *testing.T)
 			if len(report.Result.Animations) != 1 || report.Result.Animations[0].Precheck.Verdict != tc.verdict {
 				t.Fatalf("task = %s", raw)
 			}
-			if len(prompts) != 2 || !strings.Contains(prompts[0], "圆形苹果") || prompts[1] != "你的知识截至日期是什么时候" {
+			if len(prompts) != 1 || !strings.Contains(prompts[0], "圆形苹果") {
 				t.Fatalf("prompts = %v", prompts)
 			}
-			if report.Result.Animations[0].SVG != "" || len(report.Result.Animations[0].Precheck.Questions) != 2 || strings.Contains(string(raw), fixtureSecret) {
+			if report.Result.Animations[0].SVG != "" || len(report.Result.Animations[0].Precheck.Questions) != 1 || strings.Contains(string(raw), fixtureSecret) {
 				t.Fatalf("unexpected result = %s", raw)
 			}
 			statuses, err := f.service.AccountStatuses(context.Background())
@@ -99,7 +94,7 @@ func TestAnimationPrecheckAsksOnlyTwoQuestionsAndSeparatesVerdicts(t *testing.T)
 	}
 }
 
-func TestPrecheckSchedulePersistsModeAndRunsOnlyTwoQuestions(t *testing.T) {
+func TestPrecheckSchedulePersistsModeAndRunsOnlyCandyQuestion(t *testing.T) {
 	var mu sync.Mutex
 	var prompts []string
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
@@ -110,11 +105,7 @@ func TestPrecheckSchedulePersistsModeAndRunsOnlyTwoQuestions(t *testing.T) {
 		mu.Lock()
 		prompts = append(prompts, body.Input)
 		mu.Unlock()
-		answer := "21"
-		if body.Input == "你的知识截至日期是什么时候" {
-			answer = "我无法提供日期。"
-		}
-		_, _ = fmt.Fprintf(w, `{"output_text":%q}`, answer)
+		_, _ = fmt.Fprint(w, `{"output_text":"21"}`)
 	})
 	var schedule modelcheck.AnimationSchedule
 	if err := json.Unmarshal([]byte(`{"mode":"precheck","account_id":"1","model":"gpt-6-astra","enabled":true,"interval_minutes":10,"timeout_seconds":5,"version":0}`), &schedule); err != nil {
@@ -140,7 +131,7 @@ func TestPrecheckSchedulePersistsModeAndRunsOnlyTwoQuestions(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(prompts) != 2 {
+	if len(prompts) != 1 {
 		t.Fatalf("prompts = %v", prompts)
 	}
 }
@@ -197,12 +188,15 @@ func TestCustomPrecheckHidesCredentialsAndDoesNotBindAnAccount(t *testing.T) {
 	}
 	task := finished(t, f)
 	raw, _ := json.Marshal(task)
-	if task.Status != "failed" || strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), server.URL) {
+	if task.Status != "failed" || strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), "api_key") {
 		t.Fatalf("task = %s", raw)
 	}
 	rows := task.Result["animations"].([]modelcheck.AnimationResult)
 	if !strings.HasPrefix(rows[0].AccountID, "custom-") || rows[0].Precheck.Verdict != "error" {
 		t.Fatalf("results = %#v", rows)
+	}
+	if rows[0].Endpoint != server.URL || rows[0].Platform != "openai" {
+		t.Fatal("custom precheck lost endpoint metadata")
 	}
 }
 

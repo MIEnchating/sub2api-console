@@ -32,7 +32,13 @@ it.each(["discovery", "apply"] as const)(
       blocked_models: [],
       models: [{ model: "model-a", account_count: 1 }],
       accounts: [
-        { account_id: "41", account_name: "账号 A", models: ["model-a"], probe_model: "model-a" },
+        {
+          account_id: "41",
+          account_name: "账号 A",
+          models: ["model-a"],
+          enabled_models: ["model-a"],
+          probe_model: "model-a",
+        },
       ],
       fingerprint: "catalog",
     };
@@ -58,6 +64,8 @@ it.each(["discovery", "apply"] as const)(
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
     if (phase === "apply") {
       await userEvent.click(await screen.findByRole("button", { name: "同步 1 个账号" }));
     }

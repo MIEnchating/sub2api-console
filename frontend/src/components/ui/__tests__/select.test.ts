@@ -20,6 +20,7 @@ describe("select value labels", () => {
   it.each([
     ["sub2api_user_token", "Token + 刷新 Token"],
     ["newapi_admin_key", "Admin Key + 用户 ID"],
+    ["newapi_session", "Session Cookie + 用户 ID"],
     ["newapi_user_token", "Token"],
     ["sub2api_user_login", "密码箱登录"],
     ["newapi_user_login", "密码箱登录"],

@@ -105,7 +105,7 @@ describe("账号操作", () => {
       "探活测试",
       "手动熔断（停止调度）",
       "同步账号倍率",
-      "设置人工优先位",
+      "设置手动控制",
       "更多账号操作",
     ]) {
       expect(actions.getByRole("button", { name: label })).toBeVisible();
@@ -120,7 +120,7 @@ describe("账号操作", () => {
     { name: "正常", overrides: {}, count: 6 },
     { name: "已排除", overrides: { health: "excluded", routing_state: "excluded" }, count: 5 },
     { name: "熔断", overrides: { health: "fused", routing_state: "fused" }, count: 6 },
-    { name: "人工优先", overrides: { manual_priority: 3 }, count: 6 },
+    { name: "手动控制", overrides: { manual_priority: 3 }, count: 6 },
   ])("$name 账号仅展示具体操作，更多入口固定在三列两行的右下角", (fixture) => {
     render(<AccountOperationButtons {...operationProps(fixture.overrides)} />);
 
@@ -164,7 +164,7 @@ describe("账号操作", () => {
   it.each([
     { label: "探活测试", callback: "onProbe" as const },
     { label: "同步账号倍率", callback: "onRateSync" as const },
-    { label: "设置人工优先位", callback: "onManualPriority" as const },
+    { label: "设置手动控制", callback: "onManualPriority" as const },
     { label: "查看并编辑账号", callback: "onEdit" as const },
   ])("直接点击 $label 时进入对应操作", async (fixture) => {
     const user = userEvent.setup();
@@ -209,7 +209,7 @@ describe("账号操作", () => {
   });
 
   it.each([false, true])(
-    "人工优先账号的余额同步设置为 %s 时允许同步倍率和调整优先位，禁用自动处置",
+    "手动控制账号的余额同步设置为 %s 时允许同步倍率和调整优先位，禁用自动处置",
     (syncBalance) => {
       render(
         <AccountOperationButtons
@@ -220,7 +220,7 @@ describe("账号操作", () => {
         expect(screen.getByRole("button", { name: label })).toBeDisabled();
       }
       expect(screen.getByRole("button", { name: "同步账号倍率" })).toBeEnabled();
-      expect(screen.getByRole("button", { name: "调整人工优先位" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "调整手动控制" })).toBeEnabled();
     },
   );
 

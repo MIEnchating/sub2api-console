@@ -40,14 +40,6 @@ test("账号快捷入口预选正确账号，完成模型检测后返回账号�
       "/api/setup/status": { initialized: true, configuration_errors: [] },
       "/api/auth/session": { authenticated: true, username: "隔离测试" },
       "/api/accounts": rows,
-      "/api/accounts/traffic": {
-        enabled: true,
-        observed_at: new Date().toISOString(),
-        accounts: [
-          { account_id: "41", current_requests: 2, waiting_requests: 0, tracked: true },
-          { account_id: "40", current_requests: 0, waiting_requests: 3, tracked: true },
-        ],
-      },
       "/api/groups": [],
       "/api/policy": { advanced_policy: { manual_priority: { reserved_max: 10 } } },
       "/api/inspection/automation": {
@@ -80,30 +72,18 @@ test("账号快捷入口预选正确账号，完成模型检测后返回账号�
   });
   await page.goto("/accounts");
   const row = page.locator("tbody tr").filter({ hasText: "联动账号" });
-  await expect(row.getByLabel("账号 41：真实请求 · 2")).toBeVisible();
   await row.getByRole("button", { name: "模型检测", exact: true }).click();
   await expect(page).toHaveURL(/\/model-check\?account_id=41/);
   await expect(page.getByRole("checkbox", { name: /联动账号/ })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: /选择账号 其他账号/ })).toHaveCount(0);
   await expect(page.getByText("联动账号（#41）", { exact: true })).toHaveCount(0);
-  await page.getByRole("tab", { name: "动画检测", exact: true }).click();
+  await page.goto("/animation-check?account_id=41");
   await expect(page.getByRole("article", { name: "账号 联动账号" })).toBeVisible();
   await expect(page.getByRole("article", { name: "账号 其他账号" })).toHaveCount(0);
   await page.getByRole("button", { name: "查看全部账号" }).click();
   await expect(page.getByRole("article", { name: "账号 其他账号" })).toBeVisible();
-  await expect(
-    page.getByRole("article", { name: "账号 联动账号" }).getByLabel("账号 41：真实请求 · 2"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "清空选择", exact: true }).click();
-  await page.getByRole("button", { name: "选择实时流量（1）" }).click();
-  await expect(
-    page.getByRole("article", { name: "账号 联动账号" }).getByRole("checkbox"),
-  ).toBeChecked();
-  await expect(
-    page.getByRole("article", { name: "账号 其他账号" }).getByRole("checkbox"),
-  ).not.toBeChecked();
-  await page.getByRole("tab", { name: "常规检测", exact: true }).click();
-  await page.getByRole("button", { name: "选择实时流量（1）" }).click();
+  await page.goto("/model-check");
+  await page.getByRole("checkbox", { name: "联动账号 ID 41" }).click();
   await page.getByRole("checkbox", { name: /gpt-5.6-sol/ }).click();
   await page.getByRole("button", { name: /开始检测/ }).click();
   await expect(page.getByRole("button", { name: "查看账号 41 检测统计" })).toHaveText("符合特征");

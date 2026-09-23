@@ -8,11 +8,11 @@ import { AccountModelSyncDialog } from "../account-model-sync-dialog";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function renderModelSync(result: {
+async function renderModelSync(result: {
   phase: "discovery" | "apply";
   status: "failed" | "cancelled";
   message: string;
-}): void {
+}): Promise<void> {
   const discovery: Task = {
     id: "discovery",
     skill: "account-model-sync",
@@ -39,7 +39,13 @@ function renderModelSync(result: {
     blocked_models: [],
     models: [{ model: "model-a", account_count: 1 }],
     accounts: [
-      { account_id: "41", account_name: "账号 A", models: ["model-a"], probe_model: "model-a" },
+      {
+        account_id: "41",
+        account_name: "账号 A",
+        models: ["model-a"],
+        enabled_models: ["model-a"],
+        probe_model: "model-a",
+      },
     ],
     fingerprint: "catalog",
   };
@@ -48,7 +54,8 @@ function renderModelSync(result: {
     vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       let body: unknown;
-      if (path.endsWith("/models/discover") || path.endsWith("/tasks/discovery"))
+      if (path.includes("dictionaries")) body = { items: [] };
+      else if (path.endsWith("/models/discover") || path.endsWith("/tasks/discovery"))
         body = result.phase === "discovery" ? failed : discovery;
       else if (path.endsWith("/models/preview")) body = preview;
       else if (path.endsWith("/models/apply") || path.endsWith("/tasks/apply")) body = failed;
@@ -73,10 +80,12 @@ function renderModelSync(result: {
       />
     </QueryClientProvider>,
   );
+  await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+  await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 }
 
 it("模型发现任务在生成逐账号结果前失败时显示真实失败原因", async () => {
-  renderModelSync({
+  await renderModelSync({
     phase: "discovery",
     status: "failed",
     message: "模型发现失败：管理目标配置已变更",
@@ -87,7 +96,7 @@ it("模型发现任务在生成逐账号结果前失败时显示真实失败原�
 
 it("模型应用在目录复核阶段失败时显示失败原因而非完成提示", async () => {
   const user = userEvent.setup();
-  renderModelSync({
+  await renderModelSync({
     phase: "apply",
     status: "failed",
     message: "模型目录在排队期间发生变化，请重新读取",
@@ -101,7 +110,7 @@ it("模型应用在目录复核阶段失败时显示失败原因而非完成提�
 
 it("模型应用任务被取消且尚无逐账号结果时显示取消状态", async () => {
   const user = userEvent.setup();
-  renderModelSync({ phase: "apply", status: "cancelled", message: "账号模型同步已取消" });
+  await renderModelSync({ phase: "apply", status: "cancelled", message: "账号模型同步已取消" });
 
   await user.click(await screen.findByRole("button", { name: "同步 1 个账号" }));
 

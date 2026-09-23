@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 
-test("从账号地址向上移入浮层时保留地址，可选中复制且不会触发流量提示", async ({ page }) => {
+test("从账号地址向上移入浮层时保留地址并可选中复制", async ({ page }) => {
   const host = "app.haoshuai.cc.cd";
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -14,11 +14,6 @@ test("从账号地址向上移入浮层时保留地址，可选中复制且不�
       "/api/policy": { advanced_policy: { manual_priority: { reserved_max: 10 } } },
       "/api/inspection/automation": { enabled: false, running: false },
       "/api/model-checks/account-statuses": [],
-      "/api/accounts/traffic": {
-        enabled: true,
-        observed_at: new Date().toISOString(),
-        accounts: [{ account_id: "41", current_requests: 0, waiting_requests: 0, tracked: true }],
-      },
     };
     if (path.endsWith("/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": fixture\n\n" });
@@ -37,7 +32,7 @@ test("从账号地址向上移入浮层时保留地址，可选中复制且不�
   const x = triggerBox.x + triggerBox.width / 2;
   const gapY = (triggerBox.y + popupBox.y + popupBox.height) / 2;
   await page.mouse.move(x, gapY, { steps: 8 });
-  // 等到浏览器处理此次指针移动，确认间隙不会穿透到上方流量触发器。
+  // 等到浏览器处理此次指针移动，确认间隙不会关闭地址浮层。
   await expect(tooltip).toBeVisible();
   expect(
     await tooltip.evaluate(
@@ -55,6 +50,4 @@ test("从账号地址向上移入浮层时保留地址，可选中复制且不�
   await page.keyboard.press("Escape");
   await page.mouse.move(0, 0);
   await expect(tooltip).toHaveCount(0);
-  await row.getByLabel("账号 41：未观测到请求").hover();
-  await expect(page.getByRole("tooltip")).toContainText("当前没有观测到请求槽占用");
 });

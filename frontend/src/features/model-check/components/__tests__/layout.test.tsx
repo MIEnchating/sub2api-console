@@ -161,7 +161,7 @@ describe("模型检测响应式布局", () => {
     expect(markup).not.toContain("检测失败");
   });
 
-  it("人工优先位账号保留状态标记并允许加入模型检测矩阵", () => {
+  it("手动控制账号保留状态标记并允许加入模型检测矩阵", () => {
     const markup = selectionMarkup([
       { ...account, manual_priority: 3, manual_sync_balance_multiplier: true },
     ]);

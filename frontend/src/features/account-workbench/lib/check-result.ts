@@ -11,6 +11,14 @@ export function checkLabel(check: Record<string, unknown> | undefined): string {
   return checkVerdictLabels[String(check?.verdict)] || "待复核结论";
 }
 
-export function completedCheck(check: Record<string, unknown> | undefined): boolean {
-  return Boolean(check && !checkError(check) && checkVerdictLabels[String(check.verdict)]);
+export function runItemMessage(item: {
+  status: string;
+  message: string;
+  check?: Record<string, unknown>;
+}): string {
+  const error = checkError(item.check);
+  if (item.status === "review" && error && !item.message.includes(error)) {
+    return `${item.message}；检测出错：${error}`;
+  }
+  return item.message;
 }

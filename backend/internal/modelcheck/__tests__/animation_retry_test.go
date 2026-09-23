@@ -30,9 +30,13 @@ func TestAnimationRetriesTransientResponseAndRecordsAttemptCount(t *testing.T) {
 	if _, err := f.service.EnqueueAnimation(context.Background(), request("1")); err != nil {
 		t.Fatal(err)
 	}
-	row := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)[0]
+	task := finished(t, f)
+	row := task.Result["animations"].([]modelcheck.AnimationResult)[0]
 	if calls != 2 || row.Status != "succeeded" || row.RetryCount != 1 || row.SVG == "" {
 		t.Fatalf("transient generation did not retry: calls=%d row=%#v", calls, row)
+	}
+	if task.Result["started_at"] == nil || task.Result["completed_at"] == nil || task.Result["duration_ms"] == nil {
+		t.Fatalf("task runtime timing was not persisted: %#v", task.Result)
 	}
 	if len(requestIDs) != 2 || requestIDs[0] == requestIDs[1] || !strings.HasSuffix(requestIDs[1], "-retry-1") {
 		t.Fatalf("retry request IDs=%#v", requestIDs)
@@ -255,7 +259,10 @@ func TestCustomAnimationRetryKeepsCredentialsOnlyInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), input.Custom.BaseURL) {
+	if strings.Contains(string(raw), fixtureSecret) || strings.Contains(string(raw), "api_key") {
 		t.Fatal("custom retry persisted credentials")
+	}
+	if row.Endpoint != input.Custom.BaseURL || row.Platform != "openai" {
+		t.Fatal("custom retry lost endpoint metadata")
 	}
 }

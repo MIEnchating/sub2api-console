@@ -7,10 +7,7 @@ const modelID = z
   .max(256, "模型 ID 不能超过 256 个字符")
   .refine((value) => !/\p{Cc}/u.test(value), "模型 ID 不能包含控制字符");
 export const animationSchema = z.object({
-  account_ids: z
-    .array(z.string().regex(/^[1-9]\d*$/))
-    .min(1, "请选择至少一个账号")
-    .max(20, "单次最多检测 20 个账号"),
+  account_ids: z.array(z.string().regex(/^[1-9]\d*$/)).min(1, "请选择至少一个账号"),
   unified_model: modelID,
   timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
 });
@@ -57,27 +54,48 @@ export type CustomAnimationForm = z.infer<typeof customAnimationSchema>;
 
 export const animationScheduleSchema = z
   .object({
-    precheck_questions: z.array(z.enum(["candy", "knowledge-cutoff"])).optional(),
+    precheck_questions: z.array(z.enum(["candy"])).optional(),
     mode: z.enum(["animation", "precheck", "both"]).optional(),
-    detection_types: z
-      .array(z.enum(["animation", "precheck"]))
-      .min(1, "请选择至少一种检测内容")
-      .optional(),
+    schedule_type: z.enum(["interval", "daily"]).optional(),
+    daily_time: z.string().optional(),
+    daily_times: z.array(z.string()).optional(),
+    timezone: z.literal("Asia/Shanghai").optional(),
     account_id: z.string().regex(/^[1-9]\d*$/),
     enabled: z.boolean(),
     model: z.string(),
-    interval_minutes: z
-      .number()
-      .int()
-      .min(1, "间隔不能小于 1 分钟")
-      .max(1440, "间隔不能超过 1440 分钟"),
+    interval_minutes: z.number().int(),
     timeout_seconds: z.number().int().min(5, "超时不能小于 5 秒").max(120, "超时不能超过 120 秒"),
     version: z.number().int().min(0),
   })
   .superRefine((value, context) => {
     if (
-      (value.detection_types?.includes("precheck") ??
-        (value.mode === "precheck" || value.mode === "both")) &&
+      value.schedule_type !== "daily" &&
+      (value.interval_minutes < 1 || value.interval_minutes > 1440)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["interval_minutes"],
+        message: "检测间隔必须在 1 到 1440 分钟之间",
+      });
+    }
+    if (value.schedule_type === "daily") {
+      const times = value.daily_times ?? (value.daily_time ? [value.daily_time] : []);
+      if (
+        times.length < 1 ||
+        times.length > 24 ||
+        times.some((time) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(time))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["daily_times"],
+          message: "请选择每天检测的时间",
+        });
+      } else if (new Set(times).size !== times.length) {
+        context.addIssue({ code: "custom", path: ["daily_times"], message: "检测时间不能重复" });
+      }
+    }
+    if (
+      (value.mode === "precheck" || value.mode === "both") &&
       value.precheck_questions !== undefined &&
       (value.precheck_questions.length === 0 ||
         new Set(value.precheck_questions).size !== value.precheck_questions.length)
@@ -99,17 +117,3 @@ export const animationScheduleSchema = z
     }
   });
 export type AnimationScheduleForm = z.infer<typeof animationScheduleSchema>;
-
-export function scheduleDetectionTypes(
-  mode?: AnimationScheduleForm["mode"],
-): ("animation" | "precheck")[] {
-  if (mode === "both") return ["precheck", "animation"];
-  if (mode === "precheck") return ["precheck"];
-  return ["animation"];
-}
-
-export function scheduleMode(types: ("animation" | "precheck")[]): AnimationScheduleForm["mode"] {
-  if (!types.includes("precheck")) return undefined;
-  if (types.includes("animation")) return "both";
-  return "precheck";
-}

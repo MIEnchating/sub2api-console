@@ -4,7 +4,6 @@ import {
   allocationOverrides,
   validAllocationOverrides,
 } from "./features/policy/components/upstream-allocation-overrides";
-import { AccountTrafficProvider } from "@/features/accounts/components/account-traffic";
 import { PlatformSettingsPage } from "@/features/config/components/platform-settings-page";
 import {
   withOnboardingModelMappings,
@@ -57,6 +56,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "reac
 import { motion, useReducedMotion } from "motion/react";
 import {
   Activity,
+  ListChecks,
   Files,
   PanelsTopLeft,
   Ban,
@@ -475,6 +475,7 @@ export type View =
   | "pricing-config"
   | "auto-inspection"
   | "model-check"
+  | "animation-check"
   | "traffic"
   | "logs"
   | "alerts"
@@ -511,6 +512,7 @@ export const navItems: Array<{
     | "/pricing-config"
     | "/auto-inspection"
     | "/model-check"
+    | "/animation-check"
     | "/traffic"
     | "/logs"
     | "/alerts"
@@ -547,6 +549,7 @@ export const navItems: Array<{
     icon: Fingerprint,
     to: "/model-check",
   },
+  { id: "animation-check", label: "动画检测", icon: ScanSearch, to: "/animation-check" },
   {
     id: "traffic",
     label: "流量排行",
@@ -614,6 +617,7 @@ export const navSections: Array<{ label: string; itemIDs: View[] }> = [
       "account-workbench",
       "auto-inspection",
       "model-check",
+      "animation-check",
       "traffic",
       "trace",
       "alerts",
@@ -664,6 +668,7 @@ const viewByPath: Record<string, View> = {
   "/pricing-config": "pricing-config",
   "/auto-inspection": "auto-inspection",
   "/model-check": "model-check",
+  "/animation-check": "animation-check",
   "/traffic": "traffic",
   "/logs": "logs",
   "/alerts": "alerts",
@@ -1481,7 +1486,7 @@ export { schedulingStrategyOptions };
 const fallbackLabels = fallbackModeDictionary;
 const autoApplyLabels = autoApplyFieldDictionary;
 const statusLabels: Record<string, string> = {
-  manual_priority: "人工优先位",
+  manual_priority: "手动控制",
   ok: "正常",
   partial: "部分完成",
   warning: "警告",
@@ -1828,6 +1833,13 @@ export function policyPayload(value: PolicyDraft): PolicyUpdate | null {
   );
   const trafficEvidenceInterval = policyAdvancedValue(value, "traffic", "refresh_seconds");
   const configuredManualPriorityMax = policyAdvancedValue(value, "manual_priority", "reserved_max");
+  const manualLatencyPriority = policyAdvancedValue(
+    value,
+    "manual_priority",
+    "latency_priority_enabled",
+  );
+  if (manualLatencyPriority !== undefined && typeof manualLatencyPriority !== "boolean")
+    return null;
   const manualPriorityMax =
     configuredManualPriorityMax === undefined ? 10 : configuredManualPriorityMax;
   const accountRateInterval = policyAdvancedValue(value, "account_rate_sync", "interval_seconds");
@@ -3536,6 +3548,7 @@ export function manualAuthIncomplete(
     refreshToken: string;
     adminKey: string;
     userId: string;
+    cookies: string;
   },
   hasCustomHeaders: boolean,
 ): boolean {
@@ -3544,6 +3557,9 @@ export function manualAuthIncomplete(
     const hasUserId = credentials.userId.trim() !== "";
     if (!hasAdminKey && !hasUserId) return !hasCustomHeaders;
     return !hasAdminKey || !hasUserId;
+  }
+  if (authMode === "newapi_session") {
+    return credentials.cookies.trim() === "" || credentials.userId.trim() === "";
   }
   if (authMode === "sub2api_user_token") {
     const hasAccessToken = credentials.accessToken.trim() !== "";
@@ -3642,6 +3658,7 @@ export function ManualAuthForm(props: {
     saveToVault: false,
     entry: "",
     headers: "",
+    cookies: "",
   });
   const [entry, setEntry] = useState("");
   const [acceptLoginAgreement, setAcceptLoginAgreement] = useState(false);
@@ -3665,6 +3682,7 @@ export function ManualAuthForm(props: {
         saveToVault: false,
         entry: "",
         headers: "",
+        cookies: "",
       });
       setEntry("");
       setAcceptLoginAgreement(false);
@@ -3683,6 +3701,7 @@ export function ManualAuthForm(props: {
     onError: (error) => notifyOperationError(error, "凭证验证失败"),
   });
   const usesAdminKey = authMode === "newapi_admin_key";
+  const usesNewApiSession = authMode === "newapi_session";
   const usesSub2ApiToken = authMode === "sub2api_user_token";
   const usesUserToken = authMode === "newapi_user_token" || authMode === "bearer_token";
   const usesManualLogin = ["sub2api_manual_login", "newapi_manual_login"].includes(authMode);
@@ -3715,6 +3734,7 @@ export function ManualAuthForm(props: {
     incomplete = !entry;
   } else if (
     !usesAdminKey &&
+    !usesNewApiSession &&
     !usesSub2ApiToken &&
     !usesUserToken &&
     authMode !== "custom_headers"
@@ -3742,6 +3762,9 @@ export function ManualAuthForm(props: {
         if (usesAdminKey) {
           if (credentials.adminKey.trim()) payload.admin_key = credentials.adminKey.trim();
           if (credentials.userId.trim()) payload.user_id = credentials.userId.trim();
+        } else if (usesNewApiSession) {
+          if (credentials.userId.trim()) payload.user_id = credentials.userId.trim();
+          if (credentials.cookies.trim()) payload.cookies = { session: credentials.cookies.trim() };
         } else if (usesSub2ApiToken) {
           if (credentials.accessToken.trim()) payload.access_token = credentials.accessToken.trim();
           if (credentials.refreshToken.trim())
@@ -3817,6 +3840,32 @@ export function ManualAuthForm(props: {
                   ...current,
                   userId: event.target.value,
                 }))
+              }
+            />
+          </FormField>
+        </div>
+      )}
+      {usesNewApiSession && (
+        <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <FormField label="Session Cookie" htmlFor={`${fieldID}-session-cookie`}>
+            <Input
+              id={`${fieldID}-session-cookie`}
+              type="password"
+              autoComplete="off"
+              value={credentials.cookies}
+              placeholder="输入 Session Cookie"
+              onChange={(event) =>
+                setCredentials((current) => ({ ...current, cookies: event.target.value }))
+              }
+            />
+          </FormField>
+          <FormField label="User ID" htmlFor={`${fieldID}-session-user-id`}>
+            <Input
+              id={`${fieldID}-session-user-id`}
+              autoComplete="off"
+              value={credentials.userId}
+              onChange={(event) =>
+                setCredentials((current) => ({ ...current, userId: event.target.value }))
               }
             />
           </FormField>
@@ -4043,7 +4092,7 @@ export function AccountSelectionToolbar(props: {
             />
           }
         >
-          <RefreshCw />
+          <ListChecks aria-hidden="true" />
         </TooltipTrigger>
         <TooltipContent>同步已选择账号模型</TooltipContent>
       </Tooltip>
@@ -4069,11 +4118,7 @@ export function AccountSelectionToolbar(props: {
 }
 
 export function AccountsPage() {
-  return (
-    <AccountTrafficProvider>
-      <AccountsPageContent />
-    </AccountTrafficProvider>
-  );
+  return <AccountsPageContent />;
 }
 
 function AccountsPageContent() {
@@ -4525,10 +4570,10 @@ function AccountsPageContent() {
                 setShowManualPriorityAccounts(checked);
                 pagination.setCurrentPage(1);
               }}
-              aria-label="显示人工优先账号"
+              aria-label="显示手动控制账号"
             />
             <label className="cursor-pointer text-sm" htmlFor="accounts-show-manual-priority">
-              显示人工优先账号
+              显示手动控制账号
             </label>
           </div>
         </TableFilterToolbar>
@@ -5771,7 +5816,7 @@ const AccountRow = React.memo(function AccountRow(props: {
         pending={pending || activeAction !== null}
         onOpenChange={setManualPriorityOpen}
         onAssign={({ priority, loadFactor, concurrency, schedulable, syncBalanceMultiplier }) => {
-          void startTask("设置人工优先位", () =>
+          void startTask("设置手动控制", () =>
             api.setAccountManualPriority(
               account.id,
               priority,
@@ -5783,7 +5828,7 @@ const AccountRow = React.memo(function AccountRow(props: {
           ).then((started) => started && setManualPriorityOpen(false));
         }}
         onClear={() => {
-          void startTask("取消人工优先位", () => api.clearAccountManualPriority(account.id)).then(
+          void startTask("取消手动控制", () => api.clearAccountManualPriority(account.id)).then(
             (started) => started && setManualPriorityOpen(false),
           );
         }}
@@ -6379,7 +6424,7 @@ export function AlertsPage() {
                 <RunRow
                   key={alert.incident_key}
                   status={status}
-                  title={`${alertTypeLabel(alert.event_type, alert.status)} · ${alertObjectLabel(alert)}`}
+                  title={`${alertTypeLabel(alert.event_type, alert.status, alert.cause_code)} · ${alertObjectLabel(alert)}`}
                   detail={`${alertCauseLabel(alert.cause_code, alert.status)} · 首次发现 ${formatDate(alert.first_seen_at)} · 最近检测 ${formatDate(alert.last_seen_at)}${alert.delivered_at ? ` · 最近通知 ${formatDate(alert.delivered_at)}` : ""}`}
                   state={`${alertStatusLabel(alert.status)} · ${alertDeliveryLabel(alert.delivery_status, alert.delivery_attempts)}`}
                   icon={<BellRing size={15} />}
@@ -6895,11 +6940,18 @@ export function OnboardingPage() {
         (value) => value.trim() !== "",
       );
       if (
-        ["sub2api_user_token", "newapi_admin_key", "newapi_user_token", "bearer_token"].includes(
-          authMode,
-        ) &&
+        [
+          "sub2api_user_token",
+          "newapi_admin_key",
+          "newapi_session",
+          "newapi_user_token",
+          "bearer_token",
+        ].includes(authMode) &&
         manualAuthIncomplete(authMode, credentials, headerAuthenticationConfigured)
       ) {
+        if (authMode === "newapi_session") {
+          throw new Error("请填写 Session Cookie 和用户 ID");
+        }
         throw new Error("请填写完整鉴权凭据，或配置包含鉴权信息的自定义 Header");
       }
       if (authMode === "sub2api_user_token") {
@@ -6910,6 +6962,9 @@ export function OnboardingPage() {
       } else if (authMode === "newapi_admin_key") {
         if (credentials.adminKey.trim()) payload.admin_key = credentials.adminKey.trim();
         if (credentials.userId.trim()) payload.user_id = credentials.userId.trim();
+      } else if (authMode === "newapi_session") {
+        if (credentials.userId.trim()) payload.user_id = credentials.userId.trim();
+        if (credentials.cookies.trim()) payload.cookies = { session: credentials.cookies.trim() };
       } else if (["newapi_user_token", "bearer_token"].includes(authMode)) {
         if (credentials.accessToken.trim()) payload.access_token = credentials.accessToken.trim();
       } else if (["sub2api_user_login", "newapi_user_login"].includes(authMode)) {
@@ -7392,6 +7447,7 @@ export function OnboardingPage() {
     entryInteractionDisabledReason = "请选择带明确平台的本地分组以确定账号类型";
   }
   const usesAdminKey = authMode === "newapi_admin_key";
+  const usesNewApiSession = authMode === "newapi_session";
   const usesSub2ApiToken = authMode === "sub2api_user_token";
   const usesToken = ["newapi_user_token", "bearer_token"].includes(authMode);
   const usesVaultLogin = ["sub2api_user_login", "newapi_user_login"].includes(authMode);
@@ -7564,6 +7620,37 @@ export function OnboardingPage() {
                   <FormField htmlFor={`${fieldID}-user-id`} label="用户 ID">
                     <Input
                       id={`${fieldID}-user-id`}
+                      value={credentials.userId}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          userId: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                </div>
+              )}
+              {usesNewApiSession && (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <FormField htmlFor={`${fieldID}-session-cookie`} label="Session Cookie">
+                    <Input
+                      id={`${fieldID}-session-cookie`}
+                      type="password"
+                      autoComplete="off"
+                      value={credentials.cookies}
+                      onChange={(event) =>
+                        setCredentials((current) => ({
+                          ...current,
+                          cookies: event.target.value,
+                        }))
+                      }
+                    />
+                  </FormField>
+                  <FormField htmlFor={`${fieldID}-session-user-id`} label="用户 ID">
+                    <Input
+                      id={`${fieldID}-session-user-id`}
+                      autoComplete="off"
                       value={credentials.userId}
                       onChange={(event) =>
                         setCredentials((current) => ({
@@ -12584,7 +12671,7 @@ export function PolicyPage() {
                       }
                     />
                     <PolicyNumberField
-                      label="人工优先位范围"
+                      label="手动控制范围"
                       description="保留优先级 1 至 N；自动调度从 N+1 开始"
                       min={1}
                       max={1000}
@@ -12595,6 +12682,27 @@ export function PolicyPage() {
                             current,
                             "manual_priority",
                             "reserved_max",
+                            value,
+                          ),
+                        )
+                      }
+                    />
+                    <PolicySwitchRow
+                      label="按延迟调整手动控制优先级"
+                      description="默认关闭，仅完全模式执行。按同模型近期成功请求的首字 P95 延迟重排实际优先级；只调整优先级，保留调度开关、并发和负载因子。样本不足或暂停账号保持原值。"
+                      checked={
+                        policyAdvancedValue(
+                          current,
+                          "manual_priority",
+                          "latency_priority_enabled",
+                        ) === true
+                      }
+                      onCheckedChange={(value) =>
+                        setDraft(
+                          withPolicyAdvancedValue(
+                            current,
+                            "manual_priority",
+                            "latency_priority_enabled",
                             value,
                           ),
                         )
@@ -14121,7 +14229,7 @@ export function PolicyScopeEditor(props: PolicyScopeEditorProps) {
     <>
       <PolicyConfigCard
         title="账号托管"
-        description="人工优先级账号始终由人工控制；其他账号默认由调度引擎统一管理。"
+        description="手动控制账号始终由人工控制；其他账号默认由调度引擎统一管理。"
       >
         <div className="col-span-full">
           <PolicySwitchRow

@@ -84,11 +84,12 @@ function card(id: string) {
 
 it("重试请求尚未返回时在本账号显示启动中，其他账号可继续重试并开始检测", async () => {
   const view = setup();
-  fireEvent.click(card("41").getByRole("button", { name: "重试 41" }));
+  fireEvent.click(card("41").getByRole("button", { name: "重测 41" }));
   expect(await card("41").findByRole("status", { name: "正在启动检测" })).toBeVisible();
   expect(card("41").getByRole("checkbox")).toHaveAttribute("aria-disabled", "true");
-  expect(card("42").getByRole("button", { name: "重试 42" })).toBeEnabled();
-  fireEvent.click(card("42").getByRole("button", { name: "重试 42" }));
+  expect(card("41").getByRole("button", { name: "重测 41" })).toBeDisabled();
+  expect(card("42").getByRole("button", { name: "重测 42" })).toBeEnabled();
+  fireEvent.click(card("42").getByRole("button", { name: "重测 42" }));
   expect(await card("42").findByRole("status", { name: "正在启动检测" })).toBeVisible();
   await act(async () => {
     view.posts[0]!.resolve(Response.json(running("41")));
@@ -100,9 +101,8 @@ it("重试请求尚未返回时在本账号显示启动中，其他账号可继�
     target: { value: "new-model" },
   });
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
-  const dialog = await screen.findByRole("dialog", { name: "确认动画检测范围" });
-  fireEvent.click(within(dialog).getByRole("button", { name: "确认并开始检测" }));
   await waitFor(() => expect(view.posts).toHaveLength(3));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(view.posts[2]!.request.targets).toEqual([{ account_id: "43", model: "new-model" }]);
   await act(async () => {
     view.posts[1]!.resolve(Response.json(running("42")));
@@ -123,19 +123,19 @@ it("恢复多个进行中任务时各卡片独立显示状态，一个完成后�
       status: "cancelled",
     }),
   );
-  expect(await card("41").findByRole("button", { name: "重试 41" })).toBeEnabled();
+  expect(await card("41").findByRole("button", { name: "重测 41" })).toBeEnabled();
   expect(card("42").getByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
 });
 
 it("一个账号启动失败时恢复旧结果和重试入口，另一个账号仍显示启动中", async () => {
   const view = setup();
-  fireEvent.click(card("41").getByRole("button", { name: "重试 41" }));
-  fireEvent.click(card("42").getByRole("button", { name: "重试 42" }));
+  fireEvent.click(card("41").getByRole("button", { name: "重测 41" }));
+  fireEvent.click(card("42").getByRole("button", { name: "重测 42" }));
   await waitFor(() => expect(view.posts).toHaveLength(2));
   await act(async () =>
     view.posts[0]!.resolve(Response.json({ detail: "启动失败" }, { status: 503 })),
   );
-  expect(await card("41").findByRole("button", { name: "重试 41" })).toBeEnabled();
+  expect(await card("41").findByRole("button", { name: "重测 41" })).toBeEnabled();
   expect(card("41").getByText("上游超时")).toBeVisible();
   expect(card("42").getByRole("status", { name: "正在启动检测" })).toBeVisible();
 });

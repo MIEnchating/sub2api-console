@@ -105,6 +105,43 @@ func TestKimiChangedColumnOrderIsRejected(t *testing.T) {
 		t.Fatal("changed Kimi column order accepted")
 	}
 }
+
+func TestKimiCurrentTTLColumnsAreParsed(t *testing.T) {
+	raw := `
+<DocTable
+  columns={[
+{ title: "模型" },
+{ title: "计费单位" },
+{ title: "缓存写入（TTL 5min）" },
+{ title: "缓存写入（TTL 1h）" },
+{ title: "输入价格（缓存命中）" },
+{ title: "输入价格（缓存未命中）" },
+{ title: "输出价格" },
+{ title: "上下文窗口" },
+]}
+  rows={[["kimi-k3", "1M tokens", "¥20.00", "¥40.00", "¥2.00", "¥20.00", "¥100.00", "1,048,576 tokens"]]}
+/>`
+	prices, err := pricing.ParseKimi([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := find(t, prices, "kimi-k3")
+	if p.InputPrice != "0.00002" || p.OutputPrice != "0.0001" || len(p.Tiers) != 2 || !strings.Contains(p.BillingExpr, `param("cache_ttl")`) {
+		t.Fatalf("current Kimi TTL pricing not preserved: %+v", p)
+	}
+}
+
+func TestDeepSeekCurrentPeakScheduleIsParsed(t *testing.T) {
+	raw := `<article><p>北京时间周一至周五（不含中国法定节假日）9:00 - 12:00、14:00 - 18:00 为高峰时段；其余时段为空闲时段。</p><table><tr><td colspan="3">模型</td><td>deepseek-flash</td></tr><tr><td rowspan="2">价格</td><td rowspan="2">百万tokens输入 （缓存命中）</td><td>空闲时段</td><td>0.02元</td></tr><tr><td>高峰时段</td><td>0.04元</td></tr><tr><td rowspan="2">价格</td><td rowspan="2">百万tokens输入 （缓存未命中）</td><td>空闲时段</td><td>1元</td></tr><tr><td>高峰时段</td><td>2元</td></tr><tr><td rowspan="2">价格</td><td rowspan="2">百万tokens输出</td><td>空闲时段</td><td>4元</td></tr><tr><td>高峰时段</td><td>8元</td></tr></table></article>`
+	prices, err := pricing.ParseDeepSeek([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := find(t, prices, "deepseek-flash")
+	if p.InputPrice != "0.000001" || p.CacheReadPrice != "0.00000002" || p.TimePricing.Peak.InputPrice != "0.000002" || len(p.TimePricing.Periods) != 2 {
+		t.Fatalf("current DeepSeek pricing not preserved: %+v", p)
+	}
+}
 func TestMiniMaxMissingContextTierIsRejected(t *testing.T) {
 	raw := string(fixture(t, "minimax.md"))
 	lines := strings.Split(raw, "\n")

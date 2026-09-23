@@ -991,6 +991,35 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 			persistStage(78, "正在应用调度目标", []string{operationRoutingWriteback})
 			writeStarted := time.Now()
 			writeResult, writeErr := r.writer.Apply(ctx, routingResult.AccountTargets, request.Actor)
+			if costWriter, ok := r.writer.(interface {
+				EnforceManualCostWall(context.Context, []string, string) (routingwrite.Result, error)
+			}); ok {
+				costResult, costErr := costWriter.EnforceManualCostWall(ctx, nil, request.Actor)
+				resultPayload["manual_cost_wall"] = costResult
+				writeResult.Changed += costResult.Changed
+				writeResult.Failed += costResult.Failed
+				writeResult.Succeeded += costResult.Succeeded
+				writeResult.RemoteWrite = writeResult.RemoteWrite || costResult.RemoteWrite
+				writeResult.Results = append(writeResult.Results, costResult.Results...)
+				if costErr != nil {
+					partialFailures = append(partialFailures, "手动账号成本墙："+costErr.Error())
+				}
+			}
+
+			if manualWriter, ok := r.writer.(interface {
+				ReorderManualPriorities(context.Context, string) (routingwrite.Result, error)
+			}); ok && writeErr == nil {
+				manualResult, manualErr := manualWriter.ReorderManualPriorities(ctx, request.Actor)
+				resultPayload["manual_priority_writeback"] = manualResult
+				writeResult.Changed += manualResult.Changed
+				writeResult.Failed += manualResult.Failed
+				writeResult.Succeeded += manualResult.Succeeded
+				writeResult.RemoteWrite = writeResult.RemoteWrite || manualResult.RemoteWrite
+				writeResult.Results = append(writeResult.Results, manualResult.Results...)
+				if manualErr != nil {
+					partialFailures = append(partialFailures, "手动控制优先级重排："+manualErr.Error())
+				}
+			}
 			timings = append(timings, operationTiming(operationRoutingWriteback, writeStarted))
 			operations = append(operations, operationRoutingWriteback)
 			resultPayload["writeback"] = writeResult

@@ -38,7 +38,7 @@ func pricingCacheFresh(at, now time.Time) bool {
 func catalogCacheKey(platform configstore.NewAPIPlatform, target configstore.TargetSettings) string {
 	// A changed management target must never reuse another instance's prices.
 	digest := sha256.Sum256([]byte(platform.ID + "\n" + strings.TrimRight(platform.BaseURL, "/") + "\n" + strings.TrimRight(target.BaseURL, "/")))
-	return "catalog-v4:" + hex.EncodeToString(digest[:])
+	return "catalog-v6:" + hex.EncodeToString(digest[:])
 }
 
 func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, force bool) (ModelPriceCatalog, error) {
@@ -68,7 +68,8 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 		}
 		age := time.Since(cached.FetchedAt)
 		expires, _ := time.Parse(time.RFC3339Nano, previous.ExpiresAt)
-		if !force && age >= 0 && ((previous.Stale && age < time.Minute) || (!previous.Stale && time.Now().Before(expires))) {
+		needsRetry := previous.Stale || previous.Warning != ""
+		if !force && age >= 0 && ((needsRetry && age < time.Minute) || (!needsRetry && time.Now().Before(expires))) {
 			return previous, nil
 		}
 	}
@@ -114,6 +115,9 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 	missing := []string{}
 	var fallbackErr error
 	var client *adminclient.Client
+	var references map[string]defaultPricingReference
+	var referenceErr error
+	var incompleteDefaults []string
 	for _, name := range names {
 		if _, found := byModel[name]; found {
 			continue
@@ -123,6 +127,7 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 			continue
 		}
 		if client == nil {
+			references, referenceErr = s.defaultPricingReferences(lookupCtx, target)
 			client, fallbackErr = adminclient.New(adminclient.Config{BaseURL: target.BaseURL, AdminKey: target.AdminKey, Timeout: time.Duration(target.TimeoutSeconds) * time.Second, Attempts: 2}, s.client.Transport)
 			if fallbackErr != nil {
 				break
@@ -141,7 +146,31 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 			missing = append(missing, name)
 			continue
 		}
-		byModel[name] = defaultPriceToModel(name, price)
+		item := defaultPriceToModel(name, price)
+		reference, hasReference := references[name]
+		syncError := "模型广场未返回该模型的完整参考价，请检查模型可见性后刷新"
+		if referenceErr != nil {
+			syncError = referenceErr.Error()
+		}
+		if referenceErr == nil && hasReference {
+			if enriched, err := applyDefaultPricingReference(item, reference); err == nil {
+				byModel[name] = enriched
+				continue
+			} else {
+				syncError = err.Error() + "，请检查该模型参考价后刷新"
+			}
+		}
+		incompleteDefaults = append(incompleteDefaults, name)
+		// Never present the autofill endpoint's flat rate as a verified billing schedule.
+		item.ModelRatio, item.CompletionRatio = "", ""
+		for _, cached := range previous.Models {
+			if cached.Model == name && cached.Source == "sub2api" {
+				item = cached
+				break
+			}
+		}
+		item.SyncError = syncError
+		byModel[name] = item
 	}
 	if fallbackErr != nil {
 		warnings = append(warnings, "Sub2API 默认价格读取失败，已保留可用缓存；请检查管理地址、密钥及接口版本后刷新")
@@ -162,7 +191,17 @@ func (s *Service) ModelPriceCatalog(ctx context.Context, platformID string, forc
 		return ModelPriceCatalog{}, errors.New(strings.Join(warnings, "；"))
 	}
 	now := time.Now().UTC()
-	result := ModelPriceCatalog{Models: make([]Sub2APIModelPrice, 0, len(byModel)), MissingModels: missing, FetchedAt: oldest.Format(time.RFC3339Nano), ExpiresAt: oldest.Add(24 * time.Hour).Format(time.RFC3339Nano), Stale: len(warnings) > 0, Warning: strings.Join(warnings, "；")}
+	// A missing plaza reference blocks only that model. Failures of shared sources
+	// still invalidate the catalog; retained per-model caches remain read-only.
+	stale := len(warnings) > 0
+	if len(incompleteDefaults) > 0 {
+		warning := "以下模型参考价不完整，仅可查看缓存：" + strings.Join(incompleteDefaults, "、") + "；请检查这些模型在模型广场的参考价后刷新"
+		if !stale {
+			warning += "，其他完整参考价仍可同步"
+		}
+		warnings = append(warnings, warning)
+	}
+	result := ModelPriceCatalog{Models: make([]Sub2APIModelPrice, 0, len(byModel)), MissingModels: missing, FetchedAt: oldest.Format(time.RFC3339Nano), ExpiresAt: oldest.Add(24 * time.Hour).Format(time.RFC3339Nano), Stale: stale, Warning: strings.Join(warnings, "；")}
 	if !officialExpiry.IsZero() && officialExpiry.Before(oldest.Add(24*time.Hour)) {
 		result.ExpiresAt = officialExpiry.Format(time.RFC3339Nano)
 	}

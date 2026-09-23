@@ -3,6 +3,7 @@ import { CircleAlert, RotateCw } from "lucide-react";
 import type { AnimationResult, AnimationTarget } from "@/api";
 import { ContentLoading } from "@/components/content-loading";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { AnimationActivity } from "../lib/animation-task-results";
@@ -25,10 +26,10 @@ export function AnimationCardResult(props: {
 }): ReactElement {
   const result = props.result;
   const success = result.status === "succeeded" && Boolean(result.svg);
-  const modelLabel =
-    result.response_model && result.response_model !== result.model
-      ? `${result.model} · 返回模型 ${result.response_model}`
-      : result.model;
+  const modelMismatch = Boolean(result.response_model && result.response_model !== result.model);
+  const modelLabel = modelMismatch
+    ? `${result.model} · 返回模型 ${result.response_model}`
+    : result.model;
   let preview: ReactElement;
   if (props.activity) {
     const label = props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果";
@@ -45,30 +46,11 @@ export function AnimationCardResult(props: {
         <p className="line-clamp-2 text-xs leading-5 text-muted-foreground wrap-anywhere">
           {result.error || "未返回动画内容，请重试"}
         </p>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                aria-label={`重试 ${result.account_name}`}
-                disabled={props.retryDisabled}
-                onClick={() =>
-                  props.onRetry({ account_id: result.account_id, model: result.model })
-                }
-              />
-            }
-          >
-            <RotateCw aria-hidden="true" />
-          </TooltipTrigger>
-          <TooltipContent>重试动画检测</TooltipContent>
-        </Tooltip>
       </div>
     );
   }
   return (
-    <div aria-label="动画检测结果" className="h-56 min-w-0 shrink-0">
+    <div aria-label="动画检测结果" className="min-w-0 shrink-0">
       <div
         role="group"
         aria-label="动画预览区域"
@@ -76,11 +58,16 @@ export function AnimationCardResult(props: {
       >
         {preview}
       </div>
-      <div className="flex h-11 min-w-0 items-center gap-2 px-3">
+      <div className="flex h-14 min-w-0 items-center gap-2 px-3">
         <div className="min-w-0 flex-1 space-y-0.5 text-xs">
           <Tooltip>
-            <TooltipTrigger render={<p className="truncate font-medium" />}>
-              {modelLabel}
+            <TooltipTrigger render={<div className="flex min-w-0 items-center gap-1.5" />}>
+              <p className="min-w-0 truncate font-medium">{modelLabel}</p>
+              {modelMismatch ? (
+                <Badge variant="destructive" className="shrink-0 px-1.5 py-0 text-[10px]">
+                  模型不一致
+                </Badge>
+              ) : null}
             </TooltipTrigger>
             <TooltipContent>{modelLabel}</TooltipContent>
           </Tooltip>
@@ -99,7 +86,29 @@ export function AnimationCardResult(props: {
             <span className="ml-auto shrink-0">{(result.duration_ms / 1000).toFixed(1)} 秒</span>
           </div>
         </div>
-        <AnimationResultDetails result={result} />
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-label={`重测 ${result.account_name}`}
+                  disabled={props.retryDisabled || Boolean(props.activity)}
+                  aria-busy={Boolean(props.activity)}
+                  onClick={() =>
+                    props.onRetry({ account_id: result.account_id, model: result.model })
+                  }
+                />
+              }
+            >
+              <RotateCw aria-hidden="true" />
+              重测
+            </TooltipTrigger>
+            <TooltipContent>使用 {result.model} 重新检测，将产生 API 用量</TooltipContent>
+          </Tooltip>
+          <AnimationResultDetails result={result} />
+        </div>
       </div>
     </div>
   );

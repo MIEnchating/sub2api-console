@@ -19,6 +19,7 @@ export const probeTaskResultSchema = z.object({
   request_model: z.string(),
   actual_model: z.string(),
   response_text: z.string().optional(),
+  response_json: z.string().optional(),
   latency_ms: z.number(),
   http_status: z.number(),
   temporary_key: z.boolean().optional(),

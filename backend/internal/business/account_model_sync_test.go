@@ -51,8 +51,8 @@ func TestAccountModelSyncPreviewKeepsCatalogsPerAccountAndAppliesGlobalBlockPatt
 		t.Fatalf("model coverage=%#v", preview.Models)
 	}
 	wantAccounts := []AccountModelSyncAccount{
-		{AccountID: "42", AccountName: "account-b", Platform: "openai", Models: []string{"model-a", "model-b", "model-c", "model-d", "model-e"}, ProbeModel: "model-b"},
-		{AccountID: "41", AccountName: "account-a", Platform: "anthropic", Models: []string{"model-a", "model-c", "model-d"}, ProbeModel: ""},
+		{EnabledModels: []string{}, AccountID: "42", AccountName: "account-b", Platform: "openai", Models: []string{"model-a", "model-b", "model-c", "model-d", "model-e"}, ProbeModel: "model-b"},
+		{EnabledModels: []string{}, AccountID: "41", AccountName: "account-a", Platform: "anthropic", Models: []string{"model-a", "model-c", "model-d"}, ProbeModel: ""},
 	}
 	if !reflect.DeepEqual(preview.Accounts, wantAccounts) {
 		t.Fatalf("account previews=%#v", preview.Accounts)

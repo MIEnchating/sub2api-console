@@ -265,10 +265,10 @@ describe("请求查询账号处置", () => {
     expect(network.fetch).not.toHaveBeenCalled();
   });
 
-  it("人工优先位账号禁止熔断和恢复", async () => {
+  it("手动控制账号禁止熔断和恢复", async () => {
     mockNetwork(account({ manual_priority: 1 }));
     renderActions();
-    expect(await screen.findByText("请先取消人工优先位")).toBeVisible();
+    expect(await screen.findByText("请先取消手动控制")).toBeVisible();
     expect(screen.getByRole("button", { name: "手动熔断" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "恢复调度" })).toBeDisabled();
   });

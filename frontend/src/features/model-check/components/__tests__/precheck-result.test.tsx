@@ -52,7 +52,7 @@ it("尚未检测时仅按状态行高度展示且不提供空详情", () => {
   expect(screen.queryByRole("button", { name: "查看前置检测详情" })).not.toBeInTheDocument();
 });
 
-it("单题不通过时卡片仅在前置检测标题旁展示一次结论", () => {
+it("糖果题回答非 21 时卡片仅在前置检测标题旁展示一次降智结论", () => {
   const fixture = result();
   fixture.precheck = {
     verdict: "not_passed",
@@ -61,7 +61,7 @@ it("单题不通过时卡片仅在前置检测标题旁展示一次结论", () =
   };
   render(<PrecheckAccountResult result={fixture} />);
   const summary = screen.getByRole("region", { name: "前置检测结果" });
-  expect(within(summary).getAllByText("不通过")).toHaveLength(1);
+  expect(within(summary).getAllByText("降智")).toHaveLength(1);
   expect(within(summary).getByText("前置检测").parentElement).toHaveClass("h-8");
   expect(within(summary).queryByRole("list")).not.toBeInTheDocument();
   expect(summary).not.toHaveTextContent("糖果题");

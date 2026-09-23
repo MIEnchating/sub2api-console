@@ -79,9 +79,13 @@ func (s *Service) execute(parent context.Context, value *privateRun, task taskst
 			row.Status = "failed"
 			row.Message = itemErr.Error()
 			phase := value.Phases[row.ID]
-			if phase == "refreshing" || phase == "exchanging" || phase == "creating" || phase == "updating" || phase == "promoting" {
+			if phase == "refreshing" || phase == "exchanging" {
 				row.Status = "interrupted"
 				row.Message = "上次提交结果需要核对，请勿重复提交该项"
+			}
+			if phase == "isolating" || phase == "creating" || phase == "updating" || phase == "configuring" || phase == "promoting" {
+				row.Status = "interrupted"
+				row.Message = itemErr.Error() + "；未重复提交，请先核对站点状态"
 			}
 		}
 		row.LoginPrompt = nil
@@ -136,7 +140,7 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 	switch phase {
 	case "refreshing", "exchanging":
 		return errors.New("上次提交结果尚未核对")
-	case "creating", "updating", "promoting":
+	case "isolating", "creating", "updating", "configuring", "promoting":
 		if err := s.reconcileItem(ctx, value, index); err != nil {
 			return err
 		}
@@ -196,6 +200,12 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 	if err := s.executionAllowed(ctx, value); err != nil {
 		return errors.New("会话、目标或模板已变化，已停止处理")
 	}
+	// Apply and validate the selected template before checking account identity.
+	item := stored.Item
+	item.Credentials = stored.Credentials
+	if _, err := AccountPayload(item, value.Template); err != nil {
+		return err
+	}
 	identity, err := s.VerifyCredential(ctx, stored.Credentials, proxyURL)
 	if err != nil {
 		return err
@@ -209,7 +219,7 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 	stored.Item.Email = identity.Email
 	row.Email = identity.Email
 	row.IdentitySource = "official_signature"
-	item := stored.Item
+	item = stored.Item
 	item.Credentials = stored.Credentials
 	payload, err := AccountPayload(item, value.Template)
 	if err != nil {
@@ -225,14 +235,20 @@ func (s *Service) processItem(ctx context.Context, value *privateRun, index int,
 		value.Phases[row.ID] = "exported"
 		return nil
 	}
+	if row.AccountID == "" {
+		if err = s.importItem(ctx, value, index, payload); err != nil {
+			return err
+		}
+	}
+	if err = s.configureImportedItem(ctx, value, index); err != nil {
+		return err
+	}
 	if value.Settings.Check {
 		if err = s.checkImportItem(ctx, value, index); err != nil {
 			return err
 		}
-	}
-	if row.AccountID == "" {
-		if err = s.importItem(ctx, value, index, payload); err != nil {
-			return err
+		if row.Status == "review" {
+			return nil
 		}
 	}
 	if value.Settings.Promote {

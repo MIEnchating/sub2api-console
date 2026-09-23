@@ -17,7 +17,7 @@ const account = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("人工优先位调度控制", () => {
+describe("手动控制调度控制", () => {
   it("账号原本停止调度时允许人工开启并随设置一起提交", () => {
     vi.stubGlobal("PointerEvent", MouseEvent);
     const onAssign = vi.fn();
@@ -39,11 +39,11 @@ describe("人工优先位调度控制", () => {
     expect(screen.getByRole("button", { name: "参与调度说明" })).toBeVisible();
     expect(screen.getByRole("button", { name: "同步上游余额说明" })).toBeVisible();
     expect(
-      screen.queryByText("关闭后停止接收流量；人工优先位期间系统不会自动切换此开关。"),
+      screen.queryByText("关闭后停止接收流量；手动控制期间系统不会自动切换此开关。"),
     ).not.toBeInTheDocument();
 
     fireEvent.click(scheduling);
-    fireEvent.click(screen.getByRole("button", { name: "更新人工优先位" }));
+    fireEvent.click(screen.getByRole("button", { name: "更新手动控制" }));
 
     expect(onAssign).toHaveBeenCalledWith({
       priority: 3,

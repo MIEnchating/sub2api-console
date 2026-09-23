@@ -131,7 +131,7 @@ export function TraceAccountActions(props: { accountId: string }): React.ReactEl
         </div>
       ) : null}
       {current?.manual_priority != null ? (
-        <p className="text-muted-foreground text-xs">请先取消人工优先位</p>
+        <p className="text-muted-foreground text-xs">请先取消手动控制</p>
       ) : null}
       {state === "excluded" ? (
         <p className="text-muted-foreground text-xs">请先在账号管理恢复管控</p>

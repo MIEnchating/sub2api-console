@@ -159,7 +159,7 @@ describe("编辑上游账号操作", () => {
     expect(deleteAccount).toHaveBeenCalledWith(preview);
   });
 
-  it("本地账号不存在时禁用探活和删除", () => {
+  it("本地账号不存在时禁用探活但允许清理失效绑定", () => {
     const missingGroup = {
       ...group,
       bound_accounts: [{ ...group.bound_accounts[0]!, account_exists: false }],
@@ -167,6 +167,7 @@ describe("编辑上游账号操作", () => {
     renderAccounts(vi.fn(), [missingGroup]);
 
     expect(screen.getByRole("button", { name: "探活测试" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "删除账号及上游 Key" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "清理失效绑定" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "删除账号及上游 Key" })).not.toBeInTheDocument();
   });
 });

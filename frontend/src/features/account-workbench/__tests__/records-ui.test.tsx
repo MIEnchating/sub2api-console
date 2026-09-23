@@ -64,7 +64,7 @@ function mount(fetcher: typeof fetch, record: WorkbenchRun = run): void {
     </QueryClientProvider>,
   );
 }
-it("只有证据不足的隔离账号显示启用入口，确认后携带批次版本和所选 ID", async () => {
+it("检测未通过的已导入账号显示手动启用入口，确认后携带批次版本和所选 ID", async () => {
   const writes: Array<{ path: string; body: unknown }> = [];
   mount(
     vi.fn(async (input, init) => {
@@ -75,9 +75,9 @@ it("只有证据不足的隔离账号显示启用入口，确认后携带批次�
       return Response.json([run]);
     }),
   );
-  expect(screen.getAllByRole("button", { name: "启用" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "启用" })).toHaveLength(2);
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name: "启用" }));
+  await user.click(screen.getAllByRole("button", { name: "启用" })[0]);
   expect(writes).toEqual([]);
   await user.click(
     within(screen.getByRole("dialog")).getByRole("button", { name: "启用所选账号" }),
@@ -110,7 +110,8 @@ it("批次资料到期后保留结果和删除入口，禁用重试、启用与�
   );
   expect(screen.getByText("本批登录资料已到期，请重新导入；处理结果仍可查看。")).toBeVisible();
   expect(screen.getByRole("button", { name: "继续 / 重试" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "启用" })).toBeDisabled();
+  for (const button of screen.getAllByRole("button", { name: "启用" }))
+    expect(button).toBeDisabled();
   expect(screen.getByRole("button", { name: "保存私有 JSON" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "删除记录" })).toBeEnabled();
 });
@@ -127,7 +128,7 @@ it("检测返回不匹配结论时显示中文标签，新增状态不会直接�
   expect(screen.queryByText("new_item_status")).not.toBeInTheDocument();
 });
 
-it("检测请求出错时直接显示具体原因并且不提供启用入口", () => {
+it("检测请求出错时显示原因并提供手动启用入口", () => {
   mount(vi.fn(), {
     ...run,
     items: [
@@ -136,16 +137,16 @@ it("检测请求出错时直接显示具体原因并且不提供启用入口", (
   });
   expect(screen.getByText(/OAuth 检测请求失败（HTTP 429）/)).toBeVisible();
   expect(screen.getByText("检测出错")).toBeVisible();
-  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启用" })).toBeEnabled();
 });
 
-it("部分请求失败时不能用证据不足结论绕过导入限制", () => {
+it("部分检测请求失败时保留原因和手动启用入口", () => {
   mount(vi.fn(), {
     ...run,
     items: [{ ...run.items[0], check: { verdict: "INCONCLUSIVE", error: "请求超时" } }],
   });
   expect(screen.getByText(/请求超时/)).toBeVisible();
-  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "启用" })).toBeEnabled();
 });
 
 it("检测正常完成且更接近 Luna 时显示具体结论，历史隔离项允许启用", () => {
@@ -155,4 +156,37 @@ it("检测正常完成且更接近 Luna 时显示具体结论，历史隔离项�
   });
   expect(screen.getByText("更接近 Luna")).toBeVisible();
   expect(screen.getByRole("button", { name: "启用" })).toBeEnabled();
+});
+
+it("导入前校验失败且没有站点账号时不提供手动启用入口", () => {
+  mount(vi.fn(), {
+    ...run,
+    items: [
+      { ...run.items[1], status: "failed", account_id: undefined, message: "访问令牌已过期" },
+    ],
+  });
+  expect(screen.getByText("访问令牌已过期")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+});
+
+it("手动启用成功后显示启用结果并可打开原检测错误报告", async () => {
+  mount(vi.fn(), {
+    ...run,
+    status: "completed",
+    items: [
+      {
+        ...run.items[1],
+        status: "completed",
+        manual_enabled: true,
+        message: "已启用（保留原检测结论）",
+        check: { verdict: "ERROR", error: "请求超时" },
+      },
+    ],
+  });
+  expect(screen.getByText("已启用（保留原检测结论）")).toBeVisible();
+  expect(screen.getByText("检测出错")).toBeVisible();
+  expect(screen.getByRole("button", { name: "检测详情" })).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "启用" })).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("button", { name: "检测详情" }));
+  expect(within(screen.getByRole("dialog")).getByText("请求超时")).toBeVisible();
 });

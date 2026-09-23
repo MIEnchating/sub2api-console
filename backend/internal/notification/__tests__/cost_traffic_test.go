@@ -24,3 +24,18 @@ func TestCostTrafficNotificationIncludesOnlyRequestGroupAndEvidence(t *testing.T
 		t.Fatalf("recovery reused firing evidence: %s", message)
 	}
 }
+
+func TestCostTrafficNotificationUsesPreciseClassification(t *testing.T) {
+	for _, tc := range []struct{ cause, label string }{
+		{"COST_TRAFFIC_LOSS:当前账号倍率 0.32 > 分组倍率 0.25", "亏损流量"},
+		{"COST_TRAFFIC_BREAK_EVEN:当前账号倍率 0.25 = 分组倍率 0.25", "无利润流量"},
+	} {
+		for _, status := range []string{"firing", "recovered"} {
+			incident := business.AlertIncident{EventType: "account.cost_traffic", CauseCode: tc.cause, Status: status}
+			message := notification.BatchMessage([]business.AlertIncident{incident})
+			if !strings.Contains(message, tc.label) || strings.Contains(message, "无利润／亏损") {
+				t.Fatalf("imprecise notification: %s", message)
+			}
+		}
+	}
+}

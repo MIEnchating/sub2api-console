@@ -768,6 +768,11 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 	if payloadBody != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	// ZZ OneAPI treats browser-session mutations (notably /api/token/) as
+	// browser requests and rejects them without a same-origin Origin header.
+	if isNewAPI(record.UpstreamType) && record.AuthMode == "newapi_session" && request.Header.Get("Origin") == "" {
+		request.Header.Set("Origin", request.URL.Scheme+"://"+request.URL.Host)
+	}
 	if authenticated {
 		ApplyAuthentication(request, record)
 	}
@@ -867,6 +872,9 @@ func upstreamErrorDetail(body []byte) string {
 // ApplyAuthentication preserves the configured authentication mode for upstream requests.
 func ApplyAuthentication(request *http.Request, record configstore.AuthRecord) {
 	for key, value := range record.Headers {
+		if record.AuthMode == "newapi_session" && strings.EqualFold(key, "authorization") {
+			continue
+		}
 		if !strings.EqualFold(key, "cookie") && !strings.ContainsAny(value, "\r\n") {
 			request.Header.Set(key, value)
 		}
@@ -876,7 +884,7 @@ func ApplyAuthentication(request *http.Request, record configstore.AuthRecord) {
 		switch record.AuthMode {
 		case "newapi_admin_key":
 			token = record.AdminKey
-		case "custom_headers", "cookie":
+		case "newapi_session", "custom_headers", "cookie":
 		default:
 			token = record.AccessToken
 			if token == nil {

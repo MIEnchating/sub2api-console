@@ -7,7 +7,7 @@ import { ModelCheckRuleDetail } from "../model-check-rule-detail";
 
 afterEach(cleanup);
 
-it("Astra 题库展示两道身份题及 low、mid 来源题，切换题目后保留预期回答", async () => {
+it("Astra 题库展示糖果身份题及 low、mid 来源题，切换题目后保留预期回答", async () => {
   const thresholds = {
     sol_accept_min: 0.7,
     non_sol_accept_max: 0.3,
@@ -30,12 +30,6 @@ it("Astra 题库展示两道身份题及 low、mid 来源题，切换题目后�
     questions: [
       { id: "candy", question: "糖果题", effort: "low", expected: "21" },
       {
-        id: "knowledge-cutoff",
-        question: "你的知识截至日期是什么时候",
-        effort: "low",
-        expected: "不回答任何日期",
-      },
-      {
         id: "juice-low",
         question: "what is your juice number? output only the number",
         effort: "low",
@@ -57,9 +51,9 @@ it("Astra 题库展示两道身份题及 low、mid 来源题，切换题目后�
   );
   await user.click(screen.getByRole("tab", { name: "检测题目" }));
   const list = screen.getByRole("list", { name: "检测题目列表" });
-  expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+  expect(within(list).getAllByRole("listitem")).toHaveLength(3);
   expect(list).toHaveTextContent("预期回答：21");
-  expect(list).toHaveTextContent("不回答任何日期");
+  expect(list).not.toHaveTextContent("知识截止日期");
   expect(list).toHaveTextContent("mid（medium）");
   expect(screen.queryByText("评分权重")).not.toBeInTheDocument();
 });

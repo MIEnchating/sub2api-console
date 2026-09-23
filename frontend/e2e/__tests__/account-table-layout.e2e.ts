@@ -164,7 +164,7 @@ test("长账号名限制在账号列内，辅助信息保持较小字号", async
   );
 });
 
-test("人工优先账号和未知调度开关的说明在窄列内完整换行", async ({ page }) => {
+test("手动控制账号和未知调度开关的说明在窄列内完整换行", async ({ page }) => {
   await page.route("**/api/accounts", (route) =>
     route.fulfill({
       json: [
@@ -174,7 +174,7 @@ test("人工优先账号和未知调度开关的说明在窄列内完整换行",
     }),
   );
   await page.goto("/accounts");
-  await page.getByRole("switch", { name: "显示人工优先账号" }).check();
+  await page.getByRole("switch", { name: "显示手动控制账号" }).check();
   const rows = page.locator("tbody tr");
   await expect(rows).toHaveCount(2);
   const overflow = await rows.evaluateAll((elements) =>

@@ -3,10 +3,12 @@ import type { AnimationResult, AnimationTarget } from "@/api";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { AnimationPreview } from "./animation-preview";
 import { AnimationCardResult } from "./animation-card-result";
+import { AnimationResultDetails } from "./animation-result-details";
 
 const resultStatusLabels = { succeeded: "成功", failed: "失败" } as const;
 const compactTimeFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -41,6 +43,7 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
     (result.response_model && result.response_model !== result.model
       ? ` · 返回模型 ${result.response_model}`
       : "");
+  const modelMismatch = Boolean(result.response_model && result.response_model !== result.model);
   const completedAt = new Date(result.completed_at);
   return (
     <div aria-label="动画检测结果" className="flex h-full min-h-0 min-w-0 flex-col gap-1.5">
@@ -66,8 +69,13 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
       </div>
       <div className="flex min-w-0 shrink-0 items-center justify-between gap-2 text-xs">
         <Tooltip>
-          <TooltipTrigger render={<p className="min-w-0 truncate font-medium" />}>
-            {modelLabel}
+          <TooltipTrigger render={<div className="flex min-w-0 items-center gap-1.5" />}>
+            <p className="min-w-0 truncate font-medium">{modelLabel}</p>
+            {modelMismatch ? (
+              <Badge variant="destructive" className="shrink-0 px-1.5 py-0 text-[10px]">
+                模型不一致
+              </Badge>
+            ) : null}
           </TooltipTrigger>
           <TooltipContent>{modelLabel}</TooltipContent>
         </Tooltip>
@@ -103,6 +111,7 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
           </TooltipContent>
         </Tooltip>
         <span className="shrink-0">耗时 {(result.duration_ms / 1000).toFixed(1)} 秒</span>
+        <AnimationResultDetails result={result} />
       </div>
     </div>
   );

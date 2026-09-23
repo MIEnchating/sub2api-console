@@ -14,7 +14,7 @@ import {
   AccountStateCell,
 } from "../account-pool-cells";
 
-it("人工优先位状态使用中文展示且不显示历史成本墙拦截", () => {
+it("手动控制状态使用中文展示且不显示历史成本墙拦截", () => {
   render(
     <AccountStateCell
       account={{
@@ -29,7 +29,7 @@ it("人工优先位状态使用中文展示且不显示历史成本墙拦截", (
     />,
   );
 
-  expect(screen.getByText("人工优先位")).toBeVisible();
+  expect(screen.getByText("手动控制")).toBeVisible();
   expect(screen.getByText("调度开关：已开启")).toBeVisible();
   expect(screen.queryByText("成本墙拦截")).not.toBeInTheDocument();
   expect(screen.queryByText("待探测")).not.toBeInTheDocument();
@@ -641,10 +641,18 @@ describe("account pool cells", () => {
       />,
     );
 
-    expect(withoutBalanceSync).toContain("人工优先位 #3");
+    expect(withoutBalanceSync).toContain("手动控制 #3");
     expect(withoutBalanceSync).toContain("停止调度");
     expect(withoutBalanceSync).toContain("不同步上游余额");
     expect(withBalanceSync).toContain("参与调度");
     expect(withBalanceSync).toContain("同步上游余额");
   });
+});
+
+it("手动控制已按延迟调序时同时展示保留位置和当前实际优先级", () => {
+  render(
+    <AccountRoutingParametersCell account={{ ...account, manual_priority: 3, priority: 1 }} />,
+  );
+  expect(screen.getByText("手动控制 #3")).toBeVisible();
+  expect(screen.getByText("当前优先级 1")).toBeVisible();
 });

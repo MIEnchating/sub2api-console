@@ -56,6 +56,19 @@ func (s *Server) newAPIChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (s *Server) availableNewAPIChannelModels(c *gin.Context) {
+	if s.newAPIManagement == nil {
+		writeError(c, http.StatusServiceUnavailable, "渠道管理服务不可用")
+		return
+	}
+	models, err := s.newAPIManagement.AvailableChannelModels(c.Request.Context(), c.Param("platform_id"), c.Param("channel_id"), c.Query("version"))
+	if err != nil {
+		writeNewAPIError(c, err, http.StatusBadGateway)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"models": models})
+}
+
 func (s *Server) changeNewAPIChannelModels(c *gin.Context) {
 	manager := s.newAPIManagement
 	if manager == nil {

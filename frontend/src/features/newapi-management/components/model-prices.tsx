@@ -202,6 +202,8 @@ export function NewAPIModelPrices(props: PriceProps) {
         [...selectedModels].sort().map((model) => {
           const reference = matchingRemoteModelPrice(catalog.models, model);
           if (!reference) return { model, reason: "跳过：参考价未找到", differences: [] };
+          if (reference.sync_error)
+            return { model, reason: `跳过：${reference.sync_error}`, differences: [] };
           if (!remotePriceSupportsNewAPIWrite(reference))
             return { model, reason: "跳过：不支持此计费格式", differences: [] };
           const current = configured.get(model) ?? { model, input_ratio: "", completion_ratio: "" };
@@ -387,9 +389,10 @@ export function NewAPIModelPrices(props: PriceProps) {
           className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
           role="status"
         >
-          {props.managementPricesStale ? (
-            <StatusBadge label="缓存过期或刷新不完整" variant="warning" />
-          ) : null}
+          <StatusBadge
+            label={props.managementPricesStale ? "缓存过期或刷新不完整" : "部分参考价不可同步"}
+            variant="warning"
+          />
           {props.managementPricesWarning ? <span>{props.managementPricesWarning}</span> : null}
         </div>
       ) : null}
@@ -929,6 +932,11 @@ export function RemoteModelPricesTable(props: {
                         阶梯 {formatRemoteThreshold(price.long_context_threshold)}
                       </div>
                     ) : null}
+                    {price.price_tiers?.length ? (
+                      <div className="text-muted-foreground mt-1 font-sans text-[11px] font-normal">
+                        阶梯计费 · {price.price_tiers.length} 档
+                      </div>
+                    ) : null}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
                     <OfficialTierValues tiers={price.price_tiers} field="input_price">
@@ -1053,6 +1061,7 @@ function remotePriceSupportsNewAPIWrite(price: Sub2APIModelPrice): boolean {
   const inputRatio = Number(price.model_ratio);
   const completionRatio = Number(price.completion_ratio);
   return (
+    !price.sync_error &&
     price.model_ratio.trim() !== "" &&
     price.completion_ratio.trim() !== "" &&
     Number.isFinite(inputRatio) &&
@@ -1069,6 +1078,17 @@ function RemotePriceWriteAction(props: {
   disabled?: boolean;
   onWritePrice: (price: Sub2APIModelPrice) => void;
 }) {
+  if (props.price.sync_error) {
+    return (
+      <TableActionButton
+        label={props.price.sync_error}
+        ariaLabel={`写入平台 ${props.price.model}`}
+        disabled
+      >
+        <Upload aria-hidden="true" />
+      </TableActionButton>
+    );
+  }
   if (!props.writeSupported) {
     return (
       <TableActionButton
@@ -1471,7 +1491,7 @@ function ManagementCacheWritePrice(props: { price: Sub2APIModelPrice }): ReactNo
 
 function ManagementImagePrice(props: { price: Sub2APIModelPrice }): ReactNode {
   const input = managementPricePerMillion(props.price.image_input_price);
-  const output = managementPriceValue(props.price.image_output_price);
+  const output = managementImageOutputPrice(props.price);
   if (input === "-" && output === "-") return "-";
   return (
     <span className="whitespace-nowrap">
@@ -1480,6 +1500,15 @@ function ManagementImagePrice(props: { price: Sub2APIModelPrice }): ReactNode {
       {output !== "-" ? <>输出 {output}</> : null}
     </span>
   );
+}
+
+function managementImageOutputPrice(price: Sub2APIModelPrice): string {
+  if (!price.image_output_price) return "-";
+  if (price.image_output_unit === "token")
+    return `${managementPricePerMillion(price.image_output_price)} / 百万 Token`;
+  if (price.image_output_unit === "image")
+    return `${managementPriceValue(price.image_output_price)} / 张`;
+  return managementPriceValue(price.image_output_price);
 }
 
 function managementPriceValue(value?: string): string {

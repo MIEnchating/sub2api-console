@@ -52,6 +52,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 A",
           platform: "openai",
           models: ["gpt-test"],
+          enabled_models: ["gpt-test"],
           probe_model: "gpt-test",
         },
       ],
@@ -88,7 +89,7 @@ describe("账号批量模型同步", () => {
     });
   });
 
-  it("默认同步新发现模型并自动应用全局屏蔽规则", () => {
+  it("默认勾选已配置模型并自动应用全局屏蔽规则", () => {
     const preview: AccountModelSyncPreview = {
       account_count: 2,
       accounts_with_catalog: 2,
@@ -105,6 +106,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 A",
           platform: "anthropic",
           models: ["model-a", "model-d"],
+          enabled_models: ["model-a", "model-d"],
           probe_model: "model-d",
         },
         {
@@ -112,6 +114,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 B",
           platform: "openai",
           models: ["model-a", "model-b", "model-d"],
+          enabled_models: ["model-a", "model-b", "model-d"],
           probe_model: "model-b",
         },
       ],
@@ -148,6 +151,7 @@ describe("账号批量模型同步", () => {
           account_name: "共享账号",
           platform: "openai",
           models: ["shared-model"],
+          enabled_models: ["shared-model"],
           probe_model: "shared-model",
         },
       ],
@@ -233,6 +237,7 @@ describe("账号批量模型同步", () => {
           account_id: "41",
           account_name: "账号 A",
           models: ["model-a", "model-b"],
+          enabled_models: ["model-a", "model-b"],
           probe_model: "model-b",
         },
       ],
@@ -260,6 +265,8 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     expect(await screen.findByRole("tab", { name: /OpenAI/ })).toBeVisible();
     expect(screen.getByRole("tab", { name: /基础组/ })).toHaveAttribute("aria-selected", "true");
@@ -273,7 +280,9 @@ describe("账号批量模型同步", () => {
     expect(
       screen.queryByText("最多选择 20 个；同步完成后依次验证，不支持的账号自动跳过。"),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "统一探活模型" })).toHaveTextContent("model-a");
+    expect(screen.getByRole("combobox", { name: "统一探活模型" })).toHaveTextContent(
+      "选择探活模型",
+    );
     expect(screen.getByRole("heading", { name: "选择要同步的模型" })).toBeVisible();
     expect(screen.getByRole("checkbox", { name: "同步模型 model-a" })).toBeChecked();
     expect(screen.queryByRole("checkbox", { name: "同步模型 model-b" })).toBeNull();
@@ -285,7 +294,7 @@ describe("账号批量模型同步", () => {
       expect(apply).toHaveBeenCalledWith(
         [{ account_id: "41", models: ["model-a"] }],
         "catalog-fingerprint",
-        ["model-a"],
+        [],
       ),
     );
   });
@@ -348,6 +357,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 A",
           platform: "anthropic",
           models: ["model-a", "model-e"],
+          enabled_models: ["model-a", "model-e"],
           probe_model: "",
         },
         {
@@ -355,6 +365,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 B",
           platform: "openai",
           models: ["model-a", "model-b", "model-e"],
+          enabled_models: ["model-a", "model-b", "model-e"],
           probe_model: "model-b",
         },
       ],
@@ -392,12 +403,16 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     const anthropicTab = await screen.findByRole("tab", { name: /Anthropic/ });
     const openaiTab = screen.getByRole("tab", { name: /OpenAI/ });
     expect(anthropicTab).toHaveAttribute("aria-selected", "true");
     expect(openaiTab).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("combobox", { name: "统一探活模型" })).toHaveTextContent("model-a");
+    await userEvent.click(screen.getByRole("combobox", { name: "统一探活模型" }));
+    await userEvent.click(await screen.findByRole("option", { name: "model-a" }));
+    await userEvent.keyboard("{Escape}");
     const failureSummary = screen.getByText("1 个账号获取模型失败，已跳过");
     expect(screen.getByText(/Cloudflare 响应不完整/)).not.toBeVisible();
     await userEvent.click(failureSummary);
@@ -465,6 +480,7 @@ describe("账号批量模型同步", () => {
           account_name: "基础账号",
           platform: "openai",
           models: ["common-model", "basic-model"],
+          enabled_models: ["common-model", "basic-model"],
           probe_model: "common-model",
         },
         {
@@ -472,6 +488,7 @@ describe("账号批量模型同步", () => {
           account_name: "高级账号",
           platform: "openai",
           models: ["common-model", "advanced-model"],
+          enabled_models: ["common-model", "advanced-model"],
           probe_model: "common-model",
         },
       ],
@@ -506,6 +523,8 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     expect(await screen.findByRole("tablist", { name: "账号平台" })).toBeVisible();
     expect(screen.getByRole("tab", { name: /OpenAI/ })).toHaveAttribute("aria-selected", "true");
@@ -514,6 +533,7 @@ describe("账号批量模型同步", () => {
     expect(screen.getByTestId("account-sync-models")).toHaveClass(
       "content-start",
       "auto-rows-[3.5rem]",
+      "min-h-32",
     );
 
     await userEvent.click(screen.getByRole("tab", { name: /基础组/ }));
@@ -599,20 +619,22 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     const sparseCard = await screen.findByRole("group", { name: "模型 sparse-model" });
     expect(sparseCard).toHaveAttribute("data-model-support-tooltip-trigger");
-    fireEvent.mouseEnter(sparseCard);
+    await userEvent.hover(sparseCard);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip).toHaveTextContent("账号 1 · OpenAI");
     expect(tooltip).toHaveTextContent("账号 2 · OpenAI");
-    expect(tooltip).toHaveClass("bottom-full", "mb-1");
+    expect(screen.getByTestId("account-sync-models")).not.toContainElement(tooltip);
 
-    fireEvent.mouseLeave(sparseCard);
+    await userEvent.unhover(sparseCard);
     const popularCard = screen.getByRole("group", { name: "模型 popular-model" });
     expect(popularCard).not.toHaveAttribute("data-model-support-tooltip-trigger");
     fireEvent.mouseEnter(popularCard);
-    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
   });
 
   it("提交时目录发生变化会自动刷新预览并提示重新确认", async () => {
@@ -629,6 +651,7 @@ describe("账号批量模型同步", () => {
           account_name: "账号 A",
           platform: "openai",
           models: ["model-a"],
+          enabled_models: ["model-a"],
           probe_model: "model-a",
         },
       ],
@@ -670,6 +693,8 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     const syncButton = await screen.findByRole("button", { name: "同步 1 个账号" });
     await userEvent.click(syncButton);
@@ -685,7 +710,7 @@ describe("账号批量模型同步", () => {
       expect(apply).toHaveBeenLastCalledWith(
         [{ account_id: "41", models: ["model-a"] }],
         "new-fingerprint",
-        ["model-a"],
+        [],
       ),
     );
   });
@@ -727,6 +752,8 @@ describe("账号批量模型同步", () => {
         />
       </QueryClientProvider>,
     );
+    await userEvent.click(screen.getByRole("button", { name: "选择全部分组" }));
+    await userEvent.click(screen.getByRole("button", { name: "开始同步" }));
 
     const cancelButton = await screen.findByRole("button", { name: "取消任务" });
     const footerCloseButton = screen

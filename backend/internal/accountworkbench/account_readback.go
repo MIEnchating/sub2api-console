@@ -60,7 +60,27 @@ func verifyApplied(account, requested map[string]any) error {
 	return nil
 }
 
+// verifyAppliedWhileIsolated checks the configuration fields that are safe to
+// compare before promotion. Sub2API keeps the runtime health status (often
+// "active") independent from scheduling; schedulable=false is the isolation
+// boundary used by the workbench.
+func verifyAppliedWhileIsolated(account, requested map[string]any) error {
+	withoutStatus := make(map[string]any, len(requested))
+	for key, value := range requested {
+		if key != "status" {
+			withoutStatus[key] = value
+		}
+	}
+	return verifyApplied(account, withoutStatus)
+}
+
 func appliedValue(actual, expected any) bool {
+	// Sub2API serializes an explicitly empty optional text field as JSON null.
+	// Treat the two representations as equivalent so a successful write is not
+	// incorrectly classified as uncertain during the isolation readback.
+	if wanted, ok := expected.(string); ok && wanted == "" && actual == nil {
+		return true
+	}
 	if wanted, ok := expected.(map[string]any); ok {
 		got, ok := actual.(map[string]any)
 		if !ok {

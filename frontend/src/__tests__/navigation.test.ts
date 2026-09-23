@@ -10,6 +10,7 @@ import {
   CircleDollarSign,
   FileSearch,
   Fingerprint,
+  ScanSearch,
   HeartPulse,
   GitCompareArrows,
   KeyRound,
@@ -49,6 +50,7 @@ describe("侧边菜单", () => {
       "账号工作台",
       "自动巡检",
       "模型检测",
+      "动画检测",
       "流量排行",
       "请求查询",
       "告警通知",
@@ -80,6 +82,7 @@ describe("侧边菜单", () => {
       UserPlus,
       HeartPulse,
       Fingerprint,
+      ScanSearch,
       ChartNoAxesColumnIncreasing,
       FileSearch,
       Siren,
@@ -115,6 +118,7 @@ describe("侧边菜单", () => {
           "account-workbench",
           "auto-inspection",
           "model-check",
+          "animation-check",
           "traffic",
           "trace",
           "alerts",
@@ -158,6 +162,7 @@ describe("侧边菜单", () => {
   it.each([
     ["/newapi/", "config"],
     ["/accounts/", "accounts"],
+    ["/animation-check/", "animation-check"],
     ["/newapi/groups/", "newapi-groups"],
   ])("直接访问带尾斜线的 %s 时保持对应导航 %s", (pathname, expected) => {
     expect(viewForPath(pathname)).toBe(expected);

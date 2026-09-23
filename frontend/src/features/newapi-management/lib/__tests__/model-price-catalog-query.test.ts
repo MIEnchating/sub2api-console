@@ -62,4 +62,16 @@ describe("参考价格缓存有效期", () => {
     expect(api.managementModelPrices).toHaveBeenCalledTimes(2);
     expect(api.managementModelPrices).toHaveBeenLastCalledWith("secondary");
   });
+
+  it("部分模型参考价不完整时再次同步会重新查询，避免等满一天才恢复", async () => {
+    const options = modelPriceCatalogQueryOptions("primary");
+    client.setQueryData(options.queryKey, {
+      ...catalog,
+      stale: false,
+      warning: "部分模型参考价不完整",
+      expires_at: "2026-09-08T12:00:00Z",
+    });
+    await client.fetchQuery(options);
+    expect(api.managementModelPrices).toHaveBeenCalledOnce();
+  });
 });
