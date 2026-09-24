@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FieldError } from "@/components/field-error";
 import { Save } from "lucide-react";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
 
 import type { AccountCreationPolicy } from "@/api";
@@ -63,8 +63,12 @@ export function AccountCreationPolicyForm(props: {
   });
   const poolMode = form.watch("poolMode");
   const isDirty = form.formState.isDirty;
+  const observedPolicy = useRef(props.policy);
 
   useEffect(() => {
+    // 保存清除脏状态时，不能再次应用已经处理过的旧快照。
+    if (observedPolicy.current === props.policy) return;
+    observedPolicy.current = props.policy;
     if (isDirty) return;
     form.reset(accountCreationPolicyFormValues(props.policy));
   }, [form, isDirty, props.policy]);

@@ -2,7 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { FieldError } from "@/components/field-error";
 import { useQuery } from "@tanstack/react-query";
 import { Save } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
@@ -69,8 +69,12 @@ export function PlatformProbeModelsForm(props: {
     defaultValues: platformProbeModelFormValues(props.models),
   });
   const isDirty = form.formState.isDirty;
+  const observedModels = useRef(props.models);
 
   useEffect(() => {
+    // 保存清除脏状态时，不能再次应用已经处理过的旧快照。
+    if (observedModels.current === props.models) return;
+    observedModels.current = props.models;
     if (isDirty) return;
     form.reset(platformProbeModelFormValues(props.models));
   }, [form, isDirty, props.models]);

@@ -58,7 +58,10 @@ it("全局策略后台刷新时保留草稿，成功保存后清除未保存状�
   await screen.findByRole("tab", { name: "分组独立配置 1" });
   expect(field).toHaveValue("model-draft");
   fireEvent.click(screen.getByRole("button", { name: "保存全局默认" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "保存全局默认" })).toBeDisabled());
+  await waitFor(() => {
+    expect(field).toBeEnabled();
+    expect(screen.getByRole("button", { name: "保存全局默认" })).toBeDisabled();
+  });
   expect(field).toHaveValue("model-draft");
 });
 
@@ -78,9 +81,10 @@ it("探活模型后台刷新时保留草稿，成功保存后清除未保存状�
   await screen.findByRole("tab", { name: "分组独立配置 1" });
   expect(field).toHaveValue("probe-draft");
   fireEvent.click(screen.getByRole("button", { name: "保存默认探活模型" }));
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "保存默认探活模型" })).toBeDisabled(),
-  );
+  await waitFor(() => {
+    expect(field).toBeEnabled();
+    expect(screen.getByRole("button", { name: "保存默认探活模型" })).toBeDisabled();
+  });
   expect(field).toHaveValue("probe-draft");
 });
 
