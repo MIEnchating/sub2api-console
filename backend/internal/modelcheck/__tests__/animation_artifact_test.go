@@ -13,7 +13,7 @@ import (
 
 const htmlAnimation = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><style>body{margin:0;background:#eef}svg{width:100%;height:auto}.wheel{animation:spin 2s linear infinite;transform-origin:center;transform-box:fill-box}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:600px){svg{max-height:80vh}}</style></head><body><svg viewBox="0 0 640 400"><circle class="wheel" r="20" cx="100" cy="100"/></svg></body></html>`
 const htmlAnimationWithFilter = `<!DOCTYPE html><html><head><style>svg{width:100%}</style></head><body><svg viewBox="0 0 100 100"><defs><filter id="shadow"><feGaussianBlur stdDeviation="2"/><feOffset dx="1" dy="1"/></filter><marker id="marker" markerWidth="5" markerHeight="5" refX="1" refY="1" orient="auto"><path d="M0 0L2 1L0 2"/></marker><symbol id="wheel" viewBox="0 0 20 20"><circle r="9" cx="10" cy="10"/></symbol><linearGradient id="paint"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><use href="#wheel" width="20" height="20"/><g filter="url(#shadow)" marker-end="url(#marker)"><circle cx="50" cy="50" r="20" fill="url(#paint)"/></g></svg></body></html>`
-const requestedAnimationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。禁止依赖外部资源，只输出完整HTML，不要代码围栏或解释文字。`
+const requestedAnimationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。可使用内联JavaScript脚本实现动画，但不得发送网络请求、加载外部脚本或引用外部资源，只输出完整HTML，不要代码围栏或解释文字。`
 
 func TestAnimationUsesSelectedModelLowEffortAndHTMLPrompt(t *testing.T) {
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +94,7 @@ func TestHTMLAnimationAllowsCommonInlineSVGEffects(t *testing.T) {
 	}
 }
 
-func TestHTMLAnimationRemovesScriptsAndEventHandlersFromPreview(t *testing.T) {
+func TestHTMLAnimationKeepsInlineScriptsAndRemovesEventHandlersFromPreview(t *testing.T) {
 	source := strings.Replace(htmlAnimation, "</body>", `<script>window.alert("never run")</script><div onclick="window.alert(1)">安全内容</div></body>`, 1)
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"output_text": source})
@@ -106,13 +106,30 @@ func TestHTMLAnimationRemovesScriptsAndEventHandlersFromPreview(t *testing.T) {
 	if row.Status != "succeeded" || row.HTML == "" || row.Source != source {
 		t.Fatalf("script-bearing scene was not rendered safely: %#v", row)
 	}
-	if strings.Contains(strings.ToLower(row.HTML), "<script") || strings.Contains(row.HTML, "onclick") || !strings.Contains(row.HTML, "安全内容") || !strings.Contains(row.HTML, "script-src &#39;none&#39;") {
-		t.Fatalf("unsafe content remained in renderable HTML: %s", row.HTML)
+	if !strings.Contains(row.HTML, `<script>window.alert("never run")</script>`) || strings.Contains(row.HTML, "onclick") || !strings.Contains(row.HTML, "安全内容") || !strings.Contains(row.HTML, "script-src &#39;unsafe-inline&#39;") || !strings.Contains(row.HTML, "connect-src &#39;none&#39;") {
+		t.Fatalf("inline script or preview policy was not preserved safely: %s", row.HTML)
+	}
+}
+
+func TestHTMLAnimationRejectsExternalScriptSources(t *testing.T) {
+	for _, content := range []string{`<script src="https://example.invalid/animation.js"></script>`, `<script type="module">import "https://example.invalid/animation.js"</script>`} {
+		t.Run(content, func(t *testing.T) {
+			f := setup(t, 1, "openai", func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": strings.Replace(htmlAnimation, "</body>", content+"</body>", 1)})
+			})
+			if _, err := f.service.EnqueueAnimation(context.Background(), request("1")); err != nil {
+				t.Fatal(err)
+			}
+			task := finished(t, f)
+			if task.Status != "failed" {
+				t.Fatal("external script source accepted")
+			}
+		})
 	}
 }
 
 func TestHTMLAnimationRejectsActiveContentAndExternalResources(t *testing.T) {
-	for _, content := range []string{`<img src="https://example.invalid/a">`, `<meta http-equiv="refresh" content="0;url=https://example.invalid">`, `<style>@import 'https://example.invalid/x';</style>`, `<style>body{background:url(https://example.invalid/x)}</style>`, `<style>body{background:u\72l(https://example.invalid/x)}</style>`, `<svg><animate attributeName="href" to="https://example.invalid"/></svg>`} {
+	for _, content := range []string{`<img src="https://example.invalid/a">`, `<meta http-equiv="refresh" content="0;url=https://example.invalid">`, `<meta http-equiv="refresh" content="0;url=/other-page">`, `<style>@import 'https://example.invalid/x';</style>`, `<style>body{background:url(https://example.invalid/x)}</style>`, `<style>body{background:u\72l(https://example.invalid/x)}</style>`, `<svg><animate attributeName="href" to="https://example.invalid"/></svg>`} {
 		t.Run(content, func(t *testing.T) {
 			f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"output_text": strings.Replace(htmlAnimation, "</body>", content+"</body>", 1)})

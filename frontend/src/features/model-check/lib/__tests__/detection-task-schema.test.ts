@@ -22,7 +22,14 @@ const base: DetectionTaskForm = {
   interval_minutes: 60,
   daily_times: ["09:00", "20:00"],
   timeout_seconds: 120,
+  concurrency: 4,
 };
+
+it.each([0, 17, 1.5, Number.NaN])("同时检测账号数为 %s 时阻止保存", (concurrency) => {
+  expect(detectionTaskSchema.safeParse({ ...base, animation: true, concurrency }).success).toBe(
+    false,
+  );
+});
 
 it.each([
   [true, false, false, ["动画检测"]],

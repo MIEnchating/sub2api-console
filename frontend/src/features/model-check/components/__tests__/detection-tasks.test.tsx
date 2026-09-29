@@ -26,6 +26,7 @@ const plan: DetectionTask = {
   timezone: "Asia/Shanghai",
   interval_minutes: 60,
   timeout_seconds: 120,
+  concurrency: 4,
 };
 function setup(values: DetectionTask[] = [plan], failSave = false) {
   vi.stubGlobal("PointerEvent", MouseEvent);
@@ -77,6 +78,9 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
   await user.click(screen.getByRole("button", { name: "编辑" }));
   const dialog = screen.getByRole("dialog", { name: "编辑检测任务" });
   const model = within(dialog).getByRole("textbox", { name: "检测模型" });
+  const concurrency = within(dialog).getByRole("spinbutton", { name: "同时检测账号数" });
+  expect(concurrency).toHaveValue(4);
+  fireEvent.change(concurrency, { target: { value: "6" } });
   expect(model).toHaveValue("test-model");
   await user.clear(model);
   await user.type(model, "edited-model");
@@ -98,6 +102,7 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
       group_ids: ["7"],
       model: "edited-model",
       terminal_rounds: 5,
+      concurrency: 6,
       automatic: true,
       daily_times: ["09:00", "20:00"],
     }),
@@ -108,11 +113,33 @@ it("新任务未选分组不能保存且可以关闭表单", async () => {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "新增任务" }));
   expect(await screen.findByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  expect(screen.getByRole("spinbutton", { name: "同时检测账号数" })).toHaveValue(4);
   await user.click(screen.getByRole("button", { name: "保存任务" }));
   expect(await screen.findByText("请选择至少一个分组")).toBeVisible();
   expect(requests.filter((item) => item.method === "PUT")).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "取消" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("并发数超出上限时显示字段错误，键盘修正后保存并在任务列表展示", async () => {
+  const requests = setup();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "编辑" }));
+  const concurrency = screen.getByRole("spinbutton", { name: "同时检测账号数" });
+  fireEvent.change(concurrency, { target: { value: "17" } });
+  await user.click(screen.getByRole("button", { name: "保存任务" }));
+  expect(await screen.findByText("最多同时检测 16 个账号")).toBeVisible();
+  expect(concurrency).toHaveAttribute("aria-invalid", "true");
+  expect(requests.filter((item) => item.method === "PUT")).toHaveLength(0);
+  await user.clear(concurrency);
+  await user.type(concurrency, "2");
+  await user.click(screen.getByRole("button", { name: "保存任务" }));
+  await waitFor(() =>
+    expect(requests.find((item) => item.method === "PUT")?.body).toMatchObject({ concurrency: 2 }),
+  );
+  expect(screen.getByRole("article", { name: "检测任务 每日检测" })).toHaveTextContent(
+    "同时检测 2 个账号",
+  );
 });
 
 it("取消所有检测项时阻止保存，键盘选择前置检测后仅提交前置阶段", async () => {

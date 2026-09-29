@@ -72,6 +72,20 @@ export function DetectionTaskFields(props: {
           <FieldError message={errors.timeout_seconds?.message} />
         </div>
       </div>
+      <div className="min-w-0 space-y-1">
+        <label className="block space-y-1 text-sm">
+          同时检测账号数
+          <Input
+            type="number"
+            min={1}
+            max={16}
+            {...form.register("concurrency", { valueAsNumber: true })}
+            disabled={props.pending}
+            aria-invalid={!!errors.concurrency}
+          />
+        </label>
+        <FieldError message={errors.concurrency?.message} />
+      </div>
       <DetectionTaskStages form={form} pending={props.pending} />
       <section aria-label="自动检测计划" className="space-y-3 border-t pt-4">
         <label className="flex items-center gap-2 text-sm">

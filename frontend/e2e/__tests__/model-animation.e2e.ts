@@ -100,7 +100,7 @@ test("独立动画检测页在窄屏可滚动选择、直接开始并展示隔�
   });
   await expect(dialog.getByRole("article")).toHaveCount(1);
   await expect(accountCard.getByRole("checkbox", { name: /检测 动画检测/ })).toBeChecked();
-  await expect(accountCard.getByText("生成中，等待动画结果", { exact: true })).toBeVisible();
+  await expect(accountCard.getByText("已开始请求，等待首字", { exact: true })).toBeVisible();
   const operations = settings.getByRole("group", { name: "动画检测操作" });
   await expect(operations.getByRole("button", { name: "取消任务", exact: true })).toBeInViewport({
     ratio: 1,

@@ -18,7 +18,7 @@ import (
 )
 
 const animationSkill = "sub2api-model-animation"
-const animationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。禁止依赖外部资源，只输出完整HTML，不要代码围栏或解释文字。`
+const animationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。可使用内联JavaScript脚本实现动画，但不得发送网络请求、加载外部脚本或引用外部资源，只输出完整HTML，不要代码围栏或解释文字。`
 
 type AnimationTarget struct {
 	AccountID string `json:"account_id"`
@@ -371,13 +371,12 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 }
 
 func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) (time.Duration, error) {
-	select {
-	case s.animation.slots <- struct{}{}:
-	case <-ctx.Done():
+	releaseSlot, err := s.reserveAnimationSlot(ctx)
+	if err != nil {
 		return 0, errors.New("动画检测已取消或任务超时")
 	}
 	started := time.Now()
-	defer func() { <-s.animation.slots }()
+	defer releaseSlot()
 	result.Phase = "running"
 	for _, notify := range onPhase {
 		if notify != nil {

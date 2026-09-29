@@ -30,6 +30,11 @@ export const detectionTaskSchema = z
     interval_minutes: z.number(),
     daily_times: z.array(z.string()),
     timeout_seconds: z.number(),
+    concurrency: z
+      .number()
+      .int("请输入整数")
+      .min(1, "至少同时检测 1 个账号")
+      .max(16, "最多同时检测 16 个账号"),
   })
   .superRefine((value, ctx) => {
     if (!value.animation && !value.precheck && !value.terminal)

@@ -39,21 +39,23 @@ type AnimationScheduleView struct {
 }
 
 type animationState struct {
-	activeMu   sync.Mutex
-	active     map[string]bool
-	slots      chan struct{}
-	launchMu   sync.Mutex
-	scheduleMu sync.Mutex
-	schedules  map[string]AnimationSchedule
-	next       map[string]time.Time
-	lastTask   map[string]string
-	lastError  map[string]string
-	repository animationRepository
+	activeMu        sync.Mutex
+	active          map[string]bool
+	slots           chan struct{}
+	standaloneSlots chan struct{}
+	launchMu        sync.Mutex
+	scheduleMu      sync.Mutex
+	schedules       map[string]AnimationSchedule
+	next            map[string]time.Time
+	lastTask        map[string]string
+	lastError       map[string]string
+	repository      animationRepository
 }
 
 func (s *Service) loadAnimationConfiguration(ctx context.Context) error {
 	s.animation.active = map[string]bool{}
-	s.animation.slots = make(chan struct{}, 3)
+	s.animation.slots = make(chan struct{}, maxDetectionConcurrency)
+	s.animation.standaloneSlots = make(chan struct{}, 3)
 	s.animation.schedules = map[string]AnimationSchedule{}
 	s.animation.next = map[string]time.Time{}
 	s.animation.lastTask = map[string]string{}

@@ -8,6 +8,11 @@ const prompt = "请生成可直接运行的单文件HTML，使用内联SVG绘制
 
 for (const sizing of ["响应式", "固定尺寸"]) {
   test(`${sizing} HTML 动画完整缩放且三个视图与长代码在窄屏可用`, async ({ page }, testInfo) => {
+    const networkRequests: string[] = [];
+    await page.route("**/animation-network-probe/**", async (route) => {
+      networkRequests.push(route.request().url());
+      await route.fulfill({ body: "network must be blocked" });
+    });
     const task: Task = {
       id: "html-preview",
       skill: "sub2api-model-animation",
@@ -81,10 +86,56 @@ for (const sizing of ["响应式", "固定尺寸"]) {
     const dialog = page.getByRole("dialog", { name: "动画预览", exact: true });
     await expect(dialog).toBeInViewport({ ratio: 1 });
     const frame = dialog.locator("iframe");
-    await expect(frame).toHaveAttribute("sandbox", "");
+    await expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    await expect(frame).toHaveAttribute("scrolling", "no");
     await expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
-    await expect(frame.contentFrame().getByRole("heading", { name: "鹈鹕骑行" })).toBeVisible();
-    await expect(frame.contentFrame().getByRole("heading", { name: "脚本已执行" })).toHaveCount(0);
+    await expect(frame.contentFrame().getByRole("heading", { name: "脚本已执行" })).toBeVisible();
+    const network = await frame
+      .contentFrame()
+      .locator("body")
+      .evaluate(async () => {
+        const urls = [
+          "https://example.invalid/animation-network-probe/fetch",
+          "/animation-network-probe/same-origin",
+        ];
+        const fetchResults = await Promise.all(
+          urls.map(async (url) => {
+            try {
+              await fetch(url);
+              return "allowed";
+            } catch {
+              return "blocked";
+            }
+          }),
+        );
+        const imageResult = await new Promise<string>((resolve) => {
+          const image = new Image();
+          image.onload = () => resolve("allowed");
+          image.onerror = () => resolve("blocked");
+          image.src = "https://example.invalid/animation-network-probe/image.png";
+        });
+        const scriptResult = await new Promise<string>((resolve) => {
+          const script = document.createElement("script");
+          script.onload = () => resolve("allowed");
+          script.onerror = () => resolve("blocked");
+          script.src = "https://example.invalid/animation-network-probe/script.js";
+          document.head.append(script);
+        });
+        let parentAccess = "allowed";
+        try {
+          void parent.document.body;
+        } catch {
+          parentAccess = "blocked";
+        }
+        return { fetchResults, imageResult, scriptResult, parentAccess };
+      });
+    expect(network).toEqual({
+      fetchResults: ["blocked", "blocked"],
+      imageResult: "blocked",
+      scriptResult: "blocked",
+      parentAccess: "blocked",
+    });
+    expect(networkRequests).toEqual([]);
     await expect(dialog.getByText("输入 Token", { exact: true })).toHaveCount(0);
     await expect(dialog.getByText("TPS（计算）", { exact: true })).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath("html-animation.png") });
@@ -100,6 +151,12 @@ for (const sizing of ["响应式", "固定尺寸"]) {
     await expect(dialog.getByRole("button", { name: "关闭", exact: true })).toBeInViewport({
       ratio: 1,
     });
+    expect(
+      await frame
+        .contentFrame()
+        .locator("html")
+        .evaluate((el) => el.scrollHeight <= el.clientHeight),
+    ).toBe(true);
     await page.keyboard.press("Escape");
     await expect(trigger).toBeFocused();
     await expect(page.getByText("输入 Token", { exact: true })).toHaveCount(0);

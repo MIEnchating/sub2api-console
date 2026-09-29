@@ -1491,6 +1491,7 @@ export type DetectionTask = {
   daily_times?: string[];
   timezone?: string;
   timeout_seconds: number;
+  concurrency?: number;
   running?: boolean;
   next_at?: string;
   last_task_id?: string;

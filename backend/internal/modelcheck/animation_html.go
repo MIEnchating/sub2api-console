@@ -10,7 +10,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-const animationPreviewCSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data: blob:; connect-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+const animationPreviewCSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data: blob:; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
 const animationSourceLimit = 128 << 10
 
 var animationCSSURLs = regexp.MustCompile(`(?i)url\s*\(\s*([^)]*)\)`)
@@ -64,10 +64,6 @@ func sanitizeAnimationHTML(source string) (string, error) {
 			return errors.New("生成的 HTML 结构过于复杂，请重试")
 		}
 		if node.Type == html.ElementNode {
-			if node.Data == "script" {
-				node.Parent.RemoveChild(node)
-				return nil
-			}
 			attrs := node.Attr[:0]
 			for _, attr := range node.Attr {
 				if !strings.HasPrefix(strings.ToLower(attr.Key), "on") {
@@ -75,6 +71,17 @@ func sanitizeAnimationHTML(source string) (string, error) {
 				}
 			}
 			node.Attr = attrs
+			if node.Data == "script" {
+				for _, attr := range node.Attr {
+					key := strings.ToLower(attr.Key)
+					if key == "src" {
+						return errors.New("动画脚本必须使用内联代码")
+					}
+					if key == "type" && strings.EqualFold(strings.TrimSpace(attr.Val), "module") {
+						return errors.New("动画脚本不支持模块或外部导入")
+					}
+				}
+			}
 			elements++
 			if elements > 4000 {
 				return errors.New("生成的 HTML 元素过多，请重试")
@@ -120,6 +127,9 @@ func sanitizeAnimationHTML(source string) (string, error) {
 }
 
 func validateAnimationHTMLResources(node *html.Node) error {
+	if node.Data == "meta" && strings.EqualFold(attrValue(node, "http-equiv"), "refresh") {
+		return errors.New("动画不能自动跳转")
+	}
 	for _, attr := range node.Attr {
 		key := strings.ToLower(attr.Key)
 		if key != "xmlns" && !strings.HasPrefix(key, "xmlns:") && containsExternalURL(attr.Val) {
@@ -135,9 +145,6 @@ func validateAnimationHTMLResources(node *html.Node) error {
 			if err := validateAnimationResourceReference(attr.Val); err != nil {
 				return err
 			}
-		}
-		if node.Data == "meta" && key == "content" && strings.EqualFold(attrValue(node, "http-equiv"), "refresh") && containsExternalURL(attr.Val) {
-			return errors.New("动画不能引用外部资源")
 		}
 	}
 	return nil

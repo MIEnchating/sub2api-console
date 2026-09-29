@@ -36,6 +36,7 @@ func TestManagedDetectionRestartKeepsCompletedAccountAndOriginalTaskID(t *testin
 	value := managedTask()
 	value.Precheck = false
 	value.Terminal = false
+	value.Concurrency = 1
 	plans, err := f.service.SaveDetectionTask(context.Background(), value, "test")
 	if err != nil {
 		t.Fatal(err)

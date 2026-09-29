@@ -9,6 +9,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -137,8 +138,9 @@ func (s *Service) reserveDetectionAccounts(accounts []selectedAccount) (func(), 
 	}, nil
 }
 func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Task, value DetectionTask) {
-	ctx, cancel := context.WithTimeout(parent, s.taskTimeout)
-	defer cancel()
+	parent = context.WithValue(parent, managedDetectionSlotsKey{}, true)
+	ctx, cancelPreparation := context.WithTimeout(parent, s.taskTimeout)
+	defer cancelPreparation()
 	begin := time.Now()
 	task.Status = "running"
 	task.Message = "正在读取分组当前账号"
@@ -165,6 +167,9 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		fail(err)
 		return
 	}
+	cancelPreparation()
+	ctx, cancel := context.WithTimeout(parent, detectionTaskTimeout(value, len(accounts), s.taskTimeout))
+	defer cancel()
 	if err := bindDetectionRecovery(&task, accounts); err != nil {
 		fail(err)
 		return
@@ -234,62 +239,88 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		taskstore.PersistProgress(s.tasks, task)
 	}
 	questions, _ := normalizePrecheckQuestions(precheckMode, value.PrecheckQuestions)
-	for _, account := range accounts {
-		for _, mode := range stages {
-			if done[animationResultKey(account.ID, mode)] {
-				continue
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			if mode == "terminal" {
-				publish(fmt.Sprintf("账号 %s：终端检测 %d 轮", account.ID, value.TerminalRounds))
-				var old TerminalContinuityResult
-				for _, check := range checks {
-					if check.AccountID == account.ID {
-						old = check
-						break
+	publish(fmt.Sprintf("正在并发检测 %d 个账号，同时检测上限 %d", len(accounts), value.Concurrency))
+	type stageEvent struct {
+		animation *AnimationResult
+		terminal  *TerminalContinuityResult
+		final     bool
+	}
+	priorChecks := make(map[string]TerminalContinuityResult, len(checks))
+	for _, check := range checks {
+		priorChecks[check.AccountID] = check
+	}
+	jobs := make(chan selectedAccount)
+	events := make(chan stageEvent)
+	var workers sync.WaitGroup
+	for range min(value.Concurrency, len(accounts)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for account := range jobs {
+				for _, mode := range stages {
+					if ctx.Err() != nil {
+						return
 					}
+					if done[animationResultKey(account.ID, mode)] {
+						continue
+					}
+					if mode == "terminal" {
+						result := s.runTerminalCheckpoint(ctx, account, value.TimeoutSeconds, value.Model, task.ID+"-"+account.ID+"-terminal", value.TerminalRounds, priorChecks[account.ID], func(snapshot TerminalContinuityResult) {
+							snapshot.Incomplete = true
+							events <- stageEvent{terminal: &snapshot}
+						})
+						if taskstore.Interrupted(ctx) {
+							return
+						}
+						events <- stageEvent{terminal: &result, final: true}
+						continue
+					}
+					result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
+					if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
+						if taskstore.Interrupted(ctx) {
+							return
+						}
+						result.Error = safeCredentialError(err)
+					} else {
+						result.Status = "succeeded"
+					}
+					result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+					events <- stageEvent{animation: &result, final: true}
 				}
-				result := s.runTerminalCheckpoint(ctx, account, value.TimeoutSeconds, value.Model, task.ID+"-"+account.ID+"-terminal", value.TerminalRounds, old, func(snapshot TerminalContinuityResult) {
-					// Only partial round checkpoints are published here; final stage counts are updated below.
-					snapshot.Incomplete = true
-					checks = upsertTerminal(checks, snapshot)
-					publish(fmt.Sprintf("账号 %s：已完成 %d/%d 轮", account.ID, len(snapshot.RoundResults), value.TerminalRounds))
-				})
-				if taskstore.Interrupted(ctx) {
-					break
-				}
-				checks = upsertTerminal(checks, result)
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, account := range accounts {
+			select {
+			case jobs <- account:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	go func() { workers.Wait(); close(events) }()
+	for event := range events {
+		if event.terminal != nil {
+			checks = upsertTerminal(checks, *event.terminal)
+			if event.final {
 				completed++
-				if result.Verdict != "error" {
+				if event.terminal.Verdict != "error" {
 					success++
 				}
-				publish(fmt.Sprintf("已完成 %d/%d 项检测", completed, total))
-				continue
 			}
-			publish(fmt.Sprintf("账号 %s：%s", account.ID, animationModeLabel(mode)))
-			result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
-			if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
-				if taskstore.Interrupted(ctx) {
-					break
-				}
-				result.Error = safeCredentialError(err)
-			} else {
-				result.Status = "succeeded"
+		} else if event.animation != nil {
+			animations = append(animations, *event.animation)
+			if event.animation.Status == "succeeded" {
 				success++
 			}
-			result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
-			animations = append(animations, result)
-			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{result}); err != nil {
-				slog.Error("保存分组动画检测证据失败", "task_id", task.ID, "account_id", result.AccountID, "mode", result.Mode, "error", err)
+			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{*event.animation}); err != nil {
+				slog.Error("保存分组动画检测证据失败", "task_id", task.ID, "account_id", event.animation.AccountID, "mode", event.animation.Mode, "error", err)
 			}
 			completed++
-			publish(fmt.Sprintf("已完成 %d/%d 项检测", completed, total))
 		}
-		if ctx.Err() != nil {
-			break
-		}
+		publish(fmt.Sprintf("已完成 %d/%d 项检测", completed, total))
 	}
 	publish(fmt.Sprintf("检测任务完成：成功 %d，失败或未执行 %d", success, total-success))
 	task.Status = "succeeded"
@@ -302,6 +333,26 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	task.Result["completed_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.MarkCancelled(ctx, &task, "检测任务已取消")
 	taskstore.PersistFinal(s.tasks, task)
+}
+
+func detectionTaskTimeout(value DetectionTask, accountCount int, minimum time.Duration) time.Duration {
+	const perRequestOverhead = 15 * time.Second
+	requestBudget := time.Duration(value.TimeoutSeconds)*time.Second + perRequestOverhead
+	perAccount := time.Duration(0)
+	if value.Precheck {
+		perAccount += requestBudget
+	}
+	if value.Terminal {
+		perAccount += time.Duration(value.TerminalRounds) * requestBudget
+	}
+	if value.Animation == nil || *value.Animation {
+		perAccount += animationMaximumAttempts * requestBudget
+	}
+	concurrency := value.Concurrency
+	if concurrency <= 0 {
+		concurrency = defaultDetectionConcurrency
+	}
+	return max(minimum, time.Duration((accountCount+concurrency-1)/concurrency)*perAccount)
 }
 
 func detectionTaskMode(value DetectionTask) string {

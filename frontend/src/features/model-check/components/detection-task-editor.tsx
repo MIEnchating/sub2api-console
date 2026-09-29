@@ -44,6 +44,7 @@ export function DetectionTaskEditor(props: {
       interval_minutes: 60,
       timeout_seconds: 120,
       ...props.value,
+      concurrency: props.value?.concurrency || 4,
       model: props.value?.model ?? animationTestModel,
       animation: props.value?.animation ?? true,
       daily_times: props.value?.daily_times ?? ["09:00"],

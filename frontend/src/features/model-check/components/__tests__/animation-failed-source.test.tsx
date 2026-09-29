@@ -10,12 +10,12 @@ const failedResult: AnimationResult = {
   model: "gpt-6-astra",
   request_id: "failed-html",
   status: "failed",
-  error: "生成的 HTML 包含脚本、外部资源或不支持的元素，请重试",
+  error: "生成的 HTML 包含外部资源或不支持的元素，请重试",
   duration_ms: 1000,
   completed_at: "2026-09-28T00:00:00Z",
 };
 
-it("校验拒绝的动画可在详情查看原文且脚本不执行", async () => {
+it("校验拒绝的动画可在详情查看原文且不会在详情页执行", async () => {
   const user = userEvent.setup();
   const source = "<html><script>window.invalidAnimation=1</script></html>";
   render(<AnimationResultDetails result={{ ...failedResult, source, source_truncated: true }} />);

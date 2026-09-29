@@ -26,9 +26,11 @@ it("HTML 动画可切换代码和本次提示词，不展示用量统计", async
   await user.click(screen.getByRole("button", { name: /放大查看/ }));
   const dialog = within(await screen.findByRole("dialog", { name: "动画预览" }));
   const frame = dialog.getByLabelText("动画账号生成的鹈鹕骑自行车动画");
-  expect(frame).toHaveAttribute("sandbox", "");
+  expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+  expect(frame).toHaveAttribute("scrolling", "no");
   expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
-  expect(frame.getAttribute("srcdoc")).toContain("script-src 'none'");
+  expect(frame.getAttribute("srcdoc")).toContain("script-src 'unsafe-inline'");
+  expect(frame.getAttribute("srcdoc")).toContain("connect-src 'none'");
   expect(dialog.getByText("low")).toBeVisible();
   expect(dialog.queryByText("输入 Token")).not.toBeInTheDocument();
   expect(dialog.queryByText("TPS（计算）")).not.toBeInTheDocument();

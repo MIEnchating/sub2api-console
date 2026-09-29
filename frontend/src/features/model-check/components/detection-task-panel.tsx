@@ -102,6 +102,9 @@ export function DetectionTaskPanel(): ReactElement {
                   </Badge>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                同时检测 {plan.concurrency || 4} 个账号
+              </p>
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-3">
               <p className="text-xs text-muted-foreground wrap-anywhere">

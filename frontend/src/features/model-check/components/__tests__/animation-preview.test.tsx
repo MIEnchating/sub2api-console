@@ -65,7 +65,7 @@ it("透明动画使用浅色画布，深色主题下黑色线条仍清晰可见"
   );
 });
 
-it("完整 HTML 预览保留原文，但沙箱和 CSP 均禁止脚本执行", () => {
+it("完整 HTML 预览允许内联脚本，但沙箱和 CSP 禁止网络访问", () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -82,8 +82,10 @@ it("完整 HTML 预览保留原文，但沙箱和 CSP 均禁止脚本执行", ()
     <AnimationAccountResult result={htmlResult} retryDisabled={false} onRetry={vi.fn()} />,
   );
   const iframe = container.querySelector("iframe");
-  expect(iframe).toHaveAttribute("sandbox", "");
+  expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+  expect(iframe).toHaveAttribute("scrolling", "no");
   expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("window.rendered"));
-  expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("script-src 'none'"));
+  expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("script-src 'unsafe-inline'"));
+  expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("connect-src 'none'"));
   vi.unstubAllGlobals();
 });

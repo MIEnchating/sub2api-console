@@ -30,7 +30,12 @@ type DetectionTask struct {
 	DailyTimes        []string `json:"daily_times,omitempty"`
 	Timezone          string   `json:"timezone,omitempty"`
 	TimeoutSeconds    int      `json:"timeout_seconds"`
+	Concurrency       int      `json:"concurrency"`
 }
+
+const defaultDetectionConcurrency = 4
+const maxDetectionConcurrency = 16
+
 type DetectionTaskView struct {
 	DetectionTask
 	Running    bool   `json:"running"`
@@ -62,6 +67,9 @@ func cloneDetectionTask(value DetectionTask) DetectionTask {
 	// Missing animation belongs to legacy configurations, which always generated it.
 	enabled := value.Animation == nil || *value.Animation
 	value.Model = strings.TrimSpace(value.Model)
+	if value.Concurrency == 0 {
+		value.Concurrency = defaultDetectionConcurrency
+	}
 	value.Animation = &enabled
 	value.GroupIDs = slices.Clone(value.GroupIDs)
 	value.DailyTimes = slices.Clone(value.DailyTimes)
@@ -90,6 +98,9 @@ func validateDetectionTask(value DetectionTask) error {
 	}
 	if value.TimeoutSeconds < 5 || value.TimeoutSeconds > 120 {
 		return errors.New("请求超时必须在 5 到 120 秒之间")
+	}
+	if value.Concurrency < 0 || value.Concurrency > maxDetectionConcurrency {
+		return errors.New("同时检测账号数必须在 1 到 16 之间")
 	}
 	if value.Terminal && (value.TerminalRounds < 1 || value.TerminalRounds > 20) {
 		return errors.New("终端检测轮数必须在 1 到 20 之间")

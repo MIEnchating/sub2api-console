@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { AnimationResult } from "@/api";
 
 const previewPolicy =
-  "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data: blob:; connect-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data: blob:; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const canvasWidth = 1024;
 const canvasHeight = 768;
 // Keep the main SVG inside the preview viewport, including fixed-size generated SVGs.
 // This affects only the preview; the original HTML remains available in the code tab.
-const previewStyle = `html{width:100%!important;height:100%!important;overflow:auto!important}body{box-sizing:border-box!important;margin:0!important;max-width:100%!important;min-width:0!important}svg:not(svg svg){max-width:100%!important;max-height:80vh!important}`;
+const previewStyle = `html,body{width:100%!important;height:100%!important;overflow:hidden!important}body{box-sizing:border-box!important;margin:0!important;max-width:100%!important;min-width:0!important}svg:not(svg svg){max-width:100%!important;max-height:100%!important}`;
 
 export function AnimationCanvas(props: {
   result: AnimationResult;
@@ -17,7 +17,8 @@ export function AnimationCanvas(props: {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const document = useMemo(() => {
     if (!props.result.html) return undefined;
-    // Keep the generated document in an opaque-origin sandbox and block network access.
+    // Keep the generated document in an opaque-origin sandbox, allow inline animation scripts,
+    // and block network access through the document CSP.
     return `<!DOCTYPE html><meta http-equiv="Content-Security-Policy" content="${previewPolicy}">${props.result.html}<style>${previewStyle}</style>`;
   }, [props.result.html]);
   useEffect(() => {
@@ -37,7 +38,8 @@ export function AnimationCanvas(props: {
         <iframe
           aria-label={alt}
           srcDoc={document}
-          sandbox=""
+          sandbox="allow-scripts"
+          scrolling="no"
           referrerPolicy="no-referrer"
           tabIndex={props.thumbnail ? -1 : 0}
           aria-hidden={props.thumbnail || undefined}

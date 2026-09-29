@@ -204,12 +204,11 @@ func (s *Service) executeTerminalContinuity(parent context.Context, task tasksto
 }
 
 func (s *Service) runTerminalContinuityTarget(ctx context.Context, account selectedAccount, timeout int, model, requestID string) (string, string, error) {
-	select {
-	case s.animation.slots <- struct{}{}:
-	case <-ctx.Done():
+	releaseSlot, err := s.reserveAnimationSlot(ctx)
+	if err != nil {
 		return "", "", errors.New("终端续接检测已取消或任务超时")
 	}
-	defer func() { <-s.animation.slots }()
+	defer releaseSlot()
 	if account.AccountType == "oauth" {
 		return s.runOAuthPromptTarget(ctx, account, timeout, model, requestID, terminalContinuityPrompt)
 	}
