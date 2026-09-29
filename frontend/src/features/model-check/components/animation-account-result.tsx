@@ -1,6 +1,6 @@
 import { memo, type ReactElement } from "react";
 import type { AnimationResult, AnimationTarget } from "@/api";
-import type { AnimationActivity } from "../lib/animation-task-results";
+import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,16 +28,18 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
 }): ReactElement {
   if (props.layout === "card") return <AnimationCardResult {...props} />;
   const result = props.result;
-  if (props.activity)
+  if (props.activity) {
+    const label = animationActivityLabel(props.activity.status);
     return (
       <div
         role="status"
-        aria-label={props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果"}
+        aria-label={label}
         className={cn("flex items-center justify-center text-sm text-muted-foreground", "h-full")}
       >
-        {props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果"}
+        {label}
       </div>
     );
+  }
   const modelLabel =
     result.model +
     (result.response_model && result.response_model !== result.model
@@ -47,8 +49,8 @@ export const AnimationAccountResult = memo(function AnimationAccountResult(props
   const completedAt = new Date(result.completed_at);
   return (
     <div aria-label="动画检测结果" className="flex h-full min-h-0 min-w-0 flex-col gap-1.5">
-      <div className="min-h-0 flex-1">
-        {result.status === "succeeded" && result.svg ? (
+      <div className="min-h-[180px] flex-1 shrink-0">
+        {result.status === "succeeded" && (result.html || result.svg) ? (
           <AnimationPreview result={result} />
         ) : (
           <div className="flex h-full min-h-0 flex-col items-start gap-2 rounded-md bg-destructive/5 p-3">

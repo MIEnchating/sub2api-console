@@ -65,7 +65,18 @@ function renderPage(
   });
   queryClient.setQueryData(["tasks"], taskRows);
   queryClient.setQueryData(["accounts"], []);
+  queryClient.setQueryData(["groups"], []);
   queryClient.setQueryData(["task", completedTask.id], completedTask);
+  for (const row of taskRows) {
+    if (
+      typeof row === "object" &&
+      row !== null &&
+      "result" in row &&
+      "id" in row &&
+      row.id === completedTask.id
+    )
+      queryClient.setQueryData(["task", row.id], row);
+  }
   queryClient.setQueryData(["system-metrics"], {
     sampled_at: "2026-09-05T00:00:00Z",
     cpu: { usage_percent: 37.5, logical_cores: 8 },
@@ -192,5 +203,38 @@ it("打开未缓存任务时显示轻量读取状态，失败后可以重新读�
   expect(screen.getByRole("dialog").querySelector('[data-slot="skeleton"]')).toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: "重新读取" }, { timeout: 5_000 }));
   expect(await screen.findByText("OpenAI · gpt-5.6-sol")).toBeVisible();
+  view.unmount();
+});
+
+it.each([
+  ["account-model-animation", "动画检测"],
+  ["managed-model-detection", "分组检测任务"],
+])("系统信息展示 %s 的中文类型及后端进度", (operation, label) => {
+  renderPage([
+    { ...runningTask, id: "detection", operation, progress: 40, message: "已完成 2/5 项检测" },
+  ]);
+  expect(screen.getByText(label)).toBeVisible();
+  expect(screen.getByRole("progressbar", { name: "detection 任务进度" })).toHaveAttribute(
+    "aria-valuenow",
+    "40",
+  );
+});
+
+it("排队中的检测任务显示启动等待，查看任务复用检测运行详情", async () => {
+  const queued = {
+    ...completedTask,
+    id: completedTask.id,
+    operation: "managed-model-detection",
+    status: "queued" as const,
+    progress: 0,
+    message: "检测任务已排队",
+  };
+  const view = renderPage([queued]);
+  expect(
+    screen.queryByRole("progressbar", { name: `${queued.id} 任务进度` }),
+  ).not.toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole("button", { name: "查看任务" }));
+  expect(await screen.findByRole("dialog", { name: "检测任务运行详情" })).toBeVisible();
+  expect(screen.queryByText("此任务没有可展示的账号探活明细。")).not.toBeInTheDocument();
   view.unmount();
 });

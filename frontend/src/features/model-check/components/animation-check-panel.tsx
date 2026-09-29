@@ -1,3 +1,4 @@
+import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Tabs } from "@base-ui/react/tabs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -67,7 +68,7 @@ function AnimationCheckContent(props: {
     resolver: zodResolver(animationSchema),
     defaultValues: {
       account_ids: props.accountID ? [props.accountID] : [],
-      unified_model: "",
+      unified_model: animationTestModel,
       timeout_seconds: 120,
     },
   });
@@ -131,7 +132,7 @@ function AnimationCheckContent(props: {
         .filter((id) => !tasks.busyIDs.has(id))
         .map((id) => ({
           account_id: id,
-          model: value.unified_model.trim(),
+          model: value.unified_model,
         })),
       timeout_seconds: value.timeout_seconds,
     });
@@ -309,7 +310,7 @@ function AnimationCheckContent(props: {
           }
           mode={scheduleEdit.mode}
           targets={scheduleEdit.batch ? scheduleEdit.targets : undefined}
-          model={form.getValues("unified_model").trim()}
+          model={form.getValues("unified_model")}
           schedule={scheduleEdit.batch ? undefined : scheduleEdit.targets[0].schedule}
           onClose={() => setScheduleEdit(null)}
         />

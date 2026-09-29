@@ -2,9 +2,11 @@ package accountworkbench
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
@@ -34,7 +36,7 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 	if existing != nil {
 		resources = append(resources, mutationguard.Account(text(existing["id"])))
 	}
-	ctx, release, err := targetguard.Acquire(targetguard.Expect(ctx, value.Target), s.private, resources...)
+	ctx, release, err := s.acquireGroupMutation(targetguard.Expect(ctx, value.Target), resources...)
 	if err != nil {
 		return errors.New("账号目录正在变更，请稍后重试")
 	}
@@ -63,6 +65,11 @@ func (s *Service) importItem(ctx context.Context, value *privateRun, index int, 
 		current, readErr := client.Account(ctx, id)
 		if readErr != nil || accountVersion(current) != accountVersion(existing) {
 			return errors.New("线上账号已变化，请刷新后重新导入")
+		}
+		if accountGroupIDsDiffer(current, body) {
+			if err := s.requireGroupsUnlocked(ctx, id); err != nil {
+				return err
+			}
 		}
 		if !sameAccountIdentity(current, item.Credentials) {
 			return errors.New("线上账号身份与导入内容不符")
@@ -186,7 +193,7 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 	if id == "" || value.AccountVersions[id] == "" {
 		return errors.New("账号尚未确认隔离，不能启用")
 	}
-	ctx, release, err := targetguard.Acquire(targetguard.Expect(ctx, value.Target), s.private, mutationguard.Account(id))
+	ctx, release, err := s.acquireGroupMutation(targetguard.Expect(ctx, value.Target), mutationguard.Account(id))
 	if err != nil {
 		return errors.New("账号正在变更，请稍后重试")
 	}
@@ -213,6 +220,11 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 	body["schedulable"] = false
 	ctx = adminclient.WithMutationAuthorization(ctx, func(ctx context.Context) error { return s.executionAllowed(ctx, value) })
 	if value.Phases[row.ID] != "configured" {
+		if accountGroupIDsDiffer(current, body) {
+			if err := s.requireGroupsUnlocked(ctx, id); err != nil {
+				return err
+			}
+		}
 		value.Phases[row.ID] = "configuring"
 		if err = s.persistRun(value); err != nil {
 			return errors.New("应用模板前记录保存失败")
@@ -266,4 +278,33 @@ func (s *Service) applyImportedItem(ctx context.Context, value *privateRun, inde
 	value.AccountVersions[id] = accountVersion(current)
 	value.Phases[row.ID] = "completed"
 	return s.persistRun(value)
+}
+
+func accountGroupIDsDiffer(current, desired map[string]any) bool {
+	raw, present := desired["group_ids"]
+	if !present {
+		return false
+	}
+	actual := make([]string, 0)
+	for _, group := range publicAccount(current).Groups {
+		actual = append(actual, group.ID)
+	}
+	target := make([]string, 0)
+	switch ids := raw.(type) {
+	case []json.Number:
+		for _, id := range ids {
+			target = append(target, id.String())
+		}
+	case []string:
+		target = append(target, ids...)
+	case []any:
+		for _, id := range ids {
+			target = append(target, text(id))
+		}
+	default:
+		return true
+	}
+	slices.Sort(actual)
+	slices.Sort(target)
+	return !slices.Equal(actual, target)
 }

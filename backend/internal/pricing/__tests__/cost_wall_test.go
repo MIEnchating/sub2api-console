@@ -28,7 +28,7 @@ func TestCostFallbackAccountMovesToFlagshipAndRecoversOnNextRoutingCalculation(t
 	testCostMigration(t, false)
 }
 
-func TestManualRateReconciliationMigratesWithinConfiguredExchangeSet(t *testing.T) {
+func TestManualRateReconciliationPreservesGroupsWithCostWallEnabled(t *testing.T) {
 	testCostMigration(t, true)
 }
 
@@ -126,14 +126,18 @@ func testCostMigration(t *testing.T, manual bool) {
 	mu.Lock()
 	remoteGroups := append([]int64{}, groups...)
 	mu.Unlock()
-	if !reflect.DeepEqual(remoteGroups, []int64{25}) {
+	expectedRemote, expectedLocal := []int64{25}, []string{"25"}
+	if manual {
+		expectedRemote, expectedLocal = []int64{8}, []string{"8"}
+	}
+	if !reflect.DeepEqual(remoteGroups, expectedRemote) {
 		t.Fatalf("remote groups=%v", remoteGroups)
 	}
 	catalog, err := store.PricingCatalog(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(catalog.Accounts[0].GroupIDs, []string{"25"}) {
+	if !reflect.DeepEqual(catalog.Accounts[0].GroupIDs, expectedLocal) {
 		t.Fatalf("local groups=%v", catalog.Accounts[0].GroupIDs)
 	}
 	if manual {

@@ -36,7 +36,7 @@ func (s *ManualService) Enqueue(ctx context.Context, request RunRequest) (taskst
 		return taskstore.Task{}, errors.New("巡检服务尚未就绪")
 	}
 	request.Automatic = false
-	task, err := s.runner.QueueTask(ctx, false)
+	task, err := s.runner.queueRequest(ctx, request)
 	if err != nil {
 		return taskstore.Task{}, err
 	}
@@ -57,7 +57,12 @@ func (s *ManualService) execute(parent context.Context, task taskstore.Task, req
 		}
 		return
 	}
+	originalProgress := task.Progress
 	task = manualTaskNotStarted(task, request, err, time.Now().UTC())
+	if taskstore.Interrupted(ctx) {
+		task.Progress = originalProgress
+	}
+	taskstore.MarkCancelled(ctx, &task, "巡检已取消")
 	taskstore.PersistFinal(s.tasks, task)
 }
 

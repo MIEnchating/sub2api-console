@@ -85,21 +85,19 @@ function setup(accountID?: string, animation = true): () => void {
   };
 }
 
-it("独立动画页保留账号链接、模型输入和查看全部账号入口", async () => {
+it("独立动画页保留账号链接、超时设置和查看全部账号入口", async () => {
   const user = userEvent.setup();
   const dispose = setup("41");
   expect(screen.getByRole("heading", { name: "动画检测" })).toBeVisible();
   const panel = await screen.findByRole("tabpanel", { name: "账号检测" });
-  const model = await within(panel).findByRole("combobox", { name: "检测模型" });
+  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   expect(screen.queryByRole("tab", { name: "常规检测" })).not.toBeInTheDocument();
   expect(screen.getByRole("tab", { name: "前置检测" })).toBeVisible();
   expect(screen.getByRole("tab", { name: "终端续接检测" })).toBeVisible();
   expect(within(panel).getByRole("checkbox", { name: /检测 人工账号/ })).toBeChecked();
-  fireEvent.change(model, { target: { value: "shared-model" } });
   await user.click(screen.getByRole("button", { name: "查看全部账号" }));
   expect(screen.getByRole("article", { name: "账号 自动账号" })).toBeVisible();
   expect(screen.queryByRole("button", { name: /选择实时流量/ })).not.toBeInTheDocument();
-  expect(model).toHaveValue("shared-model");
   const accountsTab = screen.getByRole("tab", { name: "账号检测" });
   accountsTab.focus();
   await user.keyboard("{ArrowRight}{Enter}");
@@ -109,12 +107,13 @@ it("独立动画页保留账号链接、模型输入和查看全部账号入口"
   dispose();
 });
 
-it("前置检测使用独立 Tab 并与账号检测共享模型和账号选择", async () => {
+it("前置检测使用独立 Tab 并与账号检测共享超时和账号选择", async () => {
   const user = userEvent.setup();
   const dispose = setup("41");
   const animationPanel = await screen.findByRole("tabpanel", { name: "账号检测" });
-  const animationModel = within(animationPanel).getByRole("combobox", { name: "检测模型" });
-  fireEvent.change(animationModel, { target: { value: "shared-model" } });
+  expect(within(animationPanel).getByRole("combobox", { name: "检测模型" })).toHaveValue(
+    "gpt-6-astra",
+  );
   fireEvent.change(within(animationPanel).getByRole("spinbutton", { name: "请求超时（秒）" }), {
     target: { value: "60" },
   });
@@ -129,7 +128,7 @@ it("前置检测使用独立 Tab 并与账号检测共享模型和账号选择",
 
   const precheckPanel = screen.getByRole("tabpanel", { name: "前置检测" });
   expect(within(precheckPanel).getByRole("combobox", { name: "检测模型" })).toHaveValue(
-    "shared-model",
+    "gpt-6-astra",
   );
   expect(within(precheckPanel).getByRole("checkbox", { name: /检测 人工账号/ })).toBeChecked();
   expect(within(precheckPanel).getByRole("spinbutton", { name: "请求超时（秒）" })).toHaveValue(60);
@@ -142,7 +141,7 @@ it("前置检测使用独立 Tab 并与账号检测共享模型和账号选择",
   await user.click(within(precheckPanel).getByRole("button", { name: "清空选择" }));
   await user.click(screen.getByRole("tab", { name: "账号检测" }));
   expect(screen.getByRole("checkbox", { name: /检测 人工账号/ })).not.toBeChecked();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("shared-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   dispose();
 });
 

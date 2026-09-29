@@ -545,6 +545,7 @@ func (s *Service) rejectProtected(ctx context.Context, accountID string) error {
 	if err != nil {
 		return err
 	}
+	protection.ManualPriority = false
 	if protection.Protected() {
 		return fmt.Errorf("账号处于%s，删除前请先解除人工管控", strings.Join(protection.Reasons(), "、"))
 	}

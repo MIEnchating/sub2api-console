@@ -120,7 +120,14 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Link, Outlet, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  useLocation,
+  useNavigate,
+  useRouterState,
+  useSearch,
+} from "@tanstack/react-router";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -147,6 +154,7 @@ import {
   type Task,
   type UpstreamConfiguration,
   type UpstreamGroup,
+  type UpstreamGroupChange,
   type UpstreamGroupBindingAudit,
   type UpstreamSummary,
 } from "./api";
@@ -274,6 +282,7 @@ import {
   groupProbeModelDraftValue,
 } from "./features/groups/components/group-policy-editor-fields";
 import type { GroupPolicyOverrideDraft } from "./features/groups/components/group-policy-editor-fields";
+import { recommendedAnimationWeights } from "./features/groups/constants";
 import { captchaChallengeFromTask } from "./lib/captcha-challenge";
 import { groupStatusMeta } from "./lib/group-policy-display";
 import { schedulingMetric } from "./lib/scheduling-display";
@@ -339,7 +348,9 @@ import {
   onboardingSelectionLayout,
 } from "./features/upstreams/components/onboarding-batch-workspace";
 import { UpstreamGroupBindingEditor } from "./features/upstreams/components/upstream-group-binding-editor";
+import { historyNavigation } from "./features/upstreams/lib/history-navigation";
 import { UpstreamGroupHistory } from "./features/upstreams/components/upstream-group-history";
+import { RemovedGroupAccountsDialog } from "./features/upstreams/components/removed-group-accounts-dialog";
 import {
   summarizeUpstreamGroupBindings,
   UpstreamGroupBindingAuditTable,
@@ -367,6 +378,8 @@ import { AccountStatusFilter } from "./features/accounts/components/account-stat
 import { AccountSortTableHead } from "./features/accounts/components/account-sort-header";
 import { AccountManualPriorityDialog } from "./features/accounts/components/manual-priority-dialog";
 import { AccountsPageActions } from "./features/accounts/components/accounts-page-actions";
+import { AccountGroupLockSwitch } from "./features/accounts/components/account-group-lock-switch";
+import { AccountGroupsDialog } from "./features/accounts/components/account-groups-dialog";
 import { AccountOperationButtons } from "./features/accounts/components/account-operation-buttons";
 import {
   AccountDeleteDialog,
@@ -2000,8 +2013,21 @@ export function UpstreamsPage() {
     (item) => item.value,
   );
   const navigate = useNavigate();
-  const [groupHistoryOverviewOpen, setGroupHistoryOverviewOpen] = useState(false);
+  const historySearch = useRouterState({
+    select: (state) => historyNavigation(state.location.search),
+  });
+  const [groupHistoryOverviewOpen, setGroupHistoryOverviewOpen] = useState(
+    historySearch.history === "overview",
+  );
+  const [clearHistoryUpstream, setClearHistoryUpstream] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [clearGroupHistoryDialogOpen, setClearGroupHistoryDialogOpen] = useState(false);
+  const [removedGroupAccounts, setRemovedGroupAccounts] = useState<{
+    change: UpstreamGroupChange;
+    accountIDs: string[];
+  } | null>(null);
   const upstreams = useQuery({
     queryKey: ["upstreams"],
     queryFn: api.upstreams,
@@ -2020,10 +2046,17 @@ export function UpstreamsPage() {
   });
   const queryClient = useQueryClient();
   const clearGroupHistory = useMutation({
-    mutationFn: api.clearUpstreamGroupHistory,
+    mutationFn: () =>
+      clearHistoryUpstream
+        ? api.clearOneUpstreamGroupHistory(clearHistoryUpstream.id)
+        : api.clearUpstreamGroupHistory(),
     onSuccess: async (result) => {
       setClearGroupHistoryDialogOpen(false);
-      await queryClient.invalidateQueries({ queryKey: ["upstream-group-history-overview"] });
+      setClearHistoryUpstream(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["upstream-group-history-overview"] }),
+        queryClient.invalidateQueries({ queryKey: ["upstream-group-history"] }),
+      ]);
       toast.success(`已清空 ${result.deleted} 条上游分组变化记录`);
     },
     onError: (error) => notifyOperationError(error, "清空上游分组变化记录失败"),
@@ -2177,8 +2210,18 @@ export function UpstreamsPage() {
     },
     onError: (error) => notifyOperationError(error, "验证码取消失败"),
   });
-  const [selectedHost, setSelectedHost] = useState<string | null>(null);
-  const [groupDialogView, setGroupDialogView] = useState<UpstreamGroupDialogView>("catalog");
+  const [selectedHost, setSelectedHost] = useState<string | null>(
+    historySearch.history === "host" ? (historySearch.history_host ?? null) : null,
+  );
+  const [groupDialogView, setGroupDialogView] = useState<UpstreamGroupDialogView>(
+    historySearch.history === "host" ? "history" : "catalog",
+  );
+  const historyBindingAudit = useQuery({
+    queryKey: ["upstream-group-binding-audit"],
+    queryFn: api.upstreamGroupBindingAudit,
+    enabled: groupHistoryOverviewOpen || (Boolean(selectedHost) && groupDialogView === "history"),
+    retry: false,
+  });
   const [groupBindings, setGroupBindings] = useState<Record<string, string[]>>({});
   const [groupBindingTaskId, setGroupBindingTaskId] = useState<string | null>(null);
   const [editHost, setEditHost] = useState<string | null>(null);
@@ -2203,6 +2246,30 @@ export function UpstreamsPage() {
     enabled: Boolean(selectedHost) && groupDialogView === "history",
     retry: false,
   });
+  async function addAccountFromHistory(change: UpstreamGroupChange): Promise<void> {
+    const upstream = upstreams.data?.hosts.find((item) => item.upstream_id === change.upstream_id);
+    if (!upstream) {
+      toast.error("上游已不存在，请刷新统计变化后重试");
+      return;
+    }
+    const returnSearch = historyNavigation({
+      history: groupHistoryOverviewOpen ? "overview" : "host",
+      history_host: upstream.host,
+      history_upstream: change.upstream_id,
+    });
+    await navigate({ to: "/upstreams", search: returnSearch, replace: true });
+    setGroupHistoryOverviewOpen(false);
+    setSelectedHost(null);
+    void navigate({
+      to: "/onboarding",
+      search: {
+        host: upstream.host,
+        upstream_type: upstream.upstream_type,
+        group_id: change.group_id,
+        ...returnSearch,
+      },
+    });
+  }
   const localBindingGroups = useQuery({
     queryKey: ["groups"],
     queryFn: api.groups,
@@ -2762,12 +2829,9 @@ export function UpstreamsPage() {
                     <TableCell>
                       <div className="grid gap-0.5">
                         <span>
-                          {host.display_balance === null && host.balance === null
+                          {host.balance === null
                             ? host.balance_status
-                            : formatBalance(
-                                host.display_balance ?? host.balance!,
-                                host.balance_unit,
-                              )}
+                            : formatBalanceNumber(host.balance)}
                         </span>
                         {host.checked_at && (
                           <span className="text-muted-foreground text-xs">
@@ -2943,6 +3007,7 @@ export function UpstreamsPage() {
               disabled={clearGroupHistory.isPending}
               onClick={() => {
                 clearGroupHistory.reset();
+                setClearHistoryUpstream(null);
                 setClearGroupHistoryDialogOpen(true);
               }}
             >
@@ -2951,6 +3016,19 @@ export function UpstreamsPage() {
             </Button>
           </DialogHeader>
           <DialogBody className="overflow-hidden pr-0">
+            {groupHistoryOverviewOpen && historyBindingAudit.isError && (
+              <>
+                <QueryErrorToast error={historyBindingAudit.error} fallback="分组绑定核对失败" />
+                <Button
+                  variant="outline"
+                  onClick={() => void historyBindingAudit.refetch()}
+                  disabled={historyBindingAudit.isFetching}
+                >
+                  <RefreshCw aria-hidden="true" />
+                  重新核对绑定
+                </Button>
+              </>
+            )}
             {groupHistoryOverview.isLoading ? (
               <ContentLoading label="正在读取变化历史" className="h-full" />
             ) : null}
@@ -2964,21 +3042,47 @@ export function UpstreamsPage() {
             {!groupHistoryOverview.isLoading && !groupHistoryOverview.isError ? (
               <UpstreamGroupHistory
                 rows={groupHistoryOverview.data ?? []}
+                initialExpandedUpstreamID={historySearch.history_upstream}
+                onClearUpstream={(id, name) => {
+                  setClearHistoryUpstream({ id, name });
+                  setClearGroupHistoryDialogOpen(true);
+                }}
                 upstreams={(upstreams.data?.hosts ?? []).map((upstream) => ({
                   upstream_id: upstream.upstream_id,
                   name: upstream.name,
                   host: upstream.host,
                 }))}
+                bindingAuditItems={historyBindingAudit.data?.items}
+                onAddAccount={addAccountFromHistory}
+                onDeleteAccounts={(change, accountIDs) =>
+                  setRemovedGroupAccounts({ change, accountIDs })
+                }
               />
             ) : null}
           </DialogBody>
         </DialogContent>
       </Dialog>
+      {removedGroupAccounts && (
+        <RemovedGroupAccountsDialog
+          change={removedGroupAccounts.change}
+          expectedAccountIDs={removedGroupAccounts.accountIDs}
+          onClose={() => setRemovedGroupAccounts(null)}
+          onFinished={() => void historyBindingAudit.refetch()}
+        />
+      )}
       <ConfirmActionDialog
         open={clearGroupHistoryDialogOpen}
         onOpenChange={setClearGroupHistoryDialogOpen}
-        title="清空上游分组变化记录"
-        description="将删除所有上游的分组变化记录，且无法恢复。确定继续吗？"
+        title={
+          clearHistoryUpstream
+            ? `清除「${clearHistoryUpstream.name}」的变化记录`
+            : "清空上游分组变化记录"
+        }
+        description={
+          clearHistoryUpstream
+            ? "将清除此上游的全部分组变化记录，不会删除上游、分组或账号，其他上游记录保留。此操作无法恢复。"
+            : "将删除所有上游的分组变化记录，且无法恢复。确定继续吗？"
+        }
         confirmLabel="确认清空"
         pendingLabel="清空中…"
         pending={clearGroupHistory.isPending}
@@ -3419,7 +3523,35 @@ export function UpstreamsPage() {
               <QueryError error={groupHistory.error} fallback="上游分组变化历史读取失败" embedded />
             )}
             {groupDialogView !== "catalog" && !groupHistory.isLoading && !groupHistory.isError && (
-              <UpstreamGroupHistory rows={groupHistory.data ?? []} />
+              <>
+                {selectedHost && historyBindingAudit.isError && (
+                  <>
+                    <QueryErrorToast
+                      error={historyBindingAudit.error}
+                      fallback="分组绑定核对失败"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => void historyBindingAudit.refetch()}
+                      disabled={historyBindingAudit.isFetching}
+                    >
+                      <RefreshCw aria-hidden="true" />
+                      重新核对绑定
+                    </Button>
+                  </>
+                )}
+                <UpstreamGroupHistory
+                  rows={groupHistory.data ?? []}
+                  upstreamAvailable={Boolean(
+                    upstreams.data?.hosts.some((item) => item.host === selectedHost),
+                  )}
+                  bindingAuditItems={historyBindingAudit.data?.items}
+                  onAddAccount={addAccountFromHistory}
+                  onDeleteAccounts={(change, accountIDs) =>
+                    setRemovedGroupAccounts({ change, accountIDs })
+                  }
+                />
+              </>
             )}
           </DialogBody>
           {groupDialogView === "catalog" ? (
@@ -5647,6 +5779,7 @@ const AccountRow = React.memo(function AccountRow(props: {
   const [confirmPending, setConfirmPending] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [manualPriorityOpen, setManualPriorityOpen] = useState(false);
+  const [groupsOpen, setGroupsOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const details = useQuery({
     queryKey: ["account-detail", account.id],
@@ -5665,6 +5798,9 @@ const AccountRow = React.memo(function AccountRow(props: {
     if (activeAction === "探活测试") refreshScope = "active-probe";
     if (activeAction === "同步账号倍率") refreshScope = "management-sync";
     const keys = terminalRefreshKeys(refreshScope, task.data);
+    if (activeAction === "切换分组" && keys.length) {
+      keys.push(["account-groups", account.id], ["group-allocation"], ["pricing"]);
+    }
     if (keys.length) {
       const detailRefresh =
         activeAction === "删除账号"
@@ -5739,7 +5875,15 @@ const AccountRow = React.memo(function AccountRow(props: {
           />
         </TableCell>
         <TableCell className="align-middle">
-          <AccountIdentityCell account={account} />
+          <AccountIdentityCell
+            account={account}
+            groupControl={
+              <AccountGroupLockSwitch
+                account={account}
+                disabled={pending || activeAction !== null}
+              />
+            }
+          />
         </TableCell>
         <TableCell className="align-middle">
           <AccountHealthCell account={account} />
@@ -5789,6 +5933,7 @@ const AccountRow = React.memo(function AccountRow(props: {
                 void startTask("同步账号倍率", () => api.syncAccountRates([account.id]))
               }
               onManualPriority={() => setManualPriorityOpen(true)}
+              onSwitchGroups={() => setGroupsOpen(true)}
               onEdit={() => setDetailsOpen(true)}
               onDelete={() => setDeleteOpen(true)}
             />
@@ -5809,6 +5954,16 @@ const AccountRow = React.memo(function AccountRow(props: {
           onSaved={() => setDetailsOpen(false)}
         />
       </AccountDetailDialog>
+      {groupsOpen && (
+        <AccountGroupsDialog
+          account={account}
+          onOpenChange={setGroupsOpen}
+          onStarted={(created) => {
+            setActiveAction("切换分组");
+            setTaskId(created.id);
+          }}
+        />
+      )}
       <AccountManualPriorityDialog
         open={manualPriorityOpen}
         account={account}
@@ -5922,7 +6077,18 @@ export function GroupsPage() {
     editor.balanced_price_ratio <= 1 &&
     editor.probe_interval_seconds !== null &&
     Number.isInteger(editor.probe_interval_seconds) &&
-    editor.probe_interval_seconds >= 30;
+    editor.probe_interval_seconds >= 30 &&
+    Number.isFinite(editor.animation_pass_multiplier) &&
+    editor.animation_pass_multiplier !== null &&
+    editor.animation_pass_multiplier >= 0 &&
+    editor.animation_pass_multiplier <= 10 &&
+    Number.isFinite(editor.animation_fail_multiplier) &&
+    editor.animation_fail_multiplier !== null &&
+    editor.animation_fail_multiplier >= 0 &&
+    editor.animation_fail_multiplier <= 10 &&
+    (editor.animation_failure_action === "ignore" ||
+      editor.animation_failure_action === "degrade" ||
+      editor.animation_failure_action === "fuse");
   const excludeGroup = useMutation({
     mutationFn: ({ id, excluded }: { id: string; excluded: boolean }) =>
       api.setGroupExcluded(id, excluded),
@@ -5977,6 +6143,14 @@ export function GroupsPage() {
         override.probe_interval_seconds ??
         Number(probe.interval_seconds ?? policy.data?.probe_interval_seconds ?? 300),
       probe_model: groupProbeModelDraftValue(override.probe_model),
+      animation_enabled: override.animation_enabled ?? false,
+      animation_pass_multiplier:
+        override.animation_pass_multiplier ??
+        (group.override ? 1 : recommendedAnimationWeights.passed),
+      animation_fail_multiplier:
+        override.animation_fail_multiplier ??
+        (group.override ? 1 : recommendedAnimationWeights.degraded),
+      animation_failure_action: override.animation_failure_action ?? "ignore",
     });
     setEditingGroup(group);
   };
@@ -6582,6 +6756,9 @@ export function OnboardingPage() {
   const [onboardingConfirmation, setOnboardingConfirmation] =
     useState<OnboardingConfirmation | null>(null);
   const [onboardingSubmitting, setOnboardingSubmitting] = useState(false);
+  const [onboardingRetryRequest, setOnboardingRetryRequest] = useState<OnboardingRequest | null>(
+    null,
+  );
   const [probeTarget, setProbeTarget] = useState<ProbeDialogTarget | null>(null);
   const detectionSequence = React.useRef(0);
   const autoDetectedName = React.useRef("");
@@ -7182,10 +7359,28 @@ export function OnboardingPage() {
         onboardingConfirmation.mode === "single"
           ? await api.onboard(requests[0]!)
           : await api.onboardBatch(requests);
+      setOnboardingRetryRequest(onboardingConfirmation.mode === "single" ? requests[0]! : null);
       setOnboardingConfirmation(null);
       setTaskId(created.id);
     } catch (error) {
       notifyOperationError(error, "账号绑定变更失败");
+    } finally {
+      setOnboardingSubmitting(false);
+    }
+  }
+  async function retryOnboarding(): Promise<void> {
+    if (
+      !onboardingRetryRequest ||
+      onboardingSubmitting ||
+      (task.data?.status !== "failed" && task.data?.status !== "cancelled")
+    )
+      return;
+    setOnboardingSubmitting(true);
+    try {
+      const created = await api.onboard(onboardingRetryRequest);
+      setTaskId(created.id);
+    } catch (error) {
+      notifyOperationError(error, "账号按原参数重试失败");
     } finally {
       setOnboardingSubmitting(false);
     }
@@ -7297,12 +7492,24 @@ export function OnboardingPage() {
     entrySelectedPlatform,
   );
   const entryCandidateSelectable =
-    entryCandidateAvailable && entryProtocolReady && entryCompatibleLocalGroups.length > 0;
+    entryCandidateAvailable &&
+    !groups.isPending &&
+    entryProtocolReady &&
+    entryCompatibleLocalGroups.length > 0;
   let entryUnavailableReason: string | null = null;
   if (entryCandidate && !entryCandidateAvailable) {
     entryUnavailableReason = candidateCreationUnavailableReason(entryCandidate);
-  } else if (entryCandidate && entryProtocolReady && entryCompatibleLocalGroups.length === 0) {
-    entryUnavailableReason = "没有与该上游分组平台一致的本地分组";
+  } else if (
+    entryCandidate &&
+    groups.data &&
+    !groups.isError &&
+    !groups.isFetching &&
+    entryProtocolReady &&
+    entryCompatibleLocalGroups.length === 0
+  ) {
+    const platform =
+      accountPlatformLabel(entryCandidate.platform) ?? entryCandidate.platform ?? "未标注";
+    entryUnavailableReason = `上游分组平台为 ${platform}，当前没有兼容的本地分组。请同步管理端分组后刷新；如仍为空，请在管理端创建同平台或 Composite 分组。`;
   }
   const entryProbeTarget = onboardingProbeTarget(
     entryCandidate,
@@ -7378,12 +7585,16 @@ export function OnboardingPage() {
         host: target.host,
         upstream_type: target.upstream_type,
         group_id: undefined,
+        ...historyNavigation(onboardingSearch),
       },
     });
   }
   const onboardingHeadingActions = (
     <OnboardingHeadingActions
-      onBack={() => void navigate({ to: "/upstreams" })}
+      backLabel={onboardingSearch.history ? "返回统计变化" : undefined}
+      onBack={() =>
+        void navigate({ to: "/upstreams", search: historyNavigation(onboardingSearch) })
+      }
       previousUpstream={
         adjacentUpstreams.previous
           ? {
@@ -8027,6 +8238,7 @@ export function OnboardingPage() {
                         onProbe={() => setProbeTarget(entryProbeTarget)}
                       />
                     </div>
+                    {groups.isPending && <ContentLoading compact label="正在读取本地分组" />}
                     {entryUnavailableReason ? (
                       <QueryError
                         error={entryUnavailableReason}
@@ -8034,6 +8246,16 @@ export function OnboardingPage() {
                         embedded
                       />
                     ) : null}
+                    {(entryUnavailableReason || groups.isError) && (
+                      <Button
+                        variant="outline"
+                        disabled={groups.isFetching}
+                        onClick={() => void groups.refetch()}
+                      >
+                        <RefreshCw aria-hidden="true" />
+                        刷新本地分组
+                      </Button>
+                    )}
                   </div>
                 ) : null}
                 {entryGroupId && !entryCandidate ? (
@@ -8204,7 +8426,7 @@ export function OnboardingPage() {
                             }
                             groups={localGroups}
                             value={entryLocalGroupIDs}
-                            disabled={!selectedGroupId || onboardingPending}
+                            disabled={!selectedGroupId || onboardingPending || groups.isPending}
                             disabledReason={null}
                             onValueChange={(value) => {
                               if (!entryGroupId) return;
@@ -8629,6 +8851,7 @@ export function OnboardingPage() {
         onOpenChange={(open) => {
           if (!open && !onboardingPending) {
             setTaskId(null);
+            setOnboardingRetryRequest(null);
             setBatchBindings({});
             const host = verifiedUpstream?.host;
             if (host) prepare.load(host);
@@ -8636,8 +8859,8 @@ export function OnboardingPage() {
         }}
       >
         <DialogContent
-          width={operationDialogWidth(Boolean(task.data && !onboardingPending))}
-          height={operationDialogHeight(Boolean(task.data && !onboardingPending))}
+          width={operationDialogWidth(taskStopsPolling(task.data))}
+          height={operationDialogHeight(taskStopsPolling(task.data))}
           showCloseButton={!onboardingPending}
           className="grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden"
         >
@@ -8651,11 +8874,21 @@ export function OnboardingPage() {
             )}
             {task.data && <OnboardingTaskProgress task={task.data} />}
           </DialogBody>
-          {task.data && !onboardingPending ? (
+          {task.data && taskStopsPolling(task.data) ? (
             <DialogFooter>
+              {(task.data.status === "failed" || task.data.status === "cancelled") &&
+              task.data.operation === "onboard" &&
+              onboardingRetryRequest ? (
+                <Button variant="outline" disabled={onboardingSubmitting} onClick={retryOnboarding}>
+                  <RefreshCw aria-hidden="true" />
+                  {onboardingSubmitting ? "正在重试" : "按原参数重试"}
+                </Button>
+              ) : null}
               <Button
+                disabled={onboardingSubmitting}
                 onClick={() => {
                   setTaskId(null);
+                  setOnboardingRetryRequest(null);
                   setBatchBindings({});
                   const host = verifiedUpstream?.host;
                   if (host) prepare.load(host);
@@ -8666,7 +8899,7 @@ export function OnboardingPage() {
               </Button>
             </DialogFooter>
           ) : null}
-          {task.data && onboardingPending ? (
+          {task.data && !taskStopsPolling(task.data) ? (
             <DialogFooter>
               <TaskCancelButton taskId={task.data.id} />
             </DialogFooter>
@@ -8927,6 +9160,13 @@ export function OnboardingTaskProgress(props: { task: Task }) {
           <TaskFailureDetail
             reason={String(props.task.result.error ?? props.task.message ?? "账号绑定变更失败")}
           />
+          {String(props.task.result.error ?? props.task.message).includes(
+            "续办参数与首次冻结的开户意图不一致",
+          ) ? (
+            <p className="text-muted-foreground mt-2 text-sm">
+              取消或失败后，系统会保留首次开户记录。请按原参数重试；若仍提示不一致，需要核对首次参数和远端创建状态。
+            </p>
+          ) : null}
         </div>
       ) : null}
       {!pending && !batch && cancelled ? (
@@ -14556,6 +14796,15 @@ function formatBalance(value: string, unit?: string | null) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  }).format(parsed);
+}
+
+function formatBalanceNumber(value: string): string {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return value;
+  return new Intl.NumberFormat("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
   }).format(parsed);

@@ -3,11 +3,18 @@ import type { ReactElement } from "react";
 
 import type { TaskSummary } from "@/api";
 import { TableActionButton } from "@/components/data-table/table-action-button";
+import { ContentLoading } from "@/components/content-loading";
 import { StatusBadge } from "@/components/status-badge";
 import { Progress } from "@/components/ui/progress";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { TableOverflowTooltip } from "@/components/ui/table-overflow-tooltip";
-import { taskOperationLabel, taskStatusLabel, taskStatusVariant } from "../constants";
+import {
+  activeTaskStatuses,
+  isModelDetectionTask,
+  taskOperationLabel,
+  taskStatusLabel,
+  taskStatusVariant,
+} from "../constants";
 import { formatTaskDate } from "../lib/format-task-date";
 
 export function TaskRow(props: {
@@ -15,6 +22,10 @@ export function TaskRow(props: {
   onSelect: (id: string) => void;
 }): ReactElement {
   const operation = taskOperationLabel(props.task.operation);
+  const starting =
+    isModelDetectionTask(props.task.operation) &&
+    activeTaskStatuses.has(props.task.status) &&
+    props.task.progress === 0;
   return (
     <TableRow>
       <TableCell overflowTooltip={false}>
@@ -45,11 +56,17 @@ export function TaskRow(props: {
             >
               {props.task.message || "—"}
             </TableOverflowTooltip>
-            <span className="text-muted-foreground shrink-0 text-xs leading-5 tabular-nums">
-              {props.task.progress}%
-            </span>
+            {!starting ? (
+              <span className="text-muted-foreground shrink-0 text-xs leading-5 tabular-nums">
+                {props.task.progress}%
+              </span>
+            ) : null}
           </div>
-          <Progress value={props.task.progress} aria-label={`${props.task.id} 任务进度`} />
+          {starting ? (
+            <ContentLoading compact label="等待检测进度" />
+          ) : (
+            <Progress value={props.task.progress} aria-label={`${props.task.id} 任务进度`} />
+          )}
         </div>
       </TableCell>
       <TableCell overflowTooltip={false}>

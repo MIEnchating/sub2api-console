@@ -7,6 +7,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
+	"log/slog"
 	"slices"
 	"time"
 )
@@ -51,8 +52,10 @@ func (s *Service) enqueueDetectionTask(ctx context.Context, id string, version i
 	}
 	created := now.UTC().Format(time.RFC3339Nano)
 	task := taskstore.Task{ID: taskID, Skill: animationSkill, Operation: "managed-model-detection", Status: "queued", Message: "检测任务已排队", CreatedAt: created, UpdatedAt: created, Result: map[string]any{"detection_task_id": id, "detection_task_name": value.Name, "configuration": value, "automatic": automatic, "remote_write": false}}
-	if value.Precheck {
-		task.Result["mode"] = combinedMode
+	task.Result["mode"] = detectionTaskMode(value)
+	if err := s.prepareRecovery(ctx, &task, detectionRecovery{Configuration: &value}, nil); err != nil {
+		release()
+		return taskstore.Task{}, err
 	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		release()
@@ -162,6 +165,13 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 		fail(err)
 		return
 	}
+	if err := bindDetectionRecovery(&task, accounts); err != nil {
+		fail(err)
+		return
+	}
+	if !taskstore.SaveRunning(ctx, s.tasks, task) {
+		return
+	}
 	target, err := s.prepareOAuthTarget(ctx, accounts)
 	if err != nil {
 		fail(err)
@@ -170,12 +180,14 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	if target != nil {
 		ctx = targetguard.Expect(ctx, *target)
 	}
-	release, err := s.reserveDetectionAccounts(accounts)
-	if err != nil {
-		fail(err)
-		return
+	if reserved, _ := ctx.Value(reservedDetectionKey{}).(bool); !reserved {
+		release, err := s.reserveDetectionAccounts(accounts)
+		if err != nil {
+			fail(err)
+			return
+		}
+		defer release()
 	}
-	defer release()
 	ids := make([]string, len(accounts))
 	for i, account := range accounts {
 		ids[i] = account.ID
@@ -184,22 +196,37 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	for _, account := range accounts {
 		accountNames[account.ID] = account.Name
 	}
-	stages := 1
+	stages := []string{}
 	if value.Precheck {
-		stages++
+		stages = append(stages, precheckMode)
 	}
 	if value.Terminal {
-		stages++
+		stages = append(stages, "terminal")
 	}
-	total := len(accounts) * stages
-	animations := []AnimationResult{}
-	checks := []TerminalContinuityResult{}
-	completed, success := 0, 0
+	if value.Animation == nil || *value.Animation {
+		stages = append(stages, "animation")
+	}
+	total := len(accounts) * len(stages)
+	animations := previousResults[AnimationResult](task, "animations")
+	checks := previousResults[TerminalContinuityResult](task, "checks")
+	done := map[string]bool{}
+	terminalCompleted, terminalSuccess := terminalCounts(checks)
+	completed, success := len(animations)+terminalCompleted, terminalSuccess
+	for _, result := range animations {
+		done[animationResultKey(result.AccountID, result.Mode)] = true
+		if result.Status == "succeeded" {
+			success++
+		}
+	}
+	if err := s.persistAnimationEvidence(ctx, task.ID, animations); err != nil {
+		slog.Error("保存分组动画检测证据失败", "task_id", task.ID, "error", err)
+	}
+	for _, result := range checks {
+		done[animationResultKey(result.AccountID, "terminal")] = !result.Incomplete
+	}
 	publish := func(message string) {
 		result := map[string]any{"detection_task_id": value.ID, "detection_task_name": value.Name, "configuration": value, "automatic": task.Result["automatic"], "account_ids": ids, "targets": request.Targets, "group_ids_by_account": scope.GroupIDsByAccount, "group_names_by_id": scope.GroupNamesByID, "account_names_by_id": accountNames, "total": total, "completed": completed, "animations": slices.Clone(animations), "checks": slices.Clone(checks), "remote_write": false, "started_at": begin.UTC().Format(time.RFC3339Nano)}
-		if value.Precheck {
-			result["mode"] = combinedMode
-		}
+		result["mode"] = detectionTaskMode(value)
 		task.Result = result
 		task.Progress = completed * 100 / total
 		task.Message = message
@@ -208,29 +235,45 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	}
 	questions, _ := normalizePrecheckQuestions(precheckMode, value.PrecheckQuestions)
 	for _, account := range accounts {
-		modes := []string{"animation"}
-		if value.Precheck {
-			modes = append([]string{precheckMode}, modes...)
-		}
-		for _, mode := range modes {
+		for _, mode := range stages {
+			if done[animationResultKey(account.ID, mode)] {
+				continue
+			}
 			if ctx.Err() != nil {
 				break
 			}
-			if mode == "animation" && value.Terminal {
+			if mode == "terminal" {
 				publish(fmt.Sprintf("账号 %s：终端检测 %d 轮", account.ID, value.TerminalRounds))
-				result := s.runTerminalRounds(ctx, account, value.TimeoutSeconds, value.Model, task.ID+"-"+account.ID+"-terminal", value.TerminalRounds)
-				checks = append(checks, result)
+				var old TerminalContinuityResult
+				for _, check := range checks {
+					if check.AccountID == account.ID {
+						old = check
+						break
+					}
+				}
+				result := s.runTerminalCheckpoint(ctx, account, value.TimeoutSeconds, value.Model, task.ID+"-"+account.ID+"-terminal", value.TerminalRounds, old, func(snapshot TerminalContinuityResult) {
+					// Only partial round checkpoints are published here; final stage counts are updated below.
+					snapshot.Incomplete = true
+					checks = upsertTerminal(checks, snapshot)
+					publish(fmt.Sprintf("账号 %s：已完成 %d/%d 轮", account.ID, len(snapshot.RoundResults), value.TerminalRounds))
+				})
+				if taskstore.Interrupted(ctx) {
+					break
+				}
+				checks = upsertTerminal(checks, result)
 				completed++
 				if result.Verdict != "error" {
 					success++
 				}
-				if ctx.Err() != nil {
-					break
-				}
+				publish(fmt.Sprintf("已完成 %d/%d 项检测", completed, total))
+				continue
 			}
 			publish(fmt.Sprintf("账号 %s：%s", account.ID, animationModeLabel(mode)))
 			result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: value.Model, RequestID: task.ID + "-" + account.ID + "-" + mode, Mode: mode, Status: "failed"}
 			if err := s.runAnimationWithRetry(ctx, account, value.TimeoutSeconds, nil, questions, &result); err != nil {
+				if taskstore.Interrupted(ctx) {
+					break
+				}
 				result.Error = safeCredentialError(err)
 			} else {
 				result.Status = "succeeded"
@@ -238,6 +281,9 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 			}
 			result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 			animations = append(animations, result)
+			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{result}); err != nil {
+				slog.Error("保存分组动画检测证据失败", "task_id", task.ID, "account_id", result.AccountID, "mode", result.Mode, "error", err)
+			}
 			completed++
 			publish(fmt.Sprintf("已完成 %d/%d 项检测", completed, total))
 		}
@@ -256,4 +302,17 @@ func (s *Service) executeDetectionTask(parent context.Context, task taskstore.Ta
 	task.Result["completed_at"] = time.Now().UTC().Format(time.RFC3339Nano)
 	taskstore.MarkCancelled(ctx, &task, "检测任务已取消")
 	taskstore.PersistFinal(s.tasks, task)
+}
+
+func detectionTaskMode(value DetectionTask) string {
+	if value.Animation == nil || *value.Animation {
+		if value.Precheck {
+			return combinedMode
+		}
+		return "animation"
+	}
+	if value.Precheck {
+		return precheckMode
+	}
+	return "terminal"
 }

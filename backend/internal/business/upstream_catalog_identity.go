@@ -321,6 +321,34 @@ func recordLiveGroupAdditionsTx(ctx context.Context, tx *sql.Tx, upstreamID stri
 	return nil
 }
 
+func updateLiveGroupAdditionNamesTx(ctx context.Context, tx *sql.Tx, upstreamID string, groups []UpstreamCatalogGroup) error {
+	updated := map[string]struct{}{}
+	for _, group := range groups {
+		groupID := strings.TrimSpace(group.GroupID)
+		if groupID == "" {
+			continue
+		}
+		if _, duplicate := updated[groupID]; duplicate {
+			continue
+		}
+		updated[groupID] = struct{}{}
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			name = groupID
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE upstream_group_change_events
+			SET group_name=?
+			WHERE id=(SELECT id FROM upstream_group_change_events
+				WHERE upstream_id=? AND group_id=?
+				ORDER BY changed_at DESC,id DESC LIMIT 1)
+			AND change_type='added'`, name, upstreamID, groupID)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func reconcileCatalogEntitiesTx(ctx context.Context, tx *sql.Tx, upstreamID, kind string, live map[string]struct{}, now string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT entity_id,name,lifecycle_state,missing_observations FROM upstream_catalog_entities
 		WHERE upstream_id=? AND entity_kind=?`, upstreamID, kind)

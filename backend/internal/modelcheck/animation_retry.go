@@ -25,14 +25,17 @@ func (err retryableAnimationError) Error() string { return err.err.Error() }
 func (err retryableAnimationError) Unwrap() error { return err.err }
 
 func animationRetryableReadError(err error) error {
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
+		return err
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
 		return retryableAnimationError{err: err}
 	}
-	var network net.Error
-	if errors.As(err, &network) && (network.Timeout() || network.Temporary()) {
+	if errors.As(err, &network) && network.Temporary() {
 		return retryableAnimationError{err: err}
 	}
 	return err
@@ -75,7 +78,11 @@ func animationRetryAfter(value string) time.Duration {
 }
 
 func animationRetryDelay(err error, retryCount int) (time.Duration, bool) {
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return 0, false
+	}
+	var network net.Error
+	if errors.As(err, &network) && network.Timeout() {
 		return 0, false
 	}
 	var retryable retryableAnimationError
@@ -94,10 +101,17 @@ func animationRetryDelay(err error, retryCount int) (time.Duration, bool) {
 // runAnimationWithRetry sends a new complete generation only after a clearly
 // transient failure. Partial output is discarded; no upstream conversation is
 // persisted or replayed.
-func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) error {
+func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) error {
+	result.ReasoningEffort = "low"
+	result.Prompt = animationPrompt
 	if result.Mode == precheckMode {
-		started, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		result.ReasoningEffort = "medium"
+		result.Prompt = ""
+		result.Usage = &AnimationUsage{}
+		started, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result, onPhase...)
 		result.DurationMS = started.Milliseconds()
+		result.GenerationDurationMS = result.DurationMS
+		result.Usage.complete()
 		return err
 	}
 	requestID := result.RequestID
@@ -111,9 +125,19 @@ func (s *Service) runAnimationWithRetry(ctx context.Context, account selectedAcc
 		result.RequestID = requestID
 		if attempt > 0 {
 			result.RequestID = fmt.Sprintf("%s-retry-%d", requestID, attempt)
+			result.Phase = "queued"
+			for _, notify := range onPhase {
+				if notify != nil {
+					notify()
+				}
+			}
 		}
-		attemptDuration, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result)
+		result.Usage = &AnimationUsage{}
+		attemptDuration, err := s.runAnimationTarget(ctx, account, timeout, custom, questions, result, onPhase...)
 		elapsed += attemptDuration
+		result.DurationMS = elapsed.Milliseconds()
+		result.GenerationDurationMS = attemptDuration.Milliseconds()
+		result.Usage.complete()
 		if err == nil {
 			result.DurationMS = elapsed.Milliseconds()
 			return nil

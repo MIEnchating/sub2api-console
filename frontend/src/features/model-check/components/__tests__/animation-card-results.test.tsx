@@ -119,6 +119,33 @@ it("已有结果自动展示且不提供历史切换，无记录账号显示待�
   dispose();
 });
 
+it("收到首字后卡片显示生成中而不是等待首字", () => {
+  const generating: Task = {
+    ...task,
+    status: "running",
+    result: {
+      ...task.result,
+      animations: [
+        {
+          account_id: "41",
+          account_name: "甲账号",
+          model: "model-a",
+          request_id: "r-generating",
+          status: "failed",
+          phase: "generating",
+          duration_ms: 0,
+          completed_at: "2026-09-13T00:00:01Z",
+        },
+      ],
+    },
+  };
+  const { dispose } = setup(generating);
+  const card = screen.getByRole("article", { name: "账号 甲账号" });
+  expect(within(card).getByText("已收到首字，生成中")).toBeVisible();
+  expect(within(card).queryByText("已开始请求，等待首字")).not.toBeInTheDocument();
+  dispose();
+});
+
 it("搜索和操作分行，开始检测位于顶部，分页独立于卡片滚动区域", () => {
   const { dispose } = setup(task);
   const filters = screen.getByRole("group", { name: "动画账号筛选" });
@@ -136,7 +163,7 @@ it("搜索和操作分行，开始检测位于顶部，分页独立于卡片滚�
 });
 
 it.each([
-  ["running", "生成中，等待动画结果"],
+  ["running", "已开始请求，等待首字"],
   ["cancelled", "检测已取消，未返回动画"],
   ["failed", "本次检测未返回动画"],
 ] as const)("任务为 %s 且账号未返回结果时，仅任务内卡片展示对应状态", (status, label) => {
@@ -208,7 +235,7 @@ it.each([0, 50])("任务进度为 %s 时仅卡片显示检测状态，取消入�
   expect(within(settings).queryByRole("progressbar")).not.toBeInTheDocument();
   expect(within(operations).getByRole("button", { name: "取消任务" })).toBeEnabled();
   expect(
-    within(screen.getByRole("article", { name: "账号 甲账号" })).getByText("生成中，等待动画结果"),
+    within(screen.getByRole("article", { name: "账号 甲账号" })).getByText("已开始请求，等待首字"),
   ).toBeVisible();
   dispose();
 });
@@ -288,11 +315,11 @@ it("同批部分账号已完成时展示动画及等待批次提示，不误报�
   expect(completed.getByText("本项检测已结束，等待任务结束")).toBeVisible();
   expect(completed.getByRole("button", { name: "重测 甲账号" })).toBeDisabled();
   const pending = within(screen.getByRole("article", { name: "账号 乙账号" }));
-  expect(pending.getByText("生成中，等待动画结果")).toBeVisible();
+  expect(pending.getByText("已开始请求，等待首字")).toBeVisible();
   dispose();
 });
 
-it("旧动画仍在显示而新任务尚未返回时，继续提示正在重新检测", () => {
+it("新任务尚未返回时隐藏上次动画与成功统计，提示正在重新检测", () => {
   const { dispose } = setup(
     {
       ...task,
@@ -305,6 +332,9 @@ it("旧动画仍在显示而新任务尚未返回时，继续提示正在重新�
   );
   const pending = within(screen.getByRole("article", { name: "账号 甲账号" }));
   expect(pending.getByText("正在重新检测")).toBeVisible();
+  expect(pending.queryByText("成功")).not.toBeInTheDocument();
+  expect(pending.queryByRole("img")).not.toBeInTheDocument();
+  expect(pending.getByText("本轮结果将在检测完成后显示")).toBeVisible();
   expect(pending.queryByText("本项检测已结束，等待任务结束")).not.toBeInTheDocument();
   dispose();
 });

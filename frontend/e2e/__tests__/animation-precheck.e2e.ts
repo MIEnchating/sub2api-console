@@ -25,7 +25,10 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
     status: "succeeded",
     request_id: `precheck-${item.id}`,
     completed_at: "2026-09-15T00:01:00Z",
-    duration_ms: 100,
+    duration_ms: 2000,
+    generation_duration_ms: 2000,
+    reasoning_effort: "medium",
+    usage: { input_tokens: 209, output_tokens: 1264, total_tokens: 1473, reasoning_tokens: 832 },
     precheck: {
       verdict: i === 0 ? "passed" : "not_passed",
       profile_version: "astra-v1",
@@ -33,7 +36,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
         {
           id: "candy",
           verdict: i === 0 ? "passed" : "not_passed",
-          answer: i === 0 ? "21" : "22",
+          answer: i === 0 ? "21" : `${"推理过程与完整回答。\n".repeat(100)}回答结尾`,
           request_id: `candy-${item.id}`,
         },
       ],
@@ -96,7 +99,7 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
   await page.goto("/animation-check");
   await page.getByRole("tab", { name: "前置检测", exact: true }).click();
   const panel = page.getByRole("tabpanel", { name: "前置检测", exact: true });
-  await panel.getByRole("combobox", { name: "检测模型" }).fill("gpt-6-astra");
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await page.keyboard.press("Escape");
   await panel.getByRole("button", { name: "选择前置检测题目" }).click();
   const questions = page.getByRole("dialog", { name: "前置检测题目", exact: true });
@@ -124,10 +127,43 @@ test("前置检测结果支持筛选后生成动画及保存定时内容，窄�
     rejected.getByRole("region", { name: "前置检测结果" }).getByText("降智", { exact: true }),
   ).toBeVisible();
   await expect(passed.getByRole("listitem")).toHaveCount(0);
+  const summary = passed.getByRole("region", { name: "前置检测结果", exact: true });
+  const stats = summary.getByLabel("前置检测统计");
+  await expect(stats).toHaveCSS("border-top-width", "0px");
+  await expect(stats).toHaveCSS("padding-top", "4px");
+  await expect(stats).toHaveCSS("padding-bottom", "0px");
+  expect((await summary.boundingBox())!.height).toBeLessThanOrEqual(72);
+  await expect(
+    passed.getByLabel("前置检测统计").getByText("medium", { exact: true }),
+  ).toBeVisible();
+  await expect(passed.getByText("输入 Token", { exact: true })).toHaveCount(0);
+  await expect(passed.getByLabel("完成时间")).toHaveAttribute(
+    "datetime",
+    animations[0].completed_at,
+  );
   await passed.getByRole("button", { name: "查看前置检测详情" }).click();
   const detail = page.getByRole("dialog", { name: "前置检测详情" });
   await expect(detail.getByText("21", { exact: true })).toBeVisible();
+  await expect(detail.getByText("832", { exact: true })).toBeVisible();
+  await expect(detail.getByText("632.0 TPS", { exact: true })).toBeVisible();
+  await expect(detail.getByText("无法估算", { exact: true })).toBeVisible();
+  expect(await detail.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("precheck-detail.png") });
   await detail.getByRole("button", { name: "关闭", exact: true }).click();
+  const rejectedDetail = rejected.getByRole("button", { name: "查看前置检测详情" });
+  await rejectedDetail.click();
+  const answers = detail.getByRole("region", { name: "模型回答", exact: true });
+  await expect(answers).toContainText("回答结尾");
+  expect(await answers.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(
+    true,
+  );
+  await answers.focus();
+  await page.keyboard.press("End");
+  await expect.poll(() => answers.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await expect(detail.getByLabel("前置检测统计")).toBeInViewport({ ratio: 1 });
+  await page.keyboard.press("Escape");
+  await expect(detail).toHaveCount(0);
+  await expect(rejectedDetail).toBeFocused();
   await panel.getByRole("button", { name: "选择降智（1）" }).click();
   await expect(rejected.getByRole("checkbox")).toBeChecked();
   await expect(passed.getByRole("checkbox")).not.toBeChecked();

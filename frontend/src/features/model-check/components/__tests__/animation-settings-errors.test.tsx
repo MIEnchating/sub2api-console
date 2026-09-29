@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 it.each(["开始检测（1 个账号）", "前置检测（1）"])(
-  "点击%s且模型和超时无效时显示关联字段错误，不重复弹出 toast",
+  "点击%s且超时无效时显示关联字段错误，不重复弹出 toast",
   async (action) => {
     const errorToast = vi.spyOn(toast, "error");
     const client = new QueryClient({
@@ -36,17 +36,12 @@ it.each(["开始检测（1 个账号）", "前置检测（1）"])(
       target: { value: "1" },
     });
     fireEvent.click(screen.getByRole("button", { name: action }));
-    const model = screen.getByRole("combobox", { name: "检测模型" });
+    expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
     const timeout = screen.getByRole("spinbutton", { name: "请求超时（秒）" });
-    await waitFor(() => expect(model).toHaveAccessibleDescription("请输入模型 ID"));
-    expect(timeout).toHaveAccessibleDescription("超时不能小于 5 秒");
-    const modelField = screen.getByRole("group", { name: "检测模型设置" });
-    expect(within(modelField).getByRole("alert")).toHaveTextContent("请输入模型 ID");
-    expect(within(modelField).getByRole("alert")).toHaveClass("col-start-2");
+    await waitFor(() => expect(timeout).toHaveAccessibleDescription("超时不能小于 5 秒"));
     expect(
       within(screen.getByRole("group", { name: "请求超时设置" })).getByRole("alert"),
     ).toHaveClass("col-start-2");
-    expect(modelField).toHaveClass("min-w-0");
     expect(errorToast).not.toHaveBeenCalled();
   },
 );

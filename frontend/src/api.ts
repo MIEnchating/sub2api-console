@@ -983,6 +983,10 @@ type GroupPolicyOverride = {
   probe_enabled?: boolean | null;
   probe_interval_seconds?: number | null;
   probe_model?: string | null;
+  animation_enabled?: boolean | null;
+  animation_pass_multiplier?: number | null;
+  animation_fail_multiplier?: number | null;
+  animation_failure_action?: "ignore" | "degrade" | "fuse" | null;
 };
 
 export type GroupPolicyOverrideUpdate = {
@@ -998,6 +1002,10 @@ export type GroupPolicyOverrideUpdate = {
   probe_enabled: boolean;
   probe_interval_seconds: number;
   probe_model: string | null;
+  animation_enabled: boolean;
+  animation_pass_multiplier: number;
+  animation_fail_multiplier: number;
+  animation_failure_action: "ignore" | "degrade" | "fuse";
 };
 
 export type AccountRecovery = {
@@ -1037,6 +1045,7 @@ export type AccountStatus = {
   schedulable: boolean | null;
   priority: number | null;
   manual_priority?: number | null;
+  groups_locked?: boolean;
   manual_sync_balance_multiplier?: boolean;
   load_factor: string | null;
   concurrency: number | null;
@@ -1118,6 +1127,19 @@ export type AccountDetail = AccountStatus & {
   group_ids: Record<string, string | null>;
   bindings: AccountBinding[];
   test_models: string[];
+};
+
+export type AccountGroupsPreview = {
+  account_id: string;
+  current_group_ids: string[];
+  groups: Array<{ id: string; name: string }>;
+  target_version: string;
+};
+
+export type AccountGroupsInput = {
+  group_ids: string[];
+  expected_group_ids: string[];
+  target_version: string;
 };
 
 export type AccountDeletePreview = {
@@ -1458,6 +1480,7 @@ export type DetectionTask = {
   name: string;
   group_ids: string[];
   model: string;
+  animation?: boolean;
   precheck: boolean;
   precheck_questions?: PrecheckQuestionID[];
   terminal: boolean;
@@ -1497,6 +1520,7 @@ export type AnimationResult = {
       id: string;
       verdict: "passed" | "not_passed" | "inconclusive" | "error";
       answer?: string;
+      answer_truncated?: boolean;
       error?: string;
       request_id: string;
     }>;
@@ -1509,6 +1533,19 @@ export type AnimationResult = {
   response_model?: string;
   request_id: string;
   status: "succeeded" | "failed";
+  phase?: "queued" | "running" | "generating" | "completed";
+  html?: string;
+  source?: string;
+  source_truncated?: boolean;
+  prompt?: string;
+  reasoning_effort?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    reasoning_tokens?: number;
+  };
+  generation_duration_ms?: number;
   svg?: string;
   error?: string;
   retry_count?: number;
@@ -2406,6 +2443,18 @@ export const api = {
       body: JSON.stringify({ date }),
     }),
   latestRevenue: () => request<Task | null>("/api/pricing/revenue/latest"),
+  setAccountGroupsLocked: (id: string, enabled: boolean) =>
+    request<{ groups_locked: boolean }>(`/api/accounts/${encodeURIComponent(id)}/group-lock`, {
+      method: "PUT",
+      body: JSON.stringify({ groups_locked: enabled }),
+    }),
+  accountGroups: (id: string) =>
+    request<AccountGroupsPreview>(`/api/accounts/${encodeURIComponent(id)}/groups`),
+  updateAccountGroups: (id: string, input: AccountGroupsInput) =>
+    request<Task>(`/api/accounts/${encodeURIComponent(id)}/groups`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
   groups: () => request<GroupStatus[]>("/api/groups"),
   dictionaries: (kind: DictionaryKind) =>
     request<{ items: DictionaryEntry[] }>(`/api/dictionaries?kind=${encodeURIComponent(kind)}`),
@@ -2466,6 +2515,10 @@ export const api = {
     ),
   allUpstreamGroupHistory: () =>
     request<UpstreamGroupChange[]>("/api/upstreams/group-history?limit=500"),
+  clearOneUpstreamGroupHistory: (upstreamID: string) =>
+    request<{ deleted: number }>(`/api/upstreams/group-history/${encodeURIComponent(upstreamID)}`, {
+      method: "DELETE",
+    }),
   clearUpstreamGroupHistory: () =>
     request<{ deleted: number }>("/api/upstreams/group-history", { method: "DELETE" }),
   upstreamDeletePreview: (host: string) =>

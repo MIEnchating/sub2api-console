@@ -491,6 +491,11 @@ func (s *Service) enqueueMaintenance(ctx context.Context, operation, message str
 	if automatic {
 		task.Result["origin"] = "automatic-inspection"
 	}
+	if operation == "account-rate-sync" && targetErr == nil {
+		if err := taskstore.WithRecovery(&task, rateRecovery{AccountIDs: accountIDs, Actor: actor, Automatic: automatic, Target: targetguard.Fingerprint(expectedTarget)}); err != nil {
+			return taskstore.Task{}, err
+		}
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		return taskstore.Task{}, err
 	}
@@ -557,7 +562,11 @@ func (s *Service) executeMaintenanceContext(parent context.Context, task tasksto
 			}
 		}
 	}
+	originalProgress := task.Progress
 	task.Progress, task.UpdatedAt = 100, time.Now().UTC().Format(time.RFC3339Nano)
+	if taskstore.Interrupted(ctx) {
+		task.Progress = originalProgress
+	}
 	if err != nil {
 		task.Status, task.Message = "failed", err.Error()
 		if result == nil {

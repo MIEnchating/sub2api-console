@@ -67,9 +67,7 @@ it.each(["前置检测", "终端续接检测"])("%s 全选跨页全部账号并�
   expect(checkbox).not.toHaveAttribute("aria-disabled", "true");
   fireEvent.click(checkbox);
   expect(checkbox).toBeChecked();
-  fireEvent.change(within(panel).getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "shared-model" },
-  });
+  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   fireEvent.click(within(panel).getByRole("button", { name: submitName }));
   if (tab === "前置检测") {
     await waitFor(() => expect(posts[0]?.targets).toHaveLength(25));
@@ -135,7 +133,7 @@ it("终端检测选择全部疑似异常后提交完整的 25 个稳定账号", 
       checks: Array.from({ length: 25 }, (_, index) => ({
         account_id: String(index + 1),
         account_name: `检测账号 ${index + 1}`,
-        model: "shared-model",
+        model: "gpt-6-astra",
         request_id: `request-${index + 1}`,
         verdict: "suspected",
         duration_ms: 10,
@@ -159,9 +157,7 @@ it("终端检测选择全部疑似异常后提交完整的 25 个稳定账号", 
   await user.click(screen.getByRole("tab", { name: "终端续接检测" }));
   const panel = screen.getByRole("tabpanel", { name: "终端续接检测" });
   await user.click(await within(panel).findByRole("button", { name: "选择疑似异常（25）" }));
-  fireEvent.change(within(panel).getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "shared-model" },
-  });
+  expect(within(panel).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await user.click(within(panel).getByRole("button", { name: "开始检测（25 个账号）" }));
   const dialog = screen.getByRole("dialog", { name: "确认终端续接检测范围" });
   await user.click(within(dialog).getByRole("button", { name: "确认并开始检测" }));
@@ -169,7 +165,7 @@ it("终端检测选择全部疑似异常后提交完整的 25 个稳定账号", 
     {
       targets: Array.from({ length: 25 }, (_, index) => ({
         account_id: String(index + 1),
-        model: "shared-model",
+        model: "gpt-6-astra",
       })),
       timeout_seconds: 120,
       rounds: 1,

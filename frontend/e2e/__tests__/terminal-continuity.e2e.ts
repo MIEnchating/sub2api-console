@@ -84,7 +84,7 @@ test("终端续接检测独立提交并筛出无依据否认工具的账号", as
   const requests = await openTerminalContinuity(page);
   const panel = page.getByRole("tabpanel", { name: "终端续接检测", exact: true });
   await panel.getByRole("button", { name: "全选账号", exact: true }).click();
-  await panel.getByRole("combobox", { name: "检测模型" }).fill("gpt-6-astra");
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await page.keyboard.press("Escape");
   await panel.getByRole("spinbutton", { name: "终端检测轮数" }).fill("3");
   await panel.getByRole("button", { name: "开始检测（2 个账号）" }).click();

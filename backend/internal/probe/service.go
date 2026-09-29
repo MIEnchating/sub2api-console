@@ -633,7 +633,8 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	started := time.Now()
 	var lastStatus *int
-	var firstResponse, measuredFirstToken bool
+	var succeeded bool
+	var firstTokenAt time.Time
 	var lastReason, actualModel string
 	attempts := 0
 	attemptStatusCodes := []int{}
@@ -645,18 +646,18 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 			break
 		}
 		attempts++
-		outcome := probeAttempt(ctx, accountProbe, target, config)
+		outcome := probeAttempt(ctx, accountProbe, target, config, descriptor.Protocol)
 		if outcome.unavailable {
 			result := skippedProbeResult(target, outcome.reason)
 			result.FailureCode = outcome.failureCode
 			return result
 		}
-		lastStatus, firstResponse, lastReason, actualModel = outcome.status, outcome.content, outcome.reason, outcome.model
-		measuredFirstToken = outcome.measuredFirstToken
+		lastStatus, succeeded, lastReason, actualModel = outcome.status, outcome.content, outcome.reason, outcome.model
+		firstTokenAt = outcome.firstTokenAt
 		if lastStatus != nil {
 			attemptStatusCodes = append(attemptStatusCodes, *lastStatus)
 		}
-		if firstResponse || !config.RetryEnabled || attempts > retry.Count || lastStatus == nil {
+		if succeeded || outcome.receivedContent || !config.RetryEnabled || attempts > retry.Count || lastStatus == nil {
 			break
 		}
 		if _, retryable := retry.StatusCodes[*lastStatus]; !retryable {
@@ -676,10 +677,11 @@ func probeTarget(ctx context.Context, client *adminclient.Client, target Target,
 	}
 	rewritten := requestModel != "" && actualModel != "" && requestModel != actualModel
 	durationMS := time.Since(started).Milliseconds()
-	if firstResponse {
+	if succeeded {
 		var latency *string
+		measuredFirstToken := !firstTokenAt.IsZero()
 		if measuredFirstToken {
-			value := decimalMilliseconds(float64(time.Since(started)) / float64(time.Millisecond))
+			value := decimalMilliseconds(float64(firstTokenAt.Sub(started)) / float64(time.Millisecond))
 			latency = &value
 		}
 		return Result{AccountID: target.AccountID, AccountName: target.AccountName, GroupName: target.GroupName, Result: "通过", DurationMS: durationMS, LatencyP50: latency, LatencyP95: latency, LatencyP99: latency, Attempts: attempts, StatusCode: lastStatus, ObservedAt: observed, RequestModel: requestModel, ActualModel: actualModel, ModelRewritten: rewritten, AttemptStatusCodes: attemptStatusCodes, RetryRecovered: attempts > 1,

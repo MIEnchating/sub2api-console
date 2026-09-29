@@ -1,3 +1,4 @@
+import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
@@ -52,12 +53,12 @@ export function AnimationScheduleDialog(props: {
     resolver: zodResolver(animationScheduleSchema),
     defaultValues: {
       account_id: props.accountID,
-      model: props.model,
       enabled: false,
       interval_minutes: 60,
       timeout_seconds: 120,
       version: 0,
       ...props.schedule,
+      model: props.schedule?.model ?? (props.model.trim() || animationTestModel),
       daily_time: undefined,
       daily_times: props.schedule?.daily_times ?? [props.schedule?.daily_time ?? ""],
       mode,

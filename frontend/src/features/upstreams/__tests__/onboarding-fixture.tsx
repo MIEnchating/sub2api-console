@@ -11,7 +11,8 @@ import { render } from "@testing-library/react";
 import { StrictMode } from "react";
 import { vi } from "vitest";
 
-import { OnboardingPage } from "@/App";
+import { historyNavigation } from "../lib/history-navigation";
+import { OnboardingPage, UpstreamsPage } from "@/App";
 import { api, type GroupStatus, type OnboardingCandidate, type UpstreamConfiguration } from "@/api";
 
 export const upstream: UpstreamConfiguration = {
@@ -82,6 +83,8 @@ export function renderOnboarding(
     strictMode?: boolean;
     upstreamType?: string;
     candidates?: OnboardingCandidate[];
+    history?: "overview" | "host";
+    realUpstreamsPage?: boolean;
   },
 ): QueryClient {
   const configuredUpstream = {
@@ -167,18 +170,30 @@ export function renderOnboarding(
     path: "/onboarding",
     component: OnboardingPage,
     validateSearch: (search: Record<string, unknown>) => ({
+      ...historyNavigation(search),
       host: typeof search.host === "string" ? search.host : undefined,
       upstream_type: typeof search.upstream_type === "string" ? search.upstream_type : undefined,
       group_id: typeof search.group_id === "string" ? search.group_id : undefined,
     }),
   });
   const search = defaultStringifySearch({
+    history: options?.history,
+    history_upstream: options?.history ? upstream.upstream_id : undefined,
+    history_host: options?.history ? upstream.host : undefined,
     host: upstream.host,
     group_id: directGroup ? "7" : undefined,
   });
   const url = candidate ? `/onboarding${search}` : "/onboarding";
   const router = createRouter({
-    routeTree: root.addChildren([route]),
+    routeTree: root.addChildren([
+      route,
+      createRoute({
+        getParentRoute: () => root,
+        path: "/upstreams",
+        validateSearch: historyNavigation,
+        component: options?.realUpstreamsPage ? UpstreamsPage : () => <div>返回上游管理完成</div>,
+      }),
+    ]),
     history: createMemoryHistory({ initialEntries: [url] }),
   });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

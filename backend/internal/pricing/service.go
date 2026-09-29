@@ -91,17 +91,16 @@ type Group struct {
 }
 
 type Decision struct {
-	manualCostProtection bool
-	AccountID            string   `json:"account_id"`
-	AccountName          string   `json:"account_name"`
-	Platform             string   `json:"platform"`
-	CostMultiplier       *string  `json:"cost_multiplier"`
-	CurrentGroupIDs      []string `json:"current_group_ids"`
-	DesiredGroupIDs      []string `json:"desired_group_ids"`
-	EligibleGroups       []string `json:"eligible_groups"`
-	Changed              bool     `json:"changed"`
-	Skipped              bool     `json:"skipped"`
-	Reason               *string  `json:"reason"`
+	AccountID       string   `json:"account_id"`
+	AccountName     string   `json:"account_name"`
+	Platform        string   `json:"platform"`
+	CostMultiplier  *string  `json:"cost_multiplier"`
+	CurrentGroupIDs []string `json:"current_group_ids"`
+	DesiredGroupIDs []string `json:"desired_group_ids"`
+	EligibleGroups  []string `json:"eligible_groups"`
+	Changed         bool     `json:"changed"`
+	Skipped         bool     `json:"skipped"`
+	Reason          *string  `json:"reason"`
 }
 
 type Snapshot struct {
@@ -210,6 +209,9 @@ func (s *Service) RestoreBackupNow(ctx context.Context, backupID, actor string) 
 		switch {
 		case !found:
 			reason := "备份中的账号已不存在"
+			decision.Skipped, decision.Reason = true, &reason
+		case account.GroupsLocked:
+			reason := "账号分组已锁定，备份还原不调整分组"
 			decision.Skipped, decision.Reason = true, &reason
 		case account.ManualPriority:
 			reason := "账号处于手动控制，备份还原不调整分组"
@@ -690,9 +692,15 @@ func evaluate(config Config, catalog business.PricingCatalog) (Snapshot, error) 
 		if strings.TrimSpace(costText) != "" {
 			decision.CostMultiplier = &costText
 		}
-		decision.manualCostProtection = account.ManualPriority && !account.IgnoreCostWall
-		if account.ManualPriority && account.IgnoreCostWall {
-			reason := "手动控制账号已开启无视成本墙，价格管理不调整分组"
+		if account.GroupsLocked {
+			reason := "账号分组已锁定，价格管理不调整分组"
+			decision.Skipped, decision.Reason = true, &reason
+			skipped++
+			decisions = append(decisions, decision)
+			continue
+		}
+		if account.ManualPriority {
+			reason := "账号处于手动控制，价格管理不调整分组"
 			decision.Skipped, decision.Reason = true, &reason
 			skipped++
 			decisions = append(decisions, decision)
@@ -1074,17 +1082,9 @@ func (s *Service) pricingMutationProtection(ctx context.Context, decision Decisi
 		if err != nil {
 			return nil, fmt.Errorf("人工保护状态复核失败：%w", err)
 		}
-		if protection.ManualPriority && decision.manualCostProtection {
-			catalog, err := s.repository.PricingCatalog(ctx)
-			if err != nil {
-				return nil, err
-			}
-			for _, account := range catalog.Accounts {
-				if account.ID == decision.AccountID && account.ManualPriority && !account.IgnoreCostWall && account.Multiplier != nil && decision.CostMultiplier != nil && *account.Multiplier == *decision.CostMultiplier && sameGroupIDs(account.GroupIDs, decision.CurrentGroupIDs) {
-					protection.ManualPriority = false
-					break
-				}
-			}
+		if protection.GroupsLocked {
+			reason := "账号分组已锁定，价格管理不调整分组"
+			return &reason, nil
 		}
 		if protection.Protected() {
 			reason := "账号已启用" + strings.Join(protection.Reasons(), "、") + "，价格管理未调整分组"

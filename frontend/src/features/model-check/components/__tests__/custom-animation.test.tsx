@@ -35,7 +35,7 @@ const queued = {
   message: "正在生成动画",
   result: {
     account_ids: ["custom-target"],
-    targets: [{ account_id: "custom-target", model: "custom-model" }],
+    targets: [{ account_id: "custom-target", model: "gpt-6-astra" }],
     animations: [],
   },
   created_at: "2026-09-14T00:00:00Z",
@@ -63,9 +63,7 @@ function fill(): void {
     target: { value: "https://custom.example.invalid/v1" },
   });
   fireEvent.change(screen.getByLabelText("API Key"), { target: { value: secret } });
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "custom-model" },
-  });
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
 }
 
 it("没有账号时可确认自定义接口并创建任务，提交成功后清除 Key 和 mutation 中的凭据", async () => {
@@ -84,6 +82,9 @@ it("没有账号时可确认自定义接口并创建任务，提交成功后清�
   const view = await setup();
   expect(screen.getByText("暂无自定义接口检测记录")).toBeVisible();
   fill();
+  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
+    target: { value: "custom-model" },
+  });
   expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
   await userEvent.click(screen.getByRole("button", { name: "开始检测" }));
   const dialog = await screen.findByRole("dialog", { name: "确认自定义接口检测" });
@@ -105,7 +106,7 @@ it("没有账号时可确认自定义接口并创建任务，提交成功后清�
       },
     },
   ]);
-  expect(await screen.findByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+  expect(await screen.findByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   expect(screen.getByRole("button", { name: "取消任务" })).toBeEnabled();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   await waitFor(() =>
@@ -150,7 +151,7 @@ it("自定义前置检测只提交糖果题、展示结果并清除 Key", async 
           account_id: "custom-target",
           account_name: "自定义接口",
           mode: "precheck",
-          model: "custom-model",
+          model: "gpt-6-astra",
           status: "succeeded",
           request_id: "custom-precheck",
           completed_at: "2026-09-15T00:00:00Z",
@@ -203,7 +204,7 @@ it("自定义前置检测只提交糖果题、展示结果并清除 Key", async 
         base_url: "https://custom.example.invalid/v1",
         api_key: secret,
         platform: "openai",
-        model: "custom-model",
+        model: "gpt-6-astra",
       },
     },
   ]);

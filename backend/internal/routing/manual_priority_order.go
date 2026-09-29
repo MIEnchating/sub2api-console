@@ -120,10 +120,11 @@ func PlanManualPriorityOrder(policy map[string]any, accounts []business.RoutingA
 		fast.priority, best.priority = best.priority, fast.priority
 	}
 	// A frozen account can retain an effective slot assigned by a previous round.
-	// Reject an ambiguous plan instead of overwriting that account's position.
+	// Effective positions may temporarily overlap after a partial remote write;
+	// only the user-reserved positions define a manual-control conflict.
 	for i, first := range items {
 		for _, second := range items[i+1:] {
-			if first.priority == second.priority && sharedManualGroup(first, second) {
+			if *first.account.ManualPriority == *second.account.ManualPriority && sharedManualGroup(first, second) {
 				return nil, fmt.Errorf("手动控制位置存在冲突（账号 %s、%s），请同步账号并调整保留位置后重试", first.account.ID, second.account.ID)
 			}
 		}

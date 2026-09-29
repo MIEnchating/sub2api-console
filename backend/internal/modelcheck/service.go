@@ -43,6 +43,10 @@ type AccountCatalog interface {
 	Account(context.Context, string) (*business.AccountDetail, error)
 }
 
+type animationEvidenceWriter interface {
+	PersistAnimationEvidence(context.Context, []business.AnimationEvidence) error
+}
+
 type KeyRevealer interface {
 	RevealKey(context.Context, configstore.AuthRecord, string, string) (upstreamsync.CreatedKey, error)
 }

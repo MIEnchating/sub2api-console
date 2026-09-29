@@ -29,6 +29,7 @@ type directBundleSender struct {
 	client     *http.Client
 	credential directCredential
 	requestID  string
+	usage      *AnimationUsage
 }
 
 func (sender directBundleSender) Send(ctx context.Context, _ string, model, prompt string, timeoutSeconds int) (string, string, error) {
@@ -39,18 +40,21 @@ func (sender directBundleSender) SendWithReasoning(ctx context.Context, _ string
 	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 	if strings.EqualFold(strings.TrimSpace(sender.credential.Platform), "anthropic") {
-		if effort != "" {
+		if effort != "" && sender.usage == nil {
 			return "", "", visibleRequestError{message: "Astra 检测需要支持思考等级的 OpenAI 接口，请检查账号平台配置"}
 		}
-		return sender.sendAnthropic(requestContext, model, prompt)
+		return sender.sendAnthropic(requestContext, model, prompt, effort)
 	}
 	return sender.sendOpenAI(requestContext, model, prompt, effort)
 }
 
-func (sender directBundleSender) sendAnthropic(ctx context.Context, model, prompt string) (string, string, error) {
+func (sender directBundleSender) sendAnthropic(ctx context.Context, model, prompt, effort string) (string, string, error) {
 	body := map[string]any{
 		"model": model, "max_tokens": 4096, "stream": false,
 		"messages": []map[string]any{{"role": "user", "content": prompt}},
+	}
+	if effort != "" {
+		body["output_config"] = map[string]string{"effort": effort}
 	}
 	headers := map[string]string{
 		"x-api-key": sender.credential.Secret, "anthropic-version": "2023-06-01",
@@ -194,6 +198,7 @@ func (sender directBundleSender) sendRequest(ctx context.Context, endpoint strin
 		}
 		result["model"] = safeCredentialText(model)
 	}
+	sender.usage.read(result)
 	return result, response.StatusCode, raw, nil
 }
 

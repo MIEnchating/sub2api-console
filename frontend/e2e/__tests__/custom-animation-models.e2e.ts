@@ -25,6 +25,36 @@ test.beforeEach(async ({ page }) => {
   await page.getByLabel("API Key").fill("isolated-list-key");
 });
 
+test("自定义接口默认 Astra，手动模型在更换凭据后保留且不自动读取模型列表", async ({ page }) => {
+  let calls = 0;
+  await page.route("**/api/model-checks/animations/models", async (route) => {
+    calls++;
+    await route.abort();
+  });
+  const model = page.getByRole("combobox", { name: "检测模型" });
+  await expect(model).toHaveValue("gpt-6-astra");
+  await model.fill("manual-model");
+  await page.keyboard.press("Escape");
+  await page.getByLabel("API Key").fill("replacement-list-key");
+  await page.getByRole("textbox", { name: "Base URL" }).fill("https://another.example.invalid/v1");
+  await expect(model).toHaveValue("manual-model");
+  await expect(page.getByRole("button", { name: "获取模型" })).toBeEnabled();
+  expect(calls).toBe(0);
+});
+
+test("Key 为空时阻止检测并展示字段错误", async ({ page }) => {
+  let calls = 0;
+  await page.route("**/api/model-checks/animations", async (route) => {
+    calls++;
+    await route.abort();
+  });
+  await page.getByLabel("API Key").clear();
+  await page.getByRole("button", { name: "开始检测", exact: true }).click();
+  await expect(page.getByText("请输入 API Key", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(calls).toBe(0);
+});
+
 test("未填写模型时可获取列表并用键盘选择，获取按钮保持标准尺寸", async ({ page }) => {
   await page.route("**/api/model-checks/animations/models", async (route) => {
     expect(route.request().method()).toBe("POST");
@@ -38,6 +68,7 @@ test("未填写模型时可获取列表并用键盘选择，获取按钮保持�
   const panel = page.getByRole("tabpanel", { name: "自定义接口", exact: true });
   const button = panel.getByRole("button", { name: "获取模型" });
   await expect(button).toHaveCSS("height", "32px");
+  await panel.getByRole("combobox", { name: "检测模型" }).clear();
   await button.click();
   await expect(page.getByRole("option", { name: "alpha-model" })).toBeVisible();
   await page.keyboard.press("ArrowDown");
@@ -75,6 +106,7 @@ test("修改 Key 会取消正在读取的旧列表，新请求只展示新凭据
       await route.fulfill({ json: { models: ["stale-model"] } }).catch(() => {});
     } else await route.fulfill({ json: { models: ["current-model"] } });
   });
+  await page.getByRole("combobox", { name: "检测模型" }).clear();
   const aborted = page.waitForEvent("requestfailed", {
     predicate: (request) => request.url().endsWith("/animations/models"),
   });

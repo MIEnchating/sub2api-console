@@ -522,6 +522,9 @@ func persistCatalogTx(ctx context.Context, tx *sql.Tx, host string, groups []Ups
 	if err := upsertLiveCatalogEntitiesTx(ctx, tx, upstreamID, groups, keys, now, hasCatalogBaseline); err != nil {
 		return err
 	}
+	if err := updateLiveGroupAdditionNamesTx(ctx, tx, upstreamID, groups); err != nil {
+		return err
+	}
 	if partial {
 		return nil
 	}

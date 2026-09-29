@@ -66,7 +66,10 @@ func (e *StatusError) Error() string {
 
 func IsAuthenticationError(err error) bool {
 	var status *StatusError
-	return errors.As(err, &status) && (status.StatusCode == http.StatusUnauthorized || status.StatusCode == http.StatusForbidden)
+	if errors.As(err, &status) && (status.StatusCode == http.StatusUnauthorized || status.StatusCode == http.StatusForbidden) {
+		return true
+	}
+	return errors.Is(err, errBusinessAuthentication)
 }
 
 type Reader struct {
@@ -587,9 +590,7 @@ func (r *Reader) getFallback(ctx context.Context, record configstore.AuthRecord,
 		if status == http.StatusNotFound && index < len(ordered)-1 {
 			continue
 		}
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			return nil, err
-		}
+		return nil, err
 	}
 	if last == nil {
 		last = errors.New("没有可用的上游请求地址")
@@ -827,7 +828,10 @@ func (r *Reader) requestJSONWithSemantics(ctx context.Context, record configstor
 		return nil, response.StatusCode, cause
 	}
 	if object, ok := payload.(map[string]any); ok && !businessSuccess(object) {
-		return nil, response.StatusCode, errors.New("上游业务读取失败")
+		return nil, response.StatusCode, &businessResponseError{
+			detail:         upstreamErrorDetail(body),
+			authentication: authenticated && isNewAPI(record.UpstreamType) && newAPIAuthenticationFailure(object),
+		}
 	}
 	if _, object := payload.(map[string]any); !object {
 		if _, array := payload.([]any); !array {
@@ -943,10 +947,9 @@ func catalogItems(payload any) ([]map[string]any, error) {
 			return nil, errors.New("上游分组目录包含无效项目")
 		}
 		copy := cloneObject(row)
-		if _, present := copy["id"]; !present {
-			copy["id"] = name
-		}
-		if _, present := copy["group_id"]; !present {
+		// Named maps may also carry a stable ID. Preserve it so a display
+		// name change does not become a group deletion followed by an addition.
+		if _, present := presentValue(copy, "group_id", "groupId", "id"); !present {
 			copy["group_id"] = name
 		}
 		if _, present := copy["name"]; !present {

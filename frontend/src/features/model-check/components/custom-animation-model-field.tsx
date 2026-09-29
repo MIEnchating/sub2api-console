@@ -50,14 +50,20 @@ export function CustomAnimationModelField(props: {
       control={props.form.control}
       name="model"
       render={({ field, fieldState }) => (
-        <div className="col-span-2 min-w-0 space-y-1">
+        <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
           <label htmlFor="custom-animation-model" className="text-sm font-medium">
             检测模型
           </label>
           <Autocomplete.Root
             items={models.data?.models ?? emptyModels}
             value={field.value}
-            onValueChange={field.onChange}
+            onValueChange={(value, details) => {
+              if (details.reason === "escape-key") {
+                details.cancel();
+                return;
+              }
+              field.onChange(value);
+            }}
             open={open && models.data !== undefined && !props.disabled}
             onOpenChange={setOpen}
             disabled={props.disabled}

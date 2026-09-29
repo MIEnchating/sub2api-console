@@ -1,3 +1,7 @@
+export const upstreamBindingLabels = {
+  bound: "已绑定",
+} as const;
+
 export const upstreamConcurrencyLabels = {
   heading: "并发",
   name: "上游并发",

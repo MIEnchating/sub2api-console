@@ -293,7 +293,7 @@ func removeAccountPolicyReferences(document map[string]any, accountID string) {
 	if !ok {
 		return
 	}
-	for _, field := range []string{"paused_account_ids", "excluded_account_ids", "manual_fused_account_ids", "ignore_cost_wall_account_ids"} {
+	for _, field := range []string{"paused_account_ids", "excluded_account_ids", "manual_fused_account_ids", "ignore_cost_wall_account_ids", groupLockedAccountIDs} {
 		switch values := scope[field].(type) {
 		case []any:
 			filtered := make([]any, 0, len(values))

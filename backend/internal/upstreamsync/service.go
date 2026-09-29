@@ -533,7 +533,7 @@ func (s *Service) syncHostData(ctx context.Context, host string, scope Scope, ac
 	if err != nil && IsAuthenticationError(err) {
 		rotated, refreshErr := s.refresher.Refresh(ctx, *record)
 		if refreshErr != nil {
-			return s.failed(ctx, host, failureScope, true, "refresh_token 续签失败："+refreshErr.Error())
+			return s.failed(ctx, host, failureScope, true, err.Error()+"；refresh_token 续签失败："+refreshErr.Error())
 		}
 		if saveErr := s.private.SaveAuthRecord(ctx, rotated, allAuthFields()); saveErr != nil {
 			return s.failed(ctx, host, failureScope, true, "新鉴权信息保存失败："+saveErr.Error())

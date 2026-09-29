@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
+	"github.com/MIEnchating/sub2api-console/backend/internal/business"
 	"github.com/MIEnchating/sub2api-console/backend/internal/configstore"
+	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
 	"net/http"
@@ -26,7 +28,10 @@ type privateStore interface {
 }
 
 type Service struct {
-	private           privateStore
+	private         privateStore
+	groupProtection interface {
+		AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
+	}
 	transport         http.RoundTripper
 	officialTransport http.RoundTripper
 	mailTransport     http.RoundTripper
@@ -41,6 +46,33 @@ type Service struct {
 
 func New(store privateStore) *Service {
 	return &Service{private: store, active: map[string]*activeRun{}}
+}
+
+func (s *Service) UseAccountGroupProtection(repository interface {
+	AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
+}) {
+	s.groupProtection = repository
+}
+
+func (s *Service) requireGroupsUnlocked(ctx context.Context, accountID string) error {
+	if s.groupProtection == nil {
+		return nil
+	}
+	protection, err := s.groupProtection.AccountMutationProtection(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if protection.GroupsLocked {
+		return business.ErrAccountGroupsLocked
+	}
+	return nil
+}
+
+func (s *Service) acquireGroupMutation(ctx context.Context, resources ...string) (context.Context, func() error, error) {
+	if s.groupProtection != nil {
+		return targetguard.Acquire(ctx, s.groupProtection, resources...)
+	}
+	return targetguard.Acquire(ctx, s.private, resources...)
 }
 
 type taskRepository interface {

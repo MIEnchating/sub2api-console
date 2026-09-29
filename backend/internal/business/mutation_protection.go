@@ -10,6 +10,7 @@ import (
 )
 
 type AccountMutationProtection struct {
+	GroupsLocked   bool
 	ManualPriority bool
 	Paused         bool
 	Excluded       bool
@@ -86,11 +87,13 @@ func (s *Store) AccountMutationProtections(ctx context.Context, accountIDs []str
 	paused := controlAccountIDs(scope["paused_account_ids"])
 	excluded := controlAccountIDs(scope["excluded_account_ids"])
 	fused := controlAccountIDs(scope["manual_fused_account_ids"])
+	groupLocked := controlAccountIDs(scope[groupLockedAccountIDs])
 	for _, accountID := range ordered {
 		result[accountID] = AccountMutationProtection{
-			Paused:      containsControlID(paused, accountID),
-			Excluded:    containsControlID(excluded, accountID),
-			ManualFused: containsControlID(fused, accountID),
+			GroupsLocked: containsControlID(groupLocked, accountID),
+			Paused:       containsControlID(paused, accountID),
+			Excluded:     containsControlID(excluded, accountID),
+			ManualFused:  containsControlID(fused, accountID),
 		}
 	}
 	encodedAccountIDs, err := json.Marshal(ordered)

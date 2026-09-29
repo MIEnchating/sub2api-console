@@ -294,7 +294,7 @@ CREATE TABLE IF NOT EXISTS onboarding_pending (
 	 operation_id TEXT PRIMARY KEY,upstream_id TEXT NOT NULL DEFAULT '',upstream_host TEXT NOT NULL,upstream_type TEXT NOT NULL,upstream_key_id TEXT NOT NULL,
 	 upstream_key_name TEXT,upstream_account_id TEXT NOT NULL DEFAULT '',upstream_group_id TEXT NOT NULL,
 	 upstream_group_name TEXT NOT NULL,local_group_id TEXT NOT NULL,local_group_name TEXT NOT NULL,
-	 local_group_ids_json TEXT NOT NULL DEFAULT '',multiplier TEXT NOT NULL,intent_hash TEXT NOT NULL DEFAULT '',reason TEXT NOT NULL,
+	 local_group_ids_json TEXT NOT NULL DEFAULT '',multiplier TEXT NOT NULL,intent_hash TEXT NOT NULL DEFAULT '',frozen_intent_json TEXT NOT NULL DEFAULT '',reason TEXT NOT NULL,
 	 key_commit_unknown INTEGER NOT NULL DEFAULT 0,account_commit_unknown INTEGER NOT NULL DEFAULT 0,
 	 created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
@@ -304,7 +304,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_onboarding_pending_identity ON onboarding_p
 `
 
 // Older compatible schemas can receive additive tables and indexes at startup.
-const businessSchemaVersion = 9
+const businessSchemaVersion = 10
 
 func (s *Store) ensureSchema(ctx context.Context) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -317,6 +317,9 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	if !fresh {
+		if err := ensureOnboardingPendingFrozenIntent(ctx, tx); err != nil {
+			return fmt.Errorf("待续开户冻结意图字段升级失败：%w", err)
+		}
 		if err := validateBusinessSchema(ctx, tx, true); err != nil {
 			return fmt.Errorf("业务数据库无法安全升级，原数据未修改：%w", err)
 		}
@@ -350,6 +353,38 @@ func (s *Store) ensureSchema(ctx context.Context) error {
 		return err
 	}
 	return s.ensureStableUpstreamRelations(ctx)
+}
+
+func ensureOnboardingPendingFrozenIntent(ctx context.Context, tx *sql.Tx) error {
+	var tableCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='onboarding_pending'`).Scan(&tableCount); err != nil {
+		return err
+	}
+	if tableCount == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_table_info('onboarding_pending')`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == "frozen_intent_json" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `ALTER TABLE onboarding_pending ADD COLUMN frozen_intent_json TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 func databaseHasNoApplicationTables(ctx context.Context, db policyQueryer) (bool, error) {

@@ -33,6 +33,10 @@ it("自动检测默认关闭，通过键盘启用后确认费用与范围才保�
       />
     </QueryClientProvider>,
   );
+  const model = screen.getByRole("textbox", { name: "检测模型" });
+  expect(model).toHaveValue("test-model");
+  await user.clear(model);
+  await user.type(model, "custom-schedule-model");
   const enabled = screen.getByRole("checkbox", { name: "开启自动检测" });
   expect(enabled).not.toBeChecked();
   expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
@@ -42,7 +46,7 @@ it("自动检测默认关闭，通过键盘启用后确认费用与范围才保�
   await user.click(screen.getByRole("button", { name: "保存设置" }));
   const confirm = await screen.findByRole("dialog", { name: "确认开启自动检测" });
   expect(confirm).toHaveTextContent("ID 41");
-  expect(confirm).toHaveTextContent("test-model");
+  expect(confirm).toHaveTextContent("custom-schedule-model");
   expect(confirm).toHaveTextContent("API 用量");
   expect(bodies).toEqual([]);
   await user.click(within(confirm).getByRole("button", { name: "确认保存并开启" }));
@@ -51,7 +55,7 @@ it("自动检测默认关闭，通过键盘启用后确认费用与范围才保�
       {
         account_id: "41",
         enabled: true,
-        model: "test-model",
+        model: "custom-schedule-model",
         interval_minutes: 60,
         timeout_seconds: 120,
         version: 0,

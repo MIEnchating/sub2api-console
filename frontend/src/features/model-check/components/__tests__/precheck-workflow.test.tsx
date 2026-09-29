@@ -73,9 +73,7 @@ function setup(task?: Task): void {
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "gpt-6-astra" },
-  });
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
 }
 
 it("批量前置检测直接开始后展示糖果题结果，并可分别选择通过或降智账号继续动画检测", async () => {
@@ -139,18 +137,27 @@ it("批量前置检测直接开始后展示糖果题结果，并可分别选择�
     ).not.toBeChecked();
 });
 
-it("切换模型后不能使用前一个模型的前置检测结果选择账号", () => {
+it("切换模型后仅允许选择同一模型的历史前置结果", () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => Response.json({ categories: [] })),
   );
-  setup(finishedTask());
-  expect(screen.getByRole("button", { name: "选择通过（1）" })).toBeEnabled();
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "another-model" },
-  });
+  const task = finishedTask();
+  if (Array.isArray(task.result.animations)) {
+    task.result.animations = task.result.animations.map((result: AnimationResult) => ({
+      ...result,
+      model: "legacy-model",
+    }));
+  }
+  setup(task);
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   expect(screen.getByRole("button", { name: "选择通过（0）" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "选择降智（0）" })).toBeDisabled();
+  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
+    target: { value: "legacy-model" },
+  });
+  expect(screen.getByRole("button", { name: "选择通过（1）" })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "选择降智（1）" })).toBeEnabled();
 });
 
 it("取消全选后禁止前置检测，选择单题后确认并只提交该题", async () => {

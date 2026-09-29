@@ -1,3 +1,4 @@
+import { animationTestModel } from "../constants";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -49,7 +50,7 @@ export function TerminalContinuityPanel(props: {
   );
   const form = useForm<AnimationForm>({
     resolver: zodResolver(animationSchema),
-    defaultValues: { account_ids: [], unified_model: "", timeout_seconds: 120 },
+    defaultValues: { account_ids: [], unified_model: animationTestModel, timeout_seconds: 120 },
   });
   const selected = useWatch({ control: form.control, name: "account_ids", exact: true });
   const rows = useMemo(
@@ -270,7 +271,7 @@ export function TerminalContinuityPanel(props: {
             {
               targets: confirmation.account_ids.map((accountID) => ({
                 account_id: accountID,
-                model: confirmation.unified_model.trim(),
+                model: confirmation.unified_model,
               })),
               timeout_seconds: confirmation.timeout_seconds,
               rounds: confirmation.rounds,

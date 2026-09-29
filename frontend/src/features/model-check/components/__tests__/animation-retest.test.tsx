@@ -41,7 +41,7 @@ function setup(options: {
 }
 
 it.each(["succeeded", "failed"] as const)(
-  "%s 结果的重测按钮支持键盘操作并沿用原账号与模型",
+  "%s 结果的重测按钮支持键盘操作并沿用原账号和原模型",
   async (status) => {
     const user = userEvent.setup();
     const onRetry = setup({ result: { ...result, status, error: "上游超时" } });

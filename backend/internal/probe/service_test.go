@@ -243,7 +243,6 @@ func TestQueuedProbeRejectsManagementTargetChangeBeforeRemoteAccess(t *testing.T
 
 func TestActiveProbeUsesDirectStreamAndPersistsConfirmedSample(t *testing.T) {
 	requestCount := 0
-	streamRelease := make(chan struct{})
 	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requestCount++
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" || request.Header.Get("Authorization") != "Bearer probe-account-41" {
@@ -253,14 +252,11 @@ func TestActiveProbeUsesDirectStreamAndPersistsConfirmedSample(t *testing.T) {
 		_, _ = response.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"model\":\"mapped-model\"}}\n\n"))
 		_, _ = response.Write([]byte("data: {\"type\":\"status\",\"text\":\"正在请求上游\"}\n\n"))
 		_, _ = response.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"))
-		if flusher, ok := response.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		<-streamRelease
 		_, _ = response.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
+		response.(http.Flusher).Flush()
+		<-request.Context().Done()
 	}))
 	defer server.Close()
-	defer close(streamRelease)
 	repository := &fakeRepository{
 		policy: map[string]any{
 			"probe":                 map[string]any{"enabled": true, "model": "gpt-test", "timeout_seconds": int64(5), "concurrency": int64(2)},
@@ -305,7 +301,7 @@ func TestActiveProbeTaskStatusReflectsTargetResults(t *testing.T) {
 	server := newDirectProbeTestServer(t, []string{"41", "42"}, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
 		if request.Header.Get("Authorization") == "Bearer probe-account-41" {
-			_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+			_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 			return
 		}
 		_, _ = response.Write([]byte("data: {\"type\":\"error\",\"error\":{\"message\":\"API returned 502: upstream authentication failed\"}}\n\n"))
@@ -382,7 +378,7 @@ func TestAutomaticProbeSkipsQueuedTargetWhenFreshTrafficAppearsBeforeDispatch(t 
 		probeRequests.Add(1)
 		trafficAppeared.Store(true)
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -428,7 +424,7 @@ func TestAutomaticProbeContinuesWhenFreshTrafficCheckFails(t *testing.T) {
 	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		probeRequests.Add(1)
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -473,7 +469,7 @@ func TestPlatformModelProbeActuallyRequestsEveryAccountWithUnlistedModel(t *test
 		requestedModels[strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer probe-account-")] = fmt.Sprint(body["model"])
 		requestedModelsMu.Unlock()
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -515,7 +511,7 @@ func TestFixedRetryRecoversAfterConfiguredStatus(t *testing.T) {
 			return
 		}
 		response.Header().Set("Content-Type", "text/event-stream")
-		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -576,7 +572,7 @@ func TestActiveProbeRejectsRedirectBodyThatLooksLikeAValidStream(t *testing.T) {
 	server := newDirectProbeTestServer(t, []string{"41"}, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
 		response.WriteHeader(http.StatusFound)
-		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	defer server.Close()
 	repository := &fakeRepository{
@@ -645,7 +641,7 @@ func TestSub2APIPoolRetryLoadsDirectoryOnceAndAppliesPerAccountRules(t *testing.
 			probeRequests[accountID]++
 			if accountID == "41" && probeRequests[accountID] > 1 {
 				response.Header().Set("Content-Type", "text/event-stream")
-				_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+				_, _ = response.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 				return
 			}
 			response.WriteHeader(http.StatusBadGateway)

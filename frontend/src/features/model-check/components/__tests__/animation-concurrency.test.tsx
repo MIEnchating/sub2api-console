@@ -94,29 +94,27 @@ it("重试请求尚未返回时在本账号显示启动中，其他账号可继�
   await act(async () => {
     view.posts[0]!.resolve(Response.json(running("41")));
   });
-  expect(await card("41").findByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+  expect(await card("41").findByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   expect(card("42").getByRole("status", { name: "正在启动检测" })).toBeVisible();
   fireEvent.click(card("43").getByRole("checkbox"));
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "new-model" },
-  });
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
   await waitFor(() => expect(view.posts).toHaveLength(3));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(view.posts[2]!.request.targets).toEqual([{ account_id: "43", model: "new-model" }]);
+  expect(view.posts[2]!.request.targets).toEqual([{ account_id: "43", model: "gpt-6-astra" }]);
   await act(async () => {
     view.posts[1]!.resolve(Response.json(running("42")));
     view.posts[2]!.resolve(Response.json(running("43")));
   });
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   for (const id of ["41", "42", "43"])
-    expect(card(id).getByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+    expect(card(id).getByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
 });
 
 it("恢复多个进行中任务时各卡片独立显示状态，一个完成后不影响其他任务", async () => {
   const view = setup([running("41"), running("42")]);
-  expect(await card("41").findByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
-  expect(card("42").getByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+  expect(await card("41").findByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
+  expect(card("42").getByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   await act(async () =>
     view.client.setQueryData(["model-animation", "task", "retry-41"], {
       ...running("41"),
@@ -124,7 +122,7 @@ it("恢复多个进行中任务时各卡片独立显示状态，一个完成后�
     }),
   );
   expect(await card("41").findByRole("button", { name: "重测 41" })).toBeEnabled();
-  expect(card("42").getByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+  expect(card("42").getByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
 });
 
 it("一个账号启动失败时恢复旧结果和重试入口，另一个账号仍显示启动中", async () => {

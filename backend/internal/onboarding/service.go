@@ -32,6 +32,7 @@ import (
 const onboardingAuditTimeout = 5 * time.Second
 
 type Repository interface {
+	AccountMutationProtection(context.Context, string) (business.AccountMutationProtection, error)
 	ControlPolicy(context.Context) (map[string]any, error)
 	RoutingAccounts(context.Context, *string, *string) ([]business.RoutingAccount, error)
 	RoutingCapacityAccounts(context.Context) ([]business.RoutingAccount, error)
@@ -433,6 +434,17 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
+	frozen, err := readFrozenOnboardingIntent(pending)
+	if err != nil {
+		return map[string]any{"remote_write": pendingRemoteWrite(*pending), "pending": pendingResult(*pending)}, err
+	}
+	if frozen != nil {
+		creationPolicy = frozen.creationPolicy()
+		useFrozenAllocation(&validated.request, *frozen)
+		priority, concurrency = accountCreationParameters(configstore.AccountDefaultsSettings{
+			Priority: frozen.Priority, Concurrency: frozen.Concurrency,
+		}, validated.request)
+	}
 	concurrency, err = s.checkCreationConcurrency(ctx, &validated, concurrency, pending)
 	if err != nil {
 		return map[string]any{"remote_write": pending != nil && pendingRemoteWrite(*pending)}, err
@@ -444,6 +456,10 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 		return map[string]any{"remote_write": false}, err
 	}
 	intentHash, err := onboardingIntentHash(validated, target.BaseURL, accountName, platform, accountType, priority, concurrency, creationPolicy)
+	if err != nil {
+		return map[string]any{"remote_write": false}, err
+	}
+	_, intentJSON, err := onboardingIntentSnapshot(validated, target.BaseURL, accountName, platform, accountType, priority, concurrency, creationPolicy)
 	if err != nil {
 		return map[string]any{"remote_write": false}, err
 	}
@@ -460,7 +476,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			legacyCompositeHash, hashErr := onboardingIntentHash(
 				validated, target.BaseURL, accountName, "composite", accountType, priority, concurrency, creationPolicy,
 			)
-			canUpgrade := hashErr == nil && platform != "composite" && pending.IntentHash == legacyCompositeHash &&
+			canUpgrade := frozen == nil && hashErr == nil && platform != "composite" && pending.IntentHash == legacyCompositeHash &&
 				strings.TrimSpace(pending.UpstreamKeyID) != "" && strings.TrimSpace(pending.UpstreamAccountID) == "" &&
 				!pending.KeyCommitUnknown && !pending.AccountCommitUnknown
 			if !canUpgrade {
@@ -478,6 +494,13 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			pending.IntentHash = intentHash
 		}
 		operationID = pending.OperationID
+		if pending.FrozenIntentJSON == "" {
+			// Only backfill legacy records after their original digest matched.
+			pending.FrozenIntentJSON = string(intentJSON)
+			if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
+				return map[string]any{"remote_write": remoteWritten, "pending": pendingResult(*pending)}, fmt.Errorf("待续开户冻结参数保存失败：%w", err)
+			}
+		}
 	}
 	keyMarker, markerRotated := pendingKeyMarker(pending, onboardingKeyMarker(operationID))
 	if markerRotated {
@@ -492,7 +515,7 @@ func (s *Service) Onboard(ctx context.Context, request Request) (map[string]any,
 			OperationID: operationID, UpstreamHost: validated.auth.Host, UpstreamType: validated.request.UpstreamType,
 			UpstreamKeyName: &keyMarker, UpstreamGroupID: validated.candidateID(), UpstreamGroupName: validated.candidate.GroupName,
 			LocalGroupID: primaryLocal.ID, LocalGroupName: primaryLocal.Name, LocalGroupIDs: localGroupIDs, Multiplier: validated.multiplier,
-			IntentHash: intentHash, Reason: "开户创建意图已保存", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			IntentHash: intentHash, FrozenIntentJSON: string(intentJSON), Reason: "开户创建意图已保存", CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		if err := s.repository.SavePendingOnboarding(ctx, *pending); err != nil {
 			return map[string]any{"remote_write": false}, fmt.Errorf("开户创建意图保存失败：%w", err)
@@ -821,7 +844,7 @@ type frozenOnboardingIntent struct {
 	AllocationOverride   *bool              `json:"allocation_override,omitempty"`
 }
 
-func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (string, error) {
+func onboardingIntentSnapshot(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (frozenOnboardingIntent, []byte, error) {
 	locals := make([]frozenLocalGroup, 0, len(validated.locals))
 	for _, local := range validated.locals {
 		locals = append(locals, frozenLocalGroup{ID: local.ID, Name: local.Name})
@@ -857,7 +880,15 @@ func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName
 	}
 	encoded, err := json.Marshal(intent)
 	if err != nil {
-		return "", errors.New("开户意图编码失败")
+		return frozenOnboardingIntent{}, nil, errors.New("开户意图编码失败")
+	}
+	return intent, encoded, nil
+}
+
+func onboardingIntentHash(validated validatedRequest, targetBaseURL, accountName, platform, accountType string, priority, concurrency int64, policies ...configstore.AccountCreationPolicy) (string, error) {
+	_, encoded, err := onboardingIntentSnapshot(validated, targetBaseURL, accountName, platform, accountType, priority, concurrency, policies...)
+	if err != nil {
+		return "", err
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
@@ -871,6 +902,22 @@ func createKey(ctx context.Context, client KeyClient, record configstore.AuthRec
 }
 
 func (s *Service) validate(ctx context.Context, request Request) (validatedRequest, error) {
+	for _, accountID := range request.AccountIDs {
+		protection, err := s.repository.AccountMutationProtection(ctx, accountID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return validatedRequest{}, ctx.Err()
+			}
+			return validatedRequest{}, err
+		}
+		if protection.GroupsLocked {
+			return validatedRequest{}, business.ErrAccountGroupsLocked
+		}
+		if protection.ManualPriority {
+			return validatedRequest{}, errors.New("账号处于手动控制，请先取消手动控制再切换分组")
+		}
+	}
+
 	mapping, err := NormalizeModelMapping(request.ModelMapping)
 	if err != nil {
 		return validatedRequest{}, err

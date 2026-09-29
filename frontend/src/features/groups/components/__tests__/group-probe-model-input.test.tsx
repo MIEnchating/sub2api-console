@@ -18,6 +18,10 @@ const value: GroupPolicyOverrideUpdate = {
   probe_enabled: true,
   probe_interval_seconds: 300,
   probe_model: null,
+  animation_enabled: false,
+  animation_pass_multiplier: 1,
+  animation_fail_multiplier: 1,
+  animation_failure_action: "ignore",
 };
 
 describe("分组探活模型输入", () => {

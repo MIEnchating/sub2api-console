@@ -486,6 +486,9 @@ func (f fakeBusiness) UpstreamGroupHistory(context.Context, string, int) ([]busi
 func (f fakeBusiness) AllUpstreamGroupHistory(context.Context, int) ([]business.UpstreamGroupChange, error) {
 	return f.allGroupHistory, nil
 }
+func (f fakeBusiness) ClearUpstreamGroupHistoryForUpstream(context.Context, string) (int64, error) {
+	return 0, nil
+}
 func (f fakeBusiness) ClearUpstreamGroupHistory(context.Context) (int64, error) { return 0, nil }
 func (f fakeBusiness) Events(context.Context, *int) ([]business.RunEvent, error) {
 	return []business.RunEvent{}, nil

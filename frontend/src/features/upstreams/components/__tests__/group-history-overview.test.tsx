@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UpstreamsPage } from "../../../../App";
+import { api } from "@/api";
 import { router } from "../../../../router";
 
 beforeEach(() => {
@@ -22,6 +23,15 @@ afterEach(() => vi.restoreAllMocks());
 describe("上游分组变化汇总", () => {
   it("从顶部维护菜单打开统计变化后显示各上游的分组变化记录", async () => {
     const user = userEvent.setup();
+    const clear = vi.spyOn(api, "clearOneUpstreamGroupHistory").mockResolvedValue({ deleted: 1 });
+    vi.spyOn(api, "allUpstreamGroupHistory").mockResolvedValue([]);
+    vi.spyOn(api, "upstreamGroupBindingAudit").mockResolvedValue({
+      items: [],
+      total_bindings: 0,
+      present: 0,
+      missing: 0,
+      unknown: 0,
+    });
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Infinity } },
     });
@@ -85,5 +95,11 @@ describe("上游分组变化汇总", () => {
     await user.click(within(dialog).getByRole("button", { name: "清空记录" }));
     expect(screen.getByRole("dialog", { name: "清空上游分组变化记录" })).toBeVisible();
     expect(screen.getByRole("button", { name: "确认清空" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(within(dialog).getByRole("button", { name: "清除 示例上游 的变化记录" }));
+    const confirmation = screen.getByRole("dialog", { name: "清除「示例上游」的变化记录" });
+    expect(within(confirmation).getByText(/其他上游记录保留/)).toBeVisible();
+    await user.click(within(confirmation).getByRole("button", { name: "确认清空" }));
+    expect(clear).toHaveBeenCalledWith("upstream-1");
   });
 });

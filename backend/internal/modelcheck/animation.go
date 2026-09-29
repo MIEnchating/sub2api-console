@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,7 +18,7 @@ import (
 )
 
 const animationSkill = "sub2api-model-animation"
-const animationPrompt = `生成一幅鹈鹕骑自行车的 SVG 动画。画面需包含清晰的鹈鹕、车架、两个旋转的车轮和蹬踏动作。使用 viewBox="0 0 640 400"，背景简洁，动画循环播放。只返回一个完整的 SVG 元素，不要 Markdown、解释、脚本、foreignObject、外部资源或链接。仅使用 SVG 图形及 animate/animateTransform 实现动画。不要 style 元素或 style 属性，颜色与线条使用 SVG 表现属性，输出不超过 24 KB。`
+const animationPrompt = `请生成可直接运行的单文件HTML，使用内联SVG绘制鹈鹕骑自行车的二维循环动画。画面以鹈鹕和自行车为主体，展示清晰的身体结构、踩踏动作和车轮转动，配合协调的背景、配色与层次。动画应流畅自然、衔接连续，并适配不同屏幕尺寸。禁止依赖外部资源，只输出完整HTML，不要代码围栏或解释文字。`
 
 type AnimationTarget struct {
 	AccountID string `json:"account_id"`
@@ -35,21 +36,37 @@ type AnimationRequest struct {
 }
 
 type AnimationResult struct {
-	Mode          string          `json:"mode,omitempty"`
-	Precheck      *PrecheckResult `json:"precheck,omitempty"`
-	AccountID     string          `json:"account_id"`
-	AccountName   string          `json:"account_name"`
-	Endpoint      string          `json:"endpoint,omitempty"`
-	Platform      string          `json:"platform,omitempty"`
-	Model         string          `json:"model"`
-	ResponseModel string          `json:"response_model,omitempty"`
-	RequestID     string          `json:"request_id"`
-	Status        string          `json:"status"`
-	SVG           string          `json:"svg,omitempty"`
-	Error         string          `json:"error,omitempty"`
-	RetryCount    int             `json:"retry_count,omitempty"`
-	DurationMS    int64           `json:"duration_ms"`
-	CompletedAt   string          `json:"completed_at"`
+	Mode                 string          `json:"mode,omitempty"`
+	Precheck             *PrecheckResult `json:"precheck,omitempty"`
+	AccountID            string          `json:"account_id"`
+	AccountName          string          `json:"account_name"`
+	Endpoint             string          `json:"endpoint,omitempty"`
+	Platform             string          `json:"platform,omitempty"`
+	Model                string          `json:"model"`
+	ResponseModel        string          `json:"response_model,omitempty"`
+	RequestID            string          `json:"request_id"`
+	Status               string          `json:"status"`
+	Phase                string          `json:"phase,omitempty"`
+	HTML                 string          `json:"html,omitempty"`
+	Source               string          `json:"source,omitempty"`
+	SourceTruncated      bool            `json:"source_truncated,omitempty"`
+	Prompt               string          `json:"prompt,omitempty"`
+	ReasoningEffort      string          `json:"reasoning_effort,omitempty"`
+	Usage                *AnimationUsage `json:"usage,omitempty"`
+	GenerationDurationMS int64           `json:"generation_duration_ms,omitempty"`
+	SVG                  string          `json:"svg,omitempty"`
+	Error                string          `json:"error,omitempty"`
+	RetryCount           int             `json:"retry_count,omitempty"`
+	DurationMS           int64           `json:"duration_ms"`
+	CompletedAt          string          `json:"completed_at"`
+}
+
+// cloneAnimationResult publishes an immutable task snapshot while a worker may
+// still be collecting streamed usage or precheck questions.
+func cloneAnimationResult(value AnimationResult) AnimationResult {
+	value.Usage = cloneAnimationUsage(value.Usage)
+	value.Precheck = clonePrecheckResult(value.Precheck)
+	return value
 }
 
 func (s *Service) prepareAnimation(ctx context.Context, request AnimationRequest) (AnimationRequest, []selectedAccount, error) {
@@ -171,6 +188,10 @@ func (s *Service) EnqueueAnimation(ctx context.Context, request AnimationRequest
 		task.Operation, task.Message = "account-model-combined", "前置与动画检测已排队"
 		task.Result["mode"], task.Result["total"] = combinedMode, 2*len(accounts)
 	}
+	if err := s.prepareRecovery(ctx, &task, detectionRecovery{Request: request}, accounts); err != nil {
+		release()
+		return taskstore.Task{}, err
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		release()
 		return taskstore.Task{}, err
@@ -231,14 +252,32 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 		unit = "项检测"
 	}
 	total := len(accounts) * len(modes)
-	results := make(chan AnimationResult, total)
+	completed := previousResults[AnimationResult](task, "animations")
+	done := map[string]bool{}
+	succeeded := 0
+	for _, result := range completed {
+		if result.Phase != "" && result.Phase != "completed" {
+			continue
+		}
+		done[animationResultKey(result.AccountID, result.Mode)] = true
+		if result.Status == "succeeded" {
+			succeeded++
+		}
+	}
+	if err := s.persistAnimationEvidence(ctx, task.ID, completed); err != nil {
+		slog.Error("保存动画检测证据失败", "task_id", task.ID, "error", err)
+	}
+	results := make(chan AnimationResult, total*8)
 	var workers sync.WaitGroup
 	for index, account := range accounts {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			for phase, mode := range modes {
-				if phase > 0 && ctx.Err() != nil {
+			for _, mode := range modes {
+				if done[animationResultKey(account.ID, mode)] {
+					continue
+				}
+				if ctx.Err() != nil {
 					return
 				}
 				result := AnimationResult{AccountID: account.ID, AccountName: account.Name, Model: request.Targets[index].Model, RequestID: fmt.Sprintf("%s-%s", task.ID, account.ID), Status: "failed"}
@@ -251,7 +290,15 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 				if request.Mode == combinedMode {
 					result.RequestID += "-" + mode
 				}
-				err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result)
+				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
+				result.Phase = "queued"
+				results <- cloneAnimationResult(result)
+				err := s.runAnimationWithRetry(ctx, account, request.TimeoutSeconds, request.Custom, request.PrecheckQuestions, &result, func() {
+					results <- cloneAnimationResult(result)
+				})
+				if err != nil && taskstore.Interrupted(ctx) {
+					return
+				}
 				result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				if err != nil {
 					if request.Custom != nil {
@@ -261,22 +308,50 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 				} else {
 					result.Status = "succeeded"
 				}
-				results <- result
+				result.Phase = "completed"
+				results <- cloneAnimationResult(result)
 			}
 		}()
 	}
 	go func() { workers.Wait(); close(results) }()
-	completed := make([]AnimationResult, 0, total)
-	succeeded := 0
-	for result := range results {
-		completed = append(completed, result)
-		if result.Status == "succeeded" {
-			succeeded++
+	activeResults := make(map[string]AnimationResult, total)
+	for _, result := range completed {
+		if result.Phase != "" && result.Phase != "completed" {
+			continue
 		}
-		task.Progress = len(completed) * 100 / total
-		task.Message = fmt.Sprintf("%s已完成 %d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
+		activeResults[animationResultKey(result.AccountID, result.Mode)] = result
+	}
+	for result := range results {
+		key := animationResultKey(result.AccountID, result.Mode)
+		if result.Phase == "completed" {
+			activeResults[key] = cloneAnimationResult(result)
+			if err := s.persistAnimationEvidence(ctx, task.ID, []AnimationResult{result}); err != nil {
+				slog.Error("保存动画检测证据失败", "task_id", task.ID, "account_id", result.AccountID, "mode", result.Mode, "error", err)
+			}
+			completed = completed[:0]
+			for _, item := range activeResults {
+				if item.Phase == "completed" {
+					completed = append(completed, item)
+				}
+			}
+			succeeded = 0
+			for _, item := range completed {
+				if item.Status == "succeeded" {
+					succeeded++
+				}
+			}
+			task.Progress = len(completed) * 100 / total
+			task.Message = fmt.Sprintf("%s已完成 %d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
+		} else {
+			activeResults[key] = result
+			task.Message = fmt.Sprintf("%s执行中：%d/%d %s", animationModeLabel(request.Mode), len(completed), total, unit)
+		}
 		// Copy results to keep previously published task snapshots immutable.
-		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": request.Targets, "completed": len(completed), "total": total, "animations": append([]AnimationResult(nil), completed...), "remote_write": false}
+		allResults := make([]AnimationResult, 0, len(activeResults))
+		for _, item := range activeResults {
+			allResults = append(allResults, item)
+		}
+		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": request.Targets, "completed": len(completed), "total": total, "animations": allResults, "remote_write": false}
 		if request.Mode == precheckMode || request.Mode == combinedMode {
 			task.Result["mode"] = request.Mode
 		}
@@ -295,7 +370,7 @@ func (s *Service) executeAnimation(parent context.Context, task taskstore.Task, 
 	taskstore.PersistFinal(s.tasks, task)
 }
 
-func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult) (time.Duration, error) {
+func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccount, timeout int, custom *AnimationCustomEndpoint, questions []string, result *AnimationResult, onPhase ...func()) (time.Duration, error) {
 	select {
 	case s.animation.slots <- struct{}{}:
 	case <-ctx.Done():
@@ -303,8 +378,15 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 	}
 	started := time.Now()
 	defer func() { <-s.animation.slots }()
+	result.Phase = "running"
+	for _, notify := range onPhase {
+		if notify != nil {
+			notify()
+		}
+	}
 	if custom == nil && account.AccountType == "oauth" {
-		return time.Since(started), s.runOAuthAnimationTarget(ctx, account, timeout, questions, result)
+		err := s.runOAuthAnimationTarget(ctx, account, timeout, questions, result, onPhase...)
+		return time.Since(started), err
 	}
 	guarded, release, credential, err := s.animationCredential(ctx, account, custom)
 	if err != nil {
@@ -313,22 +395,34 @@ func (s *Service) runAnimationTarget(ctx context.Context, account selectedAccoun
 	defer release()
 	if result.Mode == precheckMode {
 		client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		return time.Since(started), runPrecheckTarget(guarded, client, credential, timeout, questions, result)
+		err := runPrecheckTarget(guarded, client, credential, timeout, questions, result)
+		return time.Since(started), err
 	}
-	requestCtx, cancel := context.WithTimeout(guarded, time.Duration(timeout)*time.Second)
+	requestCtx, cancel, firstOutputTimedOut, markFirstOutput := firstOutputTimeout(guarded, timeout)
 	defer cancel()
-	client := &http.Client{Timeout: time.Duration(timeout) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.RequestID)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	text, model, err := sendAnimation(requestCtx, client, credential, result.Model, result.RequestID, result.Usage, func() {
+		markFirstOutput()
+		result.Phase = "generating"
+		for _, notify := range onPhase {
+			if notify != nil {
+				notify()
+			}
+		}
+	})
+	if firstOutputTimedOut() && err != nil {
+		err = context.DeadlineExceeded
+	}
 	if err != nil {
 		return time.Since(started), err
 	}
 	if strings.Contains(text, credential.Secret) {
 		return time.Since(started), errors.New("上游生成内容包含敏感信息，已拒绝展示")
 	}
-	svg, err := sanitizeAnimationSVG(text)
+	err = setAnimationArtifact(result, text)
 	if err != nil {
 		return time.Since(started), err
 	}
-	result.SVG, result.ResponseModel = svg, safeCredentialText(strings.ReplaceAll(model, credential.Secret, "[已隐藏]"))
+	result.ResponseModel = safeCredentialText(strings.ReplaceAll(model, credential.Secret, "[已隐藏]"))
 	return time.Since(started), nil
 }

@@ -12,6 +12,7 @@ const animationResultSchema = z.object({
           id: z.string(),
           verdict: z.enum(["passed", "not_passed", "inconclusive", "error"]),
           answer: z.string().optional(),
+          answer_truncated: z.boolean().optional(),
           error: z.string().optional(),
           request_id: z.string(),
         }),
@@ -26,6 +27,20 @@ const animationResultSchema = z.object({
   response_model: z.string().optional(),
   request_id: z.string(),
   status: z.enum(["succeeded", "failed"]),
+  phase: z.enum(["queued", "running", "generating", "completed"]).optional(),
+  html: z.string().optional(),
+  source: z.string().optional(),
+  prompt: z.string().optional(),
+  reasoning_effort: z.string().optional(),
+  usage: z
+    .object({
+      input_tokens: z.number().int().nonnegative().optional(),
+      output_tokens: z.number().int().nonnegative().optional(),
+      total_tokens: z.number().int().nonnegative().optional(),
+      reasoning_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
+  generation_duration_ms: z.number().nonnegative().optional(),
   svg: z.string().optional(),
   error: z.string().optional(),
   retry_count: z.number().int().nonnegative().optional(),
@@ -47,6 +62,7 @@ function animationTaskResults(task: Task, precheck: boolean): Map<string, Animat
     const parsed = animationResultSchema.safeParse(item);
     if (!parsed.success) continue;
     const result: AnimationResult = { ...parsed.data };
+    if (result.phase && result.phase !== "completed") continue;
     const isPrecheck =
       result.mode === "precheck" ||
       (!result.mode &&
@@ -58,6 +74,18 @@ function animationTaskResults(task: Task, precheck: boolean): Map<string, Animat
       results.set(result.account_id, result);
   }
   return results;
+}
+
+function animationTaskPhases(task: Task): Map<string, AnimationResult["phase"]> {
+  const phases = new Map<string, AnimationResult["phase"]>();
+  if (!Array.isArray(task?.result.animations)) return phases;
+  for (const item of task.result.animations) {
+    const parsed = animationResultSchema.safeParse(item);
+    if (parsed.success && parsed.data.phase && parsed.data.phase !== "completed") {
+      phases.set(parsed.data.account_id, parsed.data.phase);
+    }
+  }
+  return phases;
 }
 
 function animationTaskAccountIDs(task: Task, results: Map<string, AnimationResult>): Set<string> {
@@ -75,11 +103,37 @@ function animationTaskAccountIDs(task: Task, results: Map<string, AnimationResul
 
 export type AnimationActivity = {
   mode?: "precheck";
-  status: "starting" | "queued" | "running" | "waiting_input";
+  status: "starting" | "queued" | "running" | "generating" | "waiting_input";
   taskID?: string;
   batchSize?: number;
   completed?: number;
 };
+
+export function animationActivityLabel(status: AnimationActivity["status"]): string {
+  switch (status) {
+    case "starting":
+      return "正在启动检测";
+    case "queued":
+      return "排队中，等待并发槽位";
+    case "running":
+      return "已开始请求，等待首字";
+    case "generating":
+      return "已收到首字，生成中";
+    case "waiting_input":
+      return "等待检测输入";
+  }
+}
+
+function animationActivityStatus(
+  phase: AnimationResult["phase"] | undefined,
+  taskStatus: Task["status"],
+): AnimationActivity["status"] {
+  if (phase === "queued") return "queued";
+  if (phase === "generating") return "generating";
+  if (phase === "running") return "running";
+  if (taskStatus === "waiting_input") return "waiting_input";
+  return taskStatus === "queued" ? "queued" : "running";
+}
 
 export function collectAnimationTasks(
   tasks: (Task | undefined)[],
@@ -108,9 +162,21 @@ export function collectAnimationTasks(
     const combined = task.operation === "account-model-combined" || task.result.mode === "both";
     const taskPrechecks = animationTaskResults(task, true);
     const taskAnimations = animationTaskResults(task, false);
-    const taskResults = precheck ? taskPrechecks : taskAnimations;
+    const taskPhases = animationTaskPhases(task);
     const ids = animationTaskAccountIDs(task, new Map([...taskPrechecks, ...taskAnimations]));
-    const modes = combined ? [true, false] : [precheck];
+    let modes = combined ? [true, false] : [precheck];
+    const configuration = task.result.configuration;
+    if (
+      task.operation === "managed-model-detection" &&
+      configuration &&
+      typeof configuration === "object"
+    ) {
+      const config = configuration as Record<string, unknown>;
+      modes = [];
+      if (config.precheck === true) modes.push(true);
+      if (config.animation !== false) modes.push(false);
+    }
+    const taskResults = modes.includes(false) ? taskAnimations : taskPrechecks;
     for (const isPrecheck of modes) {
       const resultMap = isPrecheck ? precheckResults : results;
       const statusMap = isPrecheck ? precheckStatuses : statuses;
@@ -131,12 +197,12 @@ export function collectAnimationTasks(
     for (const id of ids) {
       // The backend reserves the batch's accounts until the entire task finishes.
       busyIDs.add(id);
-      if (!taskResults.has(id))
+      if (modes.length > 0 && !taskResults.has(id))
         activities.set(id, {
-          ...(precheck || (combined && !taskPrechecks.has(id))
+          ...(modes.includes(true) && (!modes.includes(false) || !taskPrechecks.has(id))
             ? { mode: "precheck" as const }
             : {}),
-          status: task.status,
+          status: animationActivityStatus(taskPhases.get(id), task.status),
           taskID: task.id,
           batchSize: ids.size,
           completed: taskResults.size,

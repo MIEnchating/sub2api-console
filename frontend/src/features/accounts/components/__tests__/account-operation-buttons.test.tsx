@@ -291,3 +291,43 @@ describe("账号操作", () => {
     expect(await screen.findByRole("menuitem", { name: "删除账号及上游 Key" })).toBeVisible();
   });
 });
+
+it.each([null, 2])("更多操作中的切换分组入口遵守手动控制状态 %s", async (priority) => {
+  const user = userEvent.setup();
+  const onSwitchGroups = vi.fn();
+  render(
+    <AccountOperationButtons
+      {...operationProps({ manual_priority: priority })}
+      onSwitchGroups={onSwitchGroups}
+    />,
+  );
+  const more = screen.getByRole("button", { name: "更多账号操作" });
+  more.focus();
+  await user.keyboard("{Enter}");
+  const item = await screen.findByRole("menuitem", { name: "切换分组" });
+  if (priority !== null) {
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    await user.click(item);
+    expect(onSwitchGroups).not.toHaveBeenCalled();
+  } else {
+    item.focus();
+    await user.keyboard("{Enter}");
+    expect(onSwitchGroups).toHaveBeenCalledOnce();
+  }
+});
+
+it("分组锁定时仅禁用切换分组，其他维护操作仍可用", async () => {
+  const user = userEvent.setup();
+  render(
+    <AccountOperationButtons
+      {...operationProps({ groups_locked: true })}
+      onSwitchGroups={vi.fn()}
+    />,
+  );
+  expect(screen.getByRole("button", { name: "探活测试" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "更多账号操作" }));
+  expect(await screen.findByRole("menuitem", { name: "切换分组" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});

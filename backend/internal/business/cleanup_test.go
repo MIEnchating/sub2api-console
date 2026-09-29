@@ -15,6 +15,7 @@ func TestDeleteAccountProjectionRemovesBindingsRuntimeDataAndPolicyReferences(t 
 		INSERT INTO bindings(local_account_id,upstream_host,upstream_key_id,upstream_key_name,local_group,metadata_json,updated_at)
 		VALUES('37','https://upstream.example.com','key-8','delete-me','special','{}','now');
 		INSERT INTO paused_accounts(account_id,reason,enabled,updated_at) VALUES('37','test',1,'now');
+		INSERT INTO manual_priority_accounts(account_id,priority,created_at,updated_at) VALUES('37',3,'now','now');
 	`); err != nil {
 		t.Fatal(err)
 	}
@@ -50,6 +51,7 @@ func TestDeleteAccountProjectionRemovesBindingsRuntimeDataAndPolicyReferences(t 
 		`SELECT COUNT(*) FROM bindings WHERE local_account_id='37'`,
 		`SELECT COUNT(*) FROM account_groups WHERE account_id='37'`,
 		`SELECT COUNT(*) FROM paused_accounts WHERE account_id='37'`,
+		`SELECT COUNT(*) FROM manual_priority_accounts WHERE account_id='37'`,
 	} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, query).Scan(&count); err != nil || count != 0 {

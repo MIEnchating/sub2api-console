@@ -153,6 +153,9 @@ func (s *Store) CommitAccountGroupsReadback(
 		return errors.New("账号至少需要保留一个本地分组")
 	}
 	return s.commitAccountMutation(ctx, accountID, operation, func(tx *sql.Tx, now string) error {
+		if err := s.requireAccountGroupsUnlocked(ctx, tx, accountID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM account_groups WHERE account_id=?`, accountID); err != nil {
 			return err
 		}

@@ -24,21 +24,21 @@ function setup(): void {
   );
 }
 
-it("账号筛选和模型设置共享可换行的设置行，模型宽度受容器约束", () => {
+it("账号筛选保留紧凑超时设置，默认展示可编辑的检测模型", () => {
   setup();
   const settings = screen.getByRole("group", { name: "动画筛选与模型" });
   expect(settings).toHaveClass("flex-wrap");
   expect(within(settings).getByRole("group", { name: "动画账号筛选" })).toBeVisible();
   const fields = within(settings).getByRole("group", { name: "动画模型参数" });
   expect(fields).toHaveClass("w-full", "sm:w-[36rem]", "max-w-full");
-  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toBeVisible();
+  expect(within(fields).getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   expect(within(fields).getByRole("spinbutton", { name: "请求超时（秒）" })).toBeVisible();
 });
 
-it("模型与超时标签和输入框同行，窄屏时两组字段纵向排列", () => {
+it("超时标签和输入框同行，窄屏宽度受容器约束", () => {
   setup();
   const fields = screen.getByRole("group", { name: "动画模型参数" });
-  expect(fields).toHaveClass("grid-cols-1", "sm:grid-cols-[minmax(0,1fr)_12rem]");
+  expect(fields).toHaveClass("grid-cols-1");
   for (const name of ["检测模型设置", "请求超时设置"]) {
     const field = within(fields).getByRole("group", { name });
     expect(field).toHaveClass("grid", "grid-cols-[auto_minmax(0,1fr)]", "items-center");

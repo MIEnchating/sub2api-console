@@ -41,6 +41,8 @@ type oauthBundleSender struct {
 	slots           chan struct{}
 	requestID       string
 	animationStream bool
+	usage           *AnimationUsage
+	onFirstOutput   func()
 }
 
 // UseOAuthTransport injects a trusted transport for isolated integration tests.
@@ -201,6 +203,19 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 		return "", "", ctx.Err()
 	}
 	requestContext, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	firstOutputTimedOut := func() bool { return false }
+	if sender.animationStream {
+		cancel()
+		var markFirstOutput func()
+		requestContext, cancel, firstOutputTimedOut, markFirstOutput = firstOutputTimeout(ctx, timeoutSeconds)
+		progress := sender.onFirstOutput
+		sender.onFirstOutput = func() {
+			markFirstOutput()
+			if progress != nil {
+				progress()
+			}
+		}
+	}
 	defer cancel()
 	body, err := json.Marshal(map[string]any{
 		"model": model, "input": []map[string]string{{"role": "user", "content": prompt}},
@@ -250,12 +265,16 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 		return "", "", visibleRequestError{message: fmt.Sprintf("OAuth 检测请求失败（HTTP %d），请检查账号授权或稍后重试", response.StatusCode)}
 	}
 	payload, err := sender.readResponse(response.Body)
+	if firstOutputTimedOut() && err != nil {
+		err = context.DeadlineExceeded
+	}
 	if err != nil {
 		if sender.animationStream {
 			err = animationRetryableReadError(err)
 		}
 		return "", "", animationVisibleError(err, sender.credential.secrets...)
 	}
+	sender.usage.read(payload)
 	text := openAIResponseText(payload)
 	for _, secret := range sender.credential.secrets {
 		if strings.Contains(text, secret) {
@@ -266,7 +285,12 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 		return "", "", visibleRequestError{message: "OAuth 检测未返回有效文本，请稍后重试"}
 	}
 	responseModel := stringField(payload, "model")
-	if !slices.Contains(sender.models, responseModel) {
+	for _, secret := range sender.credential.secrets {
+		if secret != "" {
+			responseModel = strings.ReplaceAll(responseModel, secret, "[已隐藏]")
+		}
+	}
+	if sender.usage == nil && !slices.Contains(sender.models, responseModel) {
 		responseModel = ""
 	}
 	return text, responseModel, nil
@@ -274,7 +298,7 @@ func (sender oauthBundleSender) SendWithReasoning(ctx context.Context, _ string,
 
 func (sender oauthBundleSender) readResponse(body io.Reader) (map[string]any, error) {
 	if sender.animationStream {
-		return readOAuthResponse(body, true)
+		return readOAuthResponse(body, true, sender.onFirstOutput)
 	}
 	raw, err := io.ReadAll(io.LimitReader(body, maximumDirectResponseBytes+1))
 	if err != nil {

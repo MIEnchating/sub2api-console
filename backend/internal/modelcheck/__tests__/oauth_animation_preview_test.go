@@ -35,7 +35,7 @@ func TestOAuthAnimationWithRedactedCredentialsUsesBoundPreviewAndKeepsSVGValidat
 				if unsafe {
 					text = `<svg><script>alert(1)</script></svg>`
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"account_id": 1, "request_id": input.RequestID, "model": "gpt-6-astra", "text": text}})
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{"account_id": 1, "request_id": input.RequestID, "model": "gpt-6-astra", "text": text, "usage": map[string]int{"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}}})
 			})
 			input := request("1")
 			input.Targets[0].Model = "gpt-6-astra"
@@ -53,6 +53,9 @@ func TestOAuthAnimationWithRedactedCredentialsUsesBoundPreviewAndKeepsSVGValidat
 				}
 			} else if task.Status != "succeeded" || !strings.Contains(rows[0].SVG, "<svg") {
 				t.Fatalf("controlled preview failed: %#v", rows)
+			}
+			if !unsafe {
+				assertAnimationUsage(t, rows[0].Usage, ptr(10), ptr(20), ptr(30))
 			}
 		})
 	}
@@ -90,5 +93,44 @@ func TestOAuthPreviewPrecheckUsesOnlySelectedQuestion(t *testing.T) {
 	rows := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)
 	if rows[0].Precheck == nil || rows[0].Precheck.Verdict != "passed" {
 		t.Fatalf("precheck failed: %#v", rows)
+	}
+}
+
+func TestOAuthPreviewPrecheckKeepsReasoningUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage map[string]any
+		want  *int64
+	}{
+		{"normalized", map[string]any{"reasoning_tokens": 832}, ptr(832)},
+		{"details", map[string]any{"output_tokens_details": map[string]any{"reasoning_tokens": 832}}, ptr(832)},
+		{"zero", map[string]any{"reasoning_tokens": 0}, ptr(0)},
+		{"missing", map[string]any{"input_tokens": 209}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := oauthAccountFixture(t, redactedOAuthAccount, func(w http.ResponseWriter, r *http.Request) {
+				var input map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+					t.Error(err)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": 0, "data": map[string]any{
+					"account_id": 1, "request_id": input["request_id"], "model": "gpt-6-astra", "text": "21", "usage": tc.usage,
+				}})
+			})
+			input := request("1")
+			input.Mode = "precheck"
+			if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
+				t.Fatal(err)
+			}
+			row := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)[0]
+			if row.Status != "succeeded" || row.Usage == nil {
+				t.Fatalf("precheck failed: %+v", row)
+			}
+			got := row.Usage.ReasoningTokens
+			if (got == nil) != (tc.want == nil) || got != nil && *got != *tc.want {
+				t.Fatalf("reasoning usage mismatch: %+v", row.Usage)
+			}
+		})
 	}
 }

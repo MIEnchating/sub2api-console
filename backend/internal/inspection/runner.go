@@ -453,7 +453,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 		request.Actor = "控制台"
 	}
 	if request.Automatic && r.management != nil {
-		task, err := r.QueueTask(ctx, true)
+		task, err := r.queueRequest(ctx, request)
 		if err != nil {
 			return ExecutionResult{}, err
 		}
@@ -467,7 +467,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 	if !plan.traffic && !plan.probes && !plan.upstreams && !plan.routing && !plan.alert && !plan.pricing && !plan.accountRates && len(plan.authRecoveryHosts) == 0 {
 		return ExecutionResult{Status: "succeeded", Operations: []string{}, OperationTiming: []business.OperationTiming{}, Skipped: true}, nil
 	}
-	task, err := r.QueueTask(ctx, request.Automatic)
+	task, err := r.queueRequest(ctx, request)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
@@ -478,14 +478,7 @@ func (r *Runner) Run(ctx context.Context, request RunRequest) (ExecutionResult, 
 }
 
 func (r *Runner) QueueTask(ctx context.Context, automatic bool) (taskstore.Task, error) {
-	task, err := newInspectionTask(r.now().UTC(), automatic)
-	if err != nil {
-		return taskstore.Task{}, err
-	}
-	if err := r.tasks.Save(ctx, task); err != nil {
-		return taskstore.Task{}, err
-	}
-	return task, nil
+	return r.queueRequest(ctx, RunRequest{Automatic: automatic, Actor: "控制台"})
 }
 
 func (r *Runner) RunTask(ctx context.Context, task taskstore.Task, request RunRequest) ExecutionResult {
@@ -510,7 +503,11 @@ func (r *Runner) failQueuedTask(ctx context.Context, task taskstore.Task, err er
 	if cause := taskstore.ContextFailureCause(ctx); cause != nil {
 		err = cause
 	}
+	originalProgress := task.Progress
 	task.Status, task.Progress, task.Message, task.UpdatedAt = "failed", 100, "巡检启动失败："+err.Error(), r.now().UTC().Format(time.RFC3339Nano)
+	if taskstore.Interrupted(ctx) {
+		task.Progress = originalProgress
+	}
 	if task.Result == nil {
 		task.Result = map[string]any{}
 	}
@@ -526,7 +523,7 @@ func (r *Runner) failQueuedTask(ctx context.Context, task taskstore.Task, err er
 	cancelled := taskstore.MarkCancelled(ctx, &task, "巡检已取消")
 	taskstore.PersistFinal(r.tasks, task)
 	if cancelled {
-		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
+		return ExecutionResult{TaskID: &task.ID, Status: task.Status, Operations: operations, OperationTiming: timings}
 	}
 	return failedExecution(&task.ID, operations, timings, err)
 }
@@ -764,6 +761,7 @@ func (r *Runner) executeTask(ctx context.Context, task taskstore.Task, request R
 	}
 	resultPayload := map[string]any{
 		"planned_operations":   plannedOperations,
+		"run_started_at":       started.UTC().Format(time.RFC3339Nano),
 		"active_operations":    []string{},
 		"completed_operations": []string{},
 	}
@@ -1152,9 +1150,16 @@ func (r *Runner) finishTask(
 ) ExecutionResult {
 	payload["operations"] = operations
 	payload["operation_timings"] = timings
+	if taskstore.Interrupted(ctx) {
+		payload["interrupted_operations"] = payload["active_operations"]
+	}
 	payload["active_operations"] = []string{}
 	payload["completed_operations"] = append([]string{}, operations...)
+	originalProgress := task.Progress
 	task.Progress, task.UpdatedAt, task.Result = 100, r.now().UTC().Format(time.RFC3339Nano), payload
+	if taskstore.Interrupted(ctx) {
+		task.Progress = originalProgress
+	}
 	contextFailure := taskstore.ContextFailureCause(ctx)
 	if errors.Is(contextFailure, mutationguard.ErrAutomaticInspectionPreempted) {
 		task.Status, task.Message = "cancelled", "自动巡检已让位于手工操作"
@@ -1173,7 +1178,7 @@ func (r *Runner) finishTask(
 		if err := taskstore.SaveFinal(context.Background(), r.tasks, task); err != nil {
 			return failedExecution(&task.ID, operations, timings, err)
 		}
-		return ExecutionResult{TaskID: &task.ID, Status: "cancelled", Operations: operations, OperationTiming: timings}
+		return ExecutionResult{TaskID: &task.ID, Status: task.Status, Operations: operations, OperationTiming: timings}
 	}
 	if contextFailure != nil {
 		failures = append(failures, contextFailure.Error())

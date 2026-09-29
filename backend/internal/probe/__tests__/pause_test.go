@@ -70,7 +70,7 @@ func TestPauseRechecksQueuedAutomaticProbesAndRetriesButAllowsManualProbes(t *te
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
-					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 					return
 				}
 				t.Errorf("unexpected request: %s %s", request.Method, request.URL.Path)

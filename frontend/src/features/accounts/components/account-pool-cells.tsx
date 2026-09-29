@@ -1,5 +1,5 @@
 import type { AccountStatus } from "@/api";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { AccountHealthScore } from "@/components/account-health-score";
 import { AccountRecentResults } from "@/components/account-recent-results";
 import { StatusBadge } from "@/components/status-badge";
@@ -214,7 +214,7 @@ export function AccountIdentityMeta(props: { account: AccountStatus; className?:
   );
 }
 
-export function AccountIdentityCell(props: { account: AccountStatus }) {
+export function AccountIdentityCell(props: { account: AccountStatus; groupControl?: ReactNode }) {
   const groups = props.account.groups.length ? props.account.groups.join("、") : "未分组";
   return (
     <div className="grid min-w-0 gap-0.5">
@@ -259,21 +259,24 @@ export function AccountIdentityCell(props: { account: AccountStatus }) {
           </TooltipContent>
         </Tooltip>
       </div>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <p
-              tabIndex={0}
-              className="w-full min-w-0 truncate rounded-sm text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-          }
-        >
-          分组：{groups}
-        </TooltipTrigger>
-        <TooltipContent role="tooltip" className="max-w-sm">
-          分组：{groups}
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex min-w-0 items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <p
+                tabIndex={0}
+                className="w-full min-w-0 truncate rounded-sm text-xs text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            }
+          >
+            分组：{groups}
+          </TooltipTrigger>
+          <TooltipContent role="tooltip" className="max-w-sm">
+            分组：{groups}
+          </TooltipContent>
+        </Tooltip>
+        {props.groupControl}
+      </div>
     </div>
   );
 }

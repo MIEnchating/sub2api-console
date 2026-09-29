@@ -61,9 +61,7 @@ it.each(["animation", "precheck"] as const)(
     const account = screen.getByRole("checkbox", { name: /检测 OAuth 账号/ });
     expect(account).not.toHaveAttribute("aria-disabled", "true");
     fireEvent.click(account);
-    fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-      target: { value: "gpt-6-astra" },
-    });
+    expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
     const startLabel = mode === "precheck" ? "前置检测（1）" : "开始检测（1 个账号）";
     if (mode === "precheck") fireEvent.click(screen.getByRole("tab", { name: "前置检测" }));
     fireEvent.click(screen.getByRole("button", { name: startLabel }));

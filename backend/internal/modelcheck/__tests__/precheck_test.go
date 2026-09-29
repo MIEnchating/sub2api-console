@@ -16,6 +16,41 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/modelcheck"
 )
 
+func TestPrecheckKeepsLongAnswerWithRedactionAndExplicitLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer, want string
+		truncated          bool
+	}{
+		{"long answer", strings.Repeat("完整回答。", 160) + "结尾", strings.Repeat("完整回答。", 160) + "结尾", false},
+		{"redacts credentials", strings.Repeat("说明。", 120) + " api_key=sk-test-private-key", strings.Repeat("说明。", 120) + " api_key=<已隐藏>", false},
+		{"explicit limit", strings.Repeat("字", 65537), strings.Repeat("字", 65536), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"output_text":%q}`, tc.answer)
+			})
+			input := request("1")
+			input.Mode = "precheck"
+			if _, err := f.service.EnqueueAnimation(context.Background(), input); err != nil {
+				t.Fatal(err)
+			}
+			row := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)[0]
+			raw, _ := json.Marshal(row.Precheck.Questions[0])
+			var question struct {
+				Answer          string
+				AnswerTruncated bool `json:"answer_truncated"`
+			}
+			_ = json.Unmarshal(raw, &question)
+			if question.Answer != tc.want || question.AnswerTruncated != tc.truncated {
+				t.Fatalf("answer lost or limit not marked: got length %d, want %d, truncated %v", len(question.Answer), len(tc.want), question.AnswerTruncated)
+			}
+			if row.Precheck.Verdict != "not_passed" {
+				t.Fatal("display change modified the strict verdict")
+			}
+		})
+	}
+}
+
 func TestAnimationPrecheckAsksOnlyCandyQuestionAndSeparatesVerdicts(t *testing.T) {
 	for _, tc := range []struct {
 		name, candy, verdict string
@@ -41,7 +76,7 @@ func TestAnimationPrecheckAsksOnlyCandyQuestionAndSeparatesVerdicts(t *testing.T
 					return
 				}
 				prompts = append(prompts, body.Input)
-				if body.Reasoning.Effort != "low" {
+				if body.Reasoning.Effort != "medium" {
 					t.Errorf("effort = %q", body.Reasoning.Effort)
 				}
 				if r.Header.Get("Authorization") != "Bearer "+fixtureSecret || r.Header.Get("X-Request-ID") == "" {

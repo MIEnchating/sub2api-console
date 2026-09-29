@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { AnimationActivity } from "../lib/animation-task-results";
+import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
 import { cn } from "@/lib/utils";
 import { PrecheckAccountResult } from "./precheck-account-result";
 import { DetectionAccountControls } from "./detection-account-controls";
@@ -75,7 +75,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
         props.checked && "border-primary/60 bg-primary/[0.02] ring-1 ring-primary/10",
       )}
     >
-      <header className="flex h-24 shrink-0 flex-col justify-center gap-1.5 px-3">
+      <header className="flex h-18 shrink-0 flex-col justify-center gap-2 px-3">
         <label className="flex h-5 min-w-0 items-center gap-2">
           <Checkbox
             checked={props.checked}
@@ -91,15 +91,21 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
             </TooltipTrigger>
             <TooltipContent>{props.account.name}</TooltipContent>
           </Tooltip>
+          {props.account.manual_priority != null ? (
+            <Badge variant="secondary" className="max-w-28 shrink-0">
+              手动控制 #{props.account.manual_priority}
+            </Badge>
+          ) : null}
           <span className="text-muted-foreground shrink-0 text-xs">ID {props.account.id}</span>
         </label>
-        <div className="flex h-5 min-w-0 items-center gap-1.5 overflow-hidden">
-          <Badge variant="outline">{props.account.platform ?? "未标注平台"}</Badge>
-          {props.account.manual_priority != null ? (
-            <Badge variant="secondary">手动控制 #{props.account.manual_priority}</Badge>
-          ) : null}
-        </div>
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+        <div
+          role="group"
+          aria-label="账号信息"
+          className="flex h-5 min-w-0 items-center gap-2 text-xs text-muted-foreground"
+        >
+          <Badge variant="outline" className="shrink-0">
+            {props.account.platform ?? "未标注平台"}
+          </Badge>
           <Tooltip>
             <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
               {groups || "未加入分组"}
@@ -152,7 +158,7 @@ export const AnimationAccountCard = memo(function AnimationAccountCard(props: {
           )}
         </div>
       )}
-      <footer className="flex h-10 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3">
+      <footer className="mt-auto flex h-10 shrink-0 items-center justify-between gap-2 border-t border-border/60 bg-muted/20 px-3">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -221,8 +227,7 @@ function AnimationCardState(props: {
   unavailable: boolean;
 }): ReactElement {
   if (props.activity) {
-    let label = "生成中，等待动画结果";
-    if (props.activity.status === "starting") label = "正在启动检测";
+    const label = animationActivityLabel(props.activity.status);
     return (
       <ContentLoading compact label={label} ariaLabel={label} className="h-full justify-center" />
     );

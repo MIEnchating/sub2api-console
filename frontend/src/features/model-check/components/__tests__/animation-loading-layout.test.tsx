@@ -25,5 +25,6 @@ it("首次读取动画账号时按容器自适应网格和未检测卡片紧凑�
   for (const card of status.children) {
     expect(card).toHaveClass("h-auto", "min-w-0", "overflow-hidden");
     expect(card).toHaveAttribute("aria-hidden", "true");
+    expect(card.firstElementChild).toHaveClass("h-18", "shrink-0");
   }
 });

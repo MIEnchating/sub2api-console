@@ -1,3 +1,4 @@
+import { animationTestModel } from "../constants";
 import { useState, type ReactElement } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -35,7 +36,6 @@ export function DetectionTaskEditor(props: {
       version: 0,
       name: "",
       group_ids: [],
-      model: "",
       precheck: false,
       terminal: false,
       terminal_rounds: 3,
@@ -44,6 +44,8 @@ export function DetectionTaskEditor(props: {
       interval_minutes: 60,
       timeout_seconds: 120,
       ...props.value,
+      model: props.value?.model ?? animationTestModel,
+      animation: props.value?.animation ?? true,
       daily_times: props.value?.daily_times ?? ["09:00"],
       precheck_questions: props.value?.precheck_questions ?? ["candy"],
     },
@@ -73,6 +75,8 @@ export function DetectionTaskEditor(props: {
         }}
       >
         <DialogContent
+          width="wide"
+          height="adaptive"
           showCloseButton={!save.isPending}
           className="grid-rows-[auto_minmax(0,1fr)] overflow-hidden"
         >

@@ -100,6 +100,7 @@ it("在前置检测 Tab 批量设置每日时间时只保存前置计划并保�
   const dialog = screen.getByRole("dialog", { name: /批量自动前置检测设置/ });
   expect(within(dialog).queryByRole("group", { name: "自动检测内容" })).not.toBeInTheDocument();
   await user.click(within(dialog).getByRole("checkbox", { name: "开启自动检测" }));
+  await user.clear(within(dialog).getByRole("textbox", { name: "检测模型" }));
   await user.type(within(dialog).getByRole("textbox", { name: "检测模型" }), "daily-model");
   const daily = within(dialog).getByRole("radio", { name: "每天定时" });
   daily.focus();
@@ -121,6 +122,7 @@ it("在前置检测 Tab 批量设置每日时间时只保存前置计划并保�
       account_id: "41",
       mode: "precheck",
       version: 5,
+      model: "daily-model",
       schedule_type: "daily",
       daily_times: ["09:35"],
       timezone: "Asia/Shanghai",

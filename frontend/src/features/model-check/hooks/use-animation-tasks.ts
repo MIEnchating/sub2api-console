@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { api, type AnimationRequest, type Task } from "@/api";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { taskPollInterval } from "@/lib/task-state";
+import { registerBackgroundTask } from "../lib/register-background-task";
 import { collectAnimationTasks } from "../lib/animation-task-results";
 
 export function useAnimationTasks(active = true) {
@@ -38,10 +39,10 @@ export function useAnimationTasks(active = true) {
     mutationFn: api.runAnimation,
     gcTime: 0,
     onSuccess: (created) => {
+      registerBackgroundTask(client, created);
       client.setQueryData(["model-animation", "task", created.id], created);
       setCreatedIDs((current) => [...new Set([...current, created.id])]);
       void client.invalidateQueries({ queryKey: ["model-animation", "history"] });
-      void client.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (error, request) =>
       notifyOperationError(

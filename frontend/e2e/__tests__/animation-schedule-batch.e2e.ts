@@ -39,7 +39,7 @@ test("批量每天定时保留当前检测类型，影响账号可滚动且窄�
   await page.getByRole("button", { name: "批量自动检测设置" }).click();
   const dialog = page.getByRole("dialog", { name: /批量自动前置检测设置/ });
   await dialog.getByRole("checkbox", { name: "开启自动检测" }).check();
-  await dialog.getByRole("textbox", { name: "检测模型" }).fill("test-model");
+  await expect(dialog.getByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await dialog.getByRole("radio", { name: "每天定时" }).check();
   await dialog.getByLabel("每天检测时间（北京时间）").fill("23:45");
   await dialog.getByRole("button", { name: "添加检测时间" }).click();

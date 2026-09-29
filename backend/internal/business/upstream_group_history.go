@@ -46,6 +46,18 @@ func (s *Store) ClearUpstreamGroupHistory(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+func (s *Store) ClearUpstreamGroupHistoryForUpstream(ctx context.Context, upstreamID string) (int64, error) {
+	upstreamID = strings.TrimSpace(upstreamID)
+	if upstreamID == "" || len(upstreamID) > 128 {
+		return 0, errors.New("上游稳定 ID 无效")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM upstream_group_change_events WHERE upstream_id=?`, upstreamID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) readUpstreamGroupHistory(ctx context.Context, upstreamID *string, limit int) ([]UpstreamGroupChange, error) {
 	query := `SELECT e.id,e.upstream_id,e.group_id,e.group_name,e.change_type,e.changed_at,
 		(SELECT g.effective_rate FROM upstream_groups g

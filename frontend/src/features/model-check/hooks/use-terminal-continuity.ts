@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Task, type TerminalContinuityRequest } from "@/api";
 import { notifyOperationError } from "@/lib/operation-feedback";
+import { registerBackgroundTask } from "../lib/register-background-task";
 import { taskPollInterval } from "@/lib/task-state";
 import {
   isTerminalContinuityActive,
@@ -38,10 +39,10 @@ export function useTerminalContinuity() {
   const run = useMutation({
     mutationFn: (input: TerminalContinuityRequest) => api.runTerminalContinuity(input),
     onSuccess: (task) => {
+      registerBackgroundTask(client, task);
       client.setQueryData<Task>(["terminal-continuity", "task", task.id], task);
       setCreatedIDs((current) => [...new Set([...current, task.id])]);
       void client.invalidateQueries({ queryKey: historyKey });
-      void client.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (error) => notifyOperationError(error, "终端续接检测启动失败"),
   });

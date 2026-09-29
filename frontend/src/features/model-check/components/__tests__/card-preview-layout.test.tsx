@@ -149,3 +149,32 @@ it("账号卡片提供手动控制入口并回传当前账号", async () => {
   await user.click(screen.getByRole("button", { name: "设置手动控制" }));
   expect(onManualPriority).toHaveBeenCalledWith(expect.objectContaining({ id: "41" }));
 });
+
+it("平台、长分组和域名在同一行展示并可收缩，账号头部保持两行", () => {
+  render(
+    <AnimationAccountCard
+      account={{
+        ...account,
+        name: "长账号名称".repeat(12),
+        platform: "openai",
+        groups: ["超长分组".repeat(20)],
+        upstream_host: "long-host.example.com",
+        manual_priority: 3,
+      }}
+      checked={false}
+      disabled={false}
+      retryDisabled={false}
+      schedulesReady
+      onRetry={vi.fn()}
+      onToggle={vi.fn()}
+      onSchedule={vi.fn()}
+    />,
+  );
+  const metadata = screen.getByRole("group", { name: "账号信息" });
+  expect(metadata).toHaveClass("flex", "min-w-0", "items-center");
+  expect(within(metadata).getByText("openai")).toBeVisible();
+  expect(within(metadata).getByText("超长分组".repeat(20))).toHaveClass("min-w-0", "truncate");
+  expect(within(metadata).getByText("long-host.example.com")).toHaveClass("min-w-0", "truncate");
+  expect(screen.getByText("手动控制 #3")).toBeVisible();
+  expect(screen.getByRole("article").querySelector("header")).toHaveClass("h-18");
+});

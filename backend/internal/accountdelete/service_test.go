@@ -684,11 +684,33 @@ func TestPreviewAllowsNoBindingButRejectsAmbiguousOrIncompleteBindings(t *testin
 	}
 }
 
-func TestPreviewRejectsMutationProtectedAccount(t *testing.T) {
-	repository := &deleteRepository{account: boundAccount(), protection: business.AccountMutationProtection{ManualPriority: true}}
+func TestManualPriorityAccountCanBePreviewedAndDeleted(t *testing.T) {
+	repository := &deleteRepository{
+		account:    unboundAccount("37", "manual-account"),
+		protection: business.AccountMutationProtection{ManualPriority: true},
+	}
+	admin := &deleteAdmin{}
+	service := configuredService(repository, &deleteKeys{}, admin)
+	preview, err := service.Preview(context.Background(), "37")
+	if err != nil {
+		t.Fatalf("manual account preview failed: %v", err)
+	}
+	result, err := service.Delete(context.Background(), preview, "tester")
+	if err != nil || !result.ManagementAccountDeleted || !result.LocalProjectionDeleted || !repository.deleted {
+		t.Fatalf("manual account deletion failed: result=%+v err=%v", result, err)
+	}
+	if len(admin.calls) != 1 || admin.calls[0] != "37" {
+		t.Fatalf("wrong management account deleted: %v", admin.calls)
+	}
+}
+
+func TestPreviewRejectsOtherMutationProtectionOnManualAccount(t *testing.T) {
+	repository := &deleteRepository{account: boundAccount(), protection: business.AccountMutationProtection{
+		ManualPriority: true, Paused: true,
+	}}
 	service := configuredService(repository, &deleteKeys{}, &deleteAdmin{})
 	_, err := service.Preview(context.Background(), "37")
-	if err == nil || !strings.Contains(err.Error(), "手动控制") || !strings.Contains(err.Error(), "先解除人工管控") {
+	if err == nil || !strings.Contains(err.Error(), "人工暂停") {
 		t.Fatalf("unexpected protection error: %v", err)
 	}
 	if repository.accountReads != 0 {

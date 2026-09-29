@@ -10,7 +10,7 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
-func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedAccount, timeout int, questions []string, result *AnimationResult) error {
+func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedAccount, timeout int, questions []string, result *AnimationResult, onPhase ...func()) error {
 	guarded, release, err := s.acquirePreparedAccounts(ctx, []selectedAccount{account})
 	if err != nil {
 		return err
@@ -40,15 +40,19 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 		transport = direct
 	}
 	sender := oauthBundleSender{
-		client: &http.Client{Transport: transport, Timeout: time.Duration(timeout) * time.Second,
+		client: &http.Client{Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
-		credential: *credential, models: []string{result.Model}, slots: make(chan struct{}, 1), requestID: result.RequestID,
+		credential: *credential, models: []string{result.Model}, slots: make(chan struct{}, 1), requestID: result.RequestID, usage: result.Usage,
 	}
-	// Animation and precheck accept an explicit model independently of behavior profiles.
-	effort := "none"
-	if result.Model == astraModel {
-		effort = "low"
+	sender.onFirstOutput = func() {
+		result.Phase = "generating"
+		for _, notify := range onPhase {
+			if notify != nil {
+				notify()
+			}
+		}
 	}
+	effort := result.ReasoningEffort
 	if result.Mode == precheckMode {
 		return runPrecheckQuestions(guarded, questions, result, func(question AstraQuestion, requestID string) (string, string, error) {
 			sender.requestID = requestID
@@ -60,25 +64,32 @@ func (s *Service) runOAuthAnimationTarget(ctx context.Context, account selectedA
 	if err != nil {
 		return err
 	}
-	svg, err := sanitizeAnimationSVG(text)
+	err = setAnimationArtifact(result, text)
 	if err != nil {
 		return err
 	}
-	result.SVG, result.ResponseModel = svg, safeCredentialText(model)
+	result.ResponseModel = safeCredentialText(model)
 	return nil
 }
 
 func runManagedOAuthAnimation(ctx context.Context, client *adminclient.Client, account selectedAccount, timeout int, questions []string, result *AnimationResult) error {
-	effort := "none"
-	if result.Model == astraModel {
-		effort = "low"
-	}
+	effort := result.ReasoningEffort
 	send := func(prompt, requestID string) (string, string, error) {
 		response, err := client.GenerateAccountPreview(ctx, account.ID, adminclient.AccountPreviewRequest{
 			ModelID: result.Model, Prompt: prompt, ReasoningEffort: effort, RequestID: requestID, TimeoutSeconds: timeout,
 		})
 		if err != nil {
 			return "", "", err
+		}
+		if response.Usage != nil {
+			reasoning := response.Usage.ReasoningTokens
+			if response.Usage.OutputTokensDetails != nil {
+				reasoning = response.Usage.OutputTokensDetails.ReasoningTokens
+			}
+			result.Usage.read(map[string]any{"usage": map[string]any{
+				"input_tokens": response.Usage.InputTokens, "output_tokens": response.Usage.OutputTokens, "total_tokens": response.Usage.TotalTokens,
+				"output_tokens_details": map[string]any{"reasoning_tokens": reasoning},
+			}})
 		}
 		return response.Text, safeCredentialText(response.Model), nil
 	}
@@ -91,11 +102,11 @@ func runManagedOAuthAnimation(ctx context.Context, client *adminclient.Client, a
 	if err != nil {
 		return err
 	}
-	svg, err := sanitizeAnimationSVG(text)
+	err = setAnimationArtifact(result, text)
 	if err != nil {
 		return err
 	}
-	result.SVG, result.ResponseModel = svg, model
+	result.ResponseModel = model
 	return nil
 }
 

@@ -12,7 +12,7 @@ func decodeOAuthResponse(raw []byte) (map[string]any, error) {
 	return readOAuthResponse(bytes.NewReader(raw), false)
 }
 
-func readOAuthResponse(body io.Reader, completeOnEvent bool) (map[string]any, error) {
+func readOAuthResponse(body io.Reader, completeOnEvent bool, onFirstOutput ...func()) (map[string]any, error) {
 	limited := &io.LimitedReader{R: body, N: maximumDirectResponseBytes + 1}
 	reader := bufio.NewReader(limited)
 	jsonResponse, err := generationResponseIsJSON(reader)
@@ -31,6 +31,9 @@ func readOAuthResponse(body io.Reader, completeOnEvent bool) (map[string]any, er
 		if err != nil {
 			return nil, err
 		}
+		if text := openAIResponseText(payload); strings.TrimSpace(text) != "" && len(onFirstOutput) > 0 && onFirstOutput[0] != nil {
+			onFirstOutput[0]()
+		}
 		if completeOnEvent {
 			return payload, validateOAuthAnimationResponse(payload)
 		}
@@ -41,6 +44,10 @@ func readOAuthResponse(body io.Reader, completeOnEvent bool) (map[string]any, er
 	var data []string
 	var terminal map[string]any
 	var deltas strings.Builder
+	var outputCallback func()
+	if len(onFirstOutput) > 0 {
+		outputCallback = onFirstOutput[0]
+	}
 	process := func() error {
 		if len(data) == 0 {
 			return nil
@@ -65,6 +72,9 @@ func readOAuthResponse(body io.Reader, completeOnEvent bool) (map[string]any, er
 		case "response.output_text.delta", "output_text.delta":
 			delta, _ := event["delta"].(string)
 			deltas.WriteString(delta)
+			if delta != "" && outputCallback != nil {
+				outputCallback()
+			}
 		case "response.output_text.done", "output_text.done":
 			if deltas.Len() == 0 {
 				text, _ := event["text"].(string)

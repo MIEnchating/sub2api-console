@@ -60,6 +60,8 @@ func TestDetectionTaskAPIAuthenticationAndVersionContract(t *testing.T) {
 		{"anonymous run", "POST", "/plan-1/run", `{"version":2}`, false, 401},
 		{"list", "GET", "", "", true, 200},
 		{"invalid body", "PUT", "", `{"group_ids":{}}`, true, 422},
+		{"invalid animation", "PUT", "", `{"version":2,"animation":"false"}`, true, 422},
+		{"precheck only", "PUT", "", `{"version":2,"animation":false,"precheck":true,"terminal":false}`, true, 200},
 		{"stale version", "PUT", "", `{"version":1}`, true, 422},
 		{"save", "PUT", "", `{"id":"plan-1","version":2,"group_ids":["7","8"],"terminal_rounds":5,"daily_times":["09:00","20:00"]}`, true, 200},
 		{"delete", "DELETE", "/plan-1", `{"version":2}`, true, 200},
@@ -91,6 +93,12 @@ func TestDetectionTaskAPIAuthenticationAndVersionContract(t *testing.T) {
 			}
 			if tc.name == "save" && (len(service.input.GroupIDs) != 2 || service.input.TerminalRounds != 5 || len(service.input.DailyTimes) != 2) {
 				t.Fatal("configuration fields lost")
+			}
+			if tc.name == "invalid animation" && service.called {
+				t.Fatal("invalid animation type reached service")
+			}
+			if tc.name == "precheck only" && (service.input.Animation == nil || *service.input.Animation || !service.input.Precheck || service.input.Terminal || !strings.Contains(response.Body.String(), `"animation":false`)) {
+				t.Fatal("explicit stage selection lost in API round trip")
 			}
 			if (tc.name == "run" || tc.name == "delete") && (service.id != "plan-1" || service.version != 2) {
 				t.Fatal("stable ID or version lost")

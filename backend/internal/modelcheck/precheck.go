@@ -6,23 +6,36 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/MIEnchating/sub2api-console/backend/internal/redact"
 )
 
 const precheckMode = "precheck"
 const combinedMode = "both"
 
 type PrecheckQuestionResult struct {
-	ID        string `json:"id"`
-	Verdict   string `json:"verdict"`
-	Answer    string `json:"answer,omitempty"`
-	Error     string `json:"error,omitempty"`
-	RequestID string `json:"request_id"`
+	ID              string `json:"id"`
+	Verdict         string `json:"verdict"`
+	Answer          string `json:"answer,omitempty"`
+	AnswerTruncated bool   `json:"answer_truncated,omitempty"`
+	Error           string `json:"error,omitempty"`
+	RequestID       string `json:"request_id"`
 }
 
 type PrecheckResult struct {
 	Verdict        string                   `json:"verdict"`
 	ProfileVersion string                   `json:"profile_version"`
 	Questions      []PrecheckQuestionResult `json:"questions"`
+}
+
+func clonePrecheckResult(value *PrecheckResult) *PrecheckResult {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	clone.Questions = append([]PrecheckQuestionResult(nil), value.Questions...)
+	return &clone
 }
 
 func validAnimationMode(mode string) bool {
@@ -82,11 +95,8 @@ func animationModeLabel(mode string) string {
 
 func runPrecheckTarget(ctx context.Context, client *http.Client, credential directCredential, timeout int, questions []string, result *AnimationResult) error {
 	return runPrecheckQuestions(ctx, questions, result, func(question AstraQuestion, requestID string) (string, string, error) {
-		sender := directBundleSender{client: client, credential: credential, requestID: requestID}
-		effort := ""
-		if result.Model == astraModel {
-			effort = "low"
-		}
+		sender := directBundleSender{client: client, credential: credential, requestID: requestID, usage: result.Usage}
+		effort := result.ReasoningEffort
 		text, model, err := sender.SendWithReasoning(ctx, result.AccountID, result.Model, question.Question, timeout, effort)
 		if err == nil && credential.Secret != "" && strings.Contains(text, credential.Secret) {
 			err = errors.New("上游回答包含敏感信息，已拒绝展示")
@@ -106,12 +116,16 @@ func runPrecheckQuestions(ctx context.Context, questions []string, result *Anima
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if result.Prompt != "" {
+			result.Prompt += "\n\n"
+		}
+		result.Prompt += question.Question
 		row := PrecheckQuestionResult{ID: question.ID, Verdict: "error", RequestID: result.RequestID + "-" + question.ID}
 		text, model, err := send(question, row.RequestID)
 		if err != nil {
 			row.Error = safeCredentialError(err)
 		} else {
-			row.Answer = safeCredentialText(text)
+			row.Answer, row.AnswerTruncated = precheckAnswer(text)
 			verdict, _ := classifyAstraAnswer(question.ID, text)
 			if question.ID == "candy" && verdict != "MATCH" {
 				// 糖果题只有严格回答 21 才通过；任何成功返回的其他内容都表示降智。
@@ -145,4 +159,15 @@ func runPrecheckQuestions(ctx context.Context, questions []string, result *Anima
 		}
 	}
 	return ctx.Err()
+}
+
+// Keep generated answers separate from the short error/metadata sanitizer.
+// Redact before limiting so a credential crossing the boundary cannot leak.
+func precheckAnswer(text string) (string, bool) {
+	const maximumAnswerRunes = 65536
+	text = strings.TrimSpace(redact.Secrets(text))
+	if utf8.RuneCountInString(text) > maximumAnswerRunes {
+		return string([]rune(text)[:maximumAnswerRunes]), true
+	}
+	return text, false
 }

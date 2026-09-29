@@ -57,7 +57,7 @@ func newCredentialFixture(t *testing.T) *credentialFixture {
 			t.Errorf("unexpected direct generation method=%s path=%s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+		_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 	}))
 	t.Cleanup(fixture.upstream.Close)
 	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +317,7 @@ func TestRedactedManagementKeyWithProtocolURLUsesBindingBaseURLForCachedAndRevea
 					t.Error("generation did not use configured protocol URL and bound key")
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+				_, _ = w.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 			}))
 			defer generation.Close()
 			fixture.protocolURL = generation.URL + "/responses-api"

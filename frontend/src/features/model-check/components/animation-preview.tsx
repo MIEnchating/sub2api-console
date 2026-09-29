@@ -1,4 +1,5 @@
-import { memo, useMemo, useRef, useState, type ReactElement } from "react";
+import { Tabs } from "@base-ui/react/tabs";
+import { memo, useRef, useState, type ReactElement } from "react";
 import { Maximize2 } from "lucide-react";
 import type { AnimationResult } from "@/api";
 import { cn } from "@/lib/utils";
@@ -10,18 +11,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { AnimationCanvas } from "./animation-canvas";
+import { AnimationResultMetrics } from "./animation-result-metrics";
+
 export const AnimationPreview = memo(function AnimationPreview(props: {
   result: AnimationResult;
   className?: string;
 }): ReactElement {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const source = useMemo(
-    () => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(props.result.svg ?? "")}`,
-    [props.result.svg],
-  );
   const description = `${props.result.account_name} · ${props.result.model}`;
-  const alt = `${props.result.account_name}生成的鹈鹕骑自行车动画`;
   return (
     <>
       <button
@@ -36,7 +35,7 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
           props.className,
         )}
       >
-        <img className="h-full min-h-0 w-full object-contain" src={source} alt={alt} />
+        <AnimationCanvas result={props.result} thumbnail />
         <span
           className="absolute right-2 bottom-2 grid size-6 place-items-center rounded-md bg-black/60 text-white transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
           aria-hidden="true"
@@ -57,11 +56,56 @@ export const AnimationPreview = memo(function AnimationPreview(props: {
               {description}
             </DialogDescription>
           </DialogHeader>
-          <img
-            className="h-[min(70svh,44rem)] min-h-0 w-full rounded-lg bg-white object-contain"
-            src={source}
-            alt={alt}
-          />
+          <Tabs.Root defaultValue="animation" className="flex min-h-0 flex-1 flex-col gap-3">
+            <Tabs.List
+              aria-label="动画结果视图"
+              className="flex shrink-0 gap-1 rounded-lg bg-muted p-1"
+            >
+              {(
+                [
+                  { value: "animation", label: "动画" },
+                  { value: "code", label: "代码" },
+                  { value: "prompt", label: "提示词" },
+                ] as const
+              ).map((tab) => (
+                <Tabs.Tab
+                  key={tab.value}
+                  value={tab.value}
+                  className="h-8 rounded-md px-3 text-sm outline-none data-active:bg-background data-active:shadow-sm focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {tab.label}
+                </Tabs.Tab>
+              ))}
+            </Tabs.List>
+            <Tabs.Panel
+              value="animation"
+              className="h-[min(60svh,44rem)] min-h-0 w-full overflow-hidden rounded-lg bg-white"
+            >
+              <AnimationCanvas result={props.result} />
+            </Tabs.Panel>
+            <Tabs.Panel
+              value="code"
+              className="h-[min(60svh,44rem)] min-h-0 overflow-auto overscroll-contain rounded-lg border bg-muted/30 p-4"
+            >
+              <pre className="whitespace-pre-wrap font-mono text-xs leading-6 wrap-anywhere">
+                <code>
+                  {props.result.source ??
+                    props.result.html ??
+                    props.result.svg ??
+                    "该记录未保存代码"}
+                </code>
+              </pre>
+            </Tabs.Panel>
+            <Tabs.Panel
+              value="prompt"
+              className="h-[min(60svh,44rem)] min-h-0 overflow-auto overscroll-contain rounded-lg border bg-muted/30 p-4"
+            >
+              <p className="whitespace-pre-wrap text-sm leading-7 wrap-anywhere">
+                {props.result.prompt ?? "该历史记录未保存提示词"}
+              </p>
+            </Tabs.Panel>
+          </Tabs.Root>
+          <AnimationResultMetrics result={props.result} showUsage={false} />
         </DialogContent>
       </Dialog>
     </>

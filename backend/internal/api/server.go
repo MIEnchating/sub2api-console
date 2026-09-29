@@ -97,6 +97,7 @@ type Business interface {
 	UpstreamGroupHistory(context.Context, string, int) ([]business.UpstreamGroupChange, error)
 	AllUpstreamGroupHistory(context.Context, int) ([]business.UpstreamGroupChange, error)
 	ClearUpstreamGroupHistory(context.Context) (int64, error)
+	ClearUpstreamGroupHistoryForUpstream(context.Context, string) (int64, error)
 	Events(context.Context, *int) ([]business.RunEvent, error)
 	Alerts(context.Context, *int) ([]business.AlertListItem, error)
 	ClearAlerts(context.Context) (int64, error)
@@ -685,6 +686,9 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.PUT("/accounts/:account_id/test-models", server.setAccountTestModels)
 	authorized.POST("/accounts/:account_id/sync", server.syncAccountFields)
 	authorized.PUT("/accounts/:account_id/settings", server.saveAccountSettings)
+	authorized.GET("/accounts/:account_id/groups", server.accountGroups)
+	authorized.PUT("/accounts/:account_id/groups", server.updateAccountGroups)
+	authorized.PUT("/accounts/:account_id/group-lock", server.setAccountGroupsLocked)
 	authorized.PUT("/accounts/:account_id/cost-wall", server.setAccountIgnoreCostWall)
 	authorized.PUT("/accounts/:account_id/manual-priority", server.setAccountManualPriority)
 	authorized.DELETE("/accounts/:account_id/manual-priority", server.clearAccountManualPriority)
@@ -778,6 +782,7 @@ func New(cfg config.Config, private *configstore.Store, business Business, depen
 	authorized.GET("/upstreams/group-bindings/audit", server.upstreamGroupBindingAudit)
 	authorized.GET("/upstreams/group-history", server.allUpstreamGroupHistory)
 	authorized.DELETE("/upstreams/group-history", server.clearUpstreamGroupHistory)
+	authorized.DELETE("/upstreams/group-history/:upstreamID", server.clearOneUpstreamGroupHistory)
 	authorized.POST("/upstreams/:host/rate-sync", server.syncUpstreamRates)
 	authorized.POST("/upstreams/:host/balance-sync", server.syncUpstreamBalance)
 	authorized.GET("/upstreams/:host/configuration", server.upstreamConfiguration)
@@ -4484,6 +4489,20 @@ func (s *Server) clearUpstreamGroupHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
+func (s *Server) clearOneUpstreamGroupHistory(c *gin.Context) {
+	upstreamID := strings.TrimSpace(c.Param("upstreamID"))
+	if upstreamID == "" || len(upstreamID) > 128 {
+		writeError(c, http.StatusUnprocessableEntity, "必须指定有效的上游稳定 ID")
+		return
+	}
+	deleted, err := s.business.ClearUpstreamGroupHistoryForUpstream(c.Request.Context(), upstreamID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "上游分组变化记录清除失败")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
 func (s *Server) events(c *gin.Context) {
 	limit, ok := optionalLimit(c)
 	if !ok {
@@ -5439,6 +5458,24 @@ func (s *Server) cancelTask(c *gin.Context) {
 	if taskCompleted(task.Status) {
 		writeError(c, http.StatusConflict, "任务已经结束，无法取消")
 		return
+	}
+	if store, ok := s.tasks.(interface {
+		CancelRecovery(context.Context, string) (bool, error)
+	}); ok {
+		cancelled, err := store.CancelRecovery(c.Request.Context(), taskID)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "任务取消状态保存失败")
+			return
+		}
+		if cancelled {
+			if !s.taskCanceller.CancelTask(taskID) && task.Operation == "automatic-inspection" {
+				if canceller, ok := s.inspection.(interface{ CancelTask(string) bool }); ok {
+					canceller.CancelTask(taskID)
+				}
+			}
+			c.JSON(http.StatusAccepted, gin.H{"cancelled": true})
+			return
+		}
 	}
 	if s.taskCanceller.CancelTask(taskID) {
 		c.JSON(http.StatusAccepted, gin.H{"cancelled": true})

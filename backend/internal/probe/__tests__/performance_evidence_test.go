@@ -49,7 +49,16 @@ func collectPerformanceProbe(t *testing.T, test performanceProbeCase) business.R
 		}
 		body := test.body
 		if body == "" {
-			body = "data: {\"model\":\"actual-model\",\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"
+			switch test.protocol {
+			case "chat_completions":
+				body = "data: {\"model\":\"actual-model\",\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: [DONE]\n\n"
+			case "anthropic":
+				body = "data: {\"model\":\"actual-model\",\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+			case "gemini":
+				body = "data: {\"modelVersion\":\"actual-model\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"pong\"}]},\"finishReason\":\"STOP\"}]}\n\n"
+			default:
+				body = "data: {\"type\":\"response.output_text.delta\",\"model\":\"actual-model\",\"delta\":\"pong\"}\n\n" + probeCompletedEvent
+			}
 		}
 		w.Header().Set("Content-Type", contentType)
 		_, _ = w.Write([]byte(body))
@@ -115,7 +124,7 @@ func TestProbeWithoutComparableFirstTokenKeepsHealthSuccessButCannotRank(t *test
 		input    performanceProbeCase
 		measured bool
 	}{
-		{name: "actual model missing", input: performanceProbeCase{body: "data: {\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n"}, measured: true},
+		{name: "actual model missing", input: performanceProbeCase{body: probeTextEvent + probeCompletedEvent}, measured: true},
 		{name: "complete JSON", input: performanceProbeCase{contentType: "application/json", body: `{"model":"actual-model","choices":[{"message":{"content":"pong"}}]}`}},
 		{name: "retry recovered", input: performanceProbeCase{retry: true}, measured: true},
 	} {

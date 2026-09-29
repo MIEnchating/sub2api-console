@@ -113,7 +113,7 @@ it("长探活响应使用可键盘访问的独立滚动区并保留真实模型�
   expect(screen.queryByText(/发送测试消息："hi"/)).not.toBeInTheDocument();
 });
 
-it("上游返回完整 JSON 时显示只读原文并保留响应摘要", async () => {
+it("上游返回完整 JSON 时仅显示响应文本，不展示原始 JSON", () => {
   render(
     <ProbeResultSlot
       pending={false}
@@ -132,9 +132,7 @@ it("上游返回完整 JSON 时显示只读原文并保留响应摘要", async (
     />,
   );
 
-  expect(screen.getByText("响应摘要：ok")).toBeVisible();
-  expect(await screen.findByRole("textbox", { name: "模型完整响应 JSON" })).toHaveAttribute(
-    "aria-readonly",
-    "true",
-  );
+  expect(screen.getByText("ok")).toBeVisible();
+  expect(screen.queryByRole("textbox", { name: "模型完整响应 JSON" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/response-1/)).not.toBeInTheDocument();
 });

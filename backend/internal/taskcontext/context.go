@@ -2,8 +2,12 @@ package taskcontext
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
+
+// ErrInterrupted identifies a process shutdown, never an explicit user cancellation.
+var ErrInterrupted = errors.New("服务停止导致任务中断")
 
 type taskIDKey struct{}
 

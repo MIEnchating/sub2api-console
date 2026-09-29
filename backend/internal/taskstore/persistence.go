@@ -10,6 +10,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 )
 
@@ -140,6 +141,9 @@ func SaveRunning(ctx context.Context, saver Saver, task Task) bool {
 		failed := task
 		failed.Status = "failed"
 		failed.Progress = 100
+		if Interrupted(ctx) {
+			failed.Progress = task.Progress
+		}
 		failed.Message = "任务启动状态保存失败：" + err.Error()
 		failed.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		failed.Result = maps.Clone(task.Result)
@@ -170,6 +174,23 @@ func ContextFailureCause(ctx context.Context) error {
 func MarkCancelled(ctx context.Context, task *Task, message string) bool {
 	if ctx == nil || task == nil {
 		return false
+	}
+	if errors.Is(context.Cause(ctx), taskcontext.ErrInterrupted) {
+		task.Result = maps.Clone(task.Result)
+		if task.Result == nil {
+			task.Result = map[string]any{}
+		}
+		delete(task.Result, "cancelled")
+		delete(task.Result, "error")
+		task.Result["interrupted"] = true
+		task.Status = "failed"
+		task.Message = "服务已停止；此任务缺少安全恢复参数，请重新提交"
+		if task.Recovery != nil {
+			task.Status = "queued"
+			task.Message = "服务已停止，等待重启后恢复执行"
+		}
+		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		return true
 	}
 	if cause := ContextFailureCause(ctx); cause != nil {
 		task.Status = "failed"
@@ -208,6 +229,7 @@ func MarkCancelled(ctx context.Context, task *Task, message string) bool {
 }
 
 func PersistLaunchFailure(saver Saver, task Task, err error) {
+	originalProgress := task.Progress
 	task.Status = "cancelled"
 	task.Progress = 100
 	task.Message = "服务正在停止，任务未启动"
@@ -223,5 +245,11 @@ func PersistLaunchFailure(saver Saver, task Task, err error) {
 	}
 	task.Result["cancelled"] = true
 	task.Result["error"] = err.Error()
+	if errors.Is(err, taskrunner.ErrStopped) && task.Recovery != nil {
+		task.Progress = originalProgress
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(taskcontext.ErrInterrupted)
+		MarkCancelled(ctx, &task, "")
+	}
 	PersistFinal(saver, task)
 }

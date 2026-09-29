@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestManualAccountWithoutExemptionMovesOutOfLossGroup(t *testing.T) {
+func TestManualAccountWithoutExemptionPreservesLossGroup(t *testing.T) {
 	store, err := business.Open(filepath.Join(t.TempDir(), "manual-cost.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +29,7 @@ func TestManualAccountWithoutExemptionMovesOutOfLossGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := snapshot.Decisions[0]
-	if d.Skipped || !d.Changed || len(d.DesiredGroupIDs) != 1 || d.DesiredGroupIDs[0] != "8" {
-		t.Fatalf("manual account escaped cost migration: %+v", d)
+	if !d.Skipped || d.Changed || len(d.DesiredGroupIDs) != 1 || d.DesiredGroupIDs[0] != "7" {
+		t.Fatalf("manual account group protection failed: %+v", d)
 	}
 }

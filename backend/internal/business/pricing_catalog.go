@@ -17,6 +17,7 @@ type PricingCatalog struct {
 }
 
 type PricingAccount struct {
+	GroupsLocked   bool
 	ID             string
 	Name           string
 	Platform       string
@@ -63,6 +64,10 @@ type PricingChangeRecord struct {
 
 func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 	ignored, err := s.costWallIgnoredAccounts(ctx, s.db)
+	if err != nil {
+		return PricingCatalog{}, err
+	}
+	locked, err := s.groupLockedAccounts(ctx, s.db)
 	if err != nil {
 		return PricingCatalog{}, err
 	}
@@ -115,6 +120,7 @@ func (s *Store) PricingCatalog(ctx context.Context) (PricingCatalog, error) {
 			continue
 		}
 		item.IgnoreCostWall = containsControlID(ignored, item.ID)
+		item.GroupsLocked = containsControlID(locked, item.ID)
 		item.Multiplier = nullString(multiplier)
 		if platform := accountMetadataText(metadata, "platform"); platform != nil {
 			item.Platform = strings.ToLower(strings.TrimSpace(*platform))
@@ -232,6 +238,9 @@ func (s *Store) SyncPricingAccountGroups(ctx context.Context, changes map[string
 	groupLinks := 0
 	changeRecords := make([]PricingAccountChange, 0, len(accountIDs))
 	for _, accountID := range accountIDs {
+		if err := s.requireAccountGroupsUnlocked(ctx, tx, accountID); err != nil {
+			return PricingSyncResult{}, err
+		}
 		var accountName string
 		var multiplier sql.NullString
 		if err := tx.QueryRowContext(ctx, `SELECT name,multiplier FROM accounts WHERE id=?`, accountID).Scan(&accountName, &multiplier); err != nil {

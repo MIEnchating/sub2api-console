@@ -45,8 +45,8 @@ it("自动检测配置后台版本更新时保留正在编辑的草稿", async (
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByRole("button", { name: "自动检测设置" }));
-  const model = screen.getByRole("textbox", { name: "检测模型" });
-  fireEvent.change(model, { target: { value: "draft-model" } });
+  const interval = screen.getByRole("spinbutton", { name: "检测间隔（分钟）" });
+  fireEvent.change(interval, { target: { value: "90" } });
   await act(async () =>
     queryClient.setQueryData(
       ["model-animation", "schedules"],
@@ -54,7 +54,8 @@ it("自动检测配置后台版本更新时保留正在编辑的草稿", async (
     ),
   );
   await screen.findByText("每 30 分钟自动检测");
-  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("draft-model");
+  expect(screen.getByRole("spinbutton", { name: "检测间隔（分钟）" })).toHaveValue(90);
+  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("saved-model");
 });
 
 it("关闭自动检测的保存请求等待时不能关闭编辑，失败后恢复并保留输入", async () => {
@@ -77,8 +78,8 @@ it("关闭自动检测的保存请求等待时不能关闭编辑，失败后恢�
       />
     </QueryClientProvider>,
   );
-  fireEvent.change(screen.getByRole("textbox", { name: "检测模型" }), {
-    target: { value: "draft-model" },
+  fireEvent.change(screen.getByRole("spinbutton", { name: "检测间隔（分钟）" }), {
+    target: { value: "90" },
   });
   fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "正在保存…" })).toBeDisabled());
@@ -87,5 +88,6 @@ it("关闭自动检测的保存请求等待时不能关闭编辑，失败后恢�
   expect(close).not.toHaveBeenCalled();
   await act(async () => rejectSave(new Error("保存失败")));
   await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeEnabled());
-  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("draft-model");
+  expect(screen.getByRole("spinbutton", { name: "检测间隔（分钟）" })).toHaveValue(90);
+  expect(screen.getByRole("textbox", { name: "检测模型" })).toHaveValue("saved-model");
 });

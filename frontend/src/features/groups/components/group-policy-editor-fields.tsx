@@ -2,6 +2,7 @@ import type { GroupPolicyOverrideUpdate, GroupProbeModels } from "../../../api";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useDictionaryOrder } from "@/hooks/use-dictionary-order";
+import { recommendedAnimationWeights } from "@/features/groups/constants";
 import { Button } from "../../../components/ui/button";
 import { FieldLabel } from "../../../components/field-help-tooltip";
 import { Input } from "../../../components/ui/input";
@@ -52,7 +53,28 @@ const capabilityOptions = [
     label: "智能扩容",
     description: "按实际流量提高或降低账号并发上限",
   },
+  {
+    field: "animation_enabled",
+    label: "动画结果调权",
+    description: "按当前分组的通过或降智结果调整账号权重",
+  },
 ] as const;
+
+const animationFailureLabels: Record<
+  GroupPolicyOverrideUpdate["animation_failure_action"],
+  string
+> = {
+  ignore: "忽略",
+  degrade: "适当降级",
+  fuse: "熔断账号",
+};
+
+const animationPassDescription =
+  "检测通过后，调度会更倾向把请求分配给该账号。推荐 1.2 倍；1 倍不调整。最终分配还受同组其他账号影响。";
+const animationFailDescription =
+  "检测标记为降智后，调度会减少分配给该账号的请求。推荐 0.7 倍；1 倍不调整。没有检测标记的账号不受影响。";
+const animationFailureDescription =
+  "仅检测失败原因被识别为上游异常时生效：可忽略、将账号降级或熔断账号；普通降智结果按上面的倍率处理。";
 
 export const groupPolicyDialogLayout = {
   content: "grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden",
@@ -336,6 +358,88 @@ export function GroupPolicyEditorFields(props: {
               />
             </div>
           ))}
+        </div>
+        <div
+          className="grid min-w-0 gap-3 sm:grid-cols-3"
+          data-testid="group-policy-animation-settings"
+        >
+          <div className="min-w-0 space-y-1.5 text-sm">
+            <FieldLabel
+              label="检测通过后：增加分配机会"
+              htmlFor="group-policy-animation-pass-multiplier"
+              description={animationPassDescription}
+            />
+            <Input
+              id="group-policy-animation-pass-multiplier"
+              aria-description={animationPassDescription}
+              type="number"
+              min={0}
+              max={10}
+              step={0.05}
+              value={props.value.animation_pass_multiplier ?? ""}
+              disabled={props.disabled}
+              onChange={(event) =>
+                update(
+                  "animation_pass_multiplier",
+                  event.target.value === "" ? null : Number(event.target.value),
+                )
+              }
+            />
+            <p className="text-muted-foreground text-xs">
+              推荐 {recommendedAnimationWeights.passed} 倍；1 倍不调整
+            </p>
+          </div>
+          <div className="min-w-0 space-y-1.5 text-sm">
+            <FieldLabel
+              label="检测降智后：减少分配机会"
+              htmlFor="group-policy-animation-fail-multiplier"
+              description={animationFailDescription}
+            />
+            <Input
+              id="group-policy-animation-fail-multiplier"
+              aria-description={animationFailDescription}
+              type="number"
+              min={0}
+              max={10}
+              step={0.05}
+              value={props.value.animation_fail_multiplier ?? ""}
+              disabled={props.disabled}
+              onChange={(event) =>
+                update(
+                  "animation_fail_multiplier",
+                  event.target.value === "" ? null : Number(event.target.value),
+                )
+              }
+            />
+            <p className="text-muted-foreground text-xs">
+              推荐 {recommendedAnimationWeights.degraded} 倍；1 倍不调整
+            </p>
+          </div>
+          <div className="min-w-0 space-y-1.5 text-sm">
+            <FieldLabel label="异常失败处置" description={animationFailureDescription} />
+            <Select
+              value={props.value.animation_failure_action}
+              itemToStringLabel={(value) => animationFailureLabels[value]}
+              disabled={props.disabled}
+              onValueChange={(value) => {
+                if (value === "ignore" || value === "degrade" || value === "fuse") {
+                  update("animation_failure_action", value);
+                }
+              }}
+            >
+              <SelectTrigger
+                aria-label="动画异常失败处置"
+                aria-description={animationFailureDescription}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="ignore">忽略</SelectItem>
+                <SelectItem value="degrade">适当降级</SelectItem>
+                <SelectItem value="fuse">熔断账号</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </section>
 

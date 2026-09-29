@@ -124,3 +124,31 @@ func TestManualOrderPreservesEffectiveOrderForEqualLatency(t *testing.T) {
 		t.Fatalf("equal latency must not reset reservations: %+v %v", changes, err)
 	}
 }
+
+func TestManualOrderIgnoresDistinctReservationsWhenEffectiveSlotsOverlap(t *testing.T) {
+	policy, accounts, rows, now := manualOrderFixture(t)
+	// A partial remote write can leave two accounts sharing an effective slot.
+	// Their distinct manual reservations remain independent and must not fail
+	// the next planning pass.
+	accounts[0].Priority = ptrInt64(4)
+	accounts[1].Priority = ptrInt64(4)
+	for i := 2; i < len(rows); i++ {
+		rows[i].Payload["model"] = "different-model"
+	}
+	changes, err := routing.PlanManualPriorityOrder(policy, accounts, rows, now)
+	if err != nil || len(changes) != 0 {
+		t.Fatalf("distinct manual reservations must not conflict: changes=%+v err=%v", changes, err)
+	}
+}
+
+func TestManualOrderRejectsDuplicateReservationsInSharedGroup(t *testing.T) {
+	policy, accounts, rows, now := manualOrderFixture(t)
+	accounts[1].ManualPriority = ptrInt64(1)
+	if _, err := routing.PlanManualPriorityOrder(policy, accounts, rows, now); err == nil {
+		t.Fatal("duplicate manual reservations in a shared group must fail")
+	}
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
+}

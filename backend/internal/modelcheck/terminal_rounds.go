@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
+	"slices"
 	"time"
 )
 
@@ -26,16 +28,28 @@ func validateTerminalRounds(rounds int) error {
 }
 
 func (s *Service) runTerminalRounds(ctx context.Context, account selectedAccount, timeout int, model, requestID string, rounds int) TerminalContinuityResult {
+	return s.runTerminalCheckpoint(ctx, account, timeout, model, requestID, rounds, TerminalContinuityResult{}, nil)
+}
+
+func (s *Service) runTerminalCheckpoint(ctx context.Context, account selectedAccount, timeout int, model, requestID string, rounds int, previous TerminalContinuityResult, publish func(TerminalContinuityResult)) TerminalContinuityResult {
 	result := TerminalContinuityResult{AccountID: account.ID, AccountName: account.Name, Model: model, RequestID: requestID, Verdict: "normal"}
 	priority := map[string]int{"normal": 0, "inconclusive": 1, "suspected": 2, "error": 3}
 	started := time.Now()
-	for round := 1; round <= rounds; round++ {
+	if previous.Incomplete {
+		result = previous
+		result.RoundResults = slices.Clone(previous.RoundResults)
+	}
+	previousDuration := result.DurationMS
+	for round := len(result.RoundResults) + 1; round <= rounds; round++ {
 		if ctx.Err() != nil {
 			break
 		}
 		item := TerminalContinuityRound{Round: round, RequestID: fmt.Sprintf("%s-r%d", requestID, round), Verdict: "error"}
 		begin := time.Now()
 		response, responseModel, err := s.runTerminalContinuityTarget(ctx, account, timeout, model, item.RequestID)
+		if err != nil && taskstore.Interrupted(ctx) {
+			break
+		}
 		item.DurationMS = time.Since(begin).Milliseconds()
 		item.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err != nil {
@@ -48,11 +62,19 @@ func (s *Service) runTerminalRounds(ctx context.Context, account selectedAccount
 		if len(result.RoundResults) == 1 || priority[item.Verdict] > priority[result.Verdict] {
 			result.Verdict, result.Response, result.ResponseModel, result.Error = item.Verdict, item.Response, item.ResponseModel, item.Error
 		}
+		result.Incomplete = len(result.RoundResults) < rounds
+		result.DurationMS = previousDuration + time.Since(started).Milliseconds()
+		if publish != nil {
+			snapshot := result
+			snapshot.RoundResults = slices.Clone(result.RoundResults)
+			publish(snapshot)
+		}
 	}
 	if ctx.Err() != nil {
 		result.Verdict, result.Error = "error", "终端续接检测已取消或任务超时"
 	}
-	result.DurationMS = time.Since(started).Milliseconds()
+	result.Incomplete = len(result.RoundResults) < rounds && taskstore.Interrupted(ctx)
+	result.DurationMS = previousDuration + time.Since(started).Milliseconds()
 	result.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return result
 }

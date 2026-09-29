@@ -47,3 +47,18 @@ it("Host 缺失时在账号类型同行显示占位，分组独占一行", () =>
   expect(context).toContainElement(screen.getByText(/#41/));
   expect(context).not.toContainElement(screen.getByText("分组：未分组"));
 });
+
+it("长分组名称与锁定控件同行时名称仍可截断且控件保留", () => {
+  render(
+    <AccountIdentityCell
+      account={{ ...account, groups: ["很长的分组名称".repeat(30)] }}
+      groupControl={
+        <button type="button" className="shrink-0">
+          锁定分组
+        </button>
+      }
+    />,
+  );
+  expect(screen.getByText(/分组：很长的分组名称/)).toHaveClass("min-w-0", "truncate");
+  expect(screen.getByRole("button", { name: "锁定分组" })).toHaveClass("shrink-0");
+});

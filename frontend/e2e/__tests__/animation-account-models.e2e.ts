@@ -2,19 +2,19 @@ import { expect, test } from "@playwright/test";
 import { account } from "../../src/features/accounts/__tests__/fixtures";
 import { pageFixtures } from "./fixtures/page-shell";
 
-test("动画获取模型使用实际接口交集，失败保留手填值并支持重新获取", async ({ page }) => {
-  let failed = false;
-  let refreshed = false;
+test("多账号检测默认 Astra，可手动输入并提交其他模型且不自动读取目录", async ({ page }) => {
+  let modelRequests = 0;
+  const requests: unknown[] = [];
   await page.route("**/api/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.startsWith("/api/model-checks/animations/accounts/")) {
-      if (failed) {
-        await route.fulfill({ status: 502, json: { detail: "绑定 Key 已失效，请更新授权后重试" } });
-      } else {
-        const models = [refreshed ? "refreshed-model" : "shared-model"];
-        if (path.includes("/41/")) models.push("account-only-model");
-        await route.fulfill({ json: { models } });
-      }
+      modelRequests++;
+      await route.fulfill({ status: 503, json: { detail: "不应读取模型列表" } });
+      return;
+    }
+    if (path === "/api/model-checks/animations" && route.request().method() === "POST") {
+      requests.push(route.request().postDataJSON());
+      await route.fulfill({ status: 503, json: { detail: "隔离测试停止执行" } });
       return;
     }
     const fixtures: Record<string, unknown> = {
@@ -40,31 +40,18 @@ test("动画获取模型使用实际接口交集，失败保留手填值并支�
   await page.goto("/animation-check");
   await page.getByRole("checkbox", { name: "检测 动画账号41" }).check();
   await page.getByRole("checkbox", { name: "检测 动画账号42" }).check();
-  const button = page.getByRole("button", { name: "获取模型", exact: true });
-  const input = page.getByRole("combobox", { name: "检测模型" });
-  await button.click();
-  await expect(button).toHaveAttribute("aria-busy", "false");
-  await input.click();
-  await expect(page.getByRole("option", { name: "shared-model", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "account-only-model" })).toHaveCount(0);
-  await page.getByRole("option", { name: "shared-model", exact: true }).click();
-  await expect(input).toHaveValue("shared-model");
-
-  failed = true;
-  await button.click();
-  await expect(
-    page.getByText("绑定 Key 已失效，请更新授权后重试", { exact: true }).first(),
-  ).toBeVisible();
-  await expect(input).toHaveValue("shared-model");
-  failed = false;
-  refreshed = true;
-  await button.click();
-  await expect(button).toHaveAttribute("aria-busy", "false");
-  await input.fill("");
-  await input.click();
-  await expect(page.getByRole("option", { name: "refreshed-model" })).toBeVisible();
-  await expect(page.getByRole("option", { name: "shared-model" })).toHaveCount(0);
-  await page.keyboard.press("ArrowDown");
-  await page.keyboard.press("Enter");
-  await expect(input).toHaveValue("refreshed-model");
+  await expect(page.getByRole("button", { name: "获取模型", exact: true })).toBeEnabled();
+  await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await page.getByRole("combobox", { name: "检测模型" }).fill("selected-model");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "开始检测（2 个账号）" }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0]).toMatchObject({
+    targets: [
+      { account_id: "41", model: "selected-model" },
+      { account_id: "42", model: "selected-model" },
+    ],
+  });
+  await expect(page.getByText("隔离测试停止执行", { exact: true }).first()).toBeVisible();
+  expect(modelRequests).toBe(0);
 });

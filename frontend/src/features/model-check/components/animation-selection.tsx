@@ -321,7 +321,7 @@ export function AnimationSelection(props: {
         {props.accounts.isSuccess && filtered.length === 0 ? (
           <p className="text-muted-foreground text-sm">没有匹配的账号</p>
         ) : null}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] items-start gap-3">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] items-stretch gap-3">
           {pagination.visibleItems.map((account) => (
             <AnimationAccountCard
               key={account.id}

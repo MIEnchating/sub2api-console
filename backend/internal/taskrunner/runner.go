@@ -47,7 +47,7 @@ func (c CompositeCanceller) CancelTask(taskID string) bool {
 
 type Group struct {
 	ctx    context.Context
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 
 	mu      sync.Mutex
 	stopped bool
@@ -82,7 +82,7 @@ func newGroup(parent context.Context, maxActive, queueCapacity int) *Group {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancelCause(parent)
 	group := &Group{ctx: ctx, cancel: cancel, done: make(chan struct{}), tasks: map[string]context.CancelFunc{}, limit: maxActive, queue: queueCapacity, changed: make(chan struct{})}
 	return group
 }
@@ -234,7 +234,7 @@ func (g *Group) Cancel() {
 	g.mu.Lock()
 	if !g.stopped {
 		g.stopped = true
-		g.cancel()
+		g.cancel(taskcontext.ErrInterrupted)
 		if g.active == 0 {
 			close(g.done)
 		}

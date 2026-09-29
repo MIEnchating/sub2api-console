@@ -36,6 +36,7 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 	pools := map[string][]int{}
 	snapshots := map[string]creationCapacitySnapshot{}
 	outsideReservations := map[string]int64{}
+	pendingAccountIDs := []string{}
 	for i, request := range requests {
 		validated, err := s.validate(ctx, request)
 		if err != nil {
@@ -43,6 +44,22 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 		}
 		if len(request.AccountIDs) > 0 {
 			continue
+		}
+		pending, err := s.repository.PendingOnboarding(ctx, validated.auth.Host, validated.candidateID(), onboardingLocalIDs(validated.locals))
+		if err != nil {
+			return nil, err
+		}
+		frozen, err := readFrozenOnboardingIntent(pending)
+		if err != nil {
+			return nil, err
+		}
+		if pending != nil && pending.UpstreamAccountID != "" {
+			pendingAccountIDs = append(pendingAccountIDs, pending.UpstreamAccountID)
+		}
+		if frozen != nil {
+			useFrozenAllocation(&request, *frozen)
+			requests[i] = request
+			validated.request = request
 		}
 		if !strings.EqualFold(validated.auth.UpstreamType, "sub2api") {
 			if request.WaitingForCapacity {
@@ -99,7 +116,7 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 			}
 			continue
 		}
-		remaining, err := creationRemaining(snapshot, "")
+		remaining, err := creationRemaining(snapshot, pendingAccountIDs...)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +152,7 @@ func (s *Service) PreviewConcurrency(ctx context.Context, requests []Request) ([
 			result[i].Concurrency = &value
 		}
 	}
-	return s.applyCreationGlobalPreview(ctx, requests, result)
+	return s.applyCreationGlobalPreview(ctx, requests, result, pendingAccountIDs)
 }
 
 func (s *Service) defaultCreationConcurrency(ctx context.Context, validated validatedRequest) (int64, error) {
@@ -187,10 +204,14 @@ func (s *Service) creationCapacity(ctx context.Context, id string) (creationCapa
 	return snapshot, nil
 }
 
-func creationRemaining(snapshot creationCapacitySnapshot, exclude string) (int64, error) {
+func creationRemaining(snapshot creationCapacitySnapshot, excludes ...string) (int64, error) {
+	excluded := make(map[string]bool, len(excludes))
+	for _, id := range excludes {
+		excluded[id] = true
+	}
 	remaining := *snapshot.Limit
 	for _, account := range snapshot.Accounts {
-		if account.ID == exclude {
+		if excluded[account.ID] {
 			continue
 		}
 		if account.Schedulable == nil || account.Concurrency == nil || *account.Concurrency <= 0 {

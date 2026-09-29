@@ -17,6 +17,15 @@ func TestAnimationRetriesTransientResponseAndRecordsAttemptCount(t *testing.T) {
 	requestIDs := []string{}
 	f := setup(t, 1, "openai", func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.Model != "test-model" {
+			t.Errorf("retry overwrote model: %q", body.Model)
+		}
 		requestIDs = append(requestIDs, r.Header.Get("X-Request-ID"))
 		if calls == 1 {
 			w.Header().Set("Retry-After", "0")
@@ -150,31 +159,26 @@ func TestAnimationDoesNotRetryLongRetryAfterOrInvalidSVG(t *testing.T) {
 	}
 }
 
-func TestOAuthAnimationRetriesTimeoutWithSameInputAndAccount(t *testing.T) {
+func TestOAuthAnimationTimeoutDoesNotRepeatFullGeneration(t *testing.T) {
 	f, _ := oauthAccountFixture(t, oauthAnimationAccount)
 	calls := 0
-	var firstBody string
 	f.service.UseOAuthTransport(oauthTransportFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
 		var body json.RawMessage
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if calls == 1 {
-			firstBody = string(body)
-			return nil, context.DeadlineExceeded
+		if r.Header.Get("ChatGPT-Account-Id") != "isolated-workspace" {
+			t.Error("generation used wrong account")
 		}
-		if string(body) != firstBody || r.Header.Get("ChatGPT-Account-Id") != "isolated-workspace" {
-			t.Error("retry changed conversation or account")
-		}
-		return oauthResponse(200, "application/json", fmt.Sprintf(`{"status":"completed","output_text":%q}`, fixtureSVG)), nil
+		return nil, context.DeadlineExceeded
 	}))
 	if _, err := f.service.EnqueueAnimation(context.Background(), request("1")); err != nil {
 		t.Fatal(err)
 	}
 	row := finished(t, f).Result["animations"].([]modelcheck.AnimationResult)[0]
-	if calls != 2 || row.Status != "succeeded" || row.RetryCount != 1 {
-		t.Fatalf("OAuth retry: %d %#v", calls, row)
+	if calls != 1 || row.Status != "failed" || row.RetryCount != 0 || !strings.Contains(row.Error, "超时") {
+		t.Fatalf("timed-out generation was repeated: %d %#v", calls, row)
 	}
 }
 

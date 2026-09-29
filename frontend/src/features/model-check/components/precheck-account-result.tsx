@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { precheckVerdictLabels } from "../constants";
 import type { AnimationActivity } from "../lib/animation-task-results";
 import { PrecheckResultDetails } from "./precheck-result-details";
+import { PrecheckResultMetrics } from "./precheck-result-metrics";
 
 export function PrecheckAccountResult(props: {
   result?: AnimationResult;
@@ -30,13 +31,14 @@ export function PrecheckAccountResult(props: {
   }
 
   return (
-    <section aria-label="前置检测结果" className="h-auto min-w-0 shrink-0 text-xs">
+    <section aria-label="前置检测结果" className="h-auto w-full min-w-0 shrink-0 py-2 text-xs">
       <div className="flex h-8 min-w-0 items-center gap-2">
         <span className="shrink-0 font-medium">前置检测</span>
         <Badge variant={variant}>{label}</Badge>
         {props.result && !running ? <PrecheckResultDetails result={props.result} /> : null}
       </div>
       {running ? <TaskStartupState message="正在执行前置检测" className="min-h-6 text-xs" /> : null}
+      {props.result && !running ? <PrecheckResultMetrics result={props.result} /> : null}
     </section>
   );
 }

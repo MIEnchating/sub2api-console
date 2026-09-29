@@ -64,7 +64,7 @@ func TestOAuthAnimationWithoutKeyBindingUsesOfficialStreamAndSanitizesSVG(t *tes
 	}
 }
 
-func TestOAuthPrecheckRunsOnlySelectedQuestionWithLowReasoning(t *testing.T) {
+func TestOAuthPrecheckRunsOnlySelectedQuestionWithMediumReasoning(t *testing.T) {
 	f, _ := oauthAccountFixture(t, oauthAnimationAccount)
 	var calls int
 	f.service.UseOAuthTransport(oauthTransportFunc(func(r *http.Request) (*http.Response, error) {
@@ -80,7 +80,7 @@ func TestOAuthPrecheckRunsOnlySelectedQuestionWithLowReasoning(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return nil, err
 		}
-		if body.Reasoning.Effort != "low" || len(body.Input) != 1 || !strings.Contains(body.Input[0].Content, "圆形苹果") || !strings.HasSuffix(r.Header.Get("X-Request-ID"), "-candy") {
+		if body.Reasoning.Effort != "medium" || len(body.Input) != 1 || !strings.Contains(body.Input[0].Content, "圆形苹果") || !strings.HasSuffix(r.Header.Get("X-Request-ID"), "-candy") {
 			t.Errorf("unexpected selected precheck request: %#v", body)
 		}
 		return oauthResponse(200, "application/json", `{"status":"completed","output_text":"21"}`), nil

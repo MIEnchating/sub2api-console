@@ -16,14 +16,16 @@ func TestDirectProbeRequiresRealContentAcrossSupportedProtocols(t *testing.T) {
 		name, platform, contentType, body, model string
 		passed                                   bool
 	}{
-		{name: "Responses text delta passes", platform: "openai", body: "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n", passed: true},
-		{name: "Anthropic text delta passes", platform: "anthropic", body: "data: {\"type\":\"message_start\",\"message\":{\"model\":\"actual-claude\"}}\n\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}\n\n", model: "actual-claude", passed: true},
-		{name: "Gemini generated text passes", platform: "gemini", body: "data: {\"modelVersion\":\"actual-gemini\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"pong\"}]}}]}\n\n", model: "actual-gemini", passed: true},
-		{name: "Chat text delta passes", platform: "deepseek", body: "data: {\"model\":\"actual-chat\",\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\n", model: "actual-chat", passed: true},
+		{name: "Responses text and completion pass", platform: "openai", body: probeTextEvent + probeCompletedEvent, passed: true},
+		{name: "Anthropic text and completion pass", platform: "anthropic", body: "data: {\"type\":\"message_start\",\"message\":{\"model\":\"actual-claude\"}}\n\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"pong\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n", model: "actual-claude", passed: true},
+		{name: "Gemini completed text passes", platform: "gemini", body: "data: {\"modelVersion\":\"actual-gemini\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"pong\"}]},\"finishReason\":\"STOP\"}]}\n\n", model: "actual-gemini", passed: true},
+		{name: "Chat text and completion pass", platform: "deepseek", body: "data: {\"model\":\"actual-chat\",\"choices\":[{\"delta\":{\"content\":\"pong\"}}]}\n\ndata: [DONE]\n\n", model: "actual-chat", passed: true},
 		{name: "Formatted JSON text passes", platform: "openai", contentType: "application/json", body: "{\n \"model\":\"actual-json\",\n \"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"pong\"}]}]\n}", model: "actual-json", passed: true},
-		{name: "Multiline SSE text passes", platform: "openai", body: "data: {\"type\":\"response.output_text.delta\",\ndata: \"delta\":\"pong\"}\n\n", passed: true},
+		{name: "Multiline SSE text and completion pass", platform: "openai", body: "data: {\"type\":\"response.output_text.delta\",\ndata: \"delta\":\"pong\"}\n\n" + probeCompletedEvent, passed: true},
 		{name: "HTTP 200 error fails even with text", platform: "openai", body: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\",\"error\":{\"message\":\"generation denied\"}}\n\n"},
 		{name: "Failed response status fails even with text", platform: "openai", contentType: "application/json", body: `{"status":"failed","output":[{"type":"message","content":[{"type":"output_text","text":"partial"}]}]}`},
+		{name: "Complete JSON with length termination fails", platform: "grok", contentType: "application/json", body: `{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}`},
+		{name: "Complete JSON with nested failure fails", platform: "openai", contentType: "application/json", body: `{"type":"response.completed","response":{"status":"failed","output_text":"partial"}}`},
 		{name: "Metadata and done without text fail", platform: "openai", body: "data: {\"type\":\"response.created\",\"response\":{\"model\":\"actual-model\"}}\n\ndata: [DONE]\n\n", model: "actual-model"},
 		{name: "Thinking without text fails", platform: "anthropic", body: "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"processing\"}}\n\n"},
 		{name: "Gemini thoughts without answer fail", platform: "gemini", body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"processing\"}]}}]}\n\n"},

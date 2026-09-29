@@ -33,6 +33,7 @@ type AccountRecentResult struct {
 }
 
 type AccountStatus struct {
+	GroupsLocked                bool                       `json:"groups_locked"`
 	IgnoreCostWall              bool                       `json:"ignore_cost_wall"`
 	Stability                   *accountquality.Statistics `json:"stability,omitempty"`
 	ID                          string                     `json:"id"`
@@ -446,9 +447,11 @@ func (s *Store) accountProjectionsWithOptions(ctx context.Context, options accou
 	scope, _ := control["scope"].(map[string]any)
 	manualFusedIDs := controlAccountIDs(scope["manual_fused_account_ids"])
 	ignoreCostWallIDs := controlAccountIDs(scope["ignore_cost_wall_account_ids"])
+	groupLockedIDs := controlAccountIDs(scope[groupLockedAccountIDs])
 	for index := range projections {
 		item := &projections[index]
 		item.IgnoreCostWall = containsControlID(ignoreCostWallIDs, item.ID)
+		item.GroupsLocked = containsControlID(groupLockedIDs, item.ID)
 		item.manualFused = containsControlID(manualFusedIDs, item.ID)
 		applyAccountCalculations(item, decisions[item.ID], evaluations[item.ID], applyErrors[item.ID], applyView)
 		if mode == runtimepolicy.Monitoring {

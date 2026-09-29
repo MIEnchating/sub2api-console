@@ -106,6 +106,10 @@ type GroupPolicyOverride struct {
 	ProbeEnabled       *bool    `json:"probe_enabled,omitempty"`
 	ProbeInterval      *int64   `json:"probe_interval_seconds,omitempty"`
 	ProbeModel         *string  `json:"probe_model,omitempty"`
+	AnimationEnabled   *bool    `json:"animation_enabled,omitempty"`
+	AnimationPassMultiplier *float64 `json:"animation_pass_multiplier,omitempty"`
+	AnimationFailMultiplier *float64 `json:"animation_fail_multiplier,omitempty"`
+	AnimationFailureAction *string `json:"animation_failure_action,omitempty"`
 }
 
 type GroupStatus struct {

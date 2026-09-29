@@ -139,19 +139,23 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await first.check();
   await expect(page.getByRole("button", { name: /开始检测/ })).toBeEnabled();
   const timeoutInput = page.getByRole("spinbutton", { name: "请求超时（秒）" });
+  const modelInput = page.getByRole("combobox", { name: "检测模型" });
+  await expect(modelInput).toHaveValue("gpt-6-astra");
+  await modelInput.fill("");
+  await page.keyboard.press("Escape");
   await timeoutInput.fill("1");
   await start.click();
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveAttribute(
     "aria-invalid",
     "true",
   );
-  const modelInput = page.getByRole("combobox", { name: "检测模型" });
-  const modelError = page.locator("#animation-unified-model-error");
+  const modelError = page.getByText("请输入模型 ID", { exact: true });
   await expect(modelError).toBeVisible();
   await expect(modelInput).toHaveAccessibleDescription("请输入模型 ID");
   await expect(timeoutInput).toHaveAccessibleDescription("超时不能小于 5 秒");
   const timeoutBox = (await timeoutInput.boundingBox())!;
-  const timeoutErrorBox = (await page.locator("#animation-timeout-error").boundingBox())!;
+  const timeoutError = page.getByText("超时不能小于 5 秒", { exact: true });
+  const timeoutErrorBox = (await timeoutError.boundingBox())!;
   expect(timeoutErrorBox.y).toBeGreaterThanOrEqual(timeoutBox.y + timeoutBox.height);
   const inputBox = (await modelInput.boundingBox())!;
   const errorBox = (await modelError.boundingBox())!;
@@ -165,7 +169,7 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   await page.getByRole("combobox", { name: "检测模型" }).fill("fixture-model");
   await page.keyboard.press("Escape");
   await timeoutInput.fill("120");
-  await expect(page.locator("#animation-timeout-error")).toHaveCount(0);
+  await expect(timeoutError).toHaveCount(0);
   await expect(modelError).toHaveCount(0);
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   await expect(page.getByRole("status", { name: "正在读取共同模型" })).toBeVisible();
@@ -173,7 +177,10 @@ test("动画检测错误显示在字段下方且无重叠，清除错误后恢�
   releaseModels();
   await expect(page.getByRole("button", { name: "获取模型", exact: true })).toBeEnabled();
   await expect(page.getByRole("combobox", { name: "检测模型" })).toHaveValue("fixture-model");
-  await expect(page.locator("#animation-common-models option")).toHaveCount(0);
+  await modelInput.click();
+  await expect(page.getByText("无匹配建议", { exact: true })).toBeVisible();
+  await expect(page.getByRole("option")).toHaveCount(0);
+  await page.keyboard.press("Escape");
   expect(await region.boundingBox()).toEqual(regionBox);
   await page.getByRole("button", { name: "全选账号" }).click();
   await expect(start).toHaveText("开始检测（25 个账号）");

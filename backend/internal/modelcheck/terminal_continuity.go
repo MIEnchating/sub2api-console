@@ -36,6 +36,7 @@ type TerminalContinuityRequest struct {
 }
 
 type TerminalContinuityResult struct {
+	Incomplete    bool                      `json:"incomplete,omitempty"`
 	RoundResults  []TerminalContinuityRound `json:"round_results,omitempty"`
 	AccountID     string                    `json:"account_id"`
 	AccountName   string                    `json:"account_name"`
@@ -129,6 +130,10 @@ func (s *Service) EnqueueTerminalContinuity(ctx context.Context, input TerminalC
 	}
 	task := taskstore.Task{ID: id, Skill: terminalContinuitySkill, Operation: "account-terminal-continuity", Status: "queued", Progress: 0, Message: "终端续接检测已排队", CreatedAt: now, UpdatedAt: now,
 		Result: map[string]any{"account_ids": ids, "targets": prepared.Targets, "rounds": input.Rounds, "completed": 0, "total": len(accounts), "checks": []TerminalContinuityResult{}, "remote_write": false}}
+	if err := s.prepareRecovery(ctx, &task, detectionRecovery{Request: prepared, Rounds: input.Rounds}, accounts); err != nil {
+		release()
+		return taskstore.Task{}, err
+	}
 	if err := s.tasks.Save(ctx, task); err != nil {
 		release()
 		return taskstore.Task{}, err
@@ -155,30 +160,38 @@ func (s *Service) executeTerminalContinuity(parent context.Context, task tasksto
 	if !taskstore.SaveRunning(ctx, s.tasks, task) {
 		return
 	}
+	completed := previousResults[TerminalContinuityResult](task, "checks")
+	prior := map[string]TerminalContinuityResult{}
+	for _, result := range completed {
+		prior[result.AccountID] = result
+	}
 	results := make(chan TerminalContinuityResult, len(accounts))
 	var workers sync.WaitGroup
 	for index, account := range accounts {
+		old, found := prior[account.ID]
+		if found && !old.Incomplete {
+			continue
+		}
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			result := s.runTerminalRounds(ctx, account, input.TimeoutSeconds, input.Targets[index].Model, fmt.Sprintf("%s-%s", task.ID, account.ID), rounds)
-			results <- result
+			result := s.runTerminalCheckpoint(ctx, account, input.TimeoutSeconds, input.Targets[index].Model, fmt.Sprintf("%s-%s", task.ID, account.ID), rounds, old, func(snapshot TerminalContinuityResult) { results <- snapshot })
+			if !taskstore.Interrupted(ctx) {
+				results <- result
+			}
 		}()
 	}
 	go func() { workers.Wait(); close(results) }()
-	completed := make([]TerminalContinuityResult, 0, len(accounts))
-	successful := 0
 	for result := range results {
-		completed = append(completed, result)
-		if result.Verdict != "error" {
-			successful++
-		}
-		task.Progress = len(completed) * 100 / len(accounts)
-		task.Message = fmt.Sprintf("终端续接检测已完成 %d/%d 个账号", len(completed), len(accounts))
-		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": input.Targets, "rounds": rounds, "completed": len(completed), "total": len(accounts), "checks": append([]TerminalContinuityResult(nil), completed...), "remote_write": false}
+		completed = upsertTerminal(completed, result)
+		count, _ := terminalCounts(completed)
+		task.Progress = count * 100 / len(accounts)
+		task.Message = fmt.Sprintf("终端续接检测已完成 %d/%d 个账号", count, len(accounts))
+		task.Result = map[string]any{"account_ids": task.Result["account_ids"], "targets": input.Targets, "rounds": rounds, "completed": count, "total": len(accounts), "checks": slices.Clone(completed), "remote_write": false}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		taskstore.PersistProgress(s.tasks, task)
 	}
+	_, successful := terminalCounts(completed)
 	task.Status = "succeeded"
 	if successful == 0 {
 		task.Status = "failed"

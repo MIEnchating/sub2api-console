@@ -9,10 +9,8 @@ import (
 
 	"github.com/MIEnchating/sub2api-console/backend/internal/adminclient"
 	"github.com/MIEnchating/sub2api-console/backend/internal/business"
-	"github.com/MIEnchating/sub2api-console/backend/internal/mutationguard"
 	"github.com/MIEnchating/sub2api-console/backend/internal/routing"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
-	"github.com/MIEnchating/sub2api-console/backend/internal/targetguard"
 )
 
 type manualCostRepository interface {
@@ -40,44 +38,11 @@ func (s *Service) EnforceManualCostWall(ctx context.Context, accountIDs []string
 	for _, id := range accountIDs {
 		selected[id] = true
 	}
-	resources := []string{mutationguard.AccountCatalog()}
-	for _, a := range accounts {
-		if a.ManualPriority != nil && (len(accountIDs) == 0 || selected[a.ID]) {
-			resources = append(resources, mutationguard.Account(a.ID))
-		}
-	}
-	if len(resources) == 1 {
-		return result, nil
-	}
-	if s.admin == nil {
-		ctx, err = targetguard.Capture(ctx, s.targets)
-		if err != nil {
-			return result, err
-		}
-	}
-	var release func() error
-	if s.admin == nil {
-		ctx, release, err = targetguard.Acquire(ctx, s.repository, resources...)
-	} else {
-		ctx, release, err = mutationguard.Acquire(ctx, s.repository, resources...)
-	}
-	if err != nil {
+	ctx, latest, release, err := s.acquireManualCostWallSnapshot(ctx, repository, accounts, selected)
+	if err != nil || release == nil {
 		return result, err
 	}
 	defer release()
-	if s.admin == nil {
-		ctx, err = targetguard.Bind(ctx, s.targets)
-		if err != nil {
-			return result, err
-		}
-	}
-	latest, err := repository.RoutingAccounts(ctx, nil, nil)
-	if err != nil {
-		return result, err
-	}
-	if !reflect.DeepEqual(accounts, latest) {
-		return result, errors.New("成本墙检查等待期间账号或分组已变化，请重新计算")
-	}
 	policy, err := s.repository.ControlPolicy(ctx)
 	if err != nil {
 		return result, err

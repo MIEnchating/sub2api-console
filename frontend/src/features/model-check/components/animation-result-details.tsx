@@ -13,6 +13,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 
+import { AnimationResultMetrics } from "./animation-result-metrics";
 import { AnimationEndpointDetails } from "./animation-endpoint-details";
 
 export function AnimationResultDetails(props: { result: AnimationResult }): ReactElement {
@@ -80,6 +81,7 @@ export function AnimationResultDetails(props: { result: AnimationResult }): Reac
               <dt className="text-muted-foreground">请求 ID</dt>
               <dd className="font-mono text-xs leading-5 wrap-anywhere">{result.request_id}</dd>
             </dl>
+            <AnimationResultMetrics result={result} showIdentity={false} />
             {result.error ? (
               <section aria-label="失败原因" className="space-y-2 border-t pt-3">
                 <h3 className="text-sm font-medium text-destructive">失败原因</h3>
@@ -88,6 +90,23 @@ export function AnimationResultDetails(props: { result: AnimationResult }): Reac
                 </p>
               </section>
             ) : null}
+            <section aria-label="生成原文" className="space-y-2 border-t pt-3">
+              <h3 className="text-sm font-medium">生成原文</h3>
+              {result.source ? (
+                <>
+                  <pre className="max-h-[min(50svh,28rem)] overflow-auto overscroll-contain whitespace-pre-wrap rounded-md border bg-muted/30 p-3 font-mono text-xs leading-5 wrap-anywhere">
+                    {result.source}
+                  </pre>
+                  {result.source_truncated ? (
+                    <p className="text-xs text-muted-foreground">
+                      原文超过 128 KB，仅展示前 128 KB。
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">该历史记录未保存生成原文</p>
+              )}
+            </section>
           </DialogBody>
         </DialogContent>
       </Dialog>

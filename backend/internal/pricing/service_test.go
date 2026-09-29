@@ -1066,7 +1066,7 @@ func TestEvaluateFallsBackToHighestNonLossGroupWhenProfitTargetIsUnreachable(t *
 		{name: "already in fallback group stays there", cost: "0.21", current: []string{"25"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}},
 		{name: "outside membership is preserved", cost: "0.21", current: []string{"8", "99"}, want: []string{"25", "99"}, eligible: []string{"codex-pro-旗舰"}},
 		{name: "unjoined exchange set is not entered", cost: "0.21", current: []string{"99"}, want: []string{"99"}, eligible: []string{}},
-		{name: "manual priority obeys cost migration", cost: "0.21", current: []string{"8"}, want: []string{"25"}, eligible: []string{"codex-pro-旗舰"}, manual: true},
+		{name: "manual priority preserves groups", cost: "0.21", current: []string{"8"}, want: []string{"8"}, eligible: []string{}, manual: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			catalog := business.PricingCatalog{

@@ -104,7 +104,10 @@ it("选择疑似异常账号后按稳定 ID 和当前模型创建独立检测任
   await user.click(screen.getByRole("button", { name: "选择疑似异常（1）" }));
   expect(screen.getByRole("checkbox", { name: "检测终端续接 异常账号" })).toBeChecked();
   expect(screen.getByRole("checkbox", { name: "检测终端续接 正常账号" })).not.toBeChecked();
-  await user.type(screen.getByRole("combobox", { name: "检测模型" }), "new-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
+    target: { value: "terminal-model" },
+  });
   await user.keyboard("{Escape}");
   fireEvent.change(screen.getByRole("spinbutton", { name: "终端检测轮数" }), {
     target: { value: "3" },
@@ -116,7 +119,7 @@ it("选择疑似异常账号后按稳定 ID 和当前模型创建独立检测任
   await waitFor(() =>
     expect(requests).toEqual([
       {
-        targets: [{ account_id: "42", model: "new-model" }],
+        targets: [{ account_id: "42", model: "terminal-model" }],
         timeout_seconds: 120,
         rounds: 3,
       },

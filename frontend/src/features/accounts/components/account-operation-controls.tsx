@@ -1,5 +1,6 @@
 import {
   Activity,
+  FolderSync,
   Ban,
   LoaderCircle,
   MoreHorizontal,
@@ -40,6 +41,7 @@ export type AccountOperationProps = {
   onRateSync: () => void;
   onManualPriority: () => void;
   onEdit: () => void;
+  onSwitchGroups?: () => void;
   onDelete: () => void;
 };
 
@@ -134,6 +136,16 @@ function accountActions(props: AccountOperationProps): {
         disabled: props.pending || manualControlled,
         onClick: props.onEdit,
       },
+      ...(props.onSwitchGroups
+        ? [
+            {
+              label: "切换分组",
+              icon: <FolderSync />,
+              disabled: props.pending || manualControlled || props.account.groups_locked === true,
+              onClick: props.onSwitchGroups,
+            },
+          ]
+        : []),
       {
         label: "删除账号及上游 Key",
         icon: <Trash2 />,

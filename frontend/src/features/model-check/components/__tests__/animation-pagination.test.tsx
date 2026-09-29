@@ -83,22 +83,23 @@ it("跨页勾选和搜索后保留统一模型，并提交完整的已选范围"
   const user = userEvent.setup();
   const view = setup(25);
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 1\b/ }));
-  await user.type(screen.getByRole("combobox", { name: "检测模型" }), "first-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await user.keyboard("{Escape}");
   fireEvent.click(screen.getByRole("button", { name: "转到下一页" }));
   await user.click(screen.getByRole("checkbox", { name: /^检测 分页账号 13\b/ }));
   const search = screen.getByRole("textbox", { name: "搜索动画检测账号" });
-  await user.type(search, "分页账号 25");
+  await user.click(search);
+  await user.paste("分页账号 25");
   expect(await screen.findByRole("checkbox", { name: /^检测 分页账号 25\b/ })).toBeVisible();
   expect(screen.getByRole("button", { name: "转到上一页" })).toBeDisabled();
   await user.clear(search);
   expect(await screen.findByRole("checkbox", { name: /^检测 分页账号 1\b/ })).toBeChecked();
-  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("first-model");
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await user.click(screen.getByRole("button", { name: "开始检测（2 个账号）" }));
   await waitFor(() =>
     expect(view.posts[0]?.targets).toEqual([
-      { account_id: "1", model: "first-model" },
-      { account_id: "13", model: "first-model" },
+      { account_id: "1", model: "gpt-6-astra" },
+      { account_id: "13", model: "gpt-6-astra" },
     ]),
   );
   view.dispose();
@@ -116,12 +117,10 @@ it("全选跨页选择全部账号，取消后可重新勾选第二十一个账�
   expect(account).not.toHaveAttribute("aria-disabled", "true");
   fireEvent.click(account);
   expect(account).toBeChecked();
-  fireEvent.change(screen.getByRole("combobox", { name: "检测模型" }), {
-    target: { value: "shared-model" },
-  });
+  expect(screen.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   fireEvent.click(screen.getByRole("button", { name: "开始检测（25 个账号）" }));
   await waitFor(() => expect(view.posts[0]?.targets).toHaveLength(25));
-  expect(view.posts[0]?.targets).toContainEqual({ account_id: "25", model: "shared-model" });
+  expect(view.posts[0]?.targets).toContainEqual({ account_id: "25", model: "gpt-6-astra" });
   fireEvent.click(screen.getByRole("button", { name: "清空选择" }));
   expect(screen.getByRole("button", { name: "开始检测（0 个账号）" })).toBeDisabled();
   view.dispose();
@@ -139,15 +138,18 @@ it("搜索后全选只选择当前筛选范围，空结果时禁用全选", () =
   view.dispose();
 });
 
-it("翻页后提交缺少统一模型时，聚焦顶部模型字段", async () => {
+it("翻页后超时无效时，聚焦顶部超时字段", async () => {
   const view = setup(25);
   fireEvent.click(screen.getByRole("checkbox", { name: /^检测 分页账号 1\b/ }));
   fireEvent.click(screen.getByRole("button", { name: "转到下一页" }));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "请求超时（秒）" }), {
+    target: { value: "1" },
+  });
   fireEvent.click(screen.getByRole("button", { name: "开始检测（1 个账号）" }));
-  const model = screen.getByRole("combobox", { name: "检测模型" });
+  const model = screen.getByRole("spinbutton", { name: "请求超时（秒）" });
   await waitFor(() => expect(model).toHaveFocus());
   expect(model).toHaveAttribute("aria-invalid", "true");
-  expect(screen.getByText("请输入模型 ID")).toBeVisible();
+  expect(screen.getByText("超时不能小于 5 秒")).toBeVisible();
   view.dispose();
 });
 

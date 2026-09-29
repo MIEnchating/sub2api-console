@@ -35,7 +35,8 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await page.getByRole("checkbox", { name: /检测 待校验账号/ }).check();
   await page.getByRole("button", { name: "获取模型", exact: true }).click();
   const input = page.getByRole("combobox", { name: "检测模型", exact: true });
-  await input.click();
+  await input.fill("");
+  await input.press("ArrowDown");
   await expect(page.getByRole("option", { name: "gpt-6-astra", exact: true })).toBeVisible();
   const popup = page.locator('[data-slot="combobox-content"]');
   // 等待展开缩放动画完成后再测量最终宽度，避免采到过渡帧。
@@ -45,8 +46,8 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await expect(popup).toBeInViewport({ ratio: 1 });
   await expect(input).toHaveCSS("height", "32px");
   await expect(popup).toHaveCSS("border-radius", "8px");
+  const inputWidth = await input.evaluate((element) => element.getBoundingClientRect().width);
   const geometry = await popup.evaluate((element) => {
-    const inputElement = document.querySelector<HTMLInputElement>("#animation-unified-model")!;
     const themeProbe = document.createElement("div");
     themeProbe.style.backgroundColor = "var(--popover)";
     document.body.append(themeProbe);
@@ -54,13 +55,12 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
     themeProbe.remove();
     return {
       width: element.getBoundingClientRect().width,
-      inputWidth: inputElement.getBoundingClientRect().width,
       overflowing: element.scrollWidth > element.clientWidth,
       color: getComputedStyle(element).backgroundColor,
       themeColor,
     };
   });
-  expect(geometry.width).toBe(geometry.inputWidth);
+  expect(geometry.width).toBe(inputWidth);
   expect(geometry.overflowing).toBe(false);
   expect(geometry.color).toBe(geometry.themeColor);
   await expect(page.getByText(longModel, { exact: true })).toHaveCSS("overflow-wrap", "anywhere");
@@ -72,7 +72,7 @@ test("模型建议跟随主题和输入宽度，长名称与滚动列表不溢�
   await expect(input).toHaveValue("gpt-6-astra");
   await expect(input).toHaveAttribute("aria-expanded", "false");
   await input.fill("custom-model");
-  await page.locator("#animation-timeout").click();
+  await page.getByLabel("请求超时（秒）", { exact: true }).click();
   await expect(page.getByRole("spinbutton", { name: "请求超时（秒）" })).toBeFocused();
   await expect(input).toHaveValue("custom-model");
   await expect(input).toHaveAttribute("aria-expanded", "false");

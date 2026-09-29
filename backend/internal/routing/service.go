@@ -25,6 +25,10 @@ type Repository interface {
 	PersistRoutingRound(context.Context, *string, *string, []business.RoutingEvaluationWrite, []business.RoutingDecisionWrite, []business.AccountRoutingTarget, []business.CleanupStateWrite, []business.RuntimeEventWrite, bool, time.Time) error
 }
 
+type animationEvidenceReader interface {
+	RoutingAnimationEvidence(context.Context, *string, *string) ([]business.AnimationEvidence, error)
+}
+
 type Scope struct {
 	AccountID *string
 	GroupName *string
@@ -179,6 +183,10 @@ type engineConfig struct {
 	cleanupKeepLast          bool
 	cleanupOnlyAuth          bool
 	cleanupStatusCodes       map[int]struct{}
+	animationEnabled         bool
+	animationPassMultiplier  float64
+	animationFailMultiplier  float64
+	animationFailureAction   string
 }
 
 type candidate struct {
@@ -227,6 +235,10 @@ type candidate struct {
 	cleanupAction                 *string
 	concurrencyIssue              string
 	concurrencyConfigurationError *string
+	animationVerdict              string
+	animationFailureKind          string
+	animationMultiplier           float64
+	animationEvidenceApplied      bool
 	upstreamAllocation            bool
 	upstreamReductionID           string
 	upstreamReductionLimit        *int64
@@ -277,6 +289,16 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 	samples, err := s.repository.RoutingSamples(ctx, scope.AccountID, scope.GroupName, sampleSource, config.sampleWindow())
 	if err != nil {
 		return Result{}, err
+	}
+	animationEvidence := map[string]business.AnimationEvidence{}
+	if reader, ok := s.repository.(animationEvidenceReader); ok {
+		rows, readErr := reader.RoutingAnimationEvidence(ctx, scope.AccountID, scope.GroupName)
+		if readErr != nil {
+			return Result{}, fmt.Errorf("读取动画检测证据失败：%w", readErr)
+		}
+		for _, row := range rows {
+			animationEvidence[row.AccountID+"\x00"+row.GroupName] = row
+		}
 	}
 	previousRows, err := s.repository.PreviousRoutingDecisions(ctx, scope.AccountID, scope.GroupName)
 	if err != nil {
@@ -391,6 +413,13 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 				state:            "healthy", reason: "已计算",
 				schedulable: remoteSchedulable(account), strategy: groupConfig.strategy,
 			}
+			if groupConfig.animationEnabled {
+				if evidence, found := animationEvidence[account.ID+"\x00"+account.GroupName]; found {
+					current.animationVerdict, current.animationFailureKind = evidence.Verdict, evidence.FailureKind
+					current.animationMultiplier = animationMultiplier(evidence, groupConfig)
+					current.animationEvidenceApplied = evidence.Verdict == "passed" || evidence.Verdict == "not_passed"
+				}
+			}
 			if health.SampleCount == 0 {
 				current.state = "unknown"
 			}
@@ -404,6 +433,7 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 				return Result{}, err
 			}
 			applyInitialState(current, groupConfig, prior, now)
+			applyAnimationFailureState(current, groupConfig)
 			candidates = append(candidates, current)
 			byAccount[account.ID] = append(byAccount[account.ID], current)
 		}
@@ -411,6 +441,11 @@ func (s *Service) Calculate(ctx context.Context, scope Scope, persistDecisions b
 		configsByGroup[groupName] = groupConfig
 	}
 	alignAccountStateToPrimary(byAccount, configsByGroup, previous, now)
+	for groupName, candidates := range candidatesByGroup {
+		for _, item := range candidates {
+			applyAnimationFailureState(item, configsByGroup[groupName])
+		}
+	}
 	applyFuseBudgets(candidatesByGroup, configsByGroup, byAccount, now)
 	costContext := accounts
 	if scope.AccountID != nil || scope.GroupName != nil {
@@ -944,6 +979,12 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 		return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s 必须是对象", *groupID)
 	}
 	result := c
+	if result.animationPassMultiplier == 0 && result.animationFailMultiplier == 0 {
+		result.animationPassMultiplier, result.animationFailMultiplier = 1, 1
+	}
+	if result.animationFailureAction == "" {
+		result.animationFailureAction = "ignore"
+	}
 	enabled := true
 	if rawEnabled, present := binding["enabled"]; present {
 		value, ok := rawEnabled.(bool)
@@ -1002,6 +1043,34 @@ func (c engineConfig) forGroup(groupID *string) (engineConfig, bool, error) {
 			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.balanced_price_ratio 必须在 0 到 1 之间", *groupID)
 		}
 		result.balancedPriceRatio = value
+	}
+	if raw, present := binding["animation_enabled"]; present {
+		value, ok := raw.(bool)
+		if !ok {
+			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.animation_enabled 必须是布尔值", *groupID)
+		}
+		result.animationEnabled = value
+	}
+	if raw, present := binding["animation_pass_multiplier"]; present {
+		value, err := strictNumber(raw)
+		if err != nil || value < 0 || value > 10 {
+			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.animation_pass_multiplier 无效", *groupID)
+		}
+		result.animationPassMultiplier = value
+	}
+	if raw, present := binding["animation_fail_multiplier"]; present {
+		value, err := strictNumber(raw)
+		if err != nil || value < 0 || value > 10 {
+			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.animation_fail_multiplier 无效", *groupID)
+		}
+		result.animationFailMultiplier = value
+	}
+	if raw, present := binding["animation_failure_action"]; present {
+		value, ok := raw.(string)
+		if !ok || (value != "ignore" && value != "degrade" && value != "fuse") {
+			return engineConfig{}, false, fmt.Errorf("group_policy_bindings.%s.animation_failure_action 无效", *groupID)
+		}
+		result.animationFailureAction = value
 	}
 	return result, enabled, nil
 }
@@ -1096,6 +1165,22 @@ func applyInitialState(item *candidate, config engineConfig, previous business.P
 	}
 	if (config.manageAllAccounts || previouslyConcurrencyLimited(item.account)) && managedAccountCanReceiveTraffic(item, now) {
 		item.schedulable = true
+	}
+}
+
+func applyAnimationFailureState(item *candidate, config engineConfig) {
+	if item.animationVerdict != "error" || item.animationFailureKind != "upstream" {
+		return
+	}
+	switch config.animationFailureAction {
+	case "degrade":
+		if item.state != "excluded" && item.state != "paused" && item.state != "disabled" && item.state != "fused" {
+			item.state, item.reason = "degraded", "动画检测上游异常，已按分组策略降级"
+		}
+	case "fuse":
+		if item.state != "excluded" && item.state != "paused" && item.state != "disabled" && item.state != "fused" {
+			item.state, item.schedulable, item.reason, item.fuseKind = "fuse_pending", false, "动画检测上游异常，已按分组策略熔断", "soft"
+		}
 	}
 }
 
@@ -1451,6 +1536,7 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 	qualityTotal := 0.0
 	for _, item := range eligible {
 		item.quality = strategyQuality(item, config, benchmark)
+		item.quality *= item.animationQualityMultiplier()
 		qualityTotal += item.quality
 	}
 	for _, item := range eligible {
@@ -1460,6 +1546,24 @@ func calculateGroupWeights(items []*candidate, config engineConfig) {
 		} else if len(eligible) > 0 {
 			item.weight = float64(config.weightBudget) / float64(len(eligible))
 		}
+	}
+}
+
+func (item *candidate) animationQualityMultiplier() float64 {
+	if item.animationEvidenceApplied {
+		return item.animationMultiplier
+	}
+	return 1
+}
+
+func animationMultiplier(evidence business.AnimationEvidence, config engineConfig) float64 {
+	switch evidence.Verdict {
+	case "passed":
+		return config.animationPassMultiplier
+	case "not_passed":
+		return config.animationFailMultiplier
+	default:
+		return 1
 	}
 }
 

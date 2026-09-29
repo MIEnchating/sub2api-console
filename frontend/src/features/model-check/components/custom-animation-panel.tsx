@@ -1,3 +1,4 @@
+import { animationTestModel } from "../constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronLeft, ChevronRight, Play, RefreshCw, ShieldCheck } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
@@ -12,6 +13,7 @@ import { useClientPagination } from "@/hooks/use-client-pagination";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { useAnimationTasks } from "../hooks/use-animation-tasks";
 import { customAnimationSchema, type CustomAnimationForm } from "../lib/animation-schema";
+import { animationActivityLabel } from "../lib/animation-task-results";
 import { AnimationAccountResult } from "./animation-account-result";
 import { AnimationEndpointDetails } from "./animation-endpoint-details";
 import { CustomAnimationFields } from "./custom-animation-fields";
@@ -34,7 +36,7 @@ export function CustomAnimationPanel(props: {
       base_url: "",
       api_key: "",
       platform: "openai",
-      model: "",
+      model: animationTestModel,
       timeout_seconds: 120,
     },
   });
@@ -207,7 +209,9 @@ export function CustomAnimationPanel(props: {
                   <>
                     <TaskStartupState
                       message={
-                        activity.mode === "precheck" ? "正在执行前置检测" : "生成中，等待动画结果"
+                        activity.mode === "precheck"
+                          ? "正在执行前置检测"
+                          : animationActivityLabel(activity.status)
                       }
                     />
                     {activity.taskID ? <TaskCancelButton taskId={activity.taskID} /> : null}
@@ -223,8 +227,8 @@ export function CustomAnimationPanel(props: {
                   <AnimationAccountResult
                     result={result}
                     retryDisabled={pending}
-                    onRetry={(target) => {
-                      form.setValue("model", target.model);
+                    onRetry={() => {
+                      form.setValue("model", result.model);
                       setMode("animation");
                       form.setFocus("api_key");
                       void form.handleSubmit(() => setConfirmation(true))();

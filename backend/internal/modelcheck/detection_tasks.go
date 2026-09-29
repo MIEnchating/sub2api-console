@@ -19,6 +19,7 @@ type DetectionTask struct {
 	Name              string   `json:"name"`
 	GroupIDs          []string `json:"group_ids"`
 	Model             string   `json:"model"`
+	Animation         *bool    `json:"animation"`
 	Precheck          bool     `json:"precheck"`
 	PrecheckQuestions []string `json:"precheck_questions,omitempty"`
 	Terminal          bool     `json:"terminal"`
@@ -58,12 +59,19 @@ func detectionTiming(value DetectionTask) AnimationSchedule {
 	return AnimationSchedule{ScheduleType: value.ScheduleType, IntervalMinutes: value.IntervalMinutes, DailyTimes: value.DailyTimes, Timezone: value.Timezone}
 }
 func cloneDetectionTask(value DetectionTask) DetectionTask {
+	// Missing animation belongs to legacy configurations, which always generated it.
+	enabled := value.Animation == nil || *value.Animation
+	value.Model = strings.TrimSpace(value.Model)
+	value.Animation = &enabled
 	value.GroupIDs = slices.Clone(value.GroupIDs)
 	value.DailyTimes = slices.Clone(value.DailyTimes)
 	value.PrecheckQuestions = slices.Clone(value.PrecheckQuestions)
 	return value
 }
 func validateDetectionTask(value DetectionTask) error {
+	if value.Animation != nil && !*value.Animation && !value.Precheck && !value.Terminal {
+		return errors.New("请至少选择一项检测内容")
+	}
 	if strings.TrimSpace(value.Name) == "" || len([]rune(value.Name)) > 80 || strings.ContainsFunc(value.Name, unicode.IsControl) {
 		return errors.New("任务名称需为 1～80 个字符，不能包含控制字符")
 	}
@@ -83,7 +91,7 @@ func validateDetectionTask(value DetectionTask) error {
 	if value.TimeoutSeconds < 5 || value.TimeoutSeconds > 120 {
 		return errors.New("请求超时必须在 5 到 120 秒之间")
 	}
-	if value.TerminalRounds < 1 || value.TerminalRounds > 20 {
+	if value.Terminal && (value.TerminalRounds < 1 || value.TerminalRounds > 20) {
 		return errors.New("终端检测轮数必须在 1 到 20 之间")
 	}
 	if value.Precheck {
@@ -113,6 +121,7 @@ func (s *Service) loadDetectionTasks(ctx context.Context) error {
 				return errors.New("检测任务配置无效")
 			}
 			for _, value := range values {
+				value = cloneDetectionTask(value)
 				if err := validateDetectionTask(value); err != nil {
 					return err
 				}

@@ -84,7 +84,7 @@ func TestQueuedProbeSkipsNewlyProtectedAccountsWithoutHealthEvidence(t *testing.
 					return
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+				_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 			}))
 			t.Cleanup(server.Close)
 			runner, tasks := &protectionRunner{}, &protectionTasks{}

@@ -3,11 +3,14 @@ import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type DetectionTask } from "@/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ContentRetry } from "@/components/content-retry";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { notifyOperationError } from "@/lib/operation-feedback";
 import { DetectionTaskEditor } from "./detection-task-editor";
 import { DetectionTaskDetails } from "./detection-task-details";
+import { registerBackgroundTask } from "../lib/register-background-task";
+import { detectionTaskStages } from "../lib/detection-task-stages";
 
 export function DetectionTaskPanel(): ReactElement {
   const client = useQueryClient();
@@ -22,8 +25,9 @@ export function DetectionTaskPanel(): ReactElement {
   const [details, setDetails] = useState<string | null>(null);
   const run = useMutation({
     mutationFn: (value: DetectionTask) => api.runDetectionTask(value.id, value.version),
-    onSuccess: () => {
-      toast.success("检测任务已启动，可点击运行详情查看进度");
+    onSuccess: (task) => {
+      registerBackgroundTask(client, task);
+      toast.success("检测任务已转入后台，可在系统信息或运行详情查看进度");
       void client.invalidateQueries({ queryKey: ["model-detection-tasks"] });
       void client.invalidateQueries({ queryKey: ["model-animation"] });
       void client.invalidateQueries({ queryKey: ["terminal-continuity", "history"] });
@@ -42,7 +46,7 @@ export function DetectionTaskPanel(): ReactElement {
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
         <p className="text-sm text-muted-foreground">
-          按分组保存检测流程，支持手动执行与自动检测。
+          自由组合动画、前置和终端检测，按分组手动执行或自动检测。
         </p>
         <Button onClick={() => setEdit(null)}>新增任务</Button>
       </header>
@@ -66,51 +70,68 @@ export function DetectionTaskPanel(): ReactElement {
           <article
             key={plan.id}
             aria-label={`检测任务 ${plan.name}`}
-            className="space-y-2 rounded-lg border p-4"
+            className="min-w-0 overflow-hidden rounded-xl border bg-card"
           >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <h3 className="min-w-0 font-medium wrap-anywhere">{plan.name}</h3>
-              <span className="text-xs text-muted-foreground">
-                {plan.running ? "执行中" : "未在执行"}
-              </span>
+            <div className="min-w-0 space-y-3 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <h3 className="min-w-0 flex-1 font-medium wrap-anywhere">{plan.name}</h3>
+                <Badge variant={plan.running ? "default" : "secondary"}>
+                  {plan.running ? "执行中" : "未在执行"}
+                </Badge>
+              </div>
+              <dl className="grid min-w-0 gap-3 text-sm sm:grid-cols-2">
+                <div className="min-w-0 space-y-1">
+                  <dt className="text-xs text-muted-foreground">检测分组</dt>
+                  <dd className="wrap-anywhere">
+                    {plan.group_ids
+                      .map(
+                        (id) => groups.data?.find((group) => group.id === id)?.name ?? `ID ${id}`,
+                      )
+                      .join("、")}
+                  </dd>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <dt className="text-xs text-muted-foreground">检测模型</dt>
+                  <dd className="wrap-anywhere">{plan.model}</dd>
+                </div>
+              </dl>
+              <div className="flex flex-wrap gap-2" role="group" aria-label="检测内容">
+                {detectionTaskStages(plan).map((stage) => (
+                  <Badge key={stage} variant="outline">
+                    {stage}
+                  </Badge>
+                ))}
+              </div>
             </div>
-            <p className="text-sm wrap-anywhere">
-              分组：
-              {plan.group_ids
-                .map((id) => groups.data?.find((group) => group.id === id)?.name ?? `ID ${id}`)
-                .join("、")}
-            </p>
-            <p className="text-sm wrap-anywhere">
-              模型：{plan.model} · {plan.precheck ? "前置检测 → " : ""}
-              {plan.terminal ? `终端检测 ${plan.terminal_rounds} 轮 → ` : ""}动画检测
-            </p>
-            <p className="text-xs text-muted-foreground wrap-anywhere">
-              {plan.automatic ? "自动检测已开启" : "自动检测已关闭"}
-              {plan.next_at
-                ? ` · 下次 ${new Date(plan.next_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}（北京时间）`
-                : ""}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={plan.running || run.isPending} onClick={() => run.mutate(plan)}>
-                立即执行
-              </Button>
-              <Button variant="outline" onClick={() => setEdit(plan)}>
-                编辑
-              </Button>
-              <Button
-                variant="outline"
-                disabled={!plan.last_task_id}
-                onClick={() => setDetails(plan.last_task_id ?? null)}
-              >
-                运行详情
-              </Button>
-              <Button
-                variant="outline"
-                disabled={plan.running || deletion.isPending}
-                onClick={() => setRemove(plan)}
-              >
-                删除
-              </Button>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-3">
+              <p className="text-xs text-muted-foreground wrap-anywhere">
+                {plan.automatic ? "自动检测已开启" : "自动检测已关闭"}
+                {plan.next_at
+                  ? ` · 下次 ${new Date(plan.next_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}（北京时间）`
+                  : ""}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={plan.running || run.isPending} onClick={() => run.mutate(plan)}>
+                  立即执行
+                </Button>
+                <Button variant="outline" onClick={() => setEdit(plan)}>
+                  编辑
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!plan.last_task_id}
+                  onClick={() => setDetails(plan.last_task_id ?? null)}
+                >
+                  运行详情
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={plan.running || deletion.isPending}
+                  onClick={() => setRemove(plan)}
+                >
+                  删除
+                </Button>
+              </div>
             </div>
           </article>
         ))}

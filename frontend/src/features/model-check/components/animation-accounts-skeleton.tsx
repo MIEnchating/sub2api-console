@@ -42,7 +42,7 @@ export function AnimationAccountsSkeleton(): ReactElement {
           aria-hidden="true"
           className="flex h-auto min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
         >
-          <div className="grid h-24 shrink-0 content-center gap-1.5 px-3">
+          <div className="grid h-18 shrink-0 content-center gap-1.5 px-3">
             <div className="flex items-center gap-2">
               <Skeleton className="size-4 shrink-0" />
               <Skeleton className="h-4 w-2/3" />

@@ -11,21 +11,23 @@ import (
 	"strings"
 )
 
-func sendAnimation(ctx context.Context, client *http.Client, credential directCredential, model, requestID string) (string, string, error) {
+func sendAnimation(ctx context.Context, client *http.Client, credential directCredential, model, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, error) {
 	path := "/v1/responses"
-	body := map[string]any{"model": model, "input": animationPrompt, "max_output_tokens": 8192, "stream": true}
+	body := map[string]any{"model": model, "input": animationPrompt, "max_output_tokens": 16384, "stream": true, "reasoning": map[string]string{"effort": "low"}}
 	if credential.Platform == "anthropic" {
 		path = "/v1/messages"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 8192, "stream": true}
+		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 16384, "stream": true, "output_config": map[string]string{"effort": "low"}}
 	}
-	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, path, body, requestID)
+	text, responseModel, status, raw, retryAfter, err := animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
 	if err != nil {
 		return "", "", animationVisibleError(err, credential.Secret)
 	}
 	if credential.Platform != "anthropic" && responsesEndpointUnsupported(status, raw) {
 		path = "/v1/chat/completions"
-		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 8192, "stream": true}
-		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, path, body, requestID)
+		body = map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": animationPrompt}}, "max_tokens": 16384, "stream": true}
+		body["reasoning_effort"] = "low"
+		body["stream_options"] = map[string]bool{"include_usage": true}
+		text, responseModel, status, raw, retryAfter, err = animationHTTP(ctx, client, credential, path, body, requestID, usage, onFirstOutput)
 		if err != nil {
 			return "", "", animationVisibleError(err, credential.Secret)
 		}
@@ -39,7 +41,7 @@ func sendAnimation(ctx context.Context, client *http.Client, credential directCr
 	return text, responseModel, nil
 }
 
-func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body map[string]any, requestID string) (string, string, int, []byte, http.Header, error) {
+func animationHTTP(ctx context.Context, client *http.Client, credential directCredential, path string, body map[string]any, requestID string, usage *AnimationUsage, onFirstOutput func()) (string, string, int, []byte, http.Header, error) {
 	endpoint, err := directEndpoint(credential.BaseURL, path)
 	if err != nil {
 		return "", "", 0, nil, nil, errors.New("账号 Base URL 无效")
@@ -80,7 +82,7 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 	}
 	var text, model string
 	if !jsonResponse {
-		text, model, err = animationStream(reader, path)
+		text, model, err = animationStream(reader, path, usage, onFirstOutput)
 	} else {
 		raw, err = io.ReadAll(io.LimitReader(reader, maximumDirectResponseBytes+1))
 		if err != nil {
@@ -93,7 +95,11 @@ func animationHTTP(ctx context.Context, client *http.Client, credential directCr
 		if json.Unmarshal(raw, &payload) != nil {
 			err = errors.New("上游返回的不是有效 JSON 或事件流")
 		} else {
+			usage.read(payload)
 			text, model, err = animationPayload(payload, path)
+			if err == nil && strings.TrimSpace(text) != "" && onFirstOutput != nil {
+				onFirstOutput()
+			}
 		}
 	}
 	return text, model, response.StatusCode, nil, response.Header, animationRetryableReadError(err)
@@ -122,10 +128,13 @@ func animationPayload(payload map[string]any, path string) (string, string, erro
 	return openAIResponseText(payload), model, nil
 }
 
-func animationStream(reader io.Reader, path string) (string, string, error) {
+func animationStream(reader io.Reader, path string, usage *AnimationUsage, onFirstOutput ...func()) (string, string, error) {
+	var firstOutput func()
+	if len(onFirstOutput) > 0 {
+		firstOutput = onFirstOutput[0]
+	}
 	limited := &io.LimitedReader{R: reader, N: maximumDirectResponseBytes + 1}
-	scanner := bufio.NewScanner(limited)
-	scanner.Buffer(make([]byte, 4096), maximumDirectResponseBytes)
+	buffered := bufio.NewReader(limited)
 	var output strings.Builder
 	model := ""
 	completed := false
@@ -147,6 +156,7 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 		if json.Unmarshal([]byte(value), &event) != nil {
 			return errors.New("上游返回了无效的动画事件流")
 		}
+		usage.read(event)
 		kind := stringField(event, "type")
 		if event["error"] != nil || kind == "error" || kind == "response.failed" || kind == "response.incomplete" {
 			return animationPayloadError(event, "上游报告生成失败或内容截断")
@@ -157,13 +167,19 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 		switch path {
 		case "/v1/responses":
 			if kind == "response.output_text.delta" {
-				output.WriteString(stringFieldRaw(event, "delta"))
+				if delta := stringFieldRaw(event, "delta"); delta != "" {
+					output.WriteString(delta)
+					if firstOutput != nil {
+						firstOutput()
+					}
+				}
 			}
 			if response, ok := event["response"].(map[string]any); ok {
+				usage.read(response)
 				if m := stringField(response, "model"); m != "" {
 					model = m
 				}
-				if kind == "response.completed" {
+				if kind == "response.completed" || kind == "response.done" {
 					text, _, err := animationPayload(response, path)
 					if err != nil {
 						return err
@@ -176,6 +192,7 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 			}
 		case "/v1/messages":
 			if message, ok := event["message"].(map[string]any); ok {
+				usage.read(message)
 				model = stringField(message, "model")
 			}
 			delta, _ := event["delta"].(map[string]any)
@@ -183,7 +200,12 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 				return errors.New("动画生成被截断，请更换模型后重试")
 			}
 			if kind == "content_block_delta" && stringField(delta, "type") == "text_delta" {
-				output.WriteString(stringFieldRaw(delta, "text"))
+				if text := stringFieldRaw(delta, "text"); text != "" {
+					output.WriteString(text)
+					if firstOutput != nil {
+						firstOutput()
+					}
+				}
 			}
 			if kind == "message_stop" {
 				completed = true
@@ -193,7 +215,12 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 			if len(choices) > 0 {
 				choice, _ := choices[0].(map[string]any)
 				delta, _ := choice["delta"].(map[string]any)
-				output.WriteString(stringFieldRaw(delta, "content"))
+				if content := stringFieldRaw(delta, "content"); content != "" {
+					output.WriteString(content)
+					if firstOutput != nil {
+						firstOutput()
+					}
+				}
 				reason := stringField(choice, "finish_reason")
 				if reason == "length" || reason == "content_filter" {
 					return errors.New("动画生成被截断或拦截，请更换模型后重试")
@@ -208,24 +235,43 @@ func animationStream(reader io.Reader, path string) (string, string, error) {
 		}
 		return nil
 	}
-	for scanner.Scan() {
+	for {
+		line, readErr := buffered.ReadString('\n')
+		if len(line) == 0 && readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return "", "", animationReadError(readErr)
+		}
 		if limited.N <= 0 {
 			return "", "", errors.New("动画检测响应过大，请更换模型后重试")
 		}
-		line := strings.TrimSuffix(scanner.Text(), "\r")
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		if line == "" {
 			if err := process(); err != nil {
 				return "", "", err
 			}
-			if completed {
+			if completed && buffered.Buffered() == 0 {
 				return output.String(), model, nil
 			}
 		} else if strings.HasPrefix(line, "data:") {
 			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			value := strings.Join(data, "\n")
+			if path != "/v1/chat/completions" && (value == "[DONE]" || json.Valid([]byte(value))) {
+				if err := process(); err != nil {
+					return "", "", err
+				}
+				if completed {
+					return output.String(), model, nil
+				}
+			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", "", animationReadError(err)
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return "", "", animationReadError(readErr)
+		}
 	}
 	if err := process(); err != nil {
 		return "", "", err

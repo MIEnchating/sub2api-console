@@ -1,5 +1,5 @@
 import { useQueries } from "@tanstack/react-query";
-import { useState, type ReactElement } from "react";
+import { useId, useState, type ReactElement } from "react";
 import { Controller, useFormState, useWatch, type UseFormReturn } from "react-hook-form";
 import { api } from "@/api";
 import { FieldError } from "@/components/field-error";
@@ -15,6 +15,11 @@ export function AnimationModelSettings(props: {
   form: UseFormReturn<AnimationForm>;
   pending: boolean;
 }): ReactElement {
+  const id = useId();
+  const modelID = id + "-model";
+  const modelErrorID = id + "-model-error";
+  const timeoutID = id + "-timeout";
+  const timeoutErrorID = id + "-timeout-error";
   const selected = useWatch({ control: props.form.control, name: "account_ids", exact: true });
   const state = useFormState({
     control: props.form.control,
@@ -57,8 +62,8 @@ export function AnimationModelSettings(props: {
         className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
       >
         <label
-          id="animation-unified-model-label"
-          htmlFor="animation-unified-model"
+          id={modelID + "-label"}
+          htmlFor={modelID}
           className="shrink-0 whitespace-nowrap text-xs font-medium"
         >
           检测模型
@@ -70,8 +75,8 @@ export function AnimationModelSettings(props: {
             render={({ field }) => (
               <SuggestionInput
                 className="flex-1"
-                id="animation-unified-model"
-                aria-labelledby="animation-unified-model-label"
+                id={modelID}
+                aria-labelledby={modelID + "-label"}
                 ref={field.ref}
                 name={field.name}
                 value={field.value}
@@ -82,9 +87,7 @@ export function AnimationModelSettings(props: {
                 placeholder="输入模型 ID，或获取共同模型"
                 emptyText={ready ? "所选账号暂无共同模型" : "尚未获取共同模型"}
                 aria-invalid={!!state.errors.unified_model}
-                aria-describedby={
-                  state.errors.unified_model ? "animation-unified-model-error" : undefined
-                }
+                aria-describedby={state.errors.unified_model ? modelErrorID : undefined}
               />
             )}
           />
@@ -123,7 +126,7 @@ export function AnimationModelSettings(props: {
         {state.errors.unified_model ? (
           <FieldError
             className="col-start-2"
-            id="animation-unified-model-error"
+            id={modelErrorID}
             message={state.errors.unified_model.message}
           />
         ) : null}
@@ -133,26 +136,23 @@ export function AnimationModelSettings(props: {
         aria-label="请求超时设置"
         className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5"
       >
-        <label
-          htmlFor="animation-timeout"
-          className="shrink-0 whitespace-nowrap text-xs font-medium"
-        >
+        <label htmlFor={timeoutID} className="shrink-0 whitespace-nowrap text-xs font-medium">
           请求超时（秒）
         </label>
         <Input
           className="w-full"
-          id="animation-timeout"
+          id={timeoutID}
           type="number"
           min={5}
           max={120}
           {...props.form.register("timeout_seconds", { valueAsNumber: true })}
           disabled={props.pending}
           aria-invalid={!!state.errors.timeout_seconds}
-          aria-describedby={state.errors.timeout_seconds ? "animation-timeout-error" : undefined}
+          aria-describedby={state.errors.timeout_seconds ? timeoutErrorID : undefined}
         />
         <FieldError
           className="col-start-2"
-          id="animation-timeout-error"
+          id={timeoutErrorID}
           message={state.errors.timeout_seconds?.message}
         />
       </div>

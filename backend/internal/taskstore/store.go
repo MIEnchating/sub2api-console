@@ -47,6 +47,7 @@ var validStatuses = map[string]struct{}{
 }
 
 type Task struct {
+	Recovery  *Recovery      `json:"-"`
 	ID        string         `json:"id"`
 	Skill     string         `json:"skill"`
 	Operation string         `json:"operation"`
@@ -88,6 +89,7 @@ func Open(path string) (*Store, error) {
 		return nil, errors.Join(err, db.Close())
 	}
 	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS task_recovery (task_id TEXT PRIMARY KEY, payload TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_updated_at ON tasks(updated_at DESC,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_status_updated_at ON tasks(status,updated_at,id)`,
 		`CREATE INDEX IF NOT EXISTS ix_tasks_skill_updated_at ON tasks(skill,updated_at DESC,id)`,
@@ -172,7 +174,22 @@ func (s *Store) Save(ctx context.Context, task Task) error {
 		}
 		return fmt.Errorf("%w：%s", ErrTaskTerminal, task.ID)
 	}
+	if task.Recovery != nil && activeTaskStatus(task.Status) {
+		raw, err := json.Marshal(task.Recovery)
+		if err != nil {
+			return err
+		}
+		if len(raw) > maximumTaskResultBytes {
+			return errors.New("任务恢复参数过大")
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO task_recovery(task_id,payload) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET payload=excluded.payload`, task.ID, string(raw)); err != nil {
+			return err
+		}
+	}
 	if !activeTaskStatus(task.Status) {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_recovery WHERE task_id=?`, task.ID); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM active_task_operations WHERE task_id=?`, task.ID); err != nil {
 			return err
 		}
@@ -296,7 +313,10 @@ func (s *Store) ListConsoleSummaries(ctx context.Context, limit *int) ([]Task, e
 	query := `SELECT id,skill,operation,status,progress,message,` +
 		taskRunKeySQL + `,` + taskObjectSQL +
 		`,created_at,updated_at FROM tasks AS visible
-		WHERE COALESCE(` + taskSystemInfoSQL + `,0)=1 OR (
+		WHERE COALESCE(` + taskSystemInfoSQL + `,0)=1 OR visible.operation IN (
+			'account-model-animation','account-model-precheck','account-model-combined',
+			'managed-model-detection','account-terminal-continuity'
+		) OR (
 			visible.operation='active-probe' AND json_valid(visible.result_json) AND
 			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.platform') AS TEXT),''))<>'' AND
 			TRIM(COALESCE(CAST(json_extract(visible.result_json,'$.model') AS TEXT),''))<>''
@@ -418,8 +438,8 @@ func (s *Store) recoverInterruptedBefore(ctx context.Context, cutoff time.Time) 
 			'items',json(COALESCE((SELECT json_group_array(CASE WHEN json_extract(value,'$.status') IN ('queued','running')
 			THEN json_set(value,'$.status','cancelled','$.message','原授权已中断，请重新授权') ELSE value END)
 			FROM json_each(result_json,'$.items')), '[]')))
-		ELSE '{"error":"进程重启导致任务中断","interrupted":true}' END,updated_at=?
-		WHERE status IN ('queued','running','waiting_input')`
+		ELSE json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.error','进程重启导致任务中断，缺少安全恢复参数，请重新提交','$.interrupted',json('true')) END,updated_at=?
+		WHERE status IN ('queued','running','waiting_input') AND id NOT IN (SELECT task_id FROM task_recovery)`
 	args := []any{now}
 	if !cutoff.IsZero() {
 		query += ` AND updated_at < ?`

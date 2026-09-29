@@ -8,7 +8,8 @@ import { PageHeading } from "@/components/page-heading";
 import { PageLayout } from "@/components/page-layout";
 import { QueryErrorToast } from "@/components/query-error-toast";
 import { RefreshButton } from "@/components/refresh-button";
-import { activeTaskStatuses } from "../constants";
+import { DetectionTaskDetails } from "@/features/model-check/components/detection-task-details";
+import { activeTaskStatuses, isModelDetectionTask } from "../constants";
 import { SystemResources } from "./system-resources";
 import { TaskDetailsDialog } from "./task-details-dialog";
 import { TaskTable } from "./task-table";
@@ -17,7 +18,7 @@ import { TaskToolbar, type TaskListGroup } from "./task-toolbar";
 export function SystemInfoPage(): ReactElement {
   const [statusFilter, setStatusFilter] = useState<TaskSummary["status"] | null>(null);
   const [group, setGroup] = useState<TaskListGroup>("active");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TaskSummary | null>(null);
   const tasks = useQuery({
     queryKey: ["tasks"],
     queryFn: () => api.tasks(20),
@@ -105,16 +106,20 @@ export function SystemInfoPage(): ReactElement {
               refreshing={tasks.isFetching}
               onRetry={() => void tasks.refetch()}
               onClearFilter={() => setStatusFilter(null)}
-              onSelect={setSelectedTaskId}
+              onSelect={(id) => setSelectedTask(tasks.data?.find((task) => task.id === id) ?? null)}
             />
           </div>
         </DataTablePanel>
       </div>
-      <TaskDetailsDialog
-        taskId={selectedTaskId}
-        accountNames={accountNames}
-        onClose={() => setSelectedTaskId(null)}
-      />
+      {selectedTask && isModelDetectionTask(selectedTask.operation) ? (
+        <DetectionTaskDetails id={selectedTask.id} onClose={() => setSelectedTask(null)} />
+      ) : (
+        <TaskDetailsDialog
+          taskId={selectedTask?.id ?? null}
+          accountNames={accountNames}
+          onClose={() => setSelectedTask(null)}
+        />
+      )}
     </PageLayout>
   );
 }

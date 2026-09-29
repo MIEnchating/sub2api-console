@@ -57,6 +57,7 @@ type PendingOnboarding struct {
 	LocalGroupIDs        []string
 	Multiplier           string
 	IntentHash           string
+	FrozenIntentJSON     string
 	Reason               string
 	KeyCommitUnknown     bool
 	AccountCommitUnknown bool
@@ -164,7 +165,7 @@ func (s *Store) PendingOnboarding(ctx context.Context, host, upstreamGroupID str
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT p.operation_id,p.upstream_id,p.upstream_host,p.upstream_type,p.upstream_key_id,p.upstream_key_name,p.upstream_account_id,
-		p.upstream_group_id,p.upstream_group_name,p.local_group_id,p.local_group_name,p.local_group_ids_json,p.multiplier,p.intent_hash,p.reason,
+		p.upstream_group_id,p.upstream_group_name,p.local_group_id,p.local_group_name,p.local_group_ids_json,p.multiplier,p.intent_hash,p.frozen_intent_json,p.reason,
 		p.key_commit_unknown,p.account_commit_unknown,p.created_at,p.updated_at
 		FROM onboarding_pending p LEFT JOIN upstream_identity_hosts h ON h.host=p.upstream_host
 		WHERE (p.upstream_id=? OR (p.upstream_id='' AND h.upstream_id=?)) AND p.upstream_group_id=?
@@ -182,7 +183,7 @@ func (s *Store) PendingOnboarding(ctx context.Context, host, upstreamGroupID str
 		if err := rows.Scan(
 			&value.OperationID, &value.UpstreamID, &value.UpstreamHost, &value.UpstreamType, &value.UpstreamKeyID, &keyName, &value.UpstreamAccountID,
 			&value.UpstreamGroupID, &value.UpstreamGroupName, &value.LocalGroupID, &value.LocalGroupName, &storedSelection,
-			&value.Multiplier, &value.IntentHash, &value.Reason, &value.KeyCommitUnknown, &value.AccountCommitUnknown, &value.CreatedAt, &value.UpdatedAt,
+			&value.Multiplier, &value.IntentHash, &value.FrozenIntentJSON, &value.Reason, &value.KeyCommitUnknown, &value.AccountCommitUnknown, &value.CreatedAt, &value.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -255,15 +256,16 @@ func (s *Store) SavePendingOnboarding(ctx context.Context, value PendingOnboardi
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO onboarding_pending(operation_id,upstream_id,upstream_host,upstream_type,
 		upstream_key_id,upstream_key_name,upstream_account_id,upstream_group_id,upstream_group_name,local_group_id,local_group_name,
-		local_group_ids_json,multiplier,intent_hash,reason,key_commit_unknown,account_commit_unknown,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		local_group_ids_json,multiplier,intent_hash,frozen_intent_json,reason,key_commit_unknown,account_commit_unknown,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(operation_id) DO UPDATE SET upstream_key_id=excluded.upstream_key_id,
 		upstream_key_name=excluded.upstream_key_name,upstream_account_id=excluded.upstream_account_id,reason=excluded.reason,
 		local_group_ids_json=CASE WHEN onboarding_pending.local_group_ids_json='' THEN excluded.local_group_ids_json ELSE onboarding_pending.local_group_ids_json END,
+		frozen_intent_json=CASE WHEN onboarding_pending.frozen_intent_json='' THEN excluded.frozen_intent_json ELSE onboarding_pending.frozen_intent_json END,
 		key_commit_unknown=excluded.key_commit_unknown,account_commit_unknown=excluded.account_commit_unknown,
 		updated_at=excluded.updated_at`,
 		value.OperationID, upstreamID, canonicalHost(value.UpstreamHost), strings.TrimSpace(value.UpstreamType), value.UpstreamKeyID,
 		managementNullableString(value.UpstreamKeyName), value.UpstreamAccountID, value.UpstreamGroupID, value.UpstreamGroupName, value.LocalGroupID,
-		value.LocalGroupName, selectionJSON, value.Multiplier, value.IntentHash, safeOnboardingReason(value.Reason), value.KeyCommitUnknown,
+		value.LocalGroupName, selectionJSON, value.Multiplier, value.IntentHash, strings.TrimSpace(value.FrozenIntentJSON), safeOnboardingReason(value.Reason), value.KeyCommitUnknown,
 		value.AccountCommitUnknown, value.CreatedAt, now)
 	return err
 }

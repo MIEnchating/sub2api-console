@@ -49,7 +49,7 @@ func TestStreamCapacityFailureUsesSemanticStatusAndConfiguredRetry(t *testing.T)
 				attempt := attempts.Add(1)
 				w.Header().Set("Content-Type", "text/event-stream")
 				if scenario.retry && attempt == 2 {
-					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 					return
 				}
 				_, _ = w.Write([]byte("data: " + scenario.event + "\n\n"))

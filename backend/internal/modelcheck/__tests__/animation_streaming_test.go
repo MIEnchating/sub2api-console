@@ -14,6 +14,8 @@ import (
 func TestAnimationCompletesOnTerminalEventWithoutWaitingForConnectionClose(t *testing.T) {
 	for _, tc := range []struct{ name, platform, path, body string }{
 		{"responses", "openai", "/v1/responses", fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n", fixtureSVG)},
+		{"responses done", "openai", "/v1/responses", fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\ndata: {\"type\":\"response.done\",\"response\":{\"status\":\"completed\"}}\n\n", fixtureSVG)},
+		{"responses done without separator", "openai", "/v1/responses", fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\ndata: {\"type\":\"response.done\",\"response\":{\"status\":\"completed\"}}\n", fixtureSVG)},
 		{"chat", "openai", "/v1/chat/completions", fmt.Sprintf("data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}]}\n\n", fixtureSVG)},
 		{"anthropic", "anthropic", "/v1/messages", fmt.Sprintf("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":%q}}\n\ndata: {\"type\":\"message_stop\"}\n\n", fixtureSVG)},
 	} {

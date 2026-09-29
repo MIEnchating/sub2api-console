@@ -246,6 +246,11 @@ func normalizePolicyPatch(ctx context.Context, tx *sql.Tx, current, patch map[st
 					replacement[field] = value
 				}
 			}
+			if section == "scope" {
+				if value, present := existing[groupLockedAccountIDs]; present {
+					replacement[groupLockedAccountIDs] = value
+				}
+			}
 			for field, value := range normalizedIncoming {
 				replacement[field] = value
 			}

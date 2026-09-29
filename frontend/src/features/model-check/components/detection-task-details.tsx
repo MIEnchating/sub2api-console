@@ -22,10 +22,11 @@ import { collectAnimationTasks } from "../lib/animation-task-results";
 import { terminalContinuityResults } from "../lib/terminal-continuity";
 import { detectionAccountRows, detectionResultGroups } from "../lib/detection-task-results";
 import { DetectionResultCard } from "./detection-result-card";
+import { detectionTaskMessage } from "../lib/detection-task-outcome";
 
 export function DetectionTaskDetails(props: { id: string; onClose: () => void }): ReactElement {
   const query = useQuery({
-    queryKey: ["model-detection-tasks", "run", props.id],
+    queryKey: ["task", props.id],
     queryFn: () => api.task(props.id),
     refetchInterval: taskPollInterval,
   });
@@ -45,6 +46,22 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
     configuration && typeof configuration === "object"
       ? (configuration as Record<string, unknown>)
       : {};
+  const managed = task?.operation === "managed-model-detection";
+  const mode = task?.result.mode;
+  const animation = managed
+    ? config.animation !== false
+    : task?.operation === "account-model-animation" ||
+      task?.operation === "account-model-combined" ||
+      mode === "both";
+  const precheck = managed
+    ? config.precheck === true
+    : task?.operation === "account-model-precheck" ||
+      task?.operation === "account-model-combined" ||
+      mode === "precheck" ||
+      mode === "both";
+  const terminal = managed
+    ? config.terminal === true
+    : task?.operation === "account-terminal-continuity";
   const completed = typeof task?.result.completed === "number" ? task.result.completed : 0;
 
   return (
@@ -64,7 +81,7 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
           <DialogDescription>
             {typeof task?.result.detection_task_name === "string"
               ? task.result.detection_task_name
-              : "按所选分组查看本次检测结果"}
+              : "查看本次检测进度和账号结果"}
           </DialogDescription>
           {active && (
             <div className="rounded-lg border bg-muted/20 p-3">
@@ -83,7 +100,9 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
             </div>
           )}
           {task && !active && (
-            <p className="text-sm text-muted-foreground wrap-anywhere">{task.message}</p>
+            <p className="text-sm text-muted-foreground wrap-anywhere">
+              {detectionTaskMessage(task)}
+            </p>
           )}
         </DialogHeader>
         <DialogBody
@@ -120,7 +139,9 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
                     value={group.id}
                     className="flex shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 py-2 text-sm whitespace-nowrap data-[active]:border-primary data-[active]:text-primary focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <span className="max-w-56 truncate">{group.name}</span>
+                    <span className="max-w-56 truncate">
+                      {!managed && group.id === "__ungrouped" ? "检测账号" : group.name}
+                    </span>
                     <span className="text-xs text-muted-foreground">{group.rows.length}</span>
                   </Tabs.Tab>
                 ))}
@@ -133,13 +154,7 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
                   .filter((group) => group.id === activeGroupId)
                   .map((group) => (
                     <section key={group.id} aria-label={`分组 ${group.name}`} className="space-y-3">
-                      <header className="flex min-w-0 items-start justify-between gap-3 border-b pb-2">
-                        <h3 className="min-w-0 font-medium wrap-anywhere">{group.name}</h3>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {group.rows.length} 个账号
-                        </span>
-                      </header>
-                      {group.id === "__ungrouped" && (
+                      {managed && group.id === "__ungrouped" && (
                         <p className="text-xs text-muted-foreground">
                           旧记录未保存执行时的分组归属，保留原结果供查看。
                         </p>
@@ -153,8 +168,10 @@ export function DetectionTaskDetails(props: { id: string; onClose: () => void })
                             key={row.id}
                             row={row}
                             active={active}
-                            precheck={config.precheck === true}
-                            terminal={config.terminal === true}
+                            task={task}
+                            animation={animation}
+                            precheck={precheck}
+                            terminal={terminal}
                           />
                         ))}
                       </div>

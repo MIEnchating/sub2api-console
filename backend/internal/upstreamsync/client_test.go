@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -673,8 +673,11 @@ func TestCreateKeyTreatsUnreadableServerErrorAsCommitUnknown(t *testing.T) {
 		Headers: map[string]string{}, Cookies: map[string]string{},
 	}, "account-onboarding-01234567", "6", true)
 	var unknown *CommitUnknownError
-	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" || transport.calls != 3 {
-		t.Fatalf("err=%v unknown=%#v calls=%d", err, unknown, transport.calls)
+	if !errors.As(err, &unknown) || unknown.Marker != "account-onboarding-01234567" {
+		t.Fatalf("err=%v unknown=%#v", err, unknown)
+	}
+	if !slices.Equal(transport.requests, []string{"POST /api/v1/keys", "GET /api/v1/keys"}) {
+		t.Fatalf("uncertain create must reconcile once without falling back on read failure: %v", transport.requests)
 	}
 }
 
@@ -790,16 +793,10 @@ func TestDeleteKeyAcceptsNoContentResponse(t *testing.T) {
 	}
 }
 
-type createStatusReadFailureTransport struct{ calls int }
+type createStatusReadFailureTransport struct{ requests []string }
 
-func (transport *createStatusReadFailureTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	transport.calls++
-	if transport.calls == 1 {
-		return &http.Response{
-			StatusCode: http.StatusOK, Header: make(http.Header),
-			Body: io.NopCloser(strings.NewReader(`{"code":0,"data":{"items":[],"total":0}}`)),
-		}, nil
-	}
+func (transport *createStatusReadFailureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.requests = append(transport.requests, request.Method+" "+request.URL.Path)
 	return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: make(http.Header), Body: &readFailureBody{}}, nil
 }
 

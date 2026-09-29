@@ -122,7 +122,7 @@ func TestBatchReportsPartialSuccessAndRedactsHTTPFailure(t *testing.T) {
 	f := setup(t, 2, "openai", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["model"] == "denied-model" {
+		if strings.HasSuffix(r.Header.Get("X-Request-ID"), "-2") {
 			w.WriteHeader(403)
 			_, _ = fmt.Fprintf(w, `{"error":{"message":"invalid key %s"}}`, fixtureSecret)
 			return

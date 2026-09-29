@@ -27,6 +27,10 @@ it("成功结果以图片隔离展示 SVG，并提供模型、耗时和完成时
     `data:image/svg+xml;charset=utf-8,${encodeURIComponent(result.svg!)}`,
   );
   expect(image).toHaveClass("w-full", "object-contain");
+  expect(screen.getByRole("button", { name: /放大查看/ }).parentElement).toHaveClass(
+    "min-h-[180px]",
+    "shrink-0",
+  );
   expect(view.container.querySelector("circle")).not.toBeInTheDocument();
   expect(screen.getByText(/返回模型 returned-model/)).toBeVisible();
   expect(screen.getByText("模型不一致")).toBeVisible();

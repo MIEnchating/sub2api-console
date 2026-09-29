@@ -45,7 +45,7 @@ func (s *Service) creationGlobalSnapshot(ctx context.Context, limit int64) (crea
 	return snapshot, nil
 }
 
-func (s *Service) applyCreationGlobalPreview(ctx context.Context, requests []Request, result []ConcurrencyAllocation) ([]ConcurrencyAllocation, error) {
+func (s *Service) applyCreationGlobalPreview(ctx context.Context, requests []Request, result []ConcurrencyAllocation, pendingAccountIDs []string) ([]ConcurrencyAllocation, error) {
 	var limit *int64
 	constrained := map[int]bool{}
 	for i, request := range requests {
@@ -74,7 +74,7 @@ func (s *Service) applyCreationGlobalPreview(ctx context.Context, requests []Req
 	if err != nil {
 		return nil, err
 	}
-	remaining, err := creationRemaining(snapshot, "")
+	remaining, err := creationRemaining(snapshot, pendingAccountIDs...)
 	if err != nil {
 		return nil, err
 	}

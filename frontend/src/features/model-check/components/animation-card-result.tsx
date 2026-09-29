@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { AnimationActivity } from "../lib/animation-task-results";
+import { animationActivityLabel, type AnimationActivity } from "../lib/animation-task-results";
 import { AnimationPreview } from "./animation-preview";
 import { AnimationResultDetails } from "./animation-result-details";
 
@@ -25,14 +25,14 @@ export function AnimationCardResult(props: {
   onRetry: (target: AnimationTarget) => void;
 }): ReactElement {
   const result = props.result;
-  const success = result.status === "succeeded" && Boolean(result.svg);
+  const success = result.status === "succeeded" && Boolean(result.html || result.svg);
   const modelMismatch = Boolean(result.response_model && result.response_model !== result.model);
   const modelLabel = modelMismatch
     ? `${result.model} · 返回模型 ${result.response_model}`
     : result.model;
   let preview: ReactElement;
   if (props.activity) {
-    const label = props.activity.status === "starting" ? "正在启动检测" : "生成中，等待动画结果";
+    const label = animationActivityLabel(props.activity.status);
     preview = (
       <ContentLoading compact label={label} ariaLabel={label} className="h-full justify-center" />
     );
@@ -59,33 +59,37 @@ export function AnimationCardResult(props: {
         {preview}
       </div>
       <div className="flex h-14 min-w-0 items-center gap-2 px-3">
-        <div className="min-w-0 flex-1 space-y-0.5 text-xs">
-          <Tooltip>
-            <TooltipTrigger render={<div className="flex min-w-0 items-center gap-1.5" />}>
-              <p className="min-w-0 truncate font-medium">{modelLabel}</p>
-              {modelMismatch ? (
-                <Badge variant="destructive" className="shrink-0 px-1.5 py-0 text-[10px]">
-                  模型不一致
-                </Badge>
-              ) : null}
-            </TooltipTrigger>
-            <TooltipContent>{modelLabel}</TooltipContent>
-          </Tooltip>
-          <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
-            <span
-              className={cn(
-                "shrink-0",
-                success ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
-              )}
-            >
-              {success ? "成功" : "失败"}
-            </span>
-            <time className="truncate" dateTime={result.completed_at}>
-              {timeFormat.format(new Date(result.completed_at))}
-            </time>
-            <span className="ml-auto shrink-0">{(result.duration_ms / 1000).toFixed(1)} 秒</span>
+        {props.activity ? (
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">本轮结果将在检测完成后显示</p>
+        ) : (
+          <div className="min-w-0 flex-1 space-y-0.5 text-xs">
+            <Tooltip>
+              <TooltipTrigger render={<div className="flex min-w-0 items-center gap-1.5" />}>
+                <p className="min-w-0 truncate font-medium">{modelLabel}</p>
+                {modelMismatch ? (
+                  <Badge variant="destructive" className="shrink-0 px-1.5 py-0 text-[10px]">
+                    模型不一致
+                  </Badge>
+                ) : null}
+              </TooltipTrigger>
+              <TooltipContent>{modelLabel}</TooltipContent>
+            </Tooltip>
+            <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
+              <span
+                className={cn(
+                  "shrink-0",
+                  success ? "text-emerald-700 dark:text-emerald-400" : "text-destructive",
+                )}
+              >
+                {success ? "成功" : "失败"}
+              </span>
+              <time className="truncate" dateTime={result.completed_at}>
+                {timeFormat.format(new Date(result.completed_at))}
+              </time>
+              <span className="ml-auto shrink-0">{(result.duration_ms / 1000).toFixed(1)} 秒</span>
+            </div>
           </div>
-        </div>
+        )}
         <div className="flex shrink-0 items-center gap-1">
           <Tooltip>
             <TooltipTrigger
@@ -107,7 +111,7 @@ export function AnimationCardResult(props: {
             </TooltipTrigger>
             <TooltipContent>使用 {result.model} 重新检测，将产生 API 用量</TooltipContent>
           </Tooltip>
-          <AnimationResultDetails result={result} />
+          {!props.activity ? <AnimationResultDetails result={result} /> : null}
         </div>
       </div>
     </div>

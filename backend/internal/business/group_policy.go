@@ -20,6 +20,7 @@ var groupPolicyFields = map[string]struct{}{
 	"enabled": {}, "strategy": {}, "min_pool_size": {}, "weight_budget": {}, "balanced_price_ratio": {},
 	"breaker_enabled": {}, "recovery_enabled": {}, "weights_enabled": {}, "scaling_enabled": {},
 	"probe_enabled": {}, "probe_interval_seconds": {}, "probe_model": {},
+	"animation_enabled": {}, "animation_pass_multiplier": {}, "animation_fail_multiplier": {}, "animation_failure_action": {},
 }
 
 func (s *Store) UpdateGroupPolicy(ctx context.Context, groupID string, raw map[string]any, actor string) (GroupStatus, error) {
@@ -38,9 +39,24 @@ func (s *Store) UpdateGroupPolicy(ctx context.Context, groupID string, raw map[s
 	}
 	missing := []string{}
 	for field := range groupPolicyFields {
+		if field == "animation_enabled" || field == "animation_pass_multiplier" || field == "animation_fail_multiplier" || field == "animation_failure_action" {
+			continue
+		}
 		if _, present := payload[field]; !present {
 			missing = append(missing, field)
 		}
+	}
+	if _, ok := payload["animation_enabled"]; !ok {
+		payload["animation_enabled"] = false
+	}
+	if _, ok := payload["animation_pass_multiplier"]; !ok {
+		payload["animation_pass_multiplier"] = float64(1)
+	}
+	if _, ok := payload["animation_fail_multiplier"]; !ok {
+		payload["animation_fail_multiplier"] = float64(1)
+	}
+	if _, ok := payload["animation_failure_action"]; !ok {
+		payload["animation_failure_action"] = "ignore"
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
@@ -216,7 +232,7 @@ func (s *Store) SetGroupExcluded(ctx context.Context, groupID string, excluded b
 
 func normalizeGroupPolicyBinding(payload map[string]any) (map[string]any, error) {
 	result := map[string]any{}
-	for _, field := range []string{"enabled", "breaker_enabled", "recovery_enabled", "weights_enabled", "scaling_enabled", "probe_enabled"} {
+	for _, field := range []string{"enabled", "breaker_enabled", "recovery_enabled", "weights_enabled", "scaling_enabled", "probe_enabled", "animation_enabled"} {
 		value, ok := payload[field].(bool)
 		if !ok {
 			return nil, fmt.Errorf("分组策略字段 %s 必须是布尔值", field)
@@ -258,6 +274,18 @@ func normalizeGroupPolicyBinding(payload map[string]any) (map[string]any, error)
 		}
 	}
 	result["probe_model"] = model
+	for field, bounds := range map[string][2]float64{"animation_pass_multiplier": {0, 10}, "animation_fail_multiplier": {0, 10}} {
+		value, ok := finiteNumber(payload[field])
+		if !ok || value < bounds[0] || value > bounds[1] {
+			return nil, fmt.Errorf("分组策略字段 %s 必须在 %.0f 到 %.0f 之间", field, bounds[0], bounds[1])
+		}
+		result[field] = value
+	}
+	action, ok := payload["animation_failure_action"].(string)
+	if !ok || (action != "ignore" && action != "degrade" && action != "fuse") {
+		return nil, fmt.Errorf("分组策略字段 animation_failure_action 无效")
+	}
+	result["animation_failure_action"] = action
 	return result, nil
 }
 

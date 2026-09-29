@@ -125,6 +125,16 @@ test("动画页只显示动画结果，卡片和预览保持对齐", async ({ pa
   expect(firstBox.height).toBeLessThanOrEqual(450);
   for (const card of await cards.all()) {
     const box = (await card.boundingBox())!;
+    await expect(card.locator("header")).toHaveCSS("height", "72px");
+    const metadata = card.getByRole("group", { name: "账号信息", exact: true });
+    await expect(metadata).toHaveCSS("height", "20px");
+    const rowBox = (await metadata.boundingBox())!;
+    for (const item of await metadata.locator(":scope > *").all()) {
+      const itemBox = (await item.boundingBox())!;
+      expect(itemBox.y).toBeGreaterThanOrEqual(rowBox.y);
+      expect(itemBox.y + itemBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
+      expect(itemBox.x + itemBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width);
+    }
     await expect(card.getByRole("region", { name: "前置检测结果" })).toHaveCount(0);
     const preview = card.getByRole("group", { name: "动画预览区域", exact: true });
     await expect(preview).toHaveCSS("height", "180px");
@@ -155,9 +165,9 @@ test("动画页只显示动画结果，卡片和预览保持对齐", async ({ pa
     await expect(cards.first()).toBeInViewport({ ratio: 1 });
     const settings = page.getByRole("group", { name: "动画检测设置", exact: true });
     expect((await settings.boundingBox())!.height).toBeLessThanOrEqual(168);
-    expect(
-      (await page.getByRole("combobox", { name: "检测模型", exact: true }).boundingBox())!.width,
-    ).toBeLessThanOrEqual(420);
+    await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+      "gpt-6-astra",
+    );
   }
   await page.screenshot({ path: test.info().outputPath("card-preview.png") });
   if (page.viewportSize()!.width < 768) {
@@ -188,14 +198,16 @@ test("成功卡片重测沿用原模型，启动与完成时卡片高度稳定�
     await route.fulfill({ json: current });
   });
   await page.route("**/api/tasks/retest-card", (route) => route.fulfill({ json: current }));
-  await page.getByRole("combobox", { name: "检测模型", exact: true }).fill("different-model");
+  await expect(page.getByRole("combobox", { name: "检测模型", exact: true })).toHaveValue(
+    "gpt-6-astra",
+  );
   await page.keyboard.press("Escape");
   const card = page.getByRole("article").first();
   const before = (await card.boundingBox())!;
   const retest = card.getByRole("button", { name: `重测 ${accounts[0].name}`, exact: true });
   await retest.focus();
   await page.keyboard.press("Enter");
-  await expect(card.getByRole("status", { name: "生成中，等待动画结果" })).toBeVisible();
+  await expect(card.getByRole("status", { name: "已开始请求，等待首字" })).toBeVisible();
   await expect(retest).toBeDisabled();
   expect(requests).toEqual([
     { targets: [{ account_id: "1", model: "gpt-6-astra" }], timeout_seconds: 120 },
@@ -285,7 +297,9 @@ test("前置检测自动计划独立保存，每天指定时间和题目在重�
   await dialog.getByRole("radio", { name: "每天定时" }).check();
   await dialog.getByLabel("每天检测时间（北京时间）").fill("09:30");
   await dialog.getByRole("checkbox", { name: "开启自动检测" }).check();
-  await dialog.getByRole("textbox", { name: "检测模型", exact: true }).fill("gpt-6-astra");
+  await expect(dialog.getByRole("textbox", { name: "检测模型", exact: true })).toHaveValue(
+    "gpt-6-astra",
+  );
   await dialog.getByRole("button", { name: "选择前置检测题目" }).click();
   const questions = page.getByRole("dialog", { name: "前置检测题目", exact: true });
   await expect(questions.getByRole("checkbox", { name: "糖果题", exact: true })).toBeChecked();

@@ -1,6 +1,5 @@
-import { Fragment, useId, useMemo, useState, type ReactElement } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
-import type { UpstreamGroupChange } from "@/api";
+import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactElement } from "react";
+import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { DataTablePanel } from "@/components/data-table/table-panel";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { Badge } from "@/components/ui/badge";
@@ -17,20 +16,37 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useClientPagination } from "@/hooks/use-client-pagination";
 import { aggregateGroupHistory, groupHistoryTime } from "../lib/group-history";
 import { upstreamRateLabels } from "../lib/upstream-rate-labels";
-import type { UpstreamGroupHistoryIdentity } from "./upstream-group-history";
+import {
+  UpstreamGroupHistoryAction,
+  latestHistoryGroupChanges,
+  type UpstreamGroupHistoryProps,
+} from "./upstream-group-history";
 
-export function UpstreamGroupHistoryOverview(props: {
-  rows: UpstreamGroupChange[];
-  upstreams: UpstreamGroupHistoryIdentity[];
-}): ReactElement {
+export function UpstreamGroupHistoryOverview(
+  props: UpstreamGroupHistoryProps & {
+    upstreams: NonNullable<UpstreamGroupHistoryProps["upstreams"]>;
+  },
+): ReactElement {
   const detailsID = useId();
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(
+    () => new Set(props.initialExpandedUpstreamID ? [props.initialExpandedUpstreamID] : []),
+  );
   const summaries = useMemo(() => aggregateGroupHistory(props.rows), [props.rows]);
+  const latestChanges = useMemo(() => latestHistoryGroupChanges(props.rows), [props.rows]);
   const upstreams = useMemo(
     () => new Map(props.upstreams.map((item) => [item.upstream_id, item])),
     [props.upstreams],
   );
   const pagination = useClientPagination(summaries);
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !props.initialExpandedUpstreamID || summaries.length === 0) return;
+    const index = summaries.findIndex(
+      (summary) => summary.upstreamID === props.initialExpandedUpstreamID,
+    );
+    if (index >= 0) pagination.setCurrentPage(Math.floor(index / pagination.pageSize) + 1);
+    restored.current = true;
+  }, [props.initialExpandedUpstreamID, summaries, pagination.pageSize, pagination.setCurrentPage]);
   function toggleUpstream(upstreamID: string): void {
     setExpanded((current) => {
       const next = new Set(current);
@@ -58,12 +74,16 @@ export function UpstreamGroupHistoryOverview(props: {
             <TableHead className="w-20">新增</TableHead>
             <TableHead className="w-20">删除</TableHead>
             <TableHead className="w-48">最近变化</TableHead>
+            {props.onClearUpstream && <TableHead className="w-28">操作</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
           {!summaries.length && (
             <TableRow>
-              <TableCell colSpan={5} className="text-muted-foreground h-32 text-center">
+              <TableCell
+                colSpan={props.onClearUpstream ? 6 : 5}
+                className="text-muted-foreground h-32 text-center"
+              >
                 暂无上游分组变化记录
               </TableCell>
             </TableRow>
@@ -128,10 +148,29 @@ export function UpstreamGroupHistoryOverview(props: {
                   <TableCell className="text-muted-foreground tabular-nums">
                     {groupHistoryTime(summary.latestAt)}
                   </TableCell>
+                  {props.onClearUpstream && (
+                    <TableCell overflowTooltip={false}>
+                      <Button
+                        variant="outline"
+                        aria-label={`清除 ${name} 的变化记录`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          props.onClearUpstream?.(summary.upstreamID, name);
+                        }}
+                      >
+                        <Trash2 aria-hidden="true" />
+                        清除变化
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
                 {open && (
                   <TableRow>
-                    <TableCell colSpan={5} overflowTooltip={false} className="whitespace-normal">
+                    <TableCell
+                      colSpan={props.onClearUpstream ? 6 : 5}
+                      overflowTooltip={false}
+                      className="whitespace-normal"
+                    >
                       <section
                         id={panelID}
                         aria-label={`${name} 的变化明细`}
@@ -141,11 +180,11 @@ export function UpstreamGroupHistoryOverview(props: {
                           {summary.changes.map((change) => (
                             <li
                               key={change.id}
-                              className="grid grid-cols-[12rem_4rem_minmax(0,1fr)] items-start gap-3 py-2 text-sm"
+                              className="grid grid-cols-[12rem_4rem_minmax(0,1fr)_auto] items-start gap-3 py-2 text-sm max-sm:grid-cols-[4rem_minmax(0,1fr)]"
                             >
                               <time
                                 dateTime={change.changed_at}
-                                className="text-muted-foreground tabular-nums"
+                                className="text-muted-foreground tabular-nums max-sm:col-span-2"
                               >
                                 {groupHistoryTime(change.changed_at)}
                               </time>
@@ -178,6 +217,16 @@ export function UpstreamGroupHistoryOverview(props: {
                                   </Tooltip>
                                 )}
                               </span>
+                              <div className="max-sm:col-span-2 empty:hidden">
+                                <UpstreamGroupHistoryAction
+                                  change={change}
+                                  latest={latestChanges.has(change.id)}
+                                  upstreamAvailable={Boolean(upstream?.host)}
+                                  bindingAuditItems={props.bindingAuditItems}
+                                  onAddAccount={props.onAddAccount}
+                                  onDeleteAccounts={props.onDeleteAccounts}
+                                />
+                              </div>
                             </li>
                           ))}
                         </ul>

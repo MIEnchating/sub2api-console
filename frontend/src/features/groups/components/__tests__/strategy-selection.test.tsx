@@ -23,6 +23,10 @@ function Editor() {
     probe_enabled: true,
     probe_interval_seconds: 300,
     probe_model: "saved-model",
+    animation_enabled: false,
+    animation_pass_multiplier: 1,
+    animation_fail_multiplier: 1,
+    animation_failure_action: "ignore",
   });
   return <GroupPolicyEditorFields value={value} onChange={setValue} globalStrategy="speed_first" />;
 }

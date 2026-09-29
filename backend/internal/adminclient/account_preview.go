@@ -22,10 +22,23 @@ type AccountPreviewRequest struct {
 }
 
 type AccountPreviewResult struct {
-	AccountID json.Number `json:"account_id"`
-	RequestID string      `json:"request_id"`
-	Model     string      `json:"model"`
-	Text      string      `json:"text"`
+	AccountID json.Number          `json:"account_id"`
+	RequestID string               `json:"request_id"`
+	Model     string               `json:"model"`
+	Text      string               `json:"text"`
+	Usage     *AccountPreviewUsage `json:"usage,omitempty"`
+}
+
+type AccountPreviewUsage struct {
+	InputTokens         json.Number                        `json:"input_tokens,omitempty"`
+	OutputTokens        json.Number                        `json:"output_tokens,omitempty"`
+	TotalTokens         json.Number                        `json:"total_tokens,omitempty"`
+	ReasoningTokens     json.Number                        `json:"reasoning_tokens,omitempty"`
+	OutputTokensDetails *AccountPreviewOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+type AccountPreviewOutputTokensDetails struct {
+	ReasoningTokens json.Number `json:"reasoning_tokens,omitempty"`
 }
 
 // GenerateAccountPreview never falls back to the legacy account test endpoint:

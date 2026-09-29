@@ -64,3 +64,26 @@ it("透明动画使用浅色画布，深色主题下黑色线条仍清晰可见"
     "bg-slate-100",
   );
 });
+
+it("完整 HTML 预览保留原文，但沙箱和 CSP 均禁止脚本执行", () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const htmlResult: AnimationResult = {
+    ...result,
+    html: "<!doctype html><html><head></head><body><script>window.rendered = true</script><svg></svg></body></html>",
+    svg: undefined,
+  };
+  const { container } = render(
+    <AnimationAccountResult result={htmlResult} retryDisabled={false} onRetry={vi.fn()} />,
+  );
+  const iframe = container.querySelector("iframe");
+  expect(iframe).toHaveAttribute("sandbox", "");
+  expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("window.rendered"));
+  expect(iframe).toHaveAttribute("srcdoc", expect.stringContaining("script-src 'none'"));
+  vi.unstubAllGlobals();
+});

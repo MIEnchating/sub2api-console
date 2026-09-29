@@ -28,7 +28,20 @@ const taskStatusVariants: Record<TaskSummary["status"], StatusVariant> = {
   cancelled: "neutral",
 };
 
+const detectionOperationLabels: Record<string, string> = {
+  "account-model-animation": "动画检测",
+  "account-model-precheck": "前置检测",
+  "account-model-combined": "前置与动画检测",
+  "managed-model-detection": "分组检测任务",
+  "account-terminal-continuity": "终端续接检测",
+};
+
+export function isModelDetectionTask(operation: string): boolean {
+  return Object.hasOwn(detectionOperationLabels, operation);
+}
+
 const taskOperationLabels: Record<string, string> = {
+  ...detectionOperationLabels,
   "newapi-channel-models": "渠道模型批量维护",
   "active-probe": "主动探活",
   "automatic-inspection": "自动巡检",

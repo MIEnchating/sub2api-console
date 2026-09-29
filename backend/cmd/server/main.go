@@ -40,6 +40,8 @@ import (
 	"github.com/MIEnchating/sub2api-console/backend/internal/routingwrite"
 	"github.com/MIEnchating/sub2api-console/backend/internal/runtimepolicy"
 	"github.com/MIEnchating/sub2api-console/backend/internal/systeminfo"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskcontext"
+	"github.com/MIEnchating/sub2api-console/backend/internal/taskrecovery"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskrunner"
 	"github.com/MIEnchating/sub2api-console/backend/internal/tasksettings"
 	"github.com/MIEnchating/sub2api-console/backend/internal/taskstore"
@@ -108,7 +110,12 @@ func run() error {
 	} else if recovered > 0 {
 		log.Printf("已将 %d 个进程重启前未完成任务标记为失败", recovered)
 	}
-	serviceContext, cancelServices := context.WithCancel(context.Background())
+	pendingRecovery, err := taskStore.PendingRecovery(context.Background())
+	if err != nil {
+		return err
+	}
+	serviceContext, stopServices := context.WithCancelCause(context.Background())
+	cancelServices := func() { stopServices(taskcontext.ErrInterrupted) }
 	// Each task domain has its own capacity. A long running model check or
 	// inspection must not consume the slots needed by account operations,
 	// probes, synchronization, or the workbench.
@@ -146,7 +153,10 @@ func run() error {
 	newAPIChannelTasksRunner := newTaskRunner("newapi_channel")
 	liveTasks := newTaskRunner("live")
 	workbenchTasks := newTaskRunner("workbench")
+	// Recovery dispatch must not queue behind long-lived housekeeping loops.
+	recoveryTasks := taskrunner.NewBounded(serviceContext, 1)
 	taskGroups := []*taskrunner.Group{
+		recoveryTasks,
 		housekeepingTasks, notificationTargetTasks, alertTasksRunner, accountTasksRunner,
 		managementTasksRunner, pricingTasksRunner, probeTasksRunner, modelChecksRunner,
 		modelAnimationSchedulerRunner,
@@ -260,6 +270,7 @@ func run() error {
 	accountDeleteService.SetAuthResolver(authRecoveryService)
 	modelChecks.UseUpstreamAuthResolver(authRecoveryService)
 	accountWorkbench := accountworkbench.New(privateStore)
+	accountWorkbench.UseAccountGroupProtection(businessStore)
 	accountWorkbench.UseExecution(taskStore, workbenchTasks, modelChecks, filepath.Join(cfg.DataDir, "account-workbench-private"))
 	if err := accountWorkbench.Recover(serviceContext); err != nil {
 		return err
@@ -365,6 +376,22 @@ func run() error {
 	}()
 	manualInspections := inspection.NewManualService(inspectionScheduler, inspectionRunner, taskStore)
 	manualInspections.UseTaskRunner(inspectionTasksRunner)
+	recoveryHandlers := map[string]taskrecovery.Handler{
+		"account-rate-sync":           managementTasks.ResumeTask,
+		"automatic-inspection":        manualInspections.ResumeTask,
+		"manual-inspection":           manualInspections.ResumeTask,
+		"account-model-animation":     modelChecks.ResumeTask,
+		"account-model-precheck":      modelChecks.ResumeTask,
+		"account-model-combined":      modelChecks.ResumeTask,
+		"account-terminal-continuity": modelChecks.ResumeTask,
+		"managed-model-detection":     modelChecks.ResumeTask,
+	}
+	if len(pendingRecovery) > 0 {
+		log.Printf("准备恢复 %d 个中断的后台任务", len(pendingRecovery))
+		if err := recoveryTasks.Go(func(ctx context.Context) { taskrecovery.Run(ctx, taskStore, pendingRecovery, recoveryHandlers) }); err != nil {
+			return err
+		}
+	}
 	newAPIManagement := newapimanagement.New(
 		privateStore,
 		businessStore,

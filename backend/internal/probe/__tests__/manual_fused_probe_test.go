@@ -90,7 +90,7 @@ func TestManualProbeDiagnosesFusedAccountWithoutResumingScheduling(t *testing.T)
 						return
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
-					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\n"))
+					_, _ = w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"pong\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"))
 					return
 				}
 				t.Errorf("unexpected request, including any scheduling write: %s %s", r.Method, r.URL.Path)

@@ -10,8 +10,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { CustomAnimationForm } from "../lib/animation-schema";
 import { CustomAnimationModelField } from "./custom-animation-model-field";
+import type { CustomAnimationForm } from "../lib/animation-schema";
 
 const platforms = [
   { value: "openai", label: "OpenAI" },
@@ -22,7 +22,6 @@ const fields = [
   { name: "timeout_seconds", label: "请求超时（秒）", type: "number", placeholder: "120" },
   { name: "base_url", label: "Base URL", type: "url", placeholder: "https://api.example.com/v1" },
   { name: "api_key", label: "API Key", type: "password", placeholder: "输入 API Key" },
-  { name: "model", label: "检测模型", type: "text", placeholder: "输入模型 ID" },
 ] as const;
 
 export function CustomAnimationFields(props: {
@@ -33,7 +32,7 @@ export function CustomAnimationFields(props: {
   return (
     <fieldset
       disabled={props.disabled}
-      className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 xl:grid-cols-6"
+      className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 xl:grid-cols-[8rem_9rem_minmax(0,1fr)_minmax(0,1fr)_minmax(14rem,1.2fr)]"
     >
       <div className="min-w-0 space-y-1">
         <label htmlFor="custom-animation-platform" className="text-sm font-medium">
@@ -59,14 +58,6 @@ export function CustomAnimationFields(props: {
         />
       </div>
       {fields.map((field) => {
-        if (field.name === "model")
-          return (
-            <CustomAnimationModelField
-              key={field.name}
-              form={props.form}
-              disabled={props.disabled}
-            />
-          );
         const error = props.form.formState.errors[field.name];
         const id = `custom-animation-${field.name}`;
         return (
@@ -90,6 +81,7 @@ export function CustomAnimationFields(props: {
           </div>
         );
       })}
+      <CustomAnimationModelField form={props.form} disabled={props.disabled} />
     </fieldset>
   );
 }

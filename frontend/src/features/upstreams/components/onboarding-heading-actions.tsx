@@ -41,14 +41,20 @@ function UpstreamNavigationButton(props: {
 
 export function OnboardingHeadingActions(props: {
   onBack: () => void;
+  backLabel?: string;
   previousUpstream?: NavigationTarget | null;
   nextUpstream?: NavigationTarget | null;
 }) {
   return (
     <PageActions>
-      <Button type="button" variant="outline" aria-label="返回上游管理" onClick={props.onBack}>
+      <Button
+        type="button"
+        variant="outline"
+        aria-label={props.backLabel ?? "返回上游管理"}
+        onClick={props.onBack}
+      >
         <ArrowLeft aria-hidden="true" />
-        <span className="hidden sm:inline">返回上游管理</span>
+        <span className="hidden sm:inline">{props.backLabel ?? "返回上游管理"}</span>
       </Button>
       <UpstreamNavigationButton direction="previous" target={props.previousUpstream ?? null} />
       <UpstreamNavigationButton direction="next" target={props.nextUpstream ?? null} />

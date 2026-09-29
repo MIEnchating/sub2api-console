@@ -20,3 +20,8 @@ export const groupBatchActions = {
 
 export type GroupBatchAction = keyof typeof groupBatchActions;
 export const groupBatchActionOrder: GroupBatchAction[] = ["reset", "exclude", "include"];
+
+export const recommendedAnimationWeights = {
+  passed: 1.2,
+  degraded: 0.7,
+} as const;

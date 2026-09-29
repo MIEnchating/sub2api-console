@@ -141,6 +141,9 @@ test("分组详情在宽屏显示三列，Tab 固定在顶部且只滚动当前�
   const top = await title.boundingBox();
   const tabTop = await tabs.boundingBox();
   const panel = dialog.getByRole("tabpanel", { name: /备用分组/ });
+  await expect(panel.getByRole("heading", { name: "备用分组", exact: true })).toHaveCount(0);
+  await expect(panel.getByText("8 个账号", { exact: true })).toHaveCount(0);
+  await expect(tabs.getByRole("tab", { name: /备用分组/ })).toContainText("8");
   await expect
     .poll(() =>
       panel.evaluate((el) => ({

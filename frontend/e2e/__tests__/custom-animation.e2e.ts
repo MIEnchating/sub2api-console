@@ -10,7 +10,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),
     colorScheme,
   );
-  const model = "custom-model-".repeat(18);
+  const model = "gpt-6-astra";
   const baseURL = "https://custom.example.invalid/" + "proxy/".repeat(24) + "v1";
   let created = false;
   const task: Task = {
@@ -83,11 +83,7 @@ test("无账号时自定义接口可确认生成、查看动画并清除 Key，�
   await page.getByRole("option", { name: "Anthropic" }).click();
   await panel.getByRole("textbox", { name: "Base URL" }).fill(baseURL);
   await panel.getByLabel("API Key").fill("isolated-custom-key");
-  await panel.getByRole("button", { name: "获取模型" }).click();
-  await expect(page.getByRole("option", { name: model, exact: true })).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("custom-animation-model-list.png") });
-  await page.getByRole("option", { name: model, exact: true }).click();
-  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue(model);
+  await expect(panel.getByRole("combobox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   const start = panel.getByRole("button", { name: "开始检测", exact: true });
   await expect(start).toHaveCSS("height", "32px");
   await start.click();

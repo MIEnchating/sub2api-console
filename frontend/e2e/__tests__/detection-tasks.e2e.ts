@@ -17,6 +17,7 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     result: {
       completed: 2,
       total: 2,
+      group_ids_by_account: { "41": ["7"] },
       checks: [
         {
           account_id: "41",
@@ -67,7 +68,7 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
     if (path === "/api/model-checks/detection-tasks/plan-1/run") {
       runs.push(route.request().postDataJSON());
       plans = [{ ...plans[0], last_task_id: "run-1" }];
-      await route.fulfill({ json: run });
+      await route.fulfill({ json: { ...run, result: { ...run.result, configuration: plans[0] } } });
       return;
     }
     const fixtures: Record<string, unknown> = {
@@ -81,7 +82,7 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
       ],
       "/api/model-checks/animations": [],
       "/api/model-checks/animation-schedules": [],
-      "/api/tasks/run-1": run,
+      "/api/tasks/run-1": { ...run, result: { ...run.result, configuration: plans[0] } },
     };
     if (path.endsWith("/events"))
       await route.fulfill({ contentType: "text/event-stream", body: ": isolated\n\n" });
@@ -96,7 +97,12 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
   await page.getByRole("option", { name: "主分组（ID 7）" }).click();
   await page.getByRole("option", { name: "备用分组（ID 8）" }).click();
   await page.keyboard.press("Escape");
-  await editor.getByRole("textbox", { name: "检测模型" }).fill("test-model");
+  await expect(editor.getByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
+  await editor.getByRole("textbox", { name: "检测模型" }).fill("managed-model");
+  await editor.getByRole("checkbox", { name: "动画检测", exact: true }).uncheck();
+  await editor.getByRole("button", { name: "保存任务" }).click();
+  await expect(editor.getByText("请至少选择一项检测内容")).toBeVisible();
+  expect(plans).toEqual([]);
   await editor.getByRole("checkbox", { name: "前置检测", exact: true }).check();
   await editor.getByRole("checkbox", { name: "终端检测", exact: true }).check();
   await editor.getByRole("spinbutton", { name: "终端检测轮数" }).fill("3");
@@ -106,25 +112,53 @@ test("分组任务可保存多时间与多轮、直接启动并逐轮查看结�
   await editor.getByRole("button", { name: "添加检测时间" }).click();
   await editor.getByLabel("每天检测时间 2（北京时间）").fill("20:00");
   expect(await editor.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const selections = editor.getByRole("group", { name: "检测内容", exact: true });
+  const cards = selections.locator("label").filter({ has: page.getByRole("checkbox") });
+  const bounds = await cards.evaluateAll((elements) =>
+    elements.map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y };
+    }),
+  );
+  expect(bounds).toHaveLength(3);
+  if (test.info().project.name === "desktop-light") {
+    expect(bounds[0].y).toBe(bounds[1].y);
+    expect(bounds[1].y).toBe(bounds[2].y);
+    expect((await editor.boundingBox())!.width).toBeGreaterThan(900);
+  } else {
+    expect(bounds[1].y).toBeGreaterThan(bounds[0].y);
+    expect(bounds[0].x).toBe(bounds[1].x);
+  }
+  await expect(editor.getByRole("button", { name: "保存任务" })).toBeInViewport();
+  await selections.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath("detection-task-editor.png") });
   await editor.getByRole("button", { name: "保存任务" }).click();
   const confirmation = page.getByRole("dialog", { name: "确认自动检测任务" });
   await expect(confirmation).toContainText("终端检测 3 轮");
   await expect(confirmation).toContainText("09:00、20:00");
+  await expect(confirmation).not.toContainText("动画检测");
   await confirmation.getByRole("button", { name: "确认保存并开启" }).click();
   await expect(editor).toBeHidden();
   expect(plans[0]).toMatchObject({
     group_ids: ["7", "8"],
+    animation: false,
     precheck: true,
     terminal: true,
     terminal_rounds: 3,
     automatic: true,
     daily_times: ["09:00", "20:00"],
   });
+  const card = page.getByRole("article", { name: "检测任务 每日分组检测" });
+  await expect(card).not.toContainText("动画检测");
+  expect(await card.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(card.getByRole("button", { name: "编辑" })).toBeInViewport();
+  await page.screenshot({ path: test.info().outputPath("detection-task-list.png") });
   await page.getByRole("button", { name: "立即执行" }).click();
   await expect.poll(() => runs).toEqual([{ version: 1 }]);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "运行详情" }).click();
   const details = page.getByRole("dialog", { name: "检测任务运行详情" });
+  await expect(details).not.toContainText("动画检测");
   await expect(details.getByRole("heading", { name: "逐轮检测结果（3 轮）" })).toBeVisible();
   const second = details.locator("summary").filter({ hasText: "第 2 轮" });
   await second.focus();

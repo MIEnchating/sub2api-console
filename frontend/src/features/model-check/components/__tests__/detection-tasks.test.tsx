@@ -52,6 +52,9 @@ function setup(values: DetectionTask[] = [plan], failSave = false) {
       if (String(input).includes("/run") || String(input).includes("/api/tasks/"))
         return Response.json({
           id: "run-1",
+          skill: "sub2api-model-animation",
+          operation: "managed-model-detection",
+          updated_at: "2026-09-23T00:00:00Z",
           status: "queued",
           progress: 0,
           message: "等待执行",
@@ -73,6 +76,10 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "编辑" }));
   const dialog = screen.getByRole("dialog", { name: "编辑检测任务" });
+  const model = within(dialog).getByRole("textbox", { name: "检测模型" });
+  expect(model).toHaveValue("test-model");
+  await user.clear(model);
+  await user.type(model, "edited-model");
   expect(within(dialog).getByRole("checkbox", { name: "前置检测" })).toBeChecked();
   expect(within(dialog).getByLabelText("每天检测时间 2（北京时间）")).toHaveValue("20:00");
   fireEvent.change(within(dialog).getByRole("spinbutton", { name: "终端检测轮数" }), {
@@ -89,7 +96,7 @@ it("编辑分组任务可设置多轮终端和多个自动时间并保留版本"
       id: "plan-1",
       version: 2,
       group_ids: ["7"],
-      model: "test-model",
+      model: "edited-model",
       terminal_rounds: 5,
       automatic: true,
       daily_times: ["09:00", "20:00"],
@@ -100,11 +107,41 @@ it("新任务未选分组不能保存且可以关闭表单", async () => {
   const requests = setup([]);
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "新增任务" }));
+  expect(await screen.findByRole("textbox", { name: "检测模型" })).toHaveValue("gpt-6-astra");
   await user.click(screen.getByRole("button", { name: "保存任务" }));
   expect(await screen.findByText("请选择至少一个分组")).toBeVisible();
   expect(requests.filter((item) => item.method === "PUT")).toHaveLength(0);
   await user.click(screen.getByRole("button", { name: "取消" }));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("取消所有检测项时阻止保存，键盘选择前置检测后仅提交前置阶段", async () => {
+  const requests = setup();
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", { name: "编辑" }));
+  const animation = screen.getByRole("checkbox", { name: "动画检测" });
+  expect(animation).toBeChecked();
+  await user.click(animation);
+  await user.click(screen.getByRole("checkbox", { name: "前置检测" }));
+  await user.click(screen.getByRole("checkbox", { name: "终端检测" }));
+  await user.click(screen.getByRole("button", { name: "保存任务" }));
+  expect(await screen.findByText("请至少选择一项检测内容")).toBeVisible();
+  expect(requests.filter((item) => item.method === "PUT")).toHaveLength(0);
+  expect(animation).toHaveAttribute("aria-invalid", "true");
+  screen.getByRole("checkbox", { name: "前置检测" }).focus();
+  await user.keyboard(" ");
+  await user.click(screen.getByRole("button", { name: "保存任务" }));
+  await waitFor(() =>
+    expect(requests.find((item) => item.method === "PUT")?.body).toMatchObject({
+      animation: false,
+      precheck: true,
+      terminal: false,
+    }),
+  );
+  const card = screen.getByRole("article", { name: "检测任务 每日检测" });
+  expect(card).toHaveTextContent("前置检测");
+  expect(card).not.toHaveTextContent("动画检测");
+  expect(card).not.toHaveTextContent("终端检测");
 });
 it("立即执行使用保存版本直接启动且不自动弹出详情", async () => {
   const requests = setup();
@@ -152,4 +189,22 @@ it("运行中的任务禁止重复启动和删除，仍可打开详情取消", a
   await user.click(screen.getByRole("button", { name: "运行详情" }));
   expect(await screen.findByRole("button", { name: "取消任务" })).toBeEnabled();
   expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+});
+
+it("立即执行分组计划后登记系统信息后台任务，不包含完整结果", async () => {
+  setup();
+  await userEvent.setup().click(screen.getByRole("button", { name: "立即执行" }));
+  await waitFor(() =>
+    expect(clients[0].getQueryData(["tasks"])).toEqual([
+      expect.objectContaining({
+        id: "run-1",
+        operation: "managed-model-detection",
+        status: "queued",
+        system_info: true,
+      }),
+    ]),
+  );
+  expect(clients[0].getQueryData(["tasks"])).not.toEqual([
+    expect.objectContaining({ result: expect.anything() }),
+  ]);
 });
