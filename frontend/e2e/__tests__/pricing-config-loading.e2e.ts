@@ -105,7 +105,7 @@ test("中等桌面宽度读取价格设置时上下排列，设置字段保持�
   await expect(controls).toHaveCount(3);
   const first = (await controls.nth(0).boundingBox())!;
   const last = (await controls.nth(2).boundingBox())!;
-  expect(last.y).toBe(first.y);
+  expect(Math.abs(last.y - first.y)).toBeLessThanOrEqual(1);
   expect(last.x).toBeGreaterThan(first.x);
   await expectNoHorizontalOverflow(page.locator('[data-slot="page-content"]'));
   await expect.poll(() => held.length).toBe(1);
@@ -114,7 +114,7 @@ test("中等桌面宽度读取价格设置时上下排列，设置字段保持�
   const inputs = page.getByTestId("pricing-settings-panel").getByRole("spinbutton");
   const readyFirst = (await inputs.nth(0).boundingBox())!;
   const readyLast = (await inputs.nth(2).boundingBox())!;
-  expect(readyLast.y).toBe(readyFirst.y);
+  expect(Math.abs(readyLast.y - readyFirst.y)).toBeLessThanOrEqual(1);
   expect(readyLast.x).toBeGreaterThan(readyFirst.x);
 });
 

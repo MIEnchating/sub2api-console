@@ -29,4 +29,6 @@ OpenAI 官方文档说明，可以通过再次传入消息历史，或使用支�
 
 新检测固定使用 `gpt-6-astra`，前置检测 `medium`，鹈鹕动画 `low`。动画提示词要求单文件 HTML 与内联 SVG，可使用内联 JavaScript 驱动动画，不得主动发送网络请求；后端保留原文与实际提示词，预览保留模型返回的 HTML、CSS、SVG 和内联脚本，拒绝脚本外链、事件属性和外部资源引用。HTML 在仅允许脚本的 opaque-origin sandbox 中运行，CSP 禁止 Fetch 等网络连接、表单提交和子框架，沙箱禁止顶层导航；CSP 不能阻止脚本导航 iframe 自身，不能保证任意脚本绝对不会发出导航请求。旧 SVG 结果继续以图片展示。
 
+HTML 缩略图与放大预览使用稳定的布局视口，按整页内容边界等比缩放、居中显示，保留原有 SVG 比例。超宽、超高及脚本动态改变尺寸的内容重新测量适配，不通过隐藏滚动条裁掉页面内容；代码视图仍保留原文。
+
 Responses 用量从 JSON 或完成事件读取，Chat Completions 请求 `stream_options.include_usage` 并读到 `[DONE]` 或正常 EOF，保留 finish_reason 后的用量块；Messages 合并 message_start 与 message_delta 中报告的用量。受控 OAuth 预览允许可选 `usage.input_tokens/output_tokens/total_tokens`。缺失用量不补零，仅在输入与输出都存在时计算总计；TPS 为输出 Token / 最终一次生成耗时，不将失败重试和退避计入分母。任务总耗时仍包含各次请求和退避。
