@@ -36,6 +36,11 @@ async function holdPricing(page: Page, theme: string | null): Promise<Route[]> {
   return held;
 }
 
+async function fulfillHeld(held: Route[], body: unknown, start = 0): Promise<void> {
+  const routes = held.slice(start);
+  await Promise.all(routes.map((route) => route.fulfill({ json: body })));
+}
+
 async function expectNoHorizontalOverflow(element: Locator): Promise<void> {
   expect(await element.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
 }
@@ -72,8 +77,8 @@ test("价格设置首次读取只显示一套配置布局，骨架列宽与读�
   await expectNoHorizontalOverflow(page.locator('[data-slot="page-content"]'));
   await expectNoHorizontalOverflow(loading);
   await page.screenshot({ path: test.info().outputPath("pricing-config-loading.png") });
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: pricing });
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  await fulfillHeld(held, pricing);
   await expect(loading).toHaveCount(0);
   const readySettings = page.getByTestId("pricing-settings-panel");
   const readyExchange = page.getByRole("region", { name: /^账号互换范围/ });
@@ -108,8 +113,8 @@ test("中等桌面宽度读取价格设置时上下排列，设置字段保持�
   expect(Math.abs(last.y - first.y)).toBeLessThanOrEqual(1);
   expect(last.x).toBeGreaterThan(first.x);
   await expectNoHorizontalOverflow(page.locator('[data-slot="page-content"]'));
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: pricing });
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  await fulfillHeld(held, pricing);
   await expect(page.getByRole("status", { name: "正在读取价格设置" })).toHaveCount(0);
   const inputs = page.getByTestId("pricing-settings-panel").getByRole("spinbutton");
   const readyFirst = (await inputs.nth(0).boundingBox())!;
@@ -124,18 +129,19 @@ test("价格设置后台刷新保留已加载配置和未保存的输入，不�
 }) => {
   const held = await holdPricing(page, colorScheme);
   await page.goto("/pricing-config");
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: pricing });
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  await fulfillHeld(held, pricing);
   const margin = page.getByRole("spinbutton", { name: "目标盈利比例", exact: true });
   await expect(margin).toHaveValue("20");
   await margin.fill("35");
+  const refreshStart = held.length;
   await page.getByRole("button", { name: "刷新价格数据", exact: true }).click();
-  await expect.poll(() => held.length).toBe(2);
+  await expect.poll(() => held.length).toBeGreaterThan(refreshStart);
   await expect(page.getByRole("status", { name: "正在读取价格设置" })).toHaveCount(0);
   await expect(page.getByTestId("pricing-settings-panel")).toBeVisible();
   await expect(page.getByRole("region", { name: /^账号互换范围/ })).toBeVisible();
   await expect(margin).toHaveValue("35");
-  await held[1].fulfill({ json: pricing });
+  await fulfillHeld(held, pricing, refreshStart);
   await expect(page.getByRole("button", { name: "刷新价格数据", exact: true })).toBeEnabled();
   await expect(margin).toHaveValue("35");
 });

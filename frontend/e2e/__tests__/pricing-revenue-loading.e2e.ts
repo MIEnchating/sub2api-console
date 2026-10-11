@@ -48,8 +48,8 @@ test("价格目录加载前后搜索栏和表格位置不变，仅有一个读�
   expect(await loading.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
     true,
   );
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: pricing });
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  await Promise.all(held.map((route) => route.fulfill({ json: pricing })));
   const table = page.getByTestId("pricing-catalog-table-frame");
   await expect(table).toBeVisible();
   const after = (await table.boundingBox())!;

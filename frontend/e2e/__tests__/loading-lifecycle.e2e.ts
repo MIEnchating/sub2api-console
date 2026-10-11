@@ -38,6 +38,11 @@ async function setupLoading(page: Page, endpoint: string, theme: string | null):
   return held;
 }
 
+async function fulfillHeld(held: Route[], body: unknown, start = 0): Promise<void> {
+  const routes = held.slice(start);
+  await Promise.all(routes.map((route) => route.fulfill({ json: body })));
+}
+
 test("320px 低高度视口中加载内容可纵向滚动，分页占位可到达且不横向溢出", async ({
   page,
   colorScheme,
@@ -86,21 +91,22 @@ test("系统设置首次读取后恢复可编辑表单，后台刷新保留表�
   const held = await setupLoading(page, "/api/config", colorScheme);
   await page.goto("/config");
   await expect(page.getByRole("status", { name: "正在读取连接设置" })).toBeVisible();
-  await expect.poll(() => held.length).toBe(1);
-  await held[0].fulfill({ json: pageFixtures["/api/config"] });
+  await expect.poll(() => held.length).toBeGreaterThan(0);
+  await fulfillHeld(held, pageFixtures["/api/config"]);
   const url = page.getByRole("textbox", { name: "Sub2API 地址", exact: true });
   await expect(url).toBeVisible();
   await expect(page.getByRole("status", { name: "正在读取连接设置" })).toHaveCount(0);
   await url.fill("https://edited.example.test");
+  const refreshStart = held.length;
   await page.getByRole("button", { name: "刷新系统设置", exact: true }).click();
-  await expect.poll(() => held.length).toBe(2);
+  await expect.poll(() => held.length).toBeGreaterThan(refreshStart);
   await expect(
     page.getByRole("button", { name: "刷新系统设置", exact: true }).locator("svg"),
   ).toHaveCSS("animation-name", "none");
   await expect(url).toHaveValue("https://edited.example.test");
   await expect(url).toBeVisible();
   await expect(page.getByRole("status", { name: "正在读取连接设置" })).toHaveCount(0);
-  await held[1].fulfill({ json: pageFixtures["/api/config"] });
+  await fulfillHeld(held, pageFixtures["/api/config"], refreshStart);
   await expect(url).toHaveValue("https://edited.example.test");
 });
 

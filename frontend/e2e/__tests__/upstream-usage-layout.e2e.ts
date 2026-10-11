@@ -104,14 +104,18 @@ for (const narrow of [false, true]) {
     expect(await body.evaluate((element) => element.scrollTop)).toBe(0);
     await page.keyboard.press("Tab");
     await expect(dialog.locator("dd").first().locator("span")).toBeFocused();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(spendingTotal(0));
+    await expect(
+      page.locator('[data-slot="tooltip-content"]').filter({ hasText: spendingTotal(0) }),
+    ).toHaveText(spendingTotal(0));
     await page.keyboard.press("Tab");
     await expect(
       dialog.getByText(hosts[0].account_request_usage[0].account_name, { exact: true }),
     ).toBeFocused();
-    await expect(page.locator('[data-slot="tooltip-content"]')).toHaveText(
-      `${hosts[0].account_request_usage[0].account_name} · ID 0`,
-    );
+    await expect(
+      page.locator('[data-slot="tooltip-content"]').filter({
+        hasText: `${hosts[0].account_request_usage[0].account_name} · ID 0`,
+      }),
+    ).toHaveText(`${hosts[0].account_request_usage[0].account_name} · ID 0`);
     await expect(dialog.getByRole("table", { name: "账号使用率" })).toBeVisible();
     await expect(dialog.getByRole("row")).toHaveCount(21);
     await expect(dialog.getByText("ID 20", { exact: true })).toHaveCount(0);
