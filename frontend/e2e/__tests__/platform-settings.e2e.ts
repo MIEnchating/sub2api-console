@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { pageFixtures } from "./fixtures/page-shell";
 
+// Measure settled layout without sampling the page entrance animation.
+test.use({ reducedMotion: "reduce" });
+
 test.beforeEach(async ({ page, colorScheme }) => {
   await page.addInitScript(
     (theme) => localStorage.setItem("sub2api-console-theme", theme ?? "light"),

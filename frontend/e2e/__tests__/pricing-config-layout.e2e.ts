@@ -4,6 +4,9 @@ import { expect, test, type Page } from "@playwright/test";
 import type { PricingConfig, PricingSnapshot } from "../../src/api";
 import { pricing } from "./fixtures/settings";
 
+// Measure settled layout without sampling the page entrance animation.
+test.use({ reducedMotion: "reduce" });
+
 async function setupPricing(
   page: Page,
   theme: string | null,

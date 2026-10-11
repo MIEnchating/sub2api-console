@@ -2,6 +2,9 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 import { pricing } from "./fixtures/settings";
 import { revenueTask } from "../../src/features/pricing/components/__tests__/revenue-fixtures";
 
+// Measure settled layout without sampling the page entrance animation.
+test.use({ reducedMotion: "reduce" });
+
 async function isolate(page: Page, endpoint: string, theme: string | null): Promise<Route[]> {
   const held: Route[] = [];
   await page.addInitScript(

@@ -1,6 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { setupKuma } from "../kuma-fixture";
 
+// Measure settled layout without sampling the page entrance animation.
+test.use({ reducedMotion: "reduce" });
+
 for (const kind of ["monitor", "status-page"] as const) {
   for (const action of ["create", "edit"] as const) {
     test(`${kind} ${action} 任务进度位于弹窗底部，成功后关闭且不改变表格布局`, async ({ page }) => {
